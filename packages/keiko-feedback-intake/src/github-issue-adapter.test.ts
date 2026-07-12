@@ -677,6 +677,41 @@ describe("governed GitHub issue adapter", () => {
     });
   });
 
+  it.each([403, 429] as const)(
+    "uses trusted-clock reset time for a reset-only %i primary rate limit",
+    async (status) => {
+      const transport = new FakeTransport((operation) => {
+        if (operation.kind === "mint-token") return tokenResponse();
+        return {
+          ...response(status, { message: "provider detail" }, true),
+          rateLimitRemaining: "0",
+          rateLimitReset: String(Math.floor(now.getTime() / 1_000) + 600),
+        };
+      });
+      await expect(publish(await attested(transport))).rejects.toMatchObject({
+        code: "rate-limited",
+        commitCertainty: "may-have-committed",
+        retryAfterSeconds: 600,
+      });
+    },
+  );
+
+  it("does not let a shorter Retry-After undercut a later primary reset", async () => {
+    const transport = new FakeTransport((operation) => {
+      if (operation.kind === "mint-token") return tokenResponse();
+      return {
+        ...response(429, { message: "provider detail" }, true),
+        retryAfter: "15",
+        rateLimitRemaining: "0",
+        rateLimitReset: String(Math.floor(now.getTime() / 1_000) + 600),
+      };
+    });
+    await expect(publish(await attested(transport))).rejects.toMatchObject({
+      code: "rate-limited",
+      retryAfterSeconds: 600,
+    });
+  });
+
   it.each(["readiness", "token", "get"] as const)(
     "keeps %s transport failures definitely pre-send",
     async (stage) => {

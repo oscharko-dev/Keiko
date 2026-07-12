@@ -147,21 +147,50 @@ function safeFailure(committed = false): GithubIssueAdapterError {
   );
 }
 
-function retryHint(value: string | undefined): number | undefined {
+function retryAfterHint(value: string | undefined): number | undefined {
   if (value === undefined || !/^[0-9]{1,5}$/u.test(value)) return undefined;
   return Math.min(Number(value), 3600);
 }
 
+function resetHint(response: GithubHttpResponse, trustedNow: Date): number | undefined {
+  if (
+    response.rateLimitRemaining !== "0" ||
+    response.rateLimitReset === undefined ||
+    !/^[0-9]{1,12}$/u.test(response.rateLimitReset) ||
+    !Number.isFinite(trustedNow.getTime())
+  ) {
+    return undefined;
+  }
+  const resetMs = Number(response.rateLimitReset) * 1_000;
+  const delaySeconds = Math.ceil((resetMs - trustedNow.getTime()) / 1_000);
+  if (!Number.isSafeInteger(delaySeconds) || delaySeconds <= 0) return undefined;
+  return Math.min(delaySeconds, 3600);
+}
+
+function rateLimitHint(response: GithubHttpResponse, trustedNow: Date): number {
+  // A primary reset is an independent lower bound. A shorter Retry-After must not permit a
+  // request before the exhausted primary window resets.
+  const providerHint = Math.max(
+    retryAfterHint(response.retryAfter) ?? 0,
+    resetHint(response, trustedNow) ?? 0,
+  );
+  return providerHint > 0 ? providerHint : 60;
+}
+
 // The ordered provider status taxonomy is intentionally a single fail-closed decision table.
 // eslint-disable-next-line complexity
-function classify(response: GithubHttpResponse, create: boolean): never {
+function classify(response: GithubHttpResponse, create: boolean, trustedNow: Date): never {
   const certainty = create ? "may-have-committed" : "definite-pre-send";
   if (
     response.status === 429 ||
     (response.status === 403 &&
       (response.retryAfter !== undefined || response.rateLimitRemaining === "0"))
   ) {
-    throw new GithubIssueAdapterError("rate-limited", certainty, retryHint(response.retryAfter));
+    throw new GithubIssueAdapterError(
+      "rate-limited",
+      certainty,
+      rateLimitHint(response, trustedNow),
+    );
   }
   if (response.status === 401 || response.status === 403) {
     throw new GithubIssueAdapterError("permission-denied", certainty);
@@ -174,8 +203,12 @@ function classify(response: GithubHttpResponse, create: boolean): never {
   throw new GithubIssueAdapterError("provider-unavailable", certainty);
 }
 
-function successful(response: GithubHttpResponse, statuses: readonly number[]): unknown {
-  if (!statuses.includes(response.status)) classify(response, false);
+function successful(
+  response: GithubHttpResponse,
+  statuses: readonly number[],
+  trustedNow: Date,
+): unknown {
+  if (!statuses.includes(response.status)) classify(response, false, trustedNow);
   return json(response);
 }
 
@@ -432,6 +465,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
             budgetOptions(budget, () => this.monotonicNow()),
           ),
           [200],
+          now,
         ),
       );
       if (!exactPermissions(app.permissions))
@@ -496,6 +530,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
           budgetOptions(budget, () => this.monotonicNow()),
         ),
         [200],
+        this.dependencies.trustedNow(),
       ),
     );
     if (
@@ -516,6 +551,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
           budgetOptions(budget, () => this.monotonicNow()),
         ),
         [200],
+        this.dependencies.trustedNow(),
       ),
     );
     if (String(repositoryInstallation.id) !== target.snapshot.installationId) {
@@ -539,7 +575,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
       },
       options,
     );
-    const result = record(successful(response, [201]));
+    const result = record(successful(response, [201], now));
     const token = result.token;
     const expiresAt = new Date(String(result.expires_at));
     const repositories = result.repositories;
@@ -602,6 +638,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
           budgetOptions(budget, () => this.monotonicNow()),
         ),
         [200],
+        this.dependencies.trustedNow(),
       );
       const parsed = parseSearchPage(result, page, expectedTotal);
       expectedTotal = parsed.total;
@@ -634,7 +671,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
         },
         signal === undefined ? {} : { signal },
       );
-      if (response.status !== 201) classify(response, true);
+      if (response.status !== 201) classify(response, true, this.dependencies.trustedNow());
       const created = issue(json(response, true), target.snapshot, true);
       if (
         created.title !== projection.title ||

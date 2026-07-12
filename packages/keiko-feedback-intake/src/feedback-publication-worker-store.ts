@@ -40,6 +40,13 @@ export interface FeedbackPublicationWorkerStoreHooks {
   readonly afterLoadFailureUpdate?: (() => Promise<void>) | undefined;
 }
 
+function boundedRetryDelay(delayMs: number): number {
+  return Math.max(
+    FEEDBACK_PUBLICATION_MIN_RETRY_MS,
+    Math.min(Math.trunc(delayMs), FEEDBACK_PUBLICATION_MAX_RETRY_MS),
+  );
+}
+
 export class PostgresFeedbackPublicationWorkerStore {
   private readonly activeLeases = new WeakSet();
 
@@ -152,6 +159,7 @@ export class PostgresFeedbackPublicationWorkerStore {
   async recordProviderFailure(
     lease: FeedbackPublicationWorkerLease,
     cooldownMs: number,
+    openImmediately = false,
   ): Promise<void> {
     const bounded = Math.max(1_000, Math.min(Math.trunc(cooldownMs), 3_600_000));
     await this.transaction(async (client) => {
@@ -160,19 +168,21 @@ export class PostgresFeedbackPublicationWorkerStore {
         `INSERT INTO feedback_publication_installation_circuits
            (installation_id,consecutive_failures,open_until,probe_owner,probe_expires_at,
             updated_at,expires_at)
-         VALUES ($1,1,NULL,NULL,NULL,$3,$3::timestamptz + interval '7 days')
+         VALUES ($1,CASE WHEN $5 THEN 3 ELSE 1 END,
+           CASE WHEN $5 THEN $3::timestamptz + $2::integer * interval '1 millisecond'
+             ELSE NULL END,NULL,NULL,$3,$3::timestamptz + interval '7 days')
          ON CONFLICT (installation_id) DO UPDATE SET
-           consecutive_failures=LEAST(3,
-             feedback_publication_installation_circuits.consecutive_failures+1),
+           consecutive_failures=CASE WHEN $5 THEN 3 ELSE LEAST(3,
+             feedback_publication_installation_circuits.consecutive_failures+1) END,
            open_until=CASE
-             WHEN feedback_publication_installation_circuits.consecutive_failures+1 >= 3
+             WHEN $5 OR feedback_publication_installation_circuits.consecutive_failures+1 >= 3
                THEN $3::timestamptz + $2::integer * interval '1 millisecond'
              ELSE NULL END,
            probe_owner=NULL,probe_expires_at=NULL,updated_at=$3,
            expires_at=$3::timestamptz + interval '7 days'
          WHERE feedback_publication_installation_circuits.probe_owner IS NULL
            OR feedback_publication_installation_circuits.probe_owner=$4::uuid`,
-        [lease.target.installationId, bounded, at, lease.outboxId],
+        [lease.target.installationId, bounded, at, lease.outboxId, openImmediately],
       );
       if (result.rowCount !== 1) throw new FeedbackPublicationError("claim-unavailable");
     });
@@ -189,10 +199,7 @@ export class PostgresFeedbackPublicationWorkerStore {
         await this.manualTx(client, lease, "retry-exhausted");
         return "manual-reconciliation";
       }
-      const bounded = Math.max(
-        FEEDBACK_PUBLICATION_MIN_RETRY_MS,
-        Math.min(Math.trunc(delayMs), FEEDBACK_PUBLICATION_MAX_RETRY_MS),
-      );
+      const bounded = boundedRetryDelay(delayMs);
       const result = await client.query(
         `UPDATE feedback_publication_outbox outbox
          SET status='retryable-failure',create_eligible=true,lease_owner=NULL,lease_expires_at=NULL,
@@ -213,10 +220,7 @@ export class PostgresFeedbackPublicationWorkerStore {
     lease: FeedbackPublicationLeaseIdentity,
     delayMs: number,
   ): Promise<void> {
-    const bounded = Math.max(
-      FEEDBACK_PUBLICATION_MIN_RETRY_MS,
-      Math.min(Math.trunc(delayMs), FEEDBACK_PUBLICATION_MAX_RETRY_MS),
-    );
+    const bounded = boundedRetryDelay(delayMs);
     await this.transition(
       lease,
       "may-have-committed",
@@ -227,6 +231,45 @@ export class PostgresFeedbackPublicationWorkerStore {
       "reconciliation-scheduled",
       "not-observed",
     );
+  }
+
+  async scheduleCircuitDeferral(
+    lease: FeedbackPublicationWorkerLease,
+    delayMs: number,
+  ): Promise<void> {
+    const bounded = boundedRetryDelay(delayMs);
+    const claimedStatus = lease.mode === "create-eligible" ? "claimed" : "may-have-committed";
+    const deferredStatus =
+      lease.mode === "create-eligible" ? "retryable-failure" : "may-have-committed";
+    const failureCode =
+      lease.mode === "create-eligible" ? "provider-unavailable" : "ambiguous-reconciliation";
+    await this.transaction(async (client) => {
+      const changed = await client.query(
+        `UPDATE feedback_publication_outbox outbox
+         SET status=$8,create_eligible=$9,lease_owner=NULL,lease_expires_at=NULL,
+           next_attempt_at=LEAST(clock_timestamp() + $7::integer * interval '1 millisecond',
+             outbox.expires_at),failure_code=$10,attempt_count=attempt_count-1,
+           updated_at=clock_timestamp()
+         FROM feedback_publication_preparations prep
+         WHERE prep.id=outbox.preparation_id AND ${EXACT_LEASE_WHERE}
+           AND outbox.status=$11 AND outbox.attempt_count > 0 RETURNING outbox.id`,
+        [
+          ...exactLeaseValues(lease),
+          bounded,
+          deferredStatus,
+          lease.mode === "create-eligible",
+          failureCode,
+          claimedStatus,
+        ],
+      );
+      if (changed.rowCount !== 1) throw new FeedbackPublicationError("claim-unavailable");
+      await appendDeliveryAudit(
+        client,
+        lease.outboxId,
+        lease.mode === "create-eligible" ? "retry-scheduled" : "reconciliation-scheduled",
+        "circuit-open",
+      );
+    });
   }
 
   async recordManual(

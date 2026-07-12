@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
 import { digestFeedbackTargetPolicyV1 } from "./feedback-publication-projection.js";
 import { PostgresFeedbackPublicationWorkerStore } from "./feedback-publication-worker-store.js";
+import { FeedbackPublicationWorker } from "./feedback-publication-worker.js";
 import { WORKER_CANDIDATE_SQL } from "./feedback-publication-worker-sql.js";
 import {
   leaseIdentity,
@@ -44,7 +45,10 @@ const ACTOR = {
 class CoordinatorTransport implements GithubTransport {
   readonly operations: GithubHttpOperation[] = [];
 
-  constructor(private readonly failPreflight = false) {}
+  constructor(
+    private readonly failPreflight = false,
+    private readonly rateLimitStatus?: 403 | 429,
+  ) {}
 
   execute(operation: GithubHttpOperation): Promise<GithubHttpResponse> {
     this.operations.push(operation);
@@ -97,6 +101,13 @@ class CoordinatorTransport implements GithubTransport {
           true,
         ),
       );
+    }
+    if (this.rateLimitStatus !== undefined) {
+      return Promise.resolve({
+        ...jsonResponse(this.rateLimitStatus, {}),
+        rateLimitRemaining: "0",
+        rateLimitReset: String(Math.floor(AT.getTime() / 1_000) + 600),
+      });
     }
     return Promise.resolve(jsonResponse(500, {}));
   }
@@ -559,6 +570,12 @@ describe("PostgreSQL feedback publication worker", () => {
             "SELECT consecutive_failures FROM feedback_publication_installation_circuits",
           ),
         ).toEqual([{ consecutive_failures: 3 }]);
+        await schemaRows(
+          pool,
+          schema,
+          `UPDATE feedback_publication_outbox
+           SET attempt_count=9,next_attempt_at=clock_timestamp()-interval '1 second'`,
+        );
         const restarted = new PostgresFeedbackPublicationWorkerStore(
           scoped,
           sessionA.scoped,
@@ -570,9 +587,30 @@ describe("PostgreSQL feedback publication worker", () => {
             expect(await restarted.enterProviderCircuit(candidate)).toMatchObject({
               allowed: false,
             });
-            await restarted.scheduleRetry(leaseIdentity(candidate), "provider-unavailable", 1_000);
+            await restarted.scheduleCircuitDeferral(candidate, 30_000);
           },
         );
+        expect(
+          await schemaRows(
+            pool,
+            schema,
+            `SELECT attempt_count,create_attempt_count,status,
+               next_attempt_at > statement_timestamp() AS deferred
+             FROM feedback_publication_outbox`,
+          ),
+        ).toEqual([
+          {
+            attempt_count: 9,
+            create_attempt_count: 0,
+            status: "retryable-failure",
+            deferred: true,
+          },
+        ]);
+        await expect(
+          restarted.withCandidate({ workerId: "circuit-too-early", leaseDurationMs: 60_000 }, () =>
+            Promise.reject(new Error("provider request before circuit reset")),
+          ),
+        ).resolves.toBeUndefined();
         const basis = requireLease(lastLease);
         await schemaRows(
           pool,
@@ -1023,6 +1061,56 @@ describe("PostgreSQL feedback publication worker", () => {
         ).toEqual([
           { status: "may-have-committed", create_eligible: false, create_attempt_count: 1 },
         ]);
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await installationSessions.pool.end();
+        await pool.end();
+      }
+    },
+  );
+
+  integration.each([403, 429] as const)(
+    "durably defers reset-only %i rate limits without another provider request",
+    async (status) => {
+      const pool = new Pool({ connectionString: databaseUrl, max: 8 });
+      const schema = await createSchema(pool);
+      const scoped = scopedPool(pool, schema);
+      const installationSessions = physicalSessionPool(schema);
+      const repository = new PostgresFeedbackPublicationRepository(
+        scoped,
+        ACTOR.permissionPolicyVersion,
+        () => TARGET,
+      );
+      const store = new PostgresFeedbackPublicationWorkerStore(
+        scoped,
+        installationSessions.scoped,
+        () => TARGET,
+      );
+      try {
+        await approvedOutbox(pool, schema, repository, `RESET_ONLY_${String(status)}`);
+        await approvedOutbox(pool, schema, repository, `RESET_ONLY_SECOND_${String(status)}`);
+        const transport = new CoordinatorTransport(false, status);
+        const adapter = await coordinator(transport);
+        const worker = new FeedbackPublicationWorker({
+          store,
+          adapter,
+          workerId: `reset-only-${String(status)}`,
+          leaseDurationMs: 60_000,
+          circuitCooldownMs: 30_000,
+          now: (): number => AT.getTime(),
+          random: (): number => 0.5,
+        });
+        await worker.runOne();
+        const operationsAfterLimit = transport.operations.length;
+        const delayed = await schemaRows<{ readonly delay: string }>(
+          pool,
+          schema,
+          `SELECT extract(epoch FROM (next_attempt_at-updated_at))::text AS delay
+           FROM feedback_publication_outbox WHERE status='retryable-failure'`,
+        );
+        expect(Number(delayed[0]?.delay)).toBeGreaterThanOrEqual(599.9);
+        await expect(worker.runOne()).resolves.toBe(false);
+        expect(transport.operations).toHaveLength(operationsAfterLimit);
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await installationSessions.pool.end();

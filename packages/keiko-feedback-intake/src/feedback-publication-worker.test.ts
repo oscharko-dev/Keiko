@@ -54,6 +54,8 @@ const issue: GithubIssueProjection = {
 
 class FakeStore {
   readonly calls: string[] = [];
+  readonly delays: number[] = [];
+  readonly immediateOpens: boolean[] = [];
   candidate: FeedbackPublicationWorkerLease | undefined = lease();
   circuitFailures = 0;
   async withCandidate<T>(
@@ -78,16 +80,25 @@ class FakeStore {
         : { allowed: true, probe: false },
     );
   }
-  recordProviderFailure(): Promise<void> {
-    this.circuitFailures += 1;
+  recordProviderFailure(_lease: unknown, delayMs: number, openImmediately = false): Promise<void> {
+    this.circuitFailures = openImmediately ? 3 : this.circuitFailures + 1;
+    this.delays.push(delayMs);
+    this.immediateOpens.push(openImmediately);
     return Promise.resolve();
   }
-  scheduleRetry(): Promise<"retryable-failure"> {
+  scheduleRetry(_lease: unknown, _code: unknown, delayMs: number): Promise<"retryable-failure"> {
     this.calls.push("retry");
+    this.delays.push(delayMs);
     return Promise.resolve("retryable-failure");
   }
-  scheduleReconciliation(): Promise<void> {
+  scheduleReconciliation(_lease: unknown, delayMs: number): Promise<void> {
     this.calls.push("reconcile-later");
+    this.delays.push(delayMs);
+    return Promise.resolve();
+  }
+  scheduleCircuitDeferral(_lease: unknown, delayMs: number): Promise<void> {
+    this.calls.push("circuit-defer");
+    this.delays.push(delayMs);
     return Promise.resolve();
   }
   recordManual(): Promise<void> {
@@ -190,8 +201,18 @@ describe("feedback publication worker policy", () => {
     await subject.runOne();
     await subject.runOne();
     expect(adapter.calls).toHaveLength(3);
-    expect(store.calls).toEqual(["retry", "retry", "retry", "retry"]);
+    expect(store.calls).toEqual(["retry", "retry", "retry", "circuit-defer"]);
     expect(diagnostics.join(" ")).not.toMatch(/SENTINEL|owner|repository|keiko-feedback/u);
+  });
+
+  it("propagates one provider delay to durable retry and circuit state", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    adapter.failure = new GithubIssueAdapterError("rate-limited", "definite-pre-send", 600);
+    await worker(store, adapter).runOne();
+    expect(store.calls).toEqual(["retry"]);
+    expect(store.delays).toEqual([600_000, 600_000]);
+    expect(store.immediateOpens).toEqual([true]);
   });
 
   it("does not reset failures after search success before three POST-only failures open", async () => {
@@ -208,6 +229,6 @@ describe("feedback publication worker policy", () => {
     await subject.runOne();
     expect(adapter.calls.filter((call) => call === "reconcile")).toHaveLength(3);
     expect(adapter.calls.filter((call) => call === "create")).toHaveLength(3);
-    expect(store.calls.at(-1)).toBe("retry");
+    expect(store.calls.at(-1)).toBe("circuit-defer");
   });
 });

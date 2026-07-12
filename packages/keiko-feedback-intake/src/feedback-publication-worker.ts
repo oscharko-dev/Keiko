@@ -86,16 +86,14 @@ export class FeedbackPublicationWorker {
         return;
       }
       if (lease.mode === "reconcile-only") {
+        const delayMs = this.retryDelay(lease);
         if (circuit.probe) {
           await this.dependencies.store.recordProviderFailure(
             lease,
-            this.dependencies.circuitCooldownMs,
+            Math.max(this.dependencies.circuitCooldownMs, delayMs),
           );
         }
-        await this.dependencies.store.scheduleReconciliation(
-          leaseIdentity(lease),
-          this.retryDelay(lease),
-        );
+        await this.dependencies.store.scheduleReconciliation(leaseIdentity(lease), delayMs);
         this.event("delivery", "not-observed", 1, startedAt);
         return;
       }
@@ -134,26 +132,21 @@ export class FeedbackPublicationWorker {
   ): Promise<void> {
     const identity = leaseIdentity(lease);
     if (error instanceof GithubIssueAdapterError) {
+      const delayMs = this.retryDelay(lease, error);
       if (TRANSIENT.has(error.code)) {
         await this.dependencies.store.recordProviderFailure(
           lease,
-          this.dependencies.circuitCooldownMs,
+          Math.max(this.dependencies.circuitCooldownMs, delayMs),
+          error.code === "rate-limited",
         );
       }
       if (error.commitCertainty === "may-have-committed") {
-        await this.dependencies.store.scheduleReconciliation(
-          identity,
-          this.retryDelay(lease, error),
-        );
+        await this.dependencies.store.scheduleReconciliation(identity, delayMs);
         return;
       }
       if (TRANSIENT.has(error.code)) {
         const retryCode = error.code === "rate-limited" ? "rate-limited" : "provider-unavailable";
-        await this.dependencies.store.scheduleRetry(
-          identity,
-          retryCode,
-          this.retryDelay(lease, error),
-        );
+        await this.dependencies.store.scheduleRetry(identity, retryCode, delayMs);
         return;
       }
       if (MANUAL.has(error.code as FeedbackPublicationManualCode)) {
@@ -179,15 +172,7 @@ export class FeedbackPublicationWorker {
   }
 
   private async defer(lease: FeedbackPublicationWorkerLease, delayMs: number): Promise<void> {
-    if (lease.mode === "reconcile-only") {
-      await this.dependencies.store.scheduleReconciliation(leaseIdentity(lease), delayMs);
-    } else {
-      await this.dependencies.store.scheduleRetry(
-        leaseIdentity(lease),
-        "provider-unavailable",
-        delayMs,
-      );
-    }
+    await this.dependencies.store.scheduleCircuitDeferral(lease, delayMs);
   }
 
   private retryDelay(
