@@ -270,11 +270,48 @@ function assertEvidence(stageRoot, manifest, target) {
   assertEvidenceText(sbomPath, "SBOM evidence");
   const sbom = readJson(sbomPath, "SBOM evidence");
   if (sbom.bomFormat !== "CycloneDX") fail(`${target.platformTarget} SBOM evidence is invalid`);
+  assertNativeHelperEvidence(stageRoot, manifest, target, sbom);
   assertEvidenceText(
     regularContainedFile(stageRoot, manifest.evidence.licenseNoticePath, "license evidence"),
     "license evidence",
   );
   assertSidecarEvidence(stageRoot, manifest, target);
+}
+
+// This release gate deliberately evaluates the complete helper proof in one atomic assertion.
+// eslint-disable-next-line complexity
+function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail(`${target.platformTarget} must contain exactly one native helper`);
+  }
+  const helper = manifest.nativeHelpers[0];
+  if (
+    helper.signing?.verificationStatus !== "verified-production" ||
+    helper.signing?.signatureVerified !== true ||
+    (target.nodePlatform === "darwin" && helper.signing?.notarizationVerified !== true)
+  ) {
+    fail(`${target.platformTarget} native helper is not production verified`);
+  }
+  const resourceRoot = sidecarPayloadRoot(stageRoot, target);
+  const executable = regularContainedFile(resourceRoot, helper.executablePath, "native helper");
+  const bytes = readFileSync(executable);
+  if (
+    createHash("sha256").update(bytes).digest("hex") !== helper.shippedSha256 ||
+    bytes.length !== helper.sizeBytes
+  ) {
+    fail(`${target.platformTarget} native helper bytes do not match the manifest`);
+  }
+  const components = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === helper.sbomBomRef,
+  );
+  const hashes = components[0]?.hashes?.filter((hash) => hash?.alg === "SHA-256") ?? [];
+  if (
+    components.length !== 1 ||
+    hashes.length !== 1 ||
+    hashes[0].content !== helper.shippedSha256
+  ) {
+    fail(`${target.platformTarget} native helper SBOM binding is invalid`);
+  }
 }
 
 function assertChecksumEvidence(stageRoot, manifest, target) {
@@ -318,9 +355,26 @@ function assertSigningAndProvenanceEvidence(stageRoot, manifest, target) {
     statement.packageVersion === manifest.product.packageVersion,
     statement.buildWorkflowRunId === manifest.provenance.buildWorkflowRunId,
     statement.buildWorkflowAttempt === manifest.provenance.buildWorkflowAttempt,
+    nativeHelperProvenanceMatches(statement, manifest),
   ];
   if (semantics.some((value) => !value))
     fail(`${target.platformTarget} provenance semantics do not match`);
+}
+
+// Exact provenance equality is clearer as one conjunction than as partial mutable checks.
+// eslint-disable-next-line complexity
+function nativeHelperProvenanceMatches(statement, manifest) {
+  const actual = statement.nativeHelpers?.[0];
+  const expected = manifest.nativeHelpers?.[0];
+  return (
+    statement.nativeHelpers?.length === 1 &&
+    actual?.unsignedSha256 === expected?.unsignedSha256 &&
+    actual?.sourceTreeSha256 === expected?.source?.treeSha256 &&
+    actual?.shippedSha256 === expected?.shippedSha256 &&
+    actual?.signatureKind === expected?.signing?.signatureKind &&
+    actual?.signatureVerified === true &&
+    actual?.notarizationVerified === expected?.signing?.notarizationVerified
+  );
 }
 
 function sidecarPayloadRoot(stageRoot, target) {

@@ -26,6 +26,196 @@ const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
 const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
+const secureReadSmoke = readFileSync("scripts/portable-secure-read-smoke.mjs", "utf8");
+const secureReadHarness = readFileSync("native/secure-workspace-read/test-protocol.mjs", "utf8");
+const secureReadNative = readFileSync(
+  "native/secure-workspace-read/secure_workspace_read.c",
+  "utf8",
+);
+
+describe("portable secure-read qualification", () => {
+  it("functionally smokes unsigned and fresh signed helpers on all three native runners", () => {
+    expect(
+      portableWorkflow.match(/Functionally smoke the unsigned secure-read helper/gmu),
+    ).toHaveLength(3);
+    expect(
+      portableWorkflow.match(/Functionally requalify the signed secure-read helper/gmu),
+    ).toHaveLength(2);
+    expect(portableWorkflow.match(/smoke:portable-secure-read -- .* --load/gmu)).toHaveLength(5);
+    expect(portableWorkflow).toContain(".qualified-windows-stage/windows-x64 windows-x64");
+    expect(portableWorkflow).toContain(
+      ".isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }}",
+    );
+  });
+
+  it("qualifies the complete Windows denied-name matrix and bounded real-helper load", () => {
+    for (const denied of [
+      '"CON"',
+      '"NUL.txt"',
+      '"COM1"',
+      '"LPT9.log"',
+      '"CLOCK$"',
+      '"GLOBALROOT"',
+      '"DEVICE"',
+      '"??"',
+      '"src/safe.txt:stream"',
+      '"name?"',
+      '"name."',
+      '"name "',
+      '"PROGRA~1"',
+    ]) {
+      expect(secureReadSmoke).toContain(denied);
+    }
+    expect(secureReadSmoke).toContain("index < 1_000");
+    expect(secureReadSmoke).toContain("length: 100");
+    expect(secureReadSmoke).toContain("await runBounded(");
+    expect(secureReadSmoke).toContain("    8,");
+    expect(secureReadSmoke).toContain("maxInFlight > 8");
+    expect(secureReadSmoke).toContain("assertExactRead(await runDecoded(executable, frame))");
+    expect(
+      secureReadSmoke.indexOf("assertExactRead(await runDecoded(executable, frame))"),
+    ).toBeLessThan(
+      secureReadSmoke.indexOf("const before = await stableResourceCount(nodePlatform)"),
+    );
+    expect(secureReadSmoke).toContain("p95 > 500");
+    expect(secureReadSmoke).toContain("after !== before");
+    expect(secureReadSmoke).toContain("HandleCount");
+    expect(secureReadSmoke).toContain('readdir("/dev/fd")');
+  });
+
+  it("runs the executable adversarial harness on unsigned builds and signed native bytes", () => {
+    expect(
+      portableWorkflow.match(/Run executable secure-read adversarial harness/gmu),
+    ).toHaveLength(3);
+    expect(
+      portableWorkflow.match(/Run signed secure-read executable consistency harness/gmu),
+    ).toHaveLength(2);
+    expect(portableWorkflow).toContain(
+      "test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
+    );
+    expect(portableWorkflow).toContain(
+      "test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
+    );
+    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    expect(windowsStage.indexOf("Configure MSVC environment")).toBeLessThan(
+      windowsStage.indexOf("Run executable secure-read adversarial harness"),
+    );
+    expect(secureReadHarness).toContain('const compiler = isWindows ? "cl" : "xcrun"');
+    expect(secureReadHarness).toContain('argv[0] !== "--binary"');
+    expect(secureReadHarness).toContain("spawn(binary, [], { stdio, env: {} })");
+    expect(secureReadHarness).toContain('["EACCES", "EBUSY", "EPERM"]');
+    expect(secureReadHarness).toContain('isWindows ? "junction" : "file"');
+    expect(secureReadHarness).toContain('request(fixture, "nested"))).status, isWindows ? 4 : 5');
+    expect(secureReadHarness).toContain(
+      "if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture)",
+    );
+    expect(secureReadHarness).toContain(
+      "binaryRoot = externalBinary === undefined ? await mkdtemp",
+    );
+    expect(secureReadHarness).toContain(
+      "if (externalBinary !== undefined) await assertExternalBinaryConsistency(binary, fixture, outside)",
+    );
+    expect(secureReadHarness).toContain("postSpawnAttempts > 0");
+    expect(secureReadHarness).toContain("assertFileGenerationConsistency(binary, fixture)");
+    expect(secureReadHarness).toContain("assertAncestorAliasConsistency(binary, fixture, outside)");
+    expect(secureReadHarness).toContain("await restoreRename(parent, alias)");
+    expect(secureReadHarness).toContain("await restoreRename(parked, parent)");
+    expect(secureReadHarness).toContain("harness modified supplied binary");
+    expect(secureReadHarness).toContain("[0, 6, 8].includes(decoded.status)");
+    expect(secureReadHarness).toContain("failure must be content-free");
+    expect(secureReadHarness).toContain(
+      "replacement: root mutation before denied target rename must close",
+    );
+    expect(secureReadHarness).not.toContain(
+      "if (result.mutationDenied) assert.equal(decoded.status, 0)",
+    );
+    for (const denied of [
+      "CON",
+      "con.txt",
+      "PRN",
+      "AUX.log",
+      "NUL.txt",
+      "CONIN$",
+      "conin$.txt",
+      "CONOUT$",
+      "conout$.log",
+      "COM1",
+      "COM9.log",
+      "COM¹",
+      "com¹.txt",
+      "COM²",
+      "com².log",
+      "COM³",
+      "com³.txt",
+      "LPT1",
+      "LPT9.log",
+      "LPT¹",
+      "lpt¹.txt",
+      "LPT²",
+      "lpt².log",
+      "LPT³",
+      "lpt³.txt",
+      "CLOCK$",
+      "GLOBALROOT",
+      "GLOBALROOT.txt",
+      "DEVICE",
+      "DEVICE.log",
+      "??",
+    ]) {
+      expect(secureReadHarness).toContain(JSON.stringify(denied));
+    }
+    for (const allowed of [
+      "GLOBALROOTED",
+      "CONSOLE",
+      "DEVICEFUL",
+      "CLOCK$X",
+      "COM10",
+      "LPT10",
+      "CONIN$X",
+      "CONOUT$X",
+      "COM¹0",
+      "LPT²X",
+    ]) {
+      expect(secureReadHarness).toContain(JSON.stringify(allowed));
+    }
+    expect(secureReadHarness).toContain("Windows reserved-name policy mismatch");
+    for (const stem of [
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "CONIN$",
+      "CONOUT$",
+      "COM",
+      "LPT",
+      "CLOCK$",
+      "GLOBALROOT",
+      "DEVICE",
+      "??",
+    ]) {
+      expect(secureReadNative).toContain(`"${stem}"`);
+    }
+    expect(secureReadNative).toMatch(
+      /while \(name_length < length && component\[name_length\] != '\.'\)/u,
+    );
+    expect(secureReadNative).toContain('ascii_name_equals(component, name_length, "GLOBALROOT")');
+    expect(secureReadNative).toContain("windows_reserved_port_name(component, name_length)");
+    expect(secureReadNative).toContain("bytes[3] == 0xc2");
+    expect(secureReadNative).toContain("bytes[4] == 0xb9 || bytes[4] == 0xb2 || bytes[4] == 0xb3");
+    expect(secureReadNative).toContain("_Static_assert(sizeof(KSR_SUPERSCRIPT_ONE_UTF8) == 3");
+    expect(secureReadNative).not.toContain("char name[10]");
+    expect(secureReadHarness).toContain(
+      "if (pausedBinary !== undefined) await assertAdversarialRaces",
+    );
+    expect(secureReadNative).toMatch(/#include <fcntl\.h>.*#include <io\.h>/su);
+    expect(secureReadNative).toMatch(
+      /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
+    );
+    expect(secureReadNative).toMatch(/if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
+    expect(secureReadNative).toMatch(/_write\(3, &byte, 1\).*_read\(4, &byte, 1\)/su);
+    expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
+  });
+});
 
 function productionStepPolicies() {
   const job = portableWorkflow.slice(

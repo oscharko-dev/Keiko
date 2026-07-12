@@ -148,6 +148,14 @@ function inventoryCommand(options) {
     if (!paths.has(executable))
       fail("manifest sidecar executable is missing from the Mach-O inventory");
   }
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail("manifest must contain exactly one native helper");
+  }
+  const helper = manifest.nativeHelpers[0];
+  const helperExecutable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
+  if (!paths.has(helperExecutable)) {
+    fail("manifest native helper is missing from the Mach-O inventory");
+  }
   writeFileSync(
     resolve(required(options, "inventory")),
     `${JSON.stringify(inventory, null, 2)}\n`,
@@ -191,6 +199,21 @@ function rebindPayloadCommand(options) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+function markNativeHelperVerified(manifest) {
+  const helper = manifest.nativeHelpers?.[0];
+  if (manifest.nativeHelpers?.length !== 1) fail("manifest must contain exactly one native helper");
+  helper.signing = {
+    signatureKind: "developer-id-notarized",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: true,
+    notarizationVerified: true,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = JSON.parse(
+    JSON.stringify(manifest.nativeHelpers),
+  );
+}
+
 async function finalize(options) {
   const stage = resolve(required(options, "stage-root"));
   const expected = readInventory(required(options, "expected-inventory"));
@@ -203,6 +226,7 @@ async function finalize(options) {
     fail("manifest target does not match the verified inventory");
   const inputPath = resolve(required(options, "verification-input"));
   assertProductionInput(inputPath, manifest);
+  markNativeHelperVerified(manifest);
   const archivePath = join(stage, manifest.artifact.assetName);
   if (!existsSync(archivePath)) fail("final ditto archive is missing");
   await rebindExistingSignedArchive(stage, manifest, archivePath, expected.target, {

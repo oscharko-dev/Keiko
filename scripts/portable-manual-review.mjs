@@ -472,6 +472,7 @@ function writeWindowsLayout(root, target, version, sidecar) {
   writeFileSync(join(root, "Keiko.exe"), "fixture launcher\n");
   writeFileSync(join(root, "support", "keiko-support.cmd"), "@echo off\r\n");
   writeJson(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
+  writeNativeHelperPayload(root, target);
   writeSidecarPayload(root, target, sidecar);
 }
 
@@ -489,6 +490,7 @@ function writeMacLayout(root, target, version, sidecar) {
   writeFileSync(join(root, "support", "keiko-support.sh"), "#!/usr/bin/env sh\n");
   writeJson(join(resources, ".portable", "setup-manifest.json"), setupManifest(target, version));
   writeJson(join(bundle, "Contents", "Info.plist.json"), { CFBundleIconFile: "Keiko.icns" });
+  writeNativeHelperPayload(resources, target);
   writeSidecarPayload(resources, target, sidecar);
 }
 
@@ -611,6 +613,55 @@ function sidecarFiles(target) {
 
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function nativeHelperBytes(target) {
+  return Buffer.from(
+    target === "windows-x64"
+      ? "manual-review-signed-secure-read-pe-fixture\n"
+      : "#!/bin/sh\n# manual-review-signed-secure-read-fixture\n",
+  );
+}
+
+function nativeHelperExecutablePath(target) {
+  return `runtime/native/keiko-secure-workspace-read${target === "windows-x64" ? ".exe" : ""}`;
+}
+
+function writeNativeHelperPayload(resourceRoot, target) {
+  const path = join(resourceRoot, nativeHelperExecutablePath(target));
+  ensureDir(dirname(path));
+  writeFileSync(path, nativeHelperBytes(target));
+}
+
+function nativeHelper(target, version, signingVerified) {
+  const runtimeTarget = targetByName(target);
+  const bytes = nativeHelperBytes(target);
+  const digest = sha256Bytes(bytes);
+  const signing = signingEvidence(target, signingVerified);
+  return {
+    name: "keiko-secure-workspace-read",
+    kind: "secure-workspace-text-read",
+    platformTarget: target,
+    architecture: runtimeTarget.nodeArchitecture,
+    executablePath: nativeHelperExecutablePath(target),
+    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    source: {
+      commitSha: "a".repeat(40),
+      path: "native/secure-workspace-read",
+      treeSha256: sha256Bytes(Buffer.from("native/secure-workspace-read\n")),
+    },
+    unsignedSha256: digest,
+    shippedSha256: digest,
+    sizeBytes: bytes.length,
+    sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${version}?platform=${target}`,
+    signing: {
+      signatureKind: signing.signatureKind,
+      verificationStatus: signing.verificationStatus,
+      signatureVerified: signing.signatureVerified,
+      notarizationRequired: signing.notarizationRequired,
+      notarizationVerified: signing.notarizationVerified,
+    },
+  };
 }
 
 function treeDigest(files) {
@@ -798,6 +849,7 @@ function portableManifest(input) {
     verificationSummaryPath: "evidence/signing-verification.json",
   };
   const provenance = portableManifestProvenance(input.targetVersion);
+  const nativeHelpers = [nativeHelper(input.target, input.targetVersion, input.signingVerified)];
   const manifest = {
     schemaVersion: 1,
     product: { name: "Keiko", packageName: PACKAGE_NAME, packageVersion: input.targetVersion },
@@ -805,6 +857,7 @@ function portableManifest(input) {
     artifact: portableManifestArtifact(input),
     provenance,
     runtime: portableManifestRuntime(input.target),
+    nativeHelpers,
     ...portableManifestProductSections(input.target),
     security,
     updateEligibility: portableUpdateEligibility(),
@@ -813,7 +866,10 @@ function portableManifest(input) {
       entryId: `manual-review-${input.targetVersion}`,
       entryPackageVersion: input.targetVersion,
       entryReleaseTag: `v${input.targetVersion}`,
-      reviewedBinding: reviewedBinding(input, security, provenance),
+      reviewedBinding: {
+        ...reviewedBinding(input, security, provenance),
+        nativeHelpers,
+      },
     },
   };
   if (input.sidecar !== undefined) {

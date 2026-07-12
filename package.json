@@ -123,6 +123,7 @@
     "portable:verify-signing": "node scripts/verify-portable-runtime-signing.mjs",
     "portable:manual-review": "npm run build:packages && npm run build:ui && node --disable-warning=ExperimentalWarning scripts/portable-manual-review.mjs",
     "smoke:portable-launch-setup": "npm run build:packages && node --disable-warning=ExperimentalWarning scripts/portable-launch-setup-smoke.mjs",
+    "smoke:portable-secure-read": "node scripts/portable-secure-read-smoke.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
     "smoke:install:optional": "node scripts/installable-package-smoke.mjs --include-optional",
     "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",

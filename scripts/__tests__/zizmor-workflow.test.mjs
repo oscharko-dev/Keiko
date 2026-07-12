@@ -38,7 +38,7 @@ describe("zizmor workflow job", () => {
 
   it("documents the misfeature ignore with the Windows MSVC toolchain constraint", () => {
     expect(config).toMatch(
-      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:115\n\s+- portable-assets\.yml:181/u,
+      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:115\n\s+- portable-assets\.yml:185/u,
     );
   });
 

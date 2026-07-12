@@ -129,6 +129,9 @@ describe("portable manual review harness", () => {
     const entries = await zipEntryNames(join(root, "release-assets", "keiko-macos-arm64.zip"));
     expect(entries.some((entry) => entry.endsWith("/"))).toBe(false);
     expect(entries).toContain("Keiko/Keiko.app/Contents/Resources/app/package.json");
+    expect(entries).toContain(
+      "Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
+    );
   });
 
   it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {
@@ -136,6 +139,7 @@ describe("portable manual review harness", () => {
     prepareScenarioFixture(root, "macos-arm64", "sidecar-present");
     const manifest = jsonAt(join(root, "release-assets", "macos-arm64-portable-manifest.json"));
     const sidecar = manifest.sidecarRuntimes[0];
+    const helper = manifest.nativeHelpers[0];
 
     expect(
       validatePortablePublishedManifest(manifest, {
@@ -156,6 +160,14 @@ describe("portable manual review harness", () => {
     expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
       manifest.sidecarRuntimes,
     );
+    expect(helper).toMatchObject({
+      name: "keiko-secure-workspace-read",
+      platformTarget: "macos-arm64",
+      architecture: "arm64",
+      executablePath: "runtime/native/keiko-secure-workspace-read",
+      sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${manifest.product.packageVersion}?platform=macos-arm64`,
+    });
+    expect(manifest.releaseImpact.reviewedBinding.nativeHelpers).toEqual(manifest.nativeHelpers);
     expect(manifest.updateEligibility.rollbackSupported).toBe(false);
     expect(JSON.stringify(sidecar)).not.toMatch(/selfUpdate|independentUpdate|rollback/iu);
   });

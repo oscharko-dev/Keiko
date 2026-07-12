@@ -99,6 +99,20 @@ const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
 const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
+const NATIVE_HELPER_KEYS = Object.freeze([
+  "name",
+  "kind",
+  "platformTarget",
+  "architecture",
+  "executablePath",
+  "protocol",
+  "source",
+  "unsignedSha256",
+  "shippedSha256",
+  "sizeBytes",
+  "sbomBomRef",
+  "signing",
+]);
 const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
 const GITHUB_REVIEW_REFERENCE_PATTERN =
   /^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u;
@@ -420,6 +434,133 @@ function validateSidecarRuntimes(manifest, failures, options) {
   sidecars.forEach((runtime, index) =>
     validateSidecarRuntime(manifest, runtime, index, names, failures, options),
   );
+}
+
+// One closed schema validator intentionally enumerates every field and lifecycle invariant.
+// eslint-disable-next-line complexity, max-lines-per-function
+function validateNativeHelpers(manifest, failures, options) {
+  const helpers = manifest.nativeHelpers;
+  // Schema v1 predates #2333. Absence remains parseable so an installed legacy artifact can be
+  // recognized and the secure-read capability can fail closed instead of breaking manifest reads.
+  if (helpers === undefined) {
+    if (options.requireNativeHelpers === true) {
+      push(
+        failures,
+        "nativeHelpers",
+        "must contain exactly one helper for newly produced artifacts",
+      );
+    }
+    return;
+  }
+  if (!Array.isArray(helpers) || helpers.length !== 1) {
+    push(failures, "nativeHelpers", "must contain exactly one helper when present");
+    return;
+  }
+  const helper = helpers[0];
+  const path = "nativeHelpers[0]";
+  if (!isRecord(helper)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  exactKeysAt(helper, NATIVE_HELPER_KEYS, path, failures);
+  literalAt(helper, "name", "keiko-secure-workspace-read", path, failures);
+  literalAt(helper, "kind", "secure-workspace-text-read", path, failures);
+  const targetName = stringAt(helper, "platformTarget", path, failures);
+  const target = portableTargetByName(targetName);
+  if (targetName !== manifest.artifact?.platformTarget) {
+    push(failures, `${path}.platformTarget`, "must match artifact");
+  }
+  if (
+    target !== undefined &&
+    stringAt(helper, "architecture", path, failures) !== target.nodeArchitecture
+  ) {
+    push(failures, `${path}.architecture`, `must be ${target.nodeArchitecture}`);
+  }
+  const expectedExecutable = `runtime/native/keiko-secure-workspace-read${target?.nodePlatform === "win32" ? ".exe" : ""}`;
+  if (stringAt(helper, "executablePath", path, failures) !== expectedExecutable) {
+    push(failures, `${path}.executablePath`, `must be ${expectedExecutable}`);
+  }
+  const protocol = recordAt(helper, "protocol", path, failures);
+  exactKeysAt(
+    protocol,
+    ["schemaVersion", "requestMagic", "responseMagic"],
+    `${path}.protocol`,
+    failures,
+  );
+  literalAt(protocol, "schemaVersion", 1, `${path}.protocol`, failures);
+  literalAt(protocol, "requestMagic", "KSR1", `${path}.protocol`, failures);
+  literalAt(protocol, "responseMagic", "KSS1", `${path}.protocol`, failures);
+  const source = recordAt(helper, "source", path, failures);
+  exactKeysAt(source, ["commitSha", "path", "treeSha256"], `${path}.source`, failures);
+  const commitSha = stringAt(source, "commitSha", `${path}.source`, failures);
+  const acceptedCommitPattern = options.allowPlaceholders ? COMMIT_PATTERN : STRICT_COMMIT_PATTERN;
+  if (!acceptedCommitPattern.test(commitSha))
+    push(failures, `${path}.source.commitSha`, "must be a commit SHA");
+  literalAt(source, "path", "native/secure-workspace-read", `${path}.source`, failures);
+  digestAt(source, "treeSha256", `${path}.source`, failures, options);
+  digestAt(helper, "unsignedSha256", path, failures, options);
+  digestAt(helper, "shippedSha256", path, failures, options);
+  positiveNumberAt(helper, "sizeBytes", path, failures);
+  const bomRef = stringAt(helper, "sbomBomRef", path, failures);
+  if (
+    !bomRef.startsWith("pkg:generic/keiko-secure-workspace-read@") ||
+    !bomRef.endsWith(`?platform=${targetName}`)
+  ) {
+    push(failures, `${path}.sbomBomRef`, "must bind the helper and platform target");
+  }
+  const signing = recordAt(helper, "signing", path, failures);
+  exactKeysAt(
+    signing,
+    [
+      "signatureKind",
+      "verificationStatus",
+      "signatureVerified",
+      "notarizationRequired",
+      "notarizationVerified",
+    ],
+    `${path}.signing`,
+    failures,
+  );
+  if (
+    target !== undefined &&
+    stringAt(signing, "signatureKind", `${path}.signing`, failures) !== target.signatureKind
+  ) {
+    push(failures, `${path}.signing.signatureKind`, `must be ${target.signatureKind}`);
+  }
+  const status = stringAt(signing, "verificationStatus", `${path}.signing`, failures);
+  if (!PORTABLE_VERIFICATION_STATUSES.includes(status))
+    push(failures, `${path}.signing.verificationStatus`, "is unsupported");
+  const signatureVerified = booleanAt(signing, "signatureVerified", `${path}.signing`, failures);
+  const notarizationRequired = booleanAt(
+    signing,
+    "notarizationRequired",
+    `${path}.signing`,
+    failures,
+  );
+  const notarizationVerified = booleanAt(
+    signing,
+    "notarizationVerified",
+    `${path}.signing`,
+    failures,
+  );
+  if (target !== undefined && notarizationRequired !== (target.nodePlatform === "darwin"))
+    push(failures, `${path}.signing.notarizationRequired`, "must match target");
+  if (target?.nodePlatform !== "darwin" && notarizationVerified)
+    push(failures, `${path}.signing.notarizationVerified`, "must be false for non-macOS targets");
+  if (
+    options.context === "staging" &&
+    (status !== "unverified-staging" || signatureVerified || notarizationVerified)
+  ) {
+    push(failures, `${path}.signing`, "must remain explicitly unverified during staging");
+  }
+  if (
+    requiresProductionVerification(options) &&
+    (status !== "verified-production" ||
+      !signatureVerified ||
+      (target?.nodePlatform === "darwin" && !notarizationVerified))
+  ) {
+    push(failures, `${path}.signing`, "must be verified for production");
+  }
 }
 
 function validateSidecarRuntime(manifest, runtime, index, names, failures, options) {
@@ -1111,6 +1252,7 @@ function reviewedBindingChecks(manifest) {
     ...evidenceBindingChecks(manifest),
     ...securityBindingChecks(manifest),
     ...sidecarBindingChecks(manifest),
+    ...nativeHelperBindingChecks(manifest),
   ];
 }
 
@@ -1156,6 +1298,10 @@ function securityBindingChecks(manifest) {
 function sidecarBindingChecks(manifest) {
   const sidecars = Array.isArray(manifest.sidecarRuntimes) ? manifest.sidecarRuntimes : [];
   return sidecars.length > 0 ? [["sidecarRuntimes", sidecars]] : [];
+}
+
+function nativeHelperBindingChecks(manifest) {
+  return Array.isArray(manifest.nativeHelpers) ? [["nativeHelpers", manifest.nativeHelpers]] : [];
 }
 
 function nodeRuntimeIdentity(manifest, target) {
@@ -1375,6 +1521,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateProvenance(manifest, failures, normalized);
   validateRuntime(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
+  validateNativeHelpers(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
@@ -1388,11 +1535,19 @@ export function validatePortableManifest(manifest, options = {}) {
 }
 
 export function validatePortableStagingManifest(manifest, options = {}) {
-  return validatePortableManifest(manifest, { ...options, context: "staging" });
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "staging",
+    requireNativeHelpers: true,
+  });
 }
 
 export function validatePortableCandidateManifest(manifest, options = {}) {
-  return validatePortableManifest(manifest, { ...options, context: "candidate" });
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "candidate",
+    requireNativeHelpers: true,
+  });
 }
 
 export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
@@ -1400,6 +1555,7 @@ export function validatePortablePublishedManifest(manifest, apiIdentity, options
     ...options,
     apiIdentity,
     context: "published",
+    requireNativeHelpers: true,
   });
 }
 
@@ -1428,9 +1584,26 @@ export function portableVerificationSummaryForManifest(manifest) {
     notarizationVerified: security.notarizationVerified,
     platformSignatureLocallyVerified: platformSignatureVerified(manifest),
     reasonCodes: security.verificationReasonCodes ?? [],
+    nativeHelpers: nativeHelperVerificationSummaries(manifest),
     sidecarRuntimes: sidecarVerificationSummaries(manifest),
     verificationChecks: security.verificationChecks ?? {},
   };
+}
+
+function nativeHelperVerificationSummaries(manifest) {
+  if (!Array.isArray(manifest.nativeHelpers)) return [];
+  return manifest.nativeHelpers.map((helper) => ({
+    name: helper.name,
+    platformTarget: helper.platformTarget,
+    architecture: helper.architecture,
+    executablePath: helper.executablePath,
+    shippedSha256: helper.shippedSha256,
+    signingStatus: helper.signing?.verificationStatus,
+    signatureKind: helper.signing?.signatureKind,
+    signatureVerified: helper.signing?.signatureVerified,
+    notarizationRequired: helper.signing?.notarizationRequired,
+    notarizationVerified: helper.signing?.notarizationVerified,
+  }));
 }
 
 function sidecarVerificationSummaries(manifest) {
