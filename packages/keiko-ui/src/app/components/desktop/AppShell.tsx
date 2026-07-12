@@ -323,28 +323,27 @@ export function buildAppShellCommands(
   toggleTheme: () => void,
   undoStack: WorkspaceUndoStackApi,
 ): readonly Command[] {
-  const out: Command[] = [];
-  for (const tp of CARD_TYPES) {
+  const createCommands = CARD_TYPES.map((tp): Command => {
     const t = WIN_TYPES[tp];
-    out.push({
+    return {
       id: `new-${tp}`,
       label: `New ${t.title}`,
       group: "Create",
       icon: t.icon,
       run: () => openPalettePick(tp),
-    });
-  }
-  for (const tp of TOOL_TYPES) {
+    };
+  });
+  const toolCommands = TOOL_TYPES.map((tp): Command => {
     const t = WIN_TYPES[tp];
-    out.push({
+    return {
       id: `open-${tp}`,
       label: `Open ${t.title}`,
       group: "Tools",
       icon: t.icon,
       run: () => toggleTool(tp),
-    });
-  }
-  out.push({
+    };
+  });
+  const openEditorSettingsCommand: Command = {
     id: "open-editor-settings",
     label: "Open Editor settings",
     group: "Tools",
@@ -355,8 +354,8 @@ export function buildAppShellCommands(
         window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
       }
     },
-  });
-  out.push(
+  };
+  const staticCommands: readonly Command[] = [
     {
       id: "tile",
       label: "Tile all windows",
@@ -407,8 +406,8 @@ export function buildAppShellCommands(
       shortcut: "⇧⌘Z",
       run: undoStack.redo,
     },
-  );
-  return out;
+  ];
+  return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
 }
 
 function AppShellInner(): ReactNode {

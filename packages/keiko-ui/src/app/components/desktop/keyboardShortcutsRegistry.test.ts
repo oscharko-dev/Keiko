@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeWorkspaceBindingsForContext,
   bindingFromKeyboardEvent,
+  bindingToWorkspaceChord,
   removeKeyboardShortcutOverride,
   resolveEffectiveKeyboardShortcuts,
   shortcutLabel,
@@ -90,5 +91,33 @@ describe("keyboardShortcutsRegistry", () => {
     expect(bindingFromKeyboardEvent(event)).toBe("Alt+S");
     expect(shortcutLabel("CtrlOrMeta+Alt+R", "mac")).toBe("⌘⌥R");
     expect(shortcutLabel("CtrlOrMeta+Alt+R", "other")).toBe("Ctrl+Alt+R");
+  });
+
+  it("replaces overrides, maps workspace chords, and rejects unsupported key events", () => {
+    const first = updateKeyboardShortcutOverride({
+      current: [],
+      commandId: "quick-access.files",
+      binding: "Shift+CtrlOrMeta+O",
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("expected first override");
+
+    const replaced = updateKeyboardShortcutOverride({
+      current: first.value,
+      commandId: "quick-access.files",
+      binding: "Alt+CtrlOrMeta+O",
+    });
+
+    expect(replaced).toMatchObject({ ok: true, value: ["1|quick-access.files|Alt+CtrlOrMeta+O"] });
+    expect(bindingToWorkspaceChord("CtrlOrMeta+Alt+ArrowLeft")).toEqual({
+      key: "arrowleft",
+      mod: ["cmd", "alt"],
+    });
+    expect(bindingToWorkspaceChord("CtrlOrMeta")).toBeNull();
+    expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "Control" }))).toBeNull();
+    expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "Escape" }))).toBe("Esc");
+    expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: " " }))).toBe("Space");
+    expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "F12" }))).toBe("F12");
+    expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "😀" }))).toBeNull();
   });
 });
