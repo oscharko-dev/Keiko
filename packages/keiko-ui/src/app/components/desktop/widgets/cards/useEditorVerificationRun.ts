@@ -270,7 +270,12 @@ function waitForSharedSource(source: EventSource): Promise<boolean> {
     resolveSharedSourceReady = resolve;
   });
   sharedSourceReadyTimer = setTimeout(() => {
-    if (sharedSource === source && !sharedSourceOpen) closeSharedSource();
+    if (sharedSource !== source || sharedSourceOpen) return;
+    // A reconnect waiter must fail closed without tearing down the one stream that an already
+    // adopted run still needs for its terminal event. A stream with only pending starts is safe to
+    // close, preserving the ordinary never-open handshake behavior.
+    if (projectIdByRunId.size > 0) settleSharedSourceReady(false);
+    else closeSharedSource();
   }, EVENT_SOURCE_READY_TIMEOUT_MS);
   return sharedSourceReadyPromise;
 }

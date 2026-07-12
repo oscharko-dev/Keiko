@@ -262,11 +262,10 @@ export function extractFailureLocations(
   const lines = `${result.stdout}\n${result.stderr}`
     .split(/\r?\n/u)
     // Vitest 4 inserts ANSI styling between a path's colon and its line/column digits on Linux.
-    // Strip terminal presentation controls before parsing so colored and non-colored reporters have
-    // identical semantics. Keep both pre- and post-strip bounds: pathological raw control streams do
-    // not receive extra parser work, and the parser never sees an oversized normalized line.
+    // Bound raw lines before doing any work, then strip terminal presentation controls so colored
+    // and non-colored reporters parse identically. Stripping only removes characters, so the raw
+    // bound also guarantees a bounded normalized line.
     .filter((line) => line.length <= MAX_LINE_LENGTH)
-    .map((line) => stripVTControlCharacters(line))
-    .filter((line) => line.length <= MAX_LINE_LENGTH);
+    .map((line) => stripVTControlCharacters(line));
   return clamp(extractByKind(kind, lines), workspaceRoot);
 }

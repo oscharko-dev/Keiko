@@ -28,6 +28,9 @@ class FakeEventSource {
   public emitOpen(): void {
     this.listeners.get("open")?.(new Event("open"));
   }
+  public emitError(): void {
+    this.listeners.get("error")?.(new Event("error"));
+  }
   public emit(kind: string, payload: Record<string, unknown>): void {
     this.listeners.get(`verification:${kind}`)?.({
       data: JSON.stringify({ schemaVersion: V, kind, ...payload }),
@@ -214,6 +217,53 @@ describe("useEditorVerificationRun", () => {
       expect(fetchMock.mock.calls.some(([url]) => url === "/api/editor/verification/runs")).toBe(
         false,
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not close an active run stream when another project's reconnect handshake times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookA = renderHook(() =>
+        useEditorVerificationRun({ root: "/project-a", activeFile: null }),
+      );
+      const hookB = renderHook(() =>
+        useEditorVerificationRun({ root: "/project-b", activeFile: null }),
+      );
+      await tick();
+
+      act(() => hookA.result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      const source = FakeEventSource.instances[0];
+      await act(async () => {
+        source?.emit("run-started", {
+          runId: "run-a",
+          projectId: "/project-a",
+          kinds: ["typecheck"],
+          startedAtMs: 1,
+        });
+        source?.emitError();
+        await Promise.resolve();
+      });
+
+      act(() => hookB.result.current.runWorkspaceVerification("lint"));
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+
+      expect(source?.closed).toBe(false);
+      expect(hookA.result.current.verificationRunning).toBe(true);
+      expect(hookB.result.current.statusBarRun?.label).toBe("Verification: failed to start");
+
+      await act(async () => {
+        source?.emitOpen();
+        source?.emit("run-completed", { runId: "run-a", ...completed("passed") });
+        await Promise.resolve();
+      });
+      expect(hookA.result.current.statusBarRun?.label).toContain("passed");
+      expect(source?.closed).toBe(true);
     } finally {
       vi.useRealTimers();
     }
