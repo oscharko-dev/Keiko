@@ -121,23 +121,29 @@ async function readUntil(response: Response, needle: string): Promise<string> {
   if (reader === undefined) throw new Error("missing SSE response body");
   const decoder = new TextDecoder();
   let collected = "";
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`missing SSE frame before deadline: ${needle}`));
+    }, 5_000);
+  });
   try {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      if (collected.includes(needle)) return collected;
-      const chunk = await Promise.race([
-        reader.read(),
-        new Promise<null>((resolve) => {
-          setTimeout(() => {
-            resolve(null);
-          }, 25);
-        }),
-      ]);
-      if (chunk === null) continue;
-      if (chunk.done) return collected;
-      collected += decoder.decode(chunk.value, { stream: true });
-    }
-    return collected;
+    return await Promise.race([
+      (async (): Promise<string> => {
+        while (!collected.includes(needle)) {
+          const chunk = await reader.read();
+          if (chunk.done) return collected;
+          collected += decoder.decode(chunk.value, { stream: true });
+        }
+        return collected;
+      })(),
+      deadline,
+    ]);
+  } catch (error: unknown) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
+    clearTimeout(timeout);
     reader.releaseLock();
   }
 }
@@ -160,26 +166,31 @@ describe("workspace watch routes", () => {
       `${baseUrl()}/api/editor/workspace-watch/events?root=${encodeURIComponent(workspaceRoot)}`,
       { signal: controller.signal },
     );
-    const initial = await readUntil(stream, "editor-watch:snapshot");
-    expect(initial).not.toContain(workspaceRoot);
+    let stale: Response | undefined;
+    try {
+      const initial = await readUntil(stream, "editor-watch:snapshot");
+      expect(initial).not.toContain(workspaceRoot);
 
-    await writeFile(join(workspaceRoot, "route-created.txt"), "RAW_BODY_SHOULD_NOT_LEAK", "utf8");
-    adapter.emit({ eventType: "rename", filename: "route-created.txt" });
-    const created = await readUntil(stream, "editor-watch:created");
-    expect(created).toContain('"relativePath":"route-created.txt"');
-    expect(created).not.toContain("RAW_BODY_SHOULD_NOT_LEAK");
+      await writeFile(join(workspaceRoot, "route-created.txt"), "RAW_BODY_SHOULD_NOT_LEAK", "utf8");
+      adapter.emit({ eventType: "rename", filename: "route-created.txt" });
+      const created = await readUntil(stream, "editor-watch:created");
+      expect(created).toContain('"relativePath":"route-created.txt"');
+      expect(created).not.toContain("RAW_BODY_SHOULD_NOT_LEAK");
 
-    await writeFile(join(workspaceRoot, "route-second.txt"), "second", "utf8");
-    adapter.emit({ eventType: "rename", filename: "route-second.txt" });
-    await readUntil(stream, "route-second.txt");
-    const stale = await fetch(
-      `${baseUrl()}/api/editor/workspace-watch/events?root=${encodeURIComponent(
-        workspaceRoot,
-      )}&lastEventId=0`,
-    );
-    const staleFrames = await readUntil(stale, "editor-watch:snapshot-required");
-    expect(staleFrames).toContain('"requiresSnapshot":true');
-    await stale.body?.cancel();
-    controller.abort();
+      await writeFile(join(workspaceRoot, "route-second.txt"), "second", "utf8");
+      adapter.emit({ eventType: "rename", filename: "route-second.txt" });
+      await readUntil(stream, "route-second.txt");
+      stale = await fetch(
+        `${baseUrl()}/api/editor/workspace-watch/events?root=${encodeURIComponent(
+          workspaceRoot,
+        )}&lastEventId=0`,
+      );
+      const staleFrames = await readUntil(stale, "editor-watch:snapshot-required");
+      expect(staleFrames).toContain('"requiresSnapshot":true');
+    } finally {
+      await stale?.body?.cancel();
+      controller.abort();
+      await stream.body?.cancel().catch(() => undefined);
+    }
   });
 });
