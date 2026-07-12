@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import {
   DE_CATALOG,
@@ -400,8 +400,8 @@ test("passes a pure refactor of an already-translated file with no new user-faci
     return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
 
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.problems, []);
+  expect(result.ok).toBe(true);
+  expect(result.problems).toEqual([]);
 });
 
 test("fails a change that adds a genuinely new translation key without updating catalogs", async () => {
@@ -417,8 +417,8 @@ test("fails a change that adds a genuinely new translation key without updating 
     return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
 
-  assert.equal(result.ok, false);
-  assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
 });
 
 test("fails a change that adds new hard-coded user-facing text", async () => {
@@ -434,6 +434,6 @@ test("fails a change that adds new hard-coded user-facing text", async () => {
     return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
 
-  assert.equal(result.ok, false);
-  assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
 });
