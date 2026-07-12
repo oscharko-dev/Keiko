@@ -3,21 +3,21 @@
   "assets": {
     "keiko-tokens.css": {
       "identityBytes": 20112,
-      "gzipBytes": 5098,
+      "gzipBytes": 5096,
       "brotliBytes": 4223,
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
-      "gzipBytes": 4278,
+      "gzipBytes": 4302,
       "brotliBytes": 3556,
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
     "maintainer-ui.css": {
-      "identityBytes": 9087,
-      "gzipBytes": 1963,
-      "brotliBytes": 1659,
-      "sha256": "f9090dc53eb6d20c680827a285556ade1421588936529e3b85f2a02c9d758e44"
+      "identityBytes": 10975,
+      "gzipBytes": 2219,
+      "brotliBytes": 1861,
+      "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e"
     },
     "maintainer-ui.html": {
       "identityBytes": 1655,
@@ -26,22 +26,34 @@
       "sha256": "3f497a3754ae9876169d2ab04586093110742360dd09ad908288b483829e57e1"
     },
     "maintainer-ui.js": {
-      "identityBytes": 12672,
-      "gzipBytes": 3722,
-      "brotliBytes": 3227,
-      "sha256": "9ef8dfb858ac2653d26969a8d069072670a5c48889278cfc3d39c0c3ed3d2fb4"
+      "identityBytes": 12802,
+      "gzipBytes": 3817,
+      "brotliBytes": 3325,
+      "sha256": "2e75c4e67a39fc4b9d7c3b9c825bf6000254cd5ca89d27949d5fba9c09dd27e2"
     },
     "maintainer-ui-copy.js": {
-      "identityBytes": 6718,
-      "gzipBytes": 2259,
-      "brotliBytes": 1964,
-      "sha256": "09ea41a53db52f3ae303fc7b2217af4176600e260319b4c357e0a55c4f4c4374"
+      "identityBytes": 13847,
+      "gzipBytes": 4014,
+      "brotliBytes": 3507,
+      "sha256": "7699a532395d049cf709e13acaca4c8e7d00a8977234d8d760d069dff9e4c2c9"
+    },
+    "maintainer-ui-detail.js": {
+      "identityBytes": 2468,
+      "gzipBytes": 925,
+      "brotliBytes": 764,
+      "sha256": "a5cd2210023df3b9422f746c061ee5cceaa502706181100ace92aefd0dfd7948"
     },
     "maintainer-ui-dom.js": {
-      "identityBytes": 3966,
-      "gzipBytes": 1402,
-      "brotliBytes": 1177,
-      "sha256": "1809fcd17b6b3b8bfeb5a170626231822644e975052ebd5712192c09cabb4bb7"
+      "identityBytes": 4761,
+      "gzipBytes": 1670,
+      "brotliBytes": 1407,
+      "sha256": "8252cce42202221b3f131c13d341e443b3c33440e82bb4af539cb76a8240444a"
+    },
+    "maintainer-ui-publication.js": {
+      "identityBytes": 12970,
+      "gzipBytes": 3461,
+      "brotliBytes": 3011,
+      "sha256": "0e687f2127e828f92e17252e9bef2d45faafb979b107deab3bfbb2bd67120a0c"
     }
   },
   "screenshots": [

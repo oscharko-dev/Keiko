@@ -1,5 +1,7 @@
 import { copy, german, reasonLabel, statusLabel } from "./maintainer-ui-copy.js";
-import { createUiHelpers, element, metadata, text } from "./maintainer-ui-dom.js";
+import { createUiHelpers, element, metadata, renderError, text } from "./maintainer-ui-dom.js";
+import * as detailUi from "./maintainer-ui-detail.js";
+import { createPublicationUi, publicationEnabled } from "./maintainer-ui-publication.js";
 
 const root = document.getElementById("mq-app");
 document.documentElement.lang = german ? "de" : "en";
@@ -15,10 +17,25 @@ const state = {
   detail: null,
   lastFocus: null,
   auditTrigger: null,
+  publication: null,
+  detailGeneration: 0,
+  detailAbort: null,
   busy: false,
 };
 const endpoint = "/v1/maintainer/";
 const { button, notice, replace, request, setBusy } = createUiHelpers(root, state, endpoint);
+const publication = createPublicationUi({
+  state,
+  request,
+  button,
+  notice,
+  setBusy,
+  rerender: () => renderDetail(),
+  isCurrent: (itemId, generation) =>
+    state.selected === itemId && state.detailGeneration === generation,
+  focusResult: () => document.getElementById("mq-publication-result")?.focus(),
+  onSessionExpired: () => detailUi.expireMaintainerSession(state, errorView),
+});
 function signIn() {
   window.location.assign(`${endpoint}auth/login`);
 }
@@ -28,22 +45,7 @@ function signInView(message) {
     button(copy.signIn, signIn, "mq-button--primary"),
   ]);
 }
-function errorView(error) {
-  const code = error instanceof Error ? error.message : "failed";
-  const message = copy[code] || copy.failed;
-  const retryable = code === "unavailable" || code === "rateLimited";
-  const recovery =
-    code === "session"
-      ? button(copy.signIn, signIn, "mq-button--primary")
-      : retryable
-        ? button(copy.retry, () => void loadQueue())
-        : button(copy.refresh, () => void loadQueue());
-  replace([
-    notice(message, code === "conflict" || code === "rateLimited" ? "warning" : "error"),
-    recovery,
-  ]);
-  recovery.focus();
-}
+const errorView = (error) => renderError(error, copy, button, notice, replace, signIn, loadQueue);
 
 function permitted(permission) {
   return state.session.permissions.includes(permission);
@@ -217,6 +219,31 @@ function actionControls(detail) {
     cards.push(actionCard(copy.private, copy.privateHelp, "route-private-security"));
   return legalHoldCards(cards);
 }
+function renderDetail(focus = false) {
+  detailUi.renderMaintainerDetail(
+    {
+      state,
+      copy,
+      button,
+      metadata,
+      statusLabel,
+      replace,
+      actionControls,
+      publication,
+      onBack: () => {
+        state.detailAbort?.abort();
+        state.detailAbort = null;
+        state.detailGeneration += 1;
+        state.selected = null;
+        state.detail = null;
+        state.publication = null;
+        queueView();
+        state.lastFocus?.focus();
+      },
+    },
+    focus,
+  );
+}
 function legalHoldCards(cards) {
   if (!permitted("feedback.legal-hold")) return cards;
   if (state.detail.legalHold.status === "active")
@@ -257,39 +284,16 @@ function holdCard() {
     ]),
   ]);
 }
-async function openDetail(itemId) {
-  try {
-    setBusy(true);
-    const detail = await request(`reviews/${itemId}`);
-    state.selected = itemId;
-    state.detail = detail;
-    const heading = element("h2", { textContent: copy.detail, tabIndex: "-1" });
-    const payload = element("pre", {
-      className: "mq-payload",
-      textContent: detail.canonicalPayload,
-    });
-    const cards = actionControls(detail);
-    const content = [
-      heading,
-      button(copy.back, () => {
-        queueView();
-        state.lastFocus?.focus();
-      }),
-      metadata(detail, copy, statusLabel),
-      element("h3", { textContent: copy.payload }),
-      payload,
-    ];
-    if (cards.length)
-      content.push(
-        element("section", { className: "mq-action-grid", "aria-label": copy.actions }, cards),
-      );
-    replace([element("article", { className: "mq-panel mq-stack" }, content)]);
-    heading.focus();
-  } catch (error) {
-    errorView(error);
-  } finally {
-    setBusy(false);
-  }
+function openDetail(itemId) {
+  return detailUi.openMaintainerDetail(itemId, {
+    state,
+    request,
+    setBusy,
+    errorView,
+    publicationEnabled,
+    publication,
+    renderDetail,
+  });
 }
 function actionData(action, controls) {
   const data = {
@@ -357,6 +361,12 @@ async function loadAudit() {
 }
 async function logout() {
   try {
+    state.detailAbort?.abort();
+    state.detailAbort = null;
+    state.detailGeneration += 1;
+    state.selected = null;
+    state.detail = null;
+    state.publication = null;
     await request("auth/logout", {
       method: "POST",
       headers: {
@@ -385,4 +395,5 @@ async function bootstrap() {
   }
 }
 replace([notice(copy.loading)]);
+window.addEventListener("beforeunload", () => state.detailAbort?.abort(), { once: true });
 void bootstrap();

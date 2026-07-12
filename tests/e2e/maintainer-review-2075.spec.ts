@@ -18,7 +18,9 @@ const servedAssets = [
   "maintainer-ui.html",
   "maintainer-ui.js",
   "maintainer-ui-copy.js",
+  "maintainer-ui-detail.js",
   "maintainer-ui-dom.js",
+  "maintainer-ui-publication.js",
 ] as const;
 const axeProofs: { name: string; axeViolations: number }[] = [];
 const externalRequests = new WeakMap<Page, string[]>();

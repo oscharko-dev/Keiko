@@ -17,10 +17,17 @@ describe("hosted maintainer UI assets", () => {
   );
 
   it("keeps executable assets inert and below the production line cap", async () => {
-    const names = ["maintainer-ui.js", "maintainer-ui-copy.js", "maintainer-ui-dom.js"];
+    const names = [
+      "maintainer-ui.js",
+      "maintainer-ui-copy.js",
+      "maintainer-ui-detail.js",
+      "maintainer-ui-dom.js",
+      "maintainer-ui-publication.js",
+    ];
     for (const name of names) {
       const source = await readFile(new URL(name, assets), "utf8");
       expect(source).not.toContain("innerHTML");
+      expect(source).not.toMatch(/(?:local|session)Storage/gu);
       expect(source.split("\n").length - 1, name).toBeLessThanOrEqual(400);
     }
   });
@@ -31,5 +38,22 @@ describe("hosted maintainer UI assets", () => {
     expect(literals).toEqual(["1200px", "1px", "240px", "320px", "420px", "640px", "720px"]);
     expect(source).not.toMatch(/font-weight:\s*\d/gu);
     expect(source).not.toContain("prefers-reduced-motion");
+  });
+
+  it("routes publication 401s through bounded global session recovery", async () => {
+    const [application, publication] = await Promise.all([
+      readFile(new URL("maintainer-ui.js", assets), "utf8"),
+      readFile(new URL("maintainer-ui-publication.js", assets), "utf8"),
+    ]);
+    expect(application).toContain(
+      "onSessionExpired: () => detailUi.expireMaintainerSession(state, errorView)",
+    );
+    expect(await readFile(new URL("maintainer-ui-detail.js", assets), "utf8")).toContain(
+      'errorView(new Error("session"))',
+    );
+    expect(publication).toContain('error.message === "session"');
+    expect(publication).not.toContain(
+      'error.message === "session" || error.message === "forbidden"',
+    );
   });
 });

@@ -1,0 +1,71 @@
+{
+  "issue": 2076,
+  "assets": {
+    "keiko-tokens.css": {
+      "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
+      "identityBytes": 20112,
+      "gzipBytes": 5096,
+      "brotliBytes": 4223
+    },
+    "keiko-semantic-tokens.css": {
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
+      "identityBytes": 16141,
+      "gzipBytes": 4302,
+      "brotliBytes": 3556
+    },
+    "maintainer-ui.css": {
+      "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e",
+      "identityBytes": 10975,
+      "gzipBytes": 2219,
+      "brotliBytes": 1861
+    },
+    "maintainer-ui.html": {
+      "sha256": "3f497a3754ae9876169d2ab04586093110742360dd09ad908288b483829e57e1",
+      "identityBytes": 1655,
+      "gzipBytes": 716,
+      "brotliBytes": 550
+    },
+    "maintainer-ui.js": {
+      "sha256": "2e75c4e67a39fc4b9d7c3b9c825bf6000254cd5ca89d27949d5fba9c09dd27e2",
+      "identityBytes": 12802,
+      "gzipBytes": 3817,
+      "brotliBytes": 3325
+    },
+    "maintainer-ui-copy.js": {
+      "sha256": "7699a532395d049cf709e13acaca4c8e7d00a8977234d8d760d069dff9e4c2c9",
+      "identityBytes": 13847,
+      "gzipBytes": 4014,
+      "brotliBytes": 3507
+    },
+    "maintainer-ui-detail.js": {
+      "sha256": "a5cd2210023df3b9422f746c061ee5cceaa502706181100ace92aefd0dfd7948",
+      "identityBytes": 2468,
+      "gzipBytes": 925,
+      "brotliBytes": 764
+    },
+    "maintainer-ui-dom.js": {
+      "sha256": "8252cce42202221b3f131c13d341e443b3c33440e82bb4af539cb76a8240444a",
+      "identityBytes": 4761,
+      "gzipBytes": 1670,
+      "brotliBytes": 1407
+    },
+    "maintainer-ui-publication.js": {
+      "sha256": "0e687f2127e828f92e17252e9bef2d45faafb979b107deab3bfbb2bd67120a0c",
+      "identityBytes": 12970,
+      "gzipBytes": 3461,
+      "brotliBytes": 3011
+    }
+  },
+  "screenshots": [
+    "01-dark-desktop-prepare.png",
+    "02-dark-preview-inert.png",
+    "03-light-succeeded.png",
+    "04-dark-cancelled-private.png",
+    "05-mobile-forced-colors-reduced-motion.png",
+    "06-light-high-contrast.png",
+    "07-dark-manual-remediation.png",
+    "08-forced-colors-active.png"
+  ],
+  "cspBypassed": false,
+  "result": "PASS"
+}
