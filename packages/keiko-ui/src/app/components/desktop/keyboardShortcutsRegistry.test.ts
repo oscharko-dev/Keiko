@@ -120,4 +120,10 @@ describe("keyboardShortcutsRegistry", () => {
     expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "F12" }))).toBe("F12");
     expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "😀" }))).toBeNull();
   });
+
+  // Covers bindingToWorkspaceChord's "unknown modifier → null" branch: an
+  // unknown prefix like "Foo+" filters out and yields an empty modifier list.
+  it("drops unknown modifiers when mapping a binding to a workspace chord", () => {
+    expect(bindingToWorkspaceChord("Foo+ArrowLeft")).toEqual({ key: "arrowleft", mod: [] });
+  });
 });

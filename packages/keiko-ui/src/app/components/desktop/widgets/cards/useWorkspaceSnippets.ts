@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
@@ -38,7 +38,7 @@ function eventsUrl(root: string): string {
   return `/api/editor/snippets/events?root=${encodeURIComponent(root)}`;
 }
 
-function abortControllerRef(ref: MutableRefObject<AbortController | undefined>): void {
+function abortControllerRef(ref: RefObject<AbortController | undefined>): void {
   ref.current?.abort();
 }
 
@@ -122,7 +122,7 @@ interface MutateArgs {
   readonly action: "replace" | "reset";
   readonly root: string | undefined;
   readonly snapshot: EditorM7WorkspaceSnippetSnapshot | undefined;
-  readonly signalRef: MutableRefObject<AbortController | undefined>;
+  readonly signalRef: RefObject<AbortController | undefined>;
   readonly setSnapshot: (snapshot: EditorM7WorkspaceSnippetSnapshot) => void;
   readonly setMutating: (mutating: boolean) => void;
   readonly setIssue: (issue: WorkspaceSnippetsIssue | undefined) => void;

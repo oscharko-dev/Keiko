@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import {
   EDITOR_M7_SCHEMA_VERSION,
@@ -75,7 +75,7 @@ function aborted(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-function abortControllerRef(ref: MutableRefObject<AbortController | undefined>): void {
+function abortControllerRef(ref: RefObject<AbortController | undefined>): void {
   ref.current?.abort();
 }
 
@@ -199,7 +199,7 @@ interface MutationArgs {
   readonly root: string | undefined;
   readonly scope: EditorM7SettingScope;
   readonly snapshot: EditorM7SettingsSnapshot | undefined;
-  readonly signalRef: MutableRefObject<AbortController | undefined>;
+  readonly signalRef: RefObject<AbortController | undefined>;
   readonly setSnapshot: (snapshot: EditorM7SettingsSnapshot) => void;
   readonly setMutating: (mutating: boolean) => void;
   readonly setIssue: (issue: EditorSettingsIssue | undefined) => void;

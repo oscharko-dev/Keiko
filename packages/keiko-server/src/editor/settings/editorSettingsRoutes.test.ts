@@ -10,7 +10,10 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
-import { createEditorSettingsControlService } from "./editorSettingsControl.js";
+import {
+  createEditorSettingsControlService,
+  type EditorSettingsControlService,
+} from "./editorSettingsControl.js";
 import { createEditorSettingsEventBus } from "./editorSettingsEvents.js";
 import { createEditorSettingsStore } from "./editorSettingsStore.js";
 
@@ -323,6 +326,157 @@ describe("editor settings control routes", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       error: { code: "INVALID_REQUEST" },
+    });
+  });
+});
+
+const USER_ETAG_REVISION_ZERO = '"edm7-0-0-user"';
+
+function userSetBody(): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    scope: "user",
+    action: "set",
+    expectedRevision: 0,
+    values: { fontSize: 16 },
+  };
+}
+
+async function rebuildWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void> {
+  await closeServer();
+  const built = await buildServer({ ...baseDeps(), ...overrides });
+  server = built.server;
+  port = built.port;
+}
+
+async function rebuildWithMutateOverride(
+  mutateStub: EditorSettingsControlService["mutate"],
+): Promise<void> {
+  await closeServer();
+  const deps = baseDeps();
+  const original = deps.editorSettingsControl;
+  if (original === undefined) throw new Error("expected editor settings control");
+  const wrapped: EditorSettingsControlService = {
+    stateDir: original.stateDir,
+    read: original.read,
+    mutate: mutateStub,
+  };
+  const built = await buildServer({ ...deps, editorSettingsControl: wrapped });
+  server = built.server;
+  port = built.port;
+}
+
+describe("editor settings routes — degraded control plane", () => {
+  it("returns 503 on GET when the editor settings control is unavailable", async () => {
+    await rebuildWithDeps({ editorSettingsControl: undefined });
+    const response = await snapshot();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "STATE_UNAVAILABLE" },
+    });
+  });
+
+  it("returns 503 on PATCH when the editor settings control is unavailable", async () => {
+    await rebuildWithDeps({ editorSettingsControl: undefined });
+    const response = await mutation(setBody(), {
+      "If-Match": USER_ETAG_REVISION_ZERO,
+      "Idempotency-Key": "no-control-patch",
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "STATE_UNAVAILABLE" },
+    });
+  });
+
+  it("returns 503 on events when the settings event bus is unavailable", async () => {
+    await rebuildWithDeps({ editorSettingsEvents: undefined });
+    const response = await fetch(
+      `${baseUrl()}/api/editor/settings/events?root=${encodeURIComponent(workspaceRoot)}`,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "STATE_UNAVAILABLE" },
+    });
+  });
+});
+
+describe("editor settings routes — malformed patch requests", () => {
+  it.each([
+    { name: "schemaVersion mismatch", override: { schemaVersion: "0" } },
+    { name: "invalid scope value", override: { scope: "system" } },
+    { name: "invalid action value", override: { action: "delete" } },
+    { name: "negative expectedRevision", override: { expectedRevision: -1 } },
+    { name: "non-integer expectedRevision", override: { expectedRevision: 1.5 } },
+    { name: "workspace root not a string", override: { root: 42 } },
+    { name: "empty root string", override: { root: "" } },
+    { name: "reset action with values instead of settingIds", override: { action: "reset" } },
+    { name: "unknown top-level key", override: { extraneous: true } },
+  ])("returns 400 INVALID_REQUEST for $name", async ({ override }) => {
+    const initial = await snapshot();
+    const response = await mutation(
+      { ...setBody(), ...override },
+      {
+        "If-Match": initial.headers.get("etag") ?? "",
+        "Idempotency-Key": `malformed-${String(Math.random())}`,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("returns 400 INVALID_REQUEST when the Idempotency-Key header is missing", async () => {
+    const initial = await snapshot();
+    const response = await fetch(`${baseUrl()}/api/editor/settings`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        "If-Match": initial.headers.get("etag") ?? "",
+      },
+      body: JSON.stringify(setBody()),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+});
+
+describe("editor settings routes — control mutation failure results", () => {
+  it("returns 400 with the reason code when the control reports an invalid mutation", async () => {
+    await rebuildWithMutateOverride(() =>
+      Promise.resolve({ kind: "invalid", code: "VALUE_OUT_OF_BOUNDS" }),
+    );
+    const response = await mutation(userSetBody(), {
+      "If-Match": USER_ETAG_REVISION_ZERO,
+      "Idempotency-Key": "stub-invalid",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALUE_OUT_OF_BOUNDS" },
+    });
+  });
+
+  it("returns 503 STATE_UNAVAILABLE when the control reports the store is unavailable", async () => {
+    await rebuildWithMutateOverride(() =>
+      Promise.resolve({ kind: "unavailable", code: "STATE_UNAVAILABLE" }),
+    );
+    const response = await mutation(userSetBody(), {
+      "If-Match": USER_ETAG_REVISION_ZERO,
+      "Idempotency-Key": "stub-unavailable",
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "STATE_UNAVAILABLE" },
     });
   });
 });
