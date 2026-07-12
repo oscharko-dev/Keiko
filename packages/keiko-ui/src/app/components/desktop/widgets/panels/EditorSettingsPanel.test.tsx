@@ -405,6 +405,21 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     expect(document.activeElement).toBe(enableButton);
   });
 
+  it("wraps Shift+Tab to the last button when focus is still on the dialog container itself", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+    const enableButton = within(dialog).getByRole("button", { name: "Enable" });
+
+    // Initial focus lands on the dialog container (not a button) right after it opens. Pressing
+    // Shift+Tab at that point, before ever pressing Tab, must still wrap inside the dialog instead
+    // of escaping to whatever was focusable behind it.
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(enableButton);
+  });
+
   it("prompts with the patch-apply copy for the AI patch apply toggle", () => {
     renderPanel();
 

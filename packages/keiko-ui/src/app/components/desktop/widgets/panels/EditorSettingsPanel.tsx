@@ -399,13 +399,20 @@ function AiActivationConfirmDialog({
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button, [href]");
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [href]",
+      );
       if (focusable === undefined || focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (first === undefined || last === undefined) return;
       const active = document.activeElement;
-      if (event.shiftKey && active === first) {
+      // Initial focus lands on the dialog container itself (see the effect above), not on a
+      // button, so a Shift+Tab pressed before ever pressing Tab must wrap the same as if focus
+      // were already on the first element — otherwise it escapes to whatever was focusable before
+      // the dialog opened, defeating the containment this handler exists to provide.
+      const onContainer = active === dialogRef.current;
+      if (event.shiftKey && (active === first || onContainer)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && active === last) {
