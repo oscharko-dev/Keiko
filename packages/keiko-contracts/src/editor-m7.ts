@@ -1195,7 +1195,7 @@ function normalizeBinding(binding: string): string {
 function canonicalBindingKey(binding: string): string {
   const parts = binding.split("+").map((part) => part.trim().toLowerCase());
   const key = parts.at(-1) ?? "";
-  const modifiers = parts.slice(0, -1).sort();
+  const modifiers = parts.slice(0, -1).sort((left, right) => left.localeCompare(right));
   return [...modifiers, key].join("+");
 }
 

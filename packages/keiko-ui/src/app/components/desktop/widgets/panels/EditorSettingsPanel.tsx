@@ -365,9 +365,10 @@ function aiActivationMessage(id: EditorM7SettingId, t: I18nTranslate): string {
 }
 
 // Replaces window.confirm() (WCAG 2.2 AA: a native browser confirm is not keyboard/screen-reader
-// operable, unstylable, and traps focus outside the app's control). Mirrors the accessible-dialog
-// pattern already established by EditorWidget's dirty-close dialog: capture/restore focus, move
-// focus into the dialog on mount, and close on Escape.
+// operable, unstylable, and traps focus outside the app's control). Extends the accessible-dialog
+// pattern already established by EditorWidget's dirty-close dialog (capture/restore focus, move
+// focus into the dialog on mount, close on Escape) with real Tab/Shift+Tab containment, since
+// aria-modal="true" on an alertdialog requires focus to stay inside it while open.
 function AiActivationConfirmDialog({
   id,
   t,
@@ -393,7 +394,24 @@ function AiActivationConfirmDialog({
   }, []);
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === "Escape") onDecline();
+      if (event.key === "Escape") {
+        onDecline();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button, [href]");
+      if (focusable === undefined || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (first === undefined || last === undefined) return;
+      const active = document.activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {

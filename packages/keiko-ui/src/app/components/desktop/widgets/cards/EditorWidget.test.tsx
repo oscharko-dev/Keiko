@@ -1073,6 +1073,43 @@ describe("EditorWidget — edit and save", () => {
     expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
   });
 
+  it("does not release retained models on root-change while a sibling pane is still mounted", async () => {
+    const view = await renderLoaded();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    const sibling = render(
+      <EditorRuntimeWidget windowId="editor-test" root="/repo" file="src/other.ts" />,
+    );
+    await screen.findAllByTestId("editor-surface");
+    disposeAllUnattachedEditorModels.mockClear();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("editor-surface")).toHaveLength(2);
+    });
+
+    expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
+
+    sibling.unmount();
+    view.unmount();
+  });
+
+  it("releases retained models once the last of several mounted panes unmounts", async () => {
+    const first = await renderLoaded();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    const second = render(
+      <EditorRuntimeWidget windowId="editor-test" root="/repo" file="src/other.ts" />,
+    );
+    await screen.findAllByTestId("editor-surface");
+    disposeAllUnattachedEditorModels.mockClear();
+
+    first.unmount();
+    expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
+
+    second.unmount();
+    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+  });
+
   it("compares a dirty external disk edit and keeps the local buffer without overwriting it", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();

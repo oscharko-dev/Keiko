@@ -1392,6 +1392,14 @@ function changesetSourceExceedsLimit(content: string, maxBytes: number | null): 
   return maxBytes !== null && UTF8_ENCODER.encode(content).length > maxBytes;
 }
 
+// Every editor pane mounts its own EditorRuntimeWidget instance, but disposeAllUnattachedEditorModels
+// clears the *shared* registry with no per-root scoping. Gating it behind this live-instance count
+// keeps a single pane's unmount/root-change from evicting the retained-but-inactive models that
+// sibling panes (split view, multiple windows) are still keeping warm — eager cleanup only fires
+// when this is the sole surviving instance; otherwise the registry's own count/byte-budget eviction
+// still reclaims abandoned entries the next time any pane attaches or detaches a model.
+let liveEditorRuntimeInstances = 0;
+
 function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -1445,17 +1453,24 @@ function EditorRuntimeWidget({
   }, [editorSettings.applied.modelRetentionCount, editorSettings.applied.modelRetentionBytes]);
   // AC7: releases retained-but-inactive Monaco models when this pane's root changes (the pane
   // itself is keyed by pane id, not root, so it stays mounted across a root switch) or when the
-  // pane closes/the window unmounts.
+  // pane closes/the window unmounts. Only eager when no sibling pane is alive to depend on the
+  // shared registry — see the liveEditorRuntimeInstances comment above.
   const previousRuntimeRootRef = useRef(root);
   useEffect(() => {
     if (previousRuntimeRootRef.current !== root) {
-      disposeAllUnattachedEditorModels("root-disposed");
+      if (liveEditorRuntimeInstances <= 1) {
+        disposeAllUnattachedEditorModels("root-disposed");
+      }
       previousRuntimeRootRef.current = root;
     }
   }, [root]);
   useEffect(() => {
+    liveEditorRuntimeInstances += 1;
     return () => {
-      disposeAllUnattachedEditorModels("shutdown");
+      liveEditorRuntimeInstances -= 1;
+      if (liveEditorRuntimeInstances === 0) {
+        disposeAllUnattachedEditorModels("shutdown");
+      }
     };
   }, []);
   const snippetInsertionSafeRef = useRef(false);

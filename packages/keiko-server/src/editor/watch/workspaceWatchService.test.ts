@@ -276,6 +276,38 @@ describe("workspace watch service", () => {
     expect(events.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
   });
 
+  it("keeps the first subscriber's exclusions fixed for the session, ignoring a later subscriber's different set", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const firstEvents: EditorM7WatchEvent[] = [];
+    manager.subscribe({
+      root,
+      onEvent: (event) => firstEvents.push(event),
+      additionalExclusions: ["generated"],
+    });
+    await drainInitialBaseline(manager, adapter);
+
+    const secondEvents: EditorM7WatchEvent[] = [];
+    manager.subscribe({
+      root,
+      onEvent: (event) => secondEvents.push(event),
+      additionalExclusions: [],
+    });
+
+    await mkdir(join(root, "generated"), { recursive: true });
+    await writeFile(join(root, "generated", "file.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "generated/file.txt" });
+
+    await writeFile(join(root, "allowed.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "allowed.txt" });
+    await waitForCondition(() =>
+      secondEvents.some((event) => event.relativePath === "allowed.txt"),
+    );
+
+    expect(firstEvents.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+    expect(secondEvents.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+  });
+
   it("does not fabricate deleted events when a fallback rescan is truncated by maxScanEntries", async () => {
     const adapter = new FakeAdapter();
     await mkdir(join(root, "dirA"), { recursive: true });

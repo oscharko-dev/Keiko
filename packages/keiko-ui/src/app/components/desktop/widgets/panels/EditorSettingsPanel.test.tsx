@@ -389,6 +389,22 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     );
   });
 
+  it("traps Tab focus inside the confirmation dialog instead of leaking to the settings behind it", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+    const cancelButton = within(dialog).getByRole("button", { name: "Cancel" });
+    const enableButton = within(dialog).getByRole("button", { name: "Enable" });
+
+    enableButton.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(cancelButton);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(enableButton);
+  });
+
   it("prompts with the patch-apply copy for the AI patch apply toggle", () => {
     renderPanel();
 

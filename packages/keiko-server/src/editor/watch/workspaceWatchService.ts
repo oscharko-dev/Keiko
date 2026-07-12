@@ -333,7 +333,12 @@ class WorkspaceWatchSession {
 
   public subscribe(args: WorkspaceWatchSubscribeArgs): WorkspaceWatchSubscribeResult {
     this.cancelIdleTimer();
-    if (args.additionalExclusions !== undefined) {
+    // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline
+    // scan (seedBaseline, triggered by ensureStarted below) is filtered by whatever is set here,
+    // so accepting a different value from a later subscriber would leave the seeded `known` map
+    // inconsistent with the exclusions applied to subsequent scans. All subscribers for a root
+    // resolve the same watcherExclusions setting in practice, so this only matters for the first.
+    if (args.additionalExclusions !== undefined && this.subscribers.size === 0) {
       this.additionalExclusions = exclusionsFromPatterns(args.additionalExclusions);
     }
     this.ensureStarted();
