@@ -67,7 +67,7 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function readWorkspaceNodeEngines(root) {
+export function readWorkspaceNodeEngines(root) {
   const packagesRoot = join(root, "packages");
   const engines = [];
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {

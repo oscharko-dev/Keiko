@@ -1,9 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { evaluateRuntimeToolchain, readNpmVersionFromPath } from "../check-runtime-toolchain.mjs";
+import {
+  evaluateRuntimeToolchain,
+  readNpmVersionFromPath,
+  readWorkspaceNodeEngines,
+} from "../check-runtime-toolchain.mjs";
 
 const fixtureRoots = [];
 
@@ -87,5 +91,42 @@ describe("readNpmVersionFromPath", () => {
     const fixture = npmFixture("latest");
     symlinkSync(fixture.npmCli, join(fixture.root, "npm"));
     expect(readNpmVersionFromPath(fixture.root, "linux")).toBeUndefined();
+  });
+
+  it("skips path entries without npm and reads the first governed npm manifest", () => {
+    const fixture = npmFixture("11.16.0");
+    const missingEntry = mkdtempSync(join(tmpdir(), "keiko-runtime-toolchain-missing-"));
+    fixtureRoots.push(missingEntry);
+    symlinkSync(fixture.npmCli, join(fixture.root, "npm"));
+
+    expect(readNpmVersionFromPath(`${missingEntry}${delimiter}${fixture.root}`, "linux")).toBe(
+      "11.16.0",
+    );
+  });
+});
+
+describe("readWorkspaceNodeEngines", () => {
+  it("reads workspace Node.js engine floors, skips non-package directories, and sorts by package name", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-workspaces-"));
+    fixtureRoots.push(root);
+    mkdirSync(join(root, "packages", "zeta"), { recursive: true });
+    mkdirSync(join(root, "packages", "alpha"), { recursive: true });
+    mkdirSync(join(root, "packages", "beta"), { recursive: true });
+    mkdirSync(join(root, "packages", "fixtures-only"), { recursive: true });
+    writeFileSync(
+      join(root, "packages", "zeta", "package.json"),
+      `${JSON.stringify({ name: "@oscharko-dev/zeta", engines: { node: ">=24.18.0 <25" } })}\n`,
+    );
+    writeFileSync(
+      join(root, "packages", "alpha", "package.json"),
+      `${JSON.stringify({ name: "@oscharko-dev/alpha", engines: { node: ">=24.18.0 <25" } })}\n`,
+    );
+    writeFileSync(join(root, "packages", "beta", "package.json"), "{}\n");
+
+    expect(readWorkspaceNodeEngines(root)).toEqual([
+      { name: "@oscharko-dev/alpha", value: ">=24.18.0 <25" },
+      { name: "@oscharko-dev/zeta", value: ">=24.18.0 <25" },
+      { name: "beta", value: undefined },
+    ]);
   });
 });

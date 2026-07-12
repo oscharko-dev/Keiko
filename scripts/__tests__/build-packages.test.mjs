@@ -21,6 +21,13 @@ afterEach(() => {
 });
 
 describe("native TypeScript package build", () => {
+  it("returns no empty outputs when the repository has no packages directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-build-packages-empty-"));
+    roots.push(root);
+
+    expect(findEmptyPackageBuildOutputs(root)).toEqual([]);
+  });
+
   it("reports zero-byte outputs with repository-relative paths", () => {
     const { root, output } = fixture();
     writeFileSync(output, "");
@@ -46,6 +53,16 @@ describe("native TypeScript package build", () => {
     writeFileSync(join(root, "scripts", "empty-build-output-allowlist.json"), '["../secret"]\n');
 
     expect(() => findEmptyPackageBuildOutputs(root)).toThrow("Invalid empty build-output");
+  });
+
+  it("rejects a non-array empty-output allowlist fail-closed", () => {
+    const { root } = fixture();
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(join(root, "scripts", "empty-build-output-allowlist.json"), "{}\n");
+
+    expect(() => findEmptyPackageBuildOutputs(root)).toThrow(
+      "Empty build-output allowlist must be an array",
+    );
   });
 
   it("rejects malformed empty-output allowlist entries fail-closed", () => {
@@ -110,5 +127,34 @@ describe("native TypeScript package build", () => {
         },
       }),
     ).toThrow("packages/fixture/dist/index.js");
+  });
+
+  it("propagates compiler spawn errors without retrying", () => {
+    const { root } = fixture();
+    const failure = new Error("compiler unavailable");
+    let attempts = 0;
+
+    expect(() =>
+      buildPackages({
+        root,
+        runCompiler: () => {
+          attempts += 1;
+          return { error: failure };
+        },
+      }),
+    ).toThrow(failure);
+    expect(attempts).toBe(1);
+  });
+
+  it("fails closed on a non-zero compiler exit before inspecting stale outputs", () => {
+    const { root, output } = fixture();
+    writeFileSync(output, "");
+
+    expect(() =>
+      buildPackages({
+        root,
+        runCompiler: () => ({ status: 2 }),
+      }),
+    ).toThrow("Native TypeScript package build exited with 2");
   });
 });
