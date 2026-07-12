@@ -53,6 +53,7 @@ interface AuthorityRecord {
   readonly digest: string;
   readonly registeredAtMs: number;
   readonly usage: AuthorityUsage;
+  sessionId?: string | undefined;
   readonly localActionBinding?: LocalActionBinding | undefined;
 }
 
@@ -203,8 +204,19 @@ export class EditorAgentAuthorityRegistry {
   ): EditorAgentAuthorityResolution {
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
     if (!resolved.ok) return resolved;
-    const binding = this.records.get(recordKey(reference))?.localActionBinding;
-    return binding === undefined || localBindingMatches(binding, action)
+    const record = this.records.get(recordKey(reference));
+    if (record === undefined) return { ok: false, reason: "invalid" };
+    if (
+      record.localActionBinding !== undefined &&
+      !localBindingMatches(record.localActionBinding, action)
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+    if (record.sessionId === undefined) {
+      record.sessionId = action.sessionId;
+      return resolved;
+    }
+    return safeEqual(record.sessionId, action.sessionId)
       ? resolved
       : { ok: false, reason: "invalid" };
   }
@@ -241,6 +253,28 @@ export class EditorAgentAuthorityRegistry {
     record.usage.toolCalls = nextToolCalls;
     record.usage.patchBytes = nextPatchBytes;
     return resolved;
+  }
+
+  // Roll back the synchronous pre-dispatch reservation when a mandatory admission side effect
+  // (currently the append-only audit write) fails. This is deliberately narrower than `revoke`:
+  // the envelope and its prior usage remain valid, and underflow fails closed. Callers must invoke
+  // this before yielding control so one failed admission cannot release another request's budget.
+  public rollbackActionReservation(
+    reference: EditorAgentGovernedAuthorityReference,
+    patchBytes: number,
+  ): boolean {
+    if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) return false;
+    const record = this.records.get(recordKey(reference));
+    if (
+      record === undefined ||
+      record.usage.toolCalls < 1 ||
+      record.usage.patchBytes < patchBytes
+    ) {
+      return false;
+    }
+    record.usage.toolCalls -= 1;
+    record.usage.patchBytes -= patchBytes;
+    return true;
   }
 
   // Issue #2244 (ADR-0128 D4): budget reservation for one governed CONNECTOR action. Charges

@@ -32,7 +32,7 @@ found:
 
 ## Decision
 
-### D1 — CI-based analysis, embedded in the existing required `ci` job
+### D1 — Parallel CI-based analysis with a fail-closed required `ci` aggregate
 
 Automatic Analysis is replaced by CI-based analysis using the Sonar Scanner CLI, downloaded and
 SHA-256-verified directly from `binaries.sonarsource.com` rather than via
@@ -43,20 +43,32 @@ weakening the denylist (a repository-wide supply-chain gate, not a per-dependenc
 scan step avoids the Action dependency entirely, mirroring the existing `actionlint` job in the same
 workflow, which already downloads and checksum-verifies a binary directly instead of using a
 marketplace action. The scanner CLI zip ships its own bundled JRE, so this introduces no other
-toolchain dependency. The scan step is added **inside the existing required `ci` job** in
-`.github/workflows/ci.yml`, not as a new job or a new required check — following the precedent
-already recorded in [ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) Alternative 4
-(embedding a gate in an existing required job avoids a branch-protection admin change). The scan
-step runs after
-"Coverage quality gates" so the lcov reports it consumes already exist, and is skipped under the
-same condition as that step (PRs targeting `feat/keiko-editor`).
+toolchain dependency.
 
-### D2 — The Quality Gate blocks the merge via the existing `ci` check
+Coverage and Sonar run in the dedicated `coverage-sonar` job in parallel with the long-running
+`core-quality` job. The existing required check name `ci` is retained as a minimal fail-closed
+aggregate that runs with `always()` and succeeds only when the protected-branch gate, core quality,
+and coverage/Sonar jobs all report `success`. Missing, cancelled, skipped, or failed dependencies
+therefore keep the required `ci` check red without forcing Sonar to wait behind unrelated package,
+retrieval, editor, and architecture gates. The scan itself still runs after "Coverage quality
+gates" so both LCOV reports exist. It runs only for pull requests targeting `dev` and pushes to
+`dev`; unrelated PR targets emit a successful not-applicable coverage/Sonar job rather than
+silently omitting the required aggregate evidence.
+
+### D2 — Native gate plus commit-bound fail-closed verification
 
 The scan step passes `-Dsonar.qualitygate.wait=true`, which makes the scanner poll the
-server-computed Quality Gate result and exit non-zero when it is red. Because `ci` is already a
-required status check on `dev`'s branch protection, this makes the SonarCloud Quality Gate
-merge-blocking without any branch-protection configuration change.
+server-computed Quality Gate result and exit non-zero when it is red. The same `coverage-sonar` job
+then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev`; its result is
+transitively mandatory through the required `ci` aggregate. The verifier
+queries SonarCloud for the exact PR and rejects stale analysis revisions, a native gate other than
+`OK`, any unresolved issue or new violation, new-code coverage below 85 percent, new-code
+duplication above 3 percent, or less than 100 percent hotspot review. Missing analysis or metrics
+fail closed. The verifier is independently covered by deterministic API-shaped fixtures.
+
+This compensating check is required because the current SonarCloud plan cannot activate the
+custom `Keiko Banking Grade` gate even though its conditions can be created. The required `ci`
+check therefore enforces those conditions without weakening the native Sonar result.
 
 ### D3 — lcov coverage wiring
 
@@ -68,6 +80,13 @@ the existing `text`/`json`/`json-summary` reporters used by the local coverage-b
 `packages/keiko-ui/coverage/lcov.info`. `sonar.javascript.lcov.reportPaths` covers both JavaScript
 and TypeScript; the equivalent `sonar.typescript.lcov.reportPaths` key is deprecated upstream and is
 deliberately not set.
+
+Coverage-report existence is not accepted as proof that newly added executable source was
+instrumented. `scripts/check-lcov-source-mapping.mjs` compares the exact PR base/head diff with the
+two LCOV reports and fails when a changed production TypeScript/JavaScript source file has no `SF:`
+entry. The three repository quality-gate scripts are explicitly included in package coverage and
+have per-file minimums of 90 percent for lines, statements, and functions and 85 percent for
+branches. Coverage-ignore directives are not used to satisfy these thresholds.
 
 ### D4 — New Code Definition: keep `previous_version`, fix the data defect
 
@@ -130,7 +149,7 @@ as visible legacy debt in the SonarCloud dashboard and is **not** subject to a r
 deadline by this ADR. Only new code is gated (D5). This decision is recorded here so it is not
 silently reinterpreted as an oversight later; revisiting it requires an amendment to this ADR.
 
-### D7 — Deferred to a separate, human-executed step
+### D7 — SonarCloud project administration
 
 The following require a SonarCloud UI action and are explicitly **out of scope** for this ADR's
 repository diff. Each was confirmed (2026-07-11, via `api/webservices/list`) to have **no
@@ -138,11 +157,10 @@ corresponding public API action on this SonarCloud plan** — these are not mere
 like the Quality Gate activation in D5, the endpoints do not exist at all for this org/plan, so
 there is no API path to automate them even with an admin token:
 
-- **Disable Automatic Analysis.** `sonar.autoscan.enabled` currently reads `true` at the project
-  level, inherited from the organization default (`api/settings/values`); no project-level override
-  exists yet and no API action can set one. Human action: Project → Administration → Analysis
-  Method → deactivate Automatic Analysis, once a CI-based analysis run has completed successfully
-  (avoids two conflicting analysis sources running in parallel).
+- **Automatic Analysis is disabled.** This was completed in the SonarCloud UI on 2026-07-11 after
+  CI-based analysis was introduced. The repository CI is now the sole analysis source; re-enabling
+  Automatic Analysis would reintroduce conflicting and coverage-incomplete analyses and is not an
+  accepted configuration.
 - **AI Code Assurance activation** (`contains_ai_code` project flag + qualifying gate assignment).
   No `set_contains_ai_code`-equivalent action exists in this instance's public API (only a read-only
   `api/project_badges/ai_code_assurance` badge-image endpoint was found). Human action: Project
@@ -165,7 +183,8 @@ there is no API path to automate them even with an admin token:
 
 ### Negative
 
-- The `ci` job grows by two steps (scanner download + Quality Gate polling), adding to its runtime.
+- The `ci` job grows by scanner, source-mapping, Quality Gate polling, and commit-bound evidence
+  verification steps, adding to its runtime.
 - A `SONAR_TOKEN` secret is now a dependency of the required `ci` check; if it expires or is
   revoked, `ci` fails closed for every PR until it is rotated.
 - `new_violations > 0` is strict: a single new Minor/Info finding blocks the merge, with no
@@ -176,8 +195,8 @@ there is no API path to automate them even with an admin token:
 
 - The 3,558 pre-existing issues remain visible in the SonarCloud dashboard as accepted legacy debt
   (D6), not as a blocking condition.
-- AI Code Assurance, Automatic Analysis deactivation, and permission-template governance are
-  tracked as follow-up human actions, not part of this diff.
+- AI Code Assurance and permission-template governance remain follow-up human actions. Automatic
+  Analysis is already disabled and must remain disabled.
 
 ## Alternatives Considered
 
@@ -191,8 +210,8 @@ have made Automatic Analysis fit for this repository.
 
 **Pros**: Gate failure is visible as its own named check. **Cons**: requires a branch-protection
 configuration change (adding a new required check) needing admin coordination. **Why rejected**:
-embedding the scan inside the already-required `ci` job achieves the same merge-blocking effect
-with zero branch-protection changes, mirroring the exact trade-off already decided in
+embedding the scan and commit-bound verifier inside the already-required `ci` job achieves the
+same merge-blocking effect with zero branch-protection changes, mirroring the exact trade-off in
 [ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) Alternative 4 for the
 `arch:check` gate.
 

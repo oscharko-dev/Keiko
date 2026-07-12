@@ -857,8 +857,8 @@ function AppShellInner(): ReactNode {
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
   const quickAccessCommands = useMemo(
-    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost),
-    [activeEditorHost, commands],
+    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t),
+    [activeEditorHost, commands, t],
   );
   const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
   const needsGatewaySetup =

@@ -372,7 +372,6 @@ exit 0
         run("openssl", [
           "pkcs12",
           "-export",
-          "-legacy",
           "-inkey",
           key,
           "-in",

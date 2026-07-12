@@ -318,7 +318,7 @@ registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 // Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel; jump-to-line via ctx.openEditorFile.
 registerWindowRender("problems", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "root"));
+  const root = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   return <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />;
 });
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (

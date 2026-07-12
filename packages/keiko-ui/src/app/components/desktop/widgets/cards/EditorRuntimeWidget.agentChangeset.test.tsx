@@ -133,6 +133,13 @@ class FakeEventSource {
   constructor(url: string) {
     this.url = url;
     FakeEventSource.instances.push(this);
+    queueMicrotask(() => {
+      const event = new Event("open");
+      for (const listener of this.listeners.get("open") ?? []) {
+        if (typeof listener === "function") listener(event);
+        else listener.handleEvent(event);
+      }
+    });
   }
 
   addEventListener(type: string, listener: AgentEventListener): void {
@@ -334,9 +341,41 @@ async function renderAgentEditor(
 // name in this file's changeset-review tests; stub `fetch` so those calls resolve deterministically
 // instead of reaching a real network layer, and capture the POST body to assert on run scoping.
 const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
-  const body = init?.method === "DELETE" ? { ok: true } : { runId: "verification-run-1" };
-  void url;
-  return Promise.resolve({ json: () => Promise.resolve(body) } as Response);
+  if (url.startsWith("/api/editor/verification/catalog")) {
+    return Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          schemaVersion: "1",
+          projectId: "/repo",
+          kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
+            kind,
+            available: true,
+            trustState: "trusted",
+          })),
+        }),
+    } as Response);
+  }
+  if (init?.method === "DELETE") {
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) } as Response);
+  }
+  const request = JSON.parse(String(init?.body)) as {
+    readonly projectId: string;
+    readonly kinds: readonly string[];
+    readonly targetPath?: string;
+  };
+  return Promise.resolve({
+    ok: true,
+    json: () =>
+      Promise.resolve({
+        runId: "verification-run-1",
+        projectId: request.projectId,
+        kinds: request.kinds,
+        ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+        state: "running",
+        startedAtMs: 1,
+      }),
+  } as Response);
 });
 
 beforeEach(() => {
@@ -636,8 +675,21 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     act(() => {
       diffSurface.props?.onRunVerification?.();
     });
-    await waitFor(() => expect(verificationFetchMock).toHaveBeenCalled());
-    const [runUrl, runInit] = verificationFetchMock.mock.calls[0] ?? [];
+    await waitFor(() =>
+      expect(
+        verificationFetchMock.mock.calls.some(
+          ([url, init]) =>
+            url === "/api/editor/verification/runs" &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+    const [runUrl, runInit] =
+      verificationFetchMock.mock.calls.find(
+        ([url, init]) =>
+          url === "/api/editor/verification/runs" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ) ?? [];
     expect(runUrl).toBe("/api/editor/verification/runs");
     const runBody = JSON.parse((runInit as RequestInit).body as string) as {
       kinds: readonly string[];
