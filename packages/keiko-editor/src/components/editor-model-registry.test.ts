@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   EditorModelRegistry,
   UNPROTECTED_EDITOR_MODEL,
+  attachRetainedEditorModel,
+  configureEditorModelRegistry,
+  disposeAllUnattachedEditorModels,
+  disposeEditorModelRegistryRoot,
   estimateEditorModelBytes,
+  getEditorModelRegistryDiagnostics,
+  resetEditorModelRegistryForTests,
+  updateRetainedEditorModelProtection,
   type RetainedEditorModel,
   type RetainedEditorModelEditor,
   type RetainedEditorModelNamespace,
@@ -383,5 +390,137 @@ describe("EditorModelRegistry", () => {
     registry.disposeAll("shutdown");
 
     expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("never disposes a model that is still attached, even without protection flags", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const stillOpen = attach(registry, namespace, "still-open.ts");
+
+    registry.disposeAll();
+
+    expect(namespace.created[0]?.dispose).not.toHaveBeenCalled();
+
+    stillOpen.attachment.detach();
+    registry.disposeAll();
+
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("hashes keys containing astral characters without truncating the surrogate pair", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const emoji = attach(registry, namespace, "notes-\u{1F600}.ts");
+
+    expect(registry.diagnostics().entries[0]?.identityHash).toMatch(/^[0-9a-f]{8}$/);
+
+    emoji.attachment.detach();
+  });
+});
+
+describe("EditorModelRegistry.configure", () => {
+  it("evicts immediately when a shrinking count budget is applied", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const first = attach(registry, namespace, "a.ts");
+    first.attachment.detach();
+    const second = attach(registry, namespace, "b.ts");
+    second.attachment.detach();
+
+    registry.configure({ countBudget: 1 });
+
+    expect(registry.diagnostics().liveModelCount).toBe(1);
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+    expect(namespace.created[1]?.dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current budget for an omitted field and falls back to defaults for an invalid one", () => {
+    const registry = new EditorModelRegistry({ countBudget: 3, byteBudget: 5_000_000 });
+
+    registry.configure({ countBudget: 5 });
+    expect(registry.diagnostics()).toMatchObject({ countBudget: 5, byteBudget: 5_000_000 });
+
+    registry.configure({ countBudget: -1, byteBudget: Number.NaN });
+    expect(registry.diagnostics()).toMatchObject({
+      countBudget: 16,
+      byteBudget: 128 * 1024 * 1024,
+    });
+  });
+});
+
+describe("shared editor model registry singleton", () => {
+  afterEach(() => {
+    resetEditorModelRegistryForTests();
+  });
+
+  it("attaches, updates protection, and reports diagnostics through the module-level wrappers", () => {
+    const namespace = new FakeNamespace();
+    const editor = new FakeEditor();
+    const attachment = attachRetainedEditorModel({
+      key: "scope:/repo:shared.ts",
+      rootKey: "scope:/repo",
+      uri: uri("shared.ts"),
+      language: "typescript",
+      text: "shared\n",
+      sizeBytes: 8,
+      degraded: false,
+      viewStateKey: "pane:shared",
+      namespace,
+      editor,
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+
+    updateRetainedEditorModelProtection(attachment.key, {
+      ...UNPROTECTED_EDITOR_MODEL,
+      dirty: true,
+    });
+
+    expect(getEditorModelRegistryDiagnostics().entries[0]).toMatchObject({ dirty: true });
+
+    attachment.detach();
+  });
+
+  it("applies configureEditorModelRegistry live and disposes via the root/all wrappers with default reasons", () => {
+    const namespace = new FakeNamespace();
+
+    const inRootA = attachRetainedEditorModel({
+      key: "scope:/repo-a:one.ts",
+      rootKey: "scope:/repo-a",
+      uri: uri("one.ts"),
+      language: "typescript",
+      text: "one\n",
+      sizeBytes: 4,
+      degraded: false,
+      viewStateKey: "pane:one",
+      namespace,
+      editor: new FakeEditor(),
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+    inRootA.detach();
+
+    const inRootB = attachRetainedEditorModel({
+      key: "scope:/repo-b:two.ts",
+      rootKey: "scope:/repo-b",
+      uri: uri("two.ts"),
+      language: "typescript",
+      text: "two\n",
+      sizeBytes: 4,
+      degraded: false,
+      viewStateKey: "pane:two",
+      namespace,
+      editor: new FakeEditor(),
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+    inRootB.detach();
+
+    configureEditorModelRegistry({ countBudget: 16, byteBudget: 128 * 1024 * 1024 });
+    expect(getEditorModelRegistryDiagnostics().liveModelCount).toBe(2);
+
+    disposeEditorModelRegistryRoot("scope:/repo-a");
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+    expect(namespace.created[1]?.dispose).not.toHaveBeenCalled();
+
+    disposeAllUnattachedEditorModels();
+    expect(namespace.created[1]?.dispose).toHaveBeenCalledOnce();
   });
 });
