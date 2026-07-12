@@ -74,6 +74,20 @@ const MULTI_FILE_REPORT = {
   ],
 };
 
+function cappedDiff(fileCount: number): string {
+  return Array.from({ length: fileCount }, (_value, index) => {
+    const path = `src/generated-${String(index)}.ts`;
+    return [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      "@@ -1 +1 @@",
+      `-old${String(index)}`,
+      `+new${String(index)}`,
+    ].join("\n");
+  }).join("\n");
+}
+
 function evidenceManifest(runId: string): EvidenceManifest {
   return {
     evidenceSchemaVersion: "1",
@@ -152,6 +166,7 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-123" />);
     // The loading div has aria-label "Loading diff" and aria-busy="true"
     const loading = await screen.findByLabelText(/loading diff/i);
+    expect(loading.tagName).toBe("OUTPUT");
     expect(loading).toHaveAttribute("aria-busy", "true");
   });
 
@@ -349,6 +364,23 @@ describe("ReviewWidget", () => {
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
+  });
+
+  it("links the evidence manifest from the truncated diff notice", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: { ...MINIMAL_REPORT, proposedDiff: cappedDiff(401) },
+    });
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({
+      manifest: evidenceManifest("r-large"),
+    });
+
+    render(<ReviewWidget runId="r-large" />);
+
+    expect(await screen.findByText(/diff truncated/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /evidence manifest/i })).toHaveAttribute(
+      "href",
+      "/api/evidence/r-large",
+    );
   });
 
   // CW-01: disabled Evidence must be a native <button disabled>, not role="link"

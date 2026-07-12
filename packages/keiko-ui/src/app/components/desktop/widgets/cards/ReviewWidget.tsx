@@ -64,6 +64,16 @@ function applyButtonLabel({
     : t("reviewWidget.confirmApplyPlural", { count: diffFileCount });
 }
 
+function applyStatusLabel(
+  applying: boolean,
+  appliedAt: number | undefined,
+  t: I18nTranslate,
+): string {
+  if (applying) return t("reviewWidget.applying");
+  if (appliedAt !== undefined) return t("reviewWidget.applied");
+  return "";
+}
+
 // uiux-fix F018 C259: the RunStatus→label map moved to lib/format runStatusLabel so
 // the AgentRunWidget header and this widget share one terminology.
 
@@ -282,18 +292,13 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
 
   return (
     <section className="review" aria-label={t("reviewWidget.diffReviewLabel")}>
-      {/* State 2: loading. role="status" exposes the aria-label and announces the
-          loading state; aria-label on a bare div has no effect for AT (C256). */}
+      {/* State 2: loading. Native output exposes a polite status surface without
+          depending on an explicit ARIA status role. */}
       {loading && (
-        <div
-          className="rv-loading"
-          role="status"
-          aria-busy="true"
-          aria-label={t("reviewWidget.loadingDiff")}
-        >
-          <div className="rv-skel" />
-          <div className="rv-skel rv-skel-sm" />
-        </div>
+        <output className="rv-loading" aria-busy="true" aria-label={t("reviewWidget.loadingDiff")}>
+          <span className="rv-skel" />
+          <span className="rv-skel rv-skel-sm" />
+        </output>
       )}
 
       {/* State 3: fetch error. uiux-fix F018 C124: the human message leads; the
@@ -427,11 +432,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
           {/* Apply controls */}
           <div className="rv-controls">
             <output aria-live="polite" className="rv-apply-status">
-              {applying
-                ? t("reviewWidget.applying")
-                : report.appliedAt !== undefined
-                  ? t("reviewWidget.applied")
-                  : ""}
+              {applyStatusLabel(applying, report.appliedAt, t)}
             </output>
             {applyError !== null && (
               <span role="alert" className="rv-apply-error">

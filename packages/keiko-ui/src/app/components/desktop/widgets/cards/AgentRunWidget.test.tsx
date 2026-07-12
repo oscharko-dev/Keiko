@@ -468,6 +468,36 @@ describe("AgentRunWidget", () => {
     expect(screen.getByRole("log", { name: "Run events" })).toHaveAttribute("aria-busy", "true");
   });
 
+  it("renders workspace fallback, linked file path, and report usage totals", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed",
+        durationMs: 20,
+        usage: {
+          requestId: "req-1",
+          promptTokens: 7,
+          completionTokens: 5,
+          latencyMs: 11,
+        },
+      },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-usage" }}
+        linkedRoot={null}
+        linkedFilePath="/repo/src/foo.ts"
+      />,
+    );
+
+    expect(await screen.findByText("12 tok")).toBeInTheDocument();
+    expect(screen.getByText("11 ms")).toBeInTheDocument();
+    expect(screen.getByText("no workspace")).toBeInTheDocument();
+    expect(screen.getByText("/repo/src/foo.ts")).toBeInTheDocument();
+  });
+
   // uiux-fix F018 C259/C265: header shows a human-readable status, not the raw enum
   it("maps raw report status enums to readable labels in the header", async () => {
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
@@ -628,6 +658,64 @@ describe("AgentRunWidget", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("renders investigation-only summaries with medium confidence", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "investigation-only",
+        durationMs: 100,
+        hypothesis: {
+          rootCause: "input already covered",
+          confidence: "medium",
+        },
+      },
+    });
+
+    const { container } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", model: "example-chat-model", runId: "run-medium" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Investigate bug completed without a patch."),
+    ).toBeInTheDocument();
+    const signal = container.querySelector('.ai-conf[data-level="medium"]');
+    expect(signal).not.toBeNull();
+    expect(signal).toHaveTextContent("Medium");
+  });
+
+  it("renders low confidence as an explicit verification cue", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed",
+        durationMs: 100,
+        hypothesis: {
+          rootCause: "edge case remains possible",
+          confidence: "low",
+        },
+      },
+    });
+
+    const { container } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", model: "example-chat-model", runId: "run-low" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Hypothesis")).toBeInTheDocument();
+    const signal = container.querySelector('.ai-conf[data-level="low"]');
+    expect(signal).not.toBeNull();
+    expect(signal).toHaveTextContent("Low — verify");
+  });
+
   it("keeps a non-level confidence string as the plain key/value row (behaviour-preserving)", async () => {
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
     vi.mocked(fetchModels).mockResolvedValue({ models: [] });
@@ -650,5 +738,46 @@ describe("AgentRunWidget", () => {
     expect(await screen.findByText("Hypothesis")).toBeInTheDocument();
     expect(screen.getByText("0.82")).toBeInTheDocument();
     expect(container.querySelector(".ai-conf")).toBeNull();
+  });
+
+  it("renders evidence outcomes when the archived manifest has no diff", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Unknown run.", 404));
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({
+      manifest: {
+        evidenceSchemaVersion: "1",
+        run: {
+          runId: "run-archive",
+          fingerprint: "fp",
+          harnessVersion: "test",
+          taskType: "verify",
+          outcome: "failed",
+          startedAt: 0,
+          finishedAt: 50,
+          durationMs: 50,
+        },
+        model: { modelId: "example-chat-model", costClass: "unknown" },
+        usageTotals: {
+          promptTokens: 0,
+          completionTokens: 0,
+          requestCount: 0,
+          totalLatencyMs: 0,
+        },
+        stateTransitions: [],
+        toolCalls: [],
+        commandExecutions: [],
+      },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-archive" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Verify evidence loaded: failed.")).toBeInTheDocument();
   });
 });

@@ -716,9 +716,7 @@ export function AgentRunWidget({
         >
           <Icons.files size={11} />
           <span className="arun-perm-path">
-            {linkedRoot !== null
-              ? linkedRoot
-              : (cfg.workspaceRoot ?? t("agentRunWidget.perm.noWorkspace"))}
+            {linkedRoot ?? cfg.workspaceRoot ?? t("agentRunWidget.perm.noWorkspace")}
           </span>
         </span>
         {linkedFilePath !== undefined ? (
