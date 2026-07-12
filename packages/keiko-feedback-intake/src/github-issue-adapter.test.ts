@@ -5,7 +5,8 @@ import {
   digestFeedbackIssueProjectionV1,
   digestFeedbackTargetPolicyV1,
 } from "./feedback-publication-projection.js";
-import type { ApprovedFeedbackIssueProjection } from "./feedback-publication-types.js";
+import type { FeedbackPublicationWorkerLease } from "./feedback-publication-worker-types.js";
+import { PostgresFeedbackPublicationWorkerStore } from "./feedback-publication-worker-store.js";
 import type { GithubAppConfig, GithubAppTarget } from "./github-app-config.js";
 import type {
   GithubHttpOperation,
@@ -14,7 +15,12 @@ import type {
   GithubTransportRequestOptions,
 } from "./github-app-transport.js";
 import { GithubTransportError } from "./github-app-transport.js";
-import { GovernedGithubIssueAdapter, GithubIssueAdapterError } from "./github-issue-adapter.js";
+import {
+  GovernedGithubIssueAdapter,
+  GithubIssueAdapterError,
+  type GithubIssueAdapter,
+  type GithubIssueProjection,
+} from "./github-issue-adapter.js";
 
 const marker = `<!-- keiko-feedback-reconciliation-v1:${"a".repeat(43)} -->`;
 const now = new Date("2026-07-12T00:00:00Z");
@@ -90,8 +96,8 @@ function search(
 }
 
 function claimed(
-  overrides: Partial<ApprovedFeedbackIssueProjection> = {},
-): ApprovedFeedbackIssueProjection {
+  overrides: Partial<FeedbackPublicationWorkerLease> = {},
+): FeedbackPublicationWorkerLease {
   const title = overrides.title ?? "Reviewed title";
   const body = overrides.body ?? `Reviewed body\n\n${marker}`;
   const targetPolicyDigest = overrides.targetPolicyDigest ?? target.digest;
@@ -109,8 +115,31 @@ function claimed(
     targetPolicyDigest,
     leaseOwner: "worker-1",
     leaseExpiresAt: new Date("2026-07-12T00:01:00Z"),
+    mode: "create-eligible",
+    createAttemptCount: 0,
     ...overrides,
   };
+}
+
+const coordinatorStore = new PostgresFeedbackPublicationWorkerStore(
+  {
+    connect: (): Promise<import("./postgres-types.js").PgClientLike> =>
+      Promise.reject(new Error("unused coordinator test pool")),
+  },
+  {
+    connect: (): Promise<import("./postgres-types.js").PgClientLike> =>
+      Promise.reject(new Error("unused coordinator installation-session pool")),
+  },
+  (_key: string): FeedbackPublicationTargetPolicySnapshotV1 => snapshot,
+);
+coordinatorStore.armCreate = (_lease: FeedbackPublicationWorkerLease): Promise<void> =>
+  Promise.resolve();
+
+function publish(
+  governed: GovernedGithubIssueAdapter,
+  projection: FeedbackPublicationWorkerLease = claimed(),
+): Promise<GithubIssueProjection> {
+  return governed.publishClaimedCandidate(coordinatorStore, projection);
 }
 
 function readinessResponse(operation: GithubHttpOperation): GithubHttpResponse | undefined {
@@ -342,7 +371,7 @@ describe("governed GitHub issue adapter", () => {
       commitCertainty: "definite-pre-send",
     });
     expect(transport.operations.map((operation) => operation.kind)).toEqual(["inspect-app"]);
-    await expect(governed.createIssue(claimed())).rejects.toMatchObject({
+    await expect(publish(governed)).rejects.toMatchObject({
       code: "permission-denied",
     });
   });
@@ -356,7 +385,7 @@ describe("governed GitHub issue adapter", () => {
       code: "permission-denied",
       commitCertainty: "definite-pre-send",
     });
-    await expect(governed.createIssue(claimed())).rejects.toMatchObject({
+    await expect(publish(governed)).rejects.toMatchObject({
       code: "permission-denied",
       commitCertainty: "definite-pre-send",
     });
@@ -387,7 +416,7 @@ describe("governed GitHub issue adapter", () => {
     await expect(governed.reconcileIssue(claimed())).rejects.toMatchObject({
       code: "permission-denied",
     });
-    await expect(governed.createIssue(claimed())).rejects.toMatchObject({
+    await expect(publish(governed)).rejects.toMatchObject({
       code: "permission-denied",
     });
   });
@@ -441,35 +470,21 @@ describe("governed GitHub issue adapter", () => {
       operation.kind === "mint-token" ? tokenResponse() : response(201, issue(), true),
     );
     const governed = await attested(transport);
-    await expect(governed.createIssue(claimed())).resolves.toMatchObject({
+    await expect(publish(governed)).resolves.toMatchObject({
       number: 7,
       nodeId: "I_node",
     });
     await expect(
-      governed.createIssue(claimed({ projectionDigest: "0".repeat(64) })),
+      publish(governed, claimed({ projectionDigest: "0".repeat(64) })),
     ).rejects.toMatchObject({ code: "validation-error", commitCertainty: "definite-pre-send" });
   });
 
-  it("uses an immutable entry snapshot across token minting", async () => {
-    const projection = claimed() as {
-      title: string;
-      body: string;
-    } & ApprovedFeedbackIssueProjection;
-    const transport = new FakeTransport((operation) => {
-      if (operation.kind === "mint-token") {
-        projection.title = "mutated title";
-        projection.body = `mutated body\n\n${marker}`;
-        return tokenResponse();
-      }
-      return response(201, issue(), true);
-    });
-    const governed = await attested(transport);
-    await expect(governed.createIssue(projection)).resolves.toMatchObject({ number: 7 });
-    expect(transport.operations.at(-1)).toMatchObject({
-      kind: "create-issue",
-      title: "Reviewed title",
-      body: `Reviewed body\n\n${marker}`,
-    });
+  it("exposes no raw create operation", () => {
+    const governed = adapter(new FakeTransport(() => tokenResponse()));
+    type HasRawCreate = "createIssue" extends keyof GithubIssueAdapter ? true : false;
+    const hasRawCreate: HasRawCreate = false;
+    expect(hasRawCreate).toBe(false);
+    expect("createIssue" in governed).toBe(false);
   });
 
   it.each([
@@ -490,7 +505,7 @@ describe("governed GitHub issue adapter", () => {
           ? tokenResponse()
           : response(status, { message: sentinel }, true),
       );
-      const result = (await attested(transport)).createIssue(claimed());
+      const result = publish(await attested(transport));
       await expect(result).rejects.toMatchObject({ code, commitCertainty: "may-have-committed" });
       await expect(result).rejects.not.toThrow(sentinel);
     },
@@ -505,7 +520,7 @@ describe("governed GitHub issue adapter", () => {
         retryAfter: "15",
       };
     });
-    await expect((await attested(transport)).createIssue(claimed())).rejects.toMatchObject({
+    await expect(publish(await attested(transport))).rejects.toMatchObject({
       code: "rate-limited",
       commitCertainty: "may-have-committed",
       retryAfterSeconds: 15,
@@ -525,7 +540,7 @@ describe("governed GitHub issue adapter", () => {
           ? governed.inspectReadiness()
           : (async (): Promise<unknown> => {
               await governed.inspectReadiness();
-              if (stage === "token") return governed.createIssue(claimed());
+              if (stage === "token") return publish(governed);
               return governed.reconcileIssue(claimed());
             })();
       await expect(operation).rejects.toMatchObject({
@@ -544,7 +559,7 @@ describe("governed GitHub issue adapter", () => {
         ? Promise.resolve(tokenResponse())
         : Promise.reject(new GithubTransportError(committed)),
     );
-    const result = (await attested(transport)).createIssue(claimed());
+    const result = publish(await attested(transport));
     await expect(result).rejects.toMatchObject({
       code: "provider-unavailable",
       commitCertainty: certainty,
@@ -566,7 +581,7 @@ describe("governed GitHub issue adapter", () => {
             ...invalid,
           },
     );
-    await expect((await attested(transport)).createIssue(claimed())).rejects.toMatchObject({
+    await expect(publish(await attested(transport))).rejects.toMatchObject({
       code: "provider-unavailable",
       commitCertainty: "may-have-committed",
     });
@@ -581,7 +596,7 @@ describe("governed GitHub issue adapter", () => {
       const transport = new FakeTransport((operation) =>
         operation.kind === "mint-token" ? tokenResponse() : response(201, invalidIssue, true),
       );
-      await expect((await attested(transport)).createIssue(claimed())).rejects.toMatchObject({
+      await expect(publish(await attested(transport))).rejects.toMatchObject({
         code: "provider-unavailable",
         commitCertainty: "may-have-committed",
       });

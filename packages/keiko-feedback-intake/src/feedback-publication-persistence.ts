@@ -244,12 +244,12 @@ export async function persistPrivateCancellation(
   const version = command.expectedVersion + 1;
   if (resultStatus === "cancelled-private") {
     await client.query(
-      "UPDATE feedback_publication_outbox SET status='cancelled-private',failure_code='payload-private',lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=NULL,updated_at=$2 WHERE preparation_id=$1 AND status='unclaimed'",
+      "UPDATE feedback_publication_outbox SET status='cancelled-private',create_eligible=false,failure_code='payload-private',lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=NULL,updated_at=$2 WHERE preparation_id=$1 AND status='unclaimed'",
       [command.preparationId, at],
     );
   } else if (resultStatus === "manual-reconciliation") {
     await client.query(
-      "UPDATE feedback_publication_outbox SET status='manual-reconciliation',failure_code='manual-reconciliation-required',lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=NULL,updated_at=$2 WHERE preparation_id=$1 AND status<>'succeeded'",
+      "UPDATE feedback_publication_outbox SET status='manual-reconciliation',create_eligible=false,failure_code='manual-reconciliation-required',lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=NULL,updated_at=$2 WHERE preparation_id=$1 AND status<>'succeeded'",
       [command.preparationId, at],
     );
   }

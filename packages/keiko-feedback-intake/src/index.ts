@@ -24,16 +24,7 @@ export type {
   GithubAppOperatorInput,
   GithubAppTarget,
 } from "./github-app-config.js";
-export { GithubAppPrivateKeyProvider } from "./github-app-key.js";
-export type { GithubAppSignerSnapshot } from "./github-app-key.js";
-export { createGithubAppJwt } from "./github-app-jwt.js";
-export { FixedOriginGithubTransport, GithubTransportError } from "./github-app-transport.js";
-export type {
-  GithubHttpOperation,
-  GithubHttpResponse,
-  GithubTransport,
-} from "./github-app-transport.js";
-export { GovernedGithubIssueAdapter, GithubIssueAdapterError } from "./github-issue-adapter.js";
+export { GithubIssueAdapterError } from "./github-issue-adapter.js";
 export type {
   BoundGithubTarget,
   GithubCommitCertainty,

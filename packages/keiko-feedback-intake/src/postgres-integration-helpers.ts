@@ -31,8 +31,8 @@ export function clientAdapter(client: PoolClient, observed: ObservedQuery[]): Pg
       const result = await client.query(text, [...values]);
       return { rows: result.rows as readonly Row[], rowCount: result.rowCount };
     },
-    release: (): void => {
-      client.release();
+    release: (error?: Error): void => {
+      client.release(error);
     },
   };
 }

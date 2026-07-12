@@ -81,6 +81,7 @@ describe("PostgreSQL feedback review integration", () => {
           [secondId, groupId, secondDigest, secondBytes, AT],
         );
         await setup.query(await migration("003_feedback_publication.sql"));
+        await setup.query(await migration("004_feedback_publication_worker.sql"));
       } finally {
         setup.release();
       }

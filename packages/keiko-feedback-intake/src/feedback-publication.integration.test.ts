@@ -58,6 +58,7 @@ async function createSchema(pool: Pool, prefix: string): Promise<string> {
       "001_feedback_intake.sql",
       "002_feedback_review.sql",
       "003_feedback_publication.sql",
+      "004_feedback_publication_worker.sql",
     ]);
     return schema;
   } finally {
@@ -248,6 +249,30 @@ async function expectDeferredConstraintFailure(
     client.release();
   }
   expect(failed).toBe(true);
+}
+
+async function executeTransaction(
+  pool: Pool,
+  schema: string,
+  statements: readonly { readonly sql: string; readonly values?: readonly unknown[] }[],
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL search_path TO "${schema}"`);
+    for (const statement of statements) {
+      await client.query(
+        statement.sql,
+        statement.values === undefined ? [] : [...statement.values],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function explainPlan(
@@ -674,23 +699,27 @@ describe("PostgreSQL feedback publication integration", () => {
         await schemaRows(
           pool,
           schema,
-          "UPDATE feedback_publication_outbox SET status='may-have-committed',lease_owner=NULL,lease_expires_at=NULL WHERE id=$1",
-          [approval.outboxId],
-        );
-        const claimed = await repository
-          .claimApprovedProjection(claimCommand(approval.outboxId, "worker-c"))
-          .catch((error: unknown) => error);
-        expect(claimed).toMatchObject({ code: "claim-unavailable" });
-        expect(JSON.stringify(claimed)).not.toContain("DISPATCH_CONTENT_SENTINEL");
-        await schemaRows(
-          pool,
-          schema,
           "UPDATE feedback_publication_outbox SET status='unclaimed',lease_owner=NULL,lease_expires_at=NULL,created_at=clock_timestamp()-interval '2 seconds',updated_at=clock_timestamp()-interval '2 seconds',expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
           [approval.outboxId],
         );
         await expect(
           repository.claimApprovedProjection(claimCommand(approval.outboxId, "worker-d")),
         ).rejects.toMatchObject({ code: "payload-expired" });
+        await executeTransaction(pool, schema, [
+          {
+            sql: "UPDATE feedback_publication_outbox SET status='may-have-committed',create_eligible=false,create_attempt_count=1 WHERE id=$1",
+            values: [approval.outboxId],
+          },
+          {
+            sql: "UPDATE feedback_publication_preparations SET create_armed_at=$2 WHERE id=$1",
+            values: [prepared.preparationId, AT],
+          },
+        ]);
+        const claimed = await repository
+          .claimApprovedProjection(claimCommand(approval.outboxId, "worker-c"))
+          .catch((error: unknown) => error);
+        expect(claimed).toMatchObject({ code: "claim-unavailable" });
+        expect(JSON.stringify(claimed)).not.toContain("DISPATCH_CONTENT_SENTINEL");
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await pool.end();
@@ -921,6 +950,16 @@ describe("PostgreSQL feedback publication integration", () => {
           "constraint-node",
           AT,
         ] as const;
+        await executeTransaction(pool, schema, [
+          {
+            sql: "UPDATE feedback_publication_outbox SET status='succeeded',create_eligible=false,create_attempt_count=1 WHERE preparation_id=$1",
+            values: [prepared.preparationId],
+          },
+          {
+            sql: "UPDATE feedback_publication_preparations SET create_armed_at=$2 WHERE id=$1",
+            values: [prepared.preparationId, AT],
+          },
+        ]);
         for (const [index, value] of [
           [0, other.itemId],
           [1, randomUUID()],
@@ -1337,6 +1376,16 @@ describe("PostgreSQL feedback publication integration", () => {
             failure_code: "manual-reconciliation-required",
           },
         ]);
+        await executeTransaction(pool, schema, [
+          {
+            sql: "UPDATE feedback_publication_outbox SET status='succeeded',create_eligible=false,create_attempt_count=1,failure_code=NULL WHERE id=$1",
+            values: [approval.outboxId],
+          },
+          {
+            sql: "UPDATE feedback_publication_preparations SET create_armed_at=$2 WHERE id=$1",
+            values: [afterPrepared.preparationId, AT],
+          },
+        ]);
         await schemaRows(
           pool,
           schema,
@@ -1350,14 +1399,19 @@ describe("PostgreSQL feedback publication integration", () => {
         const counts = await new PostgresIntakeRepository(scopedPool(pool, schema)).purge(
           new Date(AT.getTime() + 366 * DAY_MS),
         );
-        expect(counts.slice(0, 5).every((count) => count > 0)).toBe(true);
+        expect(
+          counts
+            .slice(0, 6)
+            .filter((_, index) => index !== 3)
+            .every((count) => count > 0),
+        ).toBe(true);
         expect(
           await schemaRows(
             pool,
             schema,
             "SELECT class_code FROM feedback_deletion_ledger WHERE class_code LIKE 'publication-%' OR class_code='github-issue-linkage' ORDER BY class_code",
           ),
-        ).toHaveLength(5);
+        ).toHaveLength(6);
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await pool.end();

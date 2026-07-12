@@ -74,8 +74,8 @@ function defaultPool(
       const client = await pool.connect();
       return {
         query: (text, values) => client.query(text, values === undefined ? [] : [...values]),
-        release: (): void => {
-          client.release();
+        release: (error?: Error): void => {
+          client.release(error);
         },
       };
     },
@@ -100,6 +100,7 @@ function migrationSources(
     [1, "feedback_intake"],
     [2, "feedback_review"],
     [3, "feedback_publication"],
+    [4, "feedback_publication_worker"],
   ] as const;
   return async () =>
     Promise.all(

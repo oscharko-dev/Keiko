@@ -10,6 +10,8 @@ import {
   digestFeedbackTargetPolicyV1,
 } from "./feedback-publication-projection.js";
 import type { ApprovedFeedbackIssueProjection } from "./feedback-publication-types.js";
+import { PostgresFeedbackPublicationWorkerStore } from "./feedback-publication-worker-store.js";
+import type { FeedbackPublicationWorkerLease } from "./feedback-publication-worker-types.js";
 import {
   GithubTransportError,
   GITHUB_MAX_SEARCH_RESULTS,
@@ -72,7 +74,6 @@ export interface GithubIssueAdapter {
     projection: ApprovedFeedbackIssueProjection,
     signal?: AbortSignal,
   ): Promise<GithubIssueReconciliationResult>;
-  createIssue(projection: ApprovedFeedbackIssueProjection): Promise<GithubIssueProjection>;
 }
 
 const MARKER = /^<!-- keiko-feedback-reconciliation-v1:[A-Za-z0-9_-]{43} -->$/u;
@@ -389,6 +390,7 @@ export interface GithubIssueAdapterDependencies {
 export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
   private readinessAttestation: ReadonlySet<string> | undefined;
   private readinessGeneration = 0;
+  private readonly coordinatedLeases = new WeakSet();
 
   constructor(private readonly dependencies: GithubIssueAdapterDependencies) {}
 
@@ -577,7 +579,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     throw safeFailure();
   }
 
-  private async postIssue(
+  async #postIssue(
     target: GithubAppTarget,
     projection: ImmutableApprovedProjection,
     token: string,
@@ -645,7 +647,13 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     }
   }
 
-  async createIssue(projection: ApprovedFeedbackIssueProjection): Promise<GithubIssueProjection> {
+  async publishClaimedCandidate(
+    store: PostgresFeedbackPublicationWorkerStore,
+    projection: FeedbackPublicationWorkerLease,
+  ): Promise<GithubIssueProjection> {
+    if (!(store instanceof PostgresFeedbackPublicationWorkerStore)) throw safeFailure(false);
+    if (this.coordinatedLeases.has(projection)) throw safeFailure(false);
+    this.coordinatedLeases.add(projection);
     const approved = immutableApprovedProjection(projection);
     const target: BoundGithubTarget = {
       snapshot: approved.target,
@@ -657,6 +665,8 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     );
     this.assertAttested(current);
     assertApprovedProjection(approved);
-    return this.postIssue(current, approved, await this.tokenDefinitelyPreSend(current));
+    const token = await this.tokenDefinitelyPreSend(current);
+    await store.armCreate(projection);
+    return this.#postIssue(current, approved, token);
   }
 }

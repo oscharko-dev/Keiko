@@ -16,6 +16,7 @@ export interface PurgeClass {
     | "publication-preparation"
     | "publication-outbox"
     | "publication-audit"
+    | "publication-delivery-audit"
     | "publication-idempotency"
     | "github-issue-linkage";
   readonly count: number;
@@ -72,6 +73,11 @@ const PURGE_QUERIES: readonly PurgeQuery[] = [
     "expires_at <= $1 AND NOT EXISTS (SELECT 1 FROM feedback_review_items item WHERE item.approval_preparation_id=feedback_publication_preparations.id AND item.state='approved')",
   ),
   batchedPurgeQuery("publication-audit", "feedback_publication_audit", "event_id"),
+  batchedPurgeQuery(
+    "publication-delivery-audit",
+    "feedback_publication_delivery_audit",
+    "event_id",
+  ),
   batchedPurgeQuery(
     "publication-idempotency",
     "feedback_publication_idempotency",

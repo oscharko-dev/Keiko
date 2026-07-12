@@ -8,7 +8,8 @@ export interface PgClientLike {
     text: string,
     values?: readonly unknown[],
   ): Promise<PgQueryResult<Row>>;
-  release(): void;
+  /** Passing an error discards a session whose state cannot be proven clean. */
+  release(error?: Error): void;
 }
 
 export interface PgPoolLike {

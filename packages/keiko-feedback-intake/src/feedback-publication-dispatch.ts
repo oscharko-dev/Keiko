@@ -19,6 +19,8 @@ export interface FeedbackPublicationDispatchRow extends FeedbackPublicationPrepa
   readonly outbox_expires_at: Date;
   readonly lease_owner: string | null;
   readonly lease_expires_at: Date | null;
+  readonly create_attempt_count: number;
+  readonly create_armed_at: Date | null;
   readonly review_state: string;
   readonly review_version: number;
   readonly review_payload_digest: string;
@@ -55,7 +57,7 @@ export async function lockDispatchCandidate(
   outboxId: string,
 ): Promise<FeedbackPublicationDispatchRow | undefined> {
   const result = await client.query<FeedbackPublicationDispatchRow>(
-    `SELECT ${FEEDBACK_PUBLICATION_PREPARATION_COLUMNS},outbox.id AS outbox_id,outbox.status AS outbox_status,outbox.expires_at AS outbox_expires_at,outbox.lease_owner,outbox.lease_expires_at,i.state AS review_state,i.version AS review_version,i.payload_digest AS review_payload_digest,i.approval_payload_digest,i.approval_marker,i.approval_projection_digest,i.approval_target_key,i.approval_label_policy_version,i.approval_record_version,i.approval_preparation_id,i.approval_target_policy_digest,p.canonical_bytes,p.exact_body_sha256 AS payload_exact_digest,p.expires_at AS payload_expires_at,private.semantic_group_id AS private_group_id FROM feedback_publication_outbox outbox JOIN feedback_publication_preparations prep ON prep.id=outbox.preparation_id JOIN feedback_review_items i ON i.id=prep.item_id JOIN feedback_payloads p ON p.id=i.payload_id LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id=i.semantic_group_id WHERE outbox.id=$1 FOR UPDATE OF outbox,prep,i,p`,
+    `SELECT ${FEEDBACK_PUBLICATION_PREPARATION_COLUMNS},outbox.id AS outbox_id,outbox.status AS outbox_status,outbox.expires_at AS outbox_expires_at,outbox.lease_owner,outbox.lease_expires_at,outbox.create_attempt_count,prep.create_armed_at,i.state AS review_state,i.version AS review_version,i.payload_digest AS review_payload_digest,i.approval_payload_digest,i.approval_marker,i.approval_projection_digest,i.approval_target_key,i.approval_label_policy_version,i.approval_record_version,i.approval_preparation_id,i.approval_target_policy_digest,p.canonical_bytes,p.exact_body_sha256 AS payload_exact_digest,p.expires_at AS payload_expires_at,private.semantic_group_id AS private_group_id FROM feedback_publication_outbox outbox JOIN feedback_publication_preparations prep ON prep.id=outbox.preparation_id JOIN feedback_review_items i ON i.id=prep.item_id JOIN feedback_payloads p ON p.id=i.payload_id LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id=i.semantic_group_id WHERE outbox.id=$1 FOR UPDATE OF outbox,prep,i,p`,
     [outboxId],
   );
   return result.rows[0];
@@ -115,9 +117,19 @@ export function claimedProjectionFromRow(
   leaseOwner: string,
   leaseExpiresAt: Date,
 ): ApprovedFeedbackIssueProjection {
+  return leasedProjectionFromRow(row, at, leaseOwner, leaseExpiresAt, "claimed");
+}
+
+export function leasedProjectionFromRow(
+  row: FeedbackPublicationDispatchRow,
+  at: Date,
+  leaseOwner: string,
+  leaseExpiresAt: Date,
+  expectedStatus: "claimed" | "may-have-committed",
+): ApprovedFeedbackIssueProjection {
   assertDispatchSnapshot(row, at);
   const exactLease = [
-    row.outbox_status === "claimed",
+    row.outbox_status === expectedStatus,
     row.lease_owner === leaseOwner,
     row.lease_expires_at?.getTime() === leaseExpiresAt.getTime(),
     leaseExpiresAt > at,

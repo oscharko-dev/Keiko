@@ -30,6 +30,10 @@ const productionModules = [
   "feedback-publication-records",
   "feedback-publication-store",
   "feedback-publication-types",
+  "feedback-publication-worker-sql",
+  "feedback-publication-worker-store",
+  "feedback-publication-worker-success",
+  "feedback-publication-worker-types",
   "github-app-config",
   "github-app-jwt",
   "github-app-key",
@@ -97,6 +101,7 @@ function expectedPaths(): readonly string[] {
     "migrations/001_feedback_intake.sql",
     "migrations/002_feedback_review.sql",
     "migrations/003_feedback_publication.sql",
+    "migrations/004_feedback_publication_worker.sql",
     "package.json",
     ...compiled,
   ].sort();
@@ -129,5 +134,33 @@ describe("hosted npm package surface", () => {
         expect(paths, `${path} imports missing ${imported}`).toContain(imported);
       }
     }
+  });
+
+  it("keeps publication creation capabilities off the package root and raw adapter surface", () => {
+    const rootSource = readFileSync(resolve(packageRoot, "src/index.ts"), "utf8");
+    for (const forbidden of [
+      "GovernedGithubIssueAdapter",
+      "PostgresFeedbackPublicationWorkerStore",
+      "GithubAppPrivateKeyProvider",
+      "createGithubAppJwt",
+      "FixedOriginGithubTransport",
+      "GithubTransport",
+    ]) {
+      expect(rootSource).not.toContain(forbidden);
+    }
+    const adapterSource = readFileSync(resolve(packageRoot, "src/github-issue-adapter.ts"), "utf8");
+    expect(adapterSource).toContain("async #postIssue(");
+    expect(adapterSource).not.toContain("createIssue(");
+    expect(packedPaths().some((path) => path.includes("feedback-publication-armed"))).toBe(false);
+    const rootDeclaration = readFileSync(resolve(packageRoot, "dist/index.d.ts"), "utf8");
+    expect(rootDeclaration).not.toMatch(
+      /GovernedGithubIssueAdapter|PostgresFeedbackPublicationWorkerStore|GithubAppPrivateKeyProvider|createGithubAppJwt|FixedOriginGithubTransport/u,
+    );
+    const adapterDeclaration = readFileSync(
+      resolve(packageRoot, "dist/github-issue-adapter.d.ts"),
+      "utf8",
+    );
+    expect(adapterDeclaration).not.toContain("createIssue");
+    expect(adapterDeclaration).not.toContain("postIssue");
   });
 });

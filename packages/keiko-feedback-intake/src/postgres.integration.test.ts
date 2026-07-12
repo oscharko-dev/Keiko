@@ -37,6 +37,7 @@ describe("PostgreSQL production intake integration", () => {
           "001_feedback_intake.sql",
           "002_feedback_review.sql",
           "003_feedback_publication.sql",
+          "004_feedback_publication_worker.sql",
         ]) {
           await migrationClient.query(
             await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"),
@@ -306,7 +307,7 @@ describe("PostgreSQL production intake integration", () => {
         const cutoff = new Date(NOW.getTime() + 242 * 86_400_000);
         expect((await repository.purge(cutoff)).some((count) => count > 0)).toBe(true);
         expect(await repository.purge(cutoff)).toEqual([
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]);
         await expect(repository.keyInUse("abuse", "integration-1", cutoff)).resolves.toBe(false);
         await expect(repository.keyInUse("dedupe", "integration-2", cutoff)).resolves.toBe(false);
@@ -319,7 +320,7 @@ describe("PostgreSQL production intake integration", () => {
             schema,
             "SELECT count(*)::text AS count FROM feedback_deletion_ledger",
           ),
-        ).toEqual([{ count: "16" }]);
+        ).toEqual([{ count: "17" }]);
         const delayedPendingAt = new Date(cutoff.getTime() - 366 * 86_400_000);
         const pendingDeletion = {
           keyClass: "dedupe" as const,
