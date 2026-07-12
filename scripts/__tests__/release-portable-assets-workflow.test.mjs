@@ -121,6 +121,14 @@ describe("portable secure-read qualification", () => {
     expect(secureReadHarness).toContain("await restoreRename(parent, alias)");
     expect(secureReadHarness).toContain("await restoreRename(parked, parent)");
     expect(secureReadHarness).toContain("harness modified supplied binary");
+    expect(secureReadHarness).toContain("[0, 6, 8].includes(decoded.status)");
+    expect(secureReadHarness).toContain("failure must be content-free");
+    expect(secureReadHarness).toContain(
+      "replacement: root mutation before denied target rename must close",
+    );
+    expect(secureReadHarness).not.toContain(
+      "if (result.mutationDenied) assert.equal(decoded.status, 0)",
+    );
     for (const denied of [
       "CON",
       "con.txt",

@@ -327,11 +327,15 @@ async function assertWindowsPolicies(binary, fixture) {
   }
 }
 
-function assertRaceResult(result) {
+function assertRaceResult(result, label) {
   const decoded = response(result);
-  assert.ok([0, 6, 8].includes(decoded.status), `unexpected race status: ${decoded.status}`);
-  if (decoded.status === 0) assert.equal(decoded.content.toString("utf8"), SAFE_TEXT);
-  if (result.mutationDenied) assert.equal(decoded.status, 0);
+  assert.ok(
+    [0, 6, 8].includes(decoded.status),
+    `${label}: unexpected race status ${decoded.status}`,
+  );
+  if (decoded.status === 0)
+    assert.equal(decoded.content.toString("utf8"), SAFE_TEXT, `${label}: unsafe content`);
+  return decoded;
 }
 
 async function resetRaceFile(fixture) {
@@ -344,23 +348,29 @@ async function assertAdversarialRaces(binary, fixture) {
   const moved = join(fixture, "moved-nested");
   const race = (mutate) => runPaused(binary, request(fixture, "nested/race.txt"), mutate);
   await resetRaceFile(fixture);
-  assertRaceResult(await race(() => writeFile(target, "evil text\n")));
+  assertRaceResult(await race(() => writeFile(target, "evil text\n")), "in-place rewrite");
   await resetRaceFile(fixture);
-  assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))));
+  assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))), "size growth");
   await resetRaceFile(fixture);
-  assertRaceResult(
-    await race(async () => {
-      const replacement = join(fixture, "replacement.txt");
-      await writeFile(replacement, "replacement\n");
-      await rename(replacement, target);
-    }),
-  );
+  const replacementResult = await race(async () => {
+    const replacement = join(fixture, "replacement.txt");
+    await writeFile(replacement, "replacement\n");
+    await rename(replacement, target);
+  });
+  const replacementResponse = assertRaceResult(replacementResult, "replacement");
+  if (replacementResult.mutationDenied)
+    assert.equal(
+      replacementResponse.status,
+      8,
+      "replacement: root mutation before denied target rename must close",
+    );
   await resetRaceFile(fixture);
   assertRaceResult(
     await race(async () => {
       await rename(nested, moved);
       await rename(moved, nested);
     }),
+    "ancestor rename round trip",
   );
   await resetRaceFile(fixture);
   let movedAway = false;
@@ -372,6 +382,7 @@ async function assertAdversarialRaces(binary, fixture) {
         await mkdir(nested);
         await writeFile(target, "replacement\n");
       }),
+      "ancestor substitution",
     );
   } finally {
     if (movedAway) {
