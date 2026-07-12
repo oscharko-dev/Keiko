@@ -49,6 +49,19 @@ describe("secure workspace text-read binary protocol", () => {
     );
   });
 
+  it("enforces root and path limits by UTF-8 bytes at multibyte boundaries", () => {
+    const root = "é".repeat(MAX_ROOT_BYTES / 2);
+    const relativePath = "é".repeat(MAX_PATH_BYTES / 2);
+
+    expect(requestFrame(root, relativePath)).toHaveLength(20 + MAX_ROOT_BYTES + MAX_PATH_BYTES);
+    expect(() => requestFrame(`${root}é`, relativePath)).toThrow(
+      "secure-workspace-read-invalid-request",
+    );
+    expect(() => requestFrame(root, `${relativePath}é`)).toThrow(
+      "secure-workspace-read-invalid-request",
+    );
+  });
+
   it.each([0, MAX_TEXT_BYTES - 1, MAX_TEXT_BYTES + 1, 0x1_0000_0000])(
     "rejects a request cap other than the fixed 65,536 bytes (%d)",
     (byteCap) => {
@@ -74,6 +87,18 @@ describe("secure workspace text-read binary protocol", () => {
     expect(() =>
       decodeSecureWorkspaceReadResponse(responseFrame(0, Buffer.alloc(MAX_TEXT_BYTES + 1))),
     ).toThrow("secure-workspace-read-malformed-response");
+  });
+
+  it("decodes response payloads as views that are wiped with their source frame", () => {
+    const source = Buffer.concat([Buffer.alloc(3), responseFrame(0, Buffer.from("secret"))]);
+    const frame = source.subarray(3);
+    const decoded = decodeSecureWorkspaceReadResponse(frame);
+
+    if (decoded.status !== "ok") throw new Error("expected successful response");
+    frame[12] = 0x53;
+    expect(new TextDecoder().decode(decoded.bytes)).toBe("Secret");
+    source.fill(0);
+    expect(decoded.bytes.every((byte) => byte === 0)).toBe(true);
   });
 
   it.each([

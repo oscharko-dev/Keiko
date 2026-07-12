@@ -81,6 +81,27 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(unavailable.create).not.toHaveBeenCalled();
   });
 
+  it("denies UTF-8 path and workspace-root byte overflows before verification or spawn", async () => {
+    const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
+    const pathOverflow = createPort(run);
+    const rootOverflow = createPort(run, { os: "darwin", arch: "arm64" }, () =>
+      "/".concat("é".repeat(16_384)),
+    );
+
+    await expect(pathOverflow.port.readText({ relativePath: "é".repeat(2_049) })).resolves.toEqual({
+      ok: false,
+      reason: "denied",
+    });
+    await expect(rootOverflow.port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "workspace-unavailable",
+    });
+    expect(pathOverflow.verify).not.toHaveBeenCalled();
+    expect(pathOverflow.create).not.toHaveBeenCalled();
+    expect(rootOverflow.verify).not.toHaveBeenCalled();
+    expect(rootOverflow.create).not.toHaveBeenCalled();
+  });
+
   it("re-resolves the live workspace root for sequential reads", async () => {
     let root = "/workspace/one";
     const roots: string[] = [];

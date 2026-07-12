@@ -1,4 +1,6 @@
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
+  SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
   encodeSecureWorkspaceReadRequest,
@@ -136,7 +138,7 @@ async function resolveLiveWorkspaceRoot(
 ): Promise<string | undefined> {
   try {
     const root = await resolve();
-    return typeof root === "string" && root.length > 0 ? root : undefined;
+    return isUsableWorkspaceRoot(root) ? root : undefined;
   } catch {
     return undefined;
   }
@@ -176,7 +178,7 @@ function helperFailure(
 function isNormalizedRelativePath(value: string): boolean {
   if (
     value.length === 0 ||
-    value.length > 4_096 ||
+    Buffer.byteLength(value, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
     value.includes("\0") ||
     value.startsWith("/") ||
     value.startsWith("\\")
@@ -186,5 +188,14 @@ function isNormalizedRelativePath(value: string): boolean {
   return components.every(
     (component) =>
       component.length > 0 && component !== "." && component !== ".." && !component.includes("\\"),
+  );
+}
+
+function isUsableWorkspaceRoot(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !value.includes("\0") &&
+    Buffer.byteLength(value, "utf8") <= SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES
   );
 }

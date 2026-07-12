@@ -66,33 +66,40 @@ export interface SecureWorkspaceReadHelperRequest {
 export function encodeSecureWorkspaceReadRequest(
   request: SecureWorkspaceReadHelperRequest,
 ): Buffer {
-  const root = encodeBoundedUtf8(request.root, SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES);
-  const relativePath = encodeBoundedUtf8(
-    request.relativePath,
-    SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
-  );
-  const maxBytes = request.byteCap;
-  if (!Number.isInteger(maxBytes) || maxBytes !== SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
-    throw new Error("secure-workspace-read-invalid-request");
+  let root: Buffer | undefined;
+  let relativePath: Buffer | undefined;
+  try {
+    root = encodeBoundedUtf8(request.root, SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES);
+    relativePath = encodeBoundedUtf8(
+      request.relativePath,
+      SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
+    );
+    const maxBytes = request.byteCap;
+    if (!Number.isInteger(maxBytes) || maxBytes !== SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
+      throw new Error("secure-workspace-read-invalid-request");
+    }
+    const frame = Buffer.allocUnsafe(
+      REQUEST_HEADER_BYTES + root.byteLength + relativePath.byteLength,
+    );
+    REQUEST_MAGIC.copy(frame, 0);
+    frame.writeUInt16LE(VERSION, 4);
+    frame.writeUInt16LE(0, 6);
+    frame.writeUInt32LE(root.byteLength, 8);
+    frame.writeUInt32LE(relativePath.byteLength, 12);
+    frame.writeUInt32LE(maxBytes, 16);
+    root.copy(frame, REQUEST_HEADER_BYTES);
+    relativePath.copy(frame, REQUEST_HEADER_BYTES + root.byteLength);
+    return frame;
+  } finally {
+    root?.fill(0);
+    relativePath?.fill(0);
   }
-  const frame = Buffer.allocUnsafe(
-    REQUEST_HEADER_BYTES + root.byteLength + relativePath.byteLength,
-  );
-  REQUEST_MAGIC.copy(frame, 0);
-  frame.writeUInt16LE(VERSION, 4);
-  frame.writeUInt16LE(0, 6);
-  frame.writeUInt32LE(root.byteLength, 8);
-  frame.writeUInt32LE(relativePath.byteLength, 12);
-  frame.writeUInt32LE(maxBytes, 16);
-  root.copy(frame, REQUEST_HEADER_BYTES);
-  relativePath.copy(frame, REQUEST_HEADER_BYTES + root.byteLength);
-  return frame;
 }
 
 export function decodeSecureWorkspaceReadRequest(
   frame: Uint8Array,
 ): SecureWorkspaceReadHelperRequest {
-  const bytes = Buffer.from(frame);
+  const bytes = bufferView(frame);
   if (
     bytes.byteLength < REQUEST_HEADER_BYTES ||
     bytes.byteLength > SECURE_WORKSPACE_TEXT_READ_MAX_FRAME_BYTES
@@ -140,7 +147,7 @@ export function encodeSecureWorkspaceReadResponse(
 export function decodeSecureWorkspaceReadResponse(
   frame: Uint8Array,
 ): SecureWorkspaceReadHelperResponse {
-  const bytes = Buffer.from(frame);
+  const bytes = bufferView(frame);
   if (
     bytes.byteLength < RESPONSE_HEADER_BYTES ||
     bytes.byteLength > RESPONSE_HEADER_BYTES + SECURE_WORKSPACE_TEXT_READ_MAX_BYTES
@@ -207,4 +214,8 @@ function decodeStrictUtf8(value: Uint8Array): string {
   } catch {
     throw new Error("secure-workspace-read-malformed-request");
   }
+}
+
+function bufferView(value: Uint8Array): Buffer {
+  return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 }
