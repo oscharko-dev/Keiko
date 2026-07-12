@@ -146,7 +146,6 @@ describe("keiko-evidence public surface", () => {
     pin<WorkflowEventLike>();
     pin<WorkflowRunIdentity>();
     pin<WorkflowRunKind>();
-    pin<WorkflowTerminalStatus>();
-    expect(true).toBe(true);
+    expect(pin<WorkflowTerminalStatus>()).toBeUndefined();
   });
 });

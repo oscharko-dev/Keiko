@@ -262,8 +262,7 @@ describe("keiko-contracts package surface", () => {
     pin<ToolCallRequest>();
     pin<ToolCallResult>();
     pin<ToolCallMetadata>();
-    pin<SideFileWriteResult>();
-    expect(true).toBe(true);
+    expect(pin<SideFileWriteResult>()).toBeUndefined();
   });
 
   it("workflow-handoff value re-exports are reachable through the barrel (#186)", () => {
@@ -290,8 +289,7 @@ describe("keiko-contracts package surface", () => {
     pin<ProposedPatchEntry>();
     pin<WorkflowHandoffRequest>();
     pin<UserApprovalTokenInput>();
-    pin<ExpectedCheck>();
-    expect(true).toBe(true);
+    expect(pin<ExpectedCheck>()).toBeUndefined();
   });
 
   it("FIM completion value re-exports are reachable through the barrel (#1210)", () => {
@@ -332,8 +330,7 @@ describe("keiko-contracts package surface", () => {
     pin<InfillingAlignment>();
     pin<CompletionInteractionMode>();
     pin<CompletionDegradeReason>();
-    pin<CompletionModelSelection>();
-    expect(true).toBe(true);
+    expect(pin<CompletionModelSelection>()).toBeUndefined();
   });
 
   it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
@@ -418,8 +415,7 @@ describe("keiko-contracts package surface", () => {
     pin<CapsuleDeleteRequest>();
     pin<LocalKnowledgeValidation<KnowledgeCapsule>>();
     pin<LocalKnowledgeValidationOk<KnowledgeCapsule>>();
-    pin<LocalKnowledgeValidationFail>();
-    expect(true).toBe(true);
+    expect(pin<LocalKnowledgeValidationFail>()).toBeUndefined();
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
@@ -448,8 +444,7 @@ describe("keiko-contracts package surface", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<KnowledgeCapsuleMigration>();
     pin<CapsuleRowShape>();
-    pin<RedactPathOptions>();
-    expect(true).toBe(true);
+    expect(pin<RedactPathOptions>()).toBeUndefined();
   });
 
   it("EvidenceDeps.costClassResolver (#163) is an optional injection port shape", () => {

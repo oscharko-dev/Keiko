@@ -219,8 +219,7 @@ describe("keiko-tools public surface", () => {
     pin<EditorAgentHttpTransportRequest>();
     pin<EditorAgentHttpTransportResponse>();
     pin<EditorAgentTimeoutScheduler>();
-    pin<EditorAgentToolOutput>();
-    expect(true).toBe(true);
+    expect(pin<EditorAgentToolOutput>()).toBeUndefined();
   });
 
   it("each type-only export is reachable by name at compile time", () => {
@@ -311,7 +310,6 @@ describe("keiko-tools public surface", () => {
     pin<GitMutationRequest>();
     pin<GitRecoveryCommand>();
     pin<GitStageCommand>();
-    pin<GitUnstageCommand>();
-    expect(true).toBe(true);
+    expect(pin<GitUnstageCommand>()).toBeUndefined();
   });
 });
