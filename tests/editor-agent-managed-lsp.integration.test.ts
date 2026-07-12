@@ -358,6 +358,10 @@ async function createFixture(
     managedLspControl,
     editorLanguageRouteOptions: {
       hostLanguageCommandRules: [{ executable: "pyright-langserver" }, { executable: "gopls" }],
+      hostLanguageProcessConfig: {
+        requestTimeoutMs: 200,
+        shutdownTimeoutMs: 200,
+      },
       hostLanguageSpawn: (spawnFactory ?? ((m, r): LspSpawnFn => managedSpawn(m, r, onLspMessage)))(
         spawnedMethods,
         root,
