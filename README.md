@@ -52,11 +52,15 @@ Software engineering is the first use case because repositories, tests, reviews,
 
 ## Report bugs and findings
 
-If you find a defect while using Keiko, use the structured [User-Finding report form](https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md). It is a public, account-free intake template that can be filled without signing in to GitHub.
+If you find a defect while using Keiko, follow the [feedback user guide](docs/feedback-intake/user-guide.md). It explains the optional operator-hosted intake, exact preview/submit behavior, accepted text evidence, and the public form alternative.
+
+The structured [User-Finding report form](https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md) remains a public, account-free intake template that can be filled without signing in to GitHub.
 
 Maintainers who are signed in to GitHub can transfer the same information into the tracked [GitHub User-Finding issue form](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml). Do not open a blank issue for reproducible bug intake.
 
 The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
+
+Operators deploying the separate hosted intake service should use the [hosted feedback intake runbook](docs/feedback-intake/operator-runbook.md) and its [GitHub App configuration contract](docs/feedback-intake/github-app-configuration.md).
 
 ## Quickstart
 
