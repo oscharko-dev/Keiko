@@ -295,9 +295,15 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **All required CI checks must be green before merge.** As of today (verify against
   [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative):
 
-  `ci` · `actionlint` · `Verify pinned action SHAs` · `Analyze (actions)` ·
+  `ci` · `actionlint` · `Verify pinned action SHAs` · `zizmor` · `Analyze (actions)` ·
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
-  `Review dependency diff (dev/main)` · `ui`
+  `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
+  `Mutation quality gate` · `SonarCloud Code Analysis` ·
+  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts` · `Gitar`
+
+  The maintainer/contributor approval bypass is disabled during the Banking Quality Gate recovery.
+  Do not restore or bypass it until the independent app-bound aggregate gate has passed its live
+  negative probes; see [`docs/qa/banking-quality-gate.md`](docs/qa/banking-quality-gate.md).
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

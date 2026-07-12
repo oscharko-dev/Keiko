@@ -13,22 +13,6 @@ function readPackageJson(): { scripts: Record<string, string> } {
   return JSON.parse(readText("package.json")) as { scripts: Record<string, string> };
 }
 
-function readCiJobBlock(): string {
-  const workflow = readText(".github/workflows/ci.yml");
-  const lines = workflow.split(/\r?\n/);
-  const start = lines.findIndex((line) => line === "  ci:");
-  if (start === -1) {
-    throw new Error("jobs.ci block not found in .github/workflows/ci.yml");
-  }
-  const block = [];
-  for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (index > start && /^ {2}[^ ]/u.test(line)) break;
-    block.push(line);
-  }
-  return block.join("\n");
-}
-
 function readWorkflowJobBlock(workflowPath: string, jobName: string): string {
   const workflow = readText(workflowPath);
   const lines = workflow.split(/\r?\n/);
@@ -109,11 +93,14 @@ describe("Issue #12 docs drift", () => {
   });
 
   it("keeps the protected ci workflow and SDK alias contract aligned with issue #433", () => {
-    const ciJob = readCiJobBlock();
+    const coreQuality = readWorkflowJobBlock(".github/workflows/ci.yml", "core-quality");
+    const ciAggregate = readWorkflowJobBlock(".github/workflows/ci.yml", "ci");
     const sdkIndex = readText("packages/keiko-sdk/src/index.ts");
     const versionGate = readText("scripts/check-version-consistency.mjs");
 
-    expect(ciJob).toContain("      - run: npm run check:version-consistency");
+    expect(coreQuality).toContain("      - run: npm run check:version-consistency");
+    expect(ciAggregate).toContain("      - core-quality");
+    expect(ciAggregate).toContain('if [ "$result" != "success" ]');
     expect(sdkIndex).toMatch(
       /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m,
     );

@@ -194,3 +194,7 @@ packages/*/src/**/*.d.ts.map
 /Only for Internal Use/
 ui/
 tests/memory-eval/scorecard.json
+
+# Mutation-testing workspaces and reports are generated locally and in CI.
+/.stryker-tmp/
+/reports/mutation/
