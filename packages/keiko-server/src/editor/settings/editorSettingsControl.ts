@@ -182,14 +182,16 @@ function requestHash(mutation: EditorSettingsControlMutation): string {
       action: mutation.action,
       expectedRevision: mutation.expectedRevision,
       scope: mutation.scope,
-      root:
-        mutation.realRoot === undefined
-          ? null
-          : editorSettingsWorkspaceFingerprint(mutation.realRoot),
+      root: mutationRootHash(mutation),
       values: mutation.values ?? null,
       settingIds: mutation.settingIds ?? null,
     }),
   );
+}
+
+function mutationRootHash(mutation: EditorSettingsControlMutation): string | null {
+  if (mutation.scope === "user" || mutation.realRoot === undefined) return null;
+  return editorSettingsWorkspaceFingerprint(mutation.realRoot);
 }
 
 function validMutation(mutation: EditorSettingsControlMutation): EditorM7ReasonCode | undefined {
@@ -431,7 +433,7 @@ export function createEditorSettingsControlService(
     read: (realRoot): Promise<EditorM7SettingsSnapshot> => loadSnapshot(realRoot, options),
     mutate: (mutation): Promise<EditorM7SettingsMutationResult> => {
       const rootKey =
-        mutation.realRoot === undefined
+        mutation.scope === "user" || mutation.realRoot === undefined
           ? "global"
           : editorSettingsWorkspaceFingerprint(mutation.realRoot);
       return options.mutex.runExclusive([`editor-settings:${mutation.scope}:${rootKey}`], () =>

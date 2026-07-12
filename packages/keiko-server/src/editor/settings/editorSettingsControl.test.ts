@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
+import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
 import {
   createEditorSettingsControlService,
@@ -123,6 +124,37 @@ describe("editor settings control service", () => {
     expect(replay).toMatchObject({ kind: "ok", changed: true });
     expect(stale).toMatchObject({ kind: "conflict", code: "STALE_REVISION" });
     expect(reused).toMatchObject({ kind: "idempotencyConflict" });
+  });
+
+  it("serializes user-scope mutations and idempotency independent of workspace root", async () => {
+    const stateDir = temporaryDirectory("editor-settings-user-root-independent");
+    const rootA = temporaryDirectory("editor-settings-user-root-a");
+    const rootB = temporaryDirectory("editor-settings-user-root-b");
+    const lockedKeys: string[][] = [];
+    const mutex: WorkspaceMutexRegistry = {
+      runExclusive: async (keys, fn) => {
+        lockedKeys.push([...keys]);
+        return await fn();
+      },
+    };
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir }),
+      mutex,
+    });
+    const mutation = {
+      action: "set" as const,
+      expectedRevision: 0,
+      idempotencyKey: "user-root-independent",
+      scope: "user" as const,
+      values: { fontSize: 16 },
+    };
+
+    const first = await control.mutate({ ...mutation, realRoot: rootA });
+    const replayFromOtherRoot = await control.mutate({ ...mutation, realRoot: rootB });
+
+    expect(first).toMatchObject({ kind: "ok", changed: true });
+    expect(replayFromOtherRoot).toMatchObject({ kind: "ok", changed: true });
+    expect(lockedKeys).toEqual([["editor-settings:user:global"], ["editor-settings:user:global"]]);
   });
 
   it("resets scoped values without leaking workspace-denied settings", async () => {

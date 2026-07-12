@@ -279,9 +279,10 @@ function nextRecord(
   const invalid = validateNextSnippets(snippets, revision);
   if (invalid !== undefined) return { invalid };
   const changed = JSON.stringify(snippets) !== JSON.stringify(record.snippets);
+  const nextRevision = changed ? revision : record.revision;
   return {
     ...record,
-    revision: changed ? revision : record.revision,
+    revision: nextRevision,
     snippets,
     idempotency: [
       ...record.idempotency,
@@ -289,7 +290,7 @@ function nextRecord(
         keyHash: sha256(mutation.idempotencyKey),
         requestHash: requestHash(mutation),
         changed,
-        revision,
+        revision: nextRevision,
       },
     ].slice(-MAX_IDEMPOTENCY_RECORDS),
   };
@@ -346,11 +347,14 @@ function mutateLocked(
   }
   const next = nextRecord(mutation, loaded.record);
   if ("invalid" in next) return { kind: "invalid", code: next.invalid };
-  saveRecord(next, mutation.realRoot, options);
-  emitChange(listeners, nextSequence(), mutation, next);
+  const changed = next.revision !== loaded.record.revision;
+  if (changed || next.idempotency.length !== loaded.record.idempotency.length) {
+    saveRecord(next, mutation.realRoot, options);
+  }
+  if (changed) emitChange(listeners, nextSequence(), mutation, next);
   return {
     kind: "ok",
-    changed: next.revision !== loaded.record.revision,
+    changed,
     revision: next.revision,
     etag: etag(next),
     snapshot: snapshot("ready", next),

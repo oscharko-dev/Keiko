@@ -8,6 +8,7 @@ import {
   type EditorM7WorkspaceSnippetInput,
 } from "@oscharko-dev/keiko-contracts";
 
+import { savePrivateJson } from "../../private-json.js";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import {
   createWorkspaceSnippetsService,
@@ -150,6 +151,37 @@ describe("workspace snippets service", () => {
     });
     expect(unsafe).toMatchObject({ kind: "invalid", code: "UNSAFE_SNIPPET" });
     expect(control.read(root)).toMatchObject({ storeState: "ready", revision: 1 });
+  });
+
+  it("does not broadcast no-op mutations and replays their idempotency without another save", async () => {
+    const root = temporaryDirectory("editor-snippets-noop-root");
+    const stateDir = temporaryDirectory("editor-snippets-noop-state");
+    const saves: string[] = [];
+    const control = createWorkspaceSnippetsService({
+      stateDir,
+      mutex: createWorkspaceMutexRegistry(),
+      save: (path, value) => {
+        saves.push(path);
+        savePrivateJson(path, value);
+      },
+    });
+    const events: unknown[] = [];
+    const unsubscribe = control.subscribe((event) => events.push(event));
+    const mutation = {
+      action: "reset" as const,
+      expectedRevision: 0,
+      idempotencyKey: "noop-reset",
+      realRoot: root,
+    };
+
+    const first = await control.mutate(mutation);
+    const replay = await control.mutate(mutation);
+    unsubscribe();
+
+    expect(first).toMatchObject({ kind: "ok", changed: false, revision: 0 });
+    expect(replay).toMatchObject({ kind: "ok", changed: false, revision: 0 });
+    expect(events).toEqual([]);
+    expect(saves).toHaveLength(1);
   });
 
   it("fails closed for malformed and future-versioned private records", async () => {
