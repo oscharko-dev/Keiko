@@ -22,6 +22,7 @@ import {
 const RUN_ID = "run-lock-persistence-007";
 const DEAD_LOCK_RECLAIM_BUDGET_MS = 250;
 const LIVE_LOCK_EXPECTED_POLLS = 40;
+const LIVE_LOCK_EXPECTED_SLEEPS = 39;
 const dirs: string[] = [];
 
 function freshEvidenceDir(): string {
@@ -100,6 +101,7 @@ describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-
       stdio: "ignore",
     });
     const killSpy = vi.spyOn(process, "kill");
+    const sleepSpy = vi.spyOn(Atomics, "wait");
     try {
       if (holder.pid === undefined) throw new Error("expected child process pid");
       writeFileSync(lockPath, `${String(holder.pid)}\n`);
@@ -111,8 +113,11 @@ describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-
       expect(killSpy.mock.calls.every(([pid, signal]) => pid === holder.pid && signal === 0)).toBe(
         true,
       );
+      expect(sleepSpy).toHaveBeenCalledTimes(LIVE_LOCK_EXPECTED_SLEEPS);
+      expect(sleepSpy.mock.calls.every(([_view, _index, _value, ms]) => ms === 5)).toBe(true);
       expect(readFileSync(lockPath, "utf8")).toBe(`${String(holder.pid)}\n`);
     } finally {
+      sleepSpy.mockRestore();
       killSpy.mockRestore();
       holder.kill();
     }

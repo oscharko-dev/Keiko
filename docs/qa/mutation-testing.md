@@ -42,6 +42,12 @@ The HTML report is written to `reports/mutation/security/index.html`. Temporary 
 reports are ignored by Git and ESLint.
 The security mutation configuration runs with `concurrency: 16` by default so local reruns and CI
 start with the same bounded worker count instead of relying on ad-hoc CLI overrides.
+The focused Stryker test matrix keeps the hermetic `keiko-sandbox` unit tests but intentionally
+excludes `packages/keiko-sandbox/src/egress.test.ts`: that file is a live host-network proof for
+the regular sandbox CI job, and its nested isolation backend can fail closed before printing the
+expected `BLOCKED`/`TIMEOUT` marker inside Stryker worker sandboxes. Excluding it from mutation
+testing does not weaken the runtime gate; the normal `@oscharko-dev/keiko-sandbox` test job still
+executes the live proof.
 
 ## Thresholds
 

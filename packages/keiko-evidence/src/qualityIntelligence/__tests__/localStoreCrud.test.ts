@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendQualityIntelligenceExportRow,
+  createInMemoryQualityIntelligenceLocalStore,
   listQualityIntelligenceRuns,
   loadQualityIntelligenceRun,
   QI_SUBDIR,
@@ -202,6 +203,19 @@ describe("recordQualityIntelligenceRun + load + list", () => {
       "run-crud-a",
       "run-crud-b",
       "run-crud-c",
+    ]);
+  });
+
+  it("listQualityIntelligenceRuns returns sorted run ids from the in-memory store", () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    recordQualityIntelligenceRun(baseInput("run-memory-b"), { store });
+    recordQualityIntelligenceRun(baseInput("run-memory-a"), { store });
+    recordQualityIntelligenceRun(baseInput("run-memory-c"), { store });
+
+    expect(listQualityIntelligenceRuns({ store })).toEqual([
+      "run-memory-a",
+      "run-memory-b",
+      "run-memory-c",
     ]);
   });
 

@@ -73,7 +73,7 @@ interface ParsedDecision {
   readonly reason?: string;
 }
 
-function parseDecision(body: Record<string, unknown>): ParsedDecision | undefined {
+export function parseDecision(body: Record<string, unknown>): ParsedDecision | undefined {
   const action = body.action;
   if (!QualityIntelligence.isQualityIntelligenceReviewAction(action)) return undefined;
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : undefined;
@@ -129,7 +129,7 @@ async function readDecision(req: IncomingMessage): Promise<DecisionOutcome> {
   return { ok: true, decision };
 }
 
-function buildApplyReviewDecisionInput(
+export function buildApplyReviewDecisionInput(
   id: string,
   decision: ParsedDecision,
   evidenceDir: string,

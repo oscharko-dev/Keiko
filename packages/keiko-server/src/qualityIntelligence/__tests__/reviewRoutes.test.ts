@@ -23,7 +23,12 @@ import { STREAMING } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
-import { handleQiReview, mapReviewError } from "../reviewRoutes.js";
+import {
+  buildApplyReviewDecisionInput,
+  handleQiReview,
+  mapReviewError,
+  parseDecision,
+} from "../reviewRoutes.js";
 import {
   applyReviewDecision,
   appendEditAudit,
@@ -116,6 +121,14 @@ function asResult(outcome: RouteResult | typeof STREAMING): RouteResult {
 
 function errorOf(result: RouteResult): { readonly code: string; readonly message: string } {
   return (result.body as { error: { code: string; message: string } }).error;
+}
+
+function parsedDecision(
+  body: Record<string, unknown>,
+): NonNullable<ReturnType<typeof parseDecision>> {
+  const decision = parseDecision(body);
+  if (decision === undefined) throw new Error("expected parsed review decision");
+  return decision;
 }
 
 /** Minimal record input. totals must satisfy the findings/exports invariant. */
@@ -226,6 +239,54 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(evidenceDir, { recursive: true, force: true });
+});
+
+describe("review decision parsing", () => {
+  it("omits candidateId for non-string request values instead of materialising undefined", () => {
+    const decision = parsedDecision({ action: "approve", candidateId: 42 });
+
+    expect(decision.scope).toBe("run");
+    expect(Object.hasOwn(decision, "candidateId")).toBe(false);
+  });
+
+  it("materialises candidateId for candidate-scope request values", () => {
+    const decision = parsedDecision({ action: "approve", candidateId: "cand-1" });
+
+    expect(decision.scope).toBe("candidate");
+    expect(Object.hasOwn(decision, "candidateId")).toBe(true);
+    expect(decision.candidateId).toBe("cand-1");
+  });
+
+  it("omits candidateId from run-scope ApplyReviewDecisionInput", () => {
+    const decision = parsedDecision({ action: "approve" });
+    const input = buildApplyReviewDecisionInput(
+      "run-review-001",
+      decision,
+      evidenceDir,
+      { actorId: "route-reviewer", displayLabel: "Route reviewer", kind: "human" },
+      undefined,
+      deps(evidenceDir),
+    );
+
+    expect(input.scope).toBe("run");
+    expect(Object.hasOwn(input, "candidateId")).toBe(false);
+  });
+
+  it("materialises candidateId in candidate-scope ApplyReviewDecisionInput", () => {
+    const decision = parsedDecision({ action: "approve", candidateId: "cand-1" });
+    const input = buildApplyReviewDecisionInput(
+      "run-review-001",
+      decision,
+      evidenceDir,
+      { actorId: "route-reviewer", displayLabel: "Route reviewer", kind: "human" },
+      REVIEW_CANDIDATE_IDS,
+      deps(evidenceDir),
+    );
+
+    expect(input.scope).toBe("candidate");
+    expect(Object.hasOwn(input, "candidateId")).toBe(true);
+    expect(input.candidateId).toBe("cand-1");
+  });
 });
 
 // ─── Missing id param → 400 ───────────────────────────────────────────────────
