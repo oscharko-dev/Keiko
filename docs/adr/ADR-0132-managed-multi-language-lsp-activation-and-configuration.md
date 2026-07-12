@@ -253,10 +253,11 @@ contract cap. At least one language requires measured quality/performance eviden
 
 Activation-change and lifecycle evidence carry only: schema/kind, closed action and outcome, actor
 class, managed language, prior/effective state, reason code, configuration revision, timestamp, and
-policy result. Actions are `activate | deactivate | configure | reset | rollback | lifecycle`;
-outcomes are `accepted | denied | noOp | failed | conflict`. Actor, language, state, reason, kind,
-action, outcome, and policy result are closed unions; no field accepts an arbitrary string. The
-parser validates effective state/reason/policy consistency and rejects every unknown field.
+policy result. Actions are `activate | deactivate | configure | reset | rollback | restart |
+lifecycle` — `restart` covers the explicit restart transition defined in D12; outcomes are
+`accepted | denied | noOp | failed | conflict`. Actor, language, state, reason, kind, action,
+outcome, and policy result are closed unions; no field accepts an arbitrary string. The parser
+validates effective state/reason/policy consistency and rejects every unknown field.
 
 There is no representable path, environment value, source text, stderr, command line, endpoint,
 request/response body, server method, or credential. Sentinel and type-level tests pin this invariant.

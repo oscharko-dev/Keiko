@@ -4,6 +4,7 @@ import type {
   LanguageServiceOperation,
   ManagedLspShellConfiguration,
   ManagedLspShellCheckSettings,
+  ManagedLspShellSettings,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
@@ -39,11 +40,19 @@ export interface ShellProtocolConfiguration {
   readonly initializationOptions: Readonly<Record<string, unknown>>;
 }
 
+const SHELLCHECK_DIALECT_SHELL: Readonly<Record<ManagedLspShellSettings["dialect"], string>> =
+  Object.freeze({
+    posix: "sh",
+    bash: "bash",
+  });
+
 function shellCheckArguments(
+  dialect: ManagedLspShellSettings["dialect"],
   settings: ManagedLspShellCheckSettings,
   workspaceRoot: string,
 ): readonly string[] {
   return [
+    `--shell=${SHELLCHECK_DIALECT_SHELL[dialect]}`,
     `--severity=${settings.severity}`,
     ...(settings.excludedCodes.length === 0
       ? []
@@ -67,7 +76,7 @@ export function shellProtocolConfiguration(
         includeAllWorkspaceSymbols: false,
         logLevel: "error",
         shellcheckArguments: shellCheckEnabled
-          ? shellCheckArguments(settings.shellCheck, workspaceRoot)
+          ? shellCheckArguments(settings.dialect, settings.shellCheck, workspaceRoot)
           : [],
         shellcheckExternalSources: false,
         shellcheckPath: shellCheckEnabled ? "shellcheck" : "",

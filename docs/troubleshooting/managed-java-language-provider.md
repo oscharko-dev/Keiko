@@ -24,6 +24,14 @@ Every process generation uses unique, private `-configuration` and `-data` direc
 reuses the operator home, the JDT LS distribution configuration, or another workspace's data.
 Failure to create, restrict, account for, or clean these directories fails closed.
 
+The approved descendant executables for the Java process tree are only `java` and `python3`.
+`python3` is required because the operator-provisioned `jdtls` launcher command is commonly
+shipped as a Python interpreter-shebang script that resolves the platform-specific JDT LS
+classpath/args before it execs `java`; it never runs arbitrary operator or workspace scripts, and
+it runs under the same enforced no-network, no-arbitrary-argument isolation boundary as `java`.
+This is not a general-purpose script-execution grant and must not be widened to cover other
+interpreters or scripts.
+
 Java currently runs in standalone `safeOffline` mode. Maven and Gradle import, wrappers, plugins,
 init scripts, annotation processing, automatic build-configuration updates, artifact/source
 downloads, external commands, and server-initiated edits are intentionally unavailable. Therefore,

@@ -14,7 +14,12 @@ import type { LspSpawnHandle } from "../lspTransport.js";
 // request AND the `exit` notification, so it never goes down on its own — the only way to terminate it
 // is the manager's SIGKILL escalation. "ignore-shutdown" ignores only `shutdown` but still exits on
 // `exit`, modelling a well-behaved server that simply never answers the shutdown RPC.
-export type FakeLspBehavior = "normal" | "slow" | "oversized" | "ignore-shutdown" | "unresponsive";
+// "unresponsive-request" answers `initialize` normally (so the manager reaches READY quickly) but
+// silently drops every other id-bearing request, modelling a provider that hangs mid-operation —
+// this reproduces the manager's real per-request `requestTimeoutMs` deadline deterministically,
+// without paying the much larger `initializeTimeoutMs` wait that "slow" would incur.
+export type FakeLspBehavior =
+  "normal" | "slow" | "oversized" | "ignore-shutdown" | "unresponsive" | "unresponsive-request";
 
 // The spawn-handle surface a manager adapter consumes: the structural stdio handle plus lifecycle
 // hooks. Mirrors the node adapter's `LspSpawnFn` return so the fake is a drop-in for the manager.
@@ -180,6 +185,7 @@ function respond(
   options: FakeLspOptions,
 ): void {
   if (behavior === "slow") return;
+  if (behavior === "unresponsive-request" && method !== "initialize") return;
   if (method === "shutdown" && (behavior === "ignore-shutdown" || behavior === "unresponsive")) {
     return;
   }

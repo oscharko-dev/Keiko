@@ -37,6 +37,7 @@ const GO_ENV_ALLOWLIST = Object.freeze([
 ]);
 
 export const GO_OFFLINE_ENV = Object.freeze({
+  CGO_ENABLED: "0",
   GOENV: "off",
   GOPROXY: "off",
   GOSUMDB: "off",

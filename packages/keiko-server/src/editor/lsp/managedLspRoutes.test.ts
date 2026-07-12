@@ -1,9 +1,11 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ManagedLspShellConfiguration } from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import { buildCspHeader } from "../../csp.js";
@@ -128,6 +130,42 @@ function activateBody(expectedRevision = 0): Record<string, unknown> {
   return { root: workspaceRoot, language: "python", action: "activate", expectedRevision };
 }
 
+function shellConfigureBody(etag: string): Record<string, unknown> {
+  const configuration: ManagedLspShellConfiguration = {
+    schemaVersion: "1",
+    language: "shell",
+    revision: 0,
+    etag,
+    activation: "enabled",
+    runtime: { kind: "operatorApproved", runtimeId: "shell-lsp" },
+    provenance: {
+      activation: "workspace",
+      runtime: "operatorProvisioning",
+      settings: "workspace",
+    },
+    restartRequired: false,
+    restartFields: [],
+    settings: {
+      dialect: "posix",
+      sourcePolicy: "workspaceOnly",
+      shellCheck: {
+        mode: "workspace",
+        severity: "info",
+        excludedCodes: ["SC1090"],
+        includePaths: [],
+        externalSources: false,
+      },
+    },
+  };
+  return {
+    root: workspaceRoot,
+    language: "shell",
+    action: "configure",
+    expectedRevision: 0,
+    configuration,
+  };
+}
+
 async function mutationWithHost(host: string): Promise<number> {
   const body = JSON.stringify(activateBody());
   return new Promise<number>((resolve, reject) => {
@@ -170,6 +208,7 @@ describe("managed LSP same-origin control routes", () => {
       readonly providerMetadata: readonly {
         readonly language: string;
         readonly configurationSource: string;
+        readonly runtimeIdentitySource: string;
       }[];
     };
 
@@ -183,7 +222,34 @@ describe("managed LSP same-origin control routes", () => {
     expect(body.configurations).toEqual([]);
     expect(body.health).toEqual([]);
     expect(body.providerMetadata).toEqual([
-      { language: "python", configurationSource: "workspaceConfiguration" },
+      {
+        language: "python",
+        configurationSource: "workspaceConfiguration",
+        runtimeIdentitySource: "interpreter",
+      },
+    ]);
+  });
+
+  it("surfaces a project-level pyproject.toml as the reported configuration precedence", async () => {
+    await writeFile(
+      join(workspaceRoot, "pyproject.toml"),
+      "[tool.pyright]\ntypeCheckingMode='basic'\n",
+    );
+
+    const response = await snapshot();
+    const body = (await response.json()) as {
+      readonly providerMetadata: readonly {
+        readonly language: string;
+        readonly configurationSource: string;
+      }[];
+    };
+
+    expect(body.providerMetadata).toEqual([
+      {
+        language: "python",
+        configurationSource: "pyproject",
+        runtimeIdentitySource: "interpreter",
+      },
     ]);
   });
 
@@ -267,6 +333,34 @@ describe("managed LSP same-origin control routes", () => {
     expect(await stale.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
     expect(after.evidenceCount).toBe(before.evidenceCount);
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("configures Shell through the route and surfaces the negotiated dialect and ShellCheck mode", async () => {
+    const initial = await snapshot();
+    const etag = initial.headers.get("etag") ?? "";
+
+    const configured = await mutation(shellConfigureBody(etag), {
+      "If-Match": etag,
+      "Idempotency-Key": "configure-shell-route",
+    });
+    const body = (await (await snapshot()).json()) as {
+      readonly configurations: readonly {
+        readonly language: string;
+        readonly settings: {
+          readonly dialect: string;
+          readonly shellCheck: { readonly mode: string; readonly severity: string };
+        };
+      }[];
+    };
+
+    expect(configured.status).toBe(200);
+    const shellConfiguration = body.configurations.find((entry) => entry.language === "shell");
+    expect(shellConfiguration).toMatchObject({
+      settings: {
+        dialect: "posix",
+        shellCheck: { mode: "workspace", severity: "info" },
+      },
+    });
   });
 
   it("bounds and strictly validates mutation bodies without reflecting sentinel content", async () => {

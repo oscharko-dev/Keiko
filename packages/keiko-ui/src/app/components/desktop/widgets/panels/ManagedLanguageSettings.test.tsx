@@ -165,6 +165,14 @@ describe("ManagedLanguageSettings", () => {
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
+  it("does not send activation for not-provisioned providers", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot("notProvisioned", "NOT_PROVISIONED"));
+    renderSettings();
+    await screen.findByText("Not provisioned");
+    expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
   it("confirms disruptive actions, supports cancel, and restores opener focus", async () => {
     fetchSettingsMock.mockResolvedValue(snapshot());
     const { container } = renderSettings();
@@ -177,6 +185,23 @@ describe("ManagedLanguageSettings", () => {
     expect(mutateSettingsMock).not.toHaveBeenCalled();
     fireEvent.click(cancel);
     await waitFor(() => expect(disable).toHaveFocus());
+  });
+
+  it("restores focus to the section title when the opener is removed by a confirmed action", async () => {
+    fetchSettingsMock
+      .mockResolvedValueOnce(snapshot("active", "ACTIVE"))
+      .mockResolvedValueOnce(snapshot("disabled", "WORKSPACE_DISABLED"));
+    mutateSettingsMock.mockResolvedValue(undefined);
+    renderSettings();
+    const deactivate = await screen.findByRole("button", { name: "Disable Python" });
+    fireEvent.click(deactivate);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm disable" }));
+
+    await screen.findByText("Disabled");
+    expect(screen.queryByRole("button", { name: "Disable Python" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Language intelligence" })).toHaveFocus(),
+    );
   });
 
   it("bounds negotiated capabilities and has no axe violations", async () => {
@@ -215,6 +240,24 @@ describe("ManagedLanguageSettings", () => {
     expect(screen.queryByText("Active")).toBeNull();
     acknowledge?.();
     expect(await screen.findByText("Active")).toBeInTheDocument();
+  });
+
+  it("renders the initial load failure with a working retry control and no axe violations", async () => {
+    fetchSettingsMock.mockRejectedValueOnce(new Error("network unreachable"));
+    fetchSettingsMock.mockResolvedValueOnce(snapshot());
+    const { container } = renderSettings();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Language intelligence could not be loaded.");
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(await axe(container)).toHaveNoViolations();
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(fetchSettingsMock).toHaveBeenCalledTimes(2);
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
   it("reloads a stale revision while preserving the requested action for retry", async () => {

@@ -54,6 +54,8 @@ failed handshake or runtime. `RESTART_REQUIRED` confirms a valid pending configu
 2. Keep command-policy permission limited to `pyright-langserver --stdio`; do not permit arbitrary
    workspace arguments or environment passthrough.
 3. Select the approved interpreter and optional venv identities in governed workspace settings.
+   These stay opaque approved identities for deterministic reporting only; Keiko never sends a
+   path derived from them to Pyright, so they do not change what Pyright itself analyzes.
 4. Activate Python. If Settings reports **Restart required**, use the targeted Python restart.
 5. To roll back, restore the previous governed settings revision and restart Python. If the runtime
    remains unhealthy, deactivate Python; Keiko then fails closed to its in-process fallback where

@@ -232,6 +232,12 @@ describe("bounded Monaco-safe semantic tokens", () => {
     expect(
       parseManagedLspSemanticTokenData({ ...tokenData(), legendVersion: 3 }, parsedLegend.value).ok,
     ).toBe(false);
+    expect(
+      parseManagedLspSemanticTokenData(
+        { ...tokenData(), totalTokenCount: 5, truncated: false },
+        parsedLegend.value,
+      ).ok,
+    ).toBe(false);
     const overCap = Array.from(
       { length: (MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1) * 5 },
       (_, index) => (index % 5 === 2 ? 1 : 0),

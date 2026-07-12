@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -43,6 +44,7 @@ const JAVA_ENV_ALLOWLIST = Object.freeze(["LANG", "LC_ALL", "TMPDIR", "TEMP", "T
 const MAX_RUNTIME_FILES = 50_000;
 const MAX_RUNTIME_BYTES = 512 * 1024 * 1024;
 const SUPPORTED_JDT_LS_VERSION = "1.60.0";
+const MINIMUM_JDK_MAJOR_VERSION = 21;
 const FORBIDDEN_PROJECT_ENTRIES = new Set([
   ".classpath",
   ".factorypath",
@@ -52,11 +54,19 @@ const FORBIDDEN_PROJECT_ENTRIES = new Set([
   "gradle.properties",
   "gradlew",
   "gradlew.bat",
+  "mvnw",
+  "mvnw.cmd",
   "pom.xml",
   "settings.gradle",
   "settings.gradle.kts",
 ]);
 
+// `python3` is required and approved solely because the operator-provisioned `jdtls` launcher
+// command is commonly shipped as a Python interpreter-shebang script that resolves the
+// platform-specific JDT LS classpath/args before it execs `java` — it never runs arbitrary
+// operator or workspace scripts. That interpreter step happens under the same enforced
+// no-network, no-arbitrary-argument isolation boundary as `java`; it is not a general-purpose
+// script-execution grant and must not be widened to cover other interpreters or scripts.
 export const JAVA_PROVIDER_SPEC: HostLanguageProviderSpec = Object.freeze({
   id: "java-lsp",
   label: "Eclipse JDT LS",
@@ -223,6 +233,7 @@ export interface JavaSpawnSecurityDeps {
   readonly resolveJava?: typeof resolveExecutableOutsideWorkspace | undefined;
   readonly validateLayout?:
     ((executable: string, platform: NodeJS.Platform) => boolean) | undefined;
+  readonly validateJavaVersion?: ((executable: string) => boolean) | undefined;
 }
 
 function jdtPlatformConfiguration(platform: NodeJS.Platform): string | undefined {
@@ -243,6 +254,17 @@ function validJdtlsLayout(executable: string, platform: NodeJS.Platform): boolea
   );
 }
 
+function javaMajorVersion(output: string): number {
+  const match = /version "(?<major>\d+)/u.exec(output);
+  return Number(match?.groups?.major ?? 0);
+}
+
+function defaultJavaVersionValid(executable: string): boolean {
+  const probe = spawnSync(executable, ["-version"], { encoding: "utf8" });
+  if (probe.status !== 0) return false;
+  return javaMajorVersion(`${probe.stdout}${probe.stderr}`) >= MINIMUM_JDK_MAJOR_VERSION;
+}
+
 function isolatedJavaCommand(
   input: LspSpawnPreparationInput,
   runtime: ReturnType<typeof createJavaRuntimeRoot>,
@@ -254,6 +276,9 @@ function isolatedJavaCommand(
     input.workspace,
     { PATH: input.env.PATH, PATHEXT: input.processEnv.PATHEXT },
   );
+  if (!(securityDeps.validateJavaVersion ?? defaultJavaVersionValid)(java)) {
+    throw new Error("Java runtime does not meet the minimum supported JDK version");
+  }
   const args = [
     ...input.args,
     "--validate-java-version",

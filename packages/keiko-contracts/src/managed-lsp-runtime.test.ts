@@ -184,6 +184,19 @@ describe("managed LSP runtime configuration", () => {
     expect(parseManagedLspRuntimeConfiguration(configuration(language, settings)).ok).toBe(true);
   });
 
+  it("accepts legacyEnvironment activation provenance alongside non-legacy runtime/settings provenance", () => {
+    expect(
+      parseManagedLspRuntimeConfiguration({
+        ...pythonConfiguration(),
+        provenance: {
+          activation: "legacyEnvironment",
+          runtime: "operatorProvisioning",
+          settings: "workspace",
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
   it.each([
     ["top-level argv", { ...pythonConfiguration(), argv: ["--unsafe"] }],
     ["free-form environment", { ...pythonConfiguration(), env: { TOKEN: "secret" } }],
@@ -272,6 +285,35 @@ describe("managed LSP runtime configuration", () => {
     ]) {
       expect(parseManagedLspRuntimeConfiguration(configuration("go", unsafe)).ok).toBe(false);
     }
+  });
+
+  it("rejects hostile Go build tags and traversal in directory filters or the workspace module file", () => {
+    for (const unsafeTags of [
+      ["-tags=inject"],
+      ["good", "tag;rm -rf /"],
+      ["tag with space"],
+      ["tag,-mod=mod"],
+      ["../escape"],
+    ]) {
+      expect(
+        parseManagedLspRuntimeConfiguration(
+          configuration("go", { ...goSettings(), buildTags: unsafeTags }),
+        ).ok,
+      ).toBe(false);
+    }
+    expect(
+      parseManagedLspRuntimeConfiguration(
+        configuration("go", {
+          ...goSettings(),
+          directoryFilters: [{ kind: "exclude", path: contained("../escape") }],
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      parseManagedLspRuntimeConfiguration(
+        configuration("go", { ...goSettings(), workspaceModuleFile: contained("../go.work") }),
+      ).ok,
+    ).toBe(false);
   });
 
   it("bounds Shell dialect, ShellCheck exclusions/include paths, and workspace-only sourcing", () => {

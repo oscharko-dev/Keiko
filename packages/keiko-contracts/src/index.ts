@@ -3662,6 +3662,7 @@ export type {
   ManagedLspEffectiveState,
   ManagedLspActivationReasonCode,
   ManagedLspProductSupport,
+  ManagedLspCanonicalState,
   ManagedLspDeploymentPolicy,
   ManagedLspProvisioning,
   ManagedLspWorkspaceActivation,

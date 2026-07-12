@@ -2203,6 +2203,35 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       expect.any(AbortSignal),
     );
   });
+
+  it("keeps semantic tokens off for a non-Rust provider even when hover is negotiated available (client gate is a hardcoded language literal, not a shared capability flag)", async () => {
+    vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValueOnce({
+      schemaVersion: "1",
+      providers: [
+        {
+          id: "python-lsp",
+          languages: ["python"],
+          operations: ["diagnostics", "hover"],
+          availability: "available",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        path: "src/lib.py",
+        name: "lib.py",
+        extension: "py",
+        content: "value = 1\n",
+      }),
+    );
+
+    render(<EditorRuntimeWidget root="/repo" file="src/lib.py" />);
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(surface.props?.provideHover).toBeDefined());
+
+    expect(surface.props?.semanticTokens).toBeUndefined();
+    expect(requestEditorSemanticTokens).not.toHaveBeenCalled();
+  });
 });
 
 describe("EditorWidget — status bar and command surface (Issue #1205)", () => {

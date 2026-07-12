@@ -90,6 +90,23 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(JAVA_PROVIDER_SPEC.operations).toHaveLength(15);
   });
 
+  it("documents why python3 is an approved descendant of the java/jdtls launcher", () => {
+    const source = readFileSync(new URL("./javaProvider.ts", import.meta.url), "utf8");
+    const specSource = source.slice(0, source.indexOf("export const JAVA_PROVIDER_SPEC"));
+    expect(specSource).toMatch(/python3.+jdtls`? launcher/is);
+    expect(specSource).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+  });
+
+  it("surfaces the python3 descendant-executable rationale in the operator troubleshooting doc", () => {
+    const docUrl = new URL(
+      "../../../../../../docs/troubleshooting/managed-java-language-provider.md",
+      import.meta.url,
+    );
+    const doc = readFileSync(docUrl, "utf8");
+    expect(doc).toMatch(/python3.+jdtls`? launcher/is);
+    expect(doc).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+  });
+
   it("projects every active JDT import and command default into a closed safe profile", () => {
     const result = javaProtocolConfiguration(configuration());
 
@@ -136,6 +153,7 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => javaPath,
         validateLayout: () => true,
+        validateJavaVersion: () => true,
       },
     );
     const configurationIndex = prepared.args.indexOf("-configuration");
@@ -154,7 +172,7 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(existsSync(configurationPath)).toBe(false);
   });
 
-  it.each(["pom.xml", "build.gradle.kts", ".project", ".factorypath"])(
+  it.each(["pom.xml", "build.gradle.kts", ".project", ".factorypath", "gradlew", "mvnw"])(
     "fails before spawn when %s exposes an execution-requiring project importer",
     (entry) => {
       const path = join(root, entry);
@@ -174,6 +192,7 @@ describe("managed Eclipse JDT LS provider", () => {
             resolveExecutable: () => "/usr/bin/bwrap",
             resolveJava: () => "/opt/jdk-21/bin/java",
             validateLayout: () => true,
+            validateJavaVersion: () => true,
           },
         ),
       ).toThrow();
@@ -199,6 +218,7 @@ describe("managed Eclipse JDT LS provider", () => {
           resolveExecutable: () => "/usr/bin/bwrap",
           resolveJava: () => "/opt/jdk-21/bin/java",
           validateLayout: () => true,
+          validateJavaVersion: () => true,
         },
       ),
     ).toThrow();
@@ -221,6 +241,7 @@ describe("managed Eclipse JDT LS provider", () => {
           resolveExecutable: () => "/usr/bin/bwrap",
           resolveJava: () => "/opt/jdk-21/bin/java",
           validateLayout: () => true,
+          validateJavaVersion: () => true,
         },
       ),
     ).toThrow();
@@ -245,5 +266,27 @@ describe("managed Eclipse JDT LS provider", () => {
         },
       ),
     ).toThrow("supported distribution");
+  });
+
+  it("fails closed when the resolved JDK does not meet the minimum supported version", () => {
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => "/opt/jdk-17/bin/java",
+          validateLayout: () => true,
+          validateJavaVersion: () => false,
+        },
+      ),
+    ).toThrow("minimum supported JDK version");
   });
 });
