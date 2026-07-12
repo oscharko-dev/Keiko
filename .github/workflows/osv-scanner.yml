@@ -4,29 +4,14 @@ on:
   pull_request:
     branches:
       - dev
-      - feat/keiko-editor
-      - feat/keiko-agent-native-editor-foundation-and-runtime
-      - feat/prompt-enhancer-1307
-      - feat/keiko-establish-governed-end-to-end-git-delivery
-      - feat/keiko-voice-digital-twin
-      - feat/keiko-isolated-task-workspaces
-      - feat/keiko-colleague-like-voice-dialogue-mode
-      - feat/keiko-repository-centered-desktop-workflow
-      - epic/coding-workbench-opencode-codex
-      - "release/**"
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
   push:
     branches:
       - dev
-      - feat/keiko-editor
-      - feat/keiko-agent-native-editor-foundation-and-runtime
-      - feat/prompt-enhancer-1307
-      - feat/keiko-establish-governed-end-to-end-git-delivery
-      - feat/keiko-voice-digital-twin
-      - feat/keiko-isolated-task-workspaces
-      - feat/keiko-colleague-like-voice-dialogue-mode
-      - feat/keiko-repository-centered-desktop-workflow
-      - epic/coding-workbench-opencode-codex
-      - "release/**"
   schedule:
     - cron: "37 3 * * *"
   workflow_dispatch:

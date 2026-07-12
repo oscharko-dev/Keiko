@@ -1,0 +1,22 @@
+{
+  "name": "Keiko Banking Quality Gate",
+  "url": "https://github.com/oscharko-dev/Keiko",
+  "hook_attributes": {
+    "active": true,
+    "url": "https://replace-with-worker-hostname.example/webhook"
+  },
+  "public": false,
+  "default_permissions": {
+    "checks": "write",
+    "issues": "read",
+    "metadata": "read",
+    "pull_requests": "read"
+  },
+  "default_events": [
+    "check_run",
+    "check_suite",
+    "issue_comment",
+    "pull_request",
+    "pull_request_review"
+  ]
+}

@@ -9,30 +9,19 @@ const workflow = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.y
 
 const OSV_SCANNER_RELEASE_SHA = "9a498708959aeaef5ef730655706c5a1df1edbc2";
 
-function readEventBlock(eventName) {
-  const lines = workflow.split("\n");
-  const start = lines.findIndex((line) => line === `  ${eventName}:`);
-
-  if (start === -1) {
-    return "";
-  }
-
-  const end = lines.findIndex(
-    (line, index) => index > start && (/^ {2}[a-z_]+:/u.test(line) || line === "jobs:"),
-  );
-
-  return lines.slice(start, end === -1 ? undefined : end).join("\n");
-}
-
 describe("OSV Scanner workflow", () => {
-  it("reports the required scan status on pull requests and protected branch pushes", () => {
-    const pullRequestBlock = readEventBlock("pull_request");
-    const pushBlock = readEventBlock("push");
+  it("always emits a scan for pull requests targeting dev", () => {
+    expect(workflow).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
+    expect(workflow).toMatch(
+      /types:\n\s+- opened\n\s+- ready_for_review\n\s+- reopened\n\s+- synchronize/u,
+    );
+    expect(workflow).not.toMatch(/pull_request:[\s\S]*?paths:/u);
+    expect(workflow).not.toContain("feat/keiko-editor");
+  });
 
-    expect(pullRequestBlock).toContain("branches:");
-    expect(pushBlock).toContain("branches:");
-    expect(pullRequestBlock).not.toContain("paths:");
-    expect(pushBlock).not.toContain("paths:");
+  it("scans every dev push without a path filter", () => {
+    expect(workflow).toMatch(/push:\n\s+branches:\n\s+- dev/u);
+    expect(workflow).not.toMatch(/push:[\s\S]*?paths:/u);
   });
 
   it("runs daily and supports a manual scan", () => {
