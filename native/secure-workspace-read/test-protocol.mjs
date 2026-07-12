@@ -19,6 +19,7 @@ import { performance } from "node:perf_hooks";
 const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.url));
 const SAFE_TEXT = "safe text\n";
 const HELPER_DEADLINE_MS = 2_000;
+const CONCURRENT_CONSISTENCY_READS = 32;
 const isWindows = process.platform === "win32";
 
 function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) {
@@ -158,6 +159,12 @@ async function assertWindowsSourceContract() {
   );
   assert.match(nativeSource, /OBJ_DONT_REPARSE/u);
   assert.match(nativeSource, /_write\(3, &byte, 1\).*_read\(4, &byte, 1\)/su);
+  assert.match(nativeSource, /#include <fcntl\.h>.*#include <io\.h>/su);
+  assert.match(
+    nativeSource,
+    /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
+  );
+  assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
 }
@@ -320,6 +327,161 @@ async function assertAdversarialRaces(binary, fixture) {
   }
 }
 
+function isSharingDenied(error) {
+  return isWindows && ["EACCES", "EBUSY", "EPERM"].includes(error?.code);
+}
+
+async function restoreRename(sourcePath, destinationPath) {
+  let lastError;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      await rename(sourcePath, destinationPath);
+      return;
+    } catch (error) {
+      if (!isSharingDenied(error)) throw error;
+      lastError = error;
+      await new Promise((resolveRetry) => setTimeout(resolveRetry, 5));
+    }
+  }
+  throw lastError;
+}
+
+async function runConcurrentUpdater(label, update, read) {
+  let active = true;
+  let readsStarted = false;
+  let attempts = 0;
+  let postSpawnAttempts = 0;
+  let sharingDenied = 0;
+  let updaterError;
+  let notifyStarted;
+  const started = new Promise((resolveStarted) => {
+    notifyStarted = resolveStarted;
+  });
+  const updater = (async () => {
+    try {
+      while (active) {
+        attempts += 1;
+        if (readsStarted) postSpawnAttempts += 1;
+        try {
+          await update(attempts);
+        } catch (error) {
+          if (isSharingDenied(error)) sharingDenied += 1;
+          else throw error;
+        } finally {
+          notifyStarted();
+        }
+        await new Promise((resolveTurn) => setImmediate(resolveTurn));
+      }
+    } catch (error) {
+      updaterError = error;
+      active = false;
+      notifyStarted();
+    }
+  })();
+  await started;
+  if (updaterError !== undefined) throw updaterError;
+  readsStarted = true;
+  try {
+    await Promise.all(Array.from({ length: CONCURRENT_CONSISTENCY_READS }, read));
+  } finally {
+    readsStarted = false;
+    active = false;
+    await updater;
+  }
+  if (updaterError !== undefined) throw updaterError;
+  assert.ok(postSpawnAttempts > 0, `${label} updater made no post-spawn attempt`);
+  console.log(
+    `secure-workspace-read consistency: case=${label} reads=${CONCURRENT_CONSISTENCY_READS} attempts=${attempts} postSpawnAttempts=${postSpawnAttempts} sharingDenied=${sharingDenied}`,
+  );
+}
+
+function assertKnownGeneration(result, generations) {
+  const decoded = response(result);
+  if (decoded.status !== 0) return;
+  assert.ok(
+    generations.some((generation) => decoded.content.equals(generation)),
+    "successful concurrent read returned external, partial, or mixed bytes",
+  );
+}
+
+async function assertFileGenerationConsistency(binary, fixture) {
+  const target = join(fixture, "concurrent-generation.txt");
+  const generations = [
+    Buffer.from(`${"a".repeat(2_584)}\n`),
+    Buffer.from(`${"b".repeat(32_767)}\n`),
+  ];
+  await writeFile(target, generations[0]);
+  await runConcurrentUpdater(
+    "file-generation",
+    async (attempt) => {
+      const staged = join(fixture, `.concurrent-generation-${attempt}.tmp`);
+      await writeFile(staged, generations[attempt % generations.length]);
+      try {
+        await rename(staged, target);
+      } finally {
+        await rm(staged, { force: true });
+      }
+    },
+    async () => {
+      assertKnownGeneration(
+        await run(binary, request(fixture, "concurrent-generation.txt")),
+        generations,
+      );
+    },
+  );
+}
+
+async function assertAncestorAliasConsistency(binary, fixture, outside) {
+  const parent = join(fixture, "concurrent-parent");
+  const parked = join(fixture, ".concurrent-parent-parked");
+  const alias = join(fixture, ".concurrent-parent-alias");
+  const outsideParent = join(outside, "concurrent-parent");
+  await mkdir(parent);
+  await mkdir(outsideParent);
+  await writeFile(join(parent, "generation.txt"), SAFE_TEXT);
+  await writeFile(join(outsideParent, "generation.txt"), "external bytes\n");
+  await symlink(outsideParent, alias, isWindows ? "junction" : "dir");
+  try {
+    await runConcurrentUpdater(
+      "ancestor-alias",
+      async () => {
+        let aliasInstalled = false;
+        let originalParked = false;
+        await rename(parent, parked);
+        originalParked = true;
+        try {
+          await rename(alias, parent);
+          aliasInstalled = true;
+          try {
+            await new Promise((resolveTurn) => setImmediate(resolveTurn));
+          } finally {
+            await restoreRename(parent, alias);
+            aliasInstalled = false;
+          }
+        } finally {
+          if (!aliasInstalled && originalParked) {
+            await restoreRename(parked, parent);
+            originalParked = false;
+          }
+        }
+      },
+      async () => {
+        assertKnownGeneration(
+          await run(binary, request(fixture, "concurrent-parent/generation.txt")),
+          [Buffer.from(SAFE_TEXT)],
+        );
+      },
+    );
+  } finally {
+    await rm(alias, { force: true });
+  }
+}
+
+async function assertExternalBinaryConsistency(binary, fixture, outside) {
+  await assertFileGenerationConsistency(binary, fixture);
+  await assertAncestorAliasConsistency(binary, fixture, outside);
+}
+
 async function stableResourceCount() {
   const samples = [];
   for (let index = 0; index < 7; index += 1) {
@@ -386,6 +548,8 @@ if (!isWindows && process.platform !== "darwin") {
 }
 
 const externalBinary = existingBinaryArgument(process.argv.slice(2));
+const externalBinaryBytes =
+  externalBinary === undefined ? undefined : await readFile(externalBinary);
 let binaryRoot;
 let fixture;
 let outside;
@@ -410,10 +574,17 @@ try {
   }
   await setupFixture(fixture, outside);
   await assertProtocolCases(binary, fixture, outside);
-  // Signed --binary runs every non-mutating adversarial case against the exact supplied bytes.
-  // Race cases require the deliberately instrumented companion built only in compile mode.
+  // Signed --binary runs protocol, live fixture consistency, and load checks against the exact
+  // supplied bytes. Deterministically paused races require the compile-mode test companion.
   if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture);
+  if (externalBinary !== undefined) await assertExternalBinaryConsistency(binary, fixture, outside);
   await assertLoadEvidence(binary, fixture);
+  if (externalBinaryBytes !== undefined)
+    assert.deepEqual(
+      await readFile(binary),
+      externalBinaryBytes,
+      "harness modified supplied binary",
+    );
   console.log(`secure-workspace-read protocol tests: PASS (${basename(binary)})`);
 } finally {
   if (fixture !== undefined) await rm(fixture, { recursive: true, force: true });

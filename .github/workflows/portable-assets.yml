@@ -420,7 +420,7 @@ jobs:
         run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
       - name: Functionally requalify the signed secure-read helper
         run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
-      - name: Run signed secure-read executable harness
+      - name: Run signed secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
 
   qualify-macos-production:
@@ -463,7 +463,7 @@ jobs:
         run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
       - name: Functionally requalify the signed secure-read helper
         run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
-      - name: Run signed secure-read executable harness
+      - name: Run signed secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read
       - name: Execute bundled runtimes in isolated disposable copy
         env:

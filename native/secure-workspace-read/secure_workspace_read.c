@@ -171,8 +171,9 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 #elif defined(_WIN32)
 #include <windows.h>
 #include <winternl.h>
-#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+#include <fcntl.h>
 #include <io.h>
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
 #include <process.h>
 #endif
 
@@ -197,6 +198,10 @@ static int identity(HANDLE handle, struct file_identity *out) {
 
 static int same_identity(const struct file_identity *a, const struct file_identity *b) {
   return a->id.VolumeSerialNumber == b->id.VolumeSerialNumber && memcmp(a->id.FileId.Identifier, b->id.FileId.Identifier, sizeof(a->id.FileId.Identifier)) == 0 && a->standard.NumberOfLinks == b->standard.NumberOfLinks && a->standard.EndOfFile.QuadPart == b->standard.EndOfFile.QuadPart && a->basic.LastWriteTime.QuadPart == b->basic.LastWriteTime.QuadPart && a->basic.ChangeTime.QuadPart == b->basic.ChangeTime.QuadPart;
+}
+
+static int binary_standard_io(void) {
+  return _setmode(_fileno(stdin), _O_BINARY) != -1 && _setmode(_fileno(stdout), _O_BINARY) != -1;
 }
 
 #if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
@@ -276,6 +281,9 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 #endif
 
 int main(void) {
+#if defined(_WIN32)
+  if (!binary_standard_io()) return 1;
+#endif
   struct request request; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);
   if (status == KSR_OK) status = secure_read(&request, &content, &length);
   reply(status, content, length);

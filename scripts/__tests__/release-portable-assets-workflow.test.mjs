@@ -87,7 +87,9 @@ describe("portable secure-read qualification", () => {
     expect(
       portableWorkflow.match(/Run executable secure-read adversarial harness/gmu),
     ).toHaveLength(3);
-    expect(portableWorkflow.match(/Run signed secure-read executable harness/gmu)).toHaveLength(2);
+    expect(
+      portableWorkflow.match(/Run signed secure-read executable consistency harness/gmu),
+    ).toHaveLength(2);
     expect(portableWorkflow).toContain(
       "test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
     );
@@ -109,6 +111,23 @@ describe("portable secure-read qualification", () => {
     expect(secureReadHarness).toContain(
       "binaryRoot = externalBinary === undefined ? await mkdtemp",
     );
+    expect(secureReadHarness).toContain(
+      "if (externalBinary !== undefined) await assertExternalBinaryConsistency(binary, fixture, outside)",
+    );
+    expect(secureReadHarness).toContain("postSpawnAttempts > 0");
+    expect(secureReadHarness).toContain("assertFileGenerationConsistency(binary, fixture)");
+    expect(secureReadHarness).toContain("assertAncestorAliasConsistency(binary, fixture, outside)");
+    expect(secureReadHarness).toContain("await restoreRename(parent, alias)");
+    expect(secureReadHarness).toContain("await restoreRename(parked, parent)");
+    expect(secureReadHarness).toContain("harness modified supplied binary");
+    expect(secureReadHarness).toContain(
+      "if (pausedBinary !== undefined) await assertAdversarialRaces",
+    );
+    expect(secureReadNative).toMatch(/#include <fcntl\.h>.*#include <io\.h>/su);
+    expect(secureReadNative).toMatch(
+      /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
+    );
+    expect(secureReadNative).toMatch(/if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
     expect(secureReadNative).toMatch(/_write\(3, &byte, 1\).*_read\(4, &byte, 1\)/su);
     expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
   });
