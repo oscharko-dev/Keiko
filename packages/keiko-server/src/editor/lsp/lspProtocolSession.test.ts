@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { LanguageServiceOperation } from "@oscharko-dev/keiko-contracts";
+import {
+  LANGUAGE_SERVICE_OPERATIONS,
+  type LanguageServiceOperation,
+} from "@oscharko-dev/keiko-contracts";
 
 import { LspServerRequestError } from "./lspJsonRpcClient.js";
 import { createLspProtocolSession, type LspProtocolSession } from "./lspProtocolSession.js";
@@ -73,6 +76,36 @@ describe("managed LSP 3.18 protocol session", () => {
     });
   });
 
+  it("rejects malformed (non-boolean/non-object) capability values for every core operation", () => {
+    const protocol = createLspProtocolSession({
+      language: "python",
+      candidateOperations: LANGUAGE_SERVICE_OPERATIONS,
+      semanticTokensCandidate: true,
+      configurationRevision: 4,
+      processId: 42,
+      workspaceRoot: "/workspace/project",
+      configuration: {},
+    });
+    protocol.acceptInitializeResult({
+      capabilities: {
+        diagnosticProvider: "yes",
+        completionProvider: 123,
+        hoverProvider: "yes",
+        documentSymbolProvider: 0,
+        documentFormattingProvider: null,
+        definitionProvider: 123,
+        typeDefinitionProvider: [],
+        implementationProvider: "true",
+        referencesProvider: false,
+        callHierarchyProvider: "enabled",
+        inlayHintProvider: 1,
+        codeActionProvider: "yes",
+        signatureHelpProvider: [1, 2, 3],
+      },
+    });
+    expect(protocol.snapshot().negotiatedOperations).toEqual([]);
+  });
+
   it("registers and unregisters known capabilities atomically", () => {
     const protocol = session();
     protocol.acceptInitializeResult({ capabilities: {} });
@@ -138,6 +171,22 @@ describe("managed LSP 3.18 protocol session", () => {
       null,
       null,
     ]);
+    expect(JSON.stringify(result)).not.toContain("SENTINEL_SECRET");
+  });
+
+  it("strips nested apiKey, auth, and key sub-fields from allowlisted configuration", () => {
+    const protocol = session({
+      "python.analysis": {
+        typeCheckingMode: "strict",
+        apiKey: "SENTINEL_SECRET_APIKEY",
+        auth: { bearer: "SENTINEL_SECRET_AUTH" },
+        key: "SENTINEL_SECRET_KEY",
+      },
+    });
+    const result = protocol.handleServerRequest("workspace/configuration", {
+      items: [{ section: "python.analysis" }],
+    });
+    expect(result).toEqual([null]);
     expect(JSON.stringify(result)).not.toContain("SENTINEL_SECRET");
   });
 

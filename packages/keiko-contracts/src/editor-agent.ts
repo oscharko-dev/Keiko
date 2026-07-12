@@ -1056,14 +1056,28 @@ function isNavigateSymbolDocument(value: unknown): boolean {
   );
 }
 
+function isNavigateSymbolExtrasValid(
+  operation: EditorAgentNavigateSymbolOperation,
+  range: unknown,
+  diagnostics: unknown,
+): boolean {
+  if (operation === "codeActions") {
+    return range !== undefined && diagnostics !== undefined;
+  }
+  // Inlay hints are always scoped to a visible range (matches the tool-host's own
+  // validateNavigateSymbolExtras), unlike every other read-only navigation operation.
+  if (operation === "inlayHints") {
+    return range !== undefined && diagnostics === undefined;
+  }
+  return range === undefined && diagnostics === undefined;
+}
+
 function isNavigateSymbolRequest(value: unknown): value is EditorAgentNavigateSymbolRequest {
   if (!isRecord(value) || !isNavigateSymbolOperation(value.operation)) return false;
   if (!isNavigateSymbolDocument(value.document) || !isPosition(value.position)) return false;
   if (!isUndefinedOr(value.range, isRange)) return false;
   if (!isUndefinedOr(value.diagnostics, isLanguageDiagnosticArray)) return false;
-  return value.operation === "codeActions"
-    ? value.range !== undefined && value.diagnostics !== undefined
-    : value.range === undefined && value.diagnostics === undefined;
+  return isNavigateSymbolExtrasValid(value.operation, value.range, value.diagnostics);
 }
 
 function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWorkspaceRequest {

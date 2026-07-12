@@ -891,6 +891,119 @@ function validActionForType(type: EditorAgentActionType): EditorAgentAction {
   return baseAction({ type });
 }
 
+describe("navigateSymbol action validation (Issue #2281)", () => {
+  it("accepts inlay hints with a range and no diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "inlayHints",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects inlay hints without a range", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "inlayHints",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts code actions with both a range and diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "codeActions",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+            diagnostics: [
+              {
+                severity: "error",
+                message: "m",
+                source: "s",
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects code actions missing diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "codeActions",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects inlay hints carrying diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "inlayHints",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+            diagnostics: [
+              {
+                severity: "error",
+                message: "m",
+                source: "s",
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects definition with a range or diagnostics attached", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "definition",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("queryGit action validation (Issue #2298)", () => {
   it("accepts a well-formed read-only git query", () => {
     expect(isEditorAgentAction(queryGitAction())).toBe(true);

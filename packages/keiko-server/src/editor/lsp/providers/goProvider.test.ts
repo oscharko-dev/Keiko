@@ -42,6 +42,7 @@ describe("Go/gopls managed provider", () => {
       id: "go-lsp",
       executableName: "gopls",
       fixedEnv: {
+        CGO_ENABLED: "0",
         GOENV: "off",
         GOPROXY: "off",
         GOSUMDB: "off",
@@ -81,6 +82,7 @@ describe("Go/gopls managed provider", () => {
           buildFlags: ["-tags=enterprise,linuxonly", "-mod=vendor", "-trimpath"],
           directoryFilters: ["+cmd", "-generated"],
           env: {
+            CGO_ENABLED: "0",
             GOENV: "off",
             GOOS: "linux",
             GOARCH: "amd64",

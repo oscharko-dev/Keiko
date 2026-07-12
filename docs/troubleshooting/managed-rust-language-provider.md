@@ -61,7 +61,7 @@ network access, downloads, or mutable shared toolchain state to repair fidelity.
    present.
 
    ```bash
-   npm exec vitest -- run packages/keiko-contracts/src/managed-lsp-runtime.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.security.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.conformance.test.ts
+   npm exec vitest -- run packages/keiko-contracts/src/managed-lsp-runtime.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.conformance.test.ts
    ```
 
 `NOT_PROVISIONED` means the approved server/toolchain profile or required offline artifacts are

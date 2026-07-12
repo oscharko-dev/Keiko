@@ -378,9 +378,17 @@ function safeConfigurationValue(value: unknown, depth: number): boolean {
 function isSensitiveConfigurationKey(key: string): boolean {
   const normalized = key.toLowerCase();
   return (
-    ["secret", "token", "password", "credential", "executable", "command", "uri"].some((part) =>
-      normalized.includes(part),
-    ) ||
+    [
+      "secret",
+      "token",
+      "password",
+      "credential",
+      "executable",
+      "command",
+      "uri",
+      "auth",
+      "key",
+    ].some((part) => normalized.includes(part)) ||
     normalized === "env" ||
     normalized === "environment"
   );

@@ -29,7 +29,10 @@ export default defineConfig({
     testTimeout: 15_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "json"],
+      // lcov is additive: check-lcov-source-mapping.mjs reads coverage/lcov.info to prove
+      // changed root-level scripts/*.mjs sources (outside packages/, which has its own scoped
+      // coverage run) are exercised by their scripts/__tests__/*.test.mjs harness.
+      reporter: ["text", "json", "lcov"],
       exclude: ["dist/**", "node_modules/**", "**/*.config.ts"],
     },
   },

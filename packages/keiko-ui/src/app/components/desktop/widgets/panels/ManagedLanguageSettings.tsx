@@ -35,15 +35,36 @@ export function ManagedLanguageSettings({
   const [confirmation, setConfirmation] = useState<Confirmation | undefined>();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<HTMLButtonElement | undefined>(undefined);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const pendingRestoreTargetRef = useRef<HTMLButtonElement | undefined>(undefined);
 
   useEffect(() => {
     if (confirmation !== undefined) {
       cancelRef.current?.focus();
       return;
     }
-    restoreFocusRef.current?.focus();
+    const opener = restoreFocusRef.current;
     restoreFocusRef.current = undefined;
+    if (opener === undefined) return;
+    if (opener.isConnected) {
+      opener.focus();
+      pendingRestoreTargetRef.current = opener;
+    } else {
+      titleRef.current?.focus();
+    }
   }, [confirmation]);
+
+  useEffect(() => {
+    const target = pendingRestoreTargetRef.current;
+    pendingRestoreTargetRef.current = undefined;
+    // A confirmed action's server-acknowledged state (e.g. restart -> active) can drop the opener
+    // button from actionsFor() on this later data-driven render. The browser already moved focus
+    // to <body> when that node was removed from the DOM; recover it onto the stable section title
+    // instead of leaving keyboard focus unmanaged.
+    if (target !== undefined && !target.isConnected && document.activeElement === document.body) {
+      titleRef.current?.focus();
+    }
+  }, [view.data]);
 
   const closeConfirmation = (): void => {
     restoreFocusRef.current = confirmation?.opener;
@@ -60,7 +81,12 @@ export function ManagedLanguageSettings({
   return (
     <section className={styles.section} aria-labelledby="managed-language-settings-title">
       <header className={styles.header}>
-        <h3 className={styles.title} id="managed-language-settings-title">
+        <h3
+          className={styles.title}
+          id="managed-language-settings-title"
+          ref={titleRef}
+          tabIndex={-1}
+        >
           {t("title")}
         </h3>
         <p className={styles.description}>{t("description")}</p>

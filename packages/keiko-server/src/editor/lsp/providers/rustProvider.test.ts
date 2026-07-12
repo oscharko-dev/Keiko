@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -107,6 +108,26 @@ describe("managed rust-analyzer provider", () => {
     expect(RUST_PROVIDER_SPEC.envAllowlist).not.toContain("PATH");
     expect(RUST_PROVIDER_SPEC.envAllowlist).not.toContain("CARGO_HOME");
     expect(RUST_PROVIDER_SPEC.envAllowlist).not.toContain("RUSTUP_HOME");
+  });
+
+  it("only references vitest paths that actually exist in the operator troubleshooting doc", () => {
+    const docUrl = new URL(
+      "../../../../../../docs/troubleshooting/managed-rust-language-provider.md",
+      import.meta.url,
+    );
+    const doc = readFileSync(docUrl, "utf8");
+    const [command] = /npm exec vitest -- run [^\n`]+/.exec(doc) ?? [];
+    expect(command).toBeDefined();
+    expect(command).not.toContain("rustProvider.security.test.ts");
+    const referencedPaths = (command ?? "")
+      .replace("npm exec vitest -- run ", "")
+      .split(/\s+/u)
+      .filter((path) => path.length > 0);
+    expect(referencedPaths.length).toBeGreaterThan(0);
+    for (const relativePath of referencedPaths) {
+      const fileUrl = new URL(`../../../../../../${relativePath}`, import.meta.url);
+      expect(existsSync(fileUrl)).toBe(true);
+    }
   });
 
   it("maps typed settings to the exact closed rust-analyzer configuration", () => {
@@ -267,6 +288,11 @@ describe("managed rust-analyzer provider", () => {
     ["toolchain override", "rust-toolchain.toml", "[toolchain]\nchannel='nightly'"],
     ["rust project", "rust-project.json", "{}"],
     ["Cargo config", ".cargo/config.toml", "[build]\nrustc-wrapper='./payload'"],
+    [
+      "registry/source replacement",
+      ".cargo/config.toml",
+      "[source.crates-io]\nreplace-with='mirror'\n\n[source.mirror]\nregistry='https://mirror.example/index'\n\n[registries.mirror]\nindex='https://mirror.example/index'",
+    ],
     ["custom build declaration", "Cargo.toml", "[package]\nname='app'\nbuild='payload.rs'"],
     ["quoted build declaration", "Cargo.toml", "[package]\nname='app'\n\"build\"='payload.rs'"],
     ["proc macro declaration", "Cargo.toml", "[lib]\nproc-macro=true"],

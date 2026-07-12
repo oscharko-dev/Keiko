@@ -17,7 +17,10 @@ import type {
   ManagedLspControlSnapshot,
 } from "./managedLspControl.js";
 import { listHostLspHealthSnapshotsForRoot } from "./hostLanguageOperation.js";
-import { detectPythonConfigurationPrecedence } from "./providers/pythonProvider.js";
+import {
+  detectPythonConfigurationPrecedence,
+  resolvePythonRuntimeIdentitySource,
+} from "./providers/pythonProvider.js";
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -186,12 +189,22 @@ export async function handleGetManagedLspControl(
           {
             language: "python",
             configurationSource: detectPythonConfigurationPrecedence(resolved.realRoot),
+            runtimeIdentitySource: pythonRuntimeIdentitySourceFor(snapshot),
           },
         ],
       },
       headers: { ETag: snapshot.etag, "Cache-Control": "no-store" },
     };
   });
+}
+
+function pythonRuntimeIdentitySourceFor(
+  snapshot: ManagedLspControlSnapshot,
+): "venv" | "interpreter" {
+  const configuration = snapshot.configurations.find((entry) => entry.language === "python");
+  return configuration?.language === "python"
+    ? resolvePythonRuntimeIdentitySource(configuration.settings)
+    : "interpreter";
 }
 
 function liveLanguages(

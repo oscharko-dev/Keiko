@@ -208,7 +208,11 @@ export async function handleEditorLanguageSemanticTokens(
     const request = parsed.value;
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
-    const authorization = await managedActivationAuthorization(deps, root.realRoot, "rust");
+    const authorization = await managedActivationAuthorization(
+      deps,
+      root.realRoot,
+      request.document.languageId,
+    );
     if (authorization?.authorized !== true) return { status: 200, body: semanticFallback() };
     const result = await runHostLanguageSemanticTokens(request.document, {
       workspace: workspaceForRoot(root.realRoot),
@@ -309,7 +313,10 @@ function snapshotAuthorizesLanguage(
   return status?.ok === true && SPAWNABLE_MANAGED_STATES.has(status.state);
 }
 
-async function managedActivationAuthorization(
+// Exported so tests can prove authorization is genuinely evaluated per languageId, independent
+// of any single call site's request shape (the semantic-token wire contract currently accepts
+// only "rust", which makes a route-level black-box test of this unable to exercise other values).
+export async function managedActivationAuthorization(
   deps: UiHandlerDeps,
   realRoot: string,
   languageId: string,

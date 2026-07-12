@@ -15,6 +15,7 @@ import {
   handleEditorLanguageCapabilities,
   handleEditorLanguageCapabilitiesForRoute,
   handleEditorLanguageSemanticTokens,
+  managedActivationAuthorization,
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
 import { createManagedLspActivationStore } from "./lsp/managedLspActivationStore.js";
@@ -791,5 +792,47 @@ describe("POST /api/editor/language", () => {
     );
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+});
+
+describe("managedActivationAuthorization", () => {
+  it("evaluates authorization against the given languageId, not a fixed language", async () => {
+    const stateDir = await realpath(
+      await mkdtemp(join(tmpdir(), "keiko-managed-authorization-state-")),
+    );
+    try {
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      await managedLspControl.mutate({
+        action: "activate",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        idempotencyKey: "activate-python-authorization",
+        language: "python",
+        root,
+      });
+      const controlledDeps = { ...deps(), managedLspControl };
+
+      // Python is activated: the same call site logic used by handleEditorLanguageSemanticTokens
+      // and runEditorLanguageOperation must authorize it when asked about "python".
+      const python = await managedActivationAuthorization(controlledDeps, root, "python");
+      expect(python?.authorized).toBe(true);
+
+      // Rust is NOT activated: a call site that hardcodes "rust" instead of forwarding the
+      // request's own document.languageId would incorrectly report this workspace as authorized
+      // for Rust too. It must not.
+      const rust = await managedActivationAuthorization(controlledDeps, root, "rust");
+      expect(rust?.authorized).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

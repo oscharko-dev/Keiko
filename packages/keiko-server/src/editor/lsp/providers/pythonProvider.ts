@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
   LanguageServiceOperation,
   ManagedLspPythonConfiguration,
+  ManagedLspPythonSettings,
 } from "@oscharko-dev/keiko-contracts";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 
@@ -54,6 +55,16 @@ export const PYTHON_PROVIDER_SPEC: HostLanguageProviderSpec = Object.freeze({
 
 export type PythonConfigurationPrecedence =
   "pyrightconfig" | "pyproject" | "workspaceConfiguration";
+
+export type PythonRuntimeIdentitySource = "venv" | "interpreter";
+
+// Reporting/selection only: per ADR-0132 D13, interpreter and venv stay opaque approved
+// identities that are never sent to Pyright, so this does not change what Pyright analyzes.
+export function resolvePythonRuntimeIdentitySource(
+  settings: ManagedLspPythonSettings,
+): PythonRuntimeIdentitySource {
+  return settings.venv !== null ? "venv" : "interpreter";
+}
 
 export function pythonProtocolConfiguration(
   configuration: ManagedLspPythonConfiguration,
