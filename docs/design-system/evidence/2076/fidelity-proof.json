@@ -4,19 +4,19 @@
     "keiko-tokens.css": {
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
       "identityBytes": 20112,
-      "gzipBytes": 5096,
+      "gzipBytes": 5098,
       "brotliBytes": 4223
     },
     "keiko-semantic-tokens.css": {
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
       "identityBytes": 16141,
-      "gzipBytes": 4302,
+      "gzipBytes": 4278,
       "brotliBytes": 3556
     },
     "maintainer-ui.css": {
       "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e",
       "identityBytes": 10975,
-      "gzipBytes": 2219,
+      "gzipBytes": 2217,
       "brotliBytes": 1861
     },
     "maintainer-ui.html": {
@@ -28,31 +28,31 @@
     "maintainer-ui.js": {
       "sha256": "2e75c4e67a39fc4b9d7c3b9c825bf6000254cd5ca89d27949d5fba9c09dd27e2",
       "identityBytes": 12802,
-      "gzipBytes": 3817,
+      "gzipBytes": 3807,
       "brotliBytes": 3325
     },
     "maintainer-ui-copy.js": {
       "sha256": "3ef6220bfb8e006a5d79c37df360f8c9b77bbca133f3686a6eec4b0d35c843fa",
       "identityBytes": 13711,
-      "gzipBytes": 4048,
+      "gzipBytes": 4029,
       "brotliBytes": 3532
     },
     "maintainer-ui-detail.js": {
       "sha256": "bc5990e7950cd774c53c1dccb018f58cf0b39d67231f9700866e6a0e633dddd5",
       "identityBytes": 2496,
-      "gzipBytes": 940,
+      "gzipBytes": 934,
       "brotliBytes": 791
     },
     "maintainer-ui-dom.js": {
       "sha256": "8252cce42202221b3f131c13d341e443b3c33440e82bb4af539cb76a8240444a",
       "identityBytes": 4761,
-      "gzipBytes": 1670,
+      "gzipBytes": 1664,
       "brotliBytes": 1407
     },
     "maintainer-ui-publication.js": {
       "sha256": "b81e12f61b2610751e088734e3485af339e2bb3247754121d69debdf47754a0a",
       "identityBytes": 14396,
-      "gzipBytes": 3702,
+      "gzipBytes": 3698,
       "brotliBytes": 3225
     }
   },
