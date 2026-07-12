@@ -604,7 +604,8 @@ test("German publication journey and copy keys stay in parity", async ({ page })
   await installFixture(page);
   await page.goto("/maintainer/");
   const keys = await page.evaluate(async (): Promise<{ english: string[]; deutsch: string[] }> => {
-    const loaded = (await import("/maintainer/maintainer-ui-copy.js")) as unknown;
+    const copyModuleUrl = "/maintainer/maintainer-ui-copy.js";
+    const loaded = (await import(copyModuleUrl)) as unknown;
     const module = loaded as {
       publicationCopyKeys(): { english: string[]; deutsch: string[] };
     };
