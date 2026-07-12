@@ -14,7 +14,7 @@ import {
   parseEditorVerificationRunRequest,
 } from "./editor-verification.js";
 import type { EditorVerificationCatalog, EditorVerificationEvent } from "./editor-verification.js";
-import type { VerificationReport } from "./verification.js";
+import type { VerificationReport, VerificationResult } from "./verification.js";
 
 const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
 
@@ -34,6 +34,39 @@ function report(): VerificationReport {
       cancelled: 0,
       "resource-exceeded": 0,
     },
+  };
+}
+
+function failedResult(overrides: Partial<VerificationResult> = {}): VerificationResult {
+  return {
+    kind: "typecheck",
+    scriptName: "typecheck",
+    command: "npm",
+    args: ["run", "typecheck"],
+    status: "failed",
+    exitCode: 2,
+    signal: null,
+    durationMs: 1,
+    truncated: false,
+    redacted: true,
+    outputSummary: "command output omitted",
+    appliedLimits: [
+      { dimension: "wall-time", limit: 120_000, enforced: true },
+      { dimension: "output-size", limit: 1_048_576, enforced: true },
+      { dimension: "memory", limit: 0, enforced: false },
+      { dimension: "network", limit: "none", enforced: true },
+    ],
+    ...overrides,
+  };
+}
+
+function failedReport(overrides: Partial<VerificationReport> = {}): VerificationReport {
+  return {
+    ...report(),
+    results: [failedResult()],
+    overallStatus: "failed",
+    counts: { ...report().counts, failed: 1 },
+    ...overrides,
   };
 }
 
@@ -152,6 +185,15 @@ describe("isEditorVerificationRun", () => {
         requestId: "",
       }),
     ).toBe(false);
+    expect(
+      isEditorVerificationRun({
+        runId: "r1",
+        projectId: "😀".repeat(2_048),
+        kinds: ["test"],
+        state: "running",
+        startedAtMs: 10,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -260,6 +302,61 @@ describe("isEditorVerificationEvent", () => {
     expect("outputSummary" in stepCompleted).toBe(false);
     expect("report" in stepCompleted).toBe(false);
   });
+
+  it("rejects unexpected fields on every closed lifecycle variant", () => {
+    const events: readonly object[] = [
+      {
+        schemaVersion: V,
+        kind: "run-started",
+        runId: "r",
+        projectId: "p",
+        kinds: ["test"],
+        startedAtMs: 1,
+      },
+      { schemaVersion: V, kind: "step-started", runId: "r", stepKind: "test" },
+      {
+        schemaVersion: V,
+        kind: "step-completed",
+        runId: "r",
+        stepKind: "test",
+        status: "passed",
+        durationMs: 1,
+      },
+      { schemaVersion: V, kind: "run-completed", runId: "r", report: report() },
+      { schemaVersion: V, kind: "run-cancelled", runId: "r" },
+      { schemaVersion: V, kind: "run-failed", runId: "r", reason: "backend" },
+    ];
+    for (const event of events) {
+      expect(isEditorVerificationEvent({ ...event, rawOutput: "secret" })).toBe(false);
+    }
+  });
+
+  it("deeply validates the completed report and its redaction/location invariants", () => {
+    const event = { schemaVersion: V, kind: "run-completed", runId: "r" } as const;
+    expect(isEditorVerificationEvent({ ...event, report: failedReport() })).toBe(true);
+    expect(
+      isEditorVerificationEvent({
+        ...event,
+        report: failedReport({ results: [failedResult({ redacted: false })] }),
+      }),
+    ).toBe(false);
+    expect(
+      isEditorVerificationEvent({
+        ...event,
+        report: failedReport({
+          results: [
+            failedResult({ locations: [{ file: "/Users/victim/secret.ts", message: "x" }] }),
+          ],
+        }),
+      }),
+    ).toBe(false);
+    expect(
+      isEditorVerificationEvent({
+        ...event,
+        report: failedReport({ counts: { ...failedReport().counts, failed: 0 } }),
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isEditorVerificationCatalog", () => {
@@ -267,10 +364,11 @@ describe("isEditorVerificationCatalog", () => {
     return {
       schemaVersion: V,
       projectId: "proj-1",
-      kinds: [
-        { kind: "test", available: true, trustState: "trusted" },
-        { kind: "build", available: false, trustState: "approval-required" },
-      ],
+      kinds: EDITOR_VERIFICATION_KINDS.map((kind) => ({
+        kind,
+        available: kind === "test",
+        trustState: kind === "test" ? "trusted" : "approval-required",
+      })),
     };
   }
 
@@ -278,8 +376,21 @@ describe("isEditorVerificationCatalog", () => {
     expect(isEditorVerificationCatalog(catalog())).toBe(true);
   });
 
-  it("accepts an empty kinds list", () => {
-    expect(isEditorVerificationCatalog({ ...catalog(), kinds: [] })).toBe(true);
+  it("rejects partial, duplicate, oversized, or sparse kind catalogs", () => {
+    const valid = catalog();
+    expect(isEditorVerificationCatalog({ ...valid, kinds: valid.kinds.slice(0, -1) })).toBe(false);
+    expect(
+      isEditorVerificationCatalog({
+        ...valid,
+        kinds: [...valid.kinds.slice(0, -1), valid.kinds[0]],
+      }),
+    ).toBe(false);
+    expect(isEditorVerificationCatalog({ ...valid, kinds: [...valid.kinds, valid.kinds[0]] })).toBe(
+      false,
+    );
+    expect(
+      isEditorVerificationCatalog({ ...valid, kinds: new Array(EDITOR_VERIFICATION_MAX_KINDS) }),
+    ).toBe(false);
   });
 
   it("rejects a wrong schema version, missing projectId, or non-array kinds", () => {
@@ -312,5 +423,16 @@ describe("isEditorVerificationCatalog", () => {
   it("rejects a non-object value", () => {
     expect(isEditorVerificationCatalog(null)).toBe(false);
     expect(isEditorVerificationCatalog("catalog")).toBe(false);
+  });
+
+  it("rejects unexpected catalog and entry fields", () => {
+    const valid = catalog();
+    expect(isEditorVerificationCatalog({ ...valid, extra: true })).toBe(false);
+    expect(
+      isEditorVerificationCatalog({
+        ...valid,
+        kinds: [{ ...valid.kinds[0], script: "secret" }, ...valid.kinds.slice(1)],
+      }),
+    ).toBe(false);
   });
 });

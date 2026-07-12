@@ -58,6 +58,10 @@ import {
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
 import {
+  createWorkspaceScriptTrustService,
+  type WorkspaceScriptTrustService,
+} from "./workspace-script-trust.js";
+import {
   createUpdateSessionManager,
   type UpdateCompletionGate,
   type UpdateSessionManager,
@@ -312,6 +316,7 @@ export interface UiHandlerDeps {
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
   readonly verificationRunner?: VerificationRunnerManager | undefined;
+  readonly workspaceScriptTrust?: WorkspaceScriptTrustService | undefined;
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -498,6 +503,7 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  readonly workspaceScriptTrust?: WorkspaceScriptTrustService | undefined;
   // Optional injected registry (tests); a fresh bounded registry is created otherwise.
   readonly registry?: RunRegistry | undefined;
   // Optional injected ModelPort factory (tests); the GatewayModelPort builder is used otherwise.
@@ -1036,11 +1042,14 @@ function buildCommandRunner(options: {
   readonly evidenceStore: EvidenceStore;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): CommandRunnerManager {
   return createCommandRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
+    isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
+      options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1048,11 +1057,9 @@ function buildCommandRunner(options: {
   });
 }
 
-// Issue #2211 — the editor verification runner reuses the same project store as the command runner.
-// The workspace-trust decider is intentionally left at its fail-closed `() => false` default, matching
-// buildCommandRunner's current production wiring, until a future issue wires a real trust source for
-// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
-// OWN redactor (below) only guards the persisted evidence entry, mirroring buildCommandRunner.
+// The editor verification runner and command runner receive the same server-owned, manifest-bound
+// trust service. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
+// own redactor below guards persisted evidence, mirroring buildCommandRunner.
 //
 // Issue #2211 fix-up (Epic #2092): also wires the SAME evidenceStore + live-redactor construction
 // pattern buildCommandRunner uses, so every finished verification run writes a content-free audit
@@ -1061,10 +1068,13 @@ function buildVerificationRunner(options: {
   readonly store: UiStore;
   readonly evidenceStore: EvidenceStore;
   readonly liveRedactor: Redactor;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): VerificationRunnerManager {
   return createVerificationRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
+    isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
+      options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1475,6 +1485,7 @@ interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
   readonly verificationRunner: VerificationRunnerManager;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly updateSession: UpdateSessionManager;
   readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
@@ -1540,6 +1551,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
+  const workspaceScriptTrust =
+    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
   return {
     terminal: buildTerminalManager({
       store: args.uiStore,
@@ -1552,12 +1565,15 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       evidenceStore: args.evidenceStore,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      workspaceScriptTrust,
     }),
     verificationRunner: buildVerificationRunner({
       store: args.uiStore,
       evidenceStore: args.evidenceStore,
       liveRedactor: args.liveRedactor,
+      workspaceScriptTrust,
     }),
+    workspaceScriptTrust,
     updateSession: buildUpdateSession({
       injected: args.options.updateSession,
       env: args.options.env,

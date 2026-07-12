@@ -139,4 +139,58 @@ describe("editor-problems guards", () => {
     expect(isEditorProblemsSnapshot({ ...base, problems: [{ bad: true }] })).toBe(false);
     expect(isEditorProblemsSnapshot({ ...base, totalCount: -1 })).toBe(false);
   });
+
+  it("enforces list, per-file, and configured cap relationships", () => {
+    const base = buildEditorProblemsSnapshot([problem({ id: "a" }), problem({ id: "b" })], 2, 2);
+    expect(
+      isEditorProblemsSnapshot({ ...base, problems: [...base.problems, problem({ id: "c" })] }),
+    ).toBe(false);
+    expect(isEditorProblemsSnapshot({ ...base, perFileCap: 1 })).toBe(false);
+    expect(isEditorProblemsSnapshot({ ...base, totalCap: EDITOR_PROBLEMS_TOTAL_CAP + 1 })).toBe(
+      false,
+    );
+    expect(
+      isEditorProblemsSnapshot({ ...base, perFileCap: EDITOR_PROBLEMS_PER_FILE_CAP + 1 }),
+    ).toBe(false);
+  });
+
+  it("requires totalCount and truncated to describe the visible list honestly", () => {
+    const base = buildEditorProblemsSnapshot([problem()]);
+    expect(isEditorProblemsSnapshot({ ...base, totalCount: 0 })).toBe(false);
+    expect(isEditorProblemsSnapshot({ ...base, totalCount: 2, truncated: false })).toBe(false);
+    expect(isEditorProblemsSnapshot({ ...base, truncated: true })).toBe(false);
+  });
+
+  it("rejects hostile oversized and sparse arrays before iterating their contents", () => {
+    const base = buildEditorProblemsSnapshot([]);
+    const oversized = Array.from({ length: EDITOR_PROBLEMS_TOTAL_CAP + 1 }, (_unused, index) =>
+      problem({ id: String(index), file: `src/${String(index)}.ts` }),
+    );
+    expect(
+      isEditorProblemsSnapshot({
+        ...base,
+        problems: oversized,
+        totalCount: oversized.length,
+        truncated: false,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorProblemsSnapshot({
+        ...base,
+        problems: new Array(1),
+        totalCount: 1,
+        truncated: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects non-canonical problem paths, source/kind mismatches, and extra fields", () => {
+    expect(isEditorProblem(problem({ file: "/host/a.ts" }))).toBe(false);
+    expect(isEditorProblem(problem({ file: "src\\a.ts" }))).toBe(false);
+    expect(isEditorProblem(problem({ source: "verification", kind: "language-diagnostic" }))).toBe(
+      false,
+    );
+    expect(isEditorProblem(problem({ source: "language-diagnostic", kind: "lint" }))).toBe(false);
+    expect(isEditorProblem({ ...problem(), raw: "secret" })).toBe(false);
+  });
 });

@@ -12,7 +12,12 @@
 
 import { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-runner.js";
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
-import type { VerificationKind, VerificationReport, VerificationStatus } from "./verification.js";
+import {
+  isVerificationReport,
+  type VerificationKind,
+  type VerificationReport,
+  type VerificationStatus,
+} from "./verification.js";
 
 export const EDITOR_VERIFICATION_SCHEMA_VERSION = "1" as const;
 
@@ -24,6 +29,7 @@ export const EDITOR_VERIFICATION_REASON_MAX_CHARS = 256;
 
 const EDITOR_VERIFICATION_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const EDITOR_VERIFICATION_TEXT_ENCODER = new TextEncoder();
+const EDITOR_VERIFICATION_IDENTIFIER_MAX_CHARS = 4_096;
 
 // Canonical runtime list of the closed kind set. `satisfies` keeps every member a real
 // VerificationKind; the type layer owns the union, this owns its runtime witness (no array exists in
@@ -192,8 +198,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasOnlyKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isDenseArray<T>(
+  value: unknown,
+  maxLength: number,
+  guard: (entry: unknown) => entry is T,
+): value is readonly T[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maxLength ||
+    Object.keys(value).length !== value.length
+  ) {
+    return false;
+  }
+  return value.every(guard);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isBoundedIdentifier(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    EDITOR_VERIFICATION_TEXT_ENCODER.encode(value).length <=
+      EDITOR_VERIFICATION_IDENTIFIER_MAX_CHARS &&
+    !value.includes("\u0000")
+  );
 }
 
 function isFiniteNonNegative(value: unknown): value is number {
@@ -247,10 +281,8 @@ function isValidRequestId(value: unknown): value is string {
 
 function isKindArray(value: unknown): value is readonly VerificationKind[] {
   return (
-    Array.isArray(value) &&
+    isDenseArray(value, EDITOR_VERIFICATION_MAX_KINDS, isVerificationKind) &&
     value.length > 0 &&
-    value.length <= EDITOR_VERIFICATION_MAX_KINDS &&
-    value.every(isVerificationKind) &&
     new Set(value).size === value.length
   );
 }
@@ -305,54 +337,85 @@ function canonicalRunRequest(input: Record<string, unknown>): EditorVerification
   };
 }
 
+function hasValidRunIdentity(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    isBoundedIdentifier(value.runId) &&
+    isBoundedIdentifier(value.projectId) &&
+    isKindArray(value.kinds) &&
+    isEditorVerificationRunState(value.state)
+  );
+}
+
+function hasValidRunOptionals(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.targetPath !== undefined && !isBoundedTargetPath(value.targetPath)) return false;
+  if (value.requestId !== undefined && !isValidRequestId(value.requestId)) return false;
+  return isFiniteNonNegative(value.startedAtMs);
+}
+
 export function isEditorVerificationRun(value: unknown): value is EditorVerificationRun {
   if (!isRecord(value)) return false;
-  return [
-    isNonEmptyString(value.runId),
-    isNonEmptyString(value.projectId),
-    isKindArray(value.kinds),
-    value.targetPath === undefined || isBoundedTargetPath(value.targetPath),
-    isEditorVerificationRunState(value.state),
-    isFiniteNonNegative(value.startedAtMs),
-    value.requestId === undefined || isValidRequestId(value.requestId),
-  ].every(Boolean);
+  return (
+    hasOnlyKeys(value, [
+      "runId",
+      "projectId",
+      "kinds",
+      "targetPath",
+      "state",
+      "startedAtMs",
+      "requestId",
+    ]) &&
+    hasValidRunIdentity(value) &&
+    hasValidRunOptionals(value)
+  );
 }
 
 function isCatalogEntry(value: unknown): value is EditorVerificationCatalogEntry {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ["kind", "available", "trustState"]) &&
     isVerificationKind(value.kind) &&
     typeof value.available === "boolean" &&
-    (COMMAND_TASK_TRUST_STATES as readonly string[]).includes(value.trustState as string)
+    typeof value.trustState === "string" &&
+    (COMMAND_TASK_TRUST_STATES as readonly string[]).includes(value.trustState)
+  );
+}
+
+function isCompleteCatalogKinds(
+  value: unknown,
+): value is readonly EditorVerificationCatalogEntry[] {
+  if (!isDenseArray(value, EDITOR_VERIFICATION_MAX_KINDS, isCatalogEntry)) return false;
+  if (value.length !== EDITOR_VERIFICATION_KINDS.length) return false;
+  const kinds = new Set(value.map((entry) => entry.kind));
+  return (
+    kinds.size === EDITOR_VERIFICATION_KINDS.length &&
+    EDITOR_VERIFICATION_KINDS.every((kind) => kinds.has(kind))
   );
 }
 
 export function isEditorVerificationCatalog(value: unknown): value is EditorVerificationCatalog {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ["schemaVersion", "projectId", "kinds"]) &&
     value.schemaVersion === EDITOR_VERIFICATION_SCHEMA_VERSION &&
-    isNonEmptyString(value.projectId) &&
-    Array.isArray(value.kinds) &&
-    value.kinds.every(isCatalogEntry)
-  );
-}
-
-// Light structural check on the terminal report envelope. Deep field validation stays with
-// keiko-verification (the trusted producer); the guard rejects a malformed SSE frame at the boundary.
-function isVerificationReportShape(value: unknown): value is VerificationReport {
-  return (
-    isRecord(value) &&
-    isNonEmptyString(value.workspaceRoot) &&
-    Array.isArray(value.results) &&
-    typeof value.overallStatus === "string" &&
-    isRecord(value.counts)
+    isBoundedIdentifier(value.projectId) &&
+    isCompleteCatalogKinds(value.kinds)
   );
 }
 
 function isRunStartedEvent(value: Record<string, unknown>): boolean {
   return (
-    isNonEmptyString(value.runId) &&
-    isNonEmptyString(value.projectId) &&
+    hasOnlyKeys(value, [
+      "schemaVersion",
+      "kind",
+      "runId",
+      "projectId",
+      "kinds",
+      "targetPath",
+      "startedAtMs",
+      "requestId",
+    ]) &&
+    isBoundedIdentifier(value.runId) &&
+    isBoundedIdentifier(value.projectId) &&
     isKindArray(value.kinds) &&
     (value.targetPath === undefined || isBoundedTargetPath(value.targetPath)) &&
     isFiniteNonNegative(value.startedAtMs) &&
@@ -361,7 +424,11 @@ function isRunStartedEvent(value: Record<string, unknown>): boolean {
 }
 
 function isStepEvent(value: Record<string, unknown>, completed: boolean): boolean {
-  if (!isNonEmptyString(value.runId) || !isVerificationKind(value.stepKind)) return false;
+  const keys = completed
+    ? ["schemaVersion", "kind", "runId", "stepKind", "status", "durationMs"]
+    : ["schemaVersion", "kind", "runId", "stepKind"];
+  if (!hasOnlyKeys(value, keys)) return false;
+  if (!isBoundedIdentifier(value.runId) || !isVerificationKind(value.stepKind)) return false;
   if (!completed) return true;
   return isVerificationStatus(value.status) && isFiniteNonNegative(value.durationMs);
 }
@@ -369,13 +436,20 @@ function isStepEvent(value: Record<string, unknown>, completed: boolean): boolea
 function isTerminalEvent(value: Record<string, unknown>): boolean {
   switch (value.kind) {
     case "run-completed":
-      return isNonEmptyString(value.runId) && isVerificationReportShape(value.report);
+      return (
+        hasOnlyKeys(value, ["schemaVersion", "kind", "runId", "report"]) &&
+        isBoundedIdentifier(value.runId) &&
+        isVerificationReport(value.report)
+      );
     case "run-cancelled":
-      return isNonEmptyString(value.runId);
+      return (
+        hasOnlyKeys(value, ["schemaVersion", "kind", "runId"]) && isBoundedIdentifier(value.runId)
+      );
     case "run-failed":
       return (
-        isNonEmptyString(value.runId) &&
-        typeof value.reason === "string" &&
+        hasOnlyKeys(value, ["schemaVersion", "kind", "runId", "reason"]) &&
+        isBoundedIdentifier(value.runId) &&
+        isNonEmptyString(value.reason) &&
         value.reason.length <= EDITOR_VERIFICATION_REASON_MAX_CHARS
       );
     default:

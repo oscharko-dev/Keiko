@@ -360,6 +360,9 @@ export function EditorWindowSessionHost({
     onOpenGitDiff: (projectPath, path) => {
       ctx.openWindow("governedGit", { projectPath, path });
     },
+    onOpenProblems: (projectPath) => {
+      ctx.openWindow("problems", { projectPath });
+    },
     onAskSelection: (handoff) => {
       if (root === undefined) return false;
       const selectionHandoffId = registerEditorSelectionHandoff(root, handoff);

@@ -10,6 +10,7 @@ import {
   subscribeEditorProblems,
   verificationResultToProblems,
 } from "./editorProblemsStore";
+import { EDITOR_PROBLEM_MESSAGE_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
 
 function diagnostic(
   severity: EditorDiagnostic["severity"],
@@ -60,6 +61,13 @@ describe("diagnosticToProblem", () => {
     expect(diagnosticToProblem("f", diagnostic("error", 0), 0).severity).toBe("error");
     expect(diagnosticToProblem("f", diagnostic("warning", 0), 0).severity).toBe("warning");
   });
+
+  it("centrally truncates hostile Unicode messages without leaving a dangling surrogate", () => {
+    const hostile = `${"x".repeat(EDITOR_PROBLEM_MESSAGE_MAX_CHARS - 1)}😀${"y".repeat(32)}`;
+    const problem = diagnosticToProblem("src/a.ts", diagnostic("error", 0, hostile), 0);
+    expect(problem.message.length).toBeLessThanOrEqual(EDITOR_PROBLEM_MESSAGE_MAX_CHARS);
+    expect(problem.message.endsWith("\ud83d")).toBe(false);
+  });
 });
 
 describe("verificationResultToProblems", () => {
@@ -91,13 +99,23 @@ describe("verificationResultToProblems", () => {
     expect(problems[0]?.message).toBe("boom");
     expect(problems[0]?.source).toBe("verification");
   });
+
+  it("applies the same message bound to verification summaries and locations", () => {
+    const hostile = `${"z".repeat(EDITOR_PROBLEM_MESSAGE_MAX_CHARS)}😀tail`;
+    const summary = verificationResultToProblems(result({ outputSummary: hostile }));
+    const located = verificationResultToProblems(
+      result({ locations: [{ file: "src/a.ts", line: 1, message: hostile }] }),
+    );
+    expect(summary[0]?.message.length).toBeLessThanOrEqual(EDITOR_PROBLEM_MESSAGE_MAX_CHARS);
+    expect(located[0]?.message.length).toBeLessThanOrEqual(EDITOR_PROBLEM_MESSAGE_MAX_CHARS);
+  });
 });
 
 describe("editorProblemsStore aggregation", () => {
   it("aggregates pane diagnostics and the latest report, notifying subscribers", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeEditorProblems("/ws", listener);
-    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 0)]);
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [diagnostic("error", 0)]);
     setVerificationReport("/ws", {
       workspaceRoot: "/ws",
       results: [result({ locations: [{ file: "src/b.ts", line: 9, message: "x" }] })],
@@ -122,15 +140,19 @@ describe("editorProblemsStore aggregation", () => {
   });
 
   it("removes a pane's diagnostics when it closes (open-files-only scoping)", () => {
-    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 0)]);
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [diagnostic("error", 0)]);
     expect(getEditorProblems("/ws")).toHaveLength(1);
-    setPaneDiagnostics("/ws", "src/a.ts", []);
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", []);
     expect(getEditorProblems("/ws")).toHaveLength(0);
   });
 
   it("scopes diagnostics per project root — two projects sharing a relative path do not collide (Epic #2092 fix-up)", () => {
-    setPaneDiagnostics("/ws-a", "src/index.ts", [diagnostic("error", 0, "project A error")]);
-    setPaneDiagnostics("/ws-b", "src/index.ts", [diagnostic("warning", 0, "project B warning")]);
+    setPaneDiagnostics("/ws-a", "window-a", "src/index.ts", [
+      diagnostic("error", 0, "project A error"),
+    ]);
+    setPaneDiagnostics("/ws-b", "window-b", "src/index.ts", [
+      diagnostic("warning", 0, "project B warning"),
+    ]);
     expect(getEditorProblems("/ws-a")).toHaveLength(1);
     expect(getEditorProblems("/ws-a")[0]?.message).toBe("project A error");
     expect(getEditorProblems("/ws-b")).toHaveLength(1);
@@ -142,8 +164,46 @@ describe("editorProblemsStore aggregation", () => {
     const listenerB = vi.fn();
     subscribeEditorProblems("/ws-a", listenerA);
     subscribeEditorProblems("/ws-b", listenerB);
-    setPaneDiagnostics("/ws-a", "src/a.ts", [diagnostic("error", 0)]);
+    setPaneDiagnostics("/ws-a", "window-a", "src/a.ts", [diagnostic("error", 0)]);
     expect(listenerA).toHaveBeenCalled();
     expect(listenerB).not.toHaveBeenCalled();
+  });
+
+  it("keeps another producer's same-path diagnostics when one window cleans up", () => {
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [diagnostic("error", 0, "shared")]);
+    setPaneDiagnostics("/ws", "window-b", "src/a.ts", [diagnostic("error", 0, "shared")]);
+    expect(getEditorProblems("/ws")).toHaveLength(1);
+
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", []);
+
+    expect(getEditorProblems("/ws")).toHaveLength(1);
+    expect(getEditorProblems("/ws")[0]?.message).toBe("shared");
+  });
+
+  it("deduplicates producers deterministically regardless of update order", () => {
+    const shared = diagnostic("error", 0, "same problem");
+    setPaneDiagnostics("/ws", "window-z", "src/a.ts", [shared]);
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [shared]);
+    const first = getEditorProblems("/ws");
+    resetEditorProblemsStoreForTests();
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [shared]);
+    setPaneDiagnostics("/ws", "window-z", "src/a.ts", [shared]);
+    expect(getEditorProblems("/ws")).toEqual(first);
+  });
+
+  it("orders producer and path keys with an explicit Unicode-aware collation", () => {
+    const shared = diagnostic("error", 0, "same problem");
+    setPaneDiagnostics("/ws", "z-window", "src/shared.ts", [shared]);
+    setPaneDiagnostics("/ws", "ä-window", "src/shared.ts", [shared]);
+    setPaneDiagnostics("/ws", "paths", "src/z.ts", [diagnostic("error", 0, "z")]);
+    setPaneDiagnostics("/ws", "paths", "src/ä.ts", [diagnostic("error", 0, "umlaut")]);
+
+    const problems = getEditorProblems("/ws");
+    expect(problems.map((problem) => problem.file)).toEqual([
+      "src/shared.ts",
+      "src/ä.ts",
+      "src/z.ts",
+    ]);
+    expect(problems[0]?.id).toContain(":z-window:");
   });
 });

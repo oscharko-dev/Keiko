@@ -2,7 +2,7 @@ import {
   isEditorAgentActionResult,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
-  isEditorAgentVerificationResult,
+  parseEditorAgentVerificationResult,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentActionResult,
@@ -247,10 +247,16 @@ function parseQueryGitActionResult(value: unknown): EditorAgentActionQueuedRespo
 
 // Issue #2214 — the verification route's response is content-free BY CONSTRUCTION (the redacted report
 // type has no field for raw output), so the client validates its shape rather than re-redacting it.
-function parseVerificationResult(value: unknown): EditorAgentVerificationResult | null {
+function parseVerificationResult(
+  value: unknown,
+  expectedKind: EditorAgentVerificationRunRequest["kind"],
+): EditorAgentVerificationResult | null {
   if (!isRecord(value)) return null;
-  const result = value.result;
-  return isEditorAgentVerificationResult(result) ? result : null;
+  const parsed = parseEditorAgentVerificationResult(value.result);
+  if (parsed?.outcome !== "completed") return parsed;
+  return parsed.report.steps.length === 1 && parsed.report.steps[0]?.kind === expectedKind
+    ? parsed
+    : null;
 }
 
 function parseRouteCode(value: unknown): string | null {
@@ -426,7 +432,7 @@ export class EditorAgentHttpClient {
       body,
       signal,
       [200],
-      parseVerificationResult,
+      (value): EditorAgentVerificationResult | null => parseVerificationResult(value, body.kind),
       this.verificationTimeoutMs,
     );
   }
