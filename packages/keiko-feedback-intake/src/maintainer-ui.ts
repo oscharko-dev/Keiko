@@ -12,6 +12,8 @@ type Asset =
   | "maintainer-ui.js"
   | "maintainer-ui-copy.js"
   | "maintainer-ui-dom.js"
+  | "maintainer-ui-detail.js"
+  | "maintainer-ui-publication.js"
   | "keiko-tokens.css"
   | "keiko-semantic-tokens.css";
 
@@ -33,6 +35,14 @@ const ASSETS: Readonly<Record<string, UiAsset>> = {
   },
   "/maintainer/maintainer-ui-dom.js": {
     filename: "maintainer-ui-dom.js",
+    contentType: "text/javascript; charset=utf-8",
+  },
+  "/maintainer/maintainer-ui-detail.js": {
+    filename: "maintainer-ui-detail.js",
+    contentType: "text/javascript; charset=utf-8",
+  },
+  "/maintainer/maintainer-ui-publication.js": {
+    filename: "maintainer-ui-publication.js",
     contentType: "text/javascript; charset=utf-8",
   },
   "/maintainer/tokens.css": {

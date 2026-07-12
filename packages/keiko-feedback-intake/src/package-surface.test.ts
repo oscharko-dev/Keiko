@@ -23,6 +23,27 @@ const productionModules = [
   "feedback-review-store",
   "feedback-review-types",
   "feedback-review-query",
+  "feedback-publication-command",
+  "feedback-publication-dispatch",
+  "feedback-publication-persistence",
+  "feedback-publication-projection",
+  "feedback-publication-query",
+  "feedback-publication-records",
+  "feedback-publication-runner",
+  "feedback-publication-runtime",
+  "feedback-publication-store",
+  "feedback-publication-types",
+  "feedback-publication-worker-sql",
+  "feedback-publication-worker-store",
+  "feedback-publication-worker-success",
+  "feedback-publication-worker-types",
+  "feedback-publication-worker",
+  "github-app-config",
+  "github-app-jwt",
+  "github-app-key",
+  "github-app-transport",
+  "github-issue-adapter",
+  "github-secure-file",
   "http",
   "index",
   "main",
@@ -35,6 +56,8 @@ const productionModules = [
   "maintainer-http-response",
   "maintainer-login-limiter",
   "maintainer-oidc",
+  "maintainer-publication-action",
+  "maintainer-publication-http",
   "maintainer-runtime",
   "maintainer-store",
   "maintainer-ui",
@@ -78,11 +101,16 @@ function expectedPaths(): readonly string[] {
     "assets/keiko-tokens.css",
     "assets/maintainer-ui.css",
     "assets/maintainer-ui-copy.js",
+    "assets/maintainer-ui-detail.js",
     "assets/maintainer-ui-dom.js",
     "assets/maintainer-ui.html",
     "assets/maintainer-ui.js",
+    "assets/maintainer-ui-publication.js",
     "migrations/001_feedback_intake.sql",
     "migrations/002_feedback_review.sql",
+    "migrations/003_feedback_publication.sql",
+    "migrations/004_feedback_publication_worker.sql",
+    "migrations/005_feedback_publication_circuit.sql",
     "package.json",
     ...compiled,
   ].sort();
@@ -115,5 +143,33 @@ describe("hosted npm package surface", () => {
         expect(paths, `${path} imports missing ${imported}`).toContain(imported);
       }
     }
+  });
+
+  it("keeps publication creation capabilities off the package root and raw adapter surface", () => {
+    const rootSource = readFileSync(resolve(packageRoot, "src/index.ts"), "utf8");
+    for (const forbidden of [
+      "GovernedGithubIssueAdapter",
+      "PostgresFeedbackPublicationWorkerStore",
+      "GithubAppPrivateKeyProvider",
+      "createGithubAppJwt",
+      "FixedOriginGithubTransport",
+      "GithubTransport",
+    ]) {
+      expect(rootSource).not.toContain(forbidden);
+    }
+    const adapterSource = readFileSync(resolve(packageRoot, "src/github-issue-adapter.ts"), "utf8");
+    expect(adapterSource).toContain("async #postIssue(");
+    expect(adapterSource).not.toContain("createIssue(");
+    expect(packedPaths().some((path) => path.includes("feedback-publication-armed"))).toBe(false);
+    const rootDeclaration = readFileSync(resolve(packageRoot, "dist/index.d.ts"), "utf8");
+    expect(rootDeclaration).not.toMatch(
+      /GovernedGithubIssueAdapter|PostgresFeedbackPublicationWorkerStore|GithubAppPrivateKeyProvider|createGithubAppJwt|FixedOriginGithubTransport/u,
+    );
+    const adapterDeclaration = readFileSync(
+      resolve(packageRoot, "dist/github-issue-adapter.d.ts"),
+      "utf8",
+    );
+    expect(adapterDeclaration).not.toContain("createIssue");
+    expect(adapterDeclaration).not.toContain("postIssue");
   });
 });

@@ -27,7 +27,7 @@ export async function readMaintainerBody(req: IncomingMessage): Promise<unknown>
     });
     req.on("end", () => {
       try {
-        finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
+        finish(undefined, parseMaintainerJson(Buffer.concat(chunks)));
       } catch {
         finish(new MaintainerRequestError("body"));
       }
@@ -36,4 +36,52 @@ export async function readMaintainerBody(req: IncomingMessage): Promise<unknown>
       finish(new MaintainerRequestError("body"));
     });
   });
+}
+
+function parseMaintainerJson(bytes: Uint8Array): unknown {
+  const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  if (source.startsWith("\uFEFF") || hasDuplicateKeys(source)) {
+    throw new MaintainerRequestError("body");
+  }
+  return JSON.parse(source) as unknown;
+}
+
+// The bounded scanner keeps duplicate-key rejection auditable at the trust boundary.
+// eslint-disable-next-line complexity
+function hasDuplicateKeys(source: string): boolean {
+  const scopes: Set<string>[] = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{") scopes.push(new Set());
+    else if (character === "}") scopes.pop();
+    else if (character === '"' && scopes.length > 0) {
+      const end = quotedEnd(source, index + 1);
+      if (end === undefined) return false;
+      let cursor = end + 1;
+      while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+      if (source[cursor] === ":" && duplicateKey(source, index, end, scopes.at(-1))) return true;
+      index = end;
+    }
+  }
+  return false;
+}
+
+function quotedEnd(source: string, start: number): number | undefined {
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === "\\") index += 1;
+    else if (source[index] === '"') return index;
+  }
+  return undefined;
+}
+
+function duplicateKey(
+  source: string,
+  start: number,
+  end: number,
+  scope: Set<string> | undefined,
+): boolean {
+  const key = JSON.parse(source.slice(start, end + 1)) as string;
+  if (scope?.has(key) === true) return true;
+  scope?.add(key);
+  return false;
 }

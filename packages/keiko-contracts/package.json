@@ -47,6 +47,10 @@
       "types": "./dist/feedback-review.d.ts",
       "import": "./dist/feedback-review.js"
     },
+    "./feedback-publication": {
+      "types": "./dist/feedback-publication.d.ts",
+      "import": "./dist/feedback-publication.js"
+    },
     "./feedback-maintainer": {
       "types": "./dist/feedback-maintainer.d.ts",
       "import": "./dist/feedback-maintainer.js"

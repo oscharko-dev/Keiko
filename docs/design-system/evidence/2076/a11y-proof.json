@@ -1,0 +1,39 @@
+{
+  "issue": 2076,
+  "modes": [
+    {
+      "name": "01-dark-desktop-prepare",
+      "axeViolations": 0
+    },
+    {
+      "name": "02-dark-preview-inert",
+      "axeViolations": 0
+    },
+    {
+      "name": "03-light-succeeded",
+      "axeViolations": 0
+    },
+    {
+      "name": "04-dark-cancelled-private",
+      "axeViolations": 0
+    },
+    {
+      "name": "05-mobile-forced-colors-reduced-motion",
+      "axeViolations": 0
+    },
+    {
+      "name": "06-light-high-contrast",
+      "axeViolations": 0
+    },
+    {
+      "name": "07-dark-manual-remediation",
+      "axeViolations": 0
+    },
+    {
+      "name": "08-forced-colors-active",
+      "axeViolations": 0
+    }
+  ],
+  "seriousOrCritical": 0,
+  "result": "PASS"
+}

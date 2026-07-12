@@ -169,12 +169,19 @@ button:disabled {
 .mq-button:hover {
   background: var(--button-secondary-surface-hover);
 }
+.mq-publication .mq-button:active {
+  border-color: var(--focus-ring);
+  background: var(--button-secondary-surface-hover);
+}
 .mq-button--primary {
   color: var(--button-primary-text);
   background: var(--button-primary-surface);
   border-color: var(--button-primary-surface);
 }
 .mq-button--primary:hover {
+  background: var(--button-primary-surface-hover);
+}
+.mq-publication .mq-button--primary:active {
   background: var(--button-primary-surface-hover);
 }
 .mq-button--danger {
@@ -285,6 +292,56 @@ button:disabled {
 .mq-action p {
   margin: 0;
 }
+.mq-publication {
+  padding: var(--space-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-secondary);
+}
+.mq-publication h3,
+.mq-publication h4,
+.mq-publication h5,
+.mq-publication p {
+  margin: 0;
+}
+.mq-publication h4,
+.mq-publication h5 {
+  color: var(--text-primary);
+  font-size: var(--text-body-sm);
+}
+.mq-publication-preview {
+  display: grid;
+  gap: var(--space-4);
+}
+.mq-publication-meta {
+  margin: 0;
+}
+.mq-publication-warning {
+  padding: var(--space-5);
+  border-left: var(--space-2) solid var(--feedback-warning);
+  color: var(--text-primary);
+  background: var(--feedback-warning-surface);
+  line-height: var(--leading-relaxed);
+}
+.mq-confirm {
+  display: flex !important;
+  align-items: center;
+  min-height: calc(var(--control-height-lg) + var(--space-2));
+}
+.mq-confirm input[type="checkbox"] {
+  width: calc(var(--control-height-lg) + var(--space-4));
+  min-height: calc(var(--control-height-lg) + var(--space-4));
+  margin: 0 var(--space-4) 0 0;
+}
+.mq-publication .mq-button,
+.mq-publication select,
+.mq-publication input[type="checkbox"] {
+  min-height: calc(var(--control-height-lg) + var(--space-4));
+}
+.mq-publication select:active,
+.mq-publication input[type="checkbox"]:active {
+  border-color: var(--focus-ring);
+}
 .mq-action label {
   display: grid;
   gap: var(--space-3);
@@ -352,6 +409,8 @@ button:disabled {
   .mq-notice,
   .mq-panel,
   .mq-action,
+  .mq-publication,
+  .mq-publication-warning,
   .mq-meta div {
     forced-color-adjust: none;
     color: CanvasText;
@@ -364,6 +423,10 @@ button:disabled {
   .mq-table td,
   .mq-action label,
   .mq-action p,
+  .mq-publication h3,
+  .mq-publication h4,
+  .mq-publication h5,
+  .mq-publication-warning,
   .mq-audit,
   .mq-table th,
   .mq-badge {
@@ -389,5 +452,12 @@ button:disabled {
     color: ButtonText;
     background: ButtonFace;
     border-color: ButtonText;
+  }
+  .mq-publication .mq-button:active,
+  .mq-publication select:active,
+  .mq-publication input[type="checkbox"]:active {
+    border-color: Highlight;
+    outline: var(--focus-width) solid Highlight;
+    outline-offset: 0;
   }
 }

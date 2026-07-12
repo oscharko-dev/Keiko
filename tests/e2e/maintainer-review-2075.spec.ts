@@ -4,7 +4,10 @@ import { resolve } from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { installAxe, runAxe, seriousOrCritical } from "./support/axe.js";
-import { captureDeterministically, settleNativeValidation } from "./support/deterministic-screenshot.js";
+import {
+  captureDeterministically,
+  settleNativeValidation,
+} from "./support/deterministic-screenshot.js";
 
 const evidence = resolve("docs/design-system/evidence/2075");
 const assetRoot = resolve("packages/keiko-feedback-intake/assets");
@@ -15,7 +18,9 @@ const servedAssets = [
   "maintainer-ui.html",
   "maintainer-ui.js",
   "maintainer-ui-copy.js",
+  "maintainer-ui-detail.js",
   "maintainer-ui-dom.js",
+  "maintainer-ui-publication.js",
 ] as const;
 const axeProofs: { name: string; axeViolations: number }[] = [];
 const externalRequests = new WeakMap<Page, string[]>();

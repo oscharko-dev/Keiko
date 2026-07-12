@@ -9,6 +9,37 @@ export { PostgresMaintainerAuthStore } from "./maintainer-store.js";
 export { createMaintainerAuthService, MaintainerAuthError } from "./maintainer-auth.js";
 export { PostgresFeedbackReviewQuery } from "./feedback-review-query.js";
 export { PostgresFeedbackReviewRepository } from "./feedback-review-store.js";
+export { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
+export { PostgresFeedbackPublicationQuery } from "./feedback-publication-query.js";
+export {
+  FeedbackPublicationProjectionError,
+  createFeedbackIssueProjectionV1,
+  digestFeedbackTargetPolicyV1,
+  recomputeFeedbackIssueProjectionV1,
+} from "./feedback-publication-projection.js";
+export { FeedbackPublicationError } from "./feedback-publication-types.js";
+export { loadGithubAppConfig } from "./github-app-config.js";
+export type {
+  GithubAppConfig,
+  GithubAppConfigReadiness,
+  GithubAppOperatorInput,
+  GithubAppTarget,
+} from "./github-app-config.js";
+export { GithubIssueAdapterError } from "./github-issue-adapter.js";
+export type {
+  BoundGithubTarget,
+  GithubCommitCertainty,
+  GithubIssueAdapter,
+  GithubIssueFailureCode,
+  GithubIssueProjection,
+  GithubIssueReconciliationResult,
+} from "./github-issue-adapter.js";
+export type {
+  ApprovedFeedbackIssueProjection,
+  FeedbackGithubIssueLinkage,
+  FeedbackPublicationClaim,
+  FeedbackPublicationErrorCode,
+} from "./feedback-publication-types.js";
 export { FeedbackReviewError } from "./feedback-review-types.js";
 export type {
   FeedbackReviewCommand,

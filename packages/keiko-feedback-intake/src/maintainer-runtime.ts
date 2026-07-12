@@ -5,6 +5,7 @@ import { createMaintainerAuthService } from "./maintainer-auth.js";
 import { loadMaintainerRuntimeConfig, type MaintainerRuntimeConfig } from "./maintainer-config.js";
 import { createMaintainerHttpHandler, type MaintainerHttpOptions } from "./maintainer-http.js";
 import type { MaintainerDiagnostics } from "./maintainer-http-response.js";
+import type { MaintainerPublicationService } from "./maintainer-publication-http.js";
 import { MaintainerLoginLimiter } from "./maintainer-login-limiter.js";
 import { createMaintainerOidcClient, type MaintainerOidcClient } from "./maintainer-oidc.js";
 import { PostgresMaintainerAuthStore } from "./maintainer-store.js";
@@ -26,6 +27,8 @@ export interface MaintainerRuntimeOptions {
   readonly now: () => Date;
   readonly oidc?: MaintainerOidcClient | undefined;
   readonly diagnostics?: MaintainerHttpOptions["diagnostics"];
+  readonly publication?: MaintainerPublicationService | undefined;
+  readonly publicationTargets?: MaintainerHttpOptions["publicationTargets"];
   readonly serverFactory?:
     | ((handler: (req: IncomingMessage, res: ServerResponse) => void) => MaintainerRuntimeServer)
     | undefined;
@@ -37,11 +40,12 @@ export function loadFeedbackRuntimeConfigs(
     readonly migrationSource?: (() => Promise<string>) | undefined;
     readonly migrationSources?: (() => Promise<readonly unknown[]>) | undefined;
   },
+  now = new Date(),
 ): {
   readonly config: HostedRuntimeConfig;
   readonly maintainerConfig: MaintainerRuntimeConfig;
 } {
-  const config = loadHostedRuntimeConfig(env);
+  const config = loadHostedRuntimeConfig(env, now);
   const maintainerConfig = loadMaintainerRuntimeConfig(env);
   if (
     maintainerConfig.enabled &&
@@ -50,6 +54,13 @@ export function loadFeedbackRuntimeConfigs(
     throw new Error("Invalid maintainer port");
   }
   assertMaintainerMigrationConfiguration(maintainerConfig, migrations);
+  if (
+    config.publication.enabled &&
+    migrations.migrationSource !== undefined &&
+    migrations.migrationSources === undefined
+  ) {
+    throw new Error("Publication runtime requires ordered migration sources");
+  }
   return { config, maintainerConfig };
 }
 
@@ -93,6 +104,8 @@ export async function createMaintainerRuntimeServer(
       options.config.legalHoldPolicyKeys,
       options.now,
     ),
+    publication: options.publication,
+    publicationTargets: options.publicationTargets,
     loginLimiter: new MaintainerLoginLimiter({
       perSource: options.config.loginPerSourceLimit,
       global: options.config.loginGlobalLimit,

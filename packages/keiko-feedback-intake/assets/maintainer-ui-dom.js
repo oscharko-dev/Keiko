@@ -15,7 +15,10 @@ export function element(name, properties, children = []) {
         "name",
         "value",
         "href",
+        "target",
+        "rel",
         "disabled",
+        "checked",
         "tabIndex",
         "scope",
         "htmlFor",
@@ -85,8 +88,10 @@ function applyBusy(root, state, value) {
 
 export function createUiHelpers(root, state, endpoint) {
   function replace(children) {
+    const activeId = document.activeElement?.id;
     root.replaceChildren(...children);
     root.setAttribute("aria-busy", String(state.busy));
+    if (activeId) document.getElementById(activeId)?.focus();
   }
   function button(label, onClick, variant = "", type = "button") {
     const node = element("button", {
@@ -134,4 +139,23 @@ export function metadata(detail, copy, statusLabel) {
       ]),
     ),
   );
+}
+
+export function renderError(error, copy, button, notice, replace, signIn, loadQueue) {
+  const code = error instanceof Error ? error.message : "failed";
+  const retryable = code === "unavailable" || code === "rateLimited";
+  const recovery =
+    code === "session"
+      ? button(copy.signIn, signIn, "mq-button--primary")
+      : retryable
+        ? button(copy.retry, () => void loadQueue())
+        : button(copy.refresh, () => void loadQueue());
+  replace([
+    notice(
+      copy[code] || copy.failed,
+      code === "conflict" || code === "rateLimited" ? "warning" : "error",
+    ),
+    recovery,
+  ]);
+  recovery.focus();
 }
