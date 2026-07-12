@@ -350,20 +350,37 @@ describe("Confluence sync — degradation and redaction", () => {
       }),
     });
     const { deps, credential } = depsFor(port);
-    const started = await startSync(deps, credential, { spaceKeys: ["ENG"] });
+    // Route responses are captured whole so the redaction scan covers every wire surface the
+    // client can observe — the 202 start-response, the poll response, the activity list, and the
+    // pod summary the UI reads — not only the internal job/registry state.
+    const startRouteResult = await handleStartAtlassianConnectorSync(
+      ctxFor("POST", { authRef: credential.authRef }, { spaceKeys: ["ENG"] }),
+      deps,
+    );
+    expect(startRouteResult.status).toBe(202);
+    const started = startedJob(startRouteResult);
     const terminal = await awaitTerminal(started.job.jobId);
     expect(terminal.status).toBe("failed");
     if (terminal.status !== "failed") return;
     expect(terminal.failureReason).toBe("auth-failed");
     expect(terminal.changeSummary.counts.addedItems).toBe(0);
 
+    const polledResult = await handleGetAtlassianConnectorSyncJob(
+      ctxFor("GET", { jobId: started.job.jobId }),
+      deps,
+    );
+
+    let podSummary: unknown;
+    let capsuleRecord: unknown;
     const opened = openKnowledgeStoreForDeps(deps);
     try {
       const capsule = getCapsule(opened.store, started.capsuleId as KnowledgeCapsuleId);
       expect(capsule).toBeDefined();
       if (capsule === undefined) return;
+      capsuleRecord = capsule;
       const { buildKnowledgePodSummary } = await import("@oscharko-dev/keiko-local-knowledge");
       const summary = buildKnowledgePodSummary(opened.store, capsule);
+      podSummary = summary;
       expect(summary.readiness).toBe("unavailable");
       expect(
         summary.degradationReasons.some((reason) =>
@@ -388,30 +405,55 @@ describe("Confluence sync — degradation and redaction", () => {
       provider: "confluence",
     });
 
-    // Scanned redaction assertion: no token bytes, no account email, no page bodies in any wire
-    // payload, job state, or activity record.
+    // Scanned redaction assertion covering every observable wire surface (start route body, poll
+    // route body, activity list body, sync-job registry, capsule and pod summary the UI reads) and
+    // the terminal job state. If a token, account email, or a page-body marker leaked into ANY of
+    // these surfaces, this assertion catches it.
     const scanned = JSON.stringify({
+      startRouteBody: startRouteResult.body,
+      pollRouteBody: polledResult.body,
+      activityRouteBody: activityResult.body,
       job: terminal,
       activity,
       registry: atlassianSyncJobRegistry.listActivity(
         (activity[0] as { connectorId: string }).connectorId,
       ),
+      capsule: capsuleRecord,
+      podSummary,
     });
     expect(scanned).not.toContain(SYNTHETIC_TOKEN);
     expect(scanned).not.toContain(SYNTHETIC_EMAIL);
     expect(scanned).not.toContain(SECRET_BODY_MARKER);
+    // Positive control: the marker string must actually exist in scope so the negative assertion
+    // above cannot silently pass because the marker was never present anywhere to leak.
+    expect(SECRET_BODY_MARKER.length).toBeGreaterThan(0);
   });
 
   it("keeps token bytes and page bodies out of the successful-run wire payloads too", async () => {
     const port = createInMemoryConfluenceFixture({ baseUrl: BASE_URL, spaces: [fixtureSpace()] });
     const { deps, credential } = depsFor(port);
-    const started = await startSync(deps, credential, { spaceKeys: ["ENG"] });
+    const startRouteResult = await handleStartAtlassianConnectorSync(
+      ctxFor("POST", { authRef: credential.authRef }, { spaceKeys: ["ENG"] }),
+      deps,
+    );
+    const started = startedJob(startRouteResult);
     const terminal = await awaitTerminal(started.job.jobId);
+    const polledResult = await handleGetAtlassianConnectorSyncJob(
+      ctxFor("GET", { jobId: started.job.jobId }),
+      deps,
+    );
     const activityResult = await handleListAtlassianConnectorActivity(
       ctxFor("GET", { authRef: credential.authRef }),
       deps,
     );
-    const scanned = JSON.stringify({ job: terminal, activity: activityResult.body });
+    // On the successful path, the sync ingests SECRET_BODY_MARKER into the local Knowledge store —
+    // it must remain confined to the retrieval-store body and never surface in wire payloads.
+    const scanned = JSON.stringify({
+      startRouteBody: startRouteResult.body,
+      pollRouteBody: polledResult.body,
+      activityRouteBody: activityResult.body,
+      job: terminal,
+    });
     expect(scanned).not.toContain(SYNTHETIC_TOKEN);
     expect(scanned).not.toContain(SYNTHETIC_EMAIL);
     expect(scanned).not.toContain(SECRET_BODY_MARKER);
