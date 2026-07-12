@@ -61,6 +61,34 @@ function rebindSidecars(manifest, resourceRoot, signedExecutables) {
   }
 }
 
+function rebindNativeHelper(stageRoot, manifest, resourceRoot) {
+  if (manifest.nativeHelpers === undefined) return;
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail("signed payload must contain exactly one native helper");
+  }
+  const helper = manifest.nativeHelpers[0];
+  const executable = containedResourcePath(resourceRoot, helper.executablePath);
+  const entry = lstatSync(executable);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("native helper is not a regular single-link file");
+  }
+  helper.shippedSha256 = sha256Bytes(readFileSync(executable));
+  helper.sizeBytes = entry.size;
+  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
+  let sbom;
+  try {
+    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+  } catch {
+    fail("portable SBOM is invalid");
+  }
+  const matches = (sbom.components ?? []).filter(
+    (component) => component?.["bom-ref"] === helper.sbomBomRef,
+  );
+  if (matches.length !== 1) fail("native helper CycloneDX component is missing or ambiguous");
+  matches[0].hashes = [{ alg: "SHA-256", content: helper.shippedSha256 }];
+  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+}
+
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -155,6 +183,7 @@ function assertSidecarSbomExecutableHash(component, expectedSha256) {
 export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
   const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
   rebindSidecars(manifest, resourceRoot, true);
+  rebindNativeHelper(stageRoot, manifest, resourceRoot);
   manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
     containedResourcePath(resourceRoot, "app"),
   );
@@ -167,6 +196,9 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   binding.provenanceStatementSha256 = manifest.provenance.provenanceStatementSha256;
   if (manifest.sidecarRuntimes !== undefined) {
     binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
+  }
+  if (manifest.nativeHelpers !== undefined) {
+    binding.nativeHelpers = JSON.parse(JSON.stringify(manifest.nativeHelpers));
   }
 }
 
@@ -192,6 +224,19 @@ export async function rebindExistingSignedArchive(
   const provenancePath = join(stageRoot, "evidence", "provenance.intoto.jsonl");
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
   provenance.subjectDigest = archiveSha256;
+  if (manifest.nativeHelpers !== undefined) {
+    provenance.nativeHelpers = manifest.nativeHelpers.map((helper) => ({
+      architecture: helper.architecture,
+      executablePath: helper.executablePath,
+      name: helper.name,
+      shippedSha256: helper.shippedSha256,
+      signatureKind: helper.signing.signatureKind,
+      signatureVerified: helper.signing.signatureVerified,
+      notarizationVerified: helper.signing.notarizationVerified,
+      sourceTreeSha256: helper.source.treeSha256,
+      unsignedSha256: helper.unsignedSha256,
+    }));
+  }
   const provenanceText = `${JSON.stringify(provenance)}\n`;
   manifest.artifact.sha256 = archiveSha256;
   manifest.artifact.sizeBytes = statSync(archivePath).size;

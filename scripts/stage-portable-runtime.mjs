@@ -58,6 +58,8 @@ const WINDOWS_LAUNCHER_RESOURCE_SOURCE = join(
   "portable-launcher",
   "keiko-portable-launcher.rc",
 );
+const SECURE_READ_SOURCE_ROOT = join(repoRoot, "native", "secure-workspace-read");
+const SECURE_READ_NAME = "keiko-secure-workspace-read";
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -1301,7 +1303,36 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
   );
   writeFileSync(
     join(evidenceRoot, "sbom.cdx.json"),
-    JSON.stringify({ bomFormat: "CycloneDX", components: [] }, null, 2) + "\n",
+    JSON.stringify(
+      {
+        bomFormat: "CycloneDX",
+        specVersion: "1.6",
+        version: 1,
+        components: manifest.nativeHelpers.map((helper) => ({
+          type: "application",
+          "bom-ref": helper.sbomBomRef,
+          name: helper.name,
+          version: rootPackage.version,
+          licenses: [{ license: { id: "Apache-2.0" } }],
+          hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+          properties: [
+            { name: "keiko:platform-target", value: helper.platformTarget },
+            { name: "keiko:architecture", value: helper.architecture },
+            { name: "keiko:source-commit", value: helper.source.commitSha },
+            { name: "keiko:source-tree-sha256", value: helper.source.treeSha256 },
+            { name: "keiko:unsigned-sha256", value: helper.unsignedSha256 },
+            { name: "keiko:build-script", value: "scripts/build-secure-workspace-read.mjs" },
+            { name: "keiko:executable-path", value: helper.executablePath },
+            { name: "keiko:protocol-request-magic", value: helper.protocol.requestMagic },
+            { name: "keiko:protocol-response-magic", value: helper.protocol.responseMagic },
+            { name: "keiko:protocol-schema-version", value: String(helper.protocol.schemaVersion) },
+            { name: "keiko:source-path", value: helper.source.path },
+          ],
+        })),
+      },
+      null,
+      2,
+    ) + "\n",
   );
   writeFileSync(
     join(evidenceRoot, "third-party-notices.txt"),
@@ -1322,7 +1353,7 @@ function writeManifest(stageRoot, manifest) {
   );
 }
 
-function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
+function provenanceStatementFor(options, target, digests, sidecarRuntimes, nativeHelpers) {
   return (
     JSON.stringify({
       artifact: target.assetName,
@@ -1330,6 +1361,17 @@ function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
       buildWorkflowRunId: options.workflowRunId ?? 0,
       packageVersion: rootPackage.version,
       sourceCommitSha: options.commitSha,
+      nativeHelpers: nativeHelpers.map((helper) => ({
+        architecture: helper.architecture,
+        executablePath: helper.executablePath,
+        name: helper.name,
+        shippedSha256: helper.shippedSha256,
+        signatureKind: helper.signing.signatureKind,
+        signatureVerified: helper.signing.signatureVerified,
+        notarizationVerified: helper.signing.notarizationVerified,
+        sourceTreeSha256: helper.source.treeSha256,
+        unsignedSha256: helper.unsignedSha256,
+      })),
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
       target: target.platformTarget,
@@ -1363,6 +1405,57 @@ function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
   }
   stageSetupManifest(target, resourceRoot);
   stageSupportLauncher(target, stageRoot);
+}
+
+function secureReadExecutablePath(target) {
+  return `runtime/native/${SECURE_READ_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
+}
+
+function stageSecureReadHelper(target, resourceRoot, options, hooks) {
+  const executablePath = secureReadExecutablePath(target);
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  (hooks.buildSecureReadHelper ?? buildSecureReadHelper)(target, destination);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("secure workspace read helper build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+  const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
+  return [
+    {
+      name: SECURE_READ_NAME,
+      kind: "secure-workspace-text-read",
+      platformTarget: target.platformTarget,
+      architecture: target.nodeArchitecture,
+      executablePath,
+      protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+      source: {
+        commitSha: options.commitSha,
+        path: "native/secure-workspace-read",
+        treeSha256: hashDirectoryTree(SECURE_READ_SOURCE_ROOT),
+      },
+      unsignedSha256,
+      shippedSha256: unsignedSha256,
+      sizeBytes: entry.size,
+      sbomBomRef: `pkg:generic/${SECURE_READ_NAME}@${rootPackage.version}?platform=${target.platformTarget}`,
+      signing: {
+        signatureKind: target.signatureKind,
+        verificationStatus: "unverified-staging",
+        signatureVerified: false,
+        notarizationRequired: target.nodePlatform === "darwin",
+        notarizationVerified: false,
+      },
+    },
+  ];
+}
+
+function buildSecureReadHelper(target, destination) {
+  run(process.execPath, [
+    join(repoRoot, "scripts", "build-secure-workspace-read.mjs"),
+    target.platformTarget,
+    destination,
+  ]);
 }
 
 function stageMacAppMetadata(target, stageRoot, resourceRoot) {
@@ -1652,6 +1745,7 @@ function manifestReviewedBinding(
   nodeIdentity,
   security,
   sidecarRuntimes,
+  nativeHelpers,
 ) {
   const binding = {
     releaseId: options.releaseId,
@@ -1678,6 +1772,7 @@ function manifestReviewedBinding(
     verificationChecks: security.verificationChecks,
   };
   if (sidecarRuntimes.length > 0) binding.sidecarRuntimes = cloneJson(sidecarRuntimes);
+  binding.nativeHelpers = cloneJson(nativeHelpers);
   return binding;
 }
 
@@ -1689,6 +1784,7 @@ function manifestReleaseImpact(
   security,
   releaseImpactEntry,
   sidecarRuntimes,
+  nativeHelpers,
 ) {
   return {
     catalogPath: "app/release-impact.catalog.json",
@@ -1702,6 +1798,7 @@ function manifestReleaseImpact(
       nodeIdentity,
       security,
       sidecarRuntimes,
+      nativeHelpers,
     ),
   };
 }
@@ -1729,7 +1826,7 @@ function manifestUpdateEligibility() {
   };
 }
 
-function manifestFor(options, target, digests, sidecarRuntimes = []) {
+function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpers = []) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(target);
@@ -1741,6 +1838,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = []) {
     artifact: manifestArtifact(options, target, { ...digests, assetSha256: assetSha }),
     provenance: manifestProvenance(options, digests),
     runtime: manifestRuntime(options, target, digests),
+    nativeHelpers,
     packageSurface: manifestPackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
@@ -1758,6 +1856,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = []) {
       security,
       releaseImpactEntry,
       sidecarRuntimes,
+      nativeHelpers,
     ),
     updateEligibility: manifestUpdateEligibility(),
   };
@@ -1851,10 +1950,12 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   const tarball = packRoot(dirname(paths.extractRoot));
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
+  const nativeHelpers = stageSecureReadHelper(target, paths.resourceRoot, options, hooks);
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const manifestInput = await manifestInputFor(options, target, paths, tarball, {
     nodeArchiveSha256,
     sidecarRuntimes,
+    nativeHelpers,
   });
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
@@ -1870,6 +1971,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     target,
     { assetSha256 },
     staged.sidecarRuntimes,
+    staged.nativeHelpers,
   );
   const provenanceSha256 = sha256Text(provenanceStatement);
   return {
@@ -1885,6 +1987,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
         tarballSha256: await sha256File(tarball),
       },
       staged.sidecarRuntimes,
+      staged.nativeHelpers,
     ),
     provenanceStatement,
   };

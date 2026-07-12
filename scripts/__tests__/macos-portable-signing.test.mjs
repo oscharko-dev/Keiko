@@ -105,6 +105,32 @@ function macManifest(executableBytes, licenseBytes) {
   manifest.runtime.nodePlatform = "darwin";
   manifest.runtime.nodeArchitecture = "arm64";
   manifest.runtime.nodeArchiveSha256 = "a".repeat(64);
+  manifest.nativeHelpers = [
+    {
+      name: "keiko-secure-workspace-read",
+      kind: "secure-workspace-text-read",
+      platformTarget: "macos-arm64",
+      architecture: "arm64",
+      executablePath: "runtime/native/keiko-secure-workspace-read",
+      protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+      source: {
+        commitSha: "a".repeat(40),
+        path: "native/secure-workspace-read",
+        treeSha256: "a".repeat(64),
+      },
+      unsignedSha256: "b".repeat(64),
+      shippedSha256: "b".repeat(64),
+      sizeBytes: 1,
+      sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${manifest.product.packageVersion}?platform=macos-arm64`,
+      signing: {
+        signatureKind: "developer-id-notarized",
+        verificationStatus: "verified-production",
+        signatureVerified: true,
+        notarizationRequired: true,
+        notarizationVerified: true,
+      },
+    },
+  ];
   manifest.provenance.rootPackageTarballSha256 = "b".repeat(64);
   sidecar.platformTarget = "macos-arm64";
   sidecar.archive = {
@@ -149,6 +175,7 @@ function macManifest(executableBytes, licenseBytes) {
     verificationChecks: macChecks,
   });
   binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
+  binding.nativeHelpers = JSON.parse(JSON.stringify(manifest.nativeHelpers));
   return manifest;
 }
 
@@ -170,6 +197,8 @@ function macFinalizeStage() {
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
   write(join(payloadRoot, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
   write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
+  const helperBytes = macho(0xfeedfacf, 7);
+  write(join(resources, "runtime", "native", "keiko-secure-workspace-read"), helperBytes);
   const upstreamSidecarExecutable = macho(0xfeedfacf, 2);
   const sidecarExecutable = Buffer.concat([
     upstreamSidecarExecutable,
@@ -228,6 +257,10 @@ function macFinalizeStage() {
   const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");
   const checksumPath = join(stage, "evidence", "SHA256SUMS.txt");
   const summaryPath = join(stage, "evidence", "signing-verification.json");
+  write(
+    join(stage, "evidence", "sbom.cdx.json"),
+    `${JSON.stringify({ bomFormat: "CycloneDX", components: [{ "bom-ref": manifest.nativeHelpers[0].sbomBomRef, hashes: [{ alg: "SHA-256", content: manifest.nativeHelpers[0].shippedSha256 }] }] })}\n`,
+  );
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   rebindSignedPayload(stage, manifest, "macos-arm64");
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

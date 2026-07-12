@@ -55,6 +55,10 @@ function validPayload() {
   const payload = root();
   write(join(payload, "Keiko.exe"), portableExecutable(1));
   write(join(payload, "runtime", "node", "node.exe"), portableExecutable(2));
+  write(
+    join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
+    portableExecutable(5),
+  );
   write(join(payload, "runtime", "sidecars", "worker", "worker.node"), portableExecutable(3));
   write(join(payload, "app", "native-addon.bin"), portableExecutable(4));
   write(join(payload, "app", "README.md"), Buffer.from("not executable"));
@@ -72,6 +76,7 @@ describe("Windows portable PE signing inventory", () => {
     expect(inventory.files.map((file) => file.relativePath)).toEqual([
       "app/native-addon.bin",
       "Keiko.exe",
+      "runtime/native/keiko-secure-workspace-read.exe",
       "runtime/node/node.exe",
       "runtime/sidecars/worker/worker.node",
     ]);
@@ -80,6 +85,7 @@ describe("Windows portable PE signing inventory", () => {
       [
         "payload/Keiko/app/native-addon.bin",
         "payload/Keiko/Keiko.exe",
+        "payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
         "payload/Keiko/runtime/node/node.exe",
         "payload/Keiko/runtime/sidecars/worker/worker.node",
         "",
@@ -348,6 +354,10 @@ describe("Windows portable PE signing inventory", () => {
     const payload = join(stage, "payload", "Keiko");
     write(join(payload, "Keiko.exe"), portableExecutable(1));
     write(join(payload, "runtime", "node", "node.exe"), portableExecutable(2));
+    write(
+      join(payload, "runtime", "native", "keiko-secure-workspace-read.exe"),
+      portableExecutable(3),
+    );
     const manifestPath = join(stage, "manifest", "portable-manifest.json");
     const archivePath = join(stage, "Keiko-windows-x64.zip");
     const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");

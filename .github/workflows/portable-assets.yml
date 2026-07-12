@@ -131,6 +131,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Upload staged target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -195,6 +197,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target windows-x64
       - name: Smoke test the unsigned staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/windows-x64 windows-x64 --load
       - name: Validate protected Azure configuration
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -323,6 +327,8 @@ jobs:
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Validate protected Apple configuration
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
@@ -406,6 +412,8 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
         run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
+      - name: Functionally requalify the signed secure-read helper
+        run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
 
   qualify-macos-production:
     name: Fresh native qualification (${{ matrix.platform_target }})
@@ -445,6 +453,8 @@ jobs:
           APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
+      - name: Functionally requalify the signed secure-read helper
+        run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Execute bundled runtimes in isolated disposable copy
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ""

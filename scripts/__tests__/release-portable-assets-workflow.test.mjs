@@ -26,6 +26,49 @@ const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
 const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
+const secureReadSmoke = readFileSync("scripts/portable-secure-read-smoke.mjs", "utf8");
+
+describe("portable secure-read qualification", () => {
+  it("functionally smokes unsigned and fresh signed helpers on all three native runners", () => {
+    expect(
+      portableWorkflow.match(/Functionally smoke the unsigned secure-read helper/gmu),
+    ).toHaveLength(3);
+    expect(
+      portableWorkflow.match(/Functionally requalify the signed secure-read helper/gmu),
+    ).toHaveLength(2);
+    expect(portableWorkflow.match(/smoke:portable-secure-read -- .* --load/gmu)).toHaveLength(5);
+    expect(portableWorkflow).toContain(".qualified-windows-stage/windows-x64 windows-x64");
+    expect(portableWorkflow).toContain(
+      ".isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }}",
+    );
+  });
+
+  it("qualifies the complete Windows denied-name matrix and bounded real-helper load", () => {
+    for (const denied of [
+      '"CON"',
+      '"NUL.txt"',
+      '"COM1"',
+      '"LPT9.log"',
+      '"CLOCK$"',
+      '"GLOBALROOT"',
+      '"DEVICE"',
+      '"??"',
+      '"src/safe.txt:stream"',
+      '"name?"',
+      '"name."',
+      '"name "',
+      '"PROGRA~1"',
+    ]) {
+      expect(secureReadSmoke).toContain(denied);
+    }
+    expect(secureReadSmoke).toContain("index < 1_000");
+    expect(secureReadSmoke).toContain("length: 100");
+    expect(secureReadSmoke).toContain("p95 > 500");
+    expect(secureReadSmoke).toContain("after !== before");
+    expect(secureReadSmoke).toContain("HandleCount");
+    expect(secureReadSmoke).toContain('readdir("/dev/fd")');
+  });
+});
 
 function productionStepPolicies() {
   const job = portableWorkflow.slice(

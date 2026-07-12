@@ -91,6 +91,8 @@ windows-x64/
         node_modules/
         release-impact.catalog.json
       runtime/
+        native/
+          keiko-secure-workspace-read.exe
         node/
           node.exe
           LICENSE
@@ -134,6 +136,8 @@ macos-arm64/
               node_modules/
               release-impact.catalog.json
             runtime/
+              native/
+                keiko-secure-workspace-read
               node/
                 bin/node
                 LICENSE
@@ -578,6 +582,11 @@ Validation rules:
 
 - The top-level portable manifest `schemaVersion` remains `1`. Sidecar entries separately carry
   `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility claims are rejected.
+- `nativeHelpers` is additive in schema v1. Legacy manifests without it remain parseable but expose
+  no secure-read capability. Every newly staged, signed-candidate, and published artifact contains
+  exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
+  architecture, `KSR1`/`KSS1`, source commit and tree, unsigned and final signed-byte digests,
+  signature/notarization state, and one CycloneDX `bom-ref`; it is not a sidecar runtime.
 - `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
 - `artifact.assetId` and `release.releaseId` are exactly `0` for staging and verified unpublished

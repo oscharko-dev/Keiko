@@ -157,6 +157,9 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   if (!paths.has("runtime/node/node.exe")) {
     fail("bundled Node executable is missing from the PE inventory");
   }
+  if (!paths.has("runtime/native/keiko-secure-workspace-read.exe")) {
+    fail("secure workspace read helper is missing from the PE inventory");
+  }
   return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
 }
 
@@ -295,6 +298,22 @@ export async function rebindPortableSignedArchive(
   });
 }
 
+function markNativeHelperVerified(manifest) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail("manifest must contain exactly one native helper");
+  }
+  manifest.nativeHelpers[0].signing = {
+    signatureKind: "authenticode",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = JSON.parse(
+    JSON.stringify(manifest.nativeHelpers),
+  );
+}
+
 async function finalizeCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   verifyInventoryCommand(options);
@@ -304,6 +323,7 @@ async function finalizeCommand(options) {
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
   assertWindowsProductionVerificationInput(verificationInputPath, manifest);
+  markNativeHelperVerified(manifest);
   await rebindPortableSignedArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
