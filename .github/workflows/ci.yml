@@ -87,6 +87,8 @@ jobs:
           node --input-type=module -e "import pg from 'pg'; const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL }); await pool.query('SELECT 1'); await pool.end();"
           npm run typecheck --workspace @oscharko-dev/keiko-feedback-intake
           npm test --workspace @oscharko-dev/keiko-feedback-intake -- --run
+      - name: Verify complete governed feedback flow
+        run: npm run test:feedback-flow-2077
       - name: Install sandbox isolation backend (bubblewrap)
         run: |
           sudo apt-get update
