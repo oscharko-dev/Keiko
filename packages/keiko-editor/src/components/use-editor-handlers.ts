@@ -109,6 +109,16 @@ interface ProgrammaticEditorChange {
 
 type ProgrammaticEditorChangeRef = MutableRefObject<ProgrammaticEditorChange | null>;
 
+function consumeProgrammaticChange(
+  value: string,
+  programmaticChangeRef: ProgrammaticEditorChangeRef | undefined,
+): ProgrammaticEditorChange | null {
+  const programmatic = programmaticChangeRef?.current;
+  if (programmatic?.text !== value) return null;
+  if (programmaticChangeRef !== undefined) programmaticChangeRef.current = null;
+  return programmatic;
+}
+
 interface EditorRefs {
   readonly editorRef: MutableRefObject<MountEditor | null>;
   readonly monacoRef: MutableRefObject<MountMonaco | null>;
@@ -264,12 +274,9 @@ export function useChangeHandler(
       if (value === undefined || readOnly) {
         return;
       }
-      const programmatic = programmaticChangeRef?.current;
-      if (programmaticChangeRef !== undefined && programmatic?.text === value) {
-        programmaticChangeRef.current = null;
-      }
-      if (programmatic?.text === value && programmatic.suppress === true) return;
-      const origin = programmatic?.text === value ? (programmatic.origin ?? "human") : "human";
+      const programmatic = consumeProgrammaticChange(value, programmaticChangeRef);
+      if (programmatic?.suppress === true) return;
+      const origin = programmatic?.origin ?? "human";
       onContentChange({ text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length }, origin);
     },
     [readOnly, onContentChange, programmaticChangeRef],
@@ -371,7 +378,7 @@ function useControlledModelValueSync(
       frame = window.requestAnimationFrame(syncWhenMounted);
     };
     syncWhenMounted();
-    return () => {
+    return (): void => {
       cancelled = true;
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
@@ -984,19 +991,28 @@ interface MountRuntimeArgs {
   readonly attachModel?: boolean;
 }
 
-function mountEditorRuntime(args: MountRuntimeArgs): void {
-  args.refs.editorRef.current = args.editor;
-  args.refs.monacoRef.current = args.monaco as MountMonaco;
-  args.refs.containerRef.current = args.editor.getContainerDomNode();
+function attachModelForRuntimeMount(args: MountRuntimeArgs): void {
   if (args.attachModel === false) {
     applyViewState(args.editor, args.refs.viewStateRef.current);
   } else {
     attachModelOnMount(args, args.monaco as MountMonaco);
   }
+}
+
+function initializeRuntimeMountRefs(args: MountRuntimeArgs): HTMLElement {
+  args.refs.editorRef.current = args.editor;
+  args.refs.monacoRef.current = args.monaco as MountMonaco;
+  args.refs.containerRef.current = args.editor.getContainerDomNode();
+  return args.refs.containerRef.current;
+}
+
+function mountEditorRuntime(args: MountRuntimeArgs): void {
+  const container = initializeRuntimeMountRefs(args);
+  attachModelForRuntimeMount(args);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
     monaco: args.monaco as MountMonaco,
-    container: args.refs.containerRef.current,
+    container,
     themeVariant: args.themeVariant ?? "dark",
     autoFocus: args.autoFocus ?? false,
     onSave: args.emitSave,

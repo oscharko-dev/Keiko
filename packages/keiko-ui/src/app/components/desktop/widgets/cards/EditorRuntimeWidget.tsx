@@ -1867,7 +1867,7 @@ function EditorRuntimeWidget({
         setGitGutterPeek(null);
         setGitGutterRefreshNonce((value) => value + 1);
         setDiagnosticsSummary(null);
-        removePaneDiagnostics(root, file);
+        removePaneDiagnostics(root, diagnosticsProducerId, file);
         symbolCacheRef.current = null;
         setOutlineSymbols([]);
       }
@@ -1880,7 +1880,7 @@ function EditorRuntimeWidget({
         originatedByKeiko: localWriteMatchesEvent(recentLocalWriteRef.current, event),
       });
     },
-    [file, root],
+    [diagnosticsProducerId, file, root],
   );
   const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
   useEffect(() => {

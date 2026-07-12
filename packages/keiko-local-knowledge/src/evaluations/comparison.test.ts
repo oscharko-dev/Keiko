@@ -144,8 +144,7 @@ describe("retrieval mode comparison (#2010)", () => {
   // metric the row prints (and floorHeadroom) cleared its floor — losing all attribution for an
   // operator reading the comparison table.
   it("does not fail a row for an orthogonal dimension the row does not display", async () => {
-    const [card] = await scoreAllFixtures();
-    if (card === undefined) throw new Error("expected at least one scorecard");
+    const card = await runRetrievalEval(exactTechnicalFixture);
     const orthogonalMiss: RetrievalEvalScorecard = {
       ...card,
       fixtureId: "exact-technical",
