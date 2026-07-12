@@ -54,7 +54,7 @@ function expired(nowIso: string, expiresAt: string): boolean {
   return Number.isNaN(nowMs) || Number.isNaN(expiresAtMs) || nowMs >= expiresAtMs;
 }
 
-function digestEnvelope(envelope: CodingWorkbenchAuthorityEnvelope): string {
+export function digestEnvelope(envelope: CodingWorkbenchAuthorityEnvelope): string {
   // Content-addressed digest with a fixed public domain-separation prefix — no shared secret is
   // involved here, so a plain sha256 is appropriate (the approval-proof HMAC in `issue` is the
   // integrity anchor).
