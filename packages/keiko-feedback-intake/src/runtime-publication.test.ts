@@ -205,6 +205,12 @@ describe("publication runtime composition", () => {
     const events: string[] = [];
     const maximums: number[] = [];
     let publicationOptions: FeedbackPublicationRuntimeOptions | undefined;
+    let releaseMaintainerRequest: (() => void) | undefined;
+    let markMaintainerDrainStarted: (() => void) | undefined;
+    const maintainerDrainStarted = new Promise<void>((resolve) => {
+      markMaintainerDrainStarted = resolve;
+    });
+    let serverIndex = 0;
     const runtime = await startHostedFeedbackIntake({
       env: configuredMaintainerEnvironment(),
       now: () => new Date("2026-07-11T12:00:00Z"),
@@ -241,16 +247,28 @@ describe("publication runtime composition", () => {
         begin: () => Promise.reject(new Error("unused")),
         exchange: () => Promise.reject(new Error("unused")),
       },
-      serverFactory: () => ({
-        listen: (_port, _host, callback): void => {
-          events.push("listen");
-          callback();
-        },
-        close: (callback): void => {
-          events.push("server-close");
-          callback();
-        },
-      }),
+      serverFactory: () => {
+        const index = serverIndex++;
+        return {
+          listen: (_port, _host, callback): void => {
+            events.push("listen");
+            callback();
+          },
+          close: (callback): void => {
+            events.push(`server-close-${String(index)}`);
+            if (index === 2) {
+              markMaintainerDrainStarted?.();
+              releaseMaintainerRequest = (): void => {
+                events.push("server-drained-2");
+                callback();
+              };
+              return;
+            }
+            events.push(`server-drained-${String(index)}`);
+            callback();
+          },
+        };
+      },
       timer: { setInterval: () => "timer", clearInterval: () => undefined },
     });
     expect(maximums).toEqual([6, 4, 2, 2]);
@@ -268,9 +286,17 @@ describe("publication runtime composition", () => {
     expect(runtime.publicationReady()).toBe(false);
     publicationOptions?.onHealthChange?.(true);
     expect(runtime.publicationReady()).toBe(true);
-    await expect(runtime.stop()).rejects.toThrow("publication drain failed");
+    const stopping = runtime.stop();
+    await maintainerDrainStarted;
+    try {
+      expect(events).not.toContain("pool-end-2");
+      expect(events).not.toContain("pool-end-3");
+    } finally {
+      releaseMaintainerRequest?.();
+    }
+    await expect(stopping).rejects.toThrow("publication drain failed");
     expect(events.indexOf("publication-stop")).toBeLessThan(events.indexOf("pool-end-2"));
-    expect(events).toContain("server-close");
+    expect(events.indexOf("server-drained-2")).toBeLessThan(events.indexOf("pool-end-2"));
     expect(runtime.ready()).toBe(false);
     expect(runtime.publicationReady()).toBe(false);
   });

@@ -356,7 +356,11 @@ async function stopServers(surface: RuntimeSurface, config: HostedRuntimeConfig)
   if (surface.maintainer !== undefined) {
     servers.push(closeBounded(surface.maintainer, config.drainDeadlineMs));
   }
-  await Promise.all(servers);
+  const results = await Promise.allSettled(servers);
+  const failure = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failure !== undefined) throw failure.reason;
 }
 
 function createPublicationRuntime(
@@ -538,12 +542,15 @@ async function stopRuntime(
     () => surface.publication?.stop(publicationDeadlineAt) ?? Promise.resolve(),
     failure,
   );
+  const [serverFailure] = await Promise.all([
+    captureShutdownFailure(() => stopServers(surface, config), undefined),
+    activeRetention.catch(() => undefined),
+  ]);
+  failure ??= serverFailure;
   failure = await captureShutdownFailure(
     () => endPublicationPools(pools, publicationDeadlineAt),
     failure,
   );
-  await activeRetention.catch(() => undefined);
-  failure = await captureShutdownFailure(() => stopServers(surface, config), failure);
   failure = await captureShutdownFailure(() => endRequestPools(pools), failure);
   if (failure instanceof Error) throw failure;
   if (failure !== undefined) throw new Error("Feedback runtime shutdown failed");
