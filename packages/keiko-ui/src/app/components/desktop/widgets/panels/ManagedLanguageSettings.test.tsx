@@ -187,6 +187,20 @@ describe("ManagedLanguageSettings", () => {
     await waitFor(() => expect(disable).toHaveFocus());
   });
 
+  it("restores focus to the section title immediately when the opener is already disconnected", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot());
+    renderSettings();
+    const disable = await screen.findByRole("button", { name: "Disable Python" });
+    fireEvent.click(disable);
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    disable.remove();
+    fireEvent.click(cancel);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Language intelligence" })).toHaveFocus(),
+    );
+  });
+
   it("restores focus to the section title when the opener is removed by a confirmed action", async () => {
     fetchSettingsMock
       .mockResolvedValueOnce(snapshot("active", "ACTIVE"))

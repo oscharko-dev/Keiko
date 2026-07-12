@@ -322,4 +322,35 @@ describe("managed Eclipse JDT LS provider", () => {
     // rather than left to run for the fixture's full 30s sleep.
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
+
+  it("accepts a real java executable whose reported version meets the minimum", () => {
+    const realJava = join(root, "java");
+    writeFileSync(
+      realJava,
+      "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2024-01-16' 1>&2\nexit 0\n",
+      "utf8",
+    );
+    chmodSync(realJava, 0o755);
+
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => realJava,
+          validateLayout: () => true,
+          // validateJavaVersion intentionally not overridden: exercises the real
+          // defaultJavaVersionValid probe's success path parsing a real -version reply.
+        },
+      ),
+    ).not.toThrow();
+  });
 });

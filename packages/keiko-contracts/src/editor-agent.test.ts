@@ -923,6 +923,46 @@ describe("navigateSymbol action validation (Issue #2281)", () => {
     ).toBe(false);
   });
 
+  it("accepts code actions with both a range and diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "codeActions",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+            diagnostics: [
+              {
+                severity: "error",
+                message: "m",
+                source: "s",
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects code actions missing diagnostics", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "navigateSymbol",
+          navigateSymbol: {
+            operation: "codeActions",
+            document: { path: "src/a.ts", languageId: "typescript" },
+            position: { line: 0, character: 0 },
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("rejects inlay hints carrying diagnostics", () => {
     expect(
       isEditorAgentAction(
