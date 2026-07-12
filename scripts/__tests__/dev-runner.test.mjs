@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
+  copyHeadersSafely,
+  forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
   publicBrowserUrl,
   readNextLockInfo,
@@ -226,5 +228,83 @@ describe("normalizeUpstreamLocation", () => {
     expect(normalizeUpstreamLocation(undefined, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
     expect(normalizeUpstreamLocation(null, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
     expect(normalizeUpstreamLocation(42, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// copyHeadersSafely — prototype-pollution defence for header spreads
+// ---------------------------------------------------------------------------
+
+describe("copyHeadersSafely", () => {
+  it("returns a prototype-less object that mirrors own-enumerable string keys", () => {
+    const copy = copyHeadersSafely({ "content-type": "application/json", accept: "*/*" });
+    expect(Object.getPrototypeOf(copy)).toBeNull();
+    expect(copy["content-type"]).toBe("application/json");
+    expect(copy.accept).toBe("*/*");
+  });
+
+  it("drops prototype-pollution header names regardless of casing", () => {
+    const copy = copyHeadersSafely({
+      __proto__: "polluted",
+      constructor: "polluted",
+      prototype: "polluted",
+      Prototype: "polluted",
+      accept: "text/html",
+    });
+    expect(copy.accept).toBe("text/html");
+    expect(copy.__proto__).toBeUndefined();
+    expect(copy.constructor).toBeUndefined();
+    expect(copy.prototype).toBeUndefined();
+    expect(copy.Prototype).toBeUndefined();
+  });
+
+  it("returns an empty prototype-less object for null / non-object inputs", () => {
+    expect(Object.getPrototypeOf(copyHeadersSafely(null))).toBeNull();
+    expect(Object.getPrototypeOf(copyHeadersSafely(undefined))).toBeNull();
+    expect(Object.getPrototypeOf(copyHeadersSafely(42))).toBeNull();
+    expect(Object.keys(copyHeadersSafely({}))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// forwardedUpstreamHeaders — rebase or drop the upstream `Location` on the way
+// back to the client so the browser stays inside the proxy origin.
+// ---------------------------------------------------------------------------
+
+describe("forwardedUpstreamHeaders", () => {
+  const NEXT_PORT = 3000;
+
+  it("rebases a same-origin location back to the public proxy origin", () => {
+    const out = forwardedUpstreamHeaders(
+      { "content-type": "text/html", location: "/dashboard" },
+      NEXT_PORT,
+    );
+    expect(out["content-type"]).toBe("text/html");
+    expect(out.location).toBe("http://localhost:1983/dashboard");
+  });
+
+  it("drops a cross-origin location entirely (fail-closed)", () => {
+    const out = forwardedUpstreamHeaders({ location: "http://evil.com/steal" }, NEXT_PORT);
+    expect(out.location).toBeUndefined();
+    expect("location" in out).toBe(false);
+  });
+
+  it("passes non-location headers through untouched", () => {
+    const out = forwardedUpstreamHeaders(
+      { "content-type": "application/json", "cache-control": "no-store" },
+      NEXT_PORT,
+    );
+    expect(out["content-type"]).toBe("application/json");
+    expect(out["cache-control"]).toBe("no-store");
+  });
+
+  it("drops __proto__/constructor/prototype header keys from the upstream response too", () => {
+    const out = forwardedUpstreamHeaders(
+      { __proto__: "polluted", constructor: "polluted", "x-safe": "ok" },
+      NEXT_PORT,
+    );
+    expect(out["x-safe"]).toBe("ok");
+    expect(out.__proto__).toBeUndefined();
+    expect(out.constructor).toBeUndefined();
   });
 });

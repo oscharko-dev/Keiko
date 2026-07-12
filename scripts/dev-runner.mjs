@@ -366,7 +366,7 @@ function rewriteOriginHeader(value, targetPort) {
 
 const UNSAFE_HEADER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
-function copyHeadersSafely(source) {
+export function copyHeadersSafely(source) {
   const safe = Object.create(null);
   if (source === null || typeof source !== "object") return safe;
   for (const name of Object.keys(source)) {
@@ -411,7 +411,7 @@ export function normalizeUpstreamLocation(
   }
 }
 
-function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
+export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   const safe = copyHeadersSafely(upstreamHeaders);
   if ("location" in safe) {
     const normalized = normalizeUpstreamLocation(safe.location, targetPort);
