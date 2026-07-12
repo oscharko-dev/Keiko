@@ -9,6 +9,8 @@ import { validateGithubAppPrivateKeyFile } from "./github-app-key.js";
 import { readSecureOperatorFile } from "./github-secure-file.js";
 
 const APP_ID = /^[1-9][0-9]{0,19}$/u;
+const RFC3339_TIMESTAMP =
+  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d{1,3})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$/u;
 const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const MAX_TARGETS = 64;
 const ROOT_KEYS = ["targets", "version"] as const;
@@ -50,6 +52,23 @@ export interface GithubAppConfig {
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+}
+
+function parseRfc3339Timestamp(value: string): Date | undefined {
+  const match = RFC3339_TIMESTAMP.exec(value);
+  if (match === null) return undefined;
+  const [yearValue, monthValue, dayValue] = match.slice(1, 4);
+  if (yearValue === undefined || monthValue === undefined || dayValue === undefined)
+    return undefined;
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const maximumDay = daysInMonth[month - 1];
+  if (maximumDay === undefined || day > maximumDay) return undefined;
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
 }
 
 // The bounded scanner deliberately counts each JSON structural branch.
@@ -177,8 +196,8 @@ export function loadGithubAppConfig(
   try {
     const appId = input.appId ?? "";
     const privateKeyFile = input.privateKeyFile ?? "";
-    const rotatedAt = new Date(input.privateKeyRotatedAt ?? "");
-    if (!APP_ID.test(appId) || !Number.isFinite(rotatedAt.getTime()) || !isAbsolute(privateKeyFile))
+    const rotatedAt = parseRfc3339Timestamp(input.privateKeyRotatedAt ?? "");
+    if (!APP_ID.test(appId) || rotatedAt === undefined || !isAbsolute(privateKeyFile))
       throw new Error("invalid");
     validateGithubAppPrivateKeyFile(privateKeyFile);
     const age = now.getTime() - rotatedAt.getTime();

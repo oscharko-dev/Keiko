@@ -231,9 +231,19 @@ function labels(value: unknown, mayHaveCommitted = false): readonly string[] {
   });
 }
 
-function sameStrings(actual: readonly string[], expected: readonly string[]): boolean {
+/**
+ * GitHub does not promise a label order in issue responses. Provider observations must therefore
+ * contain the exact unique policy label set, while request and policy/digest serialization retain
+ * their configured order.
+ */
+function sameUniqueStringSet(actual: readonly string[], expected: readonly string[]): boolean {
+  const actualSet = new Set(actual);
+  const expectedSet = new Set(expected);
   return (
-    actual.length === expected.length && actual.every((value, index) => value === expected[index])
+    actualSet.size === actual.length &&
+    expectedSet.size === expected.length &&
+    actualSet.size === expectedSet.size &&
+    [...actualSet].every((value) => expectedSet.has(value))
   );
 }
 
@@ -374,7 +384,7 @@ function exactSearchCandidate(
     found.title !== projection.title ||
     found.body !== projection.body ||
     found.body.split(projection.reconciliationMarker).length !== 2 ||
-    !sameStrings(found.labels, target.snapshot.labels)
+    !sameUniqueStringSet(found.labels, target.snapshot.labels)
   ) {
     throw safeFailure();
   }
@@ -629,7 +639,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
       if (
         created.title !== projection.title ||
         created.body !== projection.body ||
-        !sameStrings(created.labels, target.snapshot.labels)
+        !sameUniqueStringSet(created.labels, target.snapshot.labels)
       ) {
         throw safeFailure(true);
       }

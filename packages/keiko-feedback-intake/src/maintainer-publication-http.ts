@@ -134,6 +134,7 @@ async function handleMutation(
     identity.permissions.includes("feedback.security"),
     parsed.action === "prepare-publication" ? undefined : parsed.action,
     parsed.action === "prepare-publication" ? undefined : parsed.idempotencyKey,
+    parsed.action === "prepare-publication" ? undefined : maintainerPublicationActor(identity),
   );
   if (context === undefined) {
     fail(res, 404);

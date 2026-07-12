@@ -19,6 +19,11 @@ const TARGET: FeedbackPublicationTargetPolicySnapshotV1 = {
   targetPolicyVersion: "target-v1",
 };
 const TARGET_DIGEST = digestFeedbackTargetPolicyV1(TARGET);
+const ACTOR = {
+  issuer: "https://issuer.example",
+  subject: "publisher-1",
+  permissionPolicyVersion: "publish-policy-v1",
+} as const;
 
 function pool(row: object): {
   readonly pool: PgPoolLike;
@@ -51,6 +56,46 @@ function statusRow(overrides: Readonly<Record<string, unknown>> = {}): object {
 }
 
 describe("feedback publication maintainer query", () => {
+  it("binds content-free terminal replay context to the route and authenticated actor", async () => {
+    const fixture = pool({
+      command_version: 7,
+      payload_digest: "a".repeat(64),
+      source_record_version: null,
+      projection_digest: "b".repeat(64),
+      target_policy_digest: "c".repeat(64),
+    });
+    const query = new PostgresFeedbackPublicationQuery(fixture.pool, () => TARGET);
+    await expect(
+      query.commandContext(
+        ITEM,
+        PREPARATION,
+        false,
+        "approve-publication",
+        "approve-replay-key",
+        ACTOR,
+      ),
+    ).resolves.toEqual({
+      version: 7,
+      payloadDigest: "a".repeat(64),
+      projectionDigest: "b".repeat(64),
+      targetPolicyDigest: "c".repeat(64),
+    });
+    const [sql, values] = fixture.query.mock.calls[0] as [string, readonly unknown[]];
+    expect(sql).toContain("WITH replay_context AS");
+    expect(sql).toContain("audit.actor_issuer=$6::text");
+    expect(sql).toContain("audit.expires_at=replay.expires_at");
+    expect(values).toEqual([
+      ITEM,
+      PREPARATION,
+      false,
+      "approve-publication",
+      "approve-replay-key",
+      ACTOR.issuer,
+      ACTOR.subject,
+      ACTOR.permissionPolicyVersion,
+    ]);
+  });
+
   it("returns deterministic latest and a safe none state without selecting content", async () => {
     const fixture = pool(
       statusRow({

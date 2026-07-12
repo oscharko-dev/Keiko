@@ -4,6 +4,7 @@ import type {
   FeedbackPublicationStatusV1,
 } from "@oscharko-dev/keiko-contracts/feedback-publication";
 import { isFeedbackPublicationTargetPolicySnapshotV1 } from "@oscharko-dev/keiko-contracts/feedback-publication";
+import type { FeedbackReviewActorV1 } from "@oscharko-dev/keiko-contracts/feedback-review";
 import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import { digestFeedbackTargetPolicyV1 } from "./feedback-publication-projection.js";
 import type { FeedbackPublicationTargetPolicyResolver } from "./feedback-publication-store.js";
@@ -76,6 +77,7 @@ export class PostgresFeedbackPublicationQuery {
     includePrivate: boolean,
     action?: "approve-publication" | "cancel-publication-route-private" | undefined,
     idempotencyKey?: string | undefined,
+    replayActor?: FeedbackReviewActorV1 | undefined,
   ): Promise<FeedbackPublicationCommandContext | undefined> {
     assertIds(itemId, preparationId);
     const row = await this.one<ContextRow>(CONTEXT_SQL, [
@@ -84,6 +86,9 @@ export class PostgresFeedbackPublicationQuery {
       includePrivate,
       action ?? null,
       idempotencyKey ?? null,
+      replayActor?.issuer ?? null,
+      replayActor?.subject ?? null,
+      replayActor?.permissionPolicyVersion ?? null,
     ]);
     if (row === undefined) return undefined;
     return {
@@ -231,22 +236,38 @@ function linkage(row: StatusRow): Pick<FeedbackPublicationStatusV1, "linkage"> {
   };
 }
 
-const CONTEXT_SQL = `SELECT CASE
-    WHEN replay.idempotency_key IS NOT NULL THEN replay.result_version-1
-    WHEN prep.status='prepared' THEN prep.source_record_version
-    ELSE item.version
-  END AS command_version,item.payload_digest,prep.source_record_version,
-  prep.projection_digest,prep.target_policy_digest
- FROM feedback_review_items item
- JOIN feedback_payloads payload ON payload.id=item.payload_id
- LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id=item.semantic_group_id
- LEFT JOIN feedback_legal_holds hold ON hold.item_id=item.id AND hold.expires_at>transaction_timestamp()
- LEFT JOIN feedback_publication_preparations prep ON prep.item_id=item.id AND prep.id=$2::uuid
- LEFT JOIN feedback_publication_idempotency replay ON replay.idempotency_key=$5::text
-   AND replay.action=$4::text AND replay.item_id=item.id AND replay.preparation_id=prep.id
- WHERE item.id=$1 AND (payload.expires_at>transaction_timestamp() OR hold.item_id IS NOT NULL)
-   AND ($3::boolean OR (item.state<>'private-security' AND private.semantic_group_id IS NULL))
-   AND ($2::uuid IS NULL OR prep.id IS NOT NULL)`;
+const CONTEXT_SQL = `WITH replay_context AS (
+  SELECT audit.prior_version AS command_version,audit.payload_digest,
+    NULL::integer AS source_record_version,audit.projection_digest,audit.target_policy_digest
+  FROM feedback_publication_idempotency replay
+  JOIN feedback_publication_audit audit
+    ON audit.item_id=replay.item_id AND audit.preparation_id=replay.preparation_id
+   AND audit.action=replay.action AND audit.result_status=replay.result_status
+   AND audit.result_version=replay.result_version AND audit.event_at=replay.result_at
+   AND audit.expires_at=replay.expires_at
+  WHERE replay.idempotency_key=$5::text AND replay.action=$4::text
+    AND replay.item_id=$1::uuid AND replay.preparation_id=$2::uuid
+    AND replay.expires_at>transaction_timestamp()
+    AND audit.actor_issuer=$6::text AND audit.actor_sub=$7::text
+    AND audit.permission_policy_version=$8::text
+), live_context AS (
+  SELECT CASE WHEN prep.status='prepared' THEN prep.source_record_version ELSE item.version END
+      AS command_version,
+    item.payload_digest,prep.source_record_version,prep.projection_digest,
+    prep.target_policy_digest
+  FROM feedback_review_items item
+  JOIN feedback_payloads payload ON payload.id=item.payload_id
+  LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id=item.semantic_group_id
+  LEFT JOIN feedback_legal_holds hold ON hold.item_id=item.id AND hold.expires_at>transaction_timestamp()
+  LEFT JOIN feedback_publication_preparations prep ON prep.item_id=item.id AND prep.id=$2::uuid
+  WHERE item.id=$1 AND (payload.expires_at>transaction_timestamp() OR hold.item_id IS NOT NULL)
+    AND ($3::boolean OR (item.state<>'private-security' AND private.semantic_group_id IS NULL))
+    AND ($2::uuid IS NULL OR prep.id IS NOT NULL)
+)
+SELECT * FROM replay_context
+UNION ALL
+SELECT * FROM live_context WHERE NOT EXISTS (SELECT 1 FROM replay_context)
+LIMIT 1`;
 
 const PREVIEW_SQL = `SELECT prep.item_id,prep.id,prep.status,prep.projection_digest,
   prep.target_policy_digest,prep.title_bytes,prep.body_bytes,prep.target_owner,

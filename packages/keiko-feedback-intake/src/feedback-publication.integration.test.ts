@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import type {
   FeedbackPublicationApproveCommandV1,
   FeedbackPublicationCancelCommandV1,
@@ -11,6 +13,9 @@ import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
 import { PostgresFeedbackPublicationQuery } from "./feedback-publication-query.js";
+import { createMaintainerHttpHandler } from "./maintainer-http.js";
+import { MaintainerLoginLimiter } from "./maintainer-login-limiter.js";
+import { maintainerCsrfToken } from "./maintainer-store.js";
 import {
   FeedbackPublicationError,
   type ApprovedFeedbackIssueProjection,
@@ -41,6 +46,15 @@ const TARGET: FeedbackPublicationTargetPolicySnapshotV1 = {
   labelPolicyVersion: "labels-2026-07",
   targetPolicyVersion: "github-target-v1",
 };
+const MAINTAINER_CAPABILITY = "A".repeat(43);
+
+function csrfHash(token: string): Uint8Array {
+  return createHash("sha256")
+    .update("keiko-maintainer-csrf-v1")
+    .update("\0")
+    .update(token)
+    .digest();
+}
 
 async function migration(name: string): Promise<string> {
   return readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");
@@ -185,6 +199,80 @@ function delay(ms: number): Promise<void> {
 function required<T>(value: T | undefined, message: string): T {
   if (value === undefined) throw new Error(message);
   return value;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error === undefined) resolve();
+      else reject(error);
+    });
+  });
+}
+
+async function maintainerPublicationServer(publication: {
+  readonly query: PostgresFeedbackPublicationQuery;
+  readonly repository: PostgresFeedbackPublicationRepository;
+}): Promise<{ readonly origin: string; readonly server: Server; readonly csrfToken: string }> {
+  let handler: ReturnType<typeof createMaintainerHttpHandler> | undefined;
+  const server = createServer((request, response) => {
+    if (handler === undefined) throw new Error("Maintainer handler is not initialized");
+    void handler(request, response);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${String(address.port)}`;
+  const csrfToken = maintainerCsrfToken(MAINTAINER_CAPABILITY);
+  handler = createMaintainerHttpHandler({
+    publicOrigin: origin,
+    auth: {
+      login: async () => {
+        throw new Error("not used");
+      },
+      callback: async () => {
+        throw new Error("not used");
+      },
+      session: async (capability) =>
+        capability === MAINTAINER_CAPABILITY
+          ? {
+              ...ACTOR,
+              permissions: ["feedback.review", "feedback.publish"],
+              csrfHash: csrfHash(csrfToken),
+              absoluteExpiresAt: new Date(AT.getTime() + DAY_MS),
+            }
+          : undefined,
+      logout: async () => undefined,
+    },
+    query: {
+      list: async () => ({ items: [] }),
+      detail: async () => undefined,
+      hold: async () => undefined,
+      audit: async () => [],
+    },
+    review: {
+      execute: async () => {
+        throw new Error("not used");
+      },
+    },
+    publication,
+    loginLimiter: new MaintainerLoginLimiter({
+      perSource: 10,
+      global: 10,
+      windowMs: 60_000,
+      concurrency: 2,
+    }),
+    proxy: { family: "forwarded", trustedCidrs: [], maxHops: 2 },
+  });
+  return { origin, server, csrfToken };
+}
+
+function publicationMutationHeaders(origin: string, csrfToken: string): Record<string, string> {
+  return {
+    Cookie: `__Host-keiko-feedback-session=${MAINTAINER_CAPABILITY}`,
+    "Content-Type": "application/json",
+    Origin: origin,
+    "keiko-feedback-csrf": csrfToken,
+  };
 }
 
 async function assertConcurrentClaim(
@@ -1441,6 +1529,102 @@ describe("PostgreSQL feedback publication integration", () => {
   );
 
   integration(
+    "replays terminal approve and cancel responses over HTTP after content deletion",
+    async (): Promise<void> => {
+      const pool = new Pool({ connectionString: databaseUrl, max: 6 });
+      const schema = await createSchema(pool, "publication_http_replay");
+      const scoped = scopedPool(pool, schema);
+      const resolve = (key: string): FeedbackPublicationTargetPolicySnapshotV1 | undefined =>
+        key === TARGET.targetKey ? TARGET : undefined;
+      const repository = new PostgresFeedbackPublicationRepository(
+        scoped,
+        ACTOR.permissionPolicyVersion,
+        resolve,
+        2_000,
+        () => AT,
+      );
+      const query = new PostgresFeedbackPublicationQuery(scoped, resolve, 2_000);
+      const { origin, server, csrfToken } = await maintainerPublicationServer({
+        query,
+        repository,
+      });
+      try {
+        for (const action of ["approve-publication", "cancel-publication-route-private"] as const) {
+          const item = await insertReport(pool, schema, `HTTP replay ${action}`);
+          const prepared = await repository.prepare(prepareCommand(item, `${action}-prepare-key`));
+          const idempotencyKey = `${action}-terminal-key`;
+          const body = {
+            action,
+            preparationId: prepared.preparationId,
+            expectedProjectionDigest: prepared.projectionDigest,
+            expectedTargetPolicyDigest: prepared.targetPolicyDigest,
+            idempotencyKey,
+          };
+          const operation = action === "approve-publication" ? "approve" : "cancel-route-private";
+          const url = `${origin}/v1/maintainer/reviews/${item.itemId}/publication/${operation}`;
+          const headers = publicationMutationHeaders(origin, csrfToken);
+          const initial = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          expect(initial.status).toBe(200);
+          const initialBody = (await initial.json()) as Record<string, unknown>;
+          expect(initialBody).toMatchObject({
+            itemId: item.itemId,
+            preparationId: prepared.preparationId,
+            replayed: false,
+          });
+
+          await schemaRows(pool, schema, "DELETE FROM feedback_receipts WHERE payload_id=$1", [
+            item.itemId,
+          ]);
+          await schemaRows(pool, schema, "DELETE FROM feedback_payloads WHERE id=$1", [
+            item.itemId,
+          ]);
+          expect(
+            await schemaRows(
+              pool,
+              schema,
+              "SELECT (SELECT count(*)::int FROM feedback_review_items WHERE id=$1) AS items,(SELECT count(*)::int FROM feedback_publication_preparations WHERE id=$2) AS preparations,(SELECT count(*)::int FROM feedback_publication_idempotency WHERE idempotency_key=$3) AS replays",
+              [item.itemId, prepared.preparationId, idempotencyKey],
+            ),
+          ).toEqual([{ items: 0, preparations: 0, replays: 1 }]);
+          await expect(
+            query.commandContext(
+              item.itemId,
+              prepared.preparationId,
+              false,
+              action,
+              idempotencyKey,
+              { ...ACTOR, subject: "different-maintainer" },
+            ),
+          ).resolves.toBeUndefined();
+
+          const mismatch = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ ...body, expectedProjectionDigest: "f".repeat(64) }),
+          });
+          expect(mismatch.status).toBe(409);
+
+          const replay = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          expect(replay.status).toBe(200);
+          expect(await replay.json()).toEqual({ ...initialBody, replayed: true });
+        }
+      } finally {
+        await closeServer(server);
+        await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await pool.end();
+      }
+    },
+  );
+
+  integration(
     "queries exact preview bytes, latest status, linkage, and private hiding",
     async () => {
       const pool = new Pool({ connectionString: databaseUrl });
@@ -1489,6 +1673,7 @@ describe("PostgreSQL feedback publication integration", () => {
             false,
             "approve-publication",
             "query-approve-key",
+            ACTOR,
           ),
         ).resolves.toMatchObject({ version: 1, payloadDigest: item.digest });
         await expect(
@@ -1550,6 +1735,7 @@ describe("PostgreSQL feedback publication integration", () => {
             true,
             "cancel-publication-route-private",
             "query-private-cancel",
+            ACTOR,
           ),
         ).resolves.toMatchObject({ version: 1, payloadDigest: privateItem.digest });
         await expect(query.status(privateItem.itemId, undefined, false)).resolves.toBeUndefined();

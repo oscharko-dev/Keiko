@@ -398,6 +398,18 @@ describe("governed GitHub issue adapter", () => {
     }
   });
 
+  it("reconciles a reversed-order unique provider label set", async () => {
+    const transport = new FakeTransport((operation) =>
+      operation.kind === "mint-token"
+        ? tokenResponse()
+        : search([issue({ labels: [{ name: "source:keiko" }, { name: "user-finding" }] })]),
+    );
+    await expect((await attested(transport)).reconcileIssue(claimed())).resolves.toMatchObject({
+      kind: "exact",
+      issue: { number: 7 },
+    });
+  });
+
   it("validates two bounded search pages and rejects the second candidate immediately", async () => {
     const second = issue({
       number: 8,
@@ -427,6 +439,10 @@ describe("governed GitHub issue adapter", () => {
       search([issue({ repository_url: "https://api.github.com/repos/other/repository" })]),
     ],
     ["wrong projection", search([issue({ title: "different title" })])],
+    [
+      "duplicate labels",
+      search([issue({ labels: [{ name: "user-finding" }, { name: "user-finding" }] })]),
+    ],
   ] as const)("fails closed for %s search results", async (_case, searchResponse) => {
     const transport = new FakeTransport((operation) =>
       operation.kind === "mint-token" ? tokenResponse() : searchResponse,
@@ -595,6 +611,24 @@ describe("governed GitHub issue adapter", () => {
     ).rejects.toMatchObject({ code: "validation-error", commitCertainty: "definite-pre-send" });
   });
 
+  it("accepts reversed provider labels after create while preserving ordered request labels", async () => {
+    const transport = new FakeTransport((operation) =>
+      operation.kind === "mint-token"
+        ? tokenResponse()
+        : response(
+            201,
+            issue({ labels: [{ name: "source:keiko" }, { name: "user-finding" }] }),
+            true,
+          ),
+    );
+    const governed = await attested(transport);
+    await expect(publish(governed)).resolves.toMatchObject({ number: 7 });
+    expect(transport.operations.at(-1)).toMatchObject({
+      kind: "create-issue",
+      labels: ["user-finding", "source:keiko"],
+    });
+  });
+
   it("exposes no raw create operation", () => {
     const governed = adapter(new FakeTransport(() => tokenResponse()));
     type HasRawCreate = "createIssue" extends keyof GithubIssueAdapter ? true : false;
@@ -707,6 +741,7 @@ describe("governed GitHub issue adapter", () => {
     for (const invalidIssue of [
       issue({ repository_url: "https://api.github.com/repositories/456" }),
       issue({ labels: "not-an-array" }),
+      issue({ labels: [{ name: "user-finding" }, { name: "user-finding" }] }),
       issue({ title: "provider-mutated-title" }),
     ]) {
       const transport = new FakeTransport((operation) =>

@@ -94,6 +94,25 @@ describe("GitHub App configuration", () => {
     ).toBe("invalid");
   });
 
+  it("requires a bounded RFC 3339 key-rotation timestamp", () => {
+    const valid = input([target()]);
+    expect(
+      loadGithubAppConfig({ ...valid, privateKeyRotatedAt: "2026-07-01T02:00:00+02:00" }, now)
+        .status,
+    ).toBe("ready");
+
+    for (const privateKeyRotatedAt of [
+      "2026-07-01T00:00:00",
+      "2026-07-01 00:00:00Z",
+      "July 1, 2026 00:00:00 UTC",
+      "2026-07-01T00:00:00+0000",
+      "2026-07-01T00:00:00.1234Z",
+      "2026-02-30T00:00:00Z",
+    ]) {
+      expect(loadGithubAppConfig({ ...valid, privateKeyRotatedAt }, now).status).toBe("invalid");
+    }
+  });
+
   it("requires an absolute, existing, hardened private-key file for ready state", () => {
     const valid = input([target()]);
     expect(loadGithubAppConfig({ ...valid, privateKeyFile: "relative-key.pem" }, now).status).toBe(
