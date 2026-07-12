@@ -58,7 +58,9 @@ import {
 // bodies use the larger per-item cap.
 export const CONFLUENCE_LIST_RESPONSE_MAX_BYTES = 1_000_000;
 // Hard ceiling on cursor-following per pagination loop: a hostile or looping `_links.next` chain
-// terminates the run as malformed instead of spinning until the duration budget.
+// terminates the run as malformed instead of spinning until the duration budget. A repeated
+// cursor is also classified as `malformed-payload` immediately (below), so a self-referential
+// A→A or A→B→A chain fails closed after two requests rather than 500.
 const MAX_PAGINATION_REQUESTS = 500;
 // Footer-comment pages harvested per item (bounded enrichment).
 const MAX_COMMENT_PAGES_PER_ITEM = 10;
@@ -140,7 +142,8 @@ function nextCursorFrom(
 
 // Walks a cursor-paginated v2 list endpoint, handing each `results` array to `onResults` (which
 // returns false to stop early, e.g. once the lane's item ceiling is crossed). Fail-closed on
-// off-scope cursors and on cursor chains longer than `MAX_PAGINATION_REQUESTS`.
+// off-scope cursors, on cursor chains longer than `MAX_PAGINATION_REQUESTS`, and on any repeated
+// cursor URL (which indicates a self-referential loop rather than legitimate large pagination).
 async function walkPaginatedList(
   context: AtlassianSyncFetchContext,
   endpoints: ConfluenceEndpoints,
@@ -149,8 +152,11 @@ async function walkPaginatedList(
 ): Promise<ListWalkOutcome> {
   let url: string | undefined = firstUrl;
   let requests = 0;
+  const seen = new Set<string>();
   while (url !== undefined) {
     if (requests >= MAX_PAGINATION_REQUESTS) return { ok: false, reason: "malformed-payload" };
+    if (seen.has(url)) return { ok: false, reason: "malformed-payload" };
+    seen.add(url);
     if (context.deadlineExceeded()) return { ok: false, reason: "timeout" };
     const result = await context.http({
       method: "GET",
