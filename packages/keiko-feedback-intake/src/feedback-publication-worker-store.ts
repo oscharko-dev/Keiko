@@ -188,6 +188,23 @@ export class PostgresFeedbackPublicationWorkerStore {
     });
   }
 
+  async recordProviderProbeSuccess(lease: FeedbackPublicationWorkerLease): Promise<void> {
+    if (lease.mode !== "reconcile-only") throw new FeedbackPublicationError("invalid-transition");
+    await this.transaction(async (client) => {
+      const current = await this.lockExactLease(client, lease);
+      if (current?.status !== "may-have-committed") {
+        throw new FeedbackPublicationError("claim-unavailable");
+      }
+      const removed = await client.query(
+        `DELETE FROM feedback_publication_installation_circuits
+         WHERE installation_id=$1 AND consecutive_failures=3
+           AND probe_owner=$2 AND probe_expires_at=$3`,
+        [lease.target.installationId, lease.outboxId, lease.leaseExpiresAt],
+      );
+      if (removed.rowCount !== 1) throw new FeedbackPublicationError("claim-unavailable");
+    });
+  }
+
   async scheduleRetry(
     lease: FeedbackPublicationLeaseIdentity,
     code: FeedbackPublicationRetryCode,
@@ -225,7 +242,8 @@ export class PostgresFeedbackPublicationWorkerStore {
       lease,
       "may-have-committed",
       `status='may-have-committed',create_eligible=false,lease_owner=NULL,lease_expires_at=NULL,
-       next_attempt_at=LEAST(clock_timestamp() + $7::integer * interval '1 millisecond',expires_at),
+       next_attempt_at=LEAST(clock_timestamp() + $7::integer * interval '1 millisecond',
+         outbox.expires_at),
        failure_code='ambiguous-reconciliation',updated_at=clock_timestamp()`,
       [bounded],
       "reconciliation-scheduled",

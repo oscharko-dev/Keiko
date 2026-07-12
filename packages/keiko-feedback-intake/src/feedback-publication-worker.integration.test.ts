@@ -48,6 +48,7 @@ class CoordinatorTransport implements GithubTransport {
   constructor(
     private readonly failPreflight = false,
     private readonly rateLimitStatus?: 403 | 429,
+    private readonly searchNotObserved = false,
   ) {}
 
   execute(operation: GithubHttpOperation): Promise<GithubHttpResponse> {
@@ -108,6 +109,11 @@ class CoordinatorTransport implements GithubTransport {
         rateLimitRemaining: "0",
         rateLimitReset: String(Math.floor(AT.getTime() / 1_000) + 600),
       });
+    }
+    if (this.searchNotObserved) {
+      return Promise.resolve(
+        jsonResponse(200, { total_count: 0, incomplete_results: false, items: [] }),
+      );
     }
     return Promise.resolve(jsonResponse(500, {}));
   }
@@ -689,6 +695,102 @@ describe("PostgreSQL feedback publication worker", () => {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await sessionA.pool.end();
         await sessionB.pool.end();
+        await pool.end();
+      }
+    },
+  );
+
+  integration(
+    "closes a healthy reconciliation probe so newer same-installation create work can proceed",
+    async () => {
+      const pool = new Pool({ connectionString: databaseUrl, max: 8 });
+      const schema = await createSchema(pool);
+      const sessions = physicalSessionPool(schema);
+      const scoped = scopedPool(pool, schema);
+      const repository = new PostgresFeedbackPublicationRepository(
+        scoped,
+        ACTOR.permissionPolicyVersion,
+        () => TARGET,
+      );
+      const store = new PostgresFeedbackPublicationWorkerStore(
+        scoped,
+        sessions.scoped,
+        () => TARGET,
+      );
+      try {
+        const ambiguousId = await approvedOutbox(pool, schema, repository, "AMBIGUOUS_A");
+        await store.withCandidate(
+          { workerId: "prepare-ambiguous-a", leaseDurationMs: 60_000 },
+          async (candidate) => {
+            await store.armCreate(candidate);
+            await store.recordProviderFailure(candidate, 30_000);
+            await store.recordProviderFailure(candidate, 30_000);
+            await store.recordProviderFailure(candidate, 30_000);
+            await store.scheduleReconciliation(leaseIdentity(candidate), 1_000);
+          },
+        );
+        const createId = await approvedOutbox(pool, schema, repository, "CREATE_B");
+        await schemaRows(
+          pool,
+          schema,
+          `UPDATE feedback_publication_installation_circuits
+           SET open_until=statement_timestamp()-interval '1 second',
+             updated_at=statement_timestamp()-interval '2 seconds',
+             expires_at=statement_timestamp()-interval '2 seconds'+interval '7 days'`,
+        );
+        await schemaRows(
+          pool,
+          schema,
+          `UPDATE feedback_publication_outbox
+           SET next_attempt_at=statement_timestamp()-interval '1 second'
+           WHERE id=$1`,
+          [ambiguousId],
+        );
+        const transport = new CoordinatorTransport(false, undefined, true);
+        const adapter = await coordinator(transport);
+        const worker = new FeedbackPublicationWorker({
+          store,
+          adapter,
+          workerId: "healthy-half-open-probe",
+          leaseDurationMs: 60_000,
+          circuitCooldownMs: 30_000,
+          random: (): number => 0.5,
+        });
+
+        await worker.runOne();
+        expect(
+          await schemaRows(
+            pool,
+            schema,
+            "SELECT installation_id FROM feedback_publication_installation_circuits",
+          ),
+        ).toEqual([]);
+        await worker.runOne();
+
+        expect(
+          await schemaRows<{
+            readonly id: string;
+            readonly status: string;
+            readonly create_attempt_count: number;
+          }>(
+            pool,
+            schema,
+            `SELECT id,status,create_attempt_count FROM feedback_publication_outbox
+             WHERE id=ANY($1::uuid[]) ORDER BY id`,
+            [[ambiguousId, createId]],
+          ),
+        ).toEqual(
+          [
+            { id: ambiguousId, status: "may-have-committed", create_attempt_count: 1 },
+            { id: createId, status: "succeeded", create_attempt_count: 1 },
+          ].sort((left, right) => left.id.localeCompare(right.id)),
+        );
+        expect(
+          transport.operations.filter((operation) => operation.kind === "create-issue"),
+        ).toHaveLength(1);
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await sessions.pool.end();
         await pool.end();
       }
     },

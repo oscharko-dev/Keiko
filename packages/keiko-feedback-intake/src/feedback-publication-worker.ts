@@ -45,6 +45,16 @@ const MANUAL = new Set<FeedbackPublicationManualCode>([
   "payload-expired",
 ]);
 
+function requiresReconciliationRetry(
+  lease: FeedbackPublicationWorkerLease,
+  error: GithubIssueAdapterError,
+): boolean {
+  return (
+    error.commitCertainty === "may-have-committed" ||
+    (lease.mode === "reconcile-only" && TRANSIENT.has(error.code))
+  );
+}
+
 export class FeedbackPublicationWorker {
   private readonly now: () => number;
   private readonly random: () => number;
@@ -88,10 +98,7 @@ export class FeedbackPublicationWorker {
       if (lease.mode === "reconcile-only") {
         const delayMs = this.retryDelay(lease);
         if (circuit.probe) {
-          await this.dependencies.store.recordProviderFailure(
-            lease,
-            Math.max(this.dependencies.circuitCooldownMs, delayMs),
-          );
+          await this.dependencies.store.recordProviderProbeSuccess(lease);
         }
         await this.dependencies.store.scheduleReconciliation(leaseIdentity(lease), delayMs);
         this.event("delivery", "not-observed", 1, startedAt);
@@ -140,7 +147,7 @@ export class FeedbackPublicationWorker {
           error.code === "rate-limited",
         );
       }
-      if (error.commitCertainty === "may-have-committed") {
+      if (requiresReconciliationRetry(lease, error)) {
         await this.dependencies.store.scheduleReconciliation(identity, delayMs);
         return;
       }

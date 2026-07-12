@@ -86,6 +86,11 @@ class FakeStore {
     this.immediateOpens.push(openImmediately);
     return Promise.resolve();
   }
+  recordProviderProbeSuccess(): Promise<void> {
+    this.calls.push("probe-healthy");
+    this.circuitFailures = 0;
+    return Promise.resolve();
+  }
   scheduleRetry(_lease: unknown, _code: unknown, delayMs: number): Promise<"retryable-failure"> {
     this.calls.push("retry");
     this.delays.push(delayMs);
@@ -170,6 +175,32 @@ describe("feedback publication worker policy", () => {
     await worker(store, adapter).runOne();
     expect(adapter.calls).toEqual(["reconcile"]);
     expect(store.calls).toEqual(["reconcile-later"]);
+  });
+
+  it("closes a half-open circuit after a complete not-observed reconciliation search", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    store.candidate = lease("reconcile-only");
+    store.circuitFailures = 3;
+    store.enterProviderCircuit = (): Promise<{ readonly allowed: true; readonly probe: true }> =>
+      Promise.resolve({ allowed: true, probe: true });
+    await worker(store, adapter).runOne();
+    expect(adapter.calls).toEqual(["reconcile"]);
+    expect(store.calls).toEqual(["probe-healthy", "reconcile-later"]);
+    expect(store.circuitFailures).toBe(0);
+  });
+
+  it("reopens a half-open circuit when the probe is actually rate limited", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    store.candidate = lease("reconcile-only");
+    store.enterProviderCircuit = (): Promise<{ readonly allowed: true; readonly probe: true }> =>
+      Promise.resolve({ allowed: true, probe: true });
+    adapter.failure = new GithubIssueAdapterError("rate-limited", "definite-pre-send", 600);
+    await worker(store, adapter).runOne();
+    expect(store.calls).toEqual(["reconcile-later"]);
+    expect(store.immediateOpens).toEqual([true]);
+    expect(store.circuitFailures).toBe(3);
   });
 
   it("retries definite pre-send transients, reconciles ambiguity, and settles permanent failures", async () => {
