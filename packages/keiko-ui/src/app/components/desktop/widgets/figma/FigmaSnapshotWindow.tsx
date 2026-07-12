@@ -328,6 +328,55 @@ function formatElapsed(ms: number): string {
   return `${String(seconds)}s`;
 }
 
+function screenCardSizeLabel(
+  imageByteLength: number | undefined,
+  structuralReason: string | undefined,
+  t: I18nTranslate,
+): string {
+  if (imageByteLength !== undefined) return formatBytes(imageByteLength);
+  if (structuralReason !== undefined) {
+    return t("figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason", {
+      reason: structuralReason,
+    });
+  }
+  return t("figmaSnapshotWindow.screenCard.structuralIrOnly");
+}
+
+function viewSourcePreviewLabel(
+  imageByteLength: number | undefined,
+  structuralReason: string | undefined,
+  t: I18nTranslate,
+): string {
+  if (imageByteLength !== undefined) return formatBytes(imageByteLength);
+  if (structuralReason !== undefined) {
+    return t("figmaSnapshotWindow.viewSource.structuralIrWithReason", {
+      reason: structuralReason,
+    });
+  }
+  return t("figmaSnapshotWindow.viewSource.structuralIrLabel");
+}
+
+function galleryAriaLabel({
+  displayedCount,
+  isScreenScopedSource,
+  totalCount,
+  t,
+}: {
+  readonly displayedCount: number;
+  readonly isScreenScopedSource: boolean;
+  readonly totalCount: number;
+  readonly t: I18nTranslate;
+}): string {
+  if (isScreenScopedSource) {
+    return displayedCount === 1
+      ? t("figmaSnapshotWindow.gallery.selectedScreenSingular", { count: displayedCount })
+      : t("figmaSnapshotWindow.gallery.selectedScreenPlural", { count: displayedCount });
+  }
+  return totalCount === 1
+    ? t("figmaSnapshotWindow.gallery.capturedScreenSingular", { count: totalCount })
+    : t("figmaSnapshotWindow.gallery.capturedScreenPlural", { count: totalCount });
+}
+
 /**
  * Differentiated validation microcopy (WCAG 3.3.1 Error Identification) for a
  * non-empty, invalid board link. Returns null when the link is empty or valid.
@@ -594,13 +643,7 @@ function ScreenCard({
         {/* uiux-fix F045 C313: app-wide byte convention via lib/format (B/KB/MB) instead
             of an ad-hoc "KiB" — the only surface that used that spelling. */}
         <p className="figma-snapshot-screen-size">
-          {imageByteLength !== undefined
-            ? formatBytes(imageByteLength)
-            : structuralReason !== undefined
-              ? t("figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason", {
-                  reason: structuralReason,
-                })
-              : t("figmaSnapshotWindow.screenCard.structuralIrOnly")}
+          {screenCardSizeLabel(imageByteLength, structuralReason, t)}
         </p>
         <p className="figma-snapshot-screen-id">{screenId}</p>
         {onAddSource !== undefined ? (
@@ -831,15 +874,7 @@ function FigmaViewSourceCard({
           </div>
           <div>
             <dt>{t("figmaSnapshotWindow.viewSource.factPreview")}</dt>
-            <dd>
-              {imageByteLength !== undefined
-                ? formatBytes(imageByteLength)
-                : structuralReason !== undefined
-                  ? t("figmaSnapshotWindow.viewSource.structuralIrWithReason", {
-                      reason: structuralReason,
-                    })
-                  : t("figmaSnapshotWindow.viewSource.structuralIrLabel")}
-            </dd>
+            <dd>{viewSourcePreviewLabel(imageByteLength, structuralReason, t)}</dd>
           </div>
         </dl>
       </div>
@@ -2644,23 +2679,12 @@ export function FigmaSnapshotWindow({
             <>
               <section
                 className="figma-snapshot-gallery"
-                aria-label={
-                  isScreenScopedSource
-                    ? displayedScreens.length !== 1
-                      ? t("figmaSnapshotWindow.gallery.selectedScreenPlural", {
-                          count: displayedScreens.length,
-                        })
-                      : t("figmaSnapshotWindow.gallery.selectedScreenSingular", {
-                          count: displayedScreens.length,
-                        })
-                    : totalScreenSummaryCount !== 1
-                      ? t("figmaSnapshotWindow.gallery.capturedScreenPlural", {
-                          count: totalScreenSummaryCount,
-                        })
-                      : t("figmaSnapshotWindow.gallery.capturedScreenSingular", {
-                          count: totalScreenSummaryCount,
-                        })
-                }
+                aria-label={galleryAriaLabel({
+                  displayedCount: displayedScreens.length,
+                  isScreenScopedSource,
+                  totalCount: totalScreenSummaryCount,
+                  t,
+                })}
               >
                 {displayedScreens.slice(0, visibleScreenCount).map((entry, displayIndex) => {
                   const onAddSource =

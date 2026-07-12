@@ -160,6 +160,52 @@ function MetadataRow({
   );
 }
 
+function copyStatusLabel(status: CopyStatusKind | null, t: I18nTranslate): string | null {
+  switch (status) {
+    case "nameCopied":
+      return t("filePreview.copyStatus.nameCopied");
+    case "pathCopied":
+      return t("filePreview.copyStatus.pathCopied");
+    case "clipboardFailed":
+      return t("filePreview.copyStatus.clipboardFailed");
+    case null:
+      return null;
+  }
+}
+
+function previewHeaderName(
+  preview: FilesPreviewResponse | null,
+  error: PreviewError | null,
+  t: I18nTranslate,
+): string {
+  if (error?.denied === true) return t("filePreview.hiddenFile");
+  if (preview !== null) return preview.name;
+  return error === null ? t("filePreview.headerLoading") : t("filePreview.previewUnavailable");
+}
+
+function previewLanguageLabel(
+  preview: FilesPreviewResponse | null,
+  error: PreviewError | null,
+  t: I18nTranslate,
+): string {
+  if (preview !== null) return previewKindLabel(preview, t);
+  if (error?.denied === true) return t("filePreview.lang.denied");
+  return error === null ? t("filePreview.lang.loading") : t("filePreview.lang.error");
+}
+
+function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
+  let offset = 0;
+  return tokens.map((tok) => {
+    const key = `${tok[0]}:${String(offset)}:${tok[1]}`;
+    offset += tok[1].length;
+    return (
+      <span key={key} className={`hl-${tok[0]}`}>
+        {tok[1]}
+      </span>
+    );
+  });
+}
+
 export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreviewProps): ReactNode {
   const t = useTranslate();
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
@@ -237,28 +283,11 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       () => setCopyStatus("clipboardFailed"),
     );
   };
-  const copyStatusText =
-    copyStatus === "nameCopied"
-      ? t("filePreview.copyStatus.nameCopied")
-      : copyStatus === "pathCopied"
-        ? t("filePreview.copyStatus.pathCopied")
-        : copyStatus === "clipboardFailed"
-          ? t("filePreview.copyStatus.clipboardFailed")
-          : null;
+  const copyStatusText = copyStatusLabel(copyStatus, t);
 
   const denied = error?.denied === true;
-  const lang =
-    preview !== null
-      ? previewKindLabel(preview, t)
-      : denied
-        ? t("filePreview.lang.denied")
-        : error !== null
-          ? t("filePreview.lang.error")
-          : t("filePreview.lang.loading");
-  const headerName = denied
-    ? t("filePreview.hiddenFile")
-    : (preview?.name ??
-      (error !== null ? t("filePreview.previewUnavailable") : t("filePreview.headerLoading")));
+  const lang = previewLanguageLabel(preview, error, t);
+  const headerName = previewHeaderName(preview, error, t);
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
   const canOpenInEditor =
@@ -290,6 +319,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   const visibleLines = useMemo(
     () => (lines.length > visibleLineCount ? lines.slice(0, visibleLineCount) : lines),
     [lines, visibleLineCount],
+  );
+  const visibleLineRows = useMemo(
+    () => visibleLines.map((tokens, index) => ({ lineNumber: index + 1, tokens })),
+    [visibleLines],
   );
   const hiddenLineCount = Math.max(0, lines.length - visibleLineCount);
 
@@ -433,16 +466,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               } as CSSProperties
             }
           >
-            {visibleLines.map((toks, i) => (
-              <div className="fpv-line" key={i}>
-                <span className="fpv-num">{i + 1}</span>
-                <span className="fpv-src">
-                  {toks.map((tok, j) => (
-                    <span key={j} className={`hl-${tok[0]}`}>
-                      {tok[1]}
-                    </span>
-                  ))}
-                </span>
+            {visibleLineRows.map((row) => (
+              <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
+                <span className="fpv-num">{row.lineNumber}</span>
+                <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
               </div>
             ))}
             {hiddenLineCount > 0 ? (

@@ -46,6 +46,24 @@ function shortPath(p: string): string {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
+function applyButtonLabel({
+  applying,
+  confirmApply,
+  diffFileCount,
+  t,
+}: {
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly diffFileCount: number;
+  readonly t: I18nTranslate;
+}): string {
+  if (applying) return t("reviewWidget.applying");
+  if (!confirmApply) return t("reviewWidget.apply");
+  return diffFileCount === 1
+    ? t("reviewWidget.confirmApplySingular", { count: diffFileCount })
+    : t("reviewWidget.confirmApplyPlural", { count: diffFileCount });
+}
+
 // uiux-fix F018 C259: the RunStatus→label map moved to lib/format runStatusLabel so
 // the AgentRunWidget header and this widget share one terminology.
 
@@ -408,13 +426,13 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
 
           {/* Apply controls */}
           <div className="rv-controls">
-            <span role="status" aria-live="polite" className="rv-apply-status">
+            <output aria-live="polite" className="rv-apply-status">
               {applying
                 ? t("reviewWidget.applying")
                 : report.appliedAt !== undefined
                   ? t("reviewWidget.applied")
                   : ""}
-            </span>
+            </output>
             {applyError !== null && (
               <span role="alert" className="rv-apply-error">
                 {applyError.message}
@@ -431,13 +449,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                 aria-disabled={applying}
                 onClick={onApplyClick}
               >
-                {applying
-                  ? t("reviewWidget.applying")
-                  : confirmApply
-                    ? diffFileCount === 1
-                      ? t("reviewWidget.confirmApplySingular", { count: diffFileCount })
-                      : t("reviewWidget.confirmApplyPlural", { count: diffFileCount })
-                    : t("reviewWidget.apply")}
+                {applyButtonLabel({ applying, confirmApply, diffFileCount, t })}
               </button>
             ) : null}
           </div>

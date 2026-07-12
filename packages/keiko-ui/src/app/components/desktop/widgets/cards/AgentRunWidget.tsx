@@ -421,6 +421,25 @@ function ConfidenceSignal({ level }: { readonly level: ConfidenceLevel }): React
   );
 }
 
+function applyButtonLabel({
+  applying,
+  confirmApply,
+  fileCount,
+  t,
+}: {
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly fileCount: number;
+  readonly t: I18nTranslate;
+}): string {
+  if (applying) return t("agentRunWidget.apply.applying");
+  if (!confirmApply) return t("agentRunWidget.apply.apply");
+  return t(
+    fileCount === 1 ? "agentRunWidget.apply.confirmSingular" : "agentRunWidget.apply.confirmPlural",
+    { count: fileCount },
+  );
+}
+
 function renderHypothesis(report: RunReport, t: I18nTranslate): ReactNode {
   const hypothesis = report.hypothesis;
   if (hypothesis === undefined) return null;
@@ -693,7 +712,7 @@ export function AgentRunWidget({
         <span
           className="arun-perm"
           data-on={linkedRoot !== null}
-          title={linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? undefined)}
+          title={linkedRoot ?? cfg.workspaceRoot ?? undefined}
         >
           <Icons.files size={11} />
           <span className="arun-perm-path">
@@ -902,16 +921,7 @@ export function AgentRunWidget({
             aria-disabled={applying}
             onClick={onApplyClick}
           >
-            {applying
-              ? t("agentRunWidget.apply.applying")
-              : confirmApply
-                ? t(
-                    applyFileCount === 1
-                      ? "agentRunWidget.apply.confirmSingular"
-                      : "agentRunWidget.apply.confirmPlural",
-                    { count: applyFileCount },
-                  )
-                : t("agentRunWidget.apply.apply")}
+            {applyButtonLabel({ applying, confirmApply, fileCount: applyFileCount, t })}
           </button>
         ) : report?.appliedAt !== undefined ? (
           <span className="arun-final mono">{t("agentRunWidget.result.applied")}</span>

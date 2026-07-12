@@ -1117,7 +1117,7 @@ export function PdfCitationPreviewWindow({
       {showToolbar ? (
         <div
           className="pdfv-toolbar"
-          role="group"
+          role="toolbar"
           aria-label={t("pdfCitationPreviewWindow.toolbar.ariaLabel")}
         >
           <div className="pdfv-group">

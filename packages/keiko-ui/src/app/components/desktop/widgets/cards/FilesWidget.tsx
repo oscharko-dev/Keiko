@@ -141,6 +141,23 @@ type PendingEntry =
   | { readonly kind: "new-file" | "new-folder"; readonly parentPath: string | null }
   | { readonly kind: "rename"; readonly path: string; readonly name: string };
 
+function pendingEntryDraftLabel(kind: PendingEntry["kind"], t: I18nTranslate): string {
+  return kind === "new-folder"
+    ? t("filesWidget.tree.newFolderName")
+    : t("filesWidget.tree.newFileName");
+}
+
+function pendingEntryDraftIcon(kind: PendingEntry["kind"], entryDraft: string): ReactNode {
+  if (kind === "new-folder") {
+    return (
+      <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+        <Icons.folder size={14} />
+      </span>
+    );
+  }
+  return <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />;
+}
+
 interface ContextMenuState {
   readonly x: number;
   readonly y: number;
@@ -1521,16 +1538,8 @@ export function FilesWidget({
         (pendingEntry.parentPath ?? "") === path
           ? renderInlineEditor(
               depth,
-              pendingEntry.kind === "new-folder" ? (
-                <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-                  <Icons.folder size={14} />
-                </span>
-              ) : (
-                <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />
-              ),
-              pendingEntry.kind === "new-folder"
-                ? t("filesWidget.tree.newFolderName")
-                : t("filesWidget.tree.newFileName"),
+              pendingEntryDraftIcon(pendingEntry.kind, entryDraft),
+              pendingEntryDraftLabel(pendingEntry.kind, t),
             )
           : null}
         {visibleEntries.map((entry) => renderEntry(entry, depth))}

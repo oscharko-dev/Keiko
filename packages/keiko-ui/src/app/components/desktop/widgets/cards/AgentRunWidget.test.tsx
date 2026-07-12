@@ -191,6 +191,262 @@ describe("AgentRunWidget", () => {
     expect(screen.queryByText(/waiting for run events/i)).not.toBeInTheDocument();
   });
 
+  it("renders translated labels for the full agent event stream", async () => {
+    vi.mocked(useSSE).mockReturnValue({
+      status: "terminal",
+      error: null,
+      events: [
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 1,
+          ts: 1,
+          type: "ready",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 2,
+          ts: 2,
+          type: "run:started",
+          taskType: "verify",
+          modelId: "example-chat-model",
+          limits: {},
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 3,
+          ts: 3,
+          type: "state:transition",
+          from: "queued",
+          to: "running",
+          reason: "worker available",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 4,
+          ts: 4,
+          type: "model:call:started",
+          modelId: "example-chat-model",
+          messageCount: 2,
+          contextBytes: 1024,
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 5,
+          ts: 5,
+          type: "model:call:failed",
+          modelId: "example-chat-model",
+          errorCode: "RATE_LIMITED",
+          message: "rate limited",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 6,
+          ts: 6,
+          type: "patch:proposed",
+          targetFile: "redacted",
+          patchBytes: 2048,
+          diff: "redacted",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 7,
+          ts: 7,
+          type: "verification:result",
+          passed: false,
+          detail: "lint failed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 8,
+          ts: 8,
+          type: "bug:rootcause:proposed",
+          hasPatch: false,
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 9,
+          ts: 9,
+          type: "bug:failed",
+          errorCode: "NOT_REPRODUCED",
+          message: "could not reproduce",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 10,
+          ts: 10,
+          type: "run:completed",
+          report: "completed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 11,
+          ts: 11,
+          type: "run:failed",
+          failure: { message: "policy denied" },
+          atState: "running",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 12,
+          ts: 12,
+          type: "run:cancelled",
+          atState: "running",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 13,
+          ts: 13,
+          type: "model:call:completed",
+          usage: {
+            promptTokens: 12,
+            completionTokens: 8,
+            latencyMs: 40,
+          },
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 14,
+          ts: 14,
+          type: "workflow:started",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 15,
+          ts: 15,
+          type: "workflow:verification:result",
+          overallStatus: "passed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 16,
+          ts: 16,
+          type: "workflow:completed",
+          status: "completed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 17,
+          ts: 17,
+          type: "workflow:failed",
+          message: "assertion missing",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 18,
+          ts: 18,
+          type: "bug:started",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 19,
+          ts: 19,
+          type: "bug:model:call:completed",
+          promptTokens: 21,
+          completionTokens: 4,
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 20,
+          ts: 20,
+          type: "bug:rootcause:proposed",
+          hasPatch: true,
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 21,
+          ts: 21,
+          type: "bug:verification:result",
+          overallStatus: "passed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 22,
+          ts: 22,
+          type: "bug:completed",
+          status: "fix-applied",
+        },
+      ] as never,
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "completed" } });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-events" }}
+        linkedRoot={null}
+        linkedFilePath={undefined}
+      />,
+    );
+
+    const log = await screen.findByRole("log", { name: "Run events" });
+    expect(log).toHaveTextContent("SSE stream ready");
+    expect(log).toHaveTextContent("Started verify");
+    expect(log).toHaveTextContent("queued -> running: worker available");
+    expect(log).toHaveTextContent("Model call started (1.0 KB)");
+    expect(log).toHaveTextContent("Model call failed: rate limited");
+    expect(log).toHaveTextContent("Patch proposed (2.0 KB)");
+    expect(log).toHaveTextContent("Verification failed: lint failed");
+    expect(log).toHaveTextContent("Root cause proposed");
+    expect(log).toHaveTextContent("Bug investigation failed: could not reproduce");
+    expect(log).toHaveTextContent("Run completed");
+    expect(log).toHaveTextContent("Run failed: policy denied");
+    expect(log).toHaveTextContent("Run cancelled");
+    expect(log).toHaveTextContent("Model call completed (20 tokens)");
+    expect(log).toHaveTextContent("Unit-test workflow started");
+    expect(log).toHaveTextContent("Unit-test verification passed");
+    expect(log).toHaveTextContent("Unit-test workflow completed");
+    expect(log).toHaveTextContent("Unit-test workflow failed: assertion missing");
+    expect(log).toHaveTextContent("Bug investigation started");
+    expect(log).toHaveTextContent("Bug model call completed (25 tokens)");
+    expect(log).toHaveTextContent("Root cause proposed with patch");
+    expect(log).toHaveTextContent("Bug verification passed");
+    expect(log).toHaveTextContent("Bug investigation fix-applied");
+  });
+
   it("marks active run surfaces busy for assistive technology", () => {
     vi.mocked(useSSE).mockReturnValue({
       status: "connecting",

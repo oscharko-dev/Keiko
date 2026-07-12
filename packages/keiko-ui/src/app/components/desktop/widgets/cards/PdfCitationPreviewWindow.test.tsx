@@ -513,7 +513,7 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByText("Preview failed")).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: /pdf preview controls/i })).toBeInTheDocument();
+    expect(screen.getByRole("toolbar", { name: /pdf preview controls/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry page/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry preview/i })).not.toBeInTheDocument();
   });
