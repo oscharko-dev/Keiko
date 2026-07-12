@@ -258,13 +258,18 @@ This is the normative mapping for every v1 governed connector operation. Rows ar
 external system over HTTPS) composed with `decideCodingWorkbenchActionForMode`'s scope gate
 (stricter-wins: `denied` beats `review-required` beats `allowed`), exactly as
 `editor-agent-governance.ts` composes `envelopeModeEffect`. Every action maps to exactly one
-`CodingWorkbenchActionClass` (`connector-access` for reads, `connector-write` for writes — see the
-scope-extension note below), one connector scope, and one `CodingWorkbenchApprovalRisk`, and the
-disposition columns are the corresponding tri-state effect
+governance identifier from the shared `keiko-contracts` vocabulary — `connector-access`
+(`CodingWorkbenchActionClass`) for read operations and `connector-write`
+(`CodingWorkbenchSupervisedActionKind`, which maps back to the `connector-access` action class in
+`actionKindToPerm` for the shared policy matrix while carrying the higher approval risk on the
+supervised-action path) for write operations — one connector scope, and one
+`CodingWorkbenchApprovalRisk`, and the disposition columns are the corresponding tri-state effect
 (`allowed | review-required | denied`) **assuming the required connector scope is present in the
-Authority Envelope.**
+Authority Envelope.** The `Action class / kind` column below records both identifiers
+uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
+`CodingWorkbenchSupervisedActionKind`.
 
-| # | Action | Provider | Action class | Connector scope | Approval risk | Ask for approval | Approve for me | Full access |
+| # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `sync-space` | Confluence | `connector-access` | `knowledge-base.read` | low | review-required | allowed | allowed |
 | 2 | `sync-project` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | allowed | allowed |
@@ -310,9 +315,12 @@ two new closed values, `"knowledge-base.read"` and `"knowledge-base.write"`, add
 the existing `source-control.*`/`issue-tracker.*` pairs. This is a genuine capability gap, not a
 connector-local scope: Confluence read/write operations have no existing scope to attach to, and
 `knowledge-base` (rather than `confluence`) is chosen so a future wiki-like connector (e.g. Notion)
-can reuse the same scope pair instead of each wiki connector inventing its own. `CodingWorkbenchActionClass`
-itself is unchanged — `connector-access` and `connector-write` already exist and are sufficient;
-only the scope enum grows.
+can reuse the same scope pair instead of each wiki connector inventing its own. The governance
+identifiers themselves are unchanged: `connector-access` already exists as a
+`CodingWorkbenchActionClass` and is the sole class the policy matrix evaluates for connector work;
+`connector-write` already exists as a `CodingWorkbenchSupervisedActionKind` whose `actionKindToPerm`
+mapping resolves back to `connector-access`, carrying the additional approval-risk signal on the
+supervised-action path. Only the scope enum grows.
 
 ### D5 — Sync bounds and lifecycle
 
