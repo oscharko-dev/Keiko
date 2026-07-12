@@ -124,6 +124,26 @@ describe("workspace watch service", () => {
     });
   });
 
+  it("seeds existing entries before processing native change events", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const events: EditorM7WatchEvent[] = [];
+    await writeFile(join(root, "existing.txt"), "one", "utf8");
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+
+    adapter.emit({ eventType: "change", filename: "existing.txt" });
+    await waitForCondition(() => manager.snapshot(root).queueDepth === 0);
+    expect(events).toHaveLength(0);
+
+    await writeFile(join(root, "existing.txt"), "one two", "utf8");
+    adapter.emit({ eventType: "change", filename: "existing.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "changed"));
+
+    expect(events.some((event) => event.kind === "created")).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "changed", relativePath: "existing.txt" });
+  });
+
   it("turns null filenames, burst overflow, and unavailable native watch into explicit degraded state", async () => {
     const adapter = new FakeAdapter();
     const manager = service(adapter, 1);

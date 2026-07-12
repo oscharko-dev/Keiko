@@ -20,6 +20,7 @@ import {
 } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
 import type { EditorSettingsControlMutation } from "./editorSettingsControl.js";
+import { editorSettingsWorkspaceFingerprint } from "./editorSettingsStore.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -34,6 +35,12 @@ interface ParsedMutationBody {
   readonly scope: EditorM7SettingScope;
   readonly values?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
   readonly settingIds?: readonly EditorM7SettingId[] | undefined;
+}
+
+interface ParsedRevisionPrecondition {
+  readonly rootToken: string;
+  readonly userRevision: number;
+  readonly workspaceRevision: number;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -153,13 +160,40 @@ function idempotencyKey(ctx: RouteContext): string | undefined {
   return hasControlCharacter(value) ? undefined : value;
 }
 
-function hasRevisionPrecondition(ctx: RouteContext, body: ParsedMutationBody): boolean {
+function parseRevisionPrecondition(ctx: RouteContext): ParsedRevisionPrecondition | undefined {
   const value = singleHeader(ctx, "if-match");
   const match =
-    value === undefined ? null : /^"edm7-(\d+)-(\d+)-[A-Za-z0-9_-]{4,64}"$/u.exec(value);
-  if (match === null) return false;
-  const revision = body.scope === "user" ? Number(match[1]) : Number(match[2]);
-  return revision === body.expectedRevision;
+    value === undefined ? null : /^"edm7-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
+  if (match === null) return undefined;
+  const userRevision = Number(match[1]);
+  const workspaceRevision = Number(match[2]);
+  if (!validRevision(userRevision) || !validRevision(workspaceRevision)) return undefined;
+  return { rootToken: match[3] ?? "", userRevision, workspaceRevision };
+}
+
+function expectedRootToken(realRoot: string | undefined): string {
+  return realRoot === undefined
+    ? "user"
+    : editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
+}
+
+function hasRevisionPrecondition(
+  precondition: ParsedRevisionPrecondition,
+  body: ParsedMutationBody,
+  realRoot: string | undefined,
+): boolean {
+  const revision =
+    body.scope === "user" ? precondition.userRevision : precondition.workspaceRevision;
+  return (
+    revision === body.expectedRevision && precondition.rootToken === expectedRootToken(realRoot)
+  );
+}
+
+function invalidEditorSettingsRequest(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("INVALID_REQUEST", "The editor settings request is invalid."),
+  };
 }
 
 function resultToRoute(result: EditorM7SettingsMutationResult): RouteResult {
@@ -250,18 +284,20 @@ export async function handlePatchEditorSettings(
   if (isRouteResult(raw)) return raw;
   const body = parseMutationBody(raw);
   const key = idempotencyKey(ctx);
-  if (body === undefined || key === undefined || !hasRevisionPrecondition(ctx, body)) {
-    return {
-      status: 400,
-      body: errorBody("INVALID_REQUEST", "The editor settings request is invalid."),
-    };
+  const precondition = parseRevisionPrecondition(ctx);
+  if (body === undefined || key === undefined || precondition === undefined) {
+    return invalidEditorSettingsRequest();
   }
   return runFilesHandler(async () => {
     const resolved =
       body.root === undefined ? undefined : await resolveRoot(deps.store, body.root, deps.redactor);
+    const realRoot = resolved?.realRoot;
+    if (!hasRevisionPrecondition(precondition, body, realRoot)) {
+      return invalidEditorSettingsRequest();
+    }
     const mutation: EditorSettingsControlMutation = {
       ...body,
-      realRoot: resolved?.realRoot,
+      realRoot,
       idempotencyKey: key,
     };
     const result = await deps.editorSettingsControl?.mutate(mutation);

@@ -221,7 +221,7 @@ export function handleWorkspaceSnippetsEvents(
     ctx.res.write(`event: editor-snippets:changed\n`);
     ctx.res.write(`data: ${JSON.stringify(event)}\n\n`);
   });
-  ctx.req.on("close", () => {
+  ctx.res.on("close", () => {
     stopHeartbeat();
     unsubscribe();
   });

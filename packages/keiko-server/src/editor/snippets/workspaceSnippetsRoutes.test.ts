@@ -72,6 +72,7 @@ function snapshot(revision = 0): EditorM7WorkspaceSnippetSnapshot {
 function fakeService(): WorkspaceSnippetsService & {
   readonly read: ReturnType<typeof vi.fn<WorkspaceSnippetsService["read"]>>;
   readonly mutate: ReturnType<typeof vi.fn<WorkspaceSnippetsService["mutate"]>>;
+  readonly listenerCount: () => number;
   emit: (event: WorkspaceSnippetsChangeEvent) => void;
 } {
   const listeners = new Set<(event: WorkspaceSnippetsChangeEvent) => void>();
@@ -92,6 +93,7 @@ function fakeService(): WorkspaceSnippetsService & {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    listenerCount: () => listeners.size,
     emit: (event): void => {
       for (const listener of listeners) listener(event);
     },
@@ -248,7 +250,7 @@ describe("workspace snippet routes", () => {
     expect(JSON.stringify(preview.body)).toContain("value:");
   });
 
-  it("streams snippet change events and closes subscriptions on request close", () => {
+  it("streams snippet change events and closes subscriptions on response close", () => {
     const service = fakeService();
     const chunks: string[] = [];
     const res = Object.assign(new EventEmitter(), {
@@ -269,9 +271,11 @@ describe("workspace snippet routes", () => {
       action: "replace",
       snippetCount: 1,
     });
-    eventContext.req.emit("close");
+    expect(service.listenerCount()).toBe(1);
+    res.emit("close");
 
     expect(result).toBe(STREAMING);
+    expect(service.listenerCount()).toBe(0);
     expect(chunks.join("")).toContain("event: ready");
     expect(chunks.join("")).toContain("editor-snippets:changed");
   });

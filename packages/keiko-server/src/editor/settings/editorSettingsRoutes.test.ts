@@ -270,6 +270,25 @@ describe("editor settings control routes", () => {
     expect(await reused.json()).toMatchObject({ error: { code: "IDEMPOTENCY_KEY_REUSED" } });
   });
 
+  it("rejects a workspace mutation guarded by an etag from a different root", async () => {
+    const otherRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-editor-settings-other-")));
+    try {
+      const otherSnapshot = await snapshot(otherRoot);
+      const response = await mutation(setBody(), {
+        "If-Match": otherSnapshot.headers.get("etag") ?? "",
+        "Idempotency-Key": "wrong-root-token",
+      });
+      const unchanged = await snapshot();
+
+      expect(otherSnapshot.status).toBe(200);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+      expect(unchanged.headers.get("etag")).toMatch(/^"edm7-0-0-/u);
+    } finally {
+      await rm(otherRoot, { recursive: true, force: true });
+    }
+  });
+
   it("inherits the central CSRF and same-origin gates for writes", async () => {
     const initial = await snapshot();
     const etag = initial.headers.get("etag") ?? "";
