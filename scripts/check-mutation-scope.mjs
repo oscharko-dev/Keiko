@@ -12,6 +12,10 @@ const criticalPrefixes = [
   "packages/keiko-workflows/src/",
 ];
 const criticalServerTerms = /\/(coding-runtime|qualityIntelligence)\//u;
+const criticalGateScripts = new Set([
+  "scripts/banking-quality-gate-core.mjs",
+  "scripts/banking-quality-gate-worker.mjs",
+]);
 
 function isProductionTypeScript(path) {
   return (
@@ -29,9 +33,10 @@ export function requiresSecurityMutation(files) {
 export function securityMutationFiles(files) {
   return files.filter(
     (path) =>
-      isProductionTypeScript(path) &&
-      (criticalPrefixes.some((prefix) => path.startsWith(prefix)) ||
-        (path.startsWith("packages/keiko-server/src/") && criticalServerTerms.test(path))),
+      criticalGateScripts.has(path) ||
+      (isProductionTypeScript(path) &&
+        (criticalPrefixes.some((prefix) => path.startsWith(prefix)) ||
+          (path.startsWith("packages/keiko-server/src/") && criticalServerTerms.test(path)))),
   );
 }
 

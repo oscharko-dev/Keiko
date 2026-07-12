@@ -45,8 +45,7 @@ jobs:
           MUTATION_FILES: ${{ steps.scope.outputs.files }}
         run: |
           if [ -n "${MUTATION_FILES:-}" ]; then
-            IFS=',' read -ra mutation_files <<< "$MUTATION_FILES"
-            npm run test:mutation:security:run -- --mutate "${mutation_files[@]}"
+            npm run test:mutation:security:run -- --mutate "$MUTATION_FILES"
             npm run check:mutation:scoped
           else
             npm run test:mutation:security

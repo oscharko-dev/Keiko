@@ -1,4 +1,7 @@
 const actionsAppId = 15368;
+const gitarIdentity = { appId: 827041, userId: 159877585 };
+const socketIdentity = { appId: 156372, userId: 95510084 };
+const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
 
 export const requiredChecks = [
   ["ci", actionsAppId],
@@ -19,16 +22,16 @@ export const requiredChecks = [
 ].map(([name, appId]) => ({ appId, name }));
 
 function completedAt(check) {
-  const value = Date.parse(check.completedAt ?? check.completed_at ?? "");
+  const value = Date.parse(check.completedAt ?? check.completed_at);
   return Number.isFinite(value) ? value : undefined;
 }
 
 function startedAt(check) {
-  const value = Date.parse(check.startedAt ?? check.started_at ?? "");
+  const value = Date.parse(check.startedAt ?? check.started_at);
   return Number.isFinite(value) ? value : undefined;
 }
 
-function checkFailures(checks, headSha) {
+export function checkFailures(checks, headSha) {
   return requiredChecks.flatMap(({ appId, name }) => {
     const candidates = checks.filter((check) => check.name === name && check.headSha === headSha);
     const check = candidates.toSorted(
@@ -42,13 +45,21 @@ function checkFailures(checks, headSha) {
   });
 }
 
-function latestComment(comments, author) {
+export function isBotEvidence(value, identity, requireApp) {
+  return (
+    value.authorId === identity.userId &&
+    value.authorType === "Bot" &&
+    (!requireApp || value.appId === identity.appId)
+  );
+}
+
+function latestComment(comments, identity) {
   return comments
-    .filter((comment) => comment.author === author)
+    .filter((comment) => isBotEvidence(comment, identity, true))
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
-function parseGitarFindings(body) {
+export function parseGitarFindings(body) {
   const match = /\b(\d+)\s+resolved\s*\/\s*(\d+)\s+findings\b/iu.exec(body);
   if (match === null) return undefined;
   const resolved = Number(match[1]);
@@ -56,19 +67,19 @@ function parseGitarFindings(body) {
   return resolved <= total ? total - resolved : undefined;
 }
 
-function packageAlerts(body) {
+export function packageAlerts(body) {
   if (!body.includes("[!WARNING]")) return [];
   const direct = [...body.matchAll(/npm\/(?:@[^/\s<]+\/)?[^@\s<]+@[^\s<`]+/gu)].map(
     ([value]) => value,
   );
   const links = [
-    ...body.matchAll(/socket\.dev\/npm\/package\/([^/"<]+)\/overview\/([^?"<]+)/gu),
+    ...body.matchAll(/socket\.dev\/npm\/package\/([^/"<\s]+)\/overview\/([^?"<\s]+)/gu),
   ].map((match) => `npm/${decodeURIComponent(match[1])}@${decodeURIComponent(match[2])}`);
   const packages = [...direct, ...links];
   return [...new Set(packages)];
 }
 
-function acceptedSocketRisks(comments, allowlist, actors, checkStart) {
+export function acceptedSocketRisks(comments, allowlist, actors, checkStart) {
   const commands = comments
     .filter(
       (comment) =>
@@ -81,7 +92,7 @@ function acceptedSocketRisks(comments, allowlist, actors, checkStart) {
   return new Set(commands.filter((entry) => allowlist.has(entry)));
 }
 
-function currentCheckStart(checks, headSha, names) {
+export function currentCheckStart(checks, headSha, names) {
   return Math.max(
     ...checks
       .filter((check) => check.headSha === headSha && names.includes(check.name))
@@ -90,9 +101,10 @@ function currentCheckStart(checks, headSha, names) {
   );
 }
 
-function commentIsCurrent(comment, checkStart) {
-  const updatedAt = Date.parse(comment?.updatedAt ?? "");
-  return comment !== undefined && Number.isFinite(checkStart) && updatedAt >= checkStart;
+export function commentIsCurrent(comment, checkStart) {
+  if (comment === undefined) return false;
+  const updatedAt = Date.parse(comment.updatedAt);
+  return Number.isFinite(checkStart) && updatedAt >= checkStart;
 }
 
 function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist, socketRiskActors) {
@@ -100,21 +112,21 @@ function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist,
   if (
     reviews.some(
       (review) =>
-        review.author === "gitar-bot" &&
+        isBotEvidence(review, gitarIdentity, false) &&
         review.commitSha === headSha &&
         review.state === "CHANGES_REQUESTED",
     )
   ) {
     failures.push("Gitar has an active CHANGES_REQUESTED review for the current head.");
   }
-  const gitar = latestComment(comments, "gitar-bot");
+  const gitar = latestComment(comments, gitarIdentity);
   const gitarStart = currentCheckStart(checks, headSha, ["Gitar"]);
   const findings = commentIsCurrent(gitar, gitarStart) ? parseGitarFindings(gitar.body) : undefined;
   if (findings === undefined)
     failures.push("Current Gitar finding evidence is missing or unparseable.");
   else if (findings !== 0) failures.push(`Gitar has ${String(findings)} unresolved finding(s).`);
 
-  const socket = latestComment(comments, "socket-security");
+  const socket = latestComment(comments, socketIdentity);
   const socketStart = currentCheckStart(checks, headSha, [
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
@@ -137,15 +149,15 @@ function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist,
   return failures;
 }
 
-function stabilityFailures(checks, comments, now, stabilityMs) {
+export function stabilityFailures(checks, comments, now, stabilityMs) {
   const evidenceTimes = [
     ...checks
       .filter((check) => check.name === "Gitar" || check.name.startsWith("Socket Security:"))
       .map(completedAt),
-    latestComment(comments, "gitar-bot")?.updatedAt,
-    latestComment(comments, "socket-security")?.updatedAt,
+    latestComment(comments, gitarIdentity)?.updatedAt,
+    latestComment(comments, socketIdentity)?.updatedAt,
   ]
-    .map((value) => (typeof value === "number" ? value : Date.parse(value ?? "")))
+    .map((value) => (typeof value === "number" ? value : Date.parse(value)))
     .filter(Number.isFinite);
   if (evidenceTimes.length < 5) return ["Review-product stability evidence is incomplete."];
   return Math.max(...evidenceTimes) + stabilityMs > now
@@ -153,7 +165,20 @@ function stabilityFailures(checks, comments, now, stabilityMs) {
     : [];
 }
 
+export function validatedSet(value, pattern) {
+  const entries = Array.isArray(value)
+    ? value.filter((entry) => typeof entry === "string" && pattern.test(entry))
+    : undefined;
+  return new Set(entries);
+}
+
+export function validatedRiskAllowlist(value) {
+  return validatedSet(value, npmRiskPattern);
+}
+
 export function evaluateBankingQualityGate(input) {
+  const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
+  const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
   const failures = [
     ...checkFailures(input.checks, input.headSha),
     ...reviewFailures(
@@ -161,8 +186,8 @@ export function evaluateBankingQualityGate(input) {
       input.reviews,
       input.comments,
       input.headSha,
-      new Set(input.socketRiskAllowlist ?? []),
-      new Set(input.socketRiskActors ?? []),
+      riskAllowlist,
+      riskActors,
     ),
     ...stabilityFailures(input.checks, input.comments, input.now, input.stabilityMs ?? 60_000),
   ];

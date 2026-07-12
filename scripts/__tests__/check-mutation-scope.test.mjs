@@ -17,12 +17,15 @@ describe("mutation scope", () => {
       ]),
     ).toBe(true);
     expect(requiresSecurityMutation(["packages/keiko-workflows/src/authority.ts"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/banking-quality-gate-core.mjs"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/banking-quality-gate-worker.mjs"])).toBe(true);
   });
 
   it("does not spend mutation time on documentation or tests only", () => {
     expect(requiresSecurityMutation(["docs/qa/mutation-testing.md"])).toBe(false);
     expect(requiresSecurityMutation(["packages/keiko-security/src/redaction.test.ts"])).toBe(false);
     expect(requiresSecurityMutation(["packages/keiko-security/src/unsafe,name.ts"])).toBe(false);
+    expect(requiresSecurityMutation(["scripts/other-quality-tool.mjs"])).toBe(false);
   });
 
   it("derives the exact mutation file list from the bounded git diff", () => {

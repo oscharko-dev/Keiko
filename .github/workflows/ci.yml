@@ -169,6 +169,13 @@ jobs:
           node-version: "22.x"
           cache: "npm"
       - run: npm ci --ignore-scripts
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
+          # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality

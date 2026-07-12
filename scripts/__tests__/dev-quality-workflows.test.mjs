@@ -12,6 +12,8 @@ describe("dev quality workflows", () => {
     expect(mutation).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
     expect(mutation).toContain('cron: "17 2 * * *"');
     expect(mutation).toContain("name: Mutation quality gate");
+    expect(mutation).toContain('-- --mutate "$MUTATION_FILES"');
+    expect(mutation).not.toContain('"${mutation_files[@]}"');
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
     expect(mutation).not.toContain("continue-on-error: true");
   });
@@ -31,6 +33,8 @@ describe("dev quality workflows", () => {
     const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}actionlint:\n)/u)?.[0];
     expect(coverageJob).toBeDefined();
     expect(coverageJob).not.toContain("needs:");
+    expect(coverageJob).toContain("Install sandbox isolation backend (bubblewrap)");
+    expect(coverageJob).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- coverage-sonar");

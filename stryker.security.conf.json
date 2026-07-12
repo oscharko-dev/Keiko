@@ -14,7 +14,9 @@
     "packages/keiko-sandbox/src/**/*.test.ts",
     "packages/keiko-workflows/src/**/*.test.ts",
     "packages/keiko-server/src/coding-runtime/**/*.test.ts",
-    "packages/keiko-server/src/qualityIntelligence/**/*.test.ts"
+    "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
+    "scripts/__tests__/banking-quality-gate-core.test.mjs",
+    "scripts/__tests__/banking-quality-gate-worker.test.mjs"
   ],
   "mutate": [
     "packages/keiko-security/src/redaction.ts",
@@ -28,7 +30,9 @@
     "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
     "packages/keiko-evidence/src/qualityIntelligence/store.ts",
     "packages/keiko-memory-vault/src/cipher.ts",
-    "packages/keiko-memory-vault/src/migrate-encrypt.ts"
+    "packages/keiko-memory-vault/src/migrate-encrypt.ts",
+    "scripts/banking-quality-gate-core.mjs",
+    "scripts/banking-quality-gate-worker.mjs"
   ],
   "reporters": ["html", "json", "clear-text", "progress"],
   "htmlReporter": {
@@ -43,6 +47,7 @@
     "break": 0
   },
   "coverageAnalysis": "perTest",
+  "ignoreStatic": true,
   "timeoutMS": 30000,
   "timeoutFactor": 2.5,
   "concurrency": 4,

@@ -36,6 +36,7 @@ export function summarizeMutationReport(report) {
 }
 
 function recordMutant({ debt, errors, file, mutant, summary }) {
+  if (mutant.status === "Ignored") return;
   summary.total += 1;
   if (mutant.status === "Killed") summary.killed += 1;
   else if (mutant.status === "Timeout") summary.timeout += 1;

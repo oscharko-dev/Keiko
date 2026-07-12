@@ -3,63 +3,73 @@ import { evaluateBankingQualityGate } from "./banking-quality-gate-core.mjs";
 const checkName = "Banking Quality Gate";
 const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
+const emptyPullNumbers = Object.freeze([]);
+const emptyCheckRuns = Object.freeze([]);
 
-function base64Url(value) {
+export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
-function bytesFromHex(value) {
+export function bytesFromHex(value) {
   return Uint8Array.from(value.match(/.{2}/gu), (byte) => Number.parseInt(byte, 16));
 }
 
-function constantTimeEqual(left, right) {
+export function constantTimeEqual(left, right) {
   let difference = 0;
-  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
+  for (const [index, byte] of left.entries()) difference |= byte ^ right[index];
   return difference === 0;
 }
 
 export async function verifyWebhookSignature(body, signature, secret) {
   const expected = signature?.match(/^sha256=([0-9a-f]{64})$/iu)?.[1];
   if (expected === undefined) return false;
-  const key = await crypto.subtle.importKey(
+  const key = await importWebhookKey(secret);
+  const actual = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(body)));
+  return constantTimeEqual(actual, bytesFromHex(expected));
+}
+
+export function importWebhookKey(secret) {
+  return crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
     { hash: "SHA-256", name: "HMAC" },
     false,
     ["sign"],
   );
-  const actual = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(body)));
-  return constantTimeEqual(actual, bytesFromHex(expected));
 }
 
-function privateKeyBytes(pem) {
+export function privateKeyBytes(pem) {
   const match = /-----BEGIN PRIVATE KEY-----([\s\S]+?)-----END PRIVATE KEY-----/u.exec(pem);
   if (match === null) throw new Error("GITHUB_PRIVATE_KEY_PKCS8 must contain a PKCS#8 key.");
   const binary = atob(match[1].replace(/\s/gu, ""));
   return Uint8Array.from(binary, (character) => character.codePointAt(0));
 }
 
-async function appJwt(env, now = Math.floor(Date.now() / 1000)) {
+export async function appJwt(env, now = Math.floor(Date.now() / 1000)) {
   const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const payload = base64Url(
     JSON.stringify({ exp: now + 540, iat: now - 60, iss: String(env.GITHUB_APP_ID) }),
   );
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    privateKeyBytes(env.GITHUB_PRIVATE_KEY_PKCS8),
-    { hash: "SHA-256", name: "RSASSA-PKCS1-v1_5" },
-    false,
-    ["sign"],
-  );
+  const key = await importAppKey(env.GITHUB_PRIVATE_KEY_PKCS8);
   const value = `${header}.${payload}`;
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, encoder.encode(value));
   return `${value}.${base64Url(signature)}`;
 }
 
-async function github(path, token, init = {}) {
+export function importAppKey(pem) {
+  return crypto.subtle.importKey(
+    "pkcs8",
+    privateKeyBytes(pem),
+    { hash: "SHA-256", name: "RSASSA-PKCS1-v1_5" },
+    false,
+    ["sign"],
+  );
+}
+
+export async function github(path, token, init = {}) {
   const response = await fetch(`${githubApi}${path}`, {
     ...init,
     headers: {
@@ -84,7 +94,7 @@ async function installationToken(installationId, env) {
   return result.token;
 }
 
-async function allPages(path, token) {
+export async function allPages(path, token) {
   const values = [];
   for (let page = 1; page <= 10; page += 1) {
     const separator = path.includes("?") ? "&" : "?";
@@ -96,15 +106,13 @@ async function allPages(path, token) {
   throw new Error(`Pagination limit exceeded for ${path}.`);
 }
 
-function normalizeAuthor(login) {
-  return String(login ?? "").replace(/\[bot\]$/u, "");
-}
-
 const pullNumberExtractors = {
-  check_run: (payload) => (payload.check_run?.pull_requests ?? []).map(({ number }) => number),
-  check_suite: (payload) => (payload.check_suite?.pull_requests ?? []).map(({ number }) => number),
+  check_run: (payload) =>
+    (payload.check_run?.pull_requests ?? emptyPullNumbers).map(({ number }) => number),
+  check_suite: (payload) =>
+    (payload.check_suite?.pull_requests ?? emptyPullNumbers).map(({ number }) => number),
   issue_comment: (payload) =>
-    payload.issue?.pull_request === undefined ? [] : [payload.issue.number],
+    payload.issue?.pull_request === undefined ? emptyPullNumbers : [payload.issue.number],
   pull_request: (payload) => [payload.pull_request?.number ?? payload.number],
   pull_request_review: (payload) => [payload.pull_request?.number ?? payload.number],
 };
@@ -114,15 +122,19 @@ export function pullRequestNumbers(event, payload) {
   return extractor === undefined ? [] : extractor(payload).filter(Number.isInteger);
 }
 
-function isOwnCheckEvent(event, payload, env) {
+export function isOwnCheckEvent(event, payload, env) {
+  const run = payload.check_run;
   return (
     event === "check_run" &&
-    payload.check_run?.name === checkName &&
-    payload.check_run?.app?.id === Number(env.GITHUB_APP_ID)
+    run !== undefined &&
+    run.name === checkName &&
+    run.app !== undefined &&
+    run.app !== null &&
+    run.app.id === Number(env.GITHUB_APP_ID)
   );
 }
 
-async function evidence(owner, repository, pullNumber, headSha, token) {
+export async function evidence(owner, repository, pullNumber, headSha, token) {
   const [checkPayload, reviews, comments] = await Promise.all([
     github(`/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`, token),
     allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/reviews`, token),
@@ -140,20 +152,24 @@ async function evidence(owner, repository, pullNumber, headSha, token) {
       status: check.status,
     })),
     comments: comments.map((comment) => ({
-      author: normalizeAuthor(comment.user?.login),
+      appId: comment.performed_via_github_app?.id,
+      author: String(comment.user?.login ?? ""),
       authorAssociation: comment.author_association,
+      authorId: comment.user?.id,
+      authorType: comment.user?.type,
       body: String(comment.body ?? ""),
       updatedAt: comment.updated_at,
     })),
     reviews: reviews.map((review) => ({
-      author: normalizeAuthor(review.user?.login),
+      authorId: review.user?.id,
+      authorType: review.user?.type,
       commitSha: review.commit_id,
       state: review.state,
     })),
   };
 }
 
-function hardFailure(failures) {
+export function hardFailure(failures) {
   return failures.some(
     (failure) =>
       failure.startsWith("Wrong producer") ||
@@ -165,13 +181,17 @@ function hardFailure(failures) {
   );
 }
 
-async function publishCheck(owner, repository, headSha, result, token, env) {
+export async function publishCheck(owner, repository, headSha, result, token, env) {
   const checkPayload = await github(
     `/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`,
     token,
   );
-  const existing = (checkPayload.check_runs ?? []).find(
-    (check) => check.name === checkName && check.app?.id === Number(env.GITHUB_APP_ID),
+  const existing = (checkPayload.check_runs ?? emptyCheckRuns).find(
+    (check) =>
+      check.name === checkName &&
+      check.app !== undefined &&
+      check.app !== null &&
+      check.app.id === Number(env.GITHUB_APP_ID),
   );
   const body = result.passed
     ? {
@@ -208,9 +228,15 @@ async function publishCheck(owner, repository, headSha, result, token, env) {
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
   const token = await installationToken(installationId, env);
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
-  if (pull.state !== "open" || pull.base?.ref !== "dev") return;
+  const stateKey = `pull:${owner}/${repository}/${String(pullNumber)}`;
+  if (pull.state !== "open" || pull.base?.ref !== "dev") {
+    await env.BANKING_GATE_STATE.delete(stateKey);
+    return;
+  }
   const headSha = pull.head?.sha;
-  if (!/^[0-9a-f]{40}$/u.test(headSha ?? "")) throw new Error("Pull request head SHA is invalid.");
+  if (!isValidHeadSha(headSha)) {
+    throw new Error("Pull request head SHA is invalid.");
+  }
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
   const result = evaluateBankingQualityGate({
     ...currentEvidence,
@@ -218,12 +244,13 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     now: Date.now(),
     socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
     socketRiskActors: JSON.parse(env.SOCKET_RISK_ACTORS_JSON ?? "[]"),
-    stabilityMs: Number(env.STABILITY_WINDOW_MS ?? "60000"),
+    stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
   });
   await publishCheck(owner, repository, headSha, result, token, env);
   await env.BANKING_GATE_STATE.put(
-    `pull:${owner}/${repository}/${String(pullNumber)}`,
+    stateKey,
     JSON.stringify({ installationId, owner, pullNumber, repository }),
+    { expirationTtl: 2_592_000 },
   );
 }
 
@@ -251,7 +278,8 @@ async function handleWebhook(request, env, context) {
   const body = await request.text();
   const authenticationFailure = await authenticateWebhook(request, env, body);
   if (authenticationFailure !== undefined) return authenticationFailure;
-  const event = request.headers.get("X-GitHub-Event") ?? "";
+  const event = request.headers.get("X-GitHub-Event");
+  if (event === null) return new Response("missing event", { status: 400 });
   const payload = JSON.parse(body);
   if (payload.repository?.full_name !== env.TARGET_REPOSITORY) {
     return new Response("unexpected repository", { status: 403 });
@@ -267,12 +295,49 @@ async function handleWebhook(request, env, context) {
   return new Response("accepted", { status: 202 });
 }
 
+export function parseTrackedPull(value) {
+  if (value === null) return { kind: "missing" };
+  const tracked = parseJson(value);
+  if (
+    typeof tracked?.owner !== "string" ||
+    typeof tracked.repository !== "string" ||
+    !Number.isInteger(tracked.pullNumber) ||
+    !Number.isInteger(tracked.installationId)
+  ) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid", tracked };
+}
+
+export function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Malformed persisted state is represented by undefined below.
+  }
+  return undefined;
+}
+
+export function parseStabilityMs(value) {
+  return value === undefined ? 60_000 : Number(value);
+}
+
+export function isValidHeadSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
 async function handleSchedule(env, context) {
   let cursor;
   do {
     const page = await env.BANKING_GATE_STATE.list({ cursor, prefix: "pull:" });
     for (const key of page.keys) {
-      const tracked = JSON.parse(await env.BANKING_GATE_STATE.get(key.name));
+      const result = parseTrackedPull(await env.BANKING_GATE_STATE.get(key.name));
+      if (result.kind === "missing") continue;
+      if (result.kind === "invalid") {
+        await env.BANKING_GATE_STATE.delete(key.name);
+        continue;
+      }
+      const { tracked } = result;
       context.waitUntil(
         evaluatePullRequest(
           tracked.owner,

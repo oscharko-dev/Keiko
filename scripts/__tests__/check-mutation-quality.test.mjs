@@ -32,6 +32,9 @@ describe("mutation quality", () => {
     });
     expect(summarizeMutationReport({})).toMatchObject({ score: 0, summary: { total: 0 } });
     expect(
+      summarizeMutationReport(report(mutant("Killed"), mutant("Ignored", { static: true }))),
+    ).toMatchObject({ errors: [], score: 100, summary: { killed: 1, total: 1 } });
+    expect(
       summarizeMutationReport({
         files: { "src/empty.ts": {}, "src/unknown.ts": { mutants: [{}] } },
       }).errors,
