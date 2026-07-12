@@ -171,6 +171,10 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 #elif defined(_WIN32)
 #include <windows.h>
 #include <winternl.h>
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+#include <io.h>
+#include <process.h>
+#endif
 
 #ifndef OBJ_DONT_REPARSE
 #define OBJ_DONT_REPARSE 0x00001000L
@@ -194,6 +198,14 @@ static int identity(HANDLE handle, struct file_identity *out) {
 static int same_identity(const struct file_identity *a, const struct file_identity *b) {
   return a->id.VolumeSerialNumber == b->id.VolumeSerialNumber && memcmp(a->id.FileId.Identifier, b->id.FileId.Identifier, sizeof(a->id.FileId.Identifier)) == 0 && a->standard.NumberOfLinks == b->standard.NumberOfLinks && a->standard.EndOfFile.QuadPart == b->standard.EndOfFile.QuadPart && a->basic.LastWriteTime.QuadPart == b->basic.LastWriteTime.QuadPart && a->basic.ChangeTime.QuadPart == b->basic.ChangeTime.QuadPart;
 }
+
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+/* Test binary only: Node maps its extra stdio pipes to CRT descriptors 3 and 4. */
+static void pause_after_final_open(void) {
+  unsigned char byte = 1;
+  if (_write(3, &byte, 1) != 1 || _read(4, &byte, 1) != 1) _exit(127);
+}
+#endif
 
 static int canonical_path_matches(HANDLE root, HANDLE file, const wchar_t *requested) {
   wchar_t root_path[KSR_MAX_ROOT + 8], file_path[KSR_MAX_ROOT + KSR_MAX_PATH + 8], expected[KSR_MAX_PATH + 1]; DWORD root_length, file_length; size_t expected_length, prefix_length; const wchar_t *suffix;
@@ -242,6 +254,9 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
   if (file == INVALID_HANDLE_VALUE || is_reparse(file)) { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); free(path); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
   if (GetFileType(file) != FILE_TYPE_DISK || !identity(file, &before) || before.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || before.standard.NumberOfLinks != 1 || before.standard.EndOfFile.QuadPart < 0) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_NOT_REGULAR; }
   if ((uint64_t)before.standard.EndOfFile.QuadPart > request->cap) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CONTENT_TOO_LARGE; }
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+  pause_after_final_open();
+#endif
   buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }
   while (read < request->cap + 1) {
     if (!ReadFile(file, buffer + read, request->cap + 1 - read, &chunk, NULL)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }

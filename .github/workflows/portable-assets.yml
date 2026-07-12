@@ -123,6 +123,8 @@ jobs:
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -189,6 +191,8 @@ jobs:
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -321,6 +325,8 @@ jobs:
           package-manager-cache: false
       - name: Install dependencies
         run: npm ci
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -414,6 +420,8 @@ jobs:
         run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
       - name: Functionally requalify the signed secure-read helper
         run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
+      - name: Run signed secure-read executable harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
 
   qualify-macos-production:
     name: Fresh native qualification (${{ matrix.platform_target }})
@@ -455,6 +463,8 @@ jobs:
         run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
       - name: Functionally requalify the signed secure-read helper
         run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
+      - name: Run signed secure-read executable harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read
       - name: Execute bundled runtimes in isolated disposable copy
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ""

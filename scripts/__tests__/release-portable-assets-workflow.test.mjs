@@ -27,6 +27,11 @@ const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
 const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
 const secureReadSmoke = readFileSync("scripts/portable-secure-read-smoke.mjs", "utf8");
+const secureReadHarness = readFileSync("native/secure-workspace-read/test-protocol.mjs", "utf8");
+const secureReadNative = readFileSync(
+  "native/secure-workspace-read/secure_workspace_read.c",
+  "utf8",
+);
 
 describe("portable secure-read qualification", () => {
   it("functionally smokes unsigned and fresh signed helpers on all three native runners", () => {
@@ -76,6 +81,36 @@ describe("portable secure-read qualification", () => {
     expect(secureReadSmoke).toContain("after !== before");
     expect(secureReadSmoke).toContain("HandleCount");
     expect(secureReadSmoke).toContain('readdir("/dev/fd")');
+  });
+
+  it("runs the executable adversarial harness on unsigned builds and signed native bytes", () => {
+    expect(
+      portableWorkflow.match(/Run executable secure-read adversarial harness/gmu),
+    ).toHaveLength(3);
+    expect(portableWorkflow.match(/Run signed secure-read executable harness/gmu)).toHaveLength(2);
+    expect(portableWorkflow).toContain(
+      "test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
+    );
+    expect(portableWorkflow).toContain(
+      "test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
+    );
+    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    expect(windowsStage.indexOf("Configure MSVC environment")).toBeLessThan(
+      windowsStage.indexOf("Run executable secure-read adversarial harness"),
+    );
+    expect(secureReadHarness).toContain('const compiler = isWindows ? "cl" : "xcrun"');
+    expect(secureReadHarness).toContain('argv[0] !== "--binary"');
+    expect(secureReadHarness).toContain("spawn(binary, [], { stdio, env: {} })");
+    expect(secureReadHarness).toContain('["EACCES", "EBUSY", "EPERM"]');
+    expect(secureReadHarness).toContain('isWindows ? "junction" : "file"');
+    expect(secureReadHarness).toContain(
+      "if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture)",
+    );
+    expect(secureReadHarness).toContain(
+      "binaryRoot = externalBinary === undefined ? await mkdtemp",
+    );
+    expect(secureReadNative).toMatch(/_write\(3, &byte, 1\).*_read\(4, &byte, 1\)/su);
+    expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
   });
 });
 
