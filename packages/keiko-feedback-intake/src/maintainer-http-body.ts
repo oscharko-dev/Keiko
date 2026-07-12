@@ -46,6 +46,8 @@ function parseMaintainerJson(bytes: Uint8Array): unknown {
   return JSON.parse(source) as unknown;
 }
 
+// The bounded scanner keeps duplicate-key rejection auditable at the trust boundary.
+// eslint-disable-next-line complexity
 function hasDuplicateKeys(source: string): boolean {
   const scopes: Set<string>[] = [];
   for (let index = 0; index < source.length; index += 1) {

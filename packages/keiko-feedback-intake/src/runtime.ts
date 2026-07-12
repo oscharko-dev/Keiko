@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { Pool } from "pg";
 import { FEEDBACK_INTAKE_REPORT_PATH_V1 } from "@oscharko-dev/keiko-contracts/feedback-intake";
 import type { FeedbackPublicationTargetCatalogItemV1 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
-import { FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1 } from "@oscharko-dev/keiko-contracts/feedback-publication";
+import {
+  FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
+  type FeedbackPublicationTargetPolicySnapshotV1,
+} from "@oscharko-dev/keiko-contracts/feedback-publication";
 import { FileSecretProvider } from "./file-secret-provider.js";
 import {
   FeedbackPublicationRuntime,
@@ -443,7 +446,8 @@ function maintainerPublicationService(
   const publication = config.publication;
   const pool = pools.publicationPrimary;
   if (pool === undefined) throw new Error("Publication database pool was not initialized");
-  const resolve = (key: string) => publication.github.targets.get(key)?.snapshot;
+  const resolve = (key: string): FeedbackPublicationTargetPolicySnapshotV1 | undefined =>
+    publication.github.targets.get(key)?.snapshot;
   return {
     query: new PostgresFeedbackPublicationQuery(pool, resolve),
     repository: new PostgresFeedbackPublicationRepository(

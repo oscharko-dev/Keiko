@@ -46,6 +46,19 @@ interface Harness {
   readonly review: { readonly execute: ReturnType<typeof vi.fn> };
 }
 
+interface PublicationMocks {
+  readonly query: {
+    readonly commandContext: ReturnType<typeof vi.fn>;
+    readonly preview: ReturnType<typeof vi.fn>;
+    readonly status: ReturnType<typeof vi.fn>;
+  };
+  readonly repository: {
+    readonly prepare: ReturnType<typeof vi.fn>;
+    readonly approve: ReturnType<typeof vi.fn>;
+    readonly cancelAndRoutePrivate: ReturnType<typeof vi.fn>;
+  };
+}
+
 function harness(
   permissions: readonly FeedbackMaintainerPermissionV1[],
   legalHoldPolicyKeys: readonly string[] = [],
@@ -936,7 +949,7 @@ function publicationHeaders(): Record<string, string> {
   });
 }
 
-function publicationMocks() {
+function publicationMocks(): PublicationMocks {
   return {
     query: {
       commandContext: vi.fn().mockResolvedValue({

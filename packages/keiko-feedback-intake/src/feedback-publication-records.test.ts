@@ -67,11 +67,11 @@ const command: FeedbackPublicationCancelCommandV1 = {
 
 describe("feedback publication cancellation preparation", () => {
   it("accepts the last instant before expiry and rejects exact expiry", () => {
-    expect(() =>
-      assertCancellationPreparation(preparation, review, command, new Date(EXPIRES.getTime() - 1)),
-    ).not.toThrow();
-    expect(() => assertCancellationPreparation(preparation, review, command, EXPIRES)).toThrow(
-      new FeedbackPublicationError("payload-expired"),
-    );
+    expect(() => {
+      assertCancellationPreparation(preparation, review, command, new Date(EXPIRES.getTime() - 1));
+    }).not.toThrow();
+    expect(() => {
+      assertCancellationPreparation(preparation, review, command, EXPIRES);
+    }).toThrow(new FeedbackPublicationError("payload-expired"));
   });
 });

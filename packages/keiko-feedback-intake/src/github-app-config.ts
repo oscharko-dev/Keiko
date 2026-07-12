@@ -57,18 +57,30 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 function parseRfc3339Timestamp(value: string): Date | undefined {
   const match = RFC3339_TIMESTAMP.exec(value);
   if (match === null) return undefined;
+  const date = rfc3339Date(match);
+  if (date === undefined || !validDay(date)) return undefined;
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
+}
+
+interface Rfc3339Date {
+  readonly year: number;
+  readonly month: number;
+  readonly day: number;
+}
+
+function rfc3339Date(match: RegExpExecArray): Rfc3339Date | undefined {
   const [yearValue, monthValue, dayValue] = match.slice(1, 4);
   if (yearValue === undefined || monthValue === undefined || dayValue === undefined)
     return undefined;
-  const year = Number(yearValue);
-  const month = Number(monthValue);
-  const day = Number(dayValue);
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return { year: Number(yearValue), month: Number(monthValue), day: Number(dayValue) };
+}
+
+function validDay(date: Rfc3339Date): boolean {
+  const leapYear = date.year % 4 === 0 && (date.year % 100 !== 0 || date.year % 400 === 0);
   const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const maximumDay = daysInMonth[month - 1];
-  if (maximumDay === undefined || day > maximumDay) return undefined;
-  const timestamp = new Date(value);
-  return Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
+  const maximumDay = daysInMonth[date.month - 1];
+  return maximumDay !== undefined && date.day <= maximumDay;
 }
 
 // The bounded scanner deliberately counts each JSON structural branch.

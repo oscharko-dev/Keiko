@@ -214,45 +214,43 @@ async function maintainerPublicationServer(publication: {
   readonly query: PostgresFeedbackPublicationQuery;
   readonly repository: PostgresFeedbackPublicationRepository;
 }): Promise<{ readonly origin: string; readonly server: Server; readonly csrfToken: string }> {
-  let handler: ReturnType<typeof createMaintainerHttpHandler> | undefined;
+  const handler = {
+    current: undefined as ReturnType<typeof createMaintainerHttpHandler> | undefined,
+  };
   const server = createServer((request, response) => {
-    if (handler === undefined) throw new Error("Maintainer handler is not initialized");
-    void handler(request, response);
+    if (handler.current === undefined) throw new Error("Maintainer handler is not initialized");
+    void handler.current(request, response);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${String(address.port)}`;
   const csrfToken = maintainerCsrfToken(MAINTAINER_CAPABILITY);
-  handler = createMaintainerHttpHandler({
+  handler.current = createMaintainerHttpHandler({
     publicOrigin: origin,
     auth: {
-      login: async () => {
-        throw new Error("not used");
-      },
-      callback: async () => {
-        throw new Error("not used");
-      },
-      session: async (capability) =>
-        capability === MAINTAINER_CAPABILITY
-          ? {
-              ...ACTOR,
-              permissions: ["feedback.review", "feedback.publish"],
-              csrfHash: csrfHash(csrfToken),
-              absoluteExpiresAt: new Date(AT.getTime() + DAY_MS),
-            }
-          : undefined,
-      logout: async () => undefined,
+      login: (): Promise<never> => Promise.reject(new Error("not used")),
+      callback: (): Promise<never> => Promise.reject(new Error("not used")),
+      session: (capability) =>
+        Promise.resolve(
+          capability === MAINTAINER_CAPABILITY
+            ? {
+                ...ACTOR,
+                permissions: ["feedback.review", "feedback.publish"],
+                csrfHash: csrfHash(csrfToken),
+                absoluteExpiresAt: new Date(AT.getTime() + DAY_MS),
+              }
+            : undefined,
+        ),
+      logout: (): Promise<void> => Promise.resolve(),
     },
     query: {
-      list: async () => ({ items: [] }),
-      detail: async () => undefined,
-      hold: async () => undefined,
-      audit: async () => [],
+      list: () => Promise.resolve({ items: [] }),
+      detail: () => Promise.resolve(undefined),
+      hold: () => Promise.resolve(undefined),
+      audit: () => Promise.resolve([]),
     },
     review: {
-      execute: async () => {
-        throw new Error("not used");
-      },
+      execute: (): Promise<never> => Promise.reject(new Error("not used")),
     },
     publication,
     loginLimiter: new MaintainerLoginLimiter({

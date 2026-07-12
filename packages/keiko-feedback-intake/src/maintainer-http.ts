@@ -158,6 +158,19 @@ async function handleAuthenticated(
   identity: Session,
   capability: string,
 ): Promise<void> {
+  if (handleSession(req, res, url, options, identity, capability)) return;
+  if (await handleLogout(req, res, url, options, identity, capability)) return;
+  await handleReview(req, res, url, options, identity);
+}
+
+function handleSession(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: MaintainerHttpOptions,
+  identity: Session,
+  capability: string,
+): boolean {
   if (req.method === "GET" && url.pathname === "/v1/maintainer/auth/session") {
     json(res, 200, {
       permissions:
@@ -175,19 +188,30 @@ async function handleAuthenticated(
         ? { publicationTargets: options.publicationTargets }
         : {}),
     });
-    return;
+    return true;
   }
+  return false;
+}
+
+async function handleLogout(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  options: MaintainerHttpOptions,
+  identity: Session,
+  capability: string,
+): Promise<boolean> {
   if (req.method === "POST" && url.pathname === "/v1/maintainer/auth/logout") {
     if (!validCsrf(req, identity, options)) {
       fail(res, 403);
-      return;
+      return true;
     }
     await options.auth.logout(capability);
     clearSessionCookie(res);
     json(res, 200, { status: "closed" });
-    return;
+    return true;
   }
-  await handleReview(req, res, url, options, identity);
+  return false;
 }
 
 async function handleReview(

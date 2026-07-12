@@ -9,6 +9,7 @@ import type {
   PostgresFeedbackPublicationQuery,
 } from "./feedback-publication-query.js";
 import type { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
+import type { FeedbackPublicationMutationResponse } from "./feedback-publication-types.js";
 import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import { readMaintainerBody } from "./maintainer-http-body.js";
 import { fail, json } from "./maintainer-http-response.js";
@@ -156,7 +157,7 @@ function execute(
   itemId: string,
   context: FeedbackPublicationCommandContext,
   identity: MaintainerPublicationIdentity,
-) {
+): Promise<FeedbackPublicationMutationResponse> {
   const actor = maintainerPublicationActor(identity);
   if (request.action === "prepare-publication") {
     const command: FeedbackPublicationPrepareCommandV1 = {

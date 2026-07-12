@@ -15,9 +15,9 @@ import type { PgPoolLike } from "./postgres-types.js";
 export interface FeedbackPublicationCommandContext {
   readonly version: number;
   readonly payloadDigest: string;
-  readonly sourceVersion?: number | undefined;
-  readonly projectionDigest?: string | undefined;
-  readonly targetPolicyDigest?: string | undefined;
+  readonly sourceVersion?: number;
+  readonly projectionDigest?: string;
+  readonly targetPolicyDigest?: string;
 }
 
 interface ContextRow {
@@ -75,31 +75,23 @@ export class PostgresFeedbackPublicationQuery {
     itemId: string,
     preparationId: string | undefined,
     includePrivate: boolean,
-    action?: "approve-publication" | "cancel-publication-route-private" | undefined,
-    idempotencyKey?: string | undefined,
-    replayActor?: FeedbackReviewActorV1 | undefined,
+    action?: "approve-publication" | "cancel-publication-route-private",
+    idempotencyKey?: string,
+    replayActor?: FeedbackReviewActorV1,
   ): Promise<FeedbackPublicationCommandContext | undefined> {
     assertIds(itemId, preparationId);
-    const row = await this.one<ContextRow>(CONTEXT_SQL, [
-      itemId,
-      preparationId ?? null,
-      includePrivate,
-      action ?? null,
-      idempotencyKey ?? null,
-      replayActor?.issuer ?? null,
-      replayActor?.subject ?? null,
-      replayActor?.permissionPolicyVersion ?? null,
-    ]);
-    if (row === undefined) return undefined;
-    return {
-      version: row.command_version,
-      payloadDigest: row.payload_digest,
-      ...(row.source_record_version === null ? {} : { sourceVersion: row.source_record_version }),
-      ...(row.projection_digest === null ? {} : { projectionDigest: row.projection_digest }),
-      ...(row.target_policy_digest === null
-        ? {}
-        : { targetPolicyDigest: row.target_policy_digest }),
-    };
+    const row = await this.one<ContextRow>(
+      CONTEXT_SQL,
+      commandContextValues({
+        itemId,
+        includePrivate,
+        preparationId,
+        action,
+        idempotencyKey,
+        replayActor,
+      }),
+    );
+    return row === undefined ? undefined : commandContextResponse(row);
   }
 
   async preview(
@@ -151,6 +143,38 @@ export class PostgresFeedbackPublicationQuery {
       throw new FeedbackPublicationError("target-policy-drift");
     }
   }
+}
+
+interface CommandContextInput {
+  readonly itemId: string;
+  readonly preparationId: string | undefined;
+  readonly includePrivate: boolean;
+  readonly action: "approve-publication" | "cancel-publication-route-private" | undefined;
+  readonly idempotencyKey: string | undefined;
+  readonly replayActor: FeedbackReviewActorV1 | undefined;
+}
+
+function commandContextValues(input: CommandContextInput): readonly unknown[] {
+  return [
+    input.itemId,
+    input.preparationId ?? null,
+    input.includePrivate,
+    input.action ?? null,
+    input.idempotencyKey ?? null,
+    input.replayActor?.issuer ?? null,
+    input.replayActor?.subject ?? null,
+    input.replayActor?.permissionPolicyVersion ?? null,
+  ];
+}
+
+function commandContextResponse(row: ContextRow): FeedbackPublicationCommandContext {
+  return {
+    version: row.command_version,
+    payloadDigest: row.payload_digest,
+    ...(row.source_record_version === null ? {} : { sourceVersion: row.source_record_version }),
+    ...(row.projection_digest === null ? {} : { projectionDigest: row.projection_digest }),
+    ...(row.target_policy_digest === null ? {} : { targetPolicyDigest: row.target_policy_digest }),
+  };
 }
 
 function assertIds(itemId: string, preparationId: string | undefined): void {
