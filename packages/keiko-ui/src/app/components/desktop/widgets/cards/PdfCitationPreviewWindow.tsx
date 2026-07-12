@@ -1115,11 +1115,8 @@ export function PdfCitationPreviewWindow({
       ) : null}
 
       {showToolbar ? (
-        <div
-          className="pdfv-toolbar"
-          role="toolbar"
-          aria-label={t("pdfCitationPreviewWindow.toolbar.ariaLabel")}
-        >
+        <fieldset className="pdfv-toolbar">
+          <legend className="sr-only">{t("pdfCitationPreviewWindow.toolbar.ariaLabel")}</legend>
           <div className="pdfv-group">
             <button
               type="button"
@@ -1239,7 +1236,7 @@ export function PdfCitationPreviewWindow({
             </button>
             <span className="pdfv-zoom mono">{String(Math.round(effectiveScale * 100))}%</span>
           </div>
-        </div>
+        </fieldset>
       ) : null}
 
       {failure !== null ? (
