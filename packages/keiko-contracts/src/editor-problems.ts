@@ -19,6 +19,10 @@ export const EDITOR_PROBLEMS_SCHEMA_VERSION = "1" as const;
 export const EDITOR_PROBLEMS_PER_FILE_CAP = 100;
 export const EDITOR_PROBLEMS_TOTAL_CAP = 1_000;
 export const EDITOR_PROBLEM_MESSAGE_MAX_CHARS = 1_024;
+const EDITOR_PROBLEM_ID_MAX_CHARS = 256;
+const EDITOR_PROBLEM_PATH_MAX_BYTES = 4_096;
+const EDITOR_PROBLEM_COORDINATE_MAX = 2_147_483_647;
+const EDITOR_PROBLEM_TEXT_ENCODER = new TextEncoder();
 
 // Language-diagnostic `hint` is normalized to `info` by the producer (Issue #2213); the panel
 // severity set stays three-valued (ADR-0126 D2).
@@ -120,6 +124,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasOnlyKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -129,7 +137,29 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isCoordinate(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= EDITOR_PROBLEM_COORDINATE_MAX
+  );
+}
+
+function isCanonicalProblemPath(value: unknown): value is string {
+  if (typeof value !== "string" || value.startsWith("/") || value.includes("\\")) return false;
+  if (EDITOR_PROBLEM_TEXT_ENCODER.encode(value).length > EDITOR_PROBLEM_PATH_MAX_BYTES)
+    return false;
+  const parts = value.split("/");
+  return (
+    parts.length > 0 &&
+    parts.every((part) => part.length > 0 && part !== "." && part !== "..") &&
+    !/^[A-Za-z]:/u.test(value) &&
+    !value.includes("\u0000")
+  );
 }
 
 export function isEditorProblemSeverity(value: unknown): value is EditorProblemSeverity {
@@ -144,28 +174,99 @@ function isEditorProblemKind(value: unknown): value is EditorProblemKind {
   return value === "language-diagnostic" || isVerificationKind(value);
 }
 
+function sourceMatchesKind(value: Readonly<Record<string, unknown>>): boolean {
+  return value.source === "language-diagnostic"
+    ? value.kind === "language-diagnostic"
+    : value.source === "verification" && isVerificationKind(value.kind);
+}
+
+function hasValidProblemIdentity(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    isNonEmptyString(value.id) &&
+    value.id.length <= EDITOR_PROBLEM_ID_MAX_CHARS &&
+    isEditorProblemSeverity(value.severity) &&
+    isEditorProblemSource(value.source) &&
+    isCanonicalProblemPath(value.file)
+  );
+}
+
+function hasValidProblemPosition(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.line !== undefined && !isCoordinate(value.line)) return false;
+  return value.column === undefined || (value.line !== undefined && isCoordinate(value.column));
+}
+
+function hasValidProblemMessage(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof value.message === "string" &&
+    value.message.length <= EDITOR_PROBLEM_MESSAGE_MAX_CHARS &&
+    !value.message.includes("\u0000")
+  );
+}
+
 export function isEditorProblem(value: unknown): value is EditorProblem {
   if (!isRecord(value)) return false;
-  return [
-    isNonEmptyString(value.id),
-    isEditorProblemSeverity(value.severity),
-    isEditorProblemSource(value.source),
-    isNonEmptyString(value.file),
-    value.line === undefined || isPositiveInteger(value.line),
-    value.column === undefined || isPositiveInteger(value.column),
-    typeof value.message === "string" && value.message.length <= EDITOR_PROBLEM_MESSAGE_MAX_CHARS,
-    isEditorProblemKind(value.kind),
-  ].every(Boolean);
+  return (
+    hasOnlyKeys(value, ["id", "severity", "source", "file", "line", "column", "message", "kind"]) &&
+    hasValidProblemIdentity(value) &&
+    hasValidProblemPosition(value) &&
+    hasValidProblemMessage(value) &&
+    isEditorProblemKind(value.kind) &&
+    sourceMatchesKind(value)
+  );
+}
+
+function isDenseProblemArray(value: unknown, totalCap: number): value is readonly EditorProblem[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= totalCap &&
+    Object.keys(value).length === value.length &&
+    value.every(isEditorProblem)
+  );
+}
+
+function perFileCountsFit(problems: readonly EditorProblem[], perFileCap: number): boolean {
+  const counts = new Map<string, number>();
+  for (const problem of problems) {
+    const count = (counts.get(problem.file) ?? 0) + 1;
+    if (count > perFileCap) return false;
+    counts.set(problem.file, count);
+  }
+  return true;
+}
+
+function hasValidSnapshotCaps(
+  value: Readonly<Record<string, unknown>>,
+): value is Readonly<Record<string, unknown>> & { perFileCap: number; totalCap: number } {
+  if (!isPositiveInteger(value.perFileCap) || value.perFileCap > EDITOR_PROBLEMS_PER_FILE_CAP) {
+    return false;
+  }
+  return isPositiveInteger(value.totalCap) && value.totalCap <= EDITOR_PROBLEMS_TOTAL_CAP;
+}
+
+function hasValidSnapshotSummary(
+  value: Readonly<Record<string, unknown>>,
+  problems: readonly EditorProblem[],
+): boolean {
+  if (!isNonNegativeInteger(value.totalCount)) return false;
+  if (problems.length > value.totalCount) return false;
+  return value.truncated === problems.length < value.totalCount;
 }
 
 export function isEditorProblemsSnapshot(value: unknown): value is EditorProblemsSnapshot {
   if (!isRecord(value)) return false;
-  return [
-    value.schemaVersion === EDITOR_PROBLEMS_SCHEMA_VERSION,
-    Array.isArray(value.problems) && value.problems.every(isEditorProblem),
-    isNonNegativeInteger(value.totalCount),
-    typeof value.truncated === "boolean",
-    isPositiveInteger(value.perFileCap),
-    isPositiveInteger(value.totalCap),
-  ].every(Boolean);
+  if (!hasValidSnapshotCaps(value)) return false;
+  if (!isDenseProblemArray(value.problems, value.totalCap)) return false;
+  return (
+    hasOnlyKeys(value, [
+      "schemaVersion",
+      "problems",
+      "totalCount",
+      "truncated",
+      "perFileCap",
+      "totalCap",
+    ]) &&
+    value.schemaVersion === EDITOR_PROBLEMS_SCHEMA_VERSION &&
+    hasValidSnapshotSummary(value, value.problems) &&
+    perFileCountsFit(value.problems, value.perFileCap)
+  );
 }

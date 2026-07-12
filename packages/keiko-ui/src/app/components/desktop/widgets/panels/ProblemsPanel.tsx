@@ -15,7 +15,7 @@
  * (WCAG 1.4.1); styling uses inline design-token custom properties, never globals.css (#1300).
  */
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
   EditorProblem,
@@ -102,12 +102,14 @@ function ProblemRow(props: {
   readonly focused: boolean;
   readonly canJump: boolean;
   readonly t: ProblemsTranslate;
+  readonly rowRef: (node: HTMLDivElement | null) => void;
   readonly onFocus: () => void;
   readonly onActivate: () => void;
 }): ReactNode {
   const { problem, focused, canJump, t } = props;
   return (
     <div
+      ref={props.rowRef}
       role="option"
       aria-selected={focused}
       data-testid="problems-row"
@@ -211,6 +213,7 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [source, setSource] = useState<SourceFilter>("all");
   const [focusId, setFocusId] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
 
   const snapshot = useMemo(
     () =>
@@ -220,6 +223,12 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
   const visibleIds = useMemo(() => snapshot.problems.map((p) => p.id), [snapshot]);
   const activeFocusId =
     focusId !== null && visibleIds.includes(focusId) ? focusId : (visibleIds[0] ?? null);
+
+  // Roving tabindex is only half of the APG pattern: keyboard movement must also move DOM focus.
+  // Keep refs keyed by stable problem id and focus after React commits the new active option.
+  useEffect(() => {
+    if (focusId !== null) rowRefs.current.get(focusId)?.focus();
+  }, [focusId]);
 
   const activate = (problem: EditorProblem): void => {
     if (openEditorFile === undefined || problem.line === undefined) return;
@@ -274,6 +283,10 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
               focused={problem.id === activeFocusId}
               canJump={openEditorFile !== undefined && problem.line !== undefined}
               t={t}
+              rowRef={(node) => {
+                if (node === null) rowRefs.current.delete(problem.id);
+                else rowRefs.current.set(problem.id, node);
+              }}
               onFocus={() => {
                 setFocusId(problem.id);
               }}

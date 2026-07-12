@@ -24,6 +24,7 @@ jobs:
         suite:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
+          - test:e2e:editor-run-verification-2215
           - test:e2e:git-changes-1575
           - test:e2e:local-knowledge
     steps:
