@@ -6,7 +6,11 @@ import { relative, resolve } from "node:path";
 
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
 
-const defaultReports = ["coverage/packages/lcov.info", "packages/keiko-ui/coverage/lcov.info"];
+const defaultReports = [
+  "coverage/packages/lcov.info",
+  "packages/keiko-ui/coverage/lcov.info",
+  "coverage/lcov.info",
+];
 
 export function parseLcovSources(contents, root) {
   return new Set(
