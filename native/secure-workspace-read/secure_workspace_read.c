@@ -63,7 +63,7 @@ static int valid_path(const char *path) {
     if (++components > KSR_MAX_COMPONENTS || p == component || (p - component == 1 && component[0] == '.') || (p - component == 2 && component[0] == '.' && component[1] == '.') || windows_reserved_component(component, (size_t)(p - component))) return 0;
 #if defined(_WIN32)
     if (component[p - component - 1] == '.' || component[p - component - 1] == ' ') return 0;
-    for (const char *q = component; q < p; ++q) if (*q == ':' || *q == '?') return 0;
+    for (const char *q = component; q < p; ++q) if (*q == ':' || *q == '?' || *q == '~') return 0;
 #endif
     if (*p == '/') ++p;
   }
@@ -182,6 +182,21 @@ static int same_identity(const struct file_identity *a, const struct file_identi
   return a->id.VolumeSerialNumber == b->id.VolumeSerialNumber && memcmp(a->id.FileId.Identifier, b->id.FileId.Identifier, sizeof(a->id.FileId.Identifier)) == 0 && a->standard.NumberOfLinks == b->standard.NumberOfLinks && a->standard.EndOfFile.QuadPart == b->standard.EndOfFile.QuadPart && a->basic.LastWriteTime.QuadPart == b->basic.LastWriteTime.QuadPart && a->basic.ChangeTime.QuadPart == b->basic.ChangeTime.QuadPart;
 }
 
+static int canonical_path_matches(HANDLE root, HANDLE file, const wchar_t *requested) {
+  wchar_t root_path[KSR_MAX_ROOT + 8], file_path[KSR_MAX_ROOT + KSR_MAX_PATH + 8], expected[KSR_MAX_PATH + 1]; DWORD root_length, file_length; size_t expected_length, prefix_length; const wchar_t *suffix;
+  root_length = GetFinalPathNameByHandleW(root, root_path, (DWORD)(sizeof(root_path) / sizeof(root_path[0])), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  file_length = GetFinalPathNameByHandleW(file, file_path, (DWORD)(sizeof(file_path) / sizeof(file_path[0])), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (root_length == 0 || root_length >= sizeof(root_path) / sizeof(root_path[0]) || file_length == 0 || file_length >= sizeof(file_path) / sizeof(file_path[0])) return 0;
+  prefix_length = (size_t)root_length;
+  if (_wcsnicmp(root_path, file_path, prefix_length) != 0) return 0;
+  if (root_path[prefix_length - 1] == L'\\') suffix = file_path + prefix_length;
+  else { if (file_path[prefix_length] != L'\\') return 0; suffix = file_path + prefix_length + 1; }
+  expected_length = wcslen(requested);
+  if (expected_length == 0 || expected_length > KSR_MAX_PATH) return 0;
+  for (size_t i = 0; i <= expected_length; ++i) expected[i] = requested[i] == L'/' ? L'\\' : requested[i];
+  return _wcsicmp(suffix, expected) == 0;
+}
+
 static HANDLE open_component(nt_create_file_fn nt_create, HANDLE parent, const wchar_t *name, USHORT length, int directory) {
   UNICODE_STRING u; OBJECT_ATTRIBUTES attributes; IO_STATUS_BLOCK ios; HANDLE handle = INVALID_HANDLE_VALUE; NTSTATUS status;
   u.Buffer = (PWSTR)name; u.Length = length; u.MaximumLength = length;
@@ -205,26 +220,26 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
   cursor = path;
   while ((slash = wcschr(cursor, L'/')) != NULL) {
     *slash = L'\0'; file = open_component(nt_create, handles[count - 1], cursor, (USHORT)(wcslen(cursor) * sizeof(*cursor)), 1);
+    *slash = L'/';
     if (file == INVALID_HANDLE_VALUE || is_reparse(file)) { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); free(path); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
     if (!identity(file, &dirs[count])) { CloseHandle(file); free(path); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
     handles[count++] = file; cursor = slash + 1;
   }
   file = open_component(nt_create, handles[count - 1], cursor, (USHORT)(wcslen(cursor) * sizeof(*cursor)), 0);
-  free(path);
-  if (file == INVALID_HANDLE_VALUE || is_reparse(file)) { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
-  if (GetFileType(file) != FILE_TYPE_DISK || !identity(file, &before) || before.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || before.standard.NumberOfLinks != 1 || before.standard.EndOfFile.QuadPart < 0) { CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_NOT_REGULAR; }
-  if ((uint64_t)before.standard.EndOfFile.QuadPart > request->cap) { CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CONTENT_TOO_LARGE; }
-  buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }
+  if (file == INVALID_HANDLE_VALUE || is_reparse(file)) { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); free(path); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
+  if (GetFileType(file) != FILE_TYPE_DISK || !identity(file, &before) || before.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || before.standard.NumberOfLinks != 1 || before.standard.EndOfFile.QuadPart < 0) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_NOT_REGULAR; }
+  if ((uint64_t)before.standard.EndOfFile.QuadPart > request->cap) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CONTENT_TOO_LARGE; }
+  buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }
   while (read < request->cap + 1) {
-    if (!ReadFile(file, buffer + read, request->cap + 1 - read, &chunk, NULL)) { memset(buffer, 0, request->cap + 1); free(buffer); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }
+    if (!ReadFile(file, buffer + read, request->cap + 1 - read, &chunk, NULL)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_IO_FAILURE; }
     if (chunk == 0) break;
     read += chunk;
   }
-  if (read > request->cap) { memset(buffer, 0, request->cap + 1); free(buffer); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CONTENT_TOO_LARGE; }
-  if (!identity(file, &after) || !same_identity(&before, &after) || read != (DWORD)before.standard.EndOfFile.QuadPart) { memset(buffer, 0, request->cap + 1); free(buffer); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CHANGED_DURING_READ; }
-  { wchar_t final_path[KSR_MAX_ROOT + KSR_MAX_PATH + 8]; if (GetFinalPathNameByHandleW(file, final_path, (DWORD)(sizeof(final_path) / sizeof(final_path[0])), FILE_NAME_NORMALIZED) == 0) { memset(buffer, 0, request->cap + 1); free(buffer); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; } }
-  for (int i = 0; i < count; ++i) { struct file_identity now; if (!identity(handles[i], &now) || now.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || !same_identity(&dirs[i], &now)) { memset(buffer, 0, request->cap + 1); free(buffer); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CHANGED_DURING_READ; } }
-  CloseHandle(file); while (count) CloseHandle(handles[--count]);
+  if (read > request->cap) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CONTENT_TOO_LARGE; }
+  if (!identity(file, &after) || !same_identity(&before, &after) || read != (DWORD)before.standard.EndOfFile.QuadPart) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CHANGED_DURING_READ; }
+  if (!canonical_path_matches(handles[0], file, path)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_ACCESS_DENIED; }
+  for (int i = 0; i < count; ++i) { struct file_identity now; if (!identity(handles[i], &now) || now.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || !same_identity(&dirs[i], &now)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]); return KSR_CHANGED_DURING_READ; } }
+  free(path); CloseHandle(file); while (count) CloseHandle(handles[--count]);
   if (!valid_utf8(buffer, read)) { memset(buffer, 0, request->cap + 1); free(buffer); return KSR_CONTENT_NOT_TEXT; }
   *content = buffer; *length = read; return KSR_OK;
 }

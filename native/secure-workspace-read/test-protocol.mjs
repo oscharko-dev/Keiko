@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { link, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -94,6 +94,20 @@ async function compile(binary) {
       code === 0 ? resolve() : reject(new Error(`compile failed: ${code}`)),
     );
   });
+}
+
+async function assertWindowsSourceContract() {
+  const nativeSource = await readFile(source, "utf8");
+  assert.match(nativeSource, /GetFinalPathNameByHandleW\(root,/u);
+  assert.match(nativeSource, /GetFinalPathNameByHandleW\(file,/u);
+  assert.match(nativeSource, /_wcsnicmp\(root_path, file_path, prefix_length\)/u);
+  assert.match(nativeSource, /_wcsicmp\(suffix, expected\) == 0/u);
+  assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
+  assert.equal(
+    nativeSource.match(/CreateFileW\(/gu)?.length,
+    1,
+    "only the trusted root may use a pathname open",
+  );
 }
 
 async function stableFdCount() {
@@ -192,6 +206,7 @@ try {
   binaryRoot = await mkdtemp(join(tmpdir(), "ksr-bin-"));
   fixture = await mkdtemp(join(tmpdir(), "ksr-fixture-"));
   const binary = join(binaryRoot, "secure-workspace-read");
+  await assertWindowsSourceContract();
   await compile(binary);
   await setupFixture(fixture);
   await assertProtocolCases(binary, fixture);
