@@ -263,6 +263,17 @@ describe("ReviewWidget", () => {
     });
   });
 
+  it("shows the fallback message when report fetch fails with an opaque value", async () => {
+    vi.mocked(fetchRunReport).mockRejectedValue("opaque failure");
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-opaque" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Unexpected error.");
+    });
+  });
+
   it("keeps evidence navigation when the live run record has expired", async () => {
     vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Run not found.", 404));
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
@@ -348,6 +359,19 @@ describe("ReviewWidget", () => {
       expect(screen.getByText("betaNew")).toBeInTheDocument();
       expect(screen.queryByText("alphaNew")).not.toBeInTheDocument();
     });
+  });
+
+  it("labels the apply confirmation with the plural file count", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: MULTI_FILE_REPORT });
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-plural-confirm" />);
+
+    await screen.findByRole("button", { name: /^apply$/i });
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+
+    expect(screen.getByRole("button", { name: /confirm apply \(2 files\)/i })).toBeInTheDocument();
+    expect(applyRun).not.toHaveBeenCalled();
   });
 
   it("Evidence link is present when manifest fetch succeeds", async () => {

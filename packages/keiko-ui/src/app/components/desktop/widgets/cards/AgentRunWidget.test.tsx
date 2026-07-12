@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   applyRun,
+  cancelRun,
   fetchEvidenceManifest,
   fetchModels,
   fetchRunReport,
@@ -409,6 +410,26 @@ describe("AgentRunWidget", () => {
           type: "bug:completed",
           status: "fix-applied",
         },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 23,
+          ts: 23,
+          type: "state:transition",
+          from: "queued",
+          to: "completed",
+        },
+        {
+          schemaVersion: "1",
+          runId: "run-events",
+          fingerprint: "fp",
+          seq: 24,
+          ts: 24,
+          type: "verification:result",
+          passed: true,
+          detail: "unit passed",
+        },
       ] as never,
     });
     vi.mocked(fetchModels).mockResolvedValue({ models: [] });
@@ -445,6 +466,8 @@ describe("AgentRunWidget", () => {
     expect(log).toHaveTextContent("Root cause proposed with patch");
     expect(log).toHaveTextContent("Bug verification passed");
     expect(log).toHaveTextContent("Bug investigation fix-applied");
+    expect(log).toHaveTextContent("queued -> completed");
+    expect(log).toHaveTextContent("Verification passed: unit passed");
   });
 
   it("marks active run surfaces busy for assistive technology", () => {
@@ -779,5 +802,209 @@ describe("AgentRunWidget", () => {
     );
 
     expect(await screen.findByText("Verify evidence loaded: failed.")).toBeInTheDocument();
+  });
+
+  it("announces live report load failures", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue(new Error("report unavailable"));
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-report-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("report unavailable");
+  });
+
+  it("announces opaque live report load failures with the fallback message", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue("opaque report failure");
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-report-opaque-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load run report.");
+  });
+
+  it("announces archived evidence load failures", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Unknown run.", 404));
+    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("manifest unavailable"));
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-evidence-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("manifest unavailable");
+  });
+
+  it("announces opaque archived evidence load failures with the fallback message", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Unknown run.", 404));
+    vi.mocked(fetchEvidenceManifest).mockRejectedValue("opaque evidence failure");
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-evidence-opaque-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load evidence.");
+  });
+
+  it("announces cancellation failures without hiding the running report", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "running" } });
+    vi.mocked(cancelRun).mockRejectedValue(new Error("cancel failed"));
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-cancel-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-cancel-error"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("cancel failed");
+    expect(screen.getByText("Verify is running.")).toBeInTheDocument();
+  });
+
+  it("announces opaque cancellation failures with the fallback message", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "running" } });
+    vi.mocked(cancelRun).mockRejectedValue("opaque cancel failure");
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-cancel-opaque-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-cancel-opaque-error"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to cancel run.");
+  });
+
+  it("announces apply failures after the plural confirmation step", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "dry-run",
+        durationMs: 100,
+        dryRunPreview: "validated",
+        proposedDiff: [
+          "diff --git a/src/a.ts b/src/a.ts",
+          "--- a/src/a.ts",
+          "+++ b/src/a.ts",
+          "diff --git a/src/b.ts b/src/b.ts",
+          "--- a/src/b.ts",
+          "+++ b/src/b.ts",
+        ].join("\n"),
+      },
+    });
+    vi.mocked(applyRun).mockRejectedValue(new Error("apply failed"));
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "unit-test-generation", runId: "run-apply-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Proposed diff")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm apply (2 files)" }));
+
+    await waitFor(() => expect(applyRun).toHaveBeenCalledWith("run-apply-error"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("apply failed");
+  });
+
+  it("announces opaque apply failures with the fallback message", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "dry-run",
+        durationMs: 100,
+        dryRunPreview: "validated",
+        proposedDiff: "diff --git a/src/a.ts b/src/a.ts",
+      },
+    });
+    vi.mocked(applyRun).mockRejectedValue("opaque apply failure");
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "unit-test-generation", runId: "run-apply-opaque-error" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Proposed diff")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm apply (1 file)" }));
+
+    await waitFor(() => expect(applyRun).toHaveBeenCalledWith("run-apply-opaque-error"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to apply run.");
+  });
+
+  it("renders translated summaries for applied and cancelled terminal reports", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "fix-applied",
+        durationMs: 100,
+        applyReport: { status: "completed" },
+      },
+    });
+
+    const { unmount } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", runId: "run-fix-applied" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Investigate bug applied changes.")).toBeInTheDocument();
+    unmount();
+    vi.clearAllMocks();
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "cancelled",
+        durationMs: 100,
+      },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", runId: "run-cancelled" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Verify was cancelled.")).toBeInTheDocument();
   });
 });
