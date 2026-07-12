@@ -59,6 +59,7 @@ async function createSchema(pool: Pool, prefix: string): Promise<string> {
       "002_feedback_review.sql",
       "003_feedback_publication.sql",
       "004_feedback_publication_worker.sql",
+      "005_feedback_publication_circuit.sql",
     ]);
     return schema;
   } finally {
@@ -1411,7 +1412,7 @@ describe("PostgreSQL feedback publication integration", () => {
             schema,
             "SELECT class_code FROM feedback_deletion_ledger WHERE class_code LIKE 'publication-%' OR class_code='github-issue-linkage' ORDER BY class_code",
           ),
-        ).toHaveLength(6);
+        ).toHaveLength(7);
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await pool.end();

@@ -1,0 +1,213 @@
+import type { FeedbackPublicationTargetPolicySnapshotV1 } from "@oscharko-dev/keiko-contracts/feedback-publication";
+import { describe, expect, it } from "vitest";
+import { FeedbackPublicationWorker } from "./feedback-publication-worker.js";
+import { PostgresFeedbackPublicationWorkerStore } from "./feedback-publication-worker-store.js";
+import type { FeedbackPublicationWorkerLease } from "./feedback-publication-worker-types.js";
+import {
+  GovernedGithubIssueAdapter,
+  GithubIssueAdapterError,
+  type GithubIssueProjection,
+  type GithubIssueReconciliationResult,
+} from "./github-issue-adapter.js";
+
+const target: FeedbackPublicationTargetPolicySnapshotV1 = {
+  apiOrigin: "https://api.github.com",
+  repositoryId: "456",
+  installationId: "123",
+  owner: "owner",
+  repository: "repository",
+  labels: ["feedback"],
+  targetKey: "public",
+  labelPolicyVersion: "labels-v1",
+  targetPolicyVersion: "target-v1",
+};
+
+function lease(
+  mode: "create-eligible" | "reconcile-only" = "create-eligible",
+): FeedbackPublicationWorkerLease {
+  return {
+    outboxId: "outbox",
+    preparationId: "preparation",
+    itemId: "item",
+    title: "SENTINEL_TITLE",
+    body: `SENTINEL_BODY <!-- keiko-feedback-reconciliation-v1:${"a".repeat(43)} -->`,
+    projectionDigest: "b".repeat(64),
+    reconciliationMarker: `<!-- keiko-feedback-reconciliation-v1:${"a".repeat(43)} -->`,
+    target,
+    targetPolicyDigest: "c".repeat(64),
+    leaseOwner: "worker",
+    leaseExpiresAt: new Date("2030-01-01T00:00:00Z"),
+    mode,
+    createAttemptCount: 0,
+  } satisfies FeedbackPublicationWorkerLease;
+}
+
+const issue: GithubIssueProjection = {
+  repositoryId: "456",
+  number: 7,
+  nodeId: "node",
+  url: "https://github.com/owner/repository/issues/7",
+  title: "SENTINEL_TITLE",
+  body: "SENTINEL_BODY",
+  labels: ["feedback"],
+};
+
+class FakeStore {
+  readonly calls: string[] = [];
+  candidate: FeedbackPublicationWorkerLease | undefined = lease();
+  circuitFailures = 0;
+  async withCandidate<T>(
+    _options: unknown,
+    handle: (value: FeedbackPublicationWorkerLease) => Promise<T>,
+  ): Promise<T | undefined> {
+    if (this.candidate === undefined) return undefined;
+    return handle(this.candidate);
+  }
+  recordSuccess(): Promise<void> {
+    this.calls.push("success");
+    this.circuitFailures = 0;
+    return Promise.resolve();
+  }
+  enterProviderCircuit(): Promise<
+    | { readonly allowed: true; readonly probe: boolean }
+    | { readonly allowed: false; readonly delayMs: number }
+  > {
+    return Promise.resolve(
+      this.circuitFailures >= 3
+        ? { allowed: false, delayMs: 30_000 }
+        : { allowed: true, probe: false },
+    );
+  }
+  recordProviderFailure(): Promise<void> {
+    this.circuitFailures += 1;
+    return Promise.resolve();
+  }
+  scheduleRetry(): Promise<"retryable-failure"> {
+    this.calls.push("retry");
+    return Promise.resolve("retryable-failure");
+  }
+  scheduleReconciliation(): Promise<void> {
+    this.calls.push("reconcile-later");
+    return Promise.resolve();
+  }
+  recordManual(): Promise<void> {
+    this.calls.push("manual");
+    return Promise.resolve();
+  }
+}
+
+class FakeAdapter {
+  readonly calls: string[] = [];
+  reconciliation: GithubIssueReconciliationResult = {
+    kind: "not-observed",
+    createAuthority: "requires-create-eligible-with-no-possibly-committed-post",
+  };
+  failure: GithubIssueAdapterError | undefined;
+  createFailure: GithubIssueAdapterError | undefined;
+  reconcileIssue(): Promise<GithubIssueReconciliationResult> {
+    this.calls.push("reconcile");
+    return this.failure === undefined
+      ? Promise.resolve(this.reconciliation)
+      : Promise.reject(this.failure);
+  }
+  publishClaimedCandidate(): Promise<GithubIssueProjection> {
+    this.calls.push("create");
+    return this.createFailure === undefined
+      ? Promise.resolve(issue)
+      : Promise.reject(this.createFailure);
+  }
+}
+
+function worker(
+  store: FakeStore,
+  adapter: FakeAdapter,
+  diagnostics: string[] = [],
+): FeedbackPublicationWorker {
+  return new FeedbackPublicationWorker({
+    store: store as unknown as PostgresFeedbackPublicationWorkerStore,
+    adapter: adapter as unknown as GovernedGithubIssueAdapter,
+    workerId: "worker",
+    leaseDurationMs: 60_000,
+    circuitCooldownMs: 30_000,
+    random: (): number => 0.5,
+    diagnostics: (event): void => {
+      diagnostics.push(JSON.stringify(event));
+    },
+  });
+}
+
+describe("feedback publication worker policy", () => {
+  it("reconciles first and records an exact match without POST", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    adapter.reconciliation = { kind: "exact", issue };
+    await worker(store, adapter).runOne();
+    expect(adapter.calls).toEqual(["reconcile"]);
+    expect(store.calls).toEqual(["success"]);
+  });
+
+  it("creates only for durable create eligibility after non-authoritative absence", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    await worker(store, adapter).runOne();
+    expect(adapter.calls).toEqual(["reconcile", "create"]);
+    expect(store.calls).toEqual(["success"]);
+
+    store.calls.length = 0;
+    adapter.calls.length = 0;
+    store.candidate = lease("reconcile-only");
+    await worker(store, adapter).runOne();
+    expect(adapter.calls).toEqual(["reconcile"]);
+    expect(store.calls).toEqual(["reconcile-later"]);
+  });
+
+  it("retries definite pre-send transients, reconciles ambiguity, and settles permanent failures", async () => {
+    const cases = [
+      [new GithubIssueAdapterError("provider-unavailable", "definite-pre-send"), "retry"],
+      [
+        new GithubIssueAdapterError("provider-unavailable", "may-have-committed"),
+        "reconcile-later",
+      ],
+      [new GithubIssueAdapterError("permission-denied", "definite-pre-send"), "manual"],
+    ] as const;
+    for (const [failure, expected] of cases) {
+      const store = new FakeStore();
+      const adapter = new FakeAdapter();
+      adapter.failure = failure;
+      await worker(store, adapter).runOne();
+      expect(store.calls).toEqual([expected]);
+    }
+  });
+
+  it("opens after three transient failures and emits content-free diagnostics", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    const diagnostics: string[] = [];
+    adapter.failure = new GithubIssueAdapterError("provider-unavailable", "definite-pre-send");
+    const subject = worker(store, adapter, diagnostics);
+    await subject.runOne();
+    await subject.runOne();
+    await subject.runOne();
+    await subject.runOne();
+    expect(adapter.calls).toHaveLength(3);
+    expect(store.calls).toEqual(["retry", "retry", "retry", "retry"]);
+    expect(diagnostics.join(" ")).not.toMatch(/SENTINEL|owner|repository|keiko-feedback/u);
+  });
+
+  it("does not reset failures after search success before three POST-only failures open", async () => {
+    const store = new FakeStore();
+    const adapter = new FakeAdapter();
+    adapter.createFailure = new GithubIssueAdapterError(
+      "provider-unavailable",
+      "may-have-committed",
+    );
+    const subject = worker(store, adapter);
+    await subject.runOne();
+    await subject.runOne();
+    await subject.runOne();
+    await subject.runOne();
+    expect(adapter.calls.filter((call) => call === "reconcile")).toHaveLength(3);
+    expect(adapter.calls.filter((call) => call === "create")).toHaveLength(3);
+    expect(store.calls.at(-1)).toBe("retry");
+  });
+});

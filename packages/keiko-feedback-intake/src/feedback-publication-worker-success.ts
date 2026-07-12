@@ -40,6 +40,7 @@ export async function persistWorkerSuccess(
   lease: FeedbackPublicationLeaseIdentity,
   issue: FeedbackPublicationSuccess,
   afterLinkageInsert: (() => Promise<void>) | undefined,
+  source: "created" | "reconciled" = "created",
 ): Promise<void> {
   await client.query(
     `INSERT INTO feedback_github_issue_linkage
@@ -60,9 +61,10 @@ export async function persistWorkerSuccess(
   await assertExactLinkage(client, lease, issue);
   const updated = await client.query(
     `UPDATE feedback_publication_outbox SET status='succeeded',create_eligible=false,
+     reconciled_exact=$2,
      lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=NULL,failure_code=NULL,
      updated_at=clock_timestamp() WHERE id=$1`,
-    [lease.outboxId],
+    [lease.outboxId, source === "reconciled"],
   );
   if (updated.rowCount !== 1) throw new FeedbackPublicationError("claim-unavailable");
   await appendDeliveryAudit(client, lease.outboxId, "succeeded", "linked");

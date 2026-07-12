@@ -8,6 +8,7 @@ import {
 import type { FeedbackPublicationWorkerLease } from "./feedback-publication-worker-types.js";
 import { PostgresFeedbackPublicationWorkerStore } from "./feedback-publication-worker-store.js";
 import type { GithubAppConfig, GithubAppTarget } from "./github-app-config.js";
+import type { GithubAppSignerSnapshot } from "./github-app-key.js";
 import type {
   GithubHttpOperation,
   GithubHttpResponse,
@@ -227,6 +228,121 @@ describe("governed GitHub issue adapter", () => {
       "inspect-installation",
       "inspect-repository-installation",
     ]);
+  });
+
+  it("attests 64 targets with bounded concurrency under one aggregate budget", async () => {
+    const targets = new Map<string, GithubAppTarget>();
+    for (let index = 0; index < 64; index += 1) {
+      const current = {
+        ...snapshot,
+        targetKey: `target-${String(index)}`,
+        installationId: String(1_000 + index),
+        repositoryId: String(2_000 + index),
+        repository: `repository-${String(index)}`,
+      };
+      targets.set(current.targetKey, {
+        snapshot: current,
+        digest: digestFeedbackTargetPolicyV1(current),
+      });
+    }
+    let active = 0;
+    let maximum = 0;
+    const transport: GithubTransport = {
+      execute: async (operation): Promise<GithubHttpResponse> => {
+        if (operation.kind === "inspect-app") {
+          return response(200, { permissions: { issues: "write", metadata: "read" } });
+        }
+        active += 1;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        active -= 1;
+        if (operation.kind === "inspect-installation") {
+          return response(200, {
+            id: Number(operation.installationId),
+            repository_selection: "selected",
+            permissions: { issues: "write", metadata: "read" },
+          });
+        }
+        if (operation.kind !== "inspect-repository-installation") {
+          throw new Error("Unexpected readiness operation");
+        }
+        const bound = [...targets.values()].find(
+          (value) => value.snapshot.repositoryId === operation.repositoryId,
+        );
+        return response(200, { id: Number(bound?.snapshot.installationId) });
+      },
+    };
+    const governed = new GovernedGithubIssueAdapter({
+      config: { ...config, targets },
+      transport,
+      trustedNow: (): Date => now,
+      keyProvider: {
+        snapshot: (): GithubAppSignerSnapshot => ({
+          keyId: "test-key",
+          rotatedAt: now,
+          signRs256: (): Uint8Array => Uint8Array.from([1, 2, 3]),
+        }),
+      },
+    });
+    await expect(governed.inspectReadiness()).resolves.toBeUndefined();
+    expect(maximum).toBeGreaterThan(1);
+    expect(maximum).toBeLessThanOrEqual(6);
+  });
+
+  it("invalidates every target when any concurrent readiness inspection fails", async () => {
+    const secondSnapshot = {
+      ...snapshot,
+      targetKey: "second",
+      installationId: "124",
+      repositoryId: "457",
+      repository: "second",
+    };
+    const second = {
+      snapshot: secondSnapshot,
+      digest: digestFeedbackTargetPolicyV1(secondSnapshot),
+    };
+    let failSecond = false;
+    const transport = new FakeTransport((operation) => {
+      if (operation.kind === "inspect-app") {
+        return response(200, { permissions: { issues: "write", metadata: "read" } });
+      }
+      if (operation.kind === "inspect-installation") {
+        if (failSecond && operation.installationId === "124") return response(503, {});
+        return response(200, {
+          id: Number(operation.installationId),
+          repository_selection: "selected",
+          permissions: { issues: "write", metadata: "read" },
+        });
+      }
+      if (operation.kind !== "inspect-repository-installation") {
+        throw new Error("Unexpected readiness operation");
+      }
+      return response(200, { id: operation.repositoryId === "457" ? 124 : 123 });
+    }, false);
+    const governed = new GovernedGithubIssueAdapter({
+      config: {
+        ...config,
+        targets: new Map([
+          [snapshot.targetKey, target],
+          ["second", second],
+        ]),
+      },
+      transport,
+      trustedNow: (): Date => now,
+      keyProvider: {
+        snapshot: (): GithubAppSignerSnapshot => ({
+          keyId: "test-key",
+          rotatedAt: now,
+          signRs256: (): Uint8Array => Uint8Array.from([1, 2, 3]),
+        }),
+      },
+    });
+    await governed.inspectReadiness();
+    failSecond = true;
+    await expect(governed.inspectReadiness()).rejects.toBeInstanceOf(GithubIssueAdapterError);
+    await expect(governed.reconcileIssue(claimed())).rejects.toMatchObject({
+      code: "permission-denied",
+    });
   });
 
   it("fails readiness for broader, missing, or all-repositories permissions", async () => {
@@ -550,22 +666,22 @@ describe("governed GitHub issue adapter", () => {
     },
   );
 
-  it.each([
-    [false, "definite-pre-send"],
-    [true, "may-have-committed"],
-  ] as const)("classifies transport loss with committed=%s", async (committed, certainty) => {
-    const transport = new FakeTransport((operation) =>
-      operation.kind === "mint-token"
-        ? Promise.resolve(tokenResponse())
-        : Promise.reject(new GithubTransportError(committed)),
-    );
-    const result = publish(await attested(transport));
-    await expect(result).rejects.toMatchObject({
-      code: "provider-unavailable",
-      commitCertainty: certainty,
-    });
-    await expect(result).rejects.not.toThrow("SENTINEL_JWT_TOKEN_KEY");
-  });
+  it.each([false, true] as const)(
+    "keeps transport loss reconciliation-only after durable arm with committed=%s",
+    async (committed) => {
+      const transport = new FakeTransport((operation) =>
+        operation.kind === "mint-token"
+          ? Promise.resolve(tokenResponse())
+          : Promise.reject(new GithubTransportError(committed)),
+      );
+      const result = publish(await attested(transport));
+      await expect(result).rejects.toMatchObject({
+        code: "provider-unavailable",
+        commitCertainty: "may-have-committed",
+      });
+      await expect(result).rejects.not.toThrow("SENTINEL_JWT_TOKEN_KEY");
+    },
+  );
 
   it.each([
     { contentType: "text/html", body: Buffer.from("not-json") },

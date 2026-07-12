@@ -37,11 +37,12 @@ export function loadFeedbackRuntimeConfigs(
     readonly migrationSource?: (() => Promise<string>) | undefined;
     readonly migrationSources?: (() => Promise<readonly unknown[]>) | undefined;
   },
+  now = new Date(),
 ): {
   readonly config: HostedRuntimeConfig;
   readonly maintainerConfig: MaintainerRuntimeConfig;
 } {
-  const config = loadHostedRuntimeConfig(env);
+  const config = loadHostedRuntimeConfig(env, now);
   const maintainerConfig = loadMaintainerRuntimeConfig(env);
   if (
     maintainerConfig.enabled &&
@@ -50,6 +51,13 @@ export function loadFeedbackRuntimeConfigs(
     throw new Error("Invalid maintainer port");
   }
   assertMaintainerMigrationConfiguration(maintainerConfig, migrations);
+  if (
+    config.publication.enabled &&
+    migrations.migrationSource !== undefined &&
+    migrations.migrationSources === undefined
+  ) {
+    throw new Error("Publication runtime requires ordered migration sources");
+  }
   return { config, maintainerConfig };
 }
 

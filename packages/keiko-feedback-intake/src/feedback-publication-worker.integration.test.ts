@@ -142,6 +142,7 @@ async function createSchema(pool: Pool): Promise<string> {
     "002_feedback_review.sql",
     "003_feedback_publication.sql",
     "004_feedback_publication_worker.sql",
+    "005_feedback_publication_circuit.sql",
   ]);
   return schema;
 }
@@ -506,6 +507,153 @@ describe("PostgreSQL feedback publication worker", () => {
       }
     },
     60_000,
+  );
+
+  integration(
+    "shares durable circuit and one half-open probe across replicas and restart",
+    async () => {
+      const pool = new Pool({ connectionString: databaseUrl, max: 8 });
+      const schema = await createSchema(pool);
+      const sessionA = physicalSessionPool(schema);
+      const sessionB = physicalSessionPool(schema);
+      const scoped = scopedPool(pool, schema);
+      const repository = new PostgresFeedbackPublicationRepository(
+        scoped,
+        ACTOR.permissionPolicyVersion,
+        () => TARGET,
+      );
+      const workerA = new PostgresFeedbackPublicationWorkerStore(
+        scoped,
+        sessionA.scoped,
+        () => TARGET,
+      );
+      const workerB = new PostgresFeedbackPublicationWorkerStore(
+        scoped,
+        sessionB.scoped,
+        () => TARGET,
+      );
+      try {
+        await approvedOutbox(pool, schema, repository, "DURABLE_CIRCUIT");
+        let lastLease: FeedbackPublicationWorkerLease | undefined;
+        for (let index = 0; index < 3; index += 1) {
+          const worker = index % 2 === 0 ? workerA : workerB;
+          await worker.withCandidate(
+            { workerId: `circuit-worker-${String(index)}`, leaseDurationMs: 60_000 },
+            async (candidate) => {
+              expect(await worker.enterProviderCircuit(candidate)).toMatchObject({ allowed: true });
+              await worker.recordProviderFailure(candidate, 30_000);
+              await worker.scheduleRetry(leaseIdentity(candidate), "provider-unavailable", 1_000);
+              lastLease = candidate;
+            },
+          );
+          await schemaRows(
+            pool,
+            schema,
+            "UPDATE feedback_publication_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE status='retryable-failure'",
+          );
+        }
+        expect(
+          await schemaRows(
+            pool,
+            schema,
+            "SELECT consecutive_failures FROM feedback_publication_installation_circuits",
+          ),
+        ).toEqual([{ consecutive_failures: 3 }]);
+        const restarted = new PostgresFeedbackPublicationWorkerStore(
+          scoped,
+          sessionA.scoped,
+          () => TARGET,
+        );
+        await restarted.withCandidate(
+          { workerId: "circuit-restart", leaseDurationMs: 60_000 },
+          async (candidate) => {
+            expect(await restarted.enterProviderCircuit(candidate)).toMatchObject({
+              allowed: false,
+            });
+            await restarted.scheduleRetry(leaseIdentity(candidate), "provider-unavailable", 1_000);
+          },
+        );
+        const basis = requireLease(lastLease);
+        await schemaRows(
+          pool,
+          schema,
+          `UPDATE feedback_publication_installation_circuits
+         SET open_until=statement_timestamp()-interval '1 second',
+           updated_at=statement_timestamp()-interval '2 seconds',
+           expires_at=statement_timestamp()-interval '2 seconds'+interval '7 days'`,
+        );
+        const probes = await Promise.all([
+          workerA.enterProviderCircuit({ ...basis, outboxId: randomUUID() }),
+          workerB.enterProviderCircuit({ ...basis, outboxId: randomUUID() }),
+        ]);
+        expect(probes.filter((gate) => gate.allowed)).toHaveLength(1);
+        await schemaRows(
+          pool,
+          schema,
+          `UPDATE feedback_publication_installation_circuits
+         SET probe_expires_at=statement_timestamp()-interval '1 second',
+           updated_at=statement_timestamp()-interval '2 seconds',
+           expires_at=statement_timestamp()-interval '2 seconds'+interval '7 days'`,
+        );
+        await schemaRows(
+          pool,
+          schema,
+          "UPDATE feedback_publication_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE status='retryable-failure'",
+        );
+        await restarted.withCandidate(
+          { workerId: "circuit-success", leaseDurationMs: 60_000 },
+          async (candidate) => {
+            expect(await restarted.enterProviderCircuit(candidate)).toMatchObject({
+              allowed: true,
+              probe: true,
+            });
+            await restarted.armCreate(candidate);
+            await restarted.recordSuccess(leaseIdentity(candidate), {
+              repositoryId: TARGET.repositoryId,
+              issueNodeId: "I_circuit_success",
+              issueNumber: 91,
+            });
+          },
+        );
+        expect(
+          await schemaRows(
+            pool,
+            schema,
+            "SELECT installation_id FROM feedback_publication_installation_circuits",
+          ),
+        ).toEqual([]);
+        await approvedOutbox(pool, schema, repository, "RECONCILED_WITHOUT_POST");
+        await restarted.withCandidate(
+          { workerId: "reconciled-success", leaseDurationMs: 60_000 },
+          async (candidate) => {
+            await restarted.recordSuccess(
+              leaseIdentity(candidate),
+              {
+                repositoryId: TARGET.repositoryId,
+                issueNodeId: "I_reconciled_success",
+                issueNumber: 92,
+              },
+              "reconciled",
+            );
+          },
+        );
+        expect(
+          await schemaRows(
+            pool,
+            schema,
+            `SELECT outbox.status,outbox.reconciled_exact,prep.create_armed_at
+             FROM feedback_publication_outbox outbox
+             JOIN feedback_publication_preparations prep ON prep.id=outbox.preparation_id
+             WHERE outbox.status='succeeded' AND outbox.reconciled_exact`,
+          ),
+        ).toEqual([{ status: "succeeded", reconciled_exact: true, create_armed_at: null }]);
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await sessionA.pool.end();
+        await sessionB.pool.end();
+        await pool.end();
+      }
+    },
   );
 
   integration("widens the bounded state head when earlier candidates are locked", async () => {

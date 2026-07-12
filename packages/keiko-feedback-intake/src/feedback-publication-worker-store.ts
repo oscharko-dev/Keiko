@@ -19,6 +19,7 @@ import {
   FEEDBACK_PUBLICATION_MAX_CREATE_ATTEMPTS,
   FEEDBACK_PUBLICATION_MAX_RETRY_MS,
   FEEDBACK_PUBLICATION_MIN_RETRY_MS,
+  type FeedbackPublicationCircuitGate,
   type FeedbackPublicationLeaseIdentity,
   type FeedbackPublicationManualCode,
   type FeedbackPublicationRetryCode,
@@ -107,6 +108,76 @@ export class PostgresFeedbackPublicationWorkerStore {
     await this.assertCommittedLease(lease, "may-have-committed");
   }
 
+  async enterProviderCircuit(
+    lease: FeedbackPublicationWorkerLease,
+  ): Promise<FeedbackPublicationCircuitGate> {
+    return this.transaction(async (client) => {
+      const at = await databaseNow(client);
+      const result = await client.query<{
+        readonly consecutive_failures: number;
+        readonly open_until: Date | null;
+        readonly probe_owner: string | null;
+        readonly probe_expires_at: Date | null;
+      }>(
+        `SELECT consecutive_failures,open_until,probe_owner,probe_expires_at
+         FROM feedback_publication_installation_circuits
+         WHERE installation_id=$1 FOR UPDATE`,
+        [lease.target.installationId],
+      );
+      const state = result.rows[0];
+      if (state === undefined || state.consecutive_failures < 3) {
+        return { allowed: true, probe: false };
+      }
+      const blockedUntil = [state.open_until, state.probe_expires_at]
+        .filter((value): value is Date => value !== null && value > at)
+        .sort((left, right) => left.getTime() - right.getTime())[0];
+      if (blockedUntil !== undefined) {
+        return { allowed: false, delayMs: Math.max(1_000, blockedUntil.getTime() - at.getTime()) };
+      }
+      const probeExpiresAt = lease.leaseExpiresAt;
+      const changed = await client.query(
+        `UPDATE feedback_publication_installation_circuits
+         SET open_until=NULL,probe_owner=$2,probe_expires_at=$3,updated_at=$4,
+           expires_at=$4::timestamptz + interval '7 days'
+         WHERE installation_id=$1 AND consecutive_failures=3
+           AND (open_until IS NULL OR open_until <= $4)
+           AND (probe_expires_at IS NULL OR probe_expires_at <= $4)`,
+        [lease.target.installationId, lease.outboxId, probeExpiresAt, at],
+      );
+      if (changed.rowCount !== 1) return { allowed: false, delayMs: 1_000 };
+      return { allowed: true, probe: true };
+    });
+  }
+
+  async recordProviderFailure(
+    lease: FeedbackPublicationWorkerLease,
+    cooldownMs: number,
+  ): Promise<void> {
+    const bounded = Math.max(1_000, Math.min(Math.trunc(cooldownMs), 3_600_000));
+    await this.transaction(async (client) => {
+      const at = await databaseNow(client);
+      const result = await client.query(
+        `INSERT INTO feedback_publication_installation_circuits
+           (installation_id,consecutive_failures,open_until,probe_owner,probe_expires_at,
+            updated_at,expires_at)
+         VALUES ($1,1,NULL,NULL,NULL,$3,$3::timestamptz + interval '7 days')
+         ON CONFLICT (installation_id) DO UPDATE SET
+           consecutive_failures=LEAST(3,
+             feedback_publication_installation_circuits.consecutive_failures+1),
+           open_until=CASE
+             WHEN feedback_publication_installation_circuits.consecutive_failures+1 >= 3
+               THEN $3::timestamptz + $2::integer * interval '1 millisecond'
+             ELSE NULL END,
+           probe_owner=NULL,probe_expires_at=NULL,updated_at=$3,
+           expires_at=$3::timestamptz + interval '7 days'
+         WHERE feedback_publication_installation_circuits.probe_owner IS NULL
+           OR feedback_publication_installation_circuits.probe_owner=$4::uuid`,
+        [lease.target.installationId, bounded, at, lease.outboxId],
+      );
+      if (result.rowCount !== 1) throw new FeedbackPublicationError("claim-unavailable");
+    });
+  }
+
   async scheduleRetry(
     lease: FeedbackPublicationLeaseIdentity,
     code: FeedbackPublicationRetryCode,
@@ -168,10 +239,15 @@ export class PostgresFeedbackPublicationWorkerStore {
   async recordSuccess(
     lease: FeedbackPublicationLeaseIdentity,
     issue: FeedbackPublicationSuccess,
+    source: "created" | "reconciled" = "created",
   ): Promise<void> {
     await this.transaction(async (client) => {
-      await this.validateSuccessLease(client, lease);
-      await persistWorkerSuccess(client, lease, issue, this.hooks.afterLinkageInsert);
+      const installationId = await this.validateSuccessLease(client, lease);
+      await persistWorkerSuccess(client, lease, issue, this.hooks.afterLinkageInsert, source);
+      await client.query(
+        "DELETE FROM feedback_publication_installation_circuits WHERE installation_id=$1",
+        [installationId],
+      );
     });
   }
 
@@ -467,7 +543,7 @@ export class PostgresFeedbackPublicationWorkerStore {
   private async validateSuccessLease(
     client: PgClientLike,
     lease: FeedbackPublicationLeaseIdentity,
-  ): Promise<void> {
+  ): Promise<string> {
     const row = await lockDispatchCandidate(client, lease.outboxId);
     if (row === undefined || !["claimed", "may-have-committed"].includes(row.outbox_status)) {
       throw new FeedbackPublicationError("claim-unavailable");
@@ -487,6 +563,7 @@ export class PostgresFeedbackPublicationWorkerStore {
     ) {
       throw new FeedbackPublicationError("claim-unavailable");
     }
+    return row.target_installation_id;
   }
 
   private async settleLoadFailure(

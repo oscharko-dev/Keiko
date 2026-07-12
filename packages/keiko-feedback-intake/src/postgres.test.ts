@@ -119,7 +119,7 @@ describe("PostgreSQL intake repository", () => {
     });
 
     await expect(repository.purge(now)).resolves.toEqual([
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
     ]);
     const evidencePurge = observed.find((item) =>
       item.text.startsWith("DELETE FROM feedback_key_deletion_evidence"),

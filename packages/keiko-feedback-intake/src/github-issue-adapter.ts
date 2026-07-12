@@ -84,6 +84,7 @@ const AGGREGATE_DEADLINE_MS = 30_000;
 interface RequestBudget {
   readonly signal: AbortSignal;
   readonly deadlineAt: number;
+  abort(): void;
   dispose(): void;
 }
 
@@ -103,6 +104,7 @@ function requestBudget(
   return {
     signal: controller.signal,
     deadlineAt,
+    abort,
     dispose(): void {
       clearTimeout(timer);
       external?.removeEventListener("abort", abort);
@@ -425,19 +427,41 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
       if (!exactPermissions(app.permissions))
         throw new GithubIssueAdapterError("permission-denied", "definite-pre-send");
       const attested = new Set<string>();
-      for (const target of this.dependencies.config.targets.values()) {
-        await this.inspectTarget(target, jwt, budget);
-        attested.add(target.digest);
-      }
+      await this.inspectTargets(
+        [...this.dependencies.config.targets.values()],
+        jwt,
+        budget,
+        attested,
+      );
       if (generation !== this.readinessGeneration) throw safeFailure(false);
       this.readinessAttestation = attested;
     } catch (error) {
+      budget.abort();
       if (generation === this.readinessGeneration) this.readinessAttestation = undefined;
       if (error instanceof GithubIssueAdapterError) throw error;
       throw safeFailure(false);
     } finally {
       budget.dispose();
     }
+  }
+
+  private async inspectTargets(
+    targets: readonly GithubAppTarget[],
+    jwt: string,
+    budget: RequestBudget,
+    attested: Set<string>,
+  ): Promise<void> {
+    let index = 0;
+    const inspectNext = async (): Promise<void> => {
+      while (index < targets.length) {
+        const target = targets[index];
+        index += 1;
+        if (target === undefined) return;
+        await this.inspectTarget(target, jwt, budget);
+        attested.add(target.digest);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, targets.length) }, () => inspectNext()));
   }
 
   private assertAttested(target: GithubAppTarget): void {
@@ -534,9 +558,12 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     return token;
   }
 
-  private async tokenDefinitelyPreSend(target: GithubAppTarget): Promise<string> {
+  private async tokenDefinitelyPreSend(
+    target: GithubAppTarget,
+    signal?: AbortSignal,
+  ): Promise<string> {
     try {
-      return await this.token(target);
+      return await this.token(target, signal === undefined ? {} : { signal });
     } catch (error) {
       if (error instanceof GithubIssueAdapterError) throw error;
       throw safeFailure(false);
@@ -583,16 +610,20 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     target: GithubAppTarget,
     projection: ImmutableApprovedProjection,
     token: string,
+    signal?: AbortSignal,
   ): Promise<GithubIssueProjection> {
     try {
-      const response = await this.dependencies.transport.execute({
-        kind: "create-issue",
-        repositoryId: target.snapshot.repositoryId,
-        title: projection.title,
-        body: projection.body,
-        labels: target.snapshot.labels,
-        token,
-      });
+      const response = await this.dependencies.transport.execute(
+        {
+          kind: "create-issue",
+          repositoryId: target.snapshot.repositoryId,
+          title: projection.title,
+          body: projection.body,
+          labels: target.snapshot.labels,
+          token,
+        },
+        signal === undefined ? {} : { signal },
+      );
       if (response.status !== 201) classify(response, true);
       const created = issue(json(response, true), target.snapshot, true);
       if (
@@ -650,6 +681,7 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
   async publishClaimedCandidate(
     store: PostgresFeedbackPublicationWorkerStore,
     projection: FeedbackPublicationWorkerLease,
+    signal?: AbortSignal,
   ): Promise<GithubIssueProjection> {
     if (!(store instanceof PostgresFeedbackPublicationWorkerStore)) throw safeFailure(false);
     if (this.coordinatedLeases.has(projection)) throw safeFailure(false);
@@ -665,8 +697,19 @@ export class GovernedGithubIssueAdapter implements GithubIssueAdapter {
     );
     this.assertAttested(current);
     assertApprovedProjection(approved);
-    const token = await this.tokenDefinitelyPreSend(current);
+    const token = await this.tokenDefinitelyPreSend(current, signal);
     await store.armCreate(projection);
-    return this.#postIssue(current, approved, token);
+    try {
+      return await this.#postIssue(current, approved, token, signal);
+    } catch (error) {
+      if (error instanceof GithubIssueAdapterError) {
+        throw new GithubIssueAdapterError(
+          error.code,
+          "may-have-committed",
+          error.retryAfterSeconds,
+        );
+      }
+      throw safeFailure(true);
+    }
   }
 }

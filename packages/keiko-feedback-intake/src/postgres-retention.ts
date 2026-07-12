@@ -18,6 +18,7 @@ export interface PurgeClass {
     | "publication-audit"
     | "publication-delivery-audit"
     | "publication-idempotency"
+    | "publication-installation-circuit"
     | "github-issue-linkage";
   readonly count: number;
   readonly complete: boolean;
@@ -111,6 +112,11 @@ const PURGE_QUERIES: readonly PurgeQuery[] = [
   purgeQuery(
     "maintainer-session",
     "DELETE FROM feedback_maintainer_sessions WHERE revoked_at IS NOT NULL OR idle_expires_at <= $1 OR absolute_expires_at <= $1",
+  ),
+  batchedPurgeQuery(
+    "publication-installation-circuit",
+    "feedback_publication_installation_circuits",
+    "installation_id",
   ),
   purgeQuery(
     "key-destruction-evidence",

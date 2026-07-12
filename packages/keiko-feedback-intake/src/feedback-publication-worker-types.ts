@@ -32,6 +32,10 @@ export interface FeedbackPublicationSuccess {
   readonly issueNumber: number;
 }
 
+export type FeedbackPublicationCircuitGate =
+  | { readonly allowed: true; readonly probe: boolean }
+  | { readonly allowed: false; readonly delayMs: number };
+
 export type FeedbackPublicationRetryCode = "rate-limited" | "provider-unavailable";
 
 export type FeedbackPublicationManualCode =

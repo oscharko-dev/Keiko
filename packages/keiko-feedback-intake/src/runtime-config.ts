@@ -1,6 +1,22 @@
 import { validateIntakeLimits } from "./config.js";
 import { DAY_MS, type IntakeLimits } from "./types.js";
 import { canonicalTrustedCidrs } from "./proxy.js";
+import {
+  loadGithubAppConfig,
+  type GithubAppConfig,
+  type GithubAppOperatorInput,
+} from "./github-app-config.js";
+
+export type GithubPublicationRuntimeConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly github: GithubAppConfig;
+      readonly maxConcurrentDeliveries: number;
+      readonly pollIntervalMs: number;
+      readonly leaseDurationMs: number;
+      readonly circuitCooldownMs: number;
+    };
 
 export interface HostedRuntimeConfig {
   readonly host: string;
@@ -14,6 +30,7 @@ export interface HostedRuntimeConfig {
   readonly managementPort: number;
   readonly drainDeadlineMs: number;
   readonly retentionIntervalMs: number;
+  readonly publication: GithubPublicationRuntimeConfig;
 }
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -81,7 +98,81 @@ function cidrs(env: Environment): readonly string[] {
   return canonicalTrustedCidrs(result);
 }
 
-export function loadHostedRuntimeConfig(env: Environment): HostedRuntimeConfig {
+function optionalBounded(
+  env: Environment,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return env[name] === undefined ? fallback : bounded(env, name, minimum, maximum);
+}
+
+function githubInput(env: Environment): GithubAppOperatorInput {
+  return {
+    ...(env.KEIKO_FEEDBACK_GITHUB_APP_ID === undefined
+      ? {}
+      : { appId: env.KEIKO_FEEDBACK_GITHUB_APP_ID }),
+    ...(env.KEIKO_FEEDBACK_GITHUB_PRIVATE_KEY_FILE === undefined
+      ? {}
+      : { privateKeyFile: env.KEIKO_FEEDBACK_GITHUB_PRIVATE_KEY_FILE }),
+    ...(env.KEIKO_FEEDBACK_GITHUB_TARGETS_POLICY_FILE === undefined
+      ? {}
+      : { targetsPolicyFile: env.KEIKO_FEEDBACK_GITHUB_TARGETS_POLICY_FILE }),
+    ...(env.KEIKO_FEEDBACK_GITHUB_PRIVATE_KEY_ROTATED_AT === undefined
+      ? {}
+      : { privateKeyRotatedAt: env.KEIKO_FEEDBACK_GITHUB_PRIVATE_KEY_ROTATED_AT }),
+  };
+}
+
+function publication(env: Environment, now: Date): GithubPublicationRuntimeConfig {
+  const readiness = loadGithubAppConfig(githubInput(env), now);
+  if (readiness.status === "disabled") {
+    const tuningPresent = [
+      "KEIKO_FEEDBACK_GITHUB_MAX_CONCURRENT_DELIVERIES",
+      "KEIKO_FEEDBACK_GITHUB_POLL_INTERVAL_MS",
+      "KEIKO_FEEDBACK_GITHUB_LEASE_DURATION_MS",
+      "KEIKO_FEEDBACK_GITHUB_CIRCUIT_COOLDOWN_MS",
+    ].some((name) => env[name] !== undefined);
+    if (tuningPresent) throw new Error("Invalid GitHub publication configuration");
+    return Object.freeze({ enabled: false });
+  }
+  if (readiness.status === "invalid") throw new Error("Invalid GitHub publication configuration");
+  return Object.freeze({
+    enabled: true,
+    github: readiness.config,
+    maxConcurrentDeliveries: optionalBounded(
+      env,
+      "KEIKO_FEEDBACK_GITHUB_MAX_CONCURRENT_DELIVERIES",
+      4,
+      1,
+      32,
+    ),
+    pollIntervalMs: optionalBounded(
+      env,
+      "KEIKO_FEEDBACK_GITHUB_POLL_INTERVAL_MS",
+      1_000,
+      100,
+      30_000,
+    ),
+    leaseDurationMs: optionalBounded(
+      env,
+      "KEIKO_FEEDBACK_GITHUB_LEASE_DURATION_MS",
+      60_000,
+      5_000,
+      300_000,
+    ),
+    circuitCooldownMs: optionalBounded(
+      env,
+      "KEIKO_FEEDBACK_GITHUB_CIRCUIT_COOLDOWN_MS",
+      30_000,
+      1_000,
+      3_600_000,
+    ),
+  });
+}
+
+export function loadHostedRuntimeConfig(env: Environment, now = new Date()): HostedRuntimeConfig {
   const limits = Object.fromEntries(
     Object.entries(LIMIT_NAMES).map(([key, name]) => [key, finite(env, name)]),
   ) as unknown as IntakeLimits;
@@ -100,5 +191,6 @@ export function loadHostedRuntimeConfig(env: Environment): HostedRuntimeConfig {
     managementPort,
     drainDeadlineMs: bounded(env, "KEIKO_FEEDBACK_DRAIN_DEADLINE_MS", 100, 30_000),
     retentionIntervalMs: bounded(env, "KEIKO_FEEDBACK_RETENTION_INTERVAL_MS", 1_000, DAY_MS),
+    publication: publication(env, now),
   });
 }
