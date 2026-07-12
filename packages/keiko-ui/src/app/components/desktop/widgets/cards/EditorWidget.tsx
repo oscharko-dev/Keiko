@@ -35,6 +35,7 @@ import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
@@ -194,35 +195,10 @@ function DirtyCloseDialog(props: {
       }
     };
   }, []);
+  useDialogTabTrap(dialogRef);
   useEffect(() => {
-    // aria-modal="true" requires focus to stay inside the dialog while it is open, so Tab/Shift+Tab
-    // cycle within its own focusable elements instead of leaking to the settings/editor behind it.
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        if (!props.pending.saving) props.onCancel();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), [href]",
-      );
-      if (focusable === undefined || focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (first === undefined || last === undefined) return;
-      const active = document.activeElement;
-      // Initial focus lands on the dialog container itself (see the effect above), not on a
-      // button, so a Shift+Tab pressed before ever pressing Tab must wrap the same as if focus
-      // were already on the first element — otherwise it escapes to whatever was focusable before
-      // the dialog opened, defeating the containment this handler exists to provide.
-      const onContainer = active === dialogRef.current;
-      if (event.shiftKey && (active === first || onContainer)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      if (event.key === "Escape" && !props.pending.saving) props.onCancel();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
