@@ -13,6 +13,7 @@ import {
   type CodingWorkbenchCodexCredentialStore,
   type CodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
+import { createHash, randomUUID } from "node:crypto";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -24,12 +25,402 @@ const SUBSCRIPTION_DISABLED_ENV = "KEIKO_CODEX_SUBSCRIPTION_DISABLED";
 const CODEX_HEADLESS_ENV = "KEIKO_CODEX_HEADLESS";
 const CODEX_AUTH_STATUS_ENV = "KEIKO_CODEX_AUTH_STATUS";
 const CODEX_CREDENTIAL_STORE_ENV = "KEIKO_CODEX_CREDENTIAL_STORE";
+const MAX_AUTH_NAVIGATION_INTENT_TTL_MS = 60_000;
+const DEFAULT_AUTH_NAVIGATION_INTENT_CAPACITY = 16;
+const MAX_AUTH_NAVIGATION_INTENT_CAPACITY = 32;
+
+export interface CodexSubscriptionProfileCoordinatorDeps {
+  readonly probe: (signal: AbortSignal) => Promise<unknown>;
+  readonly now: () => number;
+  readonly ttlMs: number;
+  readonly timeoutMs: number;
+  readonly setTimeout: (callback: () => void, delayMs: number) => object | number;
+  readonly clearTimeout: (handle: object | number) => void;
+}
+
+export interface CodexSubscriptionProfileCoordinator {
+  readonly getProfile: () => Promise<CodingWorkbenchCodexSubscriptionProfile>;
+  readonly loginStarted: () => void;
+  readonly browserLoginStarted: () => void;
+  readonly deviceCodeLoginStarted: () => void;
+  readonly loginCancelled: () => void;
+  readonly loginCompleted: () => void;
+  readonly loginSucceeded: () => void;
+  readonly loginFailed: () => void;
+  readonly loginExpired: () => void;
+  readonly loginRevoked: () => void;
+  readonly loginClosed: (outcome: CodexSubscriptionAuthClosedOutcome) => void;
+  readonly logout: () => void;
+}
+
+export type CodexSubscriptionAuthClosedOutcome = "cancelled" | "expired" | "failed" | "revoked";
+
+export interface CodexAuthNavigationIntent {
+  readonly nonce: string;
+}
+
+export interface CodexAuthNavigationIntentCoordinatorDeps {
+  readonly now: () => number;
+  readonly ttlMs: number;
+  readonly maxIntents: number;
+  readonly newNonce: () => string;
+  readonly sha256: (value: string) => string;
+  readonly setTimeout: (callback: () => void, delayMs: number) => object | number;
+  readonly clearTimeout: (handle: object | number) => void;
+}
+
+export interface CodexAuthNavigationIntentCoordinator {
+  readonly create: (input: CodexAuthNavigationIntentInput) => CodexAuthNavigationIntent | undefined;
+  readonly consume: (input: CodexAuthNavigationIntentConsumption) => string | undefined;
+  readonly invalidateLogin: (runId: string, loginId: string) => void;
+  readonly invalidateRun: (runId: string) => void;
+  readonly dispose: () => void;
+}
+
+export interface CodexAuthNavigationIntentInput {
+  readonly url: string;
+  readonly runId: string;
+  readonly loginId: string;
+}
+
+export interface CodexAuthNavigationIntentConsumption {
+  readonly nonce: string;
+  readonly runId: string;
+  readonly loginId: string;
+}
+
+interface StoredCodexAuthNavigationIntent {
+  readonly url: string;
+  readonly urlDigest: string;
+  readonly runId: string;
+  readonly loginId: string;
+  readonly expiresAt: number;
+}
+
+interface CachedProfile {
+  readonly expiresAt: number;
+  readonly value: CodingWorkbenchCodexSubscriptionProfile;
+}
+
+interface InFlightProfile {
+  readonly promise: Promise<CodingWorkbenchCodexSubscriptionProfile>;
+}
+
+interface ResolvedProfile {
+  readonly profile: CodingWorkbenchCodexSubscriptionProfile;
+  readonly cacheable: boolean;
+}
+
+export function isCodexAuthNavigationUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname === "auth.openai.com" &&
+      parsed.port === "" &&
+      parsed.username === "" &&
+      parsed.password === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function createCodexAuthNavigationIntentCoordinator(
+  deps: Partial<CodexAuthNavigationIntentCoordinatorDeps> = {},
+): CodexAuthNavigationIntentCoordinator {
+  const configured = navigationIntentDeps(deps);
+  const intents = new Map<string, StoredCodexAuthNavigationIntent>();
+  const timers = new Map<string, object | number>();
+  return {
+    create: (input): CodexAuthNavigationIntent | undefined =>
+      createNavigationIntent(input, intents, timers, configured),
+    consume: (input): string | undefined =>
+      consumeNavigationIntent(input, intents, timers, configured),
+    invalidateLogin: (runId, loginId): void => {
+      invalidateIntents(
+        intents,
+        timers,
+        configured,
+        (intent): boolean => intent.runId === runId && intent.loginId === loginId,
+      );
+    },
+    invalidateRun: (runId): void => {
+      invalidateIntents(intents, timers, configured, (intent): boolean => intent.runId === runId);
+    },
+    dispose: (): void => {
+      for (const nonce of intents.keys()) removeIntent(nonce, intents, timers, configured);
+    },
+  };
+}
+
+function createNavigationIntent(
+  input: CodexAuthNavigationIntentInput,
+  intents: Map<string, StoredCodexAuthNavigationIntent>,
+  timers: Map<string, object | number>,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+): CodexAuthNavigationIntent | undefined {
+  clearExpiredIntents(intents, timers, deps);
+  const created = storedNavigationIntent(input, deps);
+  if (created === undefined || intents.has(created.nonce) || intents.size >= deps.maxIntents) {
+    return undefined;
+  }
+  intents.set(created.nonce, created.intent);
+  timers.set(
+    created.nonce,
+    deps.setTimeout(
+      (): void => {
+        removeIntent(created.nonce, intents, timers, deps);
+      },
+      Math.max(0, created.intent.expiresAt - deps.now()),
+    ),
+  );
+  return Object.freeze({ nonce: created.nonce });
+}
+
+function consumeNavigationIntent(
+  input: CodexAuthNavigationIntentConsumption,
+  intents: Map<string, StoredCodexAuthNavigationIntent>,
+  timers: Map<string, object | number>,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+): string | undefined {
+  clearExpiredIntents(intents, timers, deps);
+  const stored = intents.get(input.nonce);
+  if (stored === undefined || !matchesNavigationIntent(stored, input, deps)) return undefined;
+  removeIntent(input.nonce, intents, timers, deps);
+  return stored.url;
+}
+
+function clearExpiredIntents(
+  intents: Map<string, StoredCodexAuthNavigationIntent>,
+  timers: Map<string, object | number>,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+): void {
+  for (const [nonce, intent] of intents) {
+    if (intent.expiresAt <= deps.now()) removeIntent(nonce, intents, timers, deps);
+  }
+}
+
+function invalidateIntents(
+  intents: Map<string, StoredCodexAuthNavigationIntent>,
+  timers: Map<string, object | number>,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+  matches: (intent: StoredCodexAuthNavigationIntent) => boolean,
+): void {
+  for (const [nonce, intent] of intents) {
+    if (matches(intent)) removeIntent(nonce, intents, timers, deps);
+  }
+}
+
+function removeIntent(
+  nonce: string,
+  intents: Map<string, StoredCodexAuthNavigationIntent>,
+  timers: Map<string, object | number>,
+  deps: Pick<CodexAuthNavigationIntentCoordinatorDeps, "clearTimeout">,
+): void {
+  const timer = timers.get(nonce);
+  if (timer !== undefined) deps.clearTimeout(timer);
+  timers.delete(nonce);
+  intents.delete(nonce);
+}
+
+function storedNavigationIntent(
+  input: CodexAuthNavigationIntentInput,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+): { readonly nonce: string; readonly intent: StoredCodexAuthNavigationIntent } | undefined {
+  if (!isCodexAuthNavigationUrl(input.url) || !nonEmpty(input.runId) || !nonEmpty(input.loginId)) {
+    return undefined;
+  }
+  const nonce = deps.newNonce();
+  if (!nonEmpty(nonce)) return undefined;
+  return {
+    nonce,
+    intent: {
+      url: input.url,
+      urlDigest: deps.sha256(input.url),
+      runId: input.runId,
+      loginId: input.loginId,
+      expiresAt: deps.now() + Math.max(0, deps.ttlMs),
+    },
+  };
+}
+
+function matchesNavigationIntent(
+  stored: StoredCodexAuthNavigationIntent,
+  input: CodexAuthNavigationIntentConsumption,
+  deps: CodexAuthNavigationIntentCoordinatorDeps,
+): boolean {
+  return (
+    stored.runId === input.runId &&
+    stored.loginId === input.loginId &&
+    isCodexAuthNavigationUrl(stored.url) &&
+    stored.urlDigest === deps.sha256(stored.url)
+  );
+}
+
+function navigationIntentDeps(
+  deps: Partial<CodexAuthNavigationIntentCoordinatorDeps>,
+): CodexAuthNavigationIntentCoordinatorDeps {
+  return {
+    now: deps.now ?? Date.now,
+    ttlMs: Math.min(
+      Math.max(0, deps.ttlMs ?? MAX_AUTH_NAVIGATION_INTENT_TTL_MS),
+      MAX_AUTH_NAVIGATION_INTENT_TTL_MS,
+    ),
+    maxIntents: Math.min(
+      Math.max(1, deps.maxIntents ?? DEFAULT_AUTH_NAVIGATION_INTENT_CAPACITY),
+      MAX_AUTH_NAVIGATION_INTENT_CAPACITY,
+    ),
+    newNonce: deps.newNonce ?? randomUUID,
+    sha256: deps.sha256 ?? sha256,
+    setTimeout: deps.setTimeout ?? setTimeout,
+    clearTimeout:
+      deps.clearTimeout ??
+      ((handle): void => {
+        clearTimeout(handle as ReturnType<typeof setTimeout>);
+      }),
+  };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function nonEmpty(value: string): boolean {
+  return value.length > 0;
+}
 
 class BodyTooLargeError extends Error {
   constructor() {
     super("request body too large");
     this.name = "BodyTooLargeError";
   }
+}
+
+export function createCodexSubscriptionProfileCoordinator(
+  deps: CodexSubscriptionProfileCoordinatorDeps,
+): CodexSubscriptionProfileCoordinator {
+  let cache: CachedProfile | undefined;
+  let inFlight: InFlightProfile | undefined;
+  let generation = 0;
+  const invalidate = (): void => {
+    generation += 1;
+    cache = undefined;
+    inFlight = undefined;
+  };
+  return {
+    getProfile: (): Promise<CodingWorkbenchCodexSubscriptionProfile> => {
+      const cached = cache;
+      if (cached !== undefined && cached.expiresAt > deps.now())
+        return Promise.resolve(cached.value);
+      if (inFlight !== undefined) return inFlight.promise;
+      const requestGeneration = generation;
+      const promise = resolveProfile(deps, (): boolean => generation === requestGeneration)
+        .then((resolved) => {
+          if (generation !== requestGeneration) return unavailableProfile();
+          if (resolved.cacheable) {
+            cache = {
+              expiresAt: deps.now() + Math.max(0, deps.ttlMs),
+              value: resolved.profile,
+            };
+          }
+          return resolved.profile;
+        })
+        .finally(() => {
+          if (inFlight?.promise === promise) inFlight = undefined;
+        });
+      inFlight = { promise };
+      return promise;
+    },
+    loginStarted: invalidate,
+    browserLoginStarted: invalidate,
+    deviceCodeLoginStarted: invalidate,
+    loginCancelled: invalidate,
+    loginCompleted: invalidate,
+    loginSucceeded: invalidate,
+    loginFailed: invalidate,
+    loginExpired: invalidate,
+    loginRevoked: invalidate,
+    loginClosed: invalidate,
+    logout: invalidate,
+  };
+}
+
+async function resolveProfile(
+  deps: CodexSubscriptionProfileCoordinatorDeps,
+  current: () => boolean,
+): Promise<ResolvedProfile> {
+  const controller = new AbortController();
+  try {
+    const value = await withinDeadline(
+      Promise.resolve().then((): Promise<unknown> => deps.probe(controller.signal)),
+      controller,
+      deps,
+    );
+    if (!current()) return { profile: unavailableProfile(), cacheable: false };
+    const validated = validateCodingWorkbenchCodexSubscriptionProfile(value);
+    return validated.ok
+      ? { profile: closedProfile(validated.value), cacheable: true }
+      : { profile: unavailableProfile(), cacheable: false };
+  } catch {
+    return { profile: unavailableProfile(), cacheable: false };
+  }
+}
+
+function withinDeadline<T>(
+  promise: Promise<T>,
+  controller: AbortController,
+  deps: Pick<CodexSubscriptionProfileCoordinatorDeps, "timeoutMs" | "setTimeout" | "clearTimeout">,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = deps.setTimeout(
+      (): void => {
+        controller.abort();
+        reject(new Error("probe-timeout"));
+      },
+      Math.max(0, deps.timeoutMs),
+    );
+    promise.then(
+      (value) => {
+        deps.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        deps.clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error("probe-failed"));
+      },
+    );
+  });
+}
+
+function unavailableProfile(): CodingWorkbenchCodexSubscriptionProfile {
+  return closedProfile({
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    profileId: PROFILE_ID,
+    modelSource: "chatgpt-codex-subscription-profile",
+    runtimeSource: "codex-cli-adapter",
+    status: "failed-login",
+    credentialStore: "file",
+    stateScope: "keiko-owned-state",
+    stateRoot: "keiko-codex-runtime-state",
+    usesGlobalCodexHome: false,
+    runtimeBinarySources: [],
+    supportsBrowserLogin: false,
+    supportsDeviceCode: false,
+    supportsAccessToken: false,
+    deploymentPolicyDisabled: false,
+    headless: false,
+  });
+}
+
+function closedProfile(
+  profile: CodingWorkbenchCodexSubscriptionProfile,
+): CodingWorkbenchCodexSubscriptionProfile {
+  return Object.freeze({
+    ...profile,
+    ...(profile.authMethod === undefined ? {} : { authMethod: profile.authMethod }),
+    runtimeBinarySources: Object.freeze([...profile.runtimeBinarySources]),
+  });
 }
 
 function envFlagEnabled(env: EnvSource, key: string): boolean {
@@ -201,14 +592,23 @@ function redistributionUnapproved(): RouteResult {
   };
 }
 
-export function handleCodingCodexSubscriptionProfile(
+export async function handleCodingCodexSubscriptionProfile(
   _ctx: RouteContext,
   deps: UiHandlerDeps,
-): RouteResult {
-  const profile = codexSubscriptionProfileForEnv(
-    deps.env,
-    deps.codexRuntimeAvailability?.isApprovedVerified() === true,
-  );
+): Promise<RouteResult> {
+  const approved = deps.codexRuntimeAvailability?.isApprovedVerified() === true;
+  const environmentProfile = codexSubscriptionProfileForEnv(deps.env, approved);
+  if (
+    approved &&
+    !environmentProfile.deploymentPolicyDisabled &&
+    deps.codexSubscriptionProfileCoordinator !== undefined
+  ) {
+    return profileRouteResult(await deps.codexSubscriptionProfileCoordinator.getProfile());
+  }
+  return profileRouteResult(environmentProfile);
+}
+
+function profileRouteResult(profile: unknown): RouteResult {
   const parsed = validateCodingWorkbenchCodexSubscriptionProfile(profile);
   return {
     status: parsed.ok ? 200 : 500,
@@ -216,6 +616,19 @@ export function handleCodingCodexSubscriptionProfile(
       ? parsed.value
       : errorBody("INTERNAL", "Codex subscription profile validation failed."),
   };
+}
+
+function invalidateForSetup(
+  method: CodingWorkbenchCodexAuthMethod,
+  coordinator: CodexSubscriptionProfileCoordinator | undefined,
+): void {
+  if (method === "chatgpt-browser-login") {
+    coordinator?.browserLoginStarted();
+  } else if (method === "chatgpt-device-code") {
+    coordinator?.deviceCodeLoginStarted();
+  } else {
+    coordinator?.loginStarted();
+  }
 }
 
 export async function handleCodingCodexSubscriptionSetup(
@@ -236,7 +649,9 @@ export async function handleCodingCodexSubscriptionSetup(
     }
     const plan = setupPlanFor(parsed.value.method, deps.env);
     const validPlan = validateCodingWorkbenchCodexAuthSetupPlan(plan);
-    return validPlan.ok ? { status: 200, body: validPlan.value } : invalidSetupRequest();
+    if (!validPlan.ok) return invalidSetupRequest();
+    invalidateForSetup(parsed.value.method, deps.codexSubscriptionProfileCoordinator);
+    return { status: 200, body: validPlan.value };
   } catch {
     return invalidSetupRequest();
   }

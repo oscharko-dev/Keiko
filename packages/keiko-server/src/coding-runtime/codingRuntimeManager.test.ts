@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -45,6 +54,17 @@ const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   backend: "windows-job-object",
   releaseReceipt: `sha256:${"a".repeat(64)}`,
 };
+const CODEX_STATE_ENV_NAMES = [
+  "CODEX_HOME",
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+] as const;
 
 type TestCodingRuntimeManagerDeps = Omit<
   CodingRuntimeManagerDeps,
@@ -63,6 +83,127 @@ type TestCodingRuntimeManagerDeps = Omit<
     >
   >;
 
+/**
+ * #2255 contract expectation. The adapter must be injected by a caller that has already
+ * qualified both the runtime and profile; the manager remains closed without it.
+ */
+interface ExpectedCodexLifecycleAdapter {
+  qualify(request: ExpectedCodexLifecycleCheckRequest): Promise<ExpectedCodexLifecycleResult>;
+  inspectProfile(
+    request: ExpectedCodexLifecycleCheckRequest,
+  ): Promise<ExpectedCodexLifecycleResult>;
+  prepare(
+    request: ExpectedCodexLifecyclePrepareRequest,
+  ): Promise<ExpectedCodexLifecyclePrepareResult>;
+  attach(request: ExpectedCodexLifecycleAttachRequest): Promise<ExpectedCodexLifecycleAttachment>;
+  dispose(runId: string): boolean | Promise<boolean>;
+}
+
+interface ExpectedCodexLifecycleCheckRequest {
+  readonly runId: string;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+interface ExpectedCodexLifecyclePrepareRequest extends ExpectedCodexLifecycleCheckRequest {
+  readonly stateRoot: string;
+}
+
+interface ExpectedCodexLifecycleAttachRequest extends ExpectedCodexLifecycleCheckRequest {
+  readonly runId: string;
+  readonly tree: RuntimeProcessTree;
+}
+
+type ExpectedCodexLifecycleResult = { readonly ok: true } | { readonly ok: false };
+
+type ExpectedCodexLifecyclePrepareResult =
+  { readonly ok: true; readonly stateRoot: string } | { readonly ok: false };
+
+type ExpectedCodexLifecycleAttachment =
+  { readonly ok: true; readonly detach: () => boolean | Promise<boolean> } | { readonly ok: false };
+
+type ExpectedCodexLifecycleAdapterDeps = TestCodingRuntimeManagerDeps & {
+  readonly codexLifecycleAdapter?: ExpectedCodexLifecycleAdapter | undefined;
+};
+
+function egressQualificationFor(
+  scenario: "missing" | "credentialed-proxy" | "unverified",
+): CodingRuntimeManagerDeps["qualifyCodexEgress"] {
+  if (scenario === "missing") return undefined;
+  if (scenario === "credentialed-proxy") {
+    return (): {
+      readonly verified: true;
+      readonly receipt: string;
+      readonly directEgress: "disabled";
+      readonly httpsProxy: string;
+    } => ({
+      verified: true,
+      receipt: "reviewed-receipt",
+      directEgress: "disabled",
+      httpsProxy: "https://operator:secret@proxy.example.test",
+    });
+  }
+  return (): {
+    readonly verified: false;
+    readonly receipt: string;
+    readonly directEgress: "disabled";
+  } => ({
+    verified: false,
+    receipt: "reviewed-receipt",
+    directEgress: "disabled",
+  });
+}
+
+function assertQualifiedCodexLaunch(input: {
+  readonly preparedRequest: ExpectedCodexLifecyclePrepareRequest | undefined;
+  readonly attachedRequest: ExpectedCodexLifecycleAttachRequest | undefined;
+  readonly preparedStateRoot: string | undefined;
+  readonly spawnedEnv: Record<string, string> | undefined;
+  readonly localSecretRoot: string;
+  readonly managedRoot: string;
+  readonly inheritedState: string;
+  readonly child: FakeChild;
+}): void {
+  if (
+    input.preparedRequest === undefined ||
+    input.attachedRequest === undefined ||
+    input.preparedStateRoot === undefined ||
+    input.spawnedEnv === undefined
+  ) {
+    throw new Error("qualified-codex-launch-missing");
+  }
+  expect(input.preparedRequest.runId).toBe("run-1988");
+  expect(input.preparedRequest.signal).toBeInstanceOf(AbortSignal);
+  expect(input.preparedRequest.stateRoot).toEqual(expect.any(String));
+  expect(input.preparedRequest.timeoutMs).toBe(30_000);
+  expect(input.attachedRequest.runId).toBe("run-1988");
+  expect(input.attachedRequest.signal).toBeInstanceOf(AbortSignal);
+  expect(input.attachedRequest.timeoutMs).toBe(30_000);
+  expect(input.attachedRequest.tree.treeId).toBe("test-4242");
+  expect(isAbsolute(input.preparedStateRoot)).toBe(true);
+  expect(pathWithin(realpathSync(input.localSecretRoot), input.preparedStateRoot)).toBe(true);
+  expect(pathWithin(input.managedRoot, input.preparedStateRoot)).toBe(false);
+  expect(input.spawnedEnv.PATH).toBeUndefined();
+  assertCodexStateEnvironment(input.spawnedEnv, input.preparedStateRoot);
+  const serialized = JSON.stringify(input.spawnedEnv);
+  expect(serialized).not.toContain(input.inheritedState);
+  expect(serialized).not.toContain(input.managedRoot);
+  expect(serialized).not.toContain("/global/bin");
+  expect(input.spawnedEnv.HTTPS_PROXY).toBeUndefined();
+  expect(input.spawnedEnv.SSL_CERT_FILE).toBeUndefined();
+  expect(existsSync(join(input.managedRoot, "coding-runtime", "codex"))).toBe(false);
+  expect(input.child.stdout.listenerCount("data")).toBe(1);
+}
+
+function assertCodexStateEnvironment(env: Record<string, string>, stateRoot: string): void {
+  for (const name of CODEX_STATE_ENV_NAMES) {
+    const value = env[name];
+    expect(value, name).toBeDefined();
+    expect(isAbsolute(value ?? ""), name).toBe(true);
+    expect(pathWithin(stateRoot, value ?? ""), name).toBe(true);
+  }
+}
+
 function createTestCodingRuntimeManager(deps: TestCodingRuntimeManagerDeps): CodingRuntimeManager {
   const portable = createPortableRuntimeFixture();
   return createProductionCodingRuntimeManager({
@@ -74,6 +215,20 @@ function createTestCodingRuntimeManager(deps: TestCodingRuntimeManagerDeps): Cod
       verification: portable.verification,
       resourceRoot: portable.resourceRoot,
       target: "windows-x64",
+    }),
+    ...deps,
+  });
+}
+
+function createCodexTestCodingRuntimeManager(
+  deps: ExpectedCodexLifecycleAdapterDeps,
+): CodingRuntimeManager {
+  return createTestCodingRuntimeManager({
+    codexLocalSecretRoot: tempDir("keiko-codex-local-secret-"),
+    qualifyCodexEgress: () => ({
+      verified: true,
+      receipt: "test-reviewed-egress-receipt",
+      directEgress: "disabled",
     }),
     ...deps,
   });
@@ -318,6 +473,121 @@ function autonomousDeliveryRequest(
     taskRef: "issue-1993",
     requestedMode: "autonomous-delivery",
     effectiveMode: "autonomous-delivery",
+  };
+}
+
+function codexRequest(
+  workspaceRoot: string,
+  managedRoot: string,
+  executablePath: string,
+): CodingRuntimeLaunchRequest {
+  return {
+    ...launchRequest(workspaceRoot, managedRoot, executablePath),
+    adapterKind: "codex-cli",
+    runtimeSource: "codex-cli-adapter",
+    modelSource: "chatgpt-codex-subscription-profile",
+  };
+}
+
+function qualifiedCodexAdapter(
+  overrides: Partial<ExpectedCodexLifecycleAdapter> = {},
+): ExpectedCodexLifecycleAdapter {
+  return {
+    qualify: (): Promise<ExpectedCodexLifecycleResult> => Promise.resolve({ ok: true }),
+    inspectProfile: (): Promise<ExpectedCodexLifecycleResult> => Promise.resolve({ ok: true }),
+    prepare: (request): Promise<ExpectedCodexLifecyclePrepareResult> =>
+      Promise.resolve(prepareManagedCodexStateRoot(request)),
+    attach: (): Promise<ExpectedCodexLifecycleAttachment> =>
+      Promise.resolve({
+        ok: true,
+        detach: (): true => true,
+      }),
+    dispose: (): true => true,
+    ...overrides,
+  };
+}
+
+function prepareManagedCodexStateRoot(request: ExpectedCodexLifecyclePrepareRequest): {
+  readonly ok: true;
+  readonly stateRoot: string;
+} {
+  mkdirSync(request.stateRoot, { recursive: true, mode: 0o700 });
+  return { ok: true, stateRoot: realpathSync(request.stateRoot) };
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+type CodexStartupStage = "qualify" | "inspectProfile" | "prepare" | "attach";
+
+interface HangingCodexAdapterControl {
+  readonly adapter: ExpectedCodexLifecycleAdapter;
+  readonly reached: Promise<void>;
+  observedSignal(): AbortSignal | undefined;
+  rejectLate(error: Error): void;
+  resume(): void;
+}
+
+function hangingCodexAdapter(stage: CodexStartupStage): HangingCodexAdapterControl {
+  let hanging = true;
+  let observedSignal: AbortSignal | undefined;
+  let rejectHang: ((error: Error) => void) | undefined;
+  let markReached: (() => void) | undefined;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const hang = (signal: AbortSignal): Promise<never> => {
+    observedSignal = signal;
+    markReached?.();
+    return new Promise<never>((_resolve, reject) => {
+      rejectHang = reject;
+    });
+  };
+  const adapter = qualifiedCodexAdapter({
+    qualify: (request) =>
+      stage === "qualify" && hanging ? hang(request.signal) : Promise.resolve({ ok: true }),
+    inspectProfile: (request) =>
+      stage === "inspectProfile" && hanging ? hang(request.signal) : Promise.resolve({ ok: true }),
+    prepare: (request) =>
+      stage === "prepare" && hanging
+        ? hang(request.signal)
+        : Promise.resolve(prepareManagedCodexStateRoot(request)),
+    attach: (request) =>
+      stage === "attach" && hanging
+        ? hang(request.signal)
+        : Promise.resolve({ ok: true, detach: (): true => true }),
+  });
+  return {
+    adapter,
+    reached,
+    observedSignal: (): AbortSignal | undefined => observedSignal,
+    rejectLate: (error): void => rejectHang?.(error),
+    resume: (): void => {
+      hanging = false;
+    },
+  };
+}
+
+function reapingSpawnHarness(): {
+  readonly spawn: CodingRuntimeSpawnFn;
+  readonly children: FakeChild[];
+} {
+  const children: FakeChild[] = [];
+  return {
+    children,
+    spawn: (): CodingRuntimeSpawnHandle => {
+      const child = fakeChild();
+      children.push(child);
+      return {
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      };
+    },
   };
 }
 
@@ -602,7 +872,7 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
-  it("keeps Codex unavailable without a reviewed bundled payload and never falls back globally", () => {
+  it("keeps Codex unavailable without a reviewed bundled payload and never falls back globally", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const manager = createTestCodingRuntimeManager({
@@ -610,15 +880,507 @@ describe("coding runtime manager", () => {
       processEnv: {},
     });
 
-    expect(
-      manager.start({
-        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
-        adapterKind: "codex-cli",
-        runtimeSource: "codex-cli-adapter",
-        modelSource: "chatgpt-codex-subscription-profile",
-      }),
-    ).toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
+    await expect(
+      Promise.resolve(
+        manager.start({
+          ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          adapterKind: "codex-cli",
+          runtimeSource: "codex-cli-adapter",
+          modelSource: "chatgpt-codex-subscription-profile",
+        }),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
     expect(harness.children).toHaveLength(0);
+  });
+
+  it("does not spawn Codex when an injected adapter does not explicitly qualify its profile", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        inspectProfile: (): Promise<ExpectedCodexLifecycleResult> => Promise.resolve({ ok: false }),
+      }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("does not spawn Codex when an injected adapter is not qualified", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        qualify: (): Promise<ExpectedCodexLifecycleResult> => Promise.resolve({ ok: false }),
+      }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("does not treat legacy static booleans as Codex runtime or profile qualification", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const staticOnlyAdapter = {
+      qualified: true,
+      profileUsable: true,
+      prepare: (
+        request: ExpectedCodexLifecyclePrepareRequest,
+      ): Promise<ExpectedCodexLifecyclePrepareResult> =>
+        Promise.resolve(prepareManagedCodexStateRoot(request)),
+      attach: (): Promise<ExpectedCodexLifecycleAttachment> =>
+        Promise.resolve({
+          ok: true,
+          detach: (): true => true,
+        }),
+      dispose: (): true => true,
+    } as unknown as ExpectedCodexLifecycleAdapter;
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: staticOnlyAdapter,
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it.each(["missing", "outside", "symlink-escaped"] as const)(
+    "rejects a %s prepared Codex state root before spawn",
+    async (scenario) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const manager = createCodexTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(harness.spawn),
+        codexLifecycleAdapter: qualifiedCodexAdapter({
+          prepare: (
+            request: ExpectedCodexLifecyclePrepareRequest,
+          ): Promise<ExpectedCodexLifecyclePrepareResult> => {
+            if (scenario === "missing")
+              return Promise.resolve({ ok: true, stateRoot: request.stateRoot });
+            const outside = tempDir("keiko-codex-state-outside-");
+            if (scenario === "outside") {
+              return Promise.resolve({ ok: true, stateRoot: realpathSync(outside) });
+            }
+            mkdirSync(dirname(request.stateRoot), { recursive: true });
+            symlinkSync(outside, request.stateRoot, "dir");
+            return Promise.resolve({ ok: true, stateRoot: realpathSync(request.stateRoot) });
+          },
+        }),
+      });
+
+      await expect(
+        Promise.resolve(
+          manager.start(
+            codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ),
+      ).resolves.toEqual({ ok: false, failureCode: "runtime-state-unavailable", retryable: false });
+      expect(harness.children).toHaveLength(0);
+      expect(manager.health()).toEqual({ status: "stopped" });
+    },
+  );
+
+  it.each(["missing", "credentialed-proxy", "unverified"] as const)(
+    "does not spawn Codex without a reviewed %s egress qualification",
+    async (scenario) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const qualification = egressQualificationFor(scenario);
+      const manager = createCodexTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(harness.spawn),
+        codexLifecycleAdapter: qualifiedCodexAdapter(),
+        qualifyCodexEgress: qualification,
+      });
+
+      await expect(
+        Promise.resolve(
+          manager.start(
+            codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ),
+      ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
+      expect(harness.children).toHaveLength(0);
+    },
+  );
+
+  it("rejects a malformed direct-egress receipt before supervisor spawn", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+      qualifyCodexEgress: () =>
+        ({ verified: true, receipt: "reviewed-receipt", directEgress: "bypass" }) as unknown as {
+          readonly verified: boolean;
+          readonly receipt: string;
+          readonly directEgress: "disabled" | "approved";
+        },
+    });
+
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("lets only a qualified Codex adapter prepare and attach to the supervisor-owned tree", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const inheritedState = tempDir("keiko-global-codex-state-");
+    const localSecretRoot = tempDir("keiko-codex-server-secret-");
+    let preparedStateRoot: string | undefined;
+    let spawnedEnv: Record<string, string> | undefined;
+    let preparedRequest: ExpectedCodexLifecyclePrepareRequest | undefined;
+    let attachedRequest: ExpectedCodexLifecycleAttachRequest | undefined;
+    const prepare = vi.fn(
+      (
+        request: ExpectedCodexLifecyclePrepareRequest,
+      ): Promise<ExpectedCodexLifecyclePrepareResult> => {
+        preparedRequest = request;
+        const prepared = prepareManagedCodexStateRoot(request);
+        preparedStateRoot = prepared.stateRoot;
+        return Promise.resolve(prepared);
+      },
+    );
+    const attach = vi.fn(
+      (request: ExpectedCodexLifecycleAttachRequest): Promise<ExpectedCodexLifecycleAttachment> => {
+        attachedRequest = request;
+        const { tree } = request;
+        const consumeProtocol = (): void => undefined;
+        tree.stdout.on("data", consumeProtocol);
+        return Promise.resolve({
+          ok: true,
+          detach: (): true => {
+            tree.stdout.off("data", consumeProtocol);
+            return true;
+          },
+        });
+      },
+    );
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {
+        PATH: "/global/bin",
+        CODEX_HOME: join(inheritedState, "codex-home"),
+        HOME: join(inheritedState, "home"),
+        USERPROFILE: join(inheritedState, "user-profile"),
+        XDG_CONFIG_HOME: join(inheritedState, "xdg-config"),
+        XDG_DATA_HOME: join(inheritedState, "xdg-data"),
+        XDG_CACHE_HOME: join(inheritedState, "xdg-cache"),
+        TMPDIR: join(inheritedState, "tmpdir"),
+        TEMP: join(inheritedState, "temp"),
+        TMP: join(inheritedState, "tmp"),
+        HTTPS_PROXY: "https://inherited-proxy.example.test",
+        SSL_CERT_FILE: join(inheritedState, "ca.pem"),
+      },
+      supervisor: testSupervisor((_executable, _args, env) => {
+        spawnedEnv = env;
+        return child.handle;
+      }),
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      codexLifecycleAdapter: qualifiedCodexAdapter({ prepare, attach }),
+      codexLocalSecretRoot: localSecretRoot,
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start({
+          ...codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          inheritedEnvAllowlist: ["PATH", "HTTPS_PROXY", "SSL_CERT_FILE", ...CODEX_STATE_ENV_NAMES],
+        }),
+      ),
+    ).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    assertQualifiedCodexLaunch({
+      preparedRequest,
+      attachedRequest,
+      preparedStateRoot,
+      spawnedEnv,
+      localSecretRoot,
+      managedRoot: fixture.managedRoot,
+      inheritedState,
+      child,
+    });
+
+    child.stdout.write(pushPermissionLine("codex-stdout-must-not-use-sidecar-parser"));
+    await settle();
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+  });
+
+  it("spawns the resolver-owned dedicated Codex app-server payload with an exact empty argv", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start({
+          ...codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          args: ["app-server", "--caller-supplied-codex-argument"],
+        }),
+      ),
+    ).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    expect(harness.captures).toHaveLength(1);
+    expect(harness.captures[0]).toMatchObject({
+      executable: realpathSync(fixture.executablePath),
+      args: [],
+    });
+  });
+
+  it("redacts Codex attach failures and reaps the whole supervisor-owned tree", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        attach: (): Promise<ExpectedCodexLifecycleAttachment> =>
+          Promise.reject(new Error("credential=must-not-escape")),
+      }),
+    });
+
+    const result = await manager.start(
+      codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      failureCode: "protocol-schema-mismatch",
+      retryable: false,
+    });
+    expect(child.kills).toEqual(["SIGTERM"]);
+    expect(manager.health()).toEqual({ status: "stopped" });
+    expect(JSON.stringify({ result, events })).not.toContain("credential=must-not-escape");
+  });
+
+  it.each(
+    (["qualify", "inspectProfile", "prepare", "attach"] as const).flatMap((stage) => [
+      [stage, "abort"],
+      [stage, "timeout"],
+    ]) as readonly (readonly [CodexStartupStage, "abort" | "timeout"])[],
+  )(
+    "cancels a hanging Codex %s step on %s without leaking content or its slot",
+    async (stage, mode) => {
+      if (mode === "timeout") vi.useFakeTimers();
+      try {
+        const fixture = createManagedFixture();
+        const harness = reapingSpawnHarness();
+        const control = hangingCodexAdapter(stage);
+        const controller = new AbortController();
+        const events: CodingWorkbenchRuntimeEvent[] = [];
+        const manager = createCodexTestCodingRuntimeManager({
+          processEnv: {},
+          supervisor: testSupervisor(harness.spawn),
+          onRuntimeEvent: (event): void => {
+            events.push(event);
+          },
+          codexLifecycleAdapter: control.adapter,
+        });
+        const request = {
+          ...codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          startTimeoutMs: 25,
+          signal: controller.signal,
+        };
+
+        const starting = Promise.resolve(manager.start(request));
+        await control.reached;
+        if (mode === "abort") controller.abort();
+        else await vi.advanceTimersByTimeAsync(25);
+
+        const expectedCode = mode === "abort" ? "start-aborted" : "start-timeout";
+        const result = await starting;
+        expect(result).toEqual({ ok: false, failureCode: expectedCode, retryable: true });
+        expect(control.observedSignal()?.aborted).toBe(true);
+        expect(manager.health()).toEqual({ status: "stopped" });
+        expect(harness.children).toHaveLength(stage === "attach" ? 1 : 0);
+        if (stage === "attach") expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
+
+        control.rejectLate(new Error("credential=hanging-stage-must-not-escape"));
+        await Promise.resolve();
+        expect(JSON.stringify({ result, events })).not.toContain("hanging-stage-must-not-escape");
+
+        control.resume();
+        await expect(manager.start({ ...request, signal: undefined })).resolves.toEqual({
+          ok: true,
+          runId: "run-1988",
+          status: "ready",
+        });
+        await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+      } finally {
+        if (mode === "timeout") vi.useRealTimers();
+      }
+    },
+  );
+
+  it("orders Codex stop authority barriers before detach and whole-tree reap, then disposes", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const order: string[] = [];
+    const approvals = createInMemorySupervisedCodingApprovalStore();
+    const approvalStore = {
+      ...approvals,
+      invalidateRun: (runId: string): void => {
+        order.push(`invalidate:${runId}`);
+        approvals.invalidateRun(runId);
+      },
+    };
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      approvalStore,
+      supervisor: testSupervisor(
+        () => ({
+          ...child.handle,
+          kill: (signal): void => {
+            order.push(`signal:${signal}`);
+            child.kills.push(signal);
+            if (signal === "SIGKILL") child.exit(0);
+          },
+        }),
+        { setTimer: (callback): unknown => (callback(), undefined) },
+      ),
+      revokeRuntime: (runId): true => {
+        order.push(`revoke:${runId}`);
+        return true;
+      },
+      abortInFlightActions: (runId): true => {
+        order.push(`abort:${runId}`);
+        return true;
+      },
+      releaseRuntimeAfterReap: (runId): true => {
+        order.push(`release:${runId}`);
+        return true;
+      },
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        attach: (): Promise<ExpectedCodexLifecycleAttachment> =>
+          Promise.resolve({
+            ok: true,
+            detach: (): true => {
+              order.push("detach:run-1988");
+              return true;
+            },
+          }),
+        dispose: (runId): true => {
+          order.push(`dispose:${runId}`);
+          return true;
+        },
+      }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(order).toEqual([
+      "revoke:run-1988",
+      "invalidate:run-1988",
+      "abort:run-1988",
+      "detach:run-1988",
+      "signal:SIGTERM",
+      "signal:SIGKILL",
+      "dispose:run-1988",
+      "release:run-1988",
+    ]);
+  });
+
+  it("retains the Codex slot for recovery when complete-tree reap is unproven", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const dispose = vi.fn(() => true);
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle, {
+        setTimer: (callback): unknown => (callback(), undefined),
+      }),
+      codexLifecycleAdapter: qualifiedCodexAdapter({ dispose }),
+    });
+
+    await expect(
+      Promise.resolve(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    await expect(manager.stop("run-1988")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(child.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(dispose).not.toHaveBeenCalled();
+    expect(manager.health()).toMatchObject({
+      status: "recovery-required",
+      activeRunId: "run-1988",
+    });
+    expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "runtime-already-running", retryable: true });
+  });
+
+  it("preserves the existing OpenCode path when no Codex lifecycle adapter is injected", () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+    });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    expect(harness.children).toHaveLength(1);
   });
 
   it("rejects a tampered resolver-owned executable immediately before spawn", () => {

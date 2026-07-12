@@ -1,5 +1,6 @@
-import { accessSync, constants, realpathSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 
 import {
@@ -62,6 +63,7 @@ export type CodingRuntimeFailureCode =
   | "adapter-profile-mismatch"
   | "archive-digest-mismatch"
   | "env-secret-denied"
+  | "egress-unqualified"
   | "executable-tree-digest-mismatch"
   | "gateway-non-loopback"
   | "payload-missing"
@@ -75,6 +77,7 @@ export type CodingRuntimeFailureCode =
   | "runtime-run-mismatch"
   | "runtime-profile-open"
   | "runtime-reap-unproven"
+  | "runtime-state-unavailable"
   | "runtime-unqualified"
   | "sidecar-missing"
   | "sidecar-unmanaged"
@@ -178,6 +181,15 @@ export interface CodingRuntimeManagerDeps {
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter?: OpenCodeLifecycleAdapter | undefined;
+  readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
+  /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
+  readonly codexLocalSecretRoot?: string | undefined;
+  /**
+   * Server-side egress verifier. Its receipt attests to network enforcement; environment
+   * projection is configuration only and is never treated as confinement.
+   */
+  readonly qualifyCodexEgress?:
+    ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver?:
     | ((request: CodingRuntimeLaunchRequest) =>
         | {
@@ -234,6 +246,52 @@ export interface OpenCodeLifecycleAdapter {
   dispose?: ((runId: string) => boolean | Promise<boolean>) | undefined;
 }
 
+/**
+ * Server-private lifecycle boundary for a reviewed Codex app-server composition.
+ * It receives an already supervisor-owned process tree; it cannot spawn or kill one.
+ */
+export interface CodexLifecycleAdapter {
+  qualify(request: CodexLifecycleCheckRequest): Promise<CodexLifecycleCheckResult>;
+  inspectProfile(request: CodexLifecycleCheckRequest): Promise<CodexLifecycleCheckResult>;
+  prepare(request: CodexLifecyclePrepareRequest): Promise<CodexLifecyclePrepareResult>;
+  attach(request: CodexLifecycleAttachRequest): Promise<CodexLifecycleAttachment>;
+  dispose(runId: string): boolean | Promise<boolean>;
+}
+
+export interface ReviewedCodexEgressPolicy {
+  readonly verified: boolean;
+  readonly receipt: string;
+  /** Direct egress is denied unless the server-side verifier has explicitly approved it. */
+  readonly directEgress: "disabled" | "approved";
+  readonly httpsProxy?: string | undefined;
+  readonly noProxy?: string | undefined;
+  /** Canonical readable CA bundle beneath the server-owned config root. */
+  readonly caBundlePath?: string | undefined;
+  readonly serverConfigRoot?: string | undefined;
+}
+
+export interface CodexLifecycleCheckRequest {
+  readonly runId: string;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+export type CodexLifecycleCheckResult = { readonly ok: true } | { readonly ok: false };
+
+export interface CodexLifecyclePrepareRequest extends CodexLifecycleCheckRequest {
+  readonly stateRoot: string;
+}
+
+export type CodexLifecyclePrepareResult =
+  { readonly ok: true; readonly stateRoot: string } | { readonly ok: false };
+
+export interface CodexLifecycleAttachRequest extends CodexLifecycleCheckRequest {
+  readonly tree: RuntimeProcessTree;
+}
+
+export type CodexLifecycleAttachment =
+  { readonly ok: true; readonly detach: () => boolean | Promise<boolean> } | { readonly ok: false };
+
 export interface CodingRuntimeSidecarLaunchTarget {
   readonly managedRoot: string;
   readonly executablePath: string;
@@ -253,6 +311,10 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
+  readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
+  readonly codexLocalSecretRoot: string | undefined;
+  readonly qualifyCodexEgress:
+    ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver:
     | ((request: CodingRuntimeLaunchRequest) =>
         | {
@@ -285,6 +347,8 @@ export interface CodingRuntimeManager {
 interface PreflightOk {
   readonly ok: true;
   readonly executablePath: string;
+  readonly managedRoot: string;
+  readonly workspaceRoot: string;
 }
 
 interface FailureResult {
@@ -311,8 +375,10 @@ interface ActiveRuntime {
   readonly nowMs: () => number;
   readonly nowIso: () => string;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
+  readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   startupOutput: OpenCodeStartupMailbox | undefined;
   lifecycleMonitorDispose: (() => void) | undefined;
+  codexDetach: (() => boolean | Promise<boolean>) | undefined;
   stdoutBuffer: string;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
@@ -353,6 +419,32 @@ const FIXED_OPENCODE_ARGS = Object.freeze([
   "0",
   "--no-mdns",
 ] as const);
+const FIXED_CODEX_ARGS = Object.freeze([] as const);
+const CODEX_STATE_DIRECTORY = "coding-runtime/codex";
+const INHERITED_EGRESS_ENV_NAMES = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "SSL_CERT_FILE",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+const GLOBAL_RUNTIME_ENV_NAMES = [
+  "CODEX_HOME",
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "PATH",
+] as const;
 
 export function createCodingRuntimeManager(deps: CodingRuntimeManagerDeps): CodingRuntimeManager {
   return new CodingRuntimeManagerImpl(normalizeDeps(deps));
@@ -388,6 +480,9 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     diagnostics: deps.diagnostics,
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
+    codexLifecycleAdapter: deps.codexLifecycleAdapter,
+    codexLocalSecretRoot: deps.codexLocalSecretRoot,
+    qualifyCodexEgress: deps.qualifyCodexEgress,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
     abortInFlightActions: deps.abortInFlightActions,
@@ -417,7 +512,6 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   public constructor(private readonly deps: NormalizedCodingRuntimeManagerDeps) {}
 
-  // eslint-disable-next-line complexity -- closed preflight and adapter preparation gates fail independently.
   public start(
     request: CodingRuntimeLaunchRequest,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
@@ -426,26 +520,41 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     const cancelled = cancellationFailure(request, this.deps);
     if (cancelled !== undefined) return cancelled;
-    const portable = resolvePortableRuntime(request, this.deps);
-    if (!portable.ok) return this.recordLaunchFailure(request, portable);
     const adapter = validateAdapterSelection(request);
     if (!adapter.ok) return this.recordLaunchFailure(request, adapter);
+    const portable = resolvePortableRuntime(request, this.deps);
+    if (!portable.ok) return this.recordLaunchFailure(request, portable);
     const preflight = preflightExecutable(
       request,
       portable.value?.managedRoot,
       portable.value?.executablePath,
     );
     if (!preflight.ok) return this.recordLaunchFailure(request, preflight);
+    return this.startAfterPreflight(request, portable.value, preflight);
+  }
+
+  private startAfterPreflight(
+    request: CodingRuntimeLaunchRequest,
+    portable: ResolvedPortableRuntime | undefined,
+    preflight: PreflightOk,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
+    if (request.adapterKind === "codex-cli") {
+      const codex = this.deps.codexLifecycleAdapter;
+      if (codex === undefined) {
+        return this.recordLaunchFailure(request, failure("redistribution-unapproved", false));
+      }
+      return this.prepareAndSpawnCodex(request, preflight, portable, codex);
+    }
     const env = buildRuntimeEnv(request, this.deps.processEnv);
     if (!env.ok) return this.recordLaunchFailure(request, env);
     const lifecycle = this.deps.openCodeLifecycleAdapter;
-    if (request.adapterKind === "opencode-compatible" && lifecycle !== undefined) {
+    if (lifecycle !== undefined) {
       return lifecycle.prepare === undefined
         ? this.spawnRuntime(
             request,
             preflight.executablePath,
             env.value,
-            portable.value,
+            portable,
             FIXED_OPENCODE_ARGS,
             lifecycle,
           )
@@ -453,17 +562,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
             request,
             preflight.executablePath,
             env.value,
-            portable.value,
+            portable,
             lifecycle,
           );
     }
-    return this.spawnRuntime(
-      request,
-      preflight.executablePath,
-      env.value,
-      portable.value,
-      request.args,
-    );
+    return this.spawnRuntime(request, preflight.executablePath, env.value, portable, request.args);
   }
 
   public async stop(runId: string): Promise<CodingRuntimeStopResult> {
@@ -634,6 +737,140 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     );
   }
 
+  private async prepareAndSpawnCodex(
+    request: CodingRuntimeLaunchRequest,
+    preflight: PreflightOk,
+    portable: ResolvedPortableRuntime | undefined,
+    adapter: CodexLifecycleAdapter,
+  ): Promise<CodingRuntimeStartResult> {
+    const deadline = createCodexStartupDeadline(request);
+    try {
+      const initiallyCancelled = deadline.failureCode();
+      if (initiallyCancelled !== undefined) {
+        return this.recordLaunchFailure(request, failure(initiallyCancelled, true));
+      }
+      const egress = qualifyCodexEgress(request, this.deps);
+      if (!egress.ok) return this.recordLaunchFailure(request, egress);
+      const checks = await qualifyCodexLaunch(adapter, request, deadline);
+      if (!checks.ok) return this.recordLaunchFailure(request, checks);
+      const stateRoot = codexStateRoot(this.deps.codexLocalSecretRoot, request);
+      if (stateRoot === undefined) {
+        return this.recordLaunchFailure(request, failure("runtime-state-unavailable", false));
+      }
+      const prepared = await prepareCodexLaunch(adapter, request, stateRoot, deadline);
+      if (!prepared.ok) return this.recordLaunchFailure(request, prepared);
+      const validatedStateRoot = validatePreparedCodexStateRoot(
+        prepared.stateRoot,
+        stateRoot,
+        preflight,
+      );
+      if (validatedStateRoot === undefined) {
+        return this.recordLaunchFailure(request, failure("runtime-state-unavailable", false));
+      }
+      const env = buildRuntimeEnv(request, this.deps.processEnv, validatedStateRoot, egress.value);
+      if (!env.ok) return this.recordLaunchFailure(request, env);
+      const cancelled = deadline.failureCode();
+      if (cancelled !== undefined) {
+        return this.recordLaunchFailure(request, failure(cancelled, true));
+      }
+      return await this.spawnCodexRuntime(
+        request,
+        preflight.executablePath,
+        env.value,
+        portable,
+        adapter,
+        deadline,
+      );
+    } finally {
+      deadline.dispose();
+    }
+  }
+
+  private async spawnCodexRuntime(
+    request: CodingRuntimeLaunchRequest,
+    executablePath: string,
+    env: Record<string, string>,
+    portable: ResolvedPortableRuntime | undefined,
+    adapter: CodexLifecycleAdapter,
+    deadline: CodexStartupDeadline,
+  ): Promise<CodingRuntimeStartResult> {
+    const portableAvailability = portableAvailabilityFailure(portable);
+    if (portableAvailability !== undefined)
+      return this.recordLaunchFailure(request, portableAvailability);
+    const launched = this.deps.supervisor.spawnOwnedTree(
+      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS),
+    );
+    if (!launched.ok) {
+      return this.recordLaunchFailure(
+        request,
+        failure(launched.failureCode, launched.failureCode === "spawn-failed"),
+      );
+    }
+    const active = createActiveRuntime(
+      request,
+      launched.tree,
+      this.deps.approvalStore,
+      this.deps.now,
+      this.deps.nowIso,
+      undefined,
+      adapter,
+    );
+    this.active = active;
+    this.attachRuntime(active);
+    return await this.attachCodexRuntime(request, active, adapter, deadline);
+  }
+
+  private async attachCodexRuntime(
+    request: CodingRuntimeLaunchRequest,
+    active: ActiveRuntime,
+    adapter: CodexLifecycleAdapter,
+    deadline: CodexStartupDeadline,
+  ): Promise<CodingRuntimeStartResult> {
+    const cancelled = deadline.failureCode();
+    if (cancelled !== undefined) return await this.failCodexStart(request, active, cancelled);
+    const attachment = await deadline.race(
+      Promise.resolve().then(() =>
+        adapter.attach({
+          runId: request.runId,
+          tree: active.tree,
+          signal: deadline.signal,
+          timeoutMs: request.startTimeoutMs,
+        }),
+      ),
+    );
+    if (attachment.status === "cancelled") {
+      return await this.failCodexStart(request, active, attachment.failureCode);
+    }
+    if (attachment.status === "failed" || !attachment.value.ok) {
+      return await this.failCodexStart(request, active, "protocol-schema-mismatch");
+    }
+    active.codexDetach = attachment.value.detach;
+    if (active.stopRequested || this.active !== active) return failure("runtime-crashed", false);
+    active.status = "ready";
+    this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
+    return { ok: true, runId: request.runId, status: "ready" };
+  }
+
+  private async failCodexStart(
+    request: CodingRuntimeLaunchRequest,
+    active: ActiveRuntime,
+    failureCode: CodingRuntimeFailureCode,
+  ): Promise<CodingRuntimeStartResult> {
+    active.stopRequested = true;
+    active.status = "stopping";
+    const receipt = await this.revokeAndTerminate(active);
+    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
+      await this.enterRecoveryRequired(active);
+      return failure("runtime-reap-unproven", false);
+    }
+    active.status = "stopped";
+    if (this.active === active) this.active = undefined;
+    return this.recordLaunchFailure(
+      request,
+      failure(failureCode, failureCode === "start-aborted" || failureCode === "start-timeout"),
+    );
+  }
+
   private async completeOpenCodeStart(
     request: CodingRuntimeLaunchRequest,
     active: ActiveRuntime,
@@ -674,6 +911,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps.approvalStore.invalidateRun(active.context.runId);
       if (!(await this.deps.abortInFlightActions(active.context.runId))) return undefined;
       if (!this.disposeLifecycleMonitor(active)) return undefined;
+      if (!(await this.detachCodexProtocol(active))) return undefined;
       active.shutdownBarrierComplete = true;
       this.deps.supervisor.terminate(active.tree, "graceful");
       let exit = await this.deps.supervisor.waitForCompleteTreeExit(
@@ -696,10 +934,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.tree.onTreeExit((code) => {
       this.handleExit(active, code);
     });
-    active.tree.stdout.setEncoding("utf8");
-    active.tree.stdout.on("data", (chunk) => {
-      this.handleStdout(active, String(chunk));
-    });
+    if (active.codexLifecycleAdapter === undefined) {
+      active.tree.stdout.setEncoding("utf8");
+      active.tree.stdout.on("data", (chunk) => {
+        this.handleStdout(active, String(chunk));
+      });
+    }
     active.tree.stderr.resume();
   }
 
@@ -760,6 +1000,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       ) {
         return false;
       }
+      if (
+        active.codexLifecycleAdapter !== undefined &&
+        !(await boundedLifecycleDisposal(
+          (): boolean | Promise<boolean> =>
+            active.codexLifecycleAdapter?.dispose(active.context.runId) ?? false,
+          active.shutdownTimeoutMs,
+        ))
+      ) {
+        return false;
+      }
     } catch {
       return false;
     }
@@ -802,6 +1052,17 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     try {
       dispose();
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async detachCodexProtocol(active: ActiveRuntime): Promise<boolean> {
+    const detach = active.codexDetach;
+    active.codexDetach = undefined;
+    if (detach === undefined) return true;
+    try {
+      return await detach();
     } catch {
       return false;
     }
@@ -899,9 +1160,7 @@ function resolvePortableRuntime(
   request: CodingRuntimeLaunchRequest,
   deps: Pick<NormalizedCodingRuntimeManagerDeps, "portableRuntimeResolver">,
 ): { readonly ok: true; readonly value: ResolvedPortableRuntime | undefined } | FailureResult {
-  if (request.runtimeSource === "codex-cli-adapter") {
-    return failure("redistribution-unapproved", false);
-  }
+  if (request.runtimeSource === "codex-cli-adapter") return { ok: true, value: undefined };
   if (request.runtimeSource !== "keiko-sidecar") return { ok: true, value: undefined };
   const resolved = deps.portableRuntimeResolver?.(request);
   if (resolved === undefined) return failure("qualification-missing", false);
@@ -946,6 +1205,140 @@ function cancellationFailure(
 }
 
 type OpenCodeHandshakeOutcome = "aborted" | "failed" | "ok" | "timeout";
+
+type CodexStartupCancellationCode = "start-aborted" | "start-timeout";
+type CodexStartupStep<T> =
+  | { readonly status: "ok"; readonly value: T }
+  | { readonly status: "failed" }
+  | { readonly status: "cancelled"; readonly failureCode: CodexStartupCancellationCode };
+
+interface CodexStartupDeadline {
+  readonly signal: AbortSignal;
+  failureCode(): CodexStartupCancellationCode | undefined;
+  race<T>(promise: Promise<T>): Promise<CodexStartupStep<T>>;
+  dispose(): void;
+}
+
+function createCodexStartupDeadline(request: CodingRuntimeLaunchRequest): CodexStartupDeadline {
+  const controller = new AbortController();
+  let cancellationCode: CodexStartupCancellationCode | undefined;
+  let cancel: ((code: CodexStartupCancellationCode) => void) | undefined;
+  const cancellation = new Promise<CodexStartupCancellationCode>((resolve) => {
+    cancel = resolve;
+  });
+  const abort = (): void => {
+    if (cancellationCode !== undefined) return;
+    cancellationCode = "start-aborted";
+    controller.abort();
+    cancel?.(cancellationCode);
+  };
+  if (request.signal?.aborted === true) abort();
+  else request.signal?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(
+    () => {
+      if (cancellationCode !== undefined) return;
+      cancellationCode = "start-timeout";
+      controller.abort();
+      cancel?.(cancellationCode);
+    },
+    Math.max(0, request.startTimeoutMs),
+  );
+  timer.unref();
+  return {
+    signal: controller.signal,
+    failureCode: (): CodexStartupCancellationCode | undefined => cancellationCode,
+    async race<T>(promise: Promise<T>): Promise<CodexStartupStep<T>> {
+      const operation = promise.then(
+        (value): CodexStartupStep<T> => ({ status: "ok", value }),
+        (): CodexStartupStep<T> => ({ status: "failed" }),
+      );
+      const cancelled = cancellation.then((failureCode): CodexStartupStep<T> => ({
+        status: "cancelled",
+        failureCode,
+      }));
+      return await Promise.race([operation, cancelled]);
+    },
+    dispose(): void {
+      clearTimeout(timer);
+      request.signal?.removeEventListener("abort", abort);
+      cancel = undefined;
+    },
+  };
+}
+
+async function qualifyCodexLaunch(
+  adapter: CodexLifecycleAdapter,
+  request: CodingRuntimeLaunchRequest,
+  deadline: CodexStartupDeadline,
+): Promise<{ readonly ok: true } | FailureResult> {
+  const input = {
+    runId: request.runId,
+    signal: deadline.signal,
+    timeoutMs: request.startTimeoutMs,
+  };
+  const qualification = await codexCheck(() => adapter.qualify(input), deadline);
+  if (!qualification.ok) return qualification;
+  return await codexCheck(() => adapter.inspectProfile(input), deadline);
+}
+
+async function codexCheck(
+  check: () => Promise<CodexLifecycleCheckResult>,
+  deadline: CodexStartupDeadline,
+): Promise<{ readonly ok: true } | FailureResult> {
+  const cancelled = deadline.failureCode();
+  if (cancelled !== undefined) return failure(cancelled, true);
+  const outcome = await deadline.race(Promise.resolve().then(check));
+  if (outcome.status === "cancelled") return failure(outcome.failureCode, true);
+  return outcome.status === "ok" && outcome.value.ok
+    ? { ok: true }
+    : failure("redistribution-unapproved", false);
+}
+
+async function boundedLifecycleDisposal(
+  dispose: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(
+      () => {
+        resolve(false);
+      },
+      Math.max(0, timeoutMs),
+    );
+    timer.unref();
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(dispose), timeout]);
+  } catch {
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function prepareCodexLaunch(
+  adapter: CodexLifecycleAdapter,
+  request: CodingRuntimeLaunchRequest,
+  stateRoot: string,
+  deadline: CodexStartupDeadline,
+): Promise<{ readonly ok: true; readonly stateRoot: string } | FailureResult> {
+  const outcome = await deadline.race(
+    Promise.resolve().then(() =>
+      adapter.prepare({
+        runId: request.runId,
+        signal: deadline.signal,
+        timeoutMs: request.startTimeoutMs,
+        stateRoot,
+      }),
+    ),
+  );
+  if (outcome.status === "cancelled") return failure(outcome.failureCode, true);
+  if (outcome.status === "failed" || !outcome.value.ok) {
+    return failure("protocol-schema-mismatch", false);
+  }
+  return outcome.value;
+}
 
 async function prepareOpenCodeLaunch(
   adapter: OpenCodeLifecycleAdapter,
@@ -1055,6 +1448,7 @@ function createActiveRuntime(
   nowMs: () => number,
   nowIso: () => string,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
+  codexLifecycleAdapter?: CodexLifecycleAdapter,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
@@ -1064,9 +1458,11 @@ function createActiveRuntime(
     nowMs,
     nowIso,
     openCodeLifecycleAdapter,
+    codexLifecycleAdapter,
     startupOutput:
       openCodeLifecycleAdapter === undefined ? undefined : createOpenCodeStartupMailbox(),
     lifecycleMonitorDispose: undefined,
+    codexDetach: undefined,
     stdoutBuffer: "",
     shutdownBarrierComplete: false,
     stopRequested: false,
@@ -1089,8 +1485,10 @@ function createInactiveRuntime(
     nowMs,
     nowIso,
     openCodeLifecycleAdapter: undefined,
+    codexLifecycleAdapter: undefined,
     startupOutput: undefined,
     lifecycleMonitorDispose: undefined,
+    codexDetach: undefined,
     stdoutBuffer: "",
     shutdownBarrierComplete: false,
     stopRequested: false,
@@ -1187,7 +1585,7 @@ function preflightExecutable(
   if (pathInside(workspaceRoot, managedRoot) || !pathInside(managedRoot, executablePath)) {
     return failure("sidecar-unmanaged", false);
   }
-  return { ok: true, executablePath };
+  return { ok: true, executablePath, managedRoot, workspaceRoot };
 }
 
 function realPath(path: string): string | undefined {
@@ -1216,18 +1614,160 @@ function pathInside(root: string, candidate: string): boolean {
 function buildRuntimeEnv(
   request: CodingRuntimeLaunchRequest,
   processEnv: NodeJS.ProcessEnv,
+  codexStateRoot?: string,
+  codexEgress?: ReviewedCodexEgressPolicy,
 ): { readonly ok: true; readonly value: Record<string, string> } | FailureResult {
   if (request.inheritedEnvAllowlist.some((name) => SECRET_ENV_NAME.test(name))) {
     return failure("env-secret-denied", false);
   }
   if (!isLoopbackUrl(request.gatewayUrl)) return failure("gateway-non-loopback", false);
-  const env = {
+  const env: Record<string, string> = {
     ...buildSandboxEnv(processEnv, request.inheritedEnvAllowlist),
     ...runtimeProjectionEnv(request),
   };
+  if (request.adapterKind === "codex-cli") {
+    if (codexStateRoot === undefined || codexEgress === undefined) {
+      return failure("runtime-state-unavailable", false);
+    }
+    for (const name of GLOBAL_RUNTIME_ENV_NAMES) Reflect.deleteProperty(env, name);
+    for (const name of INHERITED_EGRESS_ENV_NAMES) Reflect.deleteProperty(env, name);
+    Object.assign(env, isolatedCodexRuntimeEnv(codexStateRoot), codexEgressEnv(codexEgress));
+  }
   return envContainsDeniedSecret(env, processEnv, request.inheritedEnvAllowlist)
     ? failure("env-secret-denied", false)
     : { ok: true, value: env };
+}
+
+function isolatedCodexRuntimeEnv(stateRoot: string): Record<string, string> {
+  const home = join(stateRoot, "home");
+  const temporary = join(stateRoot, "tmp");
+  return {
+    CODEX_HOME: join(stateRoot, "codex-home"),
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(stateRoot, "xdg-config"),
+    XDG_DATA_HOME: join(stateRoot, "xdg-data"),
+    XDG_CACHE_HOME: join(stateRoot, "xdg-cache"),
+    TMPDIR: temporary,
+    TEMP: temporary,
+    TMP: temporary,
+  };
+}
+
+function codexStateRoot(
+  localSecretRoot: string | undefined,
+  request: CodingRuntimeLaunchRequest,
+): string | undefined {
+  const root = localSecretRoot === undefined ? undefined : realPath(localSecretRoot);
+  if (root === undefined) return undefined;
+  const identity = createHash("sha256")
+    .update(request.runId)
+    .update("\0")
+    .update(request.treeBindingId)
+    .digest("hex");
+  return join(root, CODEX_STATE_DIRECTORY, identity);
+}
+
+function validatePreparedCodexStateRoot(
+  preparedStateRoot: string,
+  expectedStateRoot: string,
+  preflight: PreflightOk,
+): string | undefined {
+  const prepared = realPath(preparedStateRoot);
+  const expectedParent = realPath(dirname(expectedStateRoot));
+  if (
+    prepared === undefined ||
+    expectedParent === undefined ||
+    dirname(prepared) !== expectedParent ||
+    basename(prepared) !== basename(expectedStateRoot)
+  ) {
+    return undefined;
+  }
+  if (
+    pathInside(preflight.managedRoot, prepared) ||
+    pathInside(preflight.workspaceRoot, prepared)
+  ) {
+    return undefined;
+  }
+  return prepared;
+}
+
+function qualifyCodexEgress(
+  request: CodingRuntimeLaunchRequest,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "qualifyCodexEgress">,
+): { readonly ok: true; readonly value: ReviewedCodexEgressPolicy } | FailureResult {
+  try {
+    const policy = deps.qualifyCodexEgress?.(request);
+    return policy !== undefined && validCodexEgressPolicy(policy)
+      ? { ok: true, value: policy }
+      : failure("egress-unqualified", false);
+  } catch {
+    return failure("egress-unqualified", false);
+  }
+}
+
+function validCodexEgressPolicy(policy: ReviewedCodexEgressPolicy): boolean {
+  return (
+    policy.verified &&
+    policy.receipt.length > 0 &&
+    validDirectEgress((policy as { readonly directEgress: unknown }).directEgress) &&
+    validCodexProxyPolicy(policy) &&
+    validCodexNoProxyPolicy(policy) &&
+    validCodexCaPolicy(policy)
+  );
+}
+
+function validDirectEgress(value: unknown): value is ReviewedCodexEgressPolicy["directEgress"] {
+  return value === "disabled" || value === "approved";
+}
+
+function validCodexProxyPolicy(policy: ReviewedCodexEgressPolicy): boolean {
+  return policy.httpsProxy === undefined || validHttpsProxy(policy.httpsProxy) !== undefined;
+}
+
+function validCodexNoProxyPolicy(policy: ReviewedCodexEgressPolicy): boolean {
+  if (policy.noProxy === undefined) return true;
+  return policy.directEgress === "approved" && validNoProxy(policy.noProxy);
+}
+
+function validCodexCaPolicy(policy: ReviewedCodexEgressPolicy): boolean {
+  return policy.caBundlePath === undefined
+    ? policy.serverConfigRoot === undefined
+    : validCaBundlePath(policy.caBundlePath, policy.serverConfigRoot);
+}
+
+function validHttpsProxy(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && parsed.username === "" && parsed.password === ""
+      ? parsed.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function validNoProxy(value: string): boolean {
+  return value.length > 0 && !/[\r\n\0]/u.test(value);
+}
+
+function validCaBundlePath(path: string, configRoot: string | undefined): boolean {
+  const root = configRoot === undefined ? undefined : realPath(configRoot);
+  const bundle = realPath(path);
+  if (root === undefined || bundle === undefined || !pathInside(root, bundle)) return false;
+  try {
+    accessSync(bundle, constants.R_OK);
+    return statSync(bundle).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function codexEgressEnv(policy: ReviewedCodexEgressPolicy): Record<string, string> {
+  const proxy = policy.httpsProxy === undefined ? {} : { HTTPS_PROXY: policy.httpsProxy };
+  const noProxy = policy.noProxy === undefined ? {} : { NO_PROXY: policy.noProxy };
+  const ca = policy.caBundlePath === undefined ? {} : { SSL_CERT_FILE: policy.caBundlePath };
+  return { ...proxy, ...noProxy, ...ca };
 }
 
 function runtimeProjectionEnv(request: CodingRuntimeLaunchRequest): Record<string, string> {
