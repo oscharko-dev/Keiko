@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // GEN-PERF-EDITOR-003 — tab-drag target resolution is rAF-coalesced (one layout pass per
 // frame, last-event-wins), so drag-feedback assertions must let the pending frame apply.
@@ -863,6 +863,23 @@ describe("EditorWidget workspace session", () => {
     });
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
     expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/a.ts|src/b.ts");
+  });
+
+  it("traps Tab focus inside the dirty-close dialog instead of leaking to the editor behind it", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved editor changes" });
+    const saveButton = within(dialog).getByRole("button", { name: "Save" });
+    const cancelButton = within(dialog).getByRole("button", { name: "Cancel" });
+
+    cancelButton.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(saveButton);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancelButton);
   });
 
   it("saves dirty files before applying a pending tab close", async () => {

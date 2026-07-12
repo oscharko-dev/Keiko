@@ -195,8 +195,27 @@ function DirtyCloseDialog(props: {
     };
   }, []);
   useEffect(() => {
+    // aria-modal="true" requires focus to stay inside the dialog while it is open, so Tab/Shift+Tab
+    // cycle within its own focusable elements instead of leaking to the settings/editor behind it.
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === "Escape" && !props.pending.saving) props.onCancel();
+      if (event.key === "Escape") {
+        if (!props.pending.saving) props.onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button, [href]");
+      if (focusable === undefined || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (first === undefined || last === undefined) return;
+      const active = document.activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
