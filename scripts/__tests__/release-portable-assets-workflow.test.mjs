@@ -105,6 +105,7 @@ describe("portable secure-read qualification", () => {
     expect(secureReadHarness).toContain("spawn(binary, [], { stdio, env: {} })");
     expect(secureReadHarness).toContain('["EACCES", "EBUSY", "EPERM"]');
     expect(secureReadHarness).toContain('isWindows ? "junction" : "file"');
+    expect(secureReadHarness).toContain('request(fixture, "nested"))).status, isWindows ? 4 : 5');
     expect(secureReadHarness).toContain(
       "if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture)",
     );

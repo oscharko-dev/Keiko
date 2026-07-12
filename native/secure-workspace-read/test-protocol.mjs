@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
 const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.url));
 const SAFE_TEXT = "safe text\n";
@@ -225,7 +226,7 @@ async function assertProtocolCases(binary, fixture, outside) {
     4,
   );
   assert.equal(response(await run(binary, request(fixture, "hard-link.txt"))).status, 5);
-  assert.equal(response(await run(binary, request(fixture, "nested"))).status, 5);
+  assert.equal(response(await run(binary, request(fixture, "nested"))).status, isWindows ? 4 : 5);
   for (const name of ["binary.txt", "invalid-utf8.txt", "c0.txt", "c1.txt"]) {
     assert.equal(response(await run(binary, request(fixture, name))).status, 7);
   }
@@ -340,7 +341,7 @@ async function restoreRename(sourcePath, destinationPath) {
     } catch (error) {
       if (!isSharingDenied(error)) throw error;
       lastError = error;
-      await new Promise((resolveRetry) => setTimeout(resolveRetry, 5));
+      await delay(5);
     }
   }
   throw lastError;
@@ -370,7 +371,7 @@ async function runConcurrentUpdater(label, update, read) {
         } finally {
           notifyStarted();
         }
-        await new Promise((resolveTurn) => setImmediate(resolveTurn));
+        await nextTurn();
       }
     } catch (error) {
       updaterError = error;
@@ -446,23 +447,18 @@ async function assertAncestorAliasConsistency(binary, fixture, outside) {
       "ancestor-alias",
       async () => {
         let aliasInstalled = false;
-        let originalParked = false;
         await rename(parent, parked);
-        originalParked = true;
         try {
           await rename(alias, parent);
           aliasInstalled = true;
           try {
-            await new Promise((resolveTurn) => setImmediate(resolveTurn));
+            await nextTurn();
           } finally {
             await restoreRename(parent, alias);
             aliasInstalled = false;
           }
         } finally {
-          if (!aliasInstalled && originalParked) {
-            await restoreRename(parked, parent);
-            originalParked = false;
-          }
+          if (!aliasInstalled) await restoreRename(parked, parent);
         }
       },
       async () => {
