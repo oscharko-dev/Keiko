@@ -1178,7 +1178,7 @@ describe("cleanScopedNodesToScreenIr — design tokens (sort/boundary)", () => {
     expect(result.tokens.radius.map((r) => r.value)).toEqual([10, 100, 2]);
   });
 
-  it("orders spacing and radius tokens numerically instead of lexicographically", () => {
+  it("orders spacing and radius tokens by persisted lexical token order", () => {
     const radiusTwo: FigmaSourceNode = {
       id: "1:2",
       name: "radius-two",
@@ -1209,8 +1209,8 @@ describe("cleanScopedNodesToScreenIr — design tokens (sort/boundary)", () => {
       ]),
     );
 
-    expect(result.tokens.spacing.map((s) => s.value)).toEqual([2, 10, 100]);
-    expect(result.tokens.radius.map((r) => r.value)).toEqual([2, 10, 100]);
+    expect(result.tokens.spacing.map((s) => s.value)).toEqual([10, 100, 2]);
+    expect(result.tokens.radius.map((r) => r.value)).toEqual([10, 100, 2]);
   });
 
   it("omits a zero itemSpacing from layout and from spacing tokens", () => {
