@@ -52,7 +52,7 @@ function toInt(value: string): number {
 function cap(text: string, maxChars = VERIFICATION_FAILURE_MESSAGE_MAX_CHARS): string {
   if (text.length <= maxChars) return text;
   const capped = text.slice(0, maxChars);
-  const last = capped.charCodeAt(capped.length - 1);
+  const last = capped.codePointAt(capped.length - 1) ?? 0;
   return last >= 0xd800 && last <= 0xdbff ? capped.slice(0, -1) : capped;
 }
 

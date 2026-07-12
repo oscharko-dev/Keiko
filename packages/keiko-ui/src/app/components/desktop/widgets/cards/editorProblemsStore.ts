@@ -32,7 +32,7 @@ const FAILED_STATUSES: ReadonlySet<VerificationResult["status"]> = new Set([
 export function truncateProblemMessage(message: string): string {
   if (message.length <= EDITOR_PROBLEM_MESSAGE_MAX_CHARS) return message;
   let end = EDITOR_PROBLEM_MESSAGE_MAX_CHARS;
-  const lastCodeUnit = message.charCodeAt(end - 1);
+  const lastCodeUnit = message.slice(end - 1, end).codePointAt(0) ?? 0;
   if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
   return message.slice(0, end);
 }
@@ -193,7 +193,7 @@ export function setPaneDiagnostics(
 export function removePaneDiagnostics(root: string, producerId: string, path: string): void {
   const entry = projectStates.get(root);
   const current = entry?.diagnosticsByProducer.get(producerId);
-  if (entry === undefined || current === undefined || !current.has(path)) return;
+  if (entry === undefined || !current?.has(path)) return;
   const next = new Map(entry.diagnosticsByProducer);
   const byPath = new Map(current);
   byPath.delete(path);

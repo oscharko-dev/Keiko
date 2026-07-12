@@ -134,6 +134,7 @@ const VERIFICATION_KINDS: readonly VerificationKind[] = [
   "lint",
   "build",
 ];
+const VERIFICATION_KIND_SET: ReadonlySet<string> = new Set(VERIFICATION_KINDS);
 const VERIFICATION_STATUSES: readonly VerificationStatus[] = [
   "passed",
   "failed",
@@ -149,6 +150,7 @@ const RESOURCE_DIMENSIONS: readonly ResourceDimension[] = [
   "memory",
   "network",
 ];
+const RESOURCE_DIMENSION_SET: ReadonlySet<string> = new Set(RESOURCE_DIMENSIONS);
 const VERIFICATION_MAX_REPORT_RESULTS = VERIFICATION_KINDS.length;
 const VERIFICATION_MAX_ARGS = 64;
 const VERIFICATION_PATH_MAX_BYTES = 4_096;
@@ -212,7 +214,7 @@ function isIntegerWithin(value: unknown, min: number, max: number): value is num
 }
 
 function isVerificationKindValue(value: unknown): value is VerificationKind {
-  return typeof value === "string" && VERIFICATION_KINDS.includes(value as VerificationKind);
+  return typeof value === "string" && VERIFICATION_KIND_SET.has(value);
 }
 
 function isVerificationStatusValue(value: unknown): value is VerificationStatus {
@@ -220,7 +222,7 @@ function isVerificationStatusValue(value: unknown): value is VerificationStatus 
 }
 
 function isResourceDimension(value: unknown): value is ResourceDimension {
-  return typeof value === "string" && RESOURCE_DIMENSIONS.includes(value as ResourceDimension);
+  return typeof value === "string" && RESOURCE_DIMENSION_SET.has(value);
 }
 
 function isCanonicalRelativePath(value: unknown): value is string {
