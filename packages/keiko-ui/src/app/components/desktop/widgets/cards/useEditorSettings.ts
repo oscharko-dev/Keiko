@@ -6,6 +6,7 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   defaultEditorM7Settings,
   parseEditorM7SettingsEvent,
+  type EditorM7ExternalReloadPolicy,
   type EditorM7LargeFileMode,
   type EditorM7ResolvedSetting,
   type EditorM7SettingId,
@@ -27,8 +28,11 @@ export interface AppliedEditorSettings {
   readonly renderWhitespace: EditorM7WhitespaceRendering;
   readonly minimap: boolean;
   readonly formatOnSave: boolean;
+  readonly externalReload: EditorM7ExternalReloadPolicy;
   readonly largeFileMode: EditorM7LargeFileMode;
   readonly keybindingOverrides: readonly string[];
+  readonly modelRetentionCount: number;
+  readonly modelRetentionBytes: number;
 }
 
 export type EditorSettingsIssue = "load" | "mutation" | "conflict";
@@ -59,8 +63,11 @@ export const DEFAULT_APPLIED_EDITOR_SETTINGS: AppliedEditorSettings = {
   renderWhitespace: whitespaceSetting(defaults.renderWhitespace),
   minimap: booleanSetting(defaults.minimap, false),
   formatOnSave: booleanSetting(defaults.formatOnSave, false),
+  externalReload: externalReloadSetting(defaults.externalReload),
   largeFileMode: largeFileModeSetting(defaults.largeFileMode),
   keybindingOverrides: stringArraySetting(defaults.keybindingOverrides),
+  modelRetentionCount: numberSetting(defaults.modelRetentionCount, 32),
+  modelRetentionBytes: numberSetting(defaults.modelRetentionBytes, 64 * 1024 * 1024),
 };
 
 let fallbackId = 0;
@@ -191,6 +198,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
   );
 
   const applied = useMemo(() => appliedEditorSettings(snapshot), [snapshot]);
+
   return { snapshot, applied, loading, mutating, issue, announcement, refresh, setValue, reset };
 }
 
@@ -290,8 +298,17 @@ export function appliedEditorSettings(
       settingValue(snapshot, "formatOnSave"),
       DEFAULT_APPLIED_EDITOR_SETTINGS.formatOnSave,
     ),
+    externalReload: externalReloadSetting(settingValue(snapshot, "externalReload")),
     largeFileMode: largeFileModeSetting(settingValue(snapshot, "largeFileMode")),
     keybindingOverrides: stringArraySetting(settingValue(snapshot, "keybindingOverrides")),
+    modelRetentionCount: numberSetting(
+      settingValue(snapshot, "modelRetentionCount"),
+      DEFAULT_APPLIED_EDITOR_SETTINGS.modelRetentionCount,
+    ),
+    modelRetentionBytes: numberSetting(
+      settingValue(snapshot, "modelRetentionBytes"),
+      DEFAULT_APPLIED_EDITOR_SETTINGS.modelRetentionBytes,
+    ),
   };
 }
 
@@ -331,4 +348,10 @@ function whitespaceSetting(value: EditorM7SettingValue | undefined): EditorM7Whi
 
 function largeFileModeSetting(value: EditorM7SettingValue | undefined): EditorM7LargeFileMode {
   return value === "degraded" || value === "readonly" ? value : "default";
+}
+
+function externalReloadSetting(
+  value: EditorM7SettingValue | undefined,
+): EditorM7ExternalReloadPolicy {
+  return value === "autoClean" || value === "manual" ? value : "prompt";
 }

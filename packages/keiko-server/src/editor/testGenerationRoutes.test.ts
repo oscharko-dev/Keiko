@@ -358,6 +358,27 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     expect(body.context?.purpose).toBe("test-generation");
   });
 
+  it("discards the outcome if activation is revoked while the generation call is in flight", async () => {
+    let reads = 0;
+    const revokingDeps = {
+      ...deps({ env: EXECUTION }),
+      editorSettingsControl: {
+        read: () => {
+          reads += 1;
+          return Promise.resolve(editorSettingsSnapshot({ testGeneration: reads === 1 }));
+        },
+      },
+    } as unknown as UiHandlerDeps;
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      revokingDeps,
+      execOptions(),
+    );
+    const body = wire(result);
+    expect(body.status).toBe("disabled");
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
   it("forwards Playwright verification to the assured pre-filter", async () => {
     let verification: unknown;
     const preFilter: AssuredPreFilterPort = (args) => {

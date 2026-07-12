@@ -53,10 +53,13 @@ settings registry is closed over:
 - `formatOnSave`
 - `externalReload`
 - `inlineCompletion`
+- `testGeneration`
+- `patchApply`
 - `watcherExclusions`
 - `largeFileMode`
 - `modelRetentionCount`
 - `modelRetentionBytes`
+- `keybindingOverrides`
 
 Each setting declares its type, default, allowed scopes, live/restart effect, security
 classification, and numeric/list/enum bounds. Defaults match the current editor behavior: 13 px font,
@@ -86,7 +89,7 @@ untrusted hints that must be re-statted and contained before emission. M7 watch 
 
 - schema version
 - monotonic sequence
-- closed event kind (`created`, `changed`, `deleted`, `renamed`, `overflow`)
+- closed event kind (`created`, `changed`, `deleted`, `renamed`, `rescan`, `overflow`)
 - root-relative path
 - optional old root-relative path for confident renames
 - optional metadata hash
@@ -183,7 +186,12 @@ diagnostics, or user text.
 - #2319 implements a server-owned watcher/reconciler that emits these metadata-only event shapes.
 - #2320 renders the same registry and effective provenance in Settings UX.
 - #2321 integrates external changes with existing dirty/hot-exit/agent semantics.
-- #2322 implements model retention using the deterministic eviction contract.
+- #2322 independently implements the D4 deterministic count/byte-budget eviction policy in
+  `packages/keiko-editor/src/components/editor-model-registry.ts`, with a richer protection predicate
+  (it additionally protects pending-save, pending-conflict, hot-exit-recovery, and agent-review
+  states introduced by #2321) than this module's `planEditorM7ModelEviction` reference algorithm.
+  `planEditorM7ModelEviction`/`EditorM7ModelEntry` remain the D4 baseline contract and are not called
+  by the runtime; do not assume the two implementations are the same function.
 - #2323 uses the snippet subset and evidence constraints defined here.
 - #2324 binds keyboard customization to the closed command registry.
 - #2325 applies the AI activation resolver and non-overridable ceilings.
