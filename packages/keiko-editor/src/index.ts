@@ -191,6 +191,9 @@ export {
   UNPROTECTED_EDITOR_MODEL,
   estimateEditorModelBytes,
   getEditorModelRegistryDiagnostics,
+  configureEditorModelRegistry,
+  disposeEditorModelRegistryRoot,
+  disposeAllUnattachedEditorModels,
 } from "./components/editor-model-registry.js";
 export type {
   EditorModelRegistryDiagnostics,

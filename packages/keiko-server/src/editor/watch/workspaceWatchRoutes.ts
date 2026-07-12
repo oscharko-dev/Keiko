@@ -1,6 +1,10 @@
 import type { ServerResponse } from "node:http";
 
-import type { EditorM7WatchEvent, EditorM7WatchSnapshot } from "@oscharko-dev/keiko-contracts";
+import type {
+  EditorM7SettingsSnapshot,
+  EditorM7WatchEvent,
+  EditorM7WatchSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 
 import { resolveRoot, runFilesHandler } from "../../files.js";
 import {
@@ -40,6 +44,31 @@ function parseLastSequence(ctx: RouteContext): number | undefined {
 async function resolveRealRoot(ctx: RouteContext, deps: UiHandlerDeps): Promise<string> {
   const resolved = await resolveRoot(deps.store, ctx.url.searchParams.get("root"), deps.redactor);
   return resolved.realRoot;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function watcherExclusionsFrom(snapshot: EditorM7SettingsSnapshot): readonly string[] {
+  const value = snapshot.settings.find((entry) => entry.id === "watcherExclusions")?.value;
+  return isStringArray(value) ? value : [];
+}
+
+// Effective watcherExclusions is resolved per subscribe call (not held open for the life of a
+// long-running connection); settings failures never block watching, they just leave exclusions at
+// their prior/empty value.
+async function resolveAdditionalExclusions(
+  deps: UiHandlerDeps,
+  realRoot: string,
+): Promise<readonly string[]> {
+  if (deps.editorSettingsControl === undefined) return [];
+  try {
+    const snapshot = await deps.editorSettingsControl.read(realRoot);
+    return watcherExclusionsFrom(snapshot);
+  } catch {
+    return [];
+  }
 }
 
 async function resolveWatchRoot(
@@ -123,11 +152,13 @@ export async function handleEditorWorkspaceWatchEvents(
   const service = deps.workspaceWatchService;
   const resolved = await resolveWatchRoot(ctx, deps);
   if (!("ok" in resolved)) return resolved;
+  const additionalExclusions = await resolveAdditionalExclusions(deps, resolved.root);
   const controller = new AbortController();
   const result = service.subscribe({
     root: resolved.root,
     lastSequence: parseLastSequence(ctx),
     onEvent: (event) => writeOrDestroy(ctx.res, frameWatchEvent(event), controller),
+    additionalExclusions,
   });
   if (result.kind === "subscriberLimit") {
     return {

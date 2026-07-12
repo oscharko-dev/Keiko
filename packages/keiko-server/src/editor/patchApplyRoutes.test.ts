@@ -286,6 +286,24 @@ describe("POST /api/editor/patch-apply — explicit decision (AC1)", () => {
     expect(response.evidence?.applyRunId).toBeTruthy();
     expect(await exists("src/a.test.ts")).toBe(false);
   });
+
+  it("discards the apply and writes nothing if activation is revoked while verification preflight runs", async () => {
+    let reads = 0;
+    const revokingDeps = {
+      ...deps({ env: ENABLED }),
+      editorSettingsControl: {
+        read: () => {
+          reads += 1;
+          return Promise.resolve(editorSettingsSnapshot({ patchApply: reads === 1 }));
+        },
+      },
+    } as unknown as UiHandlerDeps;
+    const result = await handleEditorPatchApply(postContext(body()), revokingDeps, options());
+    const response = wire(result);
+    expect(response.status).toBe("disabled");
+    expect(await exists("src/a.test.ts")).toBe(false);
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("POST /api/editor/patch-apply — scope and conflict guardrails", () => {

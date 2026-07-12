@@ -181,7 +181,7 @@ function compareEvictionCandidates(left: RegistryEntry, right: RegistryEntry): n
 
 export class EditorModelRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
-  private readonly options: EditorModelRegistryOptions;
+  private options: EditorModelRegistryOptions;
   private sequence = 0;
 
   constructor(options: Partial<EditorModelRegistryOptions> = {}) {
@@ -189,6 +189,19 @@ export class EditorModelRegistry {
       countBudget: safeBudget(options.countBudget ?? DEFAULT_COUNT_BUDGET, DEFAULT_COUNT_BUDGET),
       byteBudget: safeBudget(options.byteBudget ?? DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET),
     };
+  }
+
+  // Applies the effective `modelRetentionCount`/`modelRetentionBytes` settings live. Shrinking a
+  // budget evicts down to the new ceiling immediately rather than waiting for the next attach.
+  configure(options: Partial<EditorModelRegistryOptions>): void {
+    this.options = {
+      countBudget: safeBudget(
+        options.countBudget ?? this.options.countBudget,
+        DEFAULT_COUNT_BUDGET,
+      ),
+      byteBudget: safeBudget(options.byteBudget ?? this.options.byteBudget, DEFAULT_BYTE_BUDGET),
+    };
+    this.enforceBudgets();
   }
 
   attach(input: RetainedEditorModelAttachInput): RetainedEditorModelAttachment {
@@ -393,6 +406,33 @@ export function updateRetainedEditorModelProtection(
 
 export function getEditorModelRegistryDiagnostics(): EditorModelRegistryDiagnostics {
   return sharedRegistry.diagnostics();
+}
+
+// Applies the effective `modelRetentionCount`/`modelRetentionBytes` M7 settings to the shared
+// registry. Safe to call on every settings snapshot; a no-op reconfigure just re-enforces budgets.
+export function configureEditorModelRegistry(options: Partial<EditorModelRegistryOptions>): void {
+  sharedRegistry.configure(options);
+}
+
+// Releases every currently unattached (zero attachment count) model owned by `rootKey`. Call this
+// when a workspace root is closed/replaced so retained-but-inactive models do not linger until an
+// unrelated budget eviction happens to reclaim them.
+export function disposeEditorModelRegistryRoot(
+  rootKey: string,
+  reason: EditorModelDisposalReason = "root-disposed",
+): void {
+  sharedRegistry.disposeRoot(rootKey, reason);
+}
+
+// Releases every currently unattached model regardless of root. `modelRootKey` (use-editor-
+// handlers.ts) derives a per-directory, not per-workspace, key, so `disposeEditorModelRegistryRoot`
+// cannot reliably clear "everything for the workspace that just closed" in one call; disposing
+// every unattached model on root-change/shutdown is the safe, granularity-independent equivalent
+// (attached/dirty/pinned models remain protected, and clean ones simply recreate on next visit).
+export function disposeAllUnattachedEditorModels(
+  reason: EditorModelDisposalReason = "root-disposed",
+): void {
+  sharedRegistry.disposeAll(reason);
 }
 
 export function resetEditorModelRegistryForTests(): void {
