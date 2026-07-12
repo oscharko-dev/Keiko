@@ -158,71 +158,59 @@ describe("ProjectPanel", () => {
     expect(screen.getByRole("group", { name: "Keiko" })).toBeInTheDocument();
   });
 
-  it("ArrowDown moves focus from project to first child chat (PA-03)", async () => {
+  // Focus-transition keys — parameterized per SonarCloud S5976. Each row moves
+  // focus from the seeded item to the expected target without touching
+  // aria-expanded state.
+  it.each([
+    {
+      key: "ArrowDown",
+      startName: /Keiko/,
+      endName: /Investigate shell audit/,
+      note: "moves focus from project to first child chat",
+    },
+    {
+      key: "ArrowUp",
+      startName: /Investigate shell audit/,
+      endName: /Keiko/,
+      note: "moves focus from chat back to parent project",
+    },
+    {
+      key: "Home",
+      startName: /Investigate shell audit/,
+      endName: /Keiko/,
+      note: "moves focus to the first treeitem",
+    },
+    {
+      key: "End",
+      startName: /Keiko/,
+      endName: /Investigate shell audit/,
+      note: "moves focus to the last treeitem",
+    },
+    {
+      // ArrowLeft on a level-2 chat item routes to focusParentTreeItem: the
+      // chat button has no aria-expanded="true" attribute.
+      key: "ArrowLeft",
+      startName: /Investigate shell audit/,
+      endName: /Keiko/,
+      note: "moves focus from chat back to its parent project",
+    },
+    {
+      // ArrowRight on an already-expanded project focuses its first child.
+      key: "ArrowRight",
+      startName: /Keiko/,
+      endName: /Investigate shell audit/,
+      note: "moves focus from expanded project to the first child",
+    },
+  ])("$key $note (PA-03)", async ({ key, startName, endName }) => {
     const user = userEvent.setup();
     render(
       <ChatSessionProvider value={session()}>
         <ProjectPanel />
       </ChatSessionProvider>,
     );
-    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
-    projectItem.focus();
-    await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("treeitem", { name: /Investigate shell audit/ })).toHaveFocus();
-  });
-
-  it("ArrowUp moves focus from chat back to parent project (PA-03)", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatSessionProvider value={session()}>
-        <ProjectPanel />
-      </ChatSessionProvider>,
-    );
-    const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
-    chatItem.focus();
-    await user.keyboard("{ArrowUp}");
-    expect(screen.getByRole("treeitem", { name: /Keiko/ })).toHaveFocus();
-  });
-
-  it("Home moves focus to the first treeitem (PA-03)", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatSessionProvider value={session()}>
-        <ProjectPanel />
-      </ChatSessionProvider>,
-    );
-    const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
-    chatItem.focus();
-    await user.keyboard("{Home}");
-    expect(screen.getByRole("treeitem", { name: /Keiko/ })).toHaveFocus();
-  });
-
-  it("End moves focus to the last treeitem (PA-03)", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatSessionProvider value={session()}>
-        <ProjectPanel />
-      </ChatSessionProvider>,
-    );
-    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
-    projectItem.focus();
-    await user.keyboard("{End}");
-    expect(screen.getByRole("treeitem", { name: /Investigate shell audit/ })).toHaveFocus();
-  });
-
-  // ArrowLeft on a level-2 chat item routes to focusParentTreeItem because
-  // the chat button has no aria-expanded="true" attribute.
-  it("ArrowLeft on a chat item moves focus to its parent project (PA-03)", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatSessionProvider value={session()}>
-        <ProjectPanel />
-      </ChatSessionProvider>,
-    );
-    const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
-    chatItem.focus();
-    await user.keyboard("{ArrowLeft}");
-    expect(screen.getByRole("treeitem", { name: /Keiko/ })).toHaveFocus();
+    screen.getByRole("treeitem", { name: startName }).focus();
+    await user.keyboard(`{${key}}`);
+    expect(screen.getByRole("treeitem", { name: endName })).toHaveFocus();
   });
 
   // ArrowLeft on an expanded project collapses it (aria-expanded="true" → click).
@@ -238,20 +226,6 @@ describe("ProjectPanel", () => {
     expect(projectItem).toHaveAttribute("aria-expanded", "true");
     await user.keyboard("{ArrowLeft}");
     expect(projectItem).toHaveAttribute("aria-expanded", "false");
-  });
-
-  // ArrowRight on an already-expanded project moves focus to its first child.
-  it("ArrowRight on an expanded project moves focus to the first child (PA-03)", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChatSessionProvider value={session()}>
-        <ProjectPanel />
-      </ChatSessionProvider>,
-    );
-    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
-    projectItem.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("treeitem", { name: /Investigate shell audit/ })).toHaveFocus();
   });
 
   // ArrowRight on a collapsed project triggers a click to expand it.
