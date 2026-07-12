@@ -50,6 +50,22 @@ function domainDigest(domain: string, value: string): string {
   return createHash("sha256").update(domain).update("\0").update(value).digest("hex");
 }
 
+export function digestFeedbackIssueProjectionV1(
+  title: string,
+  body: string,
+  targetPolicyDigest: string,
+): string {
+  return domainDigest(
+    PROJECTION_DIGEST_DOMAIN,
+    JSON.stringify({
+      version: FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
+      title,
+      body,
+      targetPolicyDigest,
+    }),
+  );
+}
+
 export function digestFeedbackTargetPolicyV1(
   target: FeedbackPublicationTargetPolicySnapshotV1,
 ): string {
@@ -172,19 +188,13 @@ export function createFeedbackIssueProjectionV1(
   const body = issueBody(report, reconciliationMarker);
   assertByteLimit(title, FEEDBACK_ISSUE_TITLE_MAX_BYTES_V1, "title-byte-limit");
   assertByteLimit(body, FEEDBACK_ISSUE_BODY_MAX_BYTES_V1, "body-byte-limit");
-  const canonicalProjection = JSON.stringify({
-    version: FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
-    title,
-    body,
-    targetPolicyDigest,
-  });
   return Object.freeze({
     version: FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
     title,
     body,
     reconciliationMarker,
     targetPolicyDigest,
-    projectionDigest: domainDigest(PROJECTION_DIGEST_DOMAIN, canonicalProjection),
+    projectionDigest: digestFeedbackIssueProjectionV1(title, body, targetPolicyDigest),
   });
 }
 

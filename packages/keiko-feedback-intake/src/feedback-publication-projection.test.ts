@@ -3,6 +3,7 @@ import { preparedReport } from "./postgres-integration-helpers.js";
 import {
   FeedbackPublicationProjectionError,
   createFeedbackIssueProjectionV1,
+  digestFeedbackIssueProjectionV1,
   digestFeedbackTargetPolicyV1,
 } from "./feedback-publication-projection.js";
 
@@ -25,6 +26,9 @@ describe("feedback GitHub issue projection", () => {
     const first = createFeedbackIssueProjectionV1(report, target, () => markerBytes);
     const replay = createFeedbackIssueProjectionV1(report, target, () => markerBytes);
     expect(first).toEqual(replay);
+    expect(first.projectionDigest).toBe(
+      digestFeedbackIssueProjectionV1(first.title, first.body, first.targetPolicyDigest),
+    );
     expect(first.title).toBe("[User Finding]: Editor cannot open");
     expect(first.targetPolicyDigest).toBe(digestFeedbackTargetPolicyV1(target));
     expect(first.body.endsWith(first.reconciliationMarker)).toBe(true);
