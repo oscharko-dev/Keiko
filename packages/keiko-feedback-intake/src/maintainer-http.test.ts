@@ -7,11 +7,12 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { FeedbackMaintainerPermissionV1 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockedObject } from "vitest";
 import { MaintainerAuthError } from "./maintainer-auth.js";
 import { FeedbackPublicationError } from "./feedback-publication-types.js";
 import { createMaintainerHttpHandler, type MaintainerHttpOptions } from "./maintainer-http.js";
 import { MaintainerLoginLimiter } from "./maintainer-login-limiter.js";
+import type { MaintainerPublicationService } from "./maintainer-publication-http.js";
 import { maintainerCsrfToken } from "./maintainer-store.js";
 import { FeedbackReviewError } from "./feedback-review-types.js";
 
@@ -47,16 +48,8 @@ interface Harness {
 }
 
 interface PublicationMocks {
-  readonly query: {
-    readonly commandContext: ReturnType<typeof vi.fn>;
-    readonly preview: ReturnType<typeof vi.fn>;
-    readonly status: ReturnType<typeof vi.fn>;
-  };
-  readonly repository: {
-    readonly prepare: ReturnType<typeof vi.fn>;
-    readonly approve: ReturnType<typeof vi.fn>;
-    readonly cancelAndRoutePrivate: ReturnType<typeof vi.fn>;
-  };
+  readonly query: MockedObject<MaintainerPublicationService["query"]>;
+  readonly repository: MockedObject<MaintainerPublicationService["repository"]>;
 }
 
 function harness(
@@ -952,14 +945,16 @@ function publicationHeaders(): Record<string, string> {
 function publicationMocks(): PublicationMocks {
   return {
     query: {
-      commandContext: vi.fn().mockResolvedValue({
-        version: 7,
-        payloadDigest: "a".repeat(64),
-        sourceVersion: 7,
-        projectionDigest: "b".repeat(64),
-        targetPolicyDigest: "c".repeat(64),
-      }),
-      preview: vi.fn().mockResolvedValue({
+      commandContext: vi
+        .fn<MaintainerPublicationService["query"]["commandContext"]>()
+        .mockResolvedValue({
+          version: 7,
+          payloadDigest: "a".repeat(64),
+          sourceVersion: 7,
+          projectionDigest: "b".repeat(64),
+          targetPolicyDigest: "c".repeat(64),
+        }),
+      preview: vi.fn<MaintainerPublicationService["query"]["preview"]>().mockResolvedValue({
         status: "prepared",
         itemId: ITEM,
         preparationId: ITEM,
@@ -976,7 +971,7 @@ function publicationMocks(): PublicationMocks {
         },
         expiresAt: AT.toISOString(),
       }),
-      status: vi.fn().mockResolvedValue({
+      status: vi.fn<MaintainerPublicationService["query"]["status"]>().mockResolvedValue({
         itemId: ITEM,
         preparationId: ITEM,
         projectionDigest: "b".repeat(64),
@@ -985,9 +980,43 @@ function publicationMocks(): PublicationMocks {
       }),
     },
     repository: {
-      prepare: vi.fn().mockResolvedValue({ status: "prepared" }),
-      approve: vi.fn().mockResolvedValue({ status: "approved" }),
-      cancelAndRoutePrivate: vi.fn().mockResolvedValue({ status: "cancelled-private" }),
+      prepare: vi.fn<MaintainerPublicationService["repository"]["prepare"]>().mockResolvedValue({
+        status: "prepared",
+        itemId: ITEM,
+        preparationId: ITEM,
+        recordVersion: 7,
+        projectionDigest: "b".repeat(64),
+        targetPolicyDigest: "c".repeat(64),
+        reconciliationMarker: "marker",
+        title: "exact <script>",
+        body: "exact & body",
+        targetDisplay: {
+          owner: "owner",
+          repository: "repository",
+          labels: ["feedback"],
+          labelPolicyVersion: "labels-v1",
+          targetPolicyVersion: "target-v1",
+        },
+        expiresAt: AT.toISOString(),
+        replayed: false,
+      }),
+      approve: vi.fn<MaintainerPublicationService["repository"]["approve"]>().mockResolvedValue({
+        status: "approved",
+        itemId: ITEM,
+        preparationId: ITEM,
+        recordVersion: 7,
+        outboxId: ITEM,
+        replayed: false,
+      }),
+      cancelAndRoutePrivate: vi
+        .fn<MaintainerPublicationService["repository"]["cancelAndRoutePrivate"]>()
+        .mockResolvedValue({
+          status: "cancelled-private",
+          itemId: ITEM,
+          preparationId: ITEM,
+          recordVersion: 7,
+          replayed: false,
+        }),
     },
   };
 }
