@@ -8,10 +8,28 @@ const docs = [
   "docs/feedback-intake/2077-verification-matrix.md",
   "docs/troubleshooting/feedback-flow.md",
   "docs/troubleshooting/README.md",
-];
+] as const;
 
 function read(relativePath: string): string {
   return readFileSync(resolve(repoRoot, relativePath), "utf8");
+}
+
+function markdownLinkDestinations(source: string): readonly string[] {
+  return [...source.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)].map((match) => {
+    const destination = match[1];
+    if (destination === undefined) {
+      throw new Error("Markdown link destination capture is unexpectedly missing.");
+    }
+    return destination;
+  });
+}
+
+function withoutFragment(link: string): string {
+  const target = link.split("#", 1)[0];
+  if (target === undefined) {
+    throw new Error("Markdown link target is unexpectedly missing.");
+  }
+  return target;
 }
 
 describe("issue #2077 documentation", () => {
@@ -51,10 +69,10 @@ describe("issue #2077 documentation", () => {
     const markdown = docs.map(read).join("\n");
     for (const relativePath of docs) {
       const source = read(relativePath);
-      const links = [...source.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)].map((match) => match[1]);
+      const links = markdownLinkDestinations(source);
       for (const link of links) {
         if (/^(?:https?:|mailto:|#)/u.test(link)) continue;
-        const target = link.split("#", 1)[0];
+        const target = withoutFragment(link);
         expect(existsSync(resolve(repoRoot, dirname(relativePath), target))).toBe(true);
       }
     }
@@ -74,7 +92,7 @@ describe("issue #2077 documentation", () => {
     }
 
     const catalog = JSON.parse(read("release-impact.catalog.json")) as {
-      entries: Array<Record<string, unknown>>;
+      entries: Record<string, unknown>[];
     };
     const entry = catalog.entries.find(
       (candidate) => candidate.id === "2026-07-12-keiko-0.2.15-governed-feedback-flow-verification",
