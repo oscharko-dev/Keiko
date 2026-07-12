@@ -2,84 +2,91 @@
 
 ## Purpose
 
-Line and branch coverage metrics cannot detect mutation-blind tests: tests that pass even when the
-production logic is subtly wrong. Mutation testing injects small syntactic changes (mutations) into
-the source and asserts that the existing test suite detects each one by making at least one test
-fail.
+Coverage proves that a line executed; mutation testing checks whether the tests detect a harmful
+change to that line. Keiko therefore mutation-tests the code that enforces redaction, encryption,
+integrity, authority, and other trust-boundary decisions.
 
-For Keiko the highest-risk surface is the set of modules that enforce security invariants:
-redaction, encryption, hashing, and manifest-integrity checks. A mutation-blind test on these
-modules could mask a real bypass. This config (`stryker.security.conf.json`) focuses Stryker on
-exactly those modules so the mutation score is meaningful without the multi-hour runtime of a
-full-repo run.
+The toolchain is reproducible: `@stryker-mutator/core` and
+`@stryker-mutator/vitest-runner` are exact-version development dependencies in the root lockfile.
+The workflow never downloads an unpinned package through `npx`.
 
 ## Covered modules
 
-| Module glob                                                                   | Security invariant                                                        |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `packages/keiko-security/src/redaction.ts`                                    | Core secret-redaction primitive used by the gateway and evidence pipeline |
-| `packages/keiko-security/src/secretbox.ts`                                    | AES-GCM secretbox wrapper                                                 |
-| `packages/keiko-security/src/hashing.ts`                                      | SHA-256 content-hash used for manifest integrity                          |
-| `packages/keiko-security/src/secrets.ts`                                      | Secret-detection patterns                                                 |
-| `packages/keiko-evidence/src/redaction.ts`                                    | Evidence-layer redaction before persistence                               |
-| `packages/keiko-evidence/src/qualityIntelligence/redaction.ts`                | QI-specific manifest redaction                                            |
-| `packages/keiko-memory-vault/src/redact-record.ts`                            | Vault record redaction                                                    |
-| `packages/keiko-model-gateway/src/openai-adapter.ts`                          | Gateway streaming redaction (includes `redactResponse`, `redactToolCall`) |
-| `packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts` | Figma render-URL host allowlist                                           |
-| `packages/keiko-evidence/src/qualityIntelligence/store.ts`                    | QI manifest integrity-hash verification                                   |
-| `packages/keiko-memory-vault/src/cipher.ts`                                   | AES-GCM vault cipher                                                      |
-| `packages/keiko-memory-vault/src/migrate-encrypt.ts`                          | Vault at-rest encryption migration                                        |
+The authoritative scope is the `mutate` array in [`stryker.security.conf.json`](../../stryker.security.conf.json).
+It currently covers the security primitives, evidence redaction and integrity checks, memory-vault
+encryption and redaction, model-gateway response redaction, the Figma snapshot host allowlist, and
+the independent Banking Quality Gate's evidence and merge decisions.
+
+## Execution policy
+
+`Mutation quality gate` is emitted for every pull request targeting `dev`:
+
+- changes to critical production files run the complete focused Stryker configuration;
+- test-only, documentation, configuration, and unrelated production changes produce an explicit
+  successful `not applicable` result;
+- deleted files do not trigger a run; a renamed critical production destination does;
+- the daily scheduled workflow runs the complete critical configuration regardless of the diff;
+- maintainers can start the same complete run through `workflow_dispatch`.
+
+The scope decision is made by [`scripts/check-mutation-scope.mjs`](../../scripts/check-mutation-scope.mjs)
+from the exact PR base and head commits. It invokes `/usr/bin/git` directly, accepts only
+repository-relative safe paths, and emits the selected files through `GITHUB_OUTPUT`.
 
 ## How to run
-
-Stryker and the vitest runner are fetched on demand via `npx`; no committed dependency is required:
 
 ```sh
 npm run test:mutation:security
 ```
 
-The underlying command is:
-
-```sh
-npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json
-```
-
-An HTML report is written to `reports/mutation/security/index.html`. Open it in any browser to
-inspect surviving mutants file-by-file.
+The HTML report is written to `reports/mutation/security/index.html`. Temporary worktrees and
+reports are ignored by Git and ESLint.
 
 ## Thresholds
 
-| Level          | Score |
-| -------------- | ----- |
-| `high`         | 80 %  |
-| `low`          | 65 %  |
-| `break` (fail) | 50 %  |
+| Level           | Score |
+| --------------- | ----- |
+| target (`high`) | 90 %  |
+| warning (`low`) | 80 %  |
+| hard failure    | 80 %  |
 
-`coverageAnalysis: "perTest"` is used so Stryker only runs the tests that cover each mutated file,
-keeping the wall-clock time reasonable.
+The target remains at least 90 percent and the hard target remains 80 percent. The first complete
+run on 2026-07-11 established that the pre-existing critical scope starts at 61.66 percent, with
+591 survivors and 126 no-coverage mutants. That debt is recorded by exact, location-bound
+fingerprints in [`security-mutation-baseline.json`](security-mutation-baseline.json); it is not
+reclassified as acceptable quality.
 
-## Why this is on-demand, not a gating CI step
+Until the remediation reaches 80 percent, every complete run is guarded by a fail-closed ratchet:
 
-Mutation runs are long (minutes to tens of minutes even for a scoped subset) and require executing
-the full test suite for every injected mutation. Adding them to the CI gate would block every PR
-with an impractically long feedback loop. The correct workflow is:
+- the aggregate score may not decrease;
+- survivor and no-coverage counts may not increase;
+- no new survivor or no-coverage fingerprint is allowed;
+- removing existing debt is accepted without rewriting the baseline downward.
 
-- Run mutation testing locally or in a scheduled job when touching any of the covered modules.
-- Review surviving mutants before merging a change to a security-critical file.
-- Raise the threshold values in `stryker.security.conf.json` after eliminating surviving mutants.
+A PR that changes critical production code is stricter: the changed-file Stryker run must score at
+least 80 percent and have zero surviving and zero no-coverage mutants. A numerical aggregate never
+excuses a new mutant in a trust-boundary, redaction, secret, authority, integrity, or merge decision.
 
-## How to extend the scope
+`coverageAnalysis: "perTest"` limits each mutant to tests that cover it. Stryker emits machine-
+readable JSON; `scripts/check-mutation-quality.mjs` is the authoritative ratchet/scoped decision.
+Stryker's native break value is zero only so that this stricter repository-owned decision can
+evaluate both historical fingerprints and current results after the complete run.
 
-Add entries to the `mutate` array in `stryker.security.conf.json`. Use glob patterns relative to
-the repo root, e.g.:
+Static module-initialization mutants are excluded because Stryker cannot reliably activate them
+after an ESM module has been cached by a reused Vitest worker. Exact required-check names, immutable
+producer IDs, event dispatch tables, and exported worker wiring remain asserted by ordinary tests;
+all runtime trust and merge decisions remain mutation-tested.
 
-```json
-"mutate": [
-  "packages/keiko-security/src/redaction.ts",
-  "packages/keiko-local-knowledge/src/privacy/diagnostic-redactor.ts"
-]
-```
+## Supply-chain policy
 
-Avoid globbing entire packages (`packages/keiko-security/src/**`) unless you intend a full-package
-run; the default thresholds assume focused, security-critical coverage and would give misleading
-scores against boilerplate code.
+Stryker remains permitted only while npm audit, OSV, Dependency Review, Socket, lockfile integrity,
+and provenance evidence remain acceptable. The current transitive Socket findings are documented
+in [`supply-chain-risk-acceptances.json`](supply-chain-risk-acceptances.json). Each acceptance is
+bound to an exact package version and integrity digest; the repository test fails closed when the
+lockfile changes, so an upgrade cannot inherit an old decision.
+
+## Extending the scope
+
+Add the smallest security-relevant production files to `mutate` and the corresponding path family
+to `scripts/check-mutation-scope.mjs`. Add behavioural tests that kill all relevant mutants, then
+run the complete configuration locally. Do not lower thresholds or add mutation/coverage ignore
+comments to make a change pass.
