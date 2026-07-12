@@ -93,6 +93,18 @@ describe("readNpmVersionFromPath", () => {
     expect(readNpmVersionFromPath(fixture.root, "linux")).toBeUndefined();
   });
 
+  it("fails closed for malformed npm package metadata without probing later entries", () => {
+    const fixture = npmFixture("11.16.0");
+    writeFileSync(join(fixture.root, "node_modules", "npm", "package.json"), "{not json");
+    symlinkSync(fixture.npmCli, join(fixture.root, "npm"));
+
+    expect(readNpmVersionFromPath(fixture.root, "linux")).toBeUndefined();
+  });
+
+  it("returns undefined when PATH has no npm candidates", () => {
+    expect(readNpmVersionFromPath("", "linux")).toBeUndefined();
+  });
+
   it("skips path entries without npm and reads the first governed npm manifest", () => {
     const fixture = npmFixture("11.16.0");
     const missingEntry = mkdtempSync(join(tmpdir(), "keiko-runtime-toolchain-missing-"));

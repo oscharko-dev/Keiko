@@ -226,7 +226,7 @@ function rootForTrackedRun(
   const root = projectIdByRunId.get(event.runId);
   if (root === undefined) return null;
   const entry = projectStates.get(root);
-  return entry !== undefined && entry.activeRunId === event.runId ? root : null;
+  return entry?.activeRunId === event.runId ? root : null;
 }
 
 function rootForEvent(event: EditorVerificationEvent): string | null {
