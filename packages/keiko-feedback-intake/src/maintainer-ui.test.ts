@@ -23,6 +23,7 @@ describe("hosted maintainer UI assets", () => {
       "maintainer-ui-detail.js",
       "maintainer-ui-dom.js",
       "maintainer-ui-publication.js",
+      "maintainer-ui-queue.js",
     ];
     for (const name of names) {
       const source = await readFile(new URL(name, assets), "utf8");

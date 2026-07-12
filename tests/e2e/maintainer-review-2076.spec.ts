@@ -18,6 +18,7 @@ const served = [
   "maintainer-ui-detail.js",
   "maintainer-ui-dom.js",
   "maintainer-ui-publication.js",
+  "maintainer-ui-queue.js",
 ] as const;
 const item = {
   itemId: "11111111-1111-4111-8111-111111111111",

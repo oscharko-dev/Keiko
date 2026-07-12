@@ -106,6 +106,7 @@ function expectedPaths(): readonly string[] {
     "assets/maintainer-ui.html",
     "assets/maintainer-ui.js",
     "assets/maintainer-ui-publication.js",
+    "assets/maintainer-ui-queue.js",
     "migrations/001_feedback_intake.sql",
     "migrations/002_feedback_review.sql",
     "migrations/003_feedback_publication.sql",

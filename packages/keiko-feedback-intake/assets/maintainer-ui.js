@@ -1,8 +1,8 @@
 import { copy, german, reasonLabel, statusLabel } from "./maintainer-ui-copy.js";
 import { createUiHelpers, element, metadata, renderError, text } from "./maintainer-ui-dom.js";
+import { actionData, appendQueuePage } from "./maintainer-ui-queue.js";
 import * as detailUi from "./maintainer-ui-detail.js";
 import { createPublicationUi, publicationEnabled } from "./maintainer-ui-publication.js";
-
 const root = document.getElementById("mq-app");
 document.documentElement.lang = german ? "de" : "en";
 document.title = `Keiko ${copy.title}`;
@@ -46,7 +46,6 @@ function signInView(message) {
   ]);
 }
 const errorView = (error) => renderError(error, copy, button, notice, replace, signIn, loadQueue);
-
 function permitted(permission) {
   return state.session.permissions.includes(permission);
 }
@@ -95,16 +94,13 @@ function itemRow(item) {
   ].map((content) => element("td", {}, [content]));
   return element("tr", { "aria-current": String(state.selected === item.itemId) }, cells);
 }
-function queueView(message) {
-  const heading = element("h2", { textContent: copy.queue, tabIndex: "-1" });
-  const audit = permitted("feedback.audit") ? button(copy.audit, () => void loadAudit()) : null;
-  state.auditTrigger = audit;
-  const toolbar = element("div", { className: "mq-toolbar" }, [
-    filterSelect(),
-    element("div", {}, [audit ?? text(""), button(copy.signOut, () => void logout())]),
-  ]);
-  const table = element("table", { className: "mq-table" }, [
-    element("caption", { id: "mq-queue-caption", className: "mq-label", textContent: `${state.items.length} ${copy.loaded}` }),
+function queueTable() {
+  return element("table", { className: "mq-table" }, [
+    element("caption", {
+      id: "mq-queue-caption",
+      className: "mq-label",
+      textContent: `${state.items.length} ${copy.loaded}`,
+    }),
     element("thead", {}, [
       element(
         "tr",
@@ -116,12 +112,30 @@ function queueView(message) {
     ]),
     element("tbody", {}, state.items.map(itemRow)),
   ]);
+}
+function queueView(message) {
+  const heading = element("h2", { textContent: copy.queue, tabIndex: "-1" });
+  const audit = permitted("feedback.audit") ? button(copy.audit, () => void loadAudit()) : null;
+  state.auditTrigger = audit;
+  const toolbar = element("div", { className: "mq-toolbar" }, [
+    filterSelect(),
+    element("div", {}, [audit ?? text(""), button(copy.signOut, () => void logout())]),
+  ]);
   const children = [heading, toolbar];
   if (message) children.push(notice(message));
   if (state.items.length === 0) children.push(notice(copy.empty));
   else
     children.push(
-      element("div", { className: "mq-table-wrap", role: "region", tabIndex: "0", "aria-labelledby": "mq-queue-caption" }, [table]),
+      element(
+        "div",
+        {
+          className: "mq-table-wrap",
+          role: "region",
+          tabIndex: "0",
+          "aria-labelledby": "mq-queue-caption",
+        },
+        [queueTable()],
+      ),
     );
   if (state.cursor)
     children.push(
@@ -143,10 +157,12 @@ async function loadQueue(append = false, message) {
     if (state.filter) query.set("state", state.filter);
     if (append && state.cursor) query.set("cursor", state.cursor);
     const page = await request(`reviews?${query.toString()}`);
+    const appended =
+      append && appendQueuePage(root, page.items, itemRow, copy.loaded, Boolean(page.nextCursor));
     state.items = append ? state.items.concat(page.items) : page.items;
     state.cursor = page.nextCursor || null;
     state.selected = null;
-    queueView(message);
+    if (!appended) queueView(message);
   } catch (error) {
     errorView(error);
   } finally {
@@ -295,22 +311,6 @@ function openDetail(itemId) {
     renderDetail,
   });
 }
-function actionData(action, controls) {
-  const data = {
-    action,
-    expectedVersion: state.detail.version,
-    expectedPayloadDigest: state.detail.payloadDigest,
-    idempotencyKey: crypto.randomUUID().replaceAll("-", ""),
-  };
-  controls
-    .flatMap((control) => [...control.querySelectorAll("input, select")])
-    .forEach((control) => {
-      if (control.name) data[control.name] = control.value;
-    });
-  if (data.reviewAt) data.reviewAt = new Date(data.reviewAt).toISOString();
-  if (data.expiresAt) data.expiresAt = new Date(data.expiresAt).toISOString();
-  return data;
-}
 async function submitAction(action, controls) {
   const item = state.items.find((candidate) => candidate.itemId === state.selected);
   if (!item) return;
@@ -322,7 +322,7 @@ async function submitAction(action, controls) {
         "Content-Type": "application/json",
         "keiko-feedback-csrf": state.session.csrfToken,
       },
-      body: JSON.stringify(actionData(action, controls)),
+      body: JSON.stringify(actionData(state.detail, action, controls)),
     });
     await loadQueue(false, copy.applied);
     document.getElementById("mq-queue-heading")?.focus();

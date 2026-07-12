@@ -20,6 +20,11 @@ async function migration(name: string): Promise<string> {
   return readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");
 }
 
+function expectListProjectionExcludesCanonicalBytes(observed: readonly ObservedQuery[]): void {
+  const listSql = observed.find((entry) => entry.text.includes("report.value"))?.text;
+  expect(listSql?.split(" FROM feedback_review_items", 1)[0]).not.toContain("canonical_bytes");
+}
+
 describe("PostgreSQL feedback review query", () => {
   integration(
     "paginates metadata, uses accepted counts, hides logical expiry, and durably restricts private history",
@@ -127,6 +132,7 @@ describe("PostgreSQL feedback review query", () => {
           cursor: first.nextCursor,
         });
         expect(second.items[0]?.itemId).not.toBe(first.items[0]?.itemId);
+        expectListProjectionExcludesCanonicalBytes(observed);
         await expect(query.detail(itemIds[2], false)).resolves.toBeUndefined();
         await expect(repository.find(itemIds[2], false)).resolves.toBeUndefined();
         await expect(

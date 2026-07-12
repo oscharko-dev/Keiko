@@ -4,19 +4,19 @@
     "keiko-tokens.css": {
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
       "identityBytes": 20112,
-      "gzipBytes": 5098,
+      "gzipBytes": 5096,
       "brotliBytes": 4223
     },
     "keiko-semantic-tokens.css": {
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
       "identityBytes": 16141,
-      "gzipBytes": 4278,
+      "gzipBytes": 4302,
       "brotliBytes": 3556
     },
     "maintainer-ui.css": {
       "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e",
       "identityBytes": 10975,
-      "gzipBytes": 2217,
+      "gzipBytes": 2219,
       "brotliBytes": 1861
     },
     "maintainer-ui.html": {
@@ -26,34 +26,40 @@
       "brotliBytes": 550
     },
     "maintainer-ui.js": {
-      "sha256": "1fcc4babb0bcc2e2e39e0eaf0b08b65e330a72131ccc55a99e971ad8cd15ad14",
-      "identityBytes": 12896,
-      "gzipBytes": 3821,
-      "brotliBytes": 3348
+      "sha256": "0c62374308fc6f1788558ae8054ac6d077e3d42b037944d383f30391d26a41e0",
+      "identityBytes": 12660,
+      "gzipBytes": 3722,
+      "brotliBytes": 3248
     },
     "maintainer-ui-copy.js": {
       "sha256": "3ef6220bfb8e006a5d79c37df360f8c9b77bbca133f3686a6eec4b0d35c843fa",
       "identityBytes": 13711,
-      "gzipBytes": 4029,
+      "gzipBytes": 4048,
       "brotliBytes": 3532
     },
     "maintainer-ui-detail.js": {
       "sha256": "f7f78240f0f904ee81a02076664a1470539600e6a15d9f39346b50a602b1f60c",
       "identityBytes": 2629,
-      "gzipBytes": 974,
+      "gzipBytes": 978,
       "brotliBytes": 809
     },
     "maintainer-ui-dom.js": {
       "sha256": "134cfdb092d7085c19cfb70b268d65d983c11c66a5ad5223735dd36401895eb0",
       "identityBytes": 4777,
-      "gzipBytes": 1667,
+      "gzipBytes": 1673,
       "brotliBytes": 1410
     },
     "maintainer-ui-publication.js": {
       "sha256": "4cbdc78b8755f616c070c4145a74d0c01247e16ed14099defc0d48b2fee13641",
       "identityBytes": 14614,
-      "gzipBytes": 3732,
+      "gzipBytes": 3736,
       "brotliBytes": 3255
+    },
+    "maintainer-ui-queue.js": {
+      "sha256": "fdef9f0823bc1ccd373282cd32a4f754a2b534e8d76ad16660b9a1c5f22a1b94",
+      "identityBytes": 1152,
+      "gzipBytes": 534,
+      "brotliBytes": 440
     }
   },
   "screenshots": [

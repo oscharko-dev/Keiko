@@ -21,6 +21,7 @@ const servedAssets = [
   "maintainer-ui-detail.js",
   "maintainer-ui-dom.js",
   "maintainer-ui-publication.js",
+  "maintainer-ui-queue.js",
 ] as const;
 const axeProofs: { name: string; axeViolations: number }[] = [];
 const externalRequests = new WeakMap<Page, string[]>();
@@ -125,42 +126,64 @@ async function captureCanonicalModes(page: Page): Promise<void> {
 
 async function fixture(
   page: Page,
-  mode: "normal" | "empty" | "unauthenticated" = "normal",
+  mode: "normal" | "empty" | "unauthenticated" | "paginated" = "normal",
 ): Promise<void> {
-  await page.route("**/v1/maintainer/**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname.endsWith("/auth/session")) {
-      await reply(
-        route,
-        mode === "unauthenticated" ? { error: "request-rejected" } : session,
-        mode === "unauthenticated" ? 401 : 200,
-      );
-      return;
-    }
-    if (url.pathname.endsWith("/reviews")) {
-      await reply(route, { items: mode === "empty" ? [] : [item] });
-      return;
-    }
-    if (url.pathname.endsWith(`/reviews/${item.itemId}`)) {
-      await reply(route, {
-        ...item,
-        legalHold: { status: "none" },
-        canonicalPayload:
-          '<img src="https://tracker.invalid/x"><a href="https://tracker.invalid">x</a><script>window.__xss=1</script>\n' +
-          "review-safe-line\n".repeat(80),
-      });
-      return;
-    }
-    if (url.pathname.endsWith("/actions")) {
-      await reply(route, { itemId: item.itemId, state: "archived", version: 2 });
-      return;
-    }
-    if (url.pathname.endsWith("/audit")) {
-      await reply(route, { events: [] });
-      return;
-    }
-    await reply(route, { error: "not-found" }, 404);
+  await page.route("**/v1/maintainer/**", (route) => fixtureRoute(route, mode));
+}
+
+async function fixtureRoute(
+  route: Route,
+  mode: "normal" | "empty" | "unauthenticated" | "paginated",
+): Promise<void> {
+  const url = new URL(route.request().url());
+  if (await replySession(route, url, mode)) return;
+  if (await replyQueue(route, url, mode)) return;
+  if (await replyDetail(route, url)) return;
+  if (url.pathname.endsWith("/actions"))
+    return reply(route, { itemId: item.itemId, state: "archived", version: 2 });
+  if (url.pathname.endsWith("/audit")) return reply(route, { events: [] });
+  return reply(route, { error: "not-found" }, 404);
+}
+
+async function replySession(
+  route: Route,
+  url: URL,
+  mode: "normal" | "empty" | "unauthenticated" | "paginated",
+): Promise<boolean> {
+  if (!url.pathname.endsWith("/auth/session")) return false;
+  await reply(
+    route,
+    mode === "unauthenticated" ? { error: "request-rejected" } : session,
+    mode === "unauthenticated" ? 401 : 200,
+  );
+  return true;
+}
+
+async function replyQueue(
+  route: Route,
+  url: URL,
+  mode: "normal" | "empty" | "unauthenticated" | "paginated",
+): Promise<boolean> {
+  if (!url.pathname.endsWith("/reviews")) return false;
+  const laterPage = url.searchParams.has("cursor");
+  const pageItem = laterPage ? { ...item, itemId: "33333333-3333-4333-8333-333333333333" } : item;
+  await reply(route, {
+    items: mode === "empty" ? [] : [pageItem],
+    ...(mode === "paginated" && !laterPage ? { nextCursor: "next-page" } : {}),
   });
+  return true;
+}
+
+async function replyDetail(route: Route, url: URL): Promise<boolean> {
+  if (!url.pathname.endsWith(`/reviews/${item.itemId}`)) return false;
+  await reply(route, {
+    ...item,
+    legalHold: { status: "none" },
+    canonicalPayload:
+      '<img src="https://tracker.invalid/x"><a href="https://tracker.invalid">x</a><script>window.__xss=1</script>\n' +
+      "review-safe-line\n".repeat(80),
+  });
+  return true;
 }
 
 test.beforeAll(() => {
@@ -283,6 +306,22 @@ test("localized, empty, unauthenticated, responsive, forced-colors, and reduced-
   await expect(page.getByRole("button", { name: "Anmelden" })).toBeVisible();
   await capture(page, "08-de-unauthenticated");
   await assertSecurityBoundary(page);
+});
+
+test("queue pagination appends rows without replacing the focused scroll region", async ({
+  page,
+}) => {
+  await fixture(page, "paginated");
+  await page.goto("/maintainer/");
+  const scroller = page.getByRole("region", { name: "1 items loaded" });
+  await scroller.evaluate((node) => {
+    node.dataset.paginationIdentity = "preserved";
+  });
+  await page.getByRole("button", { name: "Load more" }).click();
+  const appended = page.getByRole("region", { name: "2 items loaded" });
+  await expect(appended).toHaveAttribute("data-pagination-identity", "preserved");
+  await expect(appended).toBeFocused();
+  await expect(page.locator(".mq-row-button")).toHaveCount(2);
 });
 
 test("captures loading, filtered-empty, stale detail, and private-security item states", async ({
