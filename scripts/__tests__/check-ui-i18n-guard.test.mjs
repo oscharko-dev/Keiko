@@ -385,7 +385,7 @@ async function withGitFixture(callback) {
 }
 
 test("passes a pure refactor of an already-translated file with no new user-facing text", async () => {
-  await withGitFixture(async (repoRoot, run) => {
+  const result = await withGitFixture(async (repoRoot, run) => {
     // The unchanged t("feature.title") call stays on its own line, untouched, exactly like a real
     // diff hunk that only edits nearby structural code (e.g. adding a ref/tabIndex to a heading).
     await writeRepoFile(
@@ -397,15 +397,15 @@ test("passes a pure refactor of an already-translated file with no new user-faci
     run(["add", "-A"]);
     run(["commit", "-q", "-m", "refactor"]);
 
-    const result = checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
-
-    assert.equal(result.ok, true);
-    assert.deepEqual(result.problems, []);
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.problems, []);
 });
 
 test("fails a change that adds a genuinely new translation key without updating catalogs", async () => {
-  await withGitFixture(async (repoRoot, run) => {
+  const result = await withGitFixture(async (repoRoot, run) => {
     await writeRepoFile(
       repoRoot,
       UI_FILE,
@@ -414,15 +414,15 @@ test("fails a change that adds a genuinely new translation key without updating 
     run(["add", "-A"]);
     run(["commit", "-q", "-m", "add subtitle"]);
 
-    const result = checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
-
-    assert.equal(result.ok, false);
-    assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
+
+  assert.equal(result.ok, false);
+  assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
 });
 
 test("fails a change that adds new hard-coded user-facing text", async () => {
-  await withGitFixture(async (repoRoot, run) => {
+  const result = await withGitFixture(async (repoRoot, run) => {
     await writeRepoFile(
       repoRoot,
       UI_FILE,
@@ -431,9 +431,9 @@ test("fails a change that adds new hard-coded user-facing text", async () => {
     run(["add", "-A"]);
     run(["commit", "-q", "-m", "add hard-coded text"]);
 
-    const result = checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
-
-    assert.equal(result.ok, false);
-    assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });
+
+  assert.equal(result.ok, false);
+  assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
 });

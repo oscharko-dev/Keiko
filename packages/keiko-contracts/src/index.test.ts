@@ -880,8 +880,8 @@ describe("keiko-contracts package surface", () => {
     expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(m.MANAGED_LSP_EFFECTIVE_STATES.length).toBe(9);
-    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES.length).toBe(16);
+    expect(m.MANAGED_LSP_EFFECTIVE_STATES).toHaveLength(9);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(16);
     expect(typeof m.parseManagedLspActivationInput).toBe("function");
     expect(typeof m.parseManagedLspActivationStatus).toBe("function");
     expect(typeof m.resolveManagedLspActivation).toBe("function");
@@ -977,8 +977,8 @@ describe("keiko-contracts package surface", () => {
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS).toBe(16);
     expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS).toBe(10_000);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
-    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_TYPES.length).toBe(23);
-    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.length).toBe(10);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_TYPES).toHaveLength(23);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS).toHaveLength(10);
     expect(typeof m.parseManagedLspCandidateCapabilities).toBe("function");
     expect(typeof m.parseManagedLspNegotiatedCapabilitySnapshot).toBe("function");
     expect(typeof m.isManagedLspOperationNegotiated).toBe("function");
