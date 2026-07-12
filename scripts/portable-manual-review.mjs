@@ -363,13 +363,12 @@ function copyCurrentArtifacts(outDir) {
   return copied;
 }
 
-function latestManualArtifactRoot() {
-  const runtimeRoot = join(repoRoot, ".portable-runtime");
+export function latestManualArtifactRoot(runtimeRoot = join(repoRoot, ".portable-runtime")) {
   if (!existsSync(runtimeRoot)) return undefined;
   return readdirSync(runtimeRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("manual-"))
     .map((entry) => join(runtimeRoot, entry.name))
-    .sort()
+    .sort((left, right) => left.localeCompare(right, "en"))
     .at(-1);
 }
 
@@ -507,6 +506,7 @@ function writeSidecarPayload(root, target, sidecar) {
 
 function zipDirectory(sourceRoot, zipPath) {
   writeZipArchiveFromDirectory(join(sourceRoot, "Keiko"), zipPath, {
+    followSymlinks: true,
     rootName: "Keiko",
   });
 }

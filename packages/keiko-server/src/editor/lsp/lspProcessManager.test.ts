@@ -347,8 +347,9 @@ describe("createLspProcessManager", () => {
     await manager.sendRequest("textDocument/hover", {}, new AbortController().signal);
 
     const health = manager.getHealthSnapshot();
+    if (health === undefined) throw new Error("Expected LSP health snapshot");
     expect(health).toMatchObject({ requestCount: 1, successCount: 1, failureCount: 0 });
-    expect(health?.latency).toMatchObject({ count: 1, lessThanOrEqual10Ms: 1 });
+    expect(health.latency).toMatchObject({ count: 1, lessThanOrEqual10Ms: 1 });
     expect(JSON.stringify(health)).not.toContain(WORKSPACE_ROOT);
     await manager.dispose();
   });

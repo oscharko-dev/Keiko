@@ -39,14 +39,14 @@ npm's collision resolution for the two packages' `tsc` bin names. Workspace-loca
 their own compiler selection. The toolchain guard runs before every root package build, which also
 covers root typecheck, test, release-check, prepack, and publish preparation paths.
 
-`npm run build:packages` forces every referenced package emit, rejects zero-byte files anywhere in
-a package `dist` tree, and retries an incomplete native emit up to two times. A persistent incomplete
-emit fails closed with repository-relative paths, so runtime and release gates cannot consume a
-partially written package graph.
-
-Root tests and package coverage run the same validated package build again after Vitest completes.
-This restores and verifies the shared `dist` graph if a hermetic build fixture overlaps a parallel
-native emit, so subsequent package, SonarCloud, and release gates never consume test-time drift.
+`npm run build:packages` forces every referenced package emit, rejects unexpected zero-byte files
+anywhere in a package `dist` tree, and retries an incomplete native emit up to two times. A
+persistent incomplete emit fails closed with repository-relative paths, so runtime and release
+gates cannot consume a partially written package graph. A deliberately empty generated artifact
+must be recorded by its repository-relative path in
+`scripts/empty-build-output-allowlist.json`; malformed, duplicate, or out-of-graph entries fail
+closed. The dev-runner readiness fixture disables its package watcher through a test-only seam, so
+the package suite cannot mutate the shared `dist` graph concurrently.
 
 The UI additionally runs `npm run typecheck:native --workspace @oscharko-dev/keiko-ui`. This checks
 every Keiko-owned UI TypeScript surface with the native 7.0 compiler while leaving the supported

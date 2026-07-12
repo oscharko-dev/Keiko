@@ -1,9 +1,8 @@
 // Static contract for `scripts/installable-package-smoke.mjs` (Issue #169 D2). This test is
 // intentionally lightweight: the npm-install round-trip belongs in the CI job, not in the unit
 // suite. Here we only assert that the script file exists at the expected path, parses as ESM,
-// and has no `export ...` declarations (it is a Node script, not a module that other code
-// imports). A future refactor that turns the script into a re-exportable module would have to
-// either move the assertions to the new module or update this test deliberately.
+// and exposes only narrow, side-effect-free coverage seams. The npm-install round-trip remains
+// guarded behind direct CLI execution.
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -24,9 +23,14 @@ describe("installable-package-smoke script", () => {
     expect(source).toMatch(/^import /m);
   });
 
-  it("exports nothing — it is a script, not a module", () => {
+  it("exposes only governed coverage seams while keeping direct CLI execution guarded", () => {
     const source = readFileSync(scriptPath, "utf8");
-    expect(source).not.toMatch(/^export[\s{]/m);
+    expect(source).toContain("export const DEFAULT_NPM_INSTALL_TIMEOUT_MS");
+    expect(source).toContain("export const WINDOWS_NPM_INSTALL_TIMEOUT_MS");
+    expect(source).toContain("export function parseArgs");
+    expect(source).toContain("export function parsePositiveTimeoutEnv");
+    expect(source).toContain("void main()");
+    expect(source).toContain("pathToFileURL(process.argv[1]).href");
     expect(source).not.toMatch(/^export\s+default\b/m);
   });
 
@@ -47,9 +51,9 @@ describe("installable-package-smoke script", () => {
     expect(source).toMatch(/timeout:\s*NPM_INSTALL_TIMEOUT_MS/);
   });
 
-  it("allows a longer bounded `npm install` timeout on Windows runners", () => {
+  it("uses a long bounded `npm install` timeout and keeps an override escape hatch", () => {
     const source = readFileSync(scriptPath, "utf8");
-    expect(source).toContain("DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000");
+    expect(source).toContain("DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000");
     expect(source).toContain("WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000");
     expect(source).toContain("KEIKO_SMOKE_INSTALL_TIMEOUT_MS");
     expect(source).toContain("must be a positive integer number of milliseconds");

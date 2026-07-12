@@ -908,6 +908,7 @@ function sha256Text(text) {
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
   writeZipArchiveFromDirectory(join(payloadContainer, "Keiko"), assetPath, {
+    followSymlinks: true,
     rootName: "Keiko",
   });
   if (!existsSync(assetPath)) fail(`expected ZIP asset at ${assetPath}`);

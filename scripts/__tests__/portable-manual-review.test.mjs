@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
@@ -6,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
 
 import {
+  latestManualArtifactRoot,
   manualReviewPlan,
   prepareManualReview,
   prepareScenarioFixture,
@@ -116,6 +125,17 @@ describe("portable manual review harness", () => {
     for (const target of PORTABLE_TARGETS) {
       expect(existsSync(join(outDir, "artifacts", "current", target.platformTarget))).toBe(true);
     }
+  });
+
+  it("selects the latest manual artifact root with an explicit stable locale order", () => {
+    const runtimeRoot = tmpReviewRoot();
+    const earlier = join(runtimeRoot, "manual-2026-07-08T09-00-00Z");
+    const later = join(runtimeRoot, "manual-2026-07-10T09-00-00Z");
+    mkdirSync(earlier);
+    mkdirSync(later);
+    mkdirSync(join(runtimeRoot, "unrelated"));
+
+    expect(latestManualArtifactRoot(runtimeRoot)).toBe(later);
   });
 
   it("creates stager-compatible fake release archives", async () => {

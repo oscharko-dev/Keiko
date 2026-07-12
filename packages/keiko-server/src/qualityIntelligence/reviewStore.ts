@@ -303,9 +303,9 @@ function verifyMaterializedReviewState(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function
 export const verifyQiReviewAuditIntegrity = (
   artifact: QiReviewStateArtifact,
+  // eslint-disable-next-line max-lines-per-function
 ): QiReviewAuditIntegrityReport => {
   const issues: QiReviewAuditIntegrityIssue[] = [];
   let sawChainedEntry = false;
@@ -987,10 +987,9 @@ const regenerationAudit = (args: {
  * a stale candidate had prior review state/audit, the new run records an explicit reopened audit
  * event so the loss of approval is visible instead of silently disappearing with the old run id.
  */
-// eslint-disable-next-line max-lines-per-function
 export const migrateReviewStateForRegeneration = (
   input: MigrateReviewStateForRegenerationInput,
-  // eslint-disable-next-line complexity
+  // eslint-disable-next-line max-lines-per-function, complexity
 ): QiReviewStateArtifact | undefined => {
   const oldArtifact = loadRunReviewState(input.oldRunId, input.evidenceDir);
   if (oldArtifact === undefined) return undefined;

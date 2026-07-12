@@ -32,14 +32,19 @@ describe("buildWrappedCommand", () => {
   it("bubblewrap preserves compatibility mode for network-only runs", () => {
     const wrapped = expectWrapped(buildWrappedCommand("bubblewrap", plan));
     expect(wrapped.command).toBe("bwrap");
-    expect(wrapped.args).toContain("--unshare-net");
-    expect(wrapped.args).toContain("--die-with-parent");
-    expect(wrapped.args).toEqual(
-      expect.arrayContaining(["--dev-bind", "/", "/", "--chdir", "/work/root"]),
-    );
-    const sep = wrapped.args.indexOf("--");
-    expect(sep).toBeGreaterThan(0);
-    expect(wrapped.args.slice(sep + 1)).toEqual(["node", "-e", "process.exit(0)"]);
+    expect(wrapped.args).toEqual([
+      "--unshare-net",
+      "--die-with-parent",
+      "--dev-bind",
+      "/",
+      "/",
+      "--chdir",
+      "/work/root",
+      "--",
+      "node",
+      "-e",
+      "process.exit(0)",
+    ]);
   });
 
   it("bubblewrap execution-root mode avoids a broad host-root bind", () => {
@@ -47,21 +52,123 @@ describe("buildWrappedCommand", () => {
       buildWrappedCommand("bubblewrap", { ...plan, filesystem: "execution-root" }),
     );
     expect(wrapped.command).toBe("bwrap");
-    expect(wrapped.args).toContain("--unshare-net");
-    expect(wrapped.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
-    expect(wrapped.args).toEqual(
-      expect.arrayContaining(["--bind", "/work/root", EXECUTION_ROOT_MOUNT]),
+    expect(wrapped.args).toEqual([
+      "--unshare-net",
+      "--die-with-parent",
+      "--new-session",
+      "--proc",
+      "/proc",
+      "--dev",
+      "/dev",
+      "--setenv",
+      "HOME",
+      "/tmp",
+      "--setenv",
+      "USERPROFILE",
+      "/tmp",
+      "--setenv",
+      "TMPDIR",
+      "/tmp",
+      "--ro-bind-try",
+      "/usr",
+      "/usr",
+      "--ro-bind-try",
+      "/bin",
+      "/bin",
+      "--ro-bind-try",
+      "/lib",
+      "/lib",
+      "--ro-bind-try",
+      "/lib64",
+      "/lib64",
+      "--ro-bind-try",
+      "/opt",
+      "/opt",
+      "--ro-bind-try",
+      "/nix/store",
+      "/nix/store",
+      "--dir",
+      EXECUTION_ROOT_MOUNT,
+      "--bind",
+      "/work/root",
+      EXECUTION_ROOT_MOUNT,
+      "--dir",
+      EXECUTION_ROOT_TMP,
+      "--symlink",
+      EXECUTION_ROOT_TMP,
+      "/tmp",
+      "--chdir",
+      EXECUTION_ROOT_MOUNT,
+      "--",
+      "node",
+      "-e",
+      "process.exit(0)",
+    ]);
+  });
+
+  it("bubblewrap execution-root mode read-only binds an absolute command directory", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("bubblewrap", {
+        ...plan,
+        command: "/usr/local/bin/node",
+        filesystem: "execution-root",
+      }),
     );
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", EXECUTION_ROOT_MOUNT]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--chdir", EXECUTION_ROOT_MOUNT]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--dir", EXECUTION_ROOT_TMP]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--symlink", EXECUTION_ROOT_TMP, "/tmp"]));
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--setenv", "TMPDIR", "/tmp"]));
-    expect(wrapped.args).not.toEqual(expect.arrayContaining(["--tmpfs", "/tmp"]));
-    expect(wrapped.args).not.toContain("/work");
-    expect(wrapped.args).not.toContain("/home");
-    expect(wrapped.args).not.toContain("/run");
-    expect(wrapped.args).not.toContain("/var/run");
+    expect(wrapped.args).toEqual([
+      "--unshare-net",
+      "--die-with-parent",
+      "--new-session",
+      "--proc",
+      "/proc",
+      "--dev",
+      "/dev",
+      "--setenv",
+      "HOME",
+      "/tmp",
+      "--setenv",
+      "USERPROFILE",
+      "/tmp",
+      "--setenv",
+      "TMPDIR",
+      "/tmp",
+      "--ro-bind-try",
+      "/usr",
+      "/usr",
+      "--ro-bind-try",
+      "/bin",
+      "/bin",
+      "--ro-bind-try",
+      "/lib",
+      "/lib",
+      "--ro-bind-try",
+      "/lib64",
+      "/lib64",
+      "--ro-bind-try",
+      "/opt",
+      "/opt",
+      "--ro-bind-try",
+      "/nix/store",
+      "/nix/store",
+      "--ro-bind-try",
+      "/usr/local/bin",
+      "/usr/local/bin",
+      "--dir",
+      EXECUTION_ROOT_MOUNT,
+      "--bind",
+      "/work/root",
+      EXECUTION_ROOT_MOUNT,
+      "--dir",
+      EXECUTION_ROOT_TMP,
+      "--symlink",
+      EXECUTION_ROOT_TMP,
+      "/tmp",
+      "--chdir",
+      EXECUTION_ROOT_MOUNT,
+      "--",
+      "/usr/local/bin/node",
+      "-e",
+      "process.exit(0)",
+    ]);
   });
 
   it("unshare maps root and creates a fresh network namespace", () => {
@@ -91,14 +198,19 @@ describe("buildWrappedCommand", () => {
     ] as const) {
       const wrapped = expectWrapped(buildWrappedCommand(backend, plan));
       expect(wrapped.command).toBe(bin);
-      expect(wrapped.args).toContain("--network=none");
-      expect(wrapped.args).toContain("--rm");
-      expect(wrapped.args).toEqual(
-        expect.arrayContaining(["--volume", "/work/root:/work/root:rw", "--workdir", "/work/root"]),
-      );
-      expect(wrapped.args).toContain(DEFAULT_CONTAINER_IMAGE);
-      const imageIndex = wrapped.args.indexOf(DEFAULT_CONTAINER_IMAGE);
-      expect(wrapped.args.slice(imageIndex + 1)).toEqual(["node", "-e", "process.exit(0)"]);
+      expect(wrapped.args).toEqual([
+        "run",
+        "--rm",
+        "--network=none",
+        "--volume",
+        "/work/root:/work/root:rw",
+        "--workdir",
+        "/work/root",
+        DEFAULT_CONTAINER_IMAGE,
+        "node",
+        "-e",
+        "process.exit(0)",
+      ]);
     }
   });
 
@@ -106,15 +218,32 @@ describe("buildWrappedCommand", () => {
     const wrapped = expectWrapped(
       buildWrappedCommand("container-docker", { ...plan, filesystem: "execution-root" }),
     );
-    expect(wrapped.args).toContain("--read-only");
-    expect(wrapped.args).toEqual(
-      expect.arrayContaining(["--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]),
-    );
-    expect(wrapped.args).toEqual(expect.arrayContaining(["--volume", "/work/root:/work/root:rw"]));
+    expect(wrapped.args).toEqual([
+      "run",
+      "--rm",
+      "--network=none",
+      "--read-only",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,size=256m",
+      "--volume",
+      "/work/root:/work/root:rw",
+      "--workdir",
+      "/work/root",
+      DEFAULT_CONTAINER_IMAGE,
+      "node",
+      "-e",
+      "process.exit(0)",
+    ]);
   });
 
   it("returns undefined for the 'none' backend (no enforcing wrapper)", () => {
     expect(buildWrappedCommand("none", plan)).toBeUndefined();
+  });
+
+  it("fails closed for an unsupported backend value", () => {
+    expect(() => buildWrappedCommand("unsupported" as never, plan)).toThrow(
+      "Unsupported sandbox backend: unsupported",
+    );
   });
 
   it("preserves an empty argument list", () => {

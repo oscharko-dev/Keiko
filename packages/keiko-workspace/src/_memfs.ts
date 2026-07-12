@@ -4,14 +4,29 @@ import { resolve } from "node:path";
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
 // path prefixes. Keys are relative POSIX paths under a single absolute root. No symlinks.
 
+const FORWARD_SLASH_CODE = "/".charCodeAt(0);
+
 function canonicalPath(path: string): string {
   return resolve(path.replaceAll("\\", "/")).replaceAll("\\", "/");
+}
+
+function trimBoundarySlashes(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  let start = 0;
+  while (start < normalized.length && normalized.charCodeAt(start) === FORWARD_SLASH_CODE) {
+    start += 1;
+  }
+  let end = normalized.length;
+  while (end > start && normalized.charCodeAt(end - 1) === FORWARD_SLASH_CODE) {
+    end -= 1;
+  }
+  return normalized.slice(start, end);
 }
 
 function toAbs(root: string, rel: string): string {
   const canonicalRoot = canonicalPath(root);
   if (rel === root) return canonicalRoot;
-  const relativePath = rel.replaceAll("\\", "/").replace(/^\/+|\/+$/gu, "");
+  const relativePath = trimBoundarySlashes(rel);
   return canonicalRoot.endsWith("/")
     ? `${canonicalRoot}${relativePath}`
     : `${canonicalRoot}/${relativePath}`;

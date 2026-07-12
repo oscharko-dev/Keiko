@@ -289,6 +289,10 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   if (stdin === null || stdout === null || stderr === null) {
     throw new LspProcessError("SPAWN_FAILED");
   }
+  // A crashing or already-disposed language server may close stdin while the JSON-RPC client is
+  // settling an in-flight request. The manager observes the child exit separately; the write-side
+  // broken pipe must not escape as an unhandled process error.
+  stdin.on("error", () => undefined);
   return {
     stdin: { write: (chunk: Buffer): void => void stdin.write(chunk) },
     stdout,

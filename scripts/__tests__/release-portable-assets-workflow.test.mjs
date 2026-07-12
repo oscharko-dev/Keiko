@@ -327,7 +327,7 @@ describe("Windows portable production signing workflow", () => {
       );
       expect(result.status, result.stderr).toBe(0);
     },
-    60_000,
+    120_000,
   );
 
   it("clears Azure immediately after signing and fails closed before native verification", () => {

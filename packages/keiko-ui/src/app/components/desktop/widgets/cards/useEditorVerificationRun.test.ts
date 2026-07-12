@@ -309,6 +309,75 @@ describe("useEditorVerificationRun", () => {
         headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
       }),
     );
+    await tick();
+    expect(result.current.verificationRunning).toBe(false);
+    expect(result.current.statusBarRun?.label).toBe("Verification: cancelled");
+  });
+
+  it("keeps an acknowledged cancellation visible when the terminal SSE was dismissed before DELETE returns", async () => {
+    vi.useFakeTimers();
+    let resolveDelete: ((value: Response) => void) | undefined;
+    const pendingDelete = new Promise<Response>((resolve) => {
+      resolveDelete = resolve;
+    });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/editor/verification/catalog")) {
+        return Promise.resolve(response(catalog()));
+      }
+      if (init?.method === "DELETE") return pendingDelete;
+      return Promise.resolve(
+        response({
+          runId: "run-1",
+          projectId: "/ws",
+          kinds: ["build"],
+          state: "running",
+          startedAtMs: 1,
+        }),
+      );
+    });
+    try {
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("build"));
+      await tick();
+      const source = FakeEventSource.instances[0];
+      await act(async () => {
+        source?.emit("run-started", {
+          runId: "run-1",
+          projectId: "/ws",
+          kinds: ["build"],
+          startedAtMs: 1,
+        });
+        source?.emit("step-started", { runId: "run-1", stepKind: "build" });
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun?.label).toBe("Verification: build…");
+
+      act(() => result.current.cancelVerification());
+      await tick();
+      expect(result.current.statusBarRun?.label).toBe("Verification: cancelling…");
+      await act(async () => {
+        source?.emit("run-cancelled", { runId: "run-1" });
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun?.label).toBe("Verification: cancelled");
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun).toBeNull();
+
+      await act(async () => {
+        resolveDelete?.(response({ ok: true }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: cancelled");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("coalesces a burst of SSE events into a bounded number of renders", async () => {
@@ -372,6 +441,60 @@ describe("useEditorVerificationRun", () => {
         await Promise.resolve();
       });
       expect(result.current.statusBarRun?.label).toContain("passed");
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not strand a terminal status when cancel is requested after the run already settled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() =>
+        useEditorVerificationRun({ root: "/ws", activeFile: null }),
+      );
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      act(() => {
+        result.current.runWorkspaceVerification("typecheck");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const source = FakeEventSource.instances[0];
+      await act(async () => {
+        source?.emit("run-started", {
+          runId: "run-1",
+          projectId: "/ws",
+          kinds: ["typecheck"],
+          startedAtMs: 1,
+        });
+        source?.emit("run-completed", { runId: "run-1", ...completed("passed") });
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun?.label).toContain("passed");
+
+      act(() => {
+        result.current.cancelVerification();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).startsWith("/api/editor/verification/runs/") &&
+            (init as RequestInit | undefined)?.method === "DELETE",
+        ),
+      ).toBe(false);
+      expect(result.current.statusBarRun?.label).toContain("passed");
+
       await act(async () => {
         vi.advanceTimersByTime(10_000);
         await Promise.resolve();

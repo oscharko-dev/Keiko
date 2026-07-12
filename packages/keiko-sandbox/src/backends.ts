@@ -137,6 +137,10 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
   ];
 }
 
+function unsupportedBackend(backend: never): never {
+  throw new Error(`Unsupported sandbox backend: ${String(backend)}`);
+}
+
 // Builds the wrapped command for a backend, or undefined for "none" (no enforcing wrapper).
 export function buildWrappedCommand(
   backend: SandboxBackend,
@@ -155,5 +159,7 @@ export function buildWrappedCommand(
       return { command: "podman", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "none":
       return undefined;
+    default:
+      return unsupportedBackend(backend);
   }
 }

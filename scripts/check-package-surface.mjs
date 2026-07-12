@@ -209,7 +209,7 @@ function assertServerRuntimeSurface(paths) {
   }
 }
 
-function assertTypeScriptRuntimeSurface(paths) {
+export function assertTypeScriptRuntimeSurface(paths) {
   if (!paths.includes("node_modules/typescript/package.json")) {
     fail(
       "the tarball does not include the productive TypeScript API runtime " +
@@ -493,6 +493,11 @@ function assertBuiltArtifactsFresh(paths) {
         "`npm run clean && npm run build && npm run build:ui` before package-surface.",
     );
   }
+}
+
+if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
+  globalThis.__keikoPackageSurfaceCoverageSeam?.(assertTypeScriptRuntimeSurface);
+  throw new Error("package-surface import-only coverage seam must never pass a release gate");
 }
 
 const files = packFiles();

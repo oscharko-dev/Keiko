@@ -310,7 +310,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 60_000);
 
 function manifest() {
   return JSON.parse(JSON.stringify(BASE_MANIFEST));

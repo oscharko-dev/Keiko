@@ -6,8 +6,8 @@
 // package names, policy descriptions, counts, and control-character-safe paths — never file bodies.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -17,8 +17,10 @@ const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const NEXT_BUILD_SEGMENT = /(?:^|\/)\.next(?:\/|$)/u;
 const BARE_PACKAGE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(\/[\w.-]+)*$/i;
-const GIT_EXECUTABLE_CANDIDATES = [
+const GOVERNED_GIT_EXECUTABLE_PATHS = [
   "/usr/bin/git",
+  "/usr/local/bin/git",
+  "/opt/homebrew/bin/git",
   String.raw`C:\Program Files\Git\bin\git.exe`,
   String.raw`C:\Program Files\Git\cmd\git.exe`,
 ];
@@ -118,12 +120,53 @@ function collectScriptImportProblems(repoRoot, rootPackage) {
   return problems;
 }
 
-function resolveGitExecutable() {
-  const executable = GIT_EXECUTABLE_CANDIDATES.find((candidate) => existsSync(candidate));
+function executableNames(env = process.env) {
+  if (process.platform !== "win32") return ["git"];
+  const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .filter((extension) => extension.length > 0);
+  return ["git", ...extensions.map((extension) => `git${extension.toLowerCase()}`)];
+}
+
+function pathGitCandidates(env = process.env) {
+  return (env.PATH ?? "")
+    .split(delimiter)
+    .filter((entry) => entry.length > 0 && isAbsolute(entry))
+    .flatMap((entry) => executableNames(env).map((name) => join(entry, name)));
+}
+
+function governedGitCandidates(env = process.env) {
+  return [
+    ...GOVERNED_GIT_EXECUTABLE_PATHS,
+    env.LOCALAPPDATA === undefined
+      ? undefined
+      : join(env.LOCALAPPDATA, "Programs", "Git", "bin", "git.exe"),
+    env.LOCALAPPDATA === undefined
+      ? undefined
+      : join(env.LOCALAPPDATA, "Programs", "Git", "cmd", "git.exe"),
+  ].filter((candidate) => typeof candidate === "string" && candidate.length > 0);
+}
+
+function unique(values) {
+  return [...new Set(values)];
+}
+
+export function gitExecutableCandidates(env = process.env) {
+  return unique([
+    env.KEIKO_GIT_EXECUTABLE,
+    ...governedGitCandidates(env),
+    ...pathGitCandidates(env),
+  ]).filter((candidate) => typeof candidate === "string" && candidate.length > 0);
+}
+
+export function resolveGitExecutable(env = process.env) {
+  const executable = gitExecutableCandidates(env).find((candidate) => existsSync(candidate));
   if (executable === undefined) {
-    throw new Error("Git index inspection requires Git in a governed system installation path.");
+    throw new Error(
+      "Git executable could not be resolved from KEIKO_GIT_EXECUTABLE, governed system paths, or PATH.",
+    );
   }
-  return executable;
+  return realpathSync(executable);
 }
 
 function normalizeTrackedPath(path) {
@@ -146,9 +189,31 @@ function readTrackedRepositoryPaths(repoRoot) {
     windowsHide: true,
   });
   if (result.error !== undefined || result.status !== 0 || typeof result.stdout !== "string") {
-    throw new Error("Git index inspection did not complete successfully.");
+    throw new Error(gitInspectionFailureMessage(result));
   }
   return result.stdout.split("\0").filter((path) => path.length > 0);
+}
+
+function safeDiagnostic(value) {
+  return String(value ?? "")
+    .replaceAll("\0", String.raw`\0`)
+    .replace(/[^\P{Cc}\r\n\t]/gu, "?")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function gitInspectionFailureMessage(result) {
+  if (result.error !== undefined) {
+    return `git ls-files could not start: ${safeDiagnostic(result.error.message)}`;
+  }
+  if (result.signal !== null) {
+    return `git ls-files terminated by signal ${safeDiagnostic(result.signal)}`;
+  }
+  if (result.status !== 0) {
+    return `git ls-files exited with status ${String(result.status)}`;
+  }
+  return "git ls-files returned no parseable stdout";
 }
 
 function collectTrackedNextProblems(repoRoot) {
@@ -176,8 +241,12 @@ export function checkDependencyHygiene(repoRoot) {
       trackedPathCount: tracked.trackedPathCount,
       trackedNextViolationCount: tracked.violationCount,
     };
-  } catch {
-    problems.push("Git index inspection did not complete successfully.");
+  } catch (error) {
+    problems.push(
+      `Git index inspection did not complete successfully: ${
+        error instanceof Error ? safeDiagnostic(error.message) : safeDiagnostic(error)
+      }`,
+    );
     return {
       manifestCount: manifests.length,
       problems,

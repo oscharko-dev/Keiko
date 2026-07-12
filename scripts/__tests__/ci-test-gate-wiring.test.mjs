@@ -20,6 +20,10 @@ const uiManifest = JSON.parse(
 );
 const extendedE2e = readFileSync(resolve(repoRoot, ".github/workflows/e2e-extended.yml"), "utf8");
 const releaseWorkflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+const mutationSecurityWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/mutation-security.yml"),
+  "utf8",
+);
 const portableAssetsWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/portable-assets.yml"),
   "utf8",
@@ -100,11 +104,17 @@ const HTML_MANUAL_FIXTURE_IDS = [
 
 describe("CI test/gate wiring guard", () => {
   it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {
-    const runtimeWorkflows = [ci, extendedE2e, releaseWorkflow, portableAssetsWorkflow].join("\n");
+    const runtimeWorkflows = [
+      ci,
+      extendedE2e,
+      releaseWorkflow,
+      portableAssetsWorkflow,
+      mutationSecurityWorkflow,
+    ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    expect(nodeSetupCount).toBe(14);
+    expect(nodeSetupCount).toBe(16);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });

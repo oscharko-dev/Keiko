@@ -1270,7 +1270,14 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           previousManualTarget !== undefined &&
           !report.updateAvailable &&
           report.currentVersion === previousManualTarget;
-        setState({ status: "ready", report, session, remediation });
+        const nextReadyState: Extract<LoadState, { status: "ready" }> = {
+          status: "ready",
+          report,
+          session,
+          remediation,
+        };
+        readyStateRef.current = nextReadyState;
+        setState(nextReadyState);
         if (hasReleaseNotes(report) && report.targetVersion !== undefined) {
           setReleaseNotesReport(report);
         }

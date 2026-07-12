@@ -7,9 +7,11 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeSync,
+  statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -40,18 +42,28 @@ function crc32(bytes) {
 
 function normalizedEntryName(name, allowUnsafeEntryNames) {
   const normalized = name.replaceAll("\\", "/").replace(/^\.\//u, "");
-  const segments = normalized.split("/");
+  const segments = new Set(normalized.split("/"));
   const unsafe =
     normalized.length === 0 ||
     normalized.startsWith("/") ||
     /^[A-Za-z]:\//u.test(normalized) ||
     normalized.includes("\u0000") ||
-    segments.includes("..") ||
-    segments.includes("");
+    segments.has("..") ||
+    segments.has("");
   if (unsafe && allowUnsafeEntryNames !== true) {
     throw new Error(`ZIP entry name is unsafe: ${name}`);
   }
   return normalized;
+}
+
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function compareDirectoryEntries(left, right) {
+  return compareCodeUnits(left.name, right.name);
 }
 
 function assertZip32(value, label) {
@@ -161,6 +173,27 @@ function cleanupFailedArchive(fd, temporaryPath, descriptorOpen) {
   return failures;
 }
 
+function symlinkDirectoryEntry(absolutePath, archiveName, options, stat) {
+  if (options.preserveSymlinks === true) {
+    return {
+      kind: "record",
+      record: { name: archiveName, data: readlinkSync(absolutePath), mode: stat.mode },
+    };
+  }
+  if (options.followSymlinks !== true) {
+    throw new Error(`ZIP source contains an unsupported entry: ${archiveName}`);
+  }
+  const targetStat = statSync(absolutePath);
+  if (targetStat.isDirectory()) return { kind: "directory" };
+  if (targetStat.isFile()) {
+    return {
+      kind: "record",
+      record: { name: archiveName, data: readFileSync(absolutePath), mode: targetStat.mode },
+    };
+  }
+  throw new Error(`ZIP source contains an unsupported symlink target: ${archiveName}`);
+}
+
 export function writeZipArchiveEntries(archivePath, records, options = {}) {
   mkdirSync(dirname(archivePath), { recursive: true });
   const temporaryPath = `${archivePath}.tmp-${process.pid}`;
@@ -184,32 +217,51 @@ export function writeZipArchiveEntries(archivePath, records, options = {}) {
       throw new AggregateError(
         [error, ...cleanupFailures],
         "ZIP archive creation and temporary-file cleanup both failed",
+        { cause: error },
       );
     }
     throw error;
   }
 }
 
-function collectDirectoryEntries(sourceRoot, rootName, preserveSymlinks) {
-  const records = [];
-  function visit(directory, relativeDirectory) {
-    const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+function collectDirectoryEntries(sourceRoot, rootName, options) {
+  if (options.followSymlinks === true && options.preserveSymlinks === true) {
+    throw new Error(
+      "ZIP symlink options preserveSymlinks and followSymlinks are mutually exclusive",
     );
-    for (const entry of entries) {
-      const absolutePath = join(directory, entry.name);
-      const relativePath =
-        relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
-      const archiveName = `${rootName}/${relativePath}`;
-      const stat = lstatSync(absolutePath);
-      if (stat.isDirectory()) visit(absolutePath, relativePath);
-      else if (stat.isSymbolicLink() && preserveSymlinks === true) {
-        records.push({ name: archiveName, data: readlinkSync(absolutePath), mode: stat.mode });
-      } else if (stat.isFile()) {
-        records.push({ name: archiveName, data: readFileSync(absolutePath), mode: stat.mode });
-      } else {
-        throw new Error(`ZIP source contains an unsupported entry: ${archiveName}`);
+  }
+  const records = [];
+  const activeDirectories = new Set();
+  function visit(directory, relativeDirectory) {
+    const realDirectory = realpathSync(directory);
+    if (activeDirectories.has(realDirectory)) {
+      throw new Error(
+        `ZIP source contains a recursive symlinked directory: ${rootName}/${relativeDirectory}`,
+      );
+    }
+    activeDirectories.add(realDirectory);
+    try {
+      const entries = readdirSync(directory, { withFileTypes: true }).sort(compareDirectoryEntries);
+      for (const entry of entries) {
+        const absolutePath = join(directory, entry.name);
+        const relativePath =
+          relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
+        const archiveName = `${rootName}/${relativePath}`;
+        const stat = lstatSync(absolutePath);
+        if (stat.isDirectory()) {
+          visit(absolutePath, relativePath);
+        } else if (stat.isSymbolicLink()) {
+          const result = symlinkDirectoryEntry(absolutePath, archiveName, options, stat);
+          if (result.kind === "directory") visit(absolutePath, relativePath);
+          else records.push(result.record);
+        } else if (stat.isFile()) {
+          records.push({ name: archiveName, data: readFileSync(absolutePath), mode: stat.mode });
+        } else {
+          throw new Error(`ZIP source contains an unsupported entry: ${archiveName}`);
+        }
       }
+    } finally {
+      activeDirectories.delete(realDirectory);
     }
   }
   visit(sourceRoot, "");
@@ -218,6 +270,9 @@ function collectDirectoryEntries(sourceRoot, rootName, preserveSymlinks) {
 
 export function writeZipArchiveFromDirectory(sourceRoot, archivePath, options) {
   const rootName = normalizedEntryName(options.rootName, false);
-  const records = collectDirectoryEntries(sourceRoot, rootName, options.preserveSymlinks === true);
+  const records = collectDirectoryEntries(sourceRoot, rootName, {
+    followSymlinks: options.followSymlinks === true,
+    preserveSymlinks: options.preserveSymlinks === true,
+  });
   writeZipArchiveEntries(archivePath, records);
 }
