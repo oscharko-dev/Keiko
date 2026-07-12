@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { join } from "node:path";
 import { Pool } from "pg";
 import { FEEDBACK_INTAKE_REPORT_PATH_V1 } from "@oscharko-dev/keiko-contracts/feedback-intake";
+import type { FeedbackPublicationTargetCatalogItemV1 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
+import { FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1 } from "@oscharko-dev/keiko-contracts/feedback-publication";
 import { FileSecretProvider } from "./file-secret-provider.js";
 import {
   FeedbackPublicationRuntime,
@@ -25,6 +27,7 @@ import { applyFeedbackMigrations, type FeedbackMigration } from "./migrations.js
 import { PostgresIntakeRepository, type PgClientLike } from "./postgres.js";
 import { createPostgresFeedbackIntake } from "./production-service.js";
 import type { HostedRuntimeConfig } from "./runtime-config.js";
+import type { GithubAppConfig } from "./github-app-config.js";
 import {
   createRuntimePools,
   endPublicationPools,
@@ -401,11 +404,34 @@ async function createConfiguredMaintainer(
     runtimeConfig: config,
     pool: pools.maintainer,
     publication: maintainerPublicationService(config, pools, maintainerConfig),
+    publicationTargets: config.publication.enabled
+      ? createMaintainerPublicationTargetCatalog(config.publication.github.targets)
+      : undefined,
     now,
     oidc: options.maintainerOidcClient,
     diagnostics: options.maintainerDiagnostics,
     serverFactory: options.serverFactory,
   });
+}
+
+export function createMaintainerPublicationTargetCatalog(
+  configured: GithubAppConfig["targets"],
+): readonly FeedbackPublicationTargetCatalogItemV1[] {
+  const targets = [...configured.values()]
+    .map(({ snapshot }) =>
+      Object.freeze({
+        targetKey: snapshot.targetKey,
+        owner: snapshot.owner,
+        repository: snapshot.repository,
+        labels: Object.freeze([...snapshot.labels]),
+        targetPolicyVersion: snapshot.targetPolicyVersion,
+        projectionPolicyVersion: FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
+      }),
+    )
+    .sort((left, right) =>
+      left.targetKey < right.targetKey ? -1 : left.targetKey > right.targetKey ? 1 : 0,
+    );
+  return Object.freeze(targets);
 }
 
 function maintainerPublicationService(

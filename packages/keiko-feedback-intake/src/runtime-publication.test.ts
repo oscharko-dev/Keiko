@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PgClientLike, PgQueryResult } from "./postgres.js";
 import type { FeedbackPublicationRuntimeOptions } from "./feedback-publication-runtime.js";
-import { startHostedFeedbackIntake } from "./runtime.js";
+import { digestFeedbackTargetPolicyV1 } from "./feedback-publication-projection.js";
+import { createMaintainerPublicationTargetCatalog, startHostedFeedbackIntake } from "./runtime.js";
 import type { RuntimePool } from "./runtime-pools.js";
 
 const roots: string[] = [];
@@ -133,6 +134,73 @@ function result<Row extends object>(rows: readonly Row[]): Promise<PgQueryResult
 }
 
 describe("publication runtime composition", () => {
+  it("freezes a deterministic safe target catalog without private identifiers", () => {
+    const snapshots = [
+      {
+        apiOrigin: "https://api.github.com" as const,
+        repositoryId: "987654321",
+        owner: "owner-z",
+        repository: "repository-z",
+        installationId: "123456789",
+        labels: ["feedback-z"],
+        targetKey: "z-target",
+        labelPolicyVersion: "labels-z",
+        targetPolicyVersion: "target-z",
+      },
+      {
+        apiOrigin: "https://api.github.com" as const,
+        repositoryId: "987654322",
+        owner: "owner-a",
+        repository: "repository-a",
+        installationId: "123456790",
+        labels: ["feedback-a"],
+        targetKey: "a-target",
+        labelPolicyVersion: "labels-a",
+        targetPolicyVersion: "target-a",
+      },
+    ];
+    const configured = new Map(
+      snapshots.map((snapshot) => [
+        snapshot.targetKey,
+        { snapshot, digest: digestFeedbackTargetPolicyV1(snapshot) },
+      ]),
+    );
+    const first = snapshots[0];
+    if (first === undefined) throw new Error("Missing target fixture");
+    const single = createMaintainerPublicationTargetCatalog(
+      new Map([
+        [first.targetKey, { snapshot: first, digest: digestFeedbackTargetPolicyV1(first) }],
+      ]),
+    );
+    expect(single).toEqual([
+      {
+        targetKey: "z-target",
+        owner: "owner-z",
+        repository: "repository-z",
+        labels: ["feedback-z"],
+        targetPolicyVersion: "target-z",
+        projectionPolicyVersion: "github-issue-v1",
+      },
+    ]);
+    const catalog = createMaintainerPublicationTargetCatalog(configured);
+    expect(catalog.map((target) => target.targetKey)).toEqual(["a-target", "z-target"]);
+    expect(Object.isFrozen(catalog)).toBe(true);
+    expect(
+      catalog.every((target) => Object.isFrozen(target) && Object.isFrozen(target.labels)),
+    ).toBe(true);
+    const serialized = JSON.stringify(catalog);
+    for (const forbidden of [
+      "987654321",
+      "123456789",
+      "apiOrigin",
+      "repositoryId",
+      "installationId",
+      "digest",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
   it("inspects before listeners, uses isolated exact-size pools, and drains before pool close", async () => {
     const events: string[] = [];
     const maximums: number[] = [];

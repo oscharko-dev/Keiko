@@ -324,6 +324,53 @@ describe("maintainer HTTP boundary", () => {
     expect(value).not.toHaveProperty("subject");
   });
 
+  it.each([
+    [["feedback.review", "feedback.publish"], true],
+    [["feedback.review"], false],
+    [["feedback.publish"], false],
+    [[], false],
+  ] as const)(
+    "exposes safe publication targets only to dual-authorized sessions %j",
+    async (permissions, visible) => {
+      const base = harness(permissions);
+      const publicationTargets = [
+        {
+          targetKey: "z-target",
+          owner: "owner-z",
+          repository: "repository-z",
+          labels: ["feedback-z"],
+          targetPolicyVersion: "target-z",
+          projectionPolicyVersion: "github-issue-v1" as const,
+        },
+        {
+          targetKey: "a-target",
+          owner: "owner-a",
+          repository: "repository-a",
+          labels: ["feedback-a"],
+          targetPolicyVersion: "target-a",
+          projectionPolicyVersion: "github-issue-v1" as const,
+        },
+      ];
+      const origin = await listen({
+        ...base.options,
+        publication: publicationMocks(),
+        publicationTargets,
+      });
+      const response = await fetch(`${origin}/v1/maintainer/auth/session`, {
+        headers: sessionHeaders(),
+      });
+      const value = (await response.json()) as Record<string, unknown>;
+      if (visible) expect(value).toHaveProperty("publicationTargets", publicationTargets);
+      else expect(value).not.toHaveProperty("publicationTargets");
+      const serialized = JSON.stringify(value);
+      expect(serialized).not.toContain("987654321");
+      expect(serialized).not.toContain("123456789");
+      expect(serialized).not.toContain("PRIVATE_KEY_SENTINEL");
+      expect(serialized).not.toContain("api.github.com");
+      expect(serialized).not.toContain("targetPolicyDigest");
+    },
+  );
+
   it("exposes legal-hold policy keys and governance metadata only to legal-hold sessions", async () => {
     const legal = harness(["feedback.review", "feedback.legal-hold"], ["retention-review"]);
     const origin = await listen(legal.options);

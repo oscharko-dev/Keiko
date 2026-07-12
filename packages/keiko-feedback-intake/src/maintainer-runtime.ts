@@ -28,6 +28,7 @@ export interface MaintainerRuntimeOptions {
   readonly oidc?: MaintainerOidcClient | undefined;
   readonly diagnostics?: MaintainerHttpOptions["diagnostics"];
   readonly publication?: MaintainerPublicationService | undefined;
+  readonly publicationTargets?: MaintainerHttpOptions["publicationTargets"];
   readonly serverFactory?:
     | ((handler: (req: IncomingMessage, res: ServerResponse) => void) => MaintainerRuntimeServer)
     | undefined;
@@ -104,6 +105,7 @@ export async function createMaintainerRuntimeServer(
       options.now,
     ),
     publication: options.publication,
+    publicationTargets: options.publicationTargets,
     loginLimiter: new MaintainerLoginLimiter({
       perSource: options.config.loginPerSourceLimit,
       global: options.config.loginGlobalLimit,

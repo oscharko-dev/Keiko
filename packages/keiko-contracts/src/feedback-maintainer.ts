@@ -19,6 +19,16 @@ export interface FeedbackMaintainerSessionV1 {
   readonly csrfToken: string;
   readonly absoluteExpiresAt: string;
   readonly legalHoldPolicyKeys?: readonly string[] | undefined;
+  readonly publicationTargets?: readonly FeedbackPublicationTargetCatalogItemV1[] | undefined;
+}
+
+export interface FeedbackPublicationTargetCatalogItemV1 {
+  readonly targetKey: string;
+  readonly owner: string;
+  readonly repository: string;
+  readonly labels: readonly string[];
+  readonly targetPolicyVersion: string;
+  readonly projectionPolicyVersion: "github-issue-v1";
 }
 
 export interface FeedbackReviewListItemV1 {

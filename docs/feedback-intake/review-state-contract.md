@@ -127,6 +127,12 @@ session, size, deadline, duplicate-key, and strict UTF-8 gates. Status never sel
 marker, or canonical report bytes. Browser responses never contain installation ids, numeric
 repository ids, credentials, tokens, maintainer notes, or anonymous receipt linkage.
 
+When publication is enabled, a session holding both review and publish permissions receives a
+frozen `publicationTargets` catalog ordered by `targetKey`. Each entry contains only target key,
+owner/repository display names, fixed labels, target-policy version, and projection-policy version.
+Disabled or partially authorized sessions receive no catalog. API origin, numeric repository and
+installation ids, key material, and policy digests remain server-only.
+
 Every non-replay review read and mutation joins the immutable payload and recomputes its SHA-256 over
 the exact canonical bytes. Digest drift fails closed. A matching idempotency record is instead the
 durable content-free result: it remains replayable for its 365-day ceiling after the terminal payload

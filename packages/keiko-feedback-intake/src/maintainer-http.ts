@@ -43,6 +43,9 @@ export interface MaintainerHttpOptions {
   readonly query: Pick<PostgresFeedbackReviewQuery, "list" | "detail" | "hold" | "audit">;
   readonly review: Pick<PostgresFeedbackReviewRepository, "execute">;
   readonly publication?: MaintainerPublicationService | undefined;
+  readonly publicationTargets?:
+    | readonly import("@oscharko-dev/keiko-contracts/feedback-maintainer").FeedbackPublicationTargetCatalogItemV1[]
+    | undefined;
   readonly loginLimiter: MaintainerLoginLimiter;
   readonly proxy: Pick<ClientAddressInput, "family" | "trustedCidrs" | "maxHops">;
   readonly legalHoldPolicyKeys?: readonly string[] | undefined;
@@ -165,6 +168,11 @@ async function handleAuthenticated(
       absoluteExpiresAt: identity.absoluteExpiresAt.toISOString(),
       ...(permits(identity, "feedback.legal-hold")
         ? { legalHoldPolicyKeys: options.legalHoldPolicyKeys ?? [] }
+        : {}),
+      ...(options.publicationTargets !== undefined &&
+      permits(identity, "feedback.review") &&
+      permits(identity, "feedback.publish")
+        ? { publicationTargets: options.publicationTargets }
         : {}),
     });
     return;
