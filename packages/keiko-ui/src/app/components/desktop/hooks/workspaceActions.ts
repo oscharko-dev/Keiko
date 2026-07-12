@@ -905,7 +905,9 @@ function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined):
 
 /** The id of the endpoint on the other side of `c` from `id`, or null when `id` isn't in `c`. */
 function otherEndpointId(c: Connection, id: string): string | null {
-  return c.a === id ? c.b : c.b === id ? c.a : null;
+  if (c.a === id) return c.b;
+  if (c.b === id) return c.a;
+  return null;
 }
 
 // Resolves whether a Files↔Chat / Connector↔Chat bind was ACCEPTED by the composition root's
