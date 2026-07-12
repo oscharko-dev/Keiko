@@ -29,6 +29,11 @@ Portable launch/setup issues are covered in the dedicated
 Windows SmartScreen, macOS Gatekeeper, managed install root, proxy, firewall, local port, and
 organization-managed rollout blockers.
 
+Editor personalization and resilience issues are covered in the dedicated
+[Editor Personalization And Resilience Troubleshooting](editor-m7-personalization.md) entry. Use
+that page for M7 settings availability, watcher rescan/degraded states, safe snippet/keyboard
+rollback, and governed AI-assist activation status.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a

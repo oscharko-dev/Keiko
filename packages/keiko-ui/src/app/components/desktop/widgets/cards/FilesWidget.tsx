@@ -36,7 +36,8 @@ import {
   type FilesWidgetMessageKey,
   type FilesWidgetTranslate,
 } from "./files-widget-i18n";
-import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoot } from "./workspace-file-events";
+import { useWorkspaceWatch } from "./useWorkspaceWatch";
+import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./workspace-file-events";
 
 interface FilesWidgetProps {
   root?: string;
@@ -235,6 +236,12 @@ function entryParent(path: string): string | null {
 
 function joinRelative(parent: string | null, name: string): string {
   return parent === null || parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+function parentDirectoryForWatchPath(relativePath: string | undefined): string {
+  if (relativePath === undefined || relativePath.length === 0) return "";
+  const idx = relativePath.lastIndexOf("/");
+  return idx < 0 ? "" : relativePath.slice(0, idx);
 }
 
 // A collision-free "<base> copy<.ext>" name for a duplicate, given the sibling names already present.
@@ -775,13 +782,14 @@ export function FilesWidget({
   useEffect(() => {
     const onMutation = (event: Event): void => {
       const boundRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
-      if (boundRoot !== null && workspaceFileMutationRoot(event) === boundRoot) {
-        invalidateGitStatus();
-      }
+      const detail = workspaceFileMutationDetail(event);
+      if (boundRoot === null || detail?.root !== boundRoot) return;
+      invalidateGitStatus();
+      void loadDirectory(parentDirectoryForWatchPath(detail.relativePath));
     };
     window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onMutation);
     return () => window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onMutation);
-  }, [apiRoot, invalidateGitStatus, resolvedRoot]);
+  }, [apiRoot, invalidateGitStatus, loadDirectory, resolvedRoot]);
 
   // Keep the root-bar input showing where we actually are (resolved root + current folder).
   useEffect(() => {
@@ -813,6 +821,23 @@ export function FilesWidget({
     invalidateGitStatus();
     void loadDirectory(currentDirectoryPath ?? "");
   }, [currentDirectoryPath, invalidateGitStatus, loadDirectory]);
+
+  const watchRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : undefined);
+  useWorkspaceWatch(
+    watchRoot,
+    useCallback(
+      (event): void => {
+        invalidateGitStatus();
+        if (event.kind === "rescan" || event.kind === "overflow" || event.relativePath === "") {
+          setDirectories({});
+          void loadDirectory(currentDirectoryPath ?? "");
+          return;
+        }
+        void loadDirectory(parentDirectoryForWatchPath(event.relativePath));
+      },
+      [currentDirectoryPath, invalidateGitStatus, loadDirectory],
+    ),
+  );
 
   // The root every mutation targets — the resolved real root, or the configured one before it loads.
   const mutationRoot = resolvedRoot ?? apiRoot;

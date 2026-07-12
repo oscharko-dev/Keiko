@@ -608,6 +608,83 @@ describe("useRelationshipActivityStream", () => {
       expect(requireCapturedState(captured).activityMap.has("rel-prune")).toBe(false);
       expect(requireCapturedState(captured).throughputMap.has("rel-prune")).toBe(false);
     });
+
+    // Covers the evictOverCapacity path (MAX_TRACKED_RELATIONSHIPS = 512):
+    // exceeding the cap must evict inactive entries first, then the oldest,
+    // and drop their throughput counts.
+    it("evicts over-capacity entries, preferring inactive then oldest", async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+
+      // MAX_TRACKED_RELATIONSHIPS is 512 (module constant).
+      // Push 514 entries so eviction has to remove 2.
+      const source = FakeEventSource.last;
+      expect(source).not.toBeNull();
+
+      // First, mark "inactive-victim" as high-throughput so it lands in the
+      // throughput map. The pruning cycle later downgrades it to "inactive",
+      // giving eviction a distinct inactive candidate to prefer.
+      act(() => {
+        source?.dispatch(
+          "relationship:activity",
+          makeActivityEvent("inactive-victim", "high-throughput", 99),
+        );
+      });
+      expect(requireCapturedState(captured).activityMap.get("inactive-victim")).toBe(
+        "high-throughput",
+      );
+      expect(requireCapturedState(captured).throughputMap.get("inactive-victim")).toBe(99);
+
+      // Advance long enough that "inactive-victim" is expired to inactive
+      // (>= ACTIVITY_WINDOW_MS = 60s) but its record is retained (pruning is
+      // driven by the 15s interval which calls pruneState with keepInactive=false;
+      // deletion happens only after 2*window = 120s, so 61s keeps it retained
+      // and inactive). Then dispatch 513 fresh entries: total > 512 → eviction
+      // fires and inactive-victim goes first.
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+      expect(requireCapturedState(captured).activityMap.get("inactive-victim")).toBe("inactive");
+      expect(requireCapturedState(captured).throughputMap.has("inactive-victim")).toBe(false);
+
+      // Now flood with 513 unique active entries (with staggered timestamps so
+      // the "oldest active" is deterministic). MIN_STATE_INTERVAL_MS is 2000ms
+      // per-id, but each id here is unique so debounce does not apply.
+      act(() => {
+        for (let i = 0; i < 513; i += 1) {
+          vi.advanceTimersByTime(1);
+          source?.dispatch(
+            "relationship:activity",
+            makeActivityEvent(`rel-${String(i)}`, "active"),
+          );
+        }
+      });
+
+      // At this point activityMap.size = 1 (inactive-victim) + 513 = 514
+      // (all still tracked — pruneState only fires on the interval).
+      // Trigger one pruneState tick. Advance to next interval boundary.
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      const state = requireCapturedState(captured);
+      // Cap enforced.
+      expect(state.activityMap.size).toBeLessThanOrEqual(512);
+      // inactive-victim evicted first (inactive-first ordering).
+      expect(state.activityMap.has("inactive-victim")).toBe(false);
+      // The oldest active entries were evicted next (rel-0 is oldest).
+      expect(state.activityMap.has("rel-0")).toBe(false);
+      // Most recent entries survive.
+      expect(state.activityMap.has("rel-512")).toBe(true);
+    });
   });
 });
 

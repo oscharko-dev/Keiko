@@ -96,7 +96,7 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "tab.reopenClosed",
     title: "Reopen Closed Editor",
-    keybinding: "Ctrl/⌘ ⌥ T",
+    keybinding: "Ctrl/⌘ ⌥ R",
     run: (host) => host.reopenClosed(),
     isAvailable: (host) => host.closedTabCount > 0,
   },

@@ -68,6 +68,7 @@ import {
   type EditorCodeActionsQuery,
   type EditorCodeActionsResolver,
   type EditorCompletionQuery,
+  type EditorCompletionItem,
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDefinitionQuery,
@@ -122,9 +123,13 @@ import {
   type GitEditorDiffHunk,
   type GitEditorBlameLine,
   GIT_EDITOR_BLAME_MAX_LINES,
+  type EditorM7WatchEvent,
   MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
+  matchingEditorM7Snippets,
+  type EditorCompletionSource,
   type ManagedLspSemanticTokenLegend,
+  type EditorM7WorkspaceSnippetSnapshot,
   type WorkspaceReplaceApplyFile,
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
@@ -203,7 +208,15 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import {
+  IDLE_EXTERNAL_CHANGE_STATE,
+  editorExternalChangeReducer,
+  type EditorExternalChangeState,
+} from "./editorExternalChangeState";
+import { useEditorSettings } from "./useEditorSettings";
+import { useWorkspaceSnippets } from "./useWorkspaceSnippets";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { useWorkspaceWatch } from "./useWorkspaceWatch";
 import { removePaneDiagnostics, setPaneDiagnostics } from "./editorProblemsStore";
 import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
@@ -473,7 +486,18 @@ const TEST_GENERATION_FAILURE_MESSAGE =
 const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
+const FORMAT_ON_SAVE_DEADLINE_MS = 5_000;
 const UTF8_ENCODER = new TextEncoder();
+
+interface FormatOnSaveState {
+  readonly enabled: boolean;
+  readonly canFormat: boolean;
+  readonly document: EditorDocumentIdentity | null;
+  readonly file: string | undefined;
+  readonly root: string | undefined;
+  readonly tabSize: number;
+  readonly insertSpaces: boolean;
+}
 const RUST_SEMANTIC_TOKEN_LEGEND: ManagedLspSemanticTokenLegend = Object.freeze({
   schemaVersion: "1",
   legendVersion: 1,
@@ -699,8 +723,10 @@ async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<
   }
   let hash = 0x811c9dc5;
   for (let index = 0; index < fallbackText.length; index += 1) {
-    hash ^= fallbackText.charCodeAt(index);
+    const code = fallbackText.codePointAt(index) ?? 0;
+    hash ^= code;
     hash = Math.imul(hash, 0x01000193) >>> 0;
+    if (code > 0xffff) index += 1;
   }
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
 }
@@ -1022,6 +1048,46 @@ function completionContextSelectors(input: {
   return Object.keys(selectors).length > 0 ? selectors : undefined;
 }
 
+function completionPrefixAt(text: string, line: number, character: number): string {
+  const currentLine = lineAtIndex(text, line);
+  const beforeCursor = currentLine.slice(0, Math.max(0, character));
+  let start = beforeCursor.length;
+  while (start > 0 && completionPrefixChar(beforeCursor[start - 1] ?? "")) start -= 1;
+  return beforeCursor.slice(start);
+}
+
+function completionPrefixChar(value: string): boolean {
+  return /^[A-Za-z0-9._:-]$/u.test(value);
+}
+
+function snippetCompletionItems(input: {
+  readonly snapshot: EditorM7WorkspaceSnippetSnapshot | undefined;
+  readonly languageId: string;
+  readonly relativePath: string;
+  readonly prefix: string;
+  readonly insertionSafe: boolean;
+  readonly signal: AbortSignal;
+}): readonly EditorCompletionItem[] {
+  const snapshot = input.snapshot;
+  if (snapshot === undefined || snapshot.storeState === "unavailable") return [];
+  return matchingEditorM7Snippets({
+    collection: snapshot,
+    languageId: input.languageId,
+    relativePath: input.relativePath,
+    prefix: input.prefix,
+    insertionSafe: input.insertionSafe,
+    signal: input.signal,
+  }).map((item) => ({
+    label: item.label,
+    kind: "snippet",
+    insertText: item.insertText,
+    insertAsSnippet: true,
+    detail: item.detail,
+    sortText: item.sortText,
+    provenance: { origin: "deterministic-completion" },
+  }));
+}
+
 function providerForLanguage(
   capabilities: LanguageServiceCapabilities | null,
   languageId: string | undefined,
@@ -1097,6 +1163,52 @@ function buildAgentPatchDiffModel(
     unsupportedCount: 0,
     truncated: false,
   };
+}
+
+function workspaceWatchEventTouchesPath(
+  event: EditorM7WatchEvent,
+  path: string | undefined,
+): boolean {
+  if (path === undefined || path.length === 0) return event.relativePath.length === 0;
+  return (
+    event.relativePath.length === 0 || event.relativePath === path || event.oldRelativePath === path
+  );
+}
+
+function externalChangeMessage(state: EditorExternalChangeState, file: string | undefined): string {
+  const subject = file !== undefined && file.length > 0 ? file : "this file";
+  switch (state.status) {
+    case "cleanChanged":
+      return `The file changed on disk: ${subject}.`;
+    case "dirtyChanged":
+      return `The file changed on disk while you have unsaved edits: ${subject}.`;
+    case "deleted":
+      return `The file was deleted on disk: ${subject}.`;
+    case "renamed":
+      return state.oldRelativePath === null
+        ? `The file may have moved on disk: ${subject}.`
+        : `The file may have moved on disk from ${state.oldRelativePath}.`;
+    case "rescanRequired":
+      return "Workspace file events fell behind. Refresh before trusting stale editor state.";
+    case "degraded":
+      return state.reason === null
+        ? "Workspace file watching is degraded. Refresh before trusting stale editor state."
+        : `Workspace file watching is degraded: ${state.reason}.`;
+    case "idle":
+      return "";
+  }
+}
+
+function externalChangeCanCompare(state: EditorExternalChangeState): boolean {
+  return state.status === "cleanChanged" || state.status === "dirtyChanged";
+}
+
+function localWriteMatchesEvent(
+  localWrite: { readonly path: string; readonly expiresAt: number } | null,
+  event: EditorM7WatchEvent,
+): boolean {
+  if (localWrite === null || Date.now() > localWrite.expiresAt) return false;
+  return localWrite.path === event.relativePath || localWrite.path === event.oldRelativePath;
 }
 
 type AgentPreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
@@ -1318,6 +1430,9 @@ function EditorRuntimeWidget({
   const sourceControlT = useEditorSourceControlTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
+  const editorSettings = useEditorSettings(root);
+  const workspaceSnippets = useWorkspaceSnippets(root);
+  const snippetInsertionSafeRef = useRef(false);
   // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
   // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
   const verification = useEditorVerificationRun({
@@ -1560,6 +1675,11 @@ function EditorRuntimeWidget({
   const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [recoveryCompare, setRecoveryCompare] = useState(false);
+  const [externalChange, dispatchExternalChange] = useReducer(
+    editorExternalChangeReducer,
+    IDLE_EXTERNAL_CHANGE_STATE,
+  );
+  const [externalCompareBaseline, setExternalCompareBaseline] = useState<string | null>(null);
   const [activeContentDigest, setActiveContentDigest] = useState<{
     readonly content: string;
     readonly hash: string;
@@ -1647,10 +1767,22 @@ function EditorRuntimeWidget({
   versionRef.current = version;
   const savingRef = useRef(false);
   savingRef.current = saveStatus === "saving";
+  const recentLocalWriteRef = useRef<{ readonly path: string; readonly expiresAt: number } | null>(
+    null,
+  );
   // The editor stays editable during a save; this ref lets the success handler tell whether the
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  const formatOnSaveStateRef = useRef<FormatOnSaveState>({
+    enabled: false,
+    canFormat: false,
+    document: null,
+    file: undefined,
+    root: undefined,
+    tabSize: 2,
+    insertSpaces: true,
+  });
   const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
   const contentSizeBytes = contentBytes.length;
   const activeContentHash =
@@ -1672,6 +1804,8 @@ function EditorRuntimeWidget({
     setRecoveryCompare(false);
     setReloadConfirm(false);
     setRecoveryDiskBaseline(null);
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "reloadSucceeded" });
     setRenameReview(null);
   }, [file, root]);
 
@@ -1733,6 +1867,31 @@ function EditorRuntimeWidget({
     lastDirtyNotificationRef.current = { file, dirty };
     onDirtyChange?.(file, dirty);
   }, [dirty, file, onDirtyChange]);
+  useEffect(() => {
+    dispatchExternalChange({ type: "dirtyChanged", dirty });
+  }, [dirty]);
+  const handleWorkspaceWatchEvent = useCallback(
+    (event: EditorM7WatchEvent): void => {
+      if (root !== undefined && file !== undefined && workspaceWatchEventTouchesPath(event, file)) {
+        setGitGutterPeek(null);
+        setGitGutterRefreshNonce((value) => value + 1);
+        setDiagnosticsSummary(null);
+        removePaneDiagnostics(root, diagnosticsProducerId, file);
+        symbolCacheRef.current = null;
+        setOutlineSymbols([]);
+      }
+      dispatchExternalChange({
+        type: "observed",
+        event,
+        activePath: file,
+        dirty: dirtyRef.current,
+        saving: savingRef.current,
+        originatedByKeiko: localWriteMatchesEvent(recentLocalWriteRef.current, event),
+      });
+    },
+    [diagnosticsProducerId, file, root],
+  );
+  const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
     const snapshotKey = documentSessionKey(root, file);
@@ -1874,6 +2033,8 @@ function EditorRuntimeWidget({
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
+          setExternalCompareBaseline(null);
+          dispatchExternalChange({ type: "reloadSucceeded" });
           // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
           // The content comparison is the authoritative signal; an additional contentHash check is
           // redundant against it (a content difference implies a hash difference) and can only ever
@@ -1923,6 +2084,8 @@ function EditorRuntimeWidget({
 
   const confirmReloadDiscard = useCallback((): void => {
     setReloadConfirm(false);
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "reloadStarted" });
     // The user chose to discard the unsaved buffer for the on-disk version, so the hot-exit snapshot
     // holding those edits must go too — otherwise the reload would immediately re-offer them as a
     // recovery. Serialized store mutations keep this delete ordered ahead of the reload's snapshot read.
@@ -1955,6 +2118,60 @@ function EditorRuntimeWidget({
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
+  const prepareFormatOnSave = useCallback(async (text: string): Promise<string | null> => {
+    const state = formatOnSaveStateRef.current;
+    if (!state.enabled) return text;
+    if (
+      !state.canFormat ||
+      state.document === null ||
+      state.root === undefined ||
+      state.file === undefined
+    ) {
+      return text;
+    }
+    const baseVersion = versionRef.current;
+    const request = {
+      request: {
+        requestId: createEditorRequestId(),
+        streamId: "editor-format-on-save",
+        sequence: Date.now(),
+      },
+      document: state.document,
+      options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
+    };
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
+    try {
+      const wire = await requestEditorFormatting(
+        {
+          root: state.root,
+          path: state.file,
+          languageId: state.document.language,
+          text,
+          options: request.options,
+        },
+        controller.signal,
+      );
+      if (contentRef.current !== text || versionRef.current !== baseVersion) {
+        setSaveError("Format-on-save stopped because the file changed while formatting.");
+        setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+        return null;
+      }
+      const response = mapWireToEditorFormattingResponse(request.request, wire);
+      return response.edits.length === 0 ? text : applyTextEditsToText(text, response.edits);
+    } catch (error: unknown) {
+      setSaveError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "Format-on-save timed out. Save again after formatting is available."
+          : `Format-on-save failed: ${errorMessage(error)}`,
+      );
+      setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+      return null;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, []);
+
   const persist = useCallback(
     async (text: string): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
@@ -1973,33 +2190,52 @@ function EditorRuntimeWidget({
       savingRef.current = true;
       setSaveStatus((status) => saveStatusReducer(status, { type: "request" }));
       setSaveError(undefined);
+      let attemptedSaveText = text;
       try {
+        const preparedText = await prepareFormatOnSave(text);
+        if (preparedText === null) return false;
+        const textToSave = preparedText;
+        attemptedSaveText = textToSave;
+        if (textToSave !== contentRef.current) {
+          contentRef.current = textToSave;
+          setContent(textToSave);
+          setFileModel((model: EditorFileModel | null) =>
+            model === null
+              ? model
+              : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+          );
+        }
         const response = await saveFilesContent({
           root,
           path: file,
-          content: text,
+          content: textToSave,
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
         });
-        notifyWorkspaceFileMutated(root);
+        recentLocalWriteRef.current = { path: file, expiresAt: Date.now() + 2_000 };
+        notifyWorkspaceFileMutated(root, {
+          kind: "changed",
+          relativePath: file,
+          provenance: "local",
+        });
         if (activeSessionKeyRef.current !== saveSessionKey) {
           const cached = sessionCacheRef.current.get(saveSessionKey);
-          const cachedContent = cached?.content ?? text;
+          const cachedContent = cached?.content ?? textToSave;
           const cachedFileModel = cached?.fileModel ?? null;
           sessionCacheRef.current.set(saveSessionKey, {
-            content: cachedContent === text ? response.content : cachedContent,
+            content: cachedContent === textToSave ? response.content : cachedContent,
             fileModel:
               cachedFileModel === null
                 ? cachedFileModel
                 : editorFileModelReducer(cachedFileModel, {
-                    type: cachedContent === text ? "saved" : "edited",
+                    type: cachedContent === textToSave ? "saved" : "edited",
                     origin: "human",
                   }),
             modifiedAt: response.modifiedAt,
             version: response.session.version,
             maxBytes: response.maxBytes,
             loadState: cached?.loadState ?? { status: "ready" },
-            saveStatus: cachedContent === text ? "saved" : "idle",
+            saveStatus: cachedContent === textToSave ? "saved" : "idle",
             saveError: undefined,
             cursor: cached?.cursor ?? null,
             currentSelection: cached?.currentSelection ?? null,
@@ -2013,7 +2249,7 @@ function EditorRuntimeWidget({
         setModifiedAt(response.modifiedAt);
         setVersion(response.session.version);
         setMaxBytes(response.maxBytes);
-        if (contentRef.current === text) {
+        if (contentRef.current === textToSave) {
           // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.
           setContent(response.content);
           setFileModel((model: EditorFileModel | null) =>
@@ -2035,7 +2271,7 @@ function EditorRuntimeWidget({
         if (activeSessionKeyRef.current !== saveSessionKey) {
           const cached = sessionCacheRef.current.get(saveSessionKey);
           sessionCacheRef.current.set(saveSessionKey, {
-            content: cached?.content ?? text,
+            content: cached?.content ?? attemptedSaveText,
             fileModel: cached?.fileModel ?? fileModel,
             modifiedAt: cached?.modifiedAt ?? modifiedAt,
             version: cached?.version ?? versionRef.current,
@@ -2063,7 +2299,7 @@ function EditorRuntimeWidget({
         savingRef.current = false;
       }
     },
-    [file, fileModel, hasTarget, maxBytes, modifiedAt, root],
+    [file, fileModel, hasTarget, maxBytes, modifiedAt, prepareFormatOnSave, root],
   );
 
   const onContentChange = useCallback(
@@ -2149,6 +2385,10 @@ function EditorRuntimeWidget({
   useEffect(() => {
     if (recoveryCompare) recoveryCompareButtonRef.current?.focus();
   }, [recoveryCompare]);
+  const externalCompareButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (externalChange.compareOpen) externalCompareButtonRef.current?.focus();
+  }, [externalChange.compareOpen]);
 
   const closeRecoveryCompare = useCallback((): void => {
     setRecoveryCompare(false);
@@ -2197,9 +2437,43 @@ function EditorRuntimeWidget({
         },
         signal,
       );
-      return mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
+      const response = mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
+      const snippetItems = snippetCompletionItems({
+        snapshot: workspaceSnippets.snapshot,
+        languageId: query.request.document.language,
+        relativePath: file,
+        prefix: completionPrefixAt(
+          query.documentText,
+          query.request.position.line,
+          query.request.position.column,
+        ),
+        insertionSafe: snippetInsertionSafeRef.current,
+        signal,
+      });
+      const sources: readonly EditorCompletionSource[] = [
+        ...new Set<EditorCompletionSource>(["workspace-snippet", ...response.provenance.sources]),
+      ];
+      return snippetItems.length === 0
+        ? response
+        : {
+            ...response,
+            items: [...snippetItems, ...response.items],
+            provenance: {
+              ...response.provenance,
+              sources,
+            },
+          };
     },
-    [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
+    [
+      file,
+      hasTarget,
+      linkedCapsuleIds,
+      linkedCapsuleSetIds,
+      linkedFilePath,
+      linkedRoot,
+      root,
+      workspaceSnippets.snapshot,
+    ],
   );
 
   // Issue #1200: the governed inline-completion (ghost-text) resolver. The Monaco inline bridge calls
@@ -2483,15 +2757,23 @@ function EditorRuntimeWidget({
           languageId: query.request.document.language,
           text: query.documentText,
           options: {
-            tabSize: query.request.options.tabSize,
-            insertSpaces: query.request.options.insertSpaces,
+            tabSize: editorSettings.applied.tabSize,
+            insertSpaces: editorSettings.applied.insertSpaces,
           },
         },
         signal,
       );
       return mapWireToEditorFormattingResponse(query.request.request, wire);
     },
-    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
+    [
+      currentDocumentUri,
+      editorSettings.applied.insertSpaces,
+      editorSettings.applied.tabSize,
+      file,
+      hasTarget,
+      languageCapabilities,
+      root,
+    ],
   );
 
   const provideDefinition = useCallback<EditorDefinitionResolver>(
@@ -2752,7 +3034,14 @@ function EditorRuntimeWidget({
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
   );
-  const largeFileDegraded = largeFileMode === "degraded";
+  const automaticLargeFileDegraded = largeFileMode === "degraded";
+  const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
+  const largeFileDegraded =
+    automaticLargeFileDegraded ||
+    preferenceLargeFileMode === "degraded" ||
+    preferenceLargeFileMode === "readonly";
+  const editorReadOnlyBySettings =
+    automaticLargeFileDegraded || preferenceLargeFileMode === "readonly";
   const editorConflicts = useMemo<NonNullable<EditorSurfaceProps["editorConflicts"]>>(
     () => ({
       labels: {
@@ -2891,6 +3180,7 @@ function EditorRuntimeWidget({
   const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
   const completionEnabled =
     providerOperationEnabled(languageProvider, "completion") && !largeFileDegraded;
+  snippetInsertionSafeRef.current = completionEnabled && !editorReadOnlyBySettings;
   const diagnosticsEnabled =
     providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
@@ -2948,6 +3238,15 @@ function EditorRuntimeWidget({
     (builtinFormatting === "keiko-language-service" &&
       providerOperationEnabled(languageProvider, "formatting"));
   const formattingEnabled = formattingAvailable && !largeFileDegraded;
+  formatOnSaveStateRef.current = {
+    enabled: editorSettings.applied.formatOnSave,
+    canFormat: formattingEnabled && loadState.status === "ready",
+    document: fileModelMatchesTarget ? (fileModel?.identity ?? null) : null,
+    file,
+    root,
+    tabSize: editorSettings.applied.tabSize,
+    insertSpaces: editorSettings.applied.insertSpaces,
+  };
   // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
   // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
   const formattingLanguageLabel =
@@ -3059,6 +3358,36 @@ function EditorRuntimeWidget({
   const announceToolbarNotice = useCallback((reason: string): void => {
     setToolbarNotice((current) => (current === reason ? `\u200B${reason}` : reason));
   }, []);
+  const compareExternalChange = useCallback((): void => {
+    if (root === undefined || file === undefined || !externalChangeCanCompare(externalChange)) {
+      return;
+    }
+    void fetchFilesContent(root, file)
+      .then((response) => {
+        setExternalCompareBaseline(response.content);
+        dispatchExternalChange({ type: "compareOpened" });
+      })
+      .catch((error: unknown) => {
+        announceToolbarNotice(errorMessage(error));
+      });
+  }, [announceToolbarNotice, externalChange, file, root]);
+  const keepExternalLocal = useCallback((): void => {
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "keepLocal" });
+  }, []);
+  const closeExternalCompare = useCallback((): void => {
+    dispatchExternalChange({ type: "compareClosed" });
+    setExternalCompareBaseline(null);
+  }, []);
+  const reloadExternalChange = useCallback((): void => {
+    setExternalCompareBaseline(null);
+    if (dirtyRef.current) {
+      setReloadConfirm(true);
+      return;
+    }
+    dispatchExternalChange({ type: "reloadStarted" });
+    reload();
+  }, [reload]);
   const handleAskSelection = useCallback(
     (selection: EditorSelectionAskRequest): void => {
       const relativeFile =
@@ -3091,7 +3420,7 @@ function EditorRuntimeWidget({
         ? null
         : {
             language: fileModel.identity.language,
-            readOnly: largeFileDegraded,
+            readOnly: editorReadOnlyBySettings,
             content: {
               relativePath: file ?? "",
               text: content,
@@ -3099,8 +3428,12 @@ function EditorRuntimeWidget({
               truncated: false,
             },
           },
-    [content, contentSizeBytes, file, fileModel, fileModelMatchesTarget, largeFileDegraded],
+    [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
   );
+  const modelViewStateKey =
+    hasTarget && root !== undefined && file !== undefined
+      ? `${editorModelScope}:${paneId ?? "pane"}:${documentSessionKey(root, file)}`
+      : undefined;
 
   const loadRenameSources = useCallback(
     async (changeset: LanguageRenameChangeset): Promise<RenameSourcesResult> => {
@@ -3238,6 +3571,7 @@ function EditorRuntimeWidget({
         })
       : null;
   const agentReviewActive =
+    externalChange.compareOpen ||
     recoveryCompare ||
     agentPatchPending !== null ||
     agentChangesetPending !== null ||
@@ -4154,6 +4488,11 @@ function EditorRuntimeWidget({
           : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+      setActiveHostEditRequest({
+        id: createEditorRequestId(),
+        text: review.modified,
+        origin: "applied-patch",
+      });
       return true;
     },
     [largeFileDegraded, t, verifyExactPatchTarget],
@@ -4566,7 +4905,48 @@ function EditorRuntimeWidget({
   }, [agentSelectionRequest, consumeSelectionRequest]);
 
   let panel: ReactNode;
-  if (recoveryCompare && recoverySnapshot !== null) {
+  if (externalChange.compareOpen && externalCompareBaseline !== null) {
+    const externalDiffModel = buildAgentPatchDiffModel(externalCompareBaseline, content, file);
+    panel = (
+      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+        <fieldset
+          aria-label={`Compare external changes for ${file ?? "this file"}`}
+          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
+        >
+          <span className="sr-only">
+            Side-by-side comparison of the latest file on disk and the local editor buffer. Keep
+            local preserves your buffer; reload replaces it with the file on disk.
+          </span>
+          <EditorDiffSurface
+            model={externalDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </fieldset>
+        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
+          <button
+            ref={externalCompareButtonRef}
+            type="button"
+            className="ed-save"
+            onClick={keepExternalLocal}
+          >
+            Keep local
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
+            Reload
+          </button>
+          <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
+            Close compare
+          </button>
+        </div>
+      </div>
+    );
+  } else if (recoveryCompare && recoverySnapshot !== null) {
     // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
     // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
     // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
@@ -4578,8 +4958,7 @@ function EditorRuntimeWidget({
     );
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label={`Compare recovered changes for ${file ?? "this file"}`}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
         >
@@ -4592,7 +4971,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           <button
             ref={recoveryCompareButtonRef}
@@ -4614,8 +4993,7 @@ function EditorRuntimeWidget({
   } else if (agentChangesetPending !== null) {
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label="Agent changeset review"
           aria-busy={agentChangesetPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -4641,7 +5019,7 @@ function EditorRuntimeWidget({
             onReject={handleAgentChangesetReject}
             onRunVerification={runChangesetVerification}
           />
-        </div>
+        </fieldset>
       </div>
     );
   } else if (agentPatchPending !== null) {
@@ -4653,8 +5031,7 @@ function EditorRuntimeWidget({
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
         {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
-        <div
-          role="group"
+        <fieldset
           aria-label={`Agent patch review for ${agentPatchPending.action.target?.file ?? "this file"}`}
           aria-busy={agentPatchPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -4672,7 +5049,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
           <button
@@ -4761,6 +5138,12 @@ function EditorRuntimeWidget({
           modifiedAt={modifiedAt ?? undefined}
           maxSizeBytes={maxBytes ?? undefined}
           themeVariant={themeVariant}
+          editorPreferences={editorSettings.applied}
+          modelViewStateKey={modelViewStateKey}
+          modelRetentionProtection={{
+            hotExitRecovery: recoverySnapshot !== null,
+            agentReview: agentReviewActive,
+          }}
           ariaLabel={
             root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
           }
@@ -4831,11 +5214,7 @@ function EditorRuntimeWidget({
       </div>
     );
   } else if (hasTarget) {
-    panel = (
-      <div className="ed-host-loading" role="status">
-        Loading file…
-      </div>
-    );
+    panel = <output className="ed-host-loading">Loading file…</output>;
   } else {
     panel = (
       <div className="ed-empty" role="note">
@@ -4843,6 +5222,10 @@ function EditorRuntimeWidget({
       </div>
     );
   }
+
+  const showExternalChangeBanner = externalChange.status !== "idle" && !externalChange.compareOpen;
+  const workspaceWatchNeedsAttention =
+    workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 
   return (
     <div className="editor">
@@ -5103,8 +5486,43 @@ function EditorRuntimeWidget({
       >
         {toolbarNotice}
       </div>
+      {workspaceWatchNeedsAttention ? (
+        <output className="ed-recovery" data-testid="editor-workspace-watch-status">
+          <span>
+            {workspaceWatch.snapshotRequired
+              ? "Workspace file events require a refresh."
+              : `Workspace file watching is ${workspaceWatch.health}.`}
+          </span>
+          <span className="spacer" />
+          <button type="button" className="ed-reload" onClick={requestReload}>
+            Refresh
+          </button>
+        </output>
+      ) : null}
+      {showExternalChangeBanner ? (
+        <output className="ed-recovery" data-testid="editor-external-change-banner">
+          <span>{externalChangeMessage(externalChange, file)}</span>
+          <span className="spacer" />
+          {externalChangeCanCompare(externalChange) ? (
+            <button type="button" className="ed-reload" onClick={compareExternalChange}>
+              Compare
+            </button>
+          ) : null}
+          <button type="button" className="ed-save" onClick={keepExternalLocal}>
+            Keep local
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
+            Reload
+          </button>
+        </output>
+      ) : null}
       {recoverySnapshot !== null && !recoveryCompare ? (
-        <div className="ed-recovery" role="status">
+        <output className="ed-recovery">
           <span>
             {recoveryDiskChanged
               ? "Recovered editor changes are available, and the disk file changed."
@@ -5135,7 +5553,7 @@ function EditorRuntimeWidget({
               Cancel
             </button>
           ) : null}
-        </div>
+        </output>
       ) : null}
       {reloadConfirm ? (
         <div className="ed-dialog-backdrop" role="presentation">

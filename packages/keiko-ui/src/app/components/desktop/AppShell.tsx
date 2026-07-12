@@ -56,12 +56,14 @@ import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
-import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
+import { applyShellUndoAction } from "./shell-undo-bindings";
+import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
 import { EditorQuickAccessTriggerProvider } from "./EditorQuickAccessTriggerContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
+import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
 import {
   QUICK_ACCESS_CARD_TYPES,
   QUICK_ACCESS_TOOL_TYPES,
@@ -76,6 +78,8 @@ import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
+const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
+
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
   { ssr: false, loading: () => null },
@@ -319,78 +323,91 @@ export function buildAppShellCommands(
   toggleTheme: () => void,
   undoStack: WorkspaceUndoStackApi,
 ): readonly Command[] {
-  const out: Command[] = [];
-  for (const tp of CARD_TYPES) {
+  const createCommands = CARD_TYPES.map((tp): Command => {
     const t = WIN_TYPES[tp];
-    out.push({
+    return {
       id: `new-${tp}`,
       label: `New ${t.title}`,
       group: "Create",
       icon: t.icon,
       run: () => openPalettePick(tp),
-    });
-  }
-  for (const tp of TOOL_TYPES) {
+    };
+  });
+  const toolCommands = TOOL_TYPES.map((tp): Command => {
     const t = WIN_TYPES[tp];
-    out.push({
+    return {
       id: `open-${tp}`,
       label: `Open ${t.title}`,
       group: "Tools",
       icon: t.icon,
       run: () => toggleTool(tp),
-    });
-  }
-  out.push({
-    id: "tile",
-    label: "Tile all windows",
-    group: "Layout",
-    icon: "tile",
-    run: api.tileAll,
+    };
   });
-  out.push({
-    id: "split",
-    label: "Split front windows",
-    group: "Layout",
-    icon: "split",
-    run: api.splitFront,
-  });
-  out.push({
-    id: "cascade",
-    label: "Cascade windows",
-    group: "Layout",
-    icon: "cascade",
-    run: api.cascade,
-  });
-  out.push({
-    id: "theme",
-    label: "Toggle light / dark theme",
-    group: "View",
-    icon: theme === "light" ? "moon" : "sun",
-    run: toggleTheme,
-  });
-  out.push({
-    id: "undo",
-    label:
-      undoStack.undoLabel !== null
-        ? `Undo: ${undoStack.undoLabel}`
-        : "Undo (window and panel changes only)",
-    group: "Edit",
-    icon: "back",
-    shortcut: "⌘Z",
-    run: undoStack.undo,
-  });
-  out.push({
-    id: "redo",
-    label:
-      undoStack.redoLabel !== null
-        ? `Redo: ${undoStack.redoLabel}`
-        : "Redo (window and panel changes only)",
-    group: "Edit",
-    icon: "fwd",
-    shortcut: "⇧⌘Z",
-    run: undoStack.redo,
-  });
-  return out;
+  const openEditorSettingsCommand: Command = {
+    id: "open-editor-settings",
+    label: "Open Editor settings",
+    group: "Tools",
+    icon: "settings",
+    run: () => {
+      toggleTool("settings");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+      }
+    },
+  };
+  const staticCommands: readonly Command[] = [
+    {
+      id: "tile",
+      label: "Tile all windows",
+      group: "Layout",
+      icon: "tile",
+      run: api.tileAll,
+    },
+    {
+      id: "split",
+      label: "Split front windows",
+      group: "Layout",
+      icon: "split",
+      run: api.splitFront,
+    },
+    {
+      id: "cascade",
+      label: "Cascade windows",
+      group: "Layout",
+      icon: "cascade",
+      run: api.cascade,
+    },
+    {
+      id: "theme",
+      label: "Toggle light / dark theme",
+      group: "View",
+      icon: theme === "light" ? "moon" : "sun",
+      run: toggleTheme,
+    },
+    {
+      id: "undo",
+      label:
+        undoStack.undoLabel !== null
+          ? `Undo: ${undoStack.undoLabel}`
+          : "Undo (window and panel changes only)",
+      group: "Edit",
+      icon: "back",
+      shortcut: "⌘Z",
+      run: undoStack.undo,
+    },
+    {
+      id: "redo",
+      label:
+        undoStack.redoLabel !== null
+          ? `Redo: ${undoStack.redoLabel}`
+          : "Redo (window and panel changes only)",
+      group: "Edit",
+      icon: "fwd",
+      shortcut: "⇧⌘Z",
+      run: undoStack.redo,
+    },
+  ];
+  return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
 }
 
 function AppShellInner(): ReactNode {
@@ -401,6 +418,22 @@ function AppShellInner(): ReactNode {
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
+  const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
+    EMPTY_SHELL_SHORTCUT_STATE,
+  );
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    let active = true;
+    void import("./shellShortcutState").then(({ subscribeShellShortcutState }) => {
+      if (!active) return;
+      cleanup = subscribeShellShortcutState(shortcutRoot, setShellShortcutState);
+    });
+    return () => {
+      active = false;
+      cleanup?.();
+    };
+  }, [shortcutRoot]);
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
@@ -825,7 +858,7 @@ function AppShellInner(): ReactNode {
     },
     [openQuickAccessCommands, openQuickAccessFiles, undoStack, ws.api, ws.wins],
   );
-  useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
+  useKeyboardShortcuts({ bindings: shellShortcutState.bindings, dispatch: dispatchShortcut });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -857,8 +890,8 @@ function AppShellInner(): ReactNode {
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
   const quickAccessCommands = useMemo(
-    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t),
-    [activeEditorHost, commands, t],
+    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t, shellShortcutState.labels),
+    [activeEditorHost, commands, shellShortcutState.labels, t],
   );
   const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
   const needsGatewaySetup =

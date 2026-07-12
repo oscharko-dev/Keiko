@@ -50,13 +50,15 @@ import {
   type TestGenerationRunResult,
 } from "./testGenerationRunner.js";
 import { defaultAssuredPreFilter, type AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
+import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
 
 // The overlay buffer(s) may be up to the document-size cap; allow 64 KiB of JSON on top, doubled to
 // accommodate a small changed-file set.
 const MAX_TEST_GENERATION_BODY_BYTES = 2 * (1_048_576 + 64 * 1024);
 const MAX_CHANGED_SET_DOCUMENTS = 32;
 
-// Gate A — surfaces the feature at all (default OFF: this is a wave-2 feature shipped switched off).
+// Gate A — deployment ceiling (default OFF: this wave-2 feature remains unavailable unless the
+// operator explicitly permits it; M7 settings still provide the separate explicit opt-in).
 const TEST_GENERATION_POLICY_ENV = "KEIKO_EDITOR_TEST_GENERATION";
 // Gate B — permits producing a candidate once the enforced egress boundary is available (default OFF).
 const TEST_GENERATION_EXECUTION_ENV = "KEIKO_EDITOR_TEST_GENERATION_EXECUTION";
@@ -80,9 +82,10 @@ function envFlagEnabled(value: string | undefined): boolean {
   return value !== undefined && ENABLE_TOKENS.has(value.trim().toLowerCase());
 }
 
-/** Whether the test-generation feature is surfaced by deployment policy (Gate A; default off). */
+/** Whether the test-generation feature is permitted by deployment policy (Gate A; default off). */
 export function isTestGenerationEnabledByPolicy(env: EnvSource | undefined): boolean {
-  return envFlagEnabled(env?.[TEST_GENERATION_POLICY_ENV]);
+  const token = env?.[TEST_GENERATION_POLICY_ENV]?.trim().toLowerCase();
+  return token !== undefined && ENABLE_TOKENS.has(token);
 }
 
 /**
@@ -337,6 +340,14 @@ export async function handleEditorTestGeneration(
     const containment = validateTargetContainment(root.realRoot, request.target);
     if (containment !== undefined) {
       return containment;
+    }
+    const activation = await resolveEditorAiAssistStatusForRoot(
+      deps,
+      root.realRoot,
+      "testGeneration",
+    );
+    if (!editorAiStatusActive(activation)) {
+      return { status: 200, body: deps.redactor(disabledResponse()) };
     }
     const nowMs = (options.now ?? Date.now)();
     const signal = clientAbortSignal(ctx);

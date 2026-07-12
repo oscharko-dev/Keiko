@@ -138,6 +138,12 @@ import type {
   ManagedLspProcessHealthSnapshot,
   ManagedLspRuntimeConfiguration,
   ManagedLspSemanticTokenResponse,
+  EditorM7SettingsMutation,
+  EditorM7SettingsMutationResult,
+  EditorM7SettingsSnapshot,
+  EditorM7WorkspaceSnippetMutation,
+  EditorM7WorkspaceSnippetMutationResult,
+  EditorM7WorkspaceSnippetSnapshot,
   GitEditorBlameResponse,
   GitEditorDiffResponse,
   GitEditorDiffScope,
@@ -2016,6 +2022,53 @@ export function mutateManagedLspSettings(
 ): Promise<{ readonly kind: "ok"; readonly revision: number; readonly etag: string }> {
   return fetchJson("/api/editor/lsp/settings", {
     method: "PUT",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchEditorSettings(
+  root?: string | undefined,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsSnapshot> {
+  const query = root === undefined || root.length === 0 ? "" : `?root=${encodeURIComponent(root)}`;
+  return fetchJson(`/api/editor/settings${query}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateEditorSettings(
+  input: EditorM7SettingsMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsMutationResult> {
+  return fetchJson("/api/editor/settings", {
+    method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchWorkspaceSnippets(
+  root: string,
+  signal?: AbortSignal,
+): Promise<EditorM7WorkspaceSnippetSnapshot> {
+  return fetchJson(`/api/editor/snippets?root=${encodeURIComponent(root)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateWorkspaceSnippets(
+  input: EditorM7WorkspaceSnippetMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7WorkspaceSnippetMutationResult> {
+  return fetchJson("/api/editor/snippets", {
+    method: "PATCH",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),

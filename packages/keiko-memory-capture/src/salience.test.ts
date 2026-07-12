@@ -570,4 +570,72 @@ describe("parseSalienceItems", () => {
       '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]';
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
+
+  // Covers the escape-tracking branch in consumeStringOrEscape: a backslash
+  // inside a JSON string must not close/open the string on the next character.
+  // Without escape handling, "\"" would be misread as an unescaped ".
+  it("handles escaped quotes and backslashes inside JSON string values", () => {
+    const raw =
+      '[{"body":"He said \\"hi\\" then a backslash \\\\ arrived","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
+    const items = parseSalienceItems(raw);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.body).toBe('He said "hi" then a backslash \\ arrived');
+  });
+
+  // Covers the "no [ present" early-return branch of firstBalancedArray.
+  it("returns [] when the model output contains no array bracket at all", () => {
+    expect(parseSalienceItems("Sorry, I have no memories to propose.")).toEqual([]);
+  });
+
+  // Covers the "unbalanced brackets" branch: an open [ without a matching ].
+  it("returns [] when the array is unterminated (missing closing bracket)", () => {
+    expect(parseSalienceItems('[{"body":"x"')).toEqual([]);
+  });
+
+  // Covers the non-object element rejection branch in isRawSalienceItem.
+  it("filters out non-object array elements", () => {
+    const raw =
+      '[42, null, "string", {"body":"kept","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
+    expect(parseSalienceItems(raw)).toHaveLength(1);
+  });
+
+  // Covers the "tag element is not a string" rejection branch.
+  it("filters out items whose tags array contains non-string values", () => {
+    const raw =
+      '[{"body":"bad","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":["ok",42]},{"body":"good","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":["ok"]}]';
+    const items = parseSalienceItems(raw);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.body).toBe("good");
+  });
+
+  // Covers each individual type-guard branch of isRawSalienceItem: body,
+  // type, confidence, scope, source, tags. Every row drops exactly one field.
+  it.each([
+    {
+      field: "body",
+      raw: '[{"type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]',
+    },
+    {
+      field: "type",
+      raw: '[{"body":"x","confidence":0.5,"scope":"user","source":"user","tags":[]}]',
+    },
+    {
+      field: "confidence",
+      raw: '[{"body":"x","type":"fact","scope":"user","source":"user","tags":[]}]',
+    },
+    {
+      field: "scope",
+      raw: '[{"body":"x","type":"fact","confidence":0.5,"source":"user","tags":[]}]',
+    },
+    {
+      field: "source",
+      raw: '[{"body":"x","type":"fact","confidence":0.5,"scope":"user","tags":[]}]',
+    },
+    {
+      field: "tags",
+      raw: '[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user"}]',
+    },
+  ])("filters an item missing the required '$field' field", ({ raw }) => {
+    expect(parseSalienceItems(raw)).toEqual([]);
+  });
 });

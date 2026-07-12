@@ -136,6 +136,33 @@ describe("textParser", () => {
     );
   });
 
+  // Covers scanTableRows' blank/non-table-row break: encountering a blank line
+  // after some table rows must terminate row emission at that boundary.
+  it("stops emitting csv-rows once a blank line ends the markdown table", () => {
+    const doc = "# Prices\n\n| Name | Price |\n| --- | ---: |\n| A | 42 |\n| B | 7 |\n\nafter\n";
+    const result = textParser.parse(
+      selectionFromText(doc, { extension: "md", mediaType: "text/markdown" }),
+      frozenAt(0),
+    );
+    const csvRows = result.units.filter((u) => u.kind === "csv-row");
+    expect(csvRows).toHaveLength(2);
+    expect(csvRows[0]).toMatchObject({ tableName: "markdown-table", rowIndex: 0 });
+    expect(csvRows[1]).toMatchObject({ tableName: "markdown-table", rowIndex: 1 });
+  });
+
+  // Covers scanTableRows' shouldStop path (UNIT_LIMIT_REACHED): a row-count cap
+  // reached mid-table must emit the diagnostic and return stopped:true.
+  it("emits UNIT_LIMIT_REACHED mid-table when the row cap trips inside scanTableRows", () => {
+    const doc =
+      "# Prices\n\n| Name | Price |\n| --- | ---: |\n| A | 1 |\n| B | 2 |\n| C | 3 |\n| D | 4 |\n";
+    const result = textParser.parse(
+      selectionFromText(doc, { extension: "md", mediaType: "text/markdown" }),
+      buildParserOptions({ now: () => 0, maxUnitsPerDocument: 2 }),
+    );
+    expect(result.diagnostics.some((d) => d.code === "UNIT_LIMIT_REACHED")).toBe(true);
+    expect(result.units.length).toBeLessThanOrEqual(2);
+  });
+
   it("refuses oversize files with OVERSIZED_FILE diagnostic and zero units", () => {
     const big = encode("x".repeat(100));
     const result = textParser.parse(selectionFromBytes(big, { extension: "txt" }), {
