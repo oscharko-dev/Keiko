@@ -109,3 +109,13 @@ readiness signal and is not lowered by GitHub provider, circuit, or publication-
 
 Diagnostics contain only a category, failure code, count, and elapsed timing. They never contain
 approved title/body bytes, reconciliation markers, target/repository strings, tokens, or key data.
+
+The maintainer listener receives a publication repository and configured-target resolver only in
+enabled mode. Maintainer approval commits the durable outbox intent and returns before the worker
+performs any provider operation; no maintainer HTTP request calls GitHub directly. Publication
+worker readiness may subsequently degrade without widening anonymous intake readiness or exposing
+credentials and numeric installation/repository identifiers to the browser.
+
+Latest maintainer status recovery is backed by the ordered preparation index on
+`(item_id, created_at DESC, id DESC)` and still filters expired preparations. This keeps the
+content-free lookup bounded as an item's preparation history grows.

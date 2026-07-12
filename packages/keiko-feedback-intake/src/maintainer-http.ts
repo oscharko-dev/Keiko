@@ -30,6 +30,10 @@ import {
   type MaintainerDiagnostics,
 } from "./maintainer-http-response.js";
 import { maintainerCsrfToken, verifyMaintainerCsrf } from "./maintainer-store.js";
+import {
+  handleMaintainerPublication,
+  type MaintainerPublicationService,
+} from "./maintainer-publication-http.js";
 import { serveMaintainerUi } from "./maintainer-ui.js";
 import { resolveClientAddress, type ClientAddressInput } from "./proxy.js";
 
@@ -38,6 +42,7 @@ export interface MaintainerHttpOptions {
   readonly auth: MaintainerAuthService;
   readonly query: Pick<PostgresFeedbackReviewQuery, "list" | "detail" | "hold" | "audit">;
   readonly review: Pick<PostgresFeedbackReviewRepository, "execute">;
+  readonly publication?: MaintainerPublicationService | undefined;
   readonly loginLimiter: MaintainerLoginLimiter;
   readonly proxy: Pick<ClientAddressInput, "family" | "trustedCidrs" | "maxHops">;
   readonly legalHoldPolicyKeys?: readonly string[] | undefined;
@@ -152,7 +157,10 @@ async function handleAuthenticated(
 ): Promise<void> {
   if (req.method === "GET" && url.pathname === "/v1/maintainer/auth/session") {
     json(res, 200, {
-      permissions: identity.permissions,
+      permissions:
+        options.publication === undefined
+          ? identity.permissions.filter((permission) => permission !== "feedback.publish")
+          : identity.permissions,
       csrfToken: maintainerCsrfToken(capability),
       absoluteExpiresAt: identity.absoluteExpiresAt.toISOString(),
       ...(permits(identity, "feedback.legal-hold")
@@ -181,6 +189,12 @@ async function handleReview(
   options: MaintainerHttpOptions,
   identity: Session,
 ): Promise<void> {
+  if (
+    await handleMaintainerPublication(req, res, url, options.publication, identity, () =>
+      validCsrf(req, identity, options),
+    )
+  )
+    return;
   if (await handleCollection(req, res, url, options, identity)) return;
   await handleReviewItem(req, res, url, options, identity);
 }

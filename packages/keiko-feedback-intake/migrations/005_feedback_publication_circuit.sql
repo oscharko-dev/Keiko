@@ -17,6 +17,9 @@ CREATE TABLE feedback_publication_installation_circuits (
 CREATE INDEX feedback_publication_installation_circuits_expiry_idx
 ON feedback_publication_installation_circuits (expires_at, installation_id);
 
+CREATE INDEX feedback_publication_preparation_latest_item_idx
+ON feedback_publication_preparations (item_id, created_at DESC, id DESC);
+
 ALTER TABLE feedback_publication_outbox
   ADD COLUMN reconciled_exact boolean NOT NULL DEFAULT false,
   ADD CONSTRAINT feedback_publication_outbox_reconciled_exact_check CHECK (

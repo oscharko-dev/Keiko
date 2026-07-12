@@ -20,6 +20,7 @@ export const FEEDBACK_PUBLICATION_FAILURE_CODES_V1 = [
   "validation-error",
   "rate-limited",
   "repository-unavailable",
+  "provider-unavailable",
   "duplicate-candidate",
   "target-policy-drift",
   "projection-drift",
@@ -27,6 +28,9 @@ export const FEEDBACK_PUBLICATION_FAILURE_CODES_V1 = [
   "payload-expired",
   "cas-mismatch",
   "idempotency-mismatch",
+  "retry-exhausted",
+  "lease-expired",
+  "ambiguous-reconciliation",
   "manual-reconciliation-required",
   "manual-remediation-required",
 ] as const;
@@ -68,6 +72,8 @@ export interface FeedbackPublicationApproveCommandV1 extends FeedbackPublication
 export interface FeedbackPublicationCancelCommandV1 extends FeedbackPublicationCommandBaseV1 {
   readonly action: "cancel-publication-route-private";
   readonly preparationId: string;
+  readonly expectedProjectionDigest: string;
+  readonly expectedTargetPolicyDigest: string;
 }
 
 export type FeedbackPublicationCommandV1 =
@@ -130,6 +136,48 @@ export type FeedbackPublicationCancelResponseV1 =
       readonly failure: "manual-reconciliation-required" | "manual-remediation-required";
       readonly replayed: boolean;
     };
+
+export interface FeedbackPublicationPreviewV1 {
+  readonly status: "prepared" | "approved";
+  readonly itemId: string;
+  readonly preparationId: string;
+  readonly projectionDigest: string;
+  readonly targetPolicyDigest: string;
+  readonly title: string;
+  readonly body: string;
+  readonly targetDisplay: FeedbackPublicationTargetDisplayV1;
+  readonly expiresAt: string;
+}
+
+export interface FeedbackPublicationTargetDisplayV1 {
+  readonly owner: string;
+  readonly repository: string;
+  readonly labels: readonly string[];
+  readonly labelPolicyVersion: string;
+  readonly targetPolicyVersion: string;
+}
+
+export type FeedbackPublicationMaintainerStatusV1 =
+  | "none"
+  | "prepared"
+  | "approved"
+  | "retryable"
+  | "may-have-committed"
+  | "manual-reconciliation"
+  | "manual-remediation"
+  | "succeeded"
+  | "cancelled-private";
+
+export interface FeedbackPublicationStatusV1 {
+  readonly itemId: string;
+  readonly status: FeedbackPublicationMaintainerStatusV1;
+  readonly preparationId?: string | undefined;
+  readonly projectionDigest?: string | undefined;
+  readonly targetPolicyDigest?: string | undefined;
+  readonly failureCode?: FeedbackPublicationFailureCodeV1 | undefined;
+  readonly retryAt?: string | undefined;
+  readonly linkage?: { readonly issueNumber: number; readonly issueUrl: string } | undefined;
+}
 
 const DECIMAL_ID = /^[1-9][0-9]{0,19}$/u;
 const MAX_POSTGRES_BIGINT = 9_223_372_036_854_775_807n;

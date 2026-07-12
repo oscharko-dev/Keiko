@@ -324,7 +324,7 @@ export class PostgresFeedbackPublicationRepository {
     const review = await lockPublicationReview(client, command.itemId);
     verifyPublicationReview(review, command.expectedVersion, command.expectedPayloadDigest, at);
     const preparation = await lockPublicationPreparation(client, command.preparationId);
-    assertCancellationPreparation(preparation, review, command);
+    assertCancellationPreparation(preparation, review, command, at);
     const status = cancellationStatus(await lockedOutboxStatus(client, command.preparationId));
     const projection = verifyStoredProjection(review, preparation);
     const version = await persistPrivateCancellation(

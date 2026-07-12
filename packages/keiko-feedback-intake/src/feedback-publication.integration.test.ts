@@ -10,9 +10,11 @@ import type {
 import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
-import type {
-  ApprovedFeedbackIssueProjection,
-  FeedbackPublicationClaim,
+import { PostgresFeedbackPublicationQuery } from "./feedback-publication-query.js";
+import {
+  FeedbackPublicationError,
+  type ApprovedFeedbackIssueProjection,
+  type FeedbackPublicationClaim,
 } from "./feedback-publication-types.js";
 import { PUBLICATION_RETENTION_BATCH_SIZE } from "./postgres-retention.js";
 import { clientAdapter, preparedReport, schemaRows } from "./postgres-integration-helpers.js";
@@ -151,7 +153,7 @@ function approveCommand(
 
 function cancelCommand(
   item: { readonly itemId: string; readonly digest: string },
-  preparationId: string,
+  preparation: Awaited<ReturnType<PostgresFeedbackPublicationRepository["prepare"]>>,
   version: number,
   key: string,
 ): FeedbackPublicationCancelCommandV1 {
@@ -162,7 +164,9 @@ function cancelCommand(
     expectedPayloadDigest: item.digest,
     idempotencyKey: key,
     actor: ACTOR,
-    preparationId,
+    preparationId: preparation.preparationId,
+    expectedProjectionDigest: preparation.projectionDigest,
+    expectedTargetPolicyDigest: preparation.targetPolicyDigest,
   };
 }
 
@@ -300,6 +304,21 @@ async function explainPlan(
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function latestPreparationPlan(pool: Pool, schema: string, itemId: string): Promise<string> {
+  const client = await pool.connect();
+  try {
+    await client.query(`SET search_path TO "${schema}"`);
+    await client.query("ANALYZE feedback_publication_preparations");
+    const result = await client.query<{ readonly "QUERY PLAN": string }>(
+      "EXPLAIN (ANALYZE,BUFFERS,COSTS OFF) SELECT id FROM feedback_publication_preparations WHERE item_id=$1 AND expires_at>transaction_timestamp() ORDER BY created_at DESC,id DESC LIMIT 1",
+      [itemId],
+    );
+    return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
   } finally {
     client.release();
   }
@@ -1162,12 +1181,7 @@ describe("PostgreSQL feedback publication integration", () => {
           prepareCommand(cancelled, "retention-cancelled-prepare"),
         );
         await repository.cancelAndRoutePrivate(
-          cancelCommand(
-            cancelled,
-            cancelledPrepared.preparationId,
-            1,
-            "retention-cancelled-command",
-          ),
+          cancelCommand(cancelled, cancelledPrepared, 1, "retention-cancelled-command"),
         );
         await schemaRows(
           pool,
@@ -1281,13 +1295,18 @@ describe("PostgreSQL feedback publication integration", () => {
         2_000,
         () => AT,
       );
+      const publicationQuery = new PostgresFeedbackPublicationQuery(
+        scopedPool(pool, schema),
+        () => TARGET,
+        2_000,
+      );
       try {
         const beforeClaim = await insertReport(pool, schema, "Cancel before claim");
         const beforePrepareCommand = prepareCommand(beforeClaim, "cancel-before-prepare");
         const beforePrepared = await repository.prepare(beforePrepareCommand);
         await expect(
           repository.cancelAndRoutePrivate(
-            cancelCommand(beforeClaim, beforePrepared.preparationId, 1, "cancel-before-command"),
+            cancelCommand(beforeClaim, beforePrepared, 1, "cancel-before-command"),
           ),
         ).resolves.toMatchObject({ status: "cancelled-private", recordVersion: 2 });
         expect(
@@ -1342,12 +1361,7 @@ describe("PostgreSQL feedback publication integration", () => {
           (cancellationLease[0]?.lease_expires_at.getTime() ?? 0) -
             (cancellationLease[0]?.updated_at.getTime() ?? 0),
         ).toBe(300_000);
-        const cancel = cancelCommand(
-          afterClaim,
-          afterPrepared.preparationId,
-          2,
-          "cancel-after-command",
-        );
+        const cancel = cancelCommand(afterClaim, afterPrepared, 2, "cancel-after-command");
         await expect(repository.cancelAndRoutePrivate(cancel)).resolves.toMatchObject({
           status: "manual-reconciliation",
           recordVersion: 3,
@@ -1377,6 +1391,12 @@ describe("PostgreSQL feedback publication integration", () => {
             failure_code: "manual-reconciliation-required",
           },
         ]);
+        await expect(
+          publicationQuery.status(afterClaim.itemId, afterPrepared.preparationId, true),
+        ).resolves.toMatchObject({
+          status: "manual-reconciliation",
+          failureCode: "manual-reconciliation-required",
+        });
         await executeTransaction(pool, schema, [
           {
             sql: "UPDATE feedback_publication_outbox SET status='succeeded',create_eligible=false,create_attempt_count=1,failure_code=NULL WHERE id=$1",
@@ -1413,6 +1433,181 @@ describe("PostgreSQL feedback publication integration", () => {
             "SELECT class_code FROM feedback_deletion_ledger WHERE class_code LIKE 'publication-%' OR class_code='github-issue-linkage' ORDER BY class_code",
           ),
         ).toHaveLength(7);
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await pool.end();
+      }
+    },
+  );
+
+  integration(
+    "queries exact preview bytes, latest status, linkage, and private hiding",
+    async () => {
+      const pool = new Pool({ connectionString: databaseUrl });
+      const schema = await createSchema(pool, "feedback_publication_query");
+      const scoped = scopedPool(pool, schema);
+      const resolve = (key: string): FeedbackPublicationTargetPolicySnapshotV1 | undefined =>
+        key === TARGET.targetKey ? TARGET : undefined;
+      const repository = new PostgresFeedbackPublicationRepository(
+        scoped,
+        ACTOR.permissionPolicyVersion,
+        resolve,
+        2_000,
+        () => AT,
+      );
+      const query = new PostgresFeedbackPublicationQuery(scoped, resolve, 2_000);
+      try {
+        const item = await insertReport(pool, schema, "Stored <preview> & bytes");
+        await expect(query.status(item.itemId, undefined, false)).resolves.toEqual({
+          itemId: item.itemId,
+          status: "none",
+        });
+        const prepared = await repository.prepare(prepareCommand(item, "query-prepare-key"));
+        await expect(query.preview(item.itemId, prepared.preparationId, false)).resolves.toEqual({
+          status: "prepared",
+          itemId: item.itemId,
+          preparationId: prepared.preparationId,
+          projectionDigest: prepared.projectionDigest,
+          targetPolicyDigest: prepared.targetPolicyDigest,
+          title: prepared.title,
+          body: prepared.body,
+          targetDisplay: prepared.targetDisplay,
+          expiresAt: prepared.expiresAt,
+        });
+        await expect(query.status(item.itemId, undefined, false)).resolves.toMatchObject({
+          status: "prepared",
+          preparationId: prepared.preparationId,
+        });
+        const approved = await repository.approve(
+          approveCommand(item, prepared, "query-approve-key"),
+        );
+        if (approved.status !== "approved") throw new Error("Expected approval");
+        await expect(
+          query.commandContext(
+            item.itemId,
+            prepared.preparationId,
+            false,
+            "approve-publication",
+            "query-approve-key",
+          ),
+        ).resolves.toMatchObject({ version: 1, payloadDigest: item.digest });
+        await expect(
+          query.status(item.itemId, prepared.preparationId, false),
+        ).resolves.toMatchObject({
+          status: "approved",
+        });
+        await executeTransaction(pool, schema, [
+          {
+            sql: "UPDATE feedback_publication_outbox SET status='succeeded',create_eligible=false,create_attempt_count=1 WHERE id=$1",
+            values: [approved.outboxId],
+          },
+          {
+            sql: "UPDATE feedback_publication_preparations SET create_armed_at=$2 WHERE id=$1",
+            values: [prepared.preparationId, AT],
+          },
+        ]);
+        await schemaRows(
+          pool,
+          schema,
+          "INSERT INTO feedback_github_issue_linkage (item_id,preparation_id,target_policy_digest,github_repository_id,github_issue_node_id,github_issue_number,linked_at,expires_at) VALUES ($1,$2,$3,123456,'query-issue-node',73,$4,$4::timestamptz + interval '365 days')",
+          [item.itemId, prepared.preparationId, prepared.targetPolicyDigest, AT],
+        );
+        await expect(query.status(item.itemId, undefined, false)).resolves.toMatchObject({
+          status: "succeeded",
+          linkage: {
+            issueNumber: 73,
+            issueUrl: "https://github.com/oscharko-dev/Keiko/issues/73",
+          },
+        });
+        await expect(
+          repository.cancelAndRoutePrivate(
+            cancelCommand(item, prepared, 2, "query-succeeded-cancel"),
+          ),
+        ).resolves.toMatchObject({ status: "manual-remediation" });
+        await expect(query.status(item.itemId, undefined, true)).resolves.toMatchObject({
+          status: "manual-remediation",
+          failureCode: "manual-remediation-required",
+          linkage: { issueNumber: 73 },
+        });
+
+        const privateItem = await insertReport(pool, schema, "Private status");
+        const privatePrepared = await repository.prepare(
+          prepareCommand(privateItem, "query-private-prepare"),
+        );
+        await expect(
+          repository.cancelAndRoutePrivate({
+            ...cancelCommand(privateItem, privatePrepared, 1, "query-private-drift"),
+            expectedProjectionDigest: "f".repeat(64),
+          }),
+        ).rejects.toEqual(new FeedbackPublicationError("cas-mismatch"));
+        await repository.cancelAndRoutePrivate(
+          cancelCommand(privateItem, privatePrepared, 1, "query-private-cancel"),
+        );
+        await expect(
+          query.commandContext(
+            privateItem.itemId,
+            privatePrepared.preparationId,
+            true,
+            "cancel-publication-route-private",
+            "query-private-cancel",
+          ),
+        ).resolves.toMatchObject({ version: 1, payloadDigest: privateItem.digest });
+        await expect(query.status(privateItem.itemId, undefined, false)).resolves.toBeUndefined();
+        await expect(query.status(privateItem.itemId, undefined, true)).resolves.toMatchObject({
+          status: "cancelled-private",
+        });
+        await expect(
+          query.preview(privateItem.itemId, privatePrepared.preparationId, true),
+        ).resolves.toBeUndefined();
+
+        const expiredItem = await insertReport(pool, schema, "Expired cancellation");
+        const expiredPrepared = await repository.prepare(
+          prepareCommand(expiredItem, "query-expired-prepare"),
+        );
+        const expiredRepository = new PostgresFeedbackPublicationRepository(
+          scoped,
+          ACTOR.permissionPolicyVersion,
+          resolve,
+          2_000,
+          () => new Date(expiredPrepared.expiresAt),
+        );
+        await expect(
+          expiredRepository.cancelAndRoutePrivate(
+            cancelCommand(expiredItem, expiredPrepared, 1, "query-expired-cancel"),
+          ),
+        ).rejects.toEqual(new FeedbackPublicationError("payload-expired"));
+
+        const planItem = await insertReport(pool, schema, "Latest status plan");
+        await schemaRows(
+          pool,
+          schema,
+          `INSERT INTO feedback_publication_preparations
+            (id,item_id,payload_digest,source_record_version,projection_version,title_bytes,
+             body_bytes,projection_digest,reconciliation_marker,target_api_origin,
+             target_repository_id,target_owner,target_repository,target_installation_id,
+             target_labels,target_key,label_policy_version,target_policy_version,
+             target_policy_digest,status,created_at,expires_at)
+           SELECT gen_random_uuid(),$1,$2,series,'github-issue-v1',decode('74','hex'),
+             decode('62','hex'),repeat('d',64),
+             '<!-- keiko-feedback-reconciliation-v1:' ||
+               lpad(series::text,43,'A') || ' -->',
+             'https://api.github.com',123456,'oscharko-dev','Keiko',987654,
+             ARRAY['source: feedback'],'keiko-public-findings','labels-2026-07',
+             'github-target-v1',repeat('e',64),'prepared',
+             transaction_timestamp()-(series * interval '1 microsecond'),
+             transaction_timestamp()+interval '29 days'
+           FROM generate_series(2,5001) series`,
+          [planItem.itemId, planItem.digest],
+        );
+        const plan = await latestPreparationPlan(pool, schema, planItem.itemId);
+        expect(plan).toContain("feedback_publication_preparation_latest_item_idx");
+        expect(plan).toContain("rows=1 loops=1");
+        const executionPlan = plan.split("Planning:")[0] ?? plan;
+        const bufferCounts = [...executionPlan.matchAll(/shared hit=(\d+)/gu)].map((match) =>
+          Number(match[1]),
+        );
+        expect(bufferCounts.length).toBeGreaterThan(0);
+        expect(Math.max(...bufferCounts)).toBeLessThanOrEqual(16);
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await pool.end();

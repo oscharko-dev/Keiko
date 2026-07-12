@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { FeedbackMaintainerPermissionV1 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MaintainerAuthError } from "./maintainer-auth.js";
+import { FeedbackPublicationError } from "./feedback-publication-types.js";
 import { createMaintainerHttpHandler, type MaintainerHttpOptions } from "./maintainer-http.js";
 import { MaintainerLoginLimiter } from "./maintainer-login-limiter.js";
 import { maintainerCsrfToken } from "./maintainer-store.js";
@@ -123,7 +124,7 @@ function rawStatus(
   path: string,
   headers: OutgoingHttpHeaders = {},
   method = "GET",
-  body?: string,
+  body?: string | Uint8Array,
 ): Promise<number> {
   const target = new URL(origin);
   return new Promise((resolve, reject) => {
@@ -697,4 +698,236 @@ describe("maintainer HTTP boundary", () => {
       expect((await fetch(`${origin}${path}`)).status).toBe(401);
     }
   });
+
+  it.each([
+    ["review-only", ["feedback.review"]],
+    ["publish-only", ["feedback.publish"]],
+    ["neither", []],
+  ] as const)(
+    "requires review and publish for every publication route: %s",
+    async (_name, permissions) => {
+      const base = harness(permissions);
+      const publication = publicationMocks();
+      const origin = await listen({ ...base.options, publication });
+      for (const path of [
+        "prepare",
+        `preview?preparationId=${ITEM}`,
+        "approve",
+        "cancel-route-private",
+        "status",
+      ]) {
+        expect(
+          (
+            await fetch(`${origin}/v1/maintainer/reviews/${ITEM}/publication/${path}`, {
+              method: path.startsWith("preview") || path === "status" ? "GET" : "POST",
+              headers: sessionHeaders(),
+            })
+          ).status,
+        ).toBe(403);
+      }
+      expect(publication.query.status).not.toHaveBeenCalled();
+      expect(publication.repository.prepare).not.toHaveBeenCalled();
+    },
+  );
+
+  it("injects canonical item, current digest, and authenticated actor into preparation", async () => {
+    const base = harness(["feedback.review", "feedback.publish"]);
+    const publication = publicationMocks();
+    const origin = await listen({ ...base.options, publication });
+    const response = await fetch(`${origin}/v1/maintainer/reviews/${ITEM}/publication/prepare`, {
+      method: "POST",
+      headers: publicationHeaders(),
+      body: JSON.stringify({
+        action: "prepare-publication",
+        expectedVersion: 7,
+        targetKey: "public-feedback",
+        idempotencyKey: "prepare-http-key",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(publication.repository.prepare).toHaveBeenCalledWith({
+      action: "prepare-publication",
+      itemId: ITEM,
+      expectedVersion: 7,
+      expectedPayloadDigest: "a".repeat(64),
+      targetKey: "public-feedback",
+      idempotencyKey: "prepare-http-key",
+      actor: {
+        issuer: "https://idp.example/tenant/",
+        subject: "maintainer-1",
+        permissionPolicyVersion: "policy-v1",
+      },
+    });
+  });
+
+  it("rejects publication CSRF, parser, duplicate-key, and malformed UTF-8 failures", async () => {
+    const base = harness(["feedback.review", "feedback.publish"]);
+    const publication = publicationMocks();
+    const origin = await listen({ ...base.options, publication });
+    const path = `/v1/maintainer/reviews/${ITEM}/publication/prepare`;
+    const valid = JSON.stringify({
+      action: "prepare-publication",
+      expectedVersion: 1,
+      targetKey: "public-feedback",
+      idempotencyKey: "strict-parser-key",
+    });
+    expect(await rawStatus(origin, path, sessionHeaders(), "POST", valid)).toBe(403);
+    expect(
+      await rawStatus(
+        origin,
+        path,
+        publicationHeaders(),
+        "POST",
+        valid.replace("}", ',"itemId":"x"}'),
+      ),
+    ).toBe(400);
+    const duplicate = valid.replace(
+      '"expectedVersion":1',
+      '"expectedVersion":1,"expectedVersion":1',
+    );
+    expect(await rawStatus(origin, path, publicationHeaders(), "POST", duplicate)).toBe(400);
+    expect(
+      await rawStatus(
+        origin,
+        path,
+        publicationHeaders(),
+        "POST",
+        Buffer.from([0x7b, 0xc3, 0x28, 0x7d]),
+      ),
+    ).toBe(400);
+    expect(publication.repository.prepare).not.toHaveBeenCalled();
+  });
+
+  it("serves exact preview/latest status and injects approval CAS without content fields", async () => {
+    const base = harness(["feedback.review", "feedback.publish"]);
+    const publication = publicationMocks();
+    const origin = await listen({ ...base.options, publication });
+    const prefix = `${origin}/v1/maintainer/reviews/${ITEM}/publication`;
+    const preview = await fetch(`${prefix}/preview?preparationId=${ITEM}`, {
+      headers: sessionHeaders(),
+    });
+    expect(await preview.json()).toEqual(
+      expect.objectContaining({ title: "exact <script>", body: "exact & body" }),
+    );
+    expect(publication.query.preview).toHaveBeenCalledWith(ITEM, ITEM, false);
+    const status = await fetch(`${prefix}/status`, { headers: sessionHeaders() });
+    const statusValue = (await status.json()) as Record<string, unknown>;
+    expect(statusValue).not.toHaveProperty("title");
+    expect(statusValue).not.toHaveProperty("body");
+    expect(statusValue).not.toHaveProperty("reconciliationMarker");
+    expect(publication.query.status).toHaveBeenCalledWith(ITEM, undefined, false);
+    const approve = await fetch(`${prefix}/approve`, {
+      method: "POST",
+      headers: publicationHeaders(),
+      body: JSON.stringify({
+        action: "approve-publication",
+        preparationId: ITEM,
+        expectedProjectionDigest: "b".repeat(64),
+        expectedTargetPolicyDigest: "c".repeat(64),
+        idempotencyKey: "approve-http-key",
+      }),
+    });
+    expect(approve.status).toBe(200);
+    expect(publication.repository.approve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: ITEM,
+        expectedVersion: 7,
+        expectedPayloadDigest: "a".repeat(64),
+      }),
+    );
+  });
+
+  it("maps an exactly expired cancellation to the safe domain response", async () => {
+    const base = harness(["feedback.review", "feedback.publish"]);
+    const publication = publicationMocks();
+    publication.repository.cancelAndRoutePrivate.mockRejectedValueOnce(
+      new FeedbackPublicationError("payload-expired"),
+    );
+    const origin = await listen({ ...base.options, publication });
+    const response = await fetch(
+      `${origin}/v1/maintainer/reviews/${ITEM}/publication/cancel-route-private`,
+      {
+        method: "POST",
+        headers: publicationHeaders(),
+        body: JSON.stringify({
+          action: "cancel-publication-route-private",
+          preparationId: ITEM,
+          expectedProjectionDigest: "b".repeat(64),
+          expectedTargetPolicyDigest: "c".repeat(64),
+          idempotencyKey: "cancel-expired-key",
+        }),
+      },
+    );
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "invalid-domain" });
+  });
+
+  it.each([
+    [["feedback.review"], ["feedback.review"]],
+    [["feedback.publish"], []],
+    [["feedback.review", "feedback.publish"], ["feedback.review"]],
+    [[], []],
+  ] as const)("hides disabled publication for permission set %j", async (permissions, visible) => {
+    const base = harness(permissions);
+    const origin = await listen(base.options);
+    const session = await fetch(`${origin}/v1/maintainer/auth/session`, {
+      headers: sessionHeaders(),
+    });
+    expect(await session.json()).toMatchObject({ permissions: visible });
+    const status = await fetch(`${origin}/v1/maintainer/reviews/${ITEM}/publication/status`, {
+      headers: sessionHeaders(),
+    });
+    expect(status.status).toBe(404);
+  });
 });
+
+function publicationHeaders(): Record<string, string> {
+  return sessionHeaders({
+    "Content-Type": "application/json",
+    Origin: "https://maintainer.example",
+    "keiko-feedback-csrf": maintainerCsrfToken(CAPABILITY),
+  });
+}
+
+function publicationMocks() {
+  return {
+    query: {
+      commandContext: vi.fn().mockResolvedValue({
+        version: 7,
+        payloadDigest: "a".repeat(64),
+        sourceVersion: 7,
+        projectionDigest: "b".repeat(64),
+        targetPolicyDigest: "c".repeat(64),
+      }),
+      preview: vi.fn().mockResolvedValue({
+        status: "prepared",
+        itemId: ITEM,
+        preparationId: ITEM,
+        projectionDigest: "b".repeat(64),
+        targetPolicyDigest: "c".repeat(64),
+        title: "exact <script>",
+        body: "exact & body",
+        targetDisplay: {
+          owner: "owner",
+          repository: "repository",
+          labels: ["feedback"],
+          labelPolicyVersion: "labels-v1",
+          targetPolicyVersion: "target-v1",
+        },
+        expiresAt: AT.toISOString(),
+      }),
+      status: vi.fn().mockResolvedValue({
+        itemId: ITEM,
+        preparationId: ITEM,
+        projectionDigest: "b".repeat(64),
+        targetPolicyDigest: "c".repeat(64),
+        status: "approved",
+      }),
+    },
+    repository: {
+      prepare: vi.fn().mockResolvedValue({ status: "prepared" }),
+      approve: vi.fn().mockResolvedValue({ status: "approved" }),
+      cancelAndRoutePrivate: vi.fn().mockResolvedValue({ status: "cancelled-private" }),
+    },
+  };
+}

@@ -95,6 +95,38 @@ retention, audit, idempotency, legal-hold validation, and the returned result. A
 and permission-policy identifiers are non-empty, control-free, and bounded to 2,048, 255, and 64
 characters respectively.
 
+## Maintainer publication HTTP boundary
+
+The separately hosted maintainer listener exposes publication only when the GitHub publication
+runtime is configured. Disabled publication removes `feedback.publish` from the browser session
+projection and returns the ordinary hidden-route response. Every publication route requires both
+`feedback.review` and `feedback.publish`; neither permission implies `feedback.security`, which is
+still required before any private item is visible.
+
+The closed routes under `/v1/maintainer/reviews/:itemId/publication` are:
+
+- `POST /prepare`, accepting only `action`, expected record version, `targetKey`, and idempotency
+  key;
+- `GET /preview?preparationId=:id`, returning the exact stored title/body bytes, safe target
+  display, digests, and expiry without recomputing the projection;
+- `POST /approve` and `POST /cancel-route-private`, accepting only their exact action,
+  preparation id, approved projection and target-policy digests, and idempotency key; and
+- `GET /status`, optionally with one exact `preparationId`, returning only the normalized
+  publication state, safe failure/retry fields, digests, and succeeded issue number/URL. Without
+  an id, status selects the latest preparation by `created_at DESC, id` or returns `none`.
+
+For a cancelled preparation, durable outbox/provider evidence takes precedence over the local
+preparation flag. An absent or `cancelled-private` outbox is `cancelled-private`; claimed,
+possibly-committed, retryable, or manual work is `manual-reconciliation`; and a succeeded linked
+issue is `manual-remediation` with its safe issue number/URL preserved. Exact preparation expiry is
+rechecked inside the cancellation transaction and fails as `payload-expired`.
+
+The server injects the canonical path item id, current immutable payload binding, and authenticated
+actor plus permission-policy version. All POST routes use the existing same-origin JSON, CSRF,
+session, size, deadline, duplicate-key, and strict UTF-8 gates. Status never selects title, body,
+marker, or canonical report bytes. Browser responses never contain installation ids, numeric
+repository ids, credentials, tokens, maintainer notes, or anonymous receipt linkage.
+
 Every non-replay review read and mutation joins the immutable payload and recomputes its SHA-256 over
 the exact canonical bytes. Digest drift fails closed. A matching idempotency record is instead the
 durable content-free result: it remains replayable for its 365-day ceiling after the terminal payload

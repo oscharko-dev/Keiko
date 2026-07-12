@@ -1,5 +1,6 @@
 import { MaintainerAuthError } from "./maintainer-auth.js";
 import { FeedbackReviewError, type FeedbackReviewErrorCode } from "./feedback-review-types.js";
+import { FeedbackPublicationError } from "./feedback-publication-types.js";
 import type { MaintainerDiagnosticCategory } from "./maintainer-http-response.js";
 
 export class MaintainerRequestError extends Error {}
@@ -31,7 +32,29 @@ export function mapMaintainerError(error: unknown): MaintainerErrorMapping {
       ? { status: 400, category: "invalid-domain" }
       : { status: 403, category: "invalid-domain" };
   }
+  if (error instanceof FeedbackPublicationError) return mapPublicationError(error);
   return error instanceof FeedbackReviewError
     ? DOMAIN_ERROR_MAPPING[error.code]
     : { status: 503, category: "dependency-unavailable" };
+}
+
+function mapPublicationError(error: FeedbackPublicationError): MaintainerErrorMapping {
+  if (error.code === "permission-denied") return { status: 403, category: "invalid-domain" };
+  if (error.code === "not-found" || error.code === "payload-private") {
+    return { status: 404, category: "not-found" };
+  }
+  if (error.code === "invalid-request") return { status: 400, category: "invalid-domain" };
+  if (error.code === "invalid-actor" || error.code === "payload-expired") {
+    return { status: 422, category: "invalid-domain" };
+  }
+  if (
+    error.code === "cas-mismatch" ||
+    error.code === "idempotency-mismatch" ||
+    error.code === "invalid-transition" ||
+    error.code === "target-policy-drift" ||
+    error.code === "projection-drift"
+  ) {
+    return { status: 409, category: "conflict" };
+  }
+  return { status: 503, category: "dependency-unavailable" };
 }

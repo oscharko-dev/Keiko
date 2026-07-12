@@ -10,6 +10,7 @@ export { createMaintainerAuthService, MaintainerAuthError } from "./maintainer-a
 export { PostgresFeedbackReviewQuery } from "./feedback-review-query.js";
 export { PostgresFeedbackReviewRepository } from "./feedback-review-store.js";
 export { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
+export { PostgresFeedbackPublicationQuery } from "./feedback-publication-query.js";
 export {
   FeedbackPublicationProjectionError,
   createFeedbackIssueProjectionV1,

@@ -5,6 +5,7 @@ import { createMaintainerAuthService } from "./maintainer-auth.js";
 import { loadMaintainerRuntimeConfig, type MaintainerRuntimeConfig } from "./maintainer-config.js";
 import { createMaintainerHttpHandler, type MaintainerHttpOptions } from "./maintainer-http.js";
 import type { MaintainerDiagnostics } from "./maintainer-http-response.js";
+import type { MaintainerPublicationService } from "./maintainer-publication-http.js";
 import { MaintainerLoginLimiter } from "./maintainer-login-limiter.js";
 import { createMaintainerOidcClient, type MaintainerOidcClient } from "./maintainer-oidc.js";
 import { PostgresMaintainerAuthStore } from "./maintainer-store.js";
@@ -26,6 +27,7 @@ export interface MaintainerRuntimeOptions {
   readonly now: () => Date;
   readonly oidc?: MaintainerOidcClient | undefined;
   readonly diagnostics?: MaintainerHttpOptions["diagnostics"];
+  readonly publication?: MaintainerPublicationService | undefined;
   readonly serverFactory?:
     | ((handler: (req: IncomingMessage, res: ServerResponse) => void) => MaintainerRuntimeServer)
     | undefined;
@@ -101,6 +103,7 @@ export async function createMaintainerRuntimeServer(
       options.config.legalHoldPolicyKeys,
       options.now,
     ),
+    publication: options.publication,
     loginLimiter: new MaintainerLoginLimiter({
       perSource: options.config.loginPerSourceLimit,
       global: options.config.loginGlobalLimit,

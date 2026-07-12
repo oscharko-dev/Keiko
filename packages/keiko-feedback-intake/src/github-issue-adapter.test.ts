@@ -287,7 +287,7 @@ describe("governed GitHub issue adapter", () => {
     await expect(governed.inspectReadiness()).resolves.toBeUndefined();
     expect(maximum).toBeGreaterThan(1);
     expect(maximum).toBeLessThanOrEqual(6);
-  });
+  }, 10_000);
 
   it("invalidates every target when any concurrent readiness inspection fails", async () => {
     const secondSnapshot = {

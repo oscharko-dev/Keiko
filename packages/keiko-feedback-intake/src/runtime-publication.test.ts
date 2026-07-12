@@ -88,6 +88,34 @@ function configuredEnvironment(): Record<string, string> {
   };
 }
 
+function configuredMaintainerEnvironment(): Record<string, string> {
+  return {
+    ...configuredEnvironment(),
+    KEIKO_FEEDBACK_MAINTAINER_ENABLED: "true",
+    KEIKO_FEEDBACK_MAINTAINER_HOST: "127.0.0.1",
+    KEIKO_FEEDBACK_MAINTAINER_PORT: "12347",
+    KEIKO_FEEDBACK_MAINTAINER_PUBLIC_ORIGIN: "https://maintainer.example",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_ISSUER: "https://idp.example/tenant/",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_ID: "keiko",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_SECRET_FILE: "/unused/oidc",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_AUTH_METHOD: "client_secret_basic",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_ID_TOKEN_ALG: "RS256",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_REDIRECT_URI:
+      "https://maintainer.example/v1/maintainer/auth/callback",
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_CLAIM: "groups",
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_RULES_JSON:
+      '{"publishers":["feedback.review","feedback.publish"]}',
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_POLICY_VERSION: "policy-v1",
+    KEIKO_FEEDBACK_MAINTAINER_LEGAL_HOLD_POLICIES_JSON: "[]",
+    KEIKO_FEEDBACK_MAINTAINER_SESSION_IDLE_MS: "60000",
+    KEIKO_FEEDBACK_MAINTAINER_SESSION_ABSOLUTE_MS: "120000",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_PER_SOURCE_LIMIT: "5",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_GLOBAL_LIMIT: "20",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_WINDOW_MS: "60000",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_CONCURRENCY_LIMIT: "4",
+  };
+}
+
 class RuntimeClient implements PgClientLike {
   query<Row extends object>(text: string): Promise<PgQueryResult<Row>> {
     if (text.includes("to_regclass")) return result([{ name: null }] as Row[]);
@@ -110,7 +138,7 @@ describe("publication runtime composition", () => {
     const maximums: number[] = [];
     let publicationOptions: FeedbackPublicationRuntimeOptions | undefined;
     const runtime = await startHostedFeedbackIntake({
-      env: configuredEnvironment(),
+      env: configuredMaintainerEnvironment(),
       now: () => new Date("2026-07-11T12:00:00Z"),
       poolFactory: (_url, maximum): RuntimePool => {
         const index = maximums.length;
@@ -141,6 +169,10 @@ describe("publication runtime composition", () => {
           },
         };
       },
+      maintainerOidcClient: {
+        begin: () => Promise.reject(new Error("unused")),
+        exchange: () => Promise.reject(new Error("unused")),
+      },
       serverFactory: () => ({
         listen: (_port, _host, callback): void => {
           events.push("listen");
@@ -153,8 +185,14 @@ describe("publication runtime composition", () => {
       }),
       timer: { setInterval: () => "timer", clearInterval: () => undefined },
     });
-    expect(maximums).toEqual([6, 2, 2]);
-    expect(events.slice(0, 4)).toEqual(["inspect", "listen", "listen", "publication-start"]);
+    expect(maximums).toEqual([6, 4, 2, 2]);
+    expect(events.slice(0, 5)).toEqual([
+      "inspect",
+      "listen",
+      "listen",
+      "listen",
+      "publication-start",
+    ]);
     expect(runtime.ready()).toBe(true);
     expect(runtime.publicationReady()).toBe(true);
     publicationOptions?.onHealthChange?.(false);
@@ -163,7 +201,7 @@ describe("publication runtime composition", () => {
     publicationOptions?.onHealthChange?.(true);
     expect(runtime.publicationReady()).toBe(true);
     await expect(runtime.stop()).rejects.toThrow("publication drain failed");
-    expect(events.indexOf("publication-stop")).toBeLessThan(events.indexOf("pool-end-1"));
+    expect(events.indexOf("publication-stop")).toBeLessThan(events.indexOf("pool-end-2"));
     expect(events).toContain("server-close");
     expect(runtime.ready()).toBe(false);
     expect(runtime.publicationReady()).toBe(false);

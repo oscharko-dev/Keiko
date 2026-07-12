@@ -219,6 +219,7 @@ export function assertCancellationPreparation(
   row: FeedbackPublicationPreparationRow,
   review: FeedbackPublicationReviewRow,
   command: FeedbackPublicationCancelCommandV1,
+  at: Date,
 ): void {
   const expectedSource =
     review.state === "approved" ? command.expectedVersion - 1 : command.expectedVersion;
@@ -227,10 +228,13 @@ export function assertCancellationPreparation(
     row.item_id !== command.itemId ||
     row.payload_digest !== command.expectedPayloadDigest ||
     row.source_record_version !== expectedSource ||
+    row.projection_digest !== command.expectedProjectionDigest ||
+    row.target_policy_digest !== command.expectedTargetPolicyDigest ||
     !validStatus
   ) {
     throw new FeedbackPublicationError("cas-mismatch");
   }
+  if (row.expires_at <= at) throw new FeedbackPublicationError("payload-expired");
 }
 
 export function verifyStoredProjection(

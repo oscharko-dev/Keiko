@@ -12,6 +12,8 @@ describe("feedback publication circuit migration 005", () => {
     expect(source).toContain("probe_owner uuid");
     expect(source).toContain("expires_at = updated_at + interval '7 days'");
     expect(source).toContain("feedback_publication_installation_circuits_expiry_idx");
+    expect(source).toContain("feedback_publication_preparation_latest_item_idx");
+    expect(source).toContain("(item_id, created_at DESC, id DESC)");
     expect(source).not.toMatch(/title_bytes|body_bytes|canonical_bytes|marker|token|secret/iu);
     expect(source).toContain(
       "INSERT INTO feedback_schema_migrations (version, applied_at) VALUES (5, now())",

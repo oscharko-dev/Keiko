@@ -9,9 +9,12 @@ import {
   type FeedbackPublicationRuntimeOptions,
 } from "./feedback-publication-runtime.js";
 import type { FeedbackPublicationDiagnostic } from "./feedback-publication-worker.js";
+import { PostgresFeedbackPublicationQuery } from "./feedback-publication-query.js";
+import { PostgresFeedbackPublicationRepository } from "./feedback-publication-store.js";
 import { createFeedbackIntakeHttpHandler } from "./http.js";
 import type { MaintainerRuntimeConfig } from "./maintainer-config.js";
 import type { MaintainerHttpOptions } from "./maintainer-http.js";
+import type { MaintainerPublicationService } from "./maintainer-publication-http.js";
 import type { MaintainerOidcClient } from "./maintainer-oidc.js";
 import {
   createMaintainerRuntimeServer,
@@ -397,11 +400,32 @@ async function createConfiguredMaintainer(
     config: maintainerConfig,
     runtimeConfig: config,
     pool: pools.maintainer,
+    publication: maintainerPublicationService(config, pools, maintainerConfig),
     now,
     oidc: options.maintainerOidcClient,
     diagnostics: options.maintainerDiagnostics,
     serverFactory: options.serverFactory,
   });
+}
+
+function maintainerPublicationService(
+  config: HostedRuntimeConfig,
+  pools: RuntimePools,
+  maintainerConfig: Extract<MaintainerRuntimeConfig, { readonly enabled: true }>,
+): MaintainerPublicationService | undefined {
+  if (!config.publication.enabled) return undefined;
+  const publication = config.publication;
+  const pool = pools.publicationPrimary;
+  if (pool === undefined) throw new Error("Publication database pool was not initialized");
+  const resolve = (key: string) => publication.github.targets.get(key)?.snapshot;
+  return {
+    query: new PostgresFeedbackPublicationQuery(pool, resolve),
+    repository: new PostgresFeedbackPublicationRepository(
+      pool,
+      maintainerConfig.permissionPolicyVersion,
+      resolve,
+    ),
+  };
 }
 
 async function initializeSurface(

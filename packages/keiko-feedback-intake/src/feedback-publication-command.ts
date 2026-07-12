@@ -20,6 +20,17 @@ const PREPARE_KEYS = new Set([
   "actor",
   "targetKey",
 ]);
+const BOUND_KEYS = new Set([
+  "action",
+  "itemId",
+  "expectedVersion",
+  "expectedPayloadDigest",
+  "idempotencyKey",
+  "actor",
+  "preparationId",
+  "expectedProjectionDigest",
+  "expectedTargetPolicyDigest",
+]);
 
 export function assertFeedbackPublicationCommand(command: FeedbackPublicationCommandV1): void {
   if (!isFeedbackReviewActorV1(command.actor)) throw new FeedbackPublicationError("invalid-actor");
@@ -56,7 +67,7 @@ function assertActionCommand(command: FeedbackPublicationCommandV1): void {
     return;
   }
   if (!isCanonicalFeedbackReviewId(command.preparationId)) invalidRequest();
-  if (command.action !== "approve-publication") return;
+  if (!hasOnlyKeys(command, BOUND_KEYS)) invalidRequest();
   if (!SHA256.test(command.expectedProjectionDigest)) invalidRequest();
   if (!SHA256.test(command.expectedTargetPolicyDigest)) invalidRequest();
 }
@@ -76,15 +87,12 @@ function commandProjection(command: FeedbackPublicationCommandV1): readonly unkn
     command.actor.permissionPolicyVersion,
   ];
   if (command.action === "prepare-publication") return [...common, command.targetKey];
-  if (command.action === "approve-publication") {
-    return [
-      ...common,
-      command.preparationId,
-      command.expectedProjectionDigest,
-      command.expectedTargetPolicyDigest,
-    ];
-  }
-  return [...common, command.preparationId];
+  return [
+    ...common,
+    command.preparationId,
+    command.expectedProjectionDigest,
+    command.expectedTargetPolicyDigest,
+  ];
 }
 
 function hasOnlyKeys(value: object, allowed: ReadonlySet<string>): boolean {
