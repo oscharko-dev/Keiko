@@ -121,14 +121,29 @@ async function readUntil(response: Response, needle: string): Promise<string> {
   if (reader === undefined) throw new Error("missing SSE response body");
   const decoder = new TextDecoder();
   let collected = "";
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`missing SSE frame before deadline: ${needle}`));
+    }, 5_000);
+  });
   try {
-    while (!collected.includes(needle)) {
-      const chunk = await reader.read();
-      if (chunk.done) return collected;
-      collected += decoder.decode(chunk.value, { stream: true });
-    }
-    return collected;
+    return await Promise.race([
+      (async (): Promise<string> => {
+        while (!collected.includes(needle)) {
+          const chunk = await reader.read();
+          if (chunk.done) return collected;
+          collected += decoder.decode(chunk.value, { stream: true });
+        }
+        return collected;
+      })(),
+      deadline,
+    ]);
+  } catch (error: unknown) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
+    clearTimeout(timeout);
     reader.releaseLock();
   }
 }
