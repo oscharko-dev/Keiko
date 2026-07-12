@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
+  normalizeUpstreamLocation,
   publicBrowserUrl,
   readNextLockInfo,
 } from "../dev-runner.mjs";
@@ -165,5 +166,65 @@ describe("canonical localhost browser URL", () => {
 
   it("does not redirect state-changing requests", () => {
     expect(canonicalLocalhostRedirectLocation(req({ method: "POST" }), 1983)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeUpstreamLocation — proxy `Location` header rewriting
+//
+// The proxy MUST rebase same-origin upstream redirects onto the PUBLIC proxy
+// origin (e.g. http://localhost:1983) instead of the internal upstream port,
+// otherwise the browser leaves the proxy and can no longer route /api/* to the
+// BFF (regression previously caught in review of #2341).
+// ---------------------------------------------------------------------------
+
+describe("normalizeUpstreamLocation", () => {
+  const NEXT_PORT = 3000;
+  const PUBLIC_PORT = 1983;
+  const PUBLIC_ORIGIN = "http://localhost:1983";
+
+  it("rebases a relative same-origin redirect onto the public proxy origin", () => {
+    expect(normalizeUpstreamLocation("/dashboard", NEXT_PORT, PUBLIC_PORT)).toBe(
+      `${PUBLIC_ORIGIN}/dashboard`,
+    );
+  });
+
+  it("preserves the query string and hash when rebasing a same-origin redirect", () => {
+    expect(normalizeUpstreamLocation("/workspace?tab=chat#panel", NEXT_PORT, PUBLIC_PORT)).toBe(
+      `${PUBLIC_ORIGIN}/workspace?tab=chat#panel`,
+    );
+  });
+
+  it("rebases an absolute same-origin redirect onto the public proxy origin", () => {
+    expect(
+      normalizeUpstreamLocation("http://127.0.0.1:3000/api/foo?x=1", NEXT_PORT, PUBLIC_PORT),
+    ).toBe(`${PUBLIC_ORIGIN}/api/foo?x=1`);
+  });
+
+  it("drops cross-origin locations (defense against open-redirect via upstream)", () => {
+    expect(
+      normalizeUpstreamLocation("http://evil.com/path", NEXT_PORT, PUBLIC_PORT),
+    ).toBeUndefined();
+    expect(normalizeUpstreamLocation("//evil.com/path", NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
+  });
+
+  it("drops locations pointing at a different upstream port", () => {
+    expect(
+      normalizeUpstreamLocation("http://127.0.0.1:9999/foo", NEXT_PORT, PUBLIC_PORT),
+    ).toBeUndefined();
+  });
+
+  it("drops malformed and non-string location values", () => {
+    expect(
+      normalizeUpstreamLocation("javascript:alert(1)", NEXT_PORT, PUBLIC_PORT),
+    ).toBeUndefined();
+    expect(normalizeUpstreamLocation("not a url", NEXT_PORT, PUBLIC_PORT)).toBe(
+      // "not a url" is a valid relative reference; the resolved URL still lives on the upstream
+      // host, so it must rebase onto the public origin as any other same-origin path would.
+      `${PUBLIC_ORIGIN}/not%20a%20url`,
+    );
+    expect(normalizeUpstreamLocation(undefined, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
+    expect(normalizeUpstreamLocation(null, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
+    expect(normalizeUpstreamLocation(42, NEXT_PORT, PUBLIC_PORT)).toBeUndefined();
   });
 });

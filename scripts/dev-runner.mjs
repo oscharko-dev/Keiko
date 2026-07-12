@@ -386,7 +386,11 @@ function proxiedHeaders(req, targetPort) {
   return headers;
 }
 
-function normalizeUpstreamLocation(rawLocation, targetPort) {
+export function normalizeUpstreamLocation(
+  rawLocation,
+  targetPort,
+  publicRedirectPort = publicPort,
+) {
   if (typeof rawLocation !== "string") return undefined;
   const upstreamBase = `http://${host}:${String(targetPort)}`;
   try {
@@ -394,7 +398,14 @@ function normalizeUpstreamLocation(rawLocation, targetPort) {
     if (resolved.hostname !== host || resolved.port !== String(targetPort)) {
       return undefined;
     }
-    return resolved.toString();
+    // Same-origin redirects from the internal upstream must be rewritten back onto the public
+    // proxy origin so the browser keeps talking to the proxy (which then routes /api/* to the
+    // BFF and everything else to Next), rather than dialing the internal port directly.
+    const publicUrl = new URL(publicBrowserUrl(publicRedirectPort));
+    publicUrl.pathname = resolved.pathname;
+    publicUrl.search = resolved.search;
+    publicUrl.hash = resolved.hash;
+    return publicUrl.toString();
   } catch {
     return undefined;
   }
