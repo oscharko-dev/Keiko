@@ -20,38 +20,45 @@ export function useEditorShortcutOverrides(root: string | undefined): readonly s
   const [overrides, setOverrides] = useState<readonly string[]>([]);
 
   useEffect(() => {
-    let active = true;
-    const controller = new AbortController();
-    let unsubscribe: (() => void) | undefined;
-
-    const load = async (): Promise<void> => {
-      try {
-        const { fetchEditorSettings } = await import("@/lib/api");
-        const snapshot = await fetchEditorSettings(root, controller.signal);
-        if (active && !controller.signal.aborted) setOverrides(keybindingOverrides(snapshot));
-      } catch {
-        if (active && !controller.signal.aborted) setOverrides([]);
-      }
-    };
-
-    void load();
-    void import("./widgets/cards/sharedEventSource").then(({ subscribeSharedEventSource }) => {
-      if (!active) return;
-      unsubscribe = subscribeSharedEventSource(
-        eventsUrl(root),
-        ["ready", "editor-settings:changed"],
-        () => {
-          void load();
-        },
-      );
-    });
-
-    return () => {
-      active = false;
-      controller.abort();
-      unsubscribe?.();
-    };
+    return subscribeEditorShortcutOverrides(root, setOverrides);
   }, [root]);
 
   return overrides;
+}
+
+export function subscribeEditorShortcutOverrides(
+  root: string | undefined,
+  onChange: (overrides: readonly string[]) => void,
+): () => void {
+  let active = true;
+  const controller = new AbortController();
+  let unsubscribe: (() => void) | undefined;
+
+  const load = async (): Promise<void> => {
+    try {
+      const { fetchEditorSettings } = await import("@/lib/api");
+      const snapshot = await fetchEditorSettings(root, controller.signal);
+      if (active && !controller.signal.aborted) onChange(keybindingOverrides(snapshot));
+    } catch {
+      if (active && !controller.signal.aborted) onChange([]);
+    }
+  };
+
+  void load();
+  void import("./widgets/cards/sharedEventSource").then(({ subscribeSharedEventSource }) => {
+    if (!active) return;
+    unsubscribe = subscribeSharedEventSource(
+      eventsUrl(root),
+      ["ready", "editor-settings:changed"],
+      () => {
+        void load();
+      },
+    );
+  });
+
+  return () => {
+    active = false;
+    controller.abort();
+    unsubscribe?.();
+  };
 }

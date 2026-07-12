@@ -57,18 +57,12 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction } from "./shell-undo-bindings";
-import {
-  activeGlobalWorkspaceBindings,
-  detectKeyboardShortcutPlatform,
-  resolveGlobalKeyboardShortcuts,
-  shortcutLabel,
-} from "./globalKeyboardShortcuts";
+import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
 import { EditorQuickAccessTriggerProvider } from "./EditorQuickAccessTriggerContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
-import { useEditorShortcutOverrides } from "./useEditorShortcutOverrides";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
 import {
   QUICK_ACCESS_CARD_TYPES,
@@ -84,6 +78,8 @@ import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
+const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
+
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
   { ssr: false, loading: () => null },
@@ -422,24 +418,21 @@ function AppShellInner(): ReactNode {
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
   const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
-  const shortcutOverrides = useEditorShortcutOverrides(shortcutRoot);
-  const shortcutRegistry = useMemo(
-    () => resolveGlobalKeyboardShortcuts(shortcutOverrides),
-    [shortcutOverrides],
+  const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
+    EMPTY_SHELL_SHORTCUT_STATE,
   );
-  const shortcutLabels = useMemo(() => {
-    const platform = detectKeyboardShortcutPlatform();
-    return new Map(
-      shortcutRegistry.commands.map((entry) => [
-        entry.command.id,
-        shortcutLabel(entry.binding, platform),
-      ]),
-    );
-  }, [shortcutRegistry]);
-  const shellShortcutBindings = useMemo(
-    () => activeGlobalWorkspaceBindings(shortcutRegistry),
-    [shortcutRegistry],
-  );
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    let active = true;
+    void import("./shellShortcutState").then(({ subscribeShellShortcutState }) => {
+      if (!active) return;
+      cleanup = subscribeShellShortcutState(shortcutRoot, setShellShortcutState);
+    });
+    return () => {
+      active = false;
+      cleanup?.();
+    };
+  }, [shortcutRoot]);
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
@@ -864,7 +857,7 @@ function AppShellInner(): ReactNode {
     },
     [openQuickAccessCommands, openQuickAccessFiles, undoStack, ws.api, ws.wins],
   );
-  useKeyboardShortcuts({ bindings: shellShortcutBindings, dispatch: dispatchShortcut });
+  useKeyboardShortcuts({ bindings: shellShortcutState.bindings, dispatch: dispatchShortcut });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -896,8 +889,8 @@ function AppShellInner(): ReactNode {
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
   const quickAccessCommands = useMemo(
-    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t, shortcutLabels),
-    [activeEditorHost, commands, shortcutLabels, t],
+    () => buildUnifiedQuickAccessCommands(commands, activeEditorHost, t, shellShortcutState.labels),
+    [activeEditorHost, commands, shellShortcutState.labels, t],
   );
   const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
   const needsGatewaySetup =
