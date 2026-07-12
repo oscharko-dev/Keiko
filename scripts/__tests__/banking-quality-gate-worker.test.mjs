@@ -4,6 +4,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker, {
   allPages,
+  appId,
   appJwt,
   base64Url,
   bytesFromHex,
@@ -323,6 +324,12 @@ describe("Banking Quality Gate worker trust boundary", () => {
         env,
       ),
     ).toBe(false);
+  });
+
+  it("extracts app identity only when present", () => {
+    expect(appId({ id: 999 })).toBe(999);
+    expect(appId(null)).toBeUndefined();
+    expect(appId(undefined)).toBeUndefined();
   });
 
   it("does not trust absent event collection shapes", () => {
@@ -973,7 +980,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
       { waitUntil: (promise) => waits.push(promise) },
     );
     await Promise.all(waits);
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/reviews?")).length).toBe(
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/reviews?"))).toHaveLength(
       2,
     );
   });

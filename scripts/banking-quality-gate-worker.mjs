@@ -9,7 +9,7 @@ const emptyCheckRuns = Object.freeze([]);
 export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
   let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (const byte of bytes) binary += String.fromCodePoint(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
@@ -128,10 +128,12 @@ export function isOwnCheckEvent(event, payload, env) {
     event === "check_run" &&
     run !== undefined &&
     run.name === checkName &&
-    run.app !== undefined &&
-    run.app !== null &&
-    run.app.id === Number(env.GITHUB_APP_ID)
+    appId(run.app) === Number(env.GITHUB_APP_ID)
   );
+}
+
+export function appId(app) {
+  return app?.id;
 }
 
 export async function evidence(owner, repository, pullNumber, headSha, token) {
@@ -187,34 +189,9 @@ export async function publishCheck(owner, repository, headSha, result, token, en
     token,
   );
   const existing = (checkPayload.check_runs ?? emptyCheckRuns).find(
-    (check) =>
-      check.name === checkName &&
-      check.app !== undefined &&
-      check.app !== null &&
-      check.app.id === Number(env.GITHUB_APP_ID),
+    (check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID),
   );
-  const body = result.passed
-    ? {
-        conclusion: "success",
-        name: checkName,
-        output: {
-          summary: "All current-head Banking Quality Gate evidence is valid.",
-          title: checkName,
-        },
-        status: "completed",
-      }
-    : hardFailure(result.failures)
-      ? {
-          conclusion: "failure",
-          name: checkName,
-          output: { summary: result.failures.join("\n"), title: checkName },
-          status: "completed",
-        }
-      : {
-          name: checkName,
-          output: { summary: result.failures.join("\n"), title: checkName },
-          status: "in_progress",
-        };
+  const body = checkBody(result);
   const path =
     existing === undefined
       ? `/repos/${owner}/${repository}/check-runs`
@@ -223,6 +200,28 @@ export async function publishCheck(owner, repository, headSha, result, token, en
     body: JSON.stringify(existing === undefined ? { ...body, head_sha: headSha } : body),
     method: existing === undefined ? "POST" : "PATCH",
   });
+}
+
+export function checkBody(result) {
+  if (result.passed) {
+    return {
+      conclusion: "success",
+      name: checkName,
+      output: {
+        summary: "All current-head Banking Quality Gate evidence is valid.",
+        title: checkName,
+      },
+      status: "completed",
+    };
+  }
+  const body = {
+    name: checkName,
+    output: { summary: result.failures.join("\n"), title: checkName },
+    status: "in_progress",
+  };
+  return hardFailure(result.failures)
+    ? { ...body, conclusion: "failure", status: "completed" }
+    : body;
 }
 
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
