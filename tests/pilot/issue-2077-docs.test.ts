@@ -7,6 +7,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const docs = [
   "README.md",
   "docs/feedback-intake/2077-verification-matrix.md",
+  "docs/feedback-intake/2077-closure-evidence.md",
   "docs/feedback-intake/operator-runbook.md",
   "docs/feedback-intake/user-guide.md",
   "docs/troubleshooting/feedback-flow.md",

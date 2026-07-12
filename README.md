@@ -61,6 +61,7 @@ Maintainers who are signed in to GitHub can transfer the same information into t
 The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
 
 Operators deploying the separate hosted intake service should use the [hosted feedback intake runbook](docs/feedback-intake/operator-runbook.md) and its [GitHub App configuration contract](docs/feedback-intake/github-app-configuration.md).
+Release reviewers can use the [governed-flow verification matrix](docs/feedback-intake/2077-verification-matrix.md) and [closure evidence](docs/feedback-intake/2077-closure-evidence.md).
 
 ## Quickstart
 
