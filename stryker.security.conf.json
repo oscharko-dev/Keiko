@@ -4,7 +4,7 @@
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
     "configFile": "vitest.config.ts",
-    "related": true
+    "related": false
   },
   "testFiles": [
     "packages/keiko-security/src/**/*.test.ts",
@@ -54,6 +54,6 @@
   "ignoreStatic": true,
   "timeoutMS": 30000,
   "timeoutFactor": 2.5,
-  "concurrency": 8,
+  "concurrency": 16,
   "tempDirName": ".stryker-tmp"
 }
