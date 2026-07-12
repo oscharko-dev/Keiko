@@ -13,6 +13,7 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('cron: "17 2 * * *"');
     expect(mutation).toContain("name: Mutation quality gate");
     expect(mutation).toContain('-- --mutate "$MUTATION_FILES"');
+    expect(mutation).toContain('check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"');
     expect(mutation).not.toContain('"${mutation_files[@]}"');
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
     expect(mutation).not.toContain("continue-on-error: true");

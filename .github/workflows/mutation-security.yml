@@ -42,11 +42,13 @@ jobs:
       - name: Run security mutation suite
         if: ${{ github.event_name != 'pull_request' || steps.scope.outputs.required == 'true' }}
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MUTATION_FILES: ${{ steps.scope.outputs.files }}
         run: |
           if [ -n "${MUTATION_FILES:-}" ]; then
             npm run test:mutation:security:run -- --mutate "$MUTATION_FILES"
-            npm run check:mutation:scoped
+            npm run check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"
           else
             npm run test:mutation:security
           fi

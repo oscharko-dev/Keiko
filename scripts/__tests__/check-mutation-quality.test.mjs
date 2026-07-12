@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  changedLineRanges,
   evaluateMutationBaseline,
   evaluateScopedMutation,
   executeMutationQualityCli,
   mutationFingerprint,
+  mutantTouchesChangedLine,
+  parseChangedLineRanges,
   runMutationQuality,
   summarizeMutationReport,
 } from "../check-mutation-quality.mjs";
@@ -121,6 +124,67 @@ describe("mutation quality", () => {
     );
   });
 
+  it("filters scoped mutation results to changed lines only", () => {
+    const changed = mutant("Killed", {
+      location: { end: { column: 4, line: 12 }, start: { column: 1, line: 12 } },
+    });
+    const legacy = mutant("Survived", {
+      location: { end: { column: 4, line: 80 }, start: { column: 1, line: 80 } },
+    });
+    const changedLines = new Map([["src/security.ts", [{ end: 14, start: 10 }]]]);
+
+    expect(evaluateScopedMutation(report(changed, legacy), { changedLines })).toMatchObject({
+      current: { score: 100, summary: { killed: 1, survived: 0, total: 1 } },
+      failures: [],
+    });
+    expect(evaluateScopedMutation(report(legacy), { changedLines }).failures).toContain(
+      "Scoped mutation run produced no mutants.",
+    );
+  });
+
+  it("parses changed line ranges and matches multi-line mutants", () => {
+    const ranges = parseChangedLineRanges(
+      [
+        "diff --git a/src/security.ts b/src/security.ts",
+        "@@ -3 +3,2 @@",
+        "@@ -10,2 +11 @@",
+        "diff --git a/src/other.ts b/src/other.ts",
+        "@@ -1 +0,0 @@",
+      ].join("\n"),
+    );
+
+    expect(ranges.get("src/security.ts")).toEqual([
+      { end: 4, start: 3 },
+      { end: 11, start: 11 },
+    ]);
+    expect(ranges.get("src/other.ts")).toEqual([]);
+    expect(
+      mutantTouchesChangedLine(
+        "src/security.ts",
+        mutant("Killed", { location: { end: { line: 12 }, start: { line: 10 } } }),
+        ranges,
+      ),
+    ).toBe(true);
+    expect(mutantTouchesChangedLine("src/missing.ts", mutant("Killed"), ranges)).toBe(false);
+  });
+
+  it("loads changed line ranges through the bounded git diff", async () => {
+    const execute = vi.fn(() => "diff --git a/src/security.ts b/src/security.ts\n@@ -1 +1 @@\n");
+    const read = vi.fn(async () => JSON.stringify(report(mutant("Killed"))));
+    const log = vi.fn();
+
+    expect(changedLineRanges("base", "head", execute)).toEqual(
+      new Map([["src/security.ts", [{ end: 1, start: 1 }]]]),
+    );
+    await runMutationQuality({ base: "base", execute, head: "head", log, mode: "scoped", read });
+    expect(execute).toHaveBeenCalledWith(
+      "/usr/bin/git",
+      ["diff", "--unified=0", "--diff-filter=ACMR", "base...head"],
+      { encoding: "utf8" },
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("100.00%"));
+  });
+
   it("loads reports and baselines and logs a passing result", async () => {
     const data = report(mutant("Killed"));
     const read = vi.fn(async (path) =>
@@ -173,6 +237,15 @@ describe("mutation quality", () => {
     expect(run).toHaveBeenCalledWith({ mode: "scoped" });
     expect(error).toHaveBeenCalledWith("mutation-quality: FAIL - fixture failure");
     expect(setExitCode).toHaveBeenCalledWith(1);
+  });
+
+  it("passes scoped base and head arguments to the runner", async () => {
+    const run = vi.fn(async () => undefined);
+    await executeMutationQualityCli({
+      args: ["--scoped", "--base", "base", "--head", "head"],
+      run,
+    });
+    expect(run).toHaveBeenCalledWith({ base: "base", head: "head", mode: "scoped" });
   });
 
   it("uses default CLI error adapters for non-Error failures", async () => {
