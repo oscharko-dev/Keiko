@@ -121,6 +121,51 @@ describe("portable secure-read qualification", () => {
     expect(secureReadHarness).toContain("await restoreRename(parent, alias)");
     expect(secureReadHarness).toContain("await restoreRename(parked, parent)");
     expect(secureReadHarness).toContain("harness modified supplied binary");
+    for (const denied of [
+      "CON",
+      "con.txt",
+      "PRN",
+      "AUX.log",
+      "NUL.txt",
+      "COM1",
+      "COM9.log",
+      "LPT1",
+      "LPT9.log",
+      "CLOCK$",
+      "GLOBALROOT",
+      "GLOBALROOT.txt",
+      "DEVICE",
+      "DEVICE.log",
+      "??",
+    ]) {
+      expect(secureReadHarness).toContain(JSON.stringify(denied));
+    }
+    for (const allowed of ["GLOBALROOTED", "CONSOLE", "DEVICEFUL", "CLOCK$X", "COM10", "LPT10"]) {
+      expect(secureReadHarness).toContain(JSON.stringify(allowed));
+    }
+    expect(secureReadHarness).toContain("Windows reserved-name policy mismatch");
+    for (const stem of [
+      "CON",
+      "PRN",
+      "AUX",
+      "NUL",
+      "COM",
+      "LPT",
+      "CLOCK$",
+      "GLOBALROOT",
+      "DEVICE",
+      "??",
+    ]) {
+      expect(secureReadNative).toContain(`"${stem}"`);
+    }
+    expect(secureReadNative).toMatch(
+      /while \(name_length < length && component\[name_length\] != '\.'\)/u,
+    );
+    expect(secureReadNative).toContain('ascii_name_equals(component, name_length, "GLOBALROOT")');
+    expect(secureReadNative).toMatch(
+      /name_length == 4 && \(ascii_name_equals.*component\[3\] >= '1'/u,
+    );
+    expect(secureReadNative).not.toContain("char name[10]");
     expect(secureReadHarness).toContain(
       "if (pausedBinary !== undefined) await assertAdversarialRaces",
     );

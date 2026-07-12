@@ -21,6 +21,43 @@ const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.ur
 const SAFE_TEXT = "safe text\n";
 const HELPER_DEADLINE_MS = 2_000;
 const CONCURRENT_CONSISTENCY_READS = 32;
+const WINDOWS_RESERVED_STEMS = [
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM",
+  "LPT",
+  "CLOCK$",
+  "GLOBALROOT",
+  "DEVICE",
+  "??",
+];
+const WINDOWS_RESERVED_DENIED = [
+  "CON",
+  "con.txt",
+  "PRN",
+  "AUX.log",
+  "NUL.txt",
+  "COM1",
+  "COM9.log",
+  "LPT1",
+  "LPT9.log",
+  "CLOCK$",
+  "GLOBALROOT",
+  "GLOBALROOT.txt",
+  "DEVICE",
+  "DEVICE.log",
+  "??",
+];
+const WINDOWS_RESERVED_PREFIX_ALLOWED = [
+  "GLOBALROOTED",
+  "CONSOLE",
+  "DEVICEFUL",
+  "CLOCK$X",
+  "COM10",
+  "LPT10",
+];
 const isWindows = process.platform === "win32";
 
 function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) {
@@ -166,6 +203,11 @@ async function assertWindowsSourceContract() {
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
   );
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
+  for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSource.includes(`"${stem}"`));
+  assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
+  assert.match(nativeSource, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
+  assert.match(nativeSource, /name_length == 4 && \(ascii_name_equals.*component\[3\] >= '1'/u);
+  assert.doesNotMatch(nativeSource, /char name\[10\]/u);
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
 }
@@ -183,6 +225,8 @@ async function setupFixture(fixture, outside) {
   await writeFile(join(fixture, "exact.txt"), "x".repeat(65_536));
   await writeFile(join(fixture, "large.txt"), "x".repeat(65_537));
   await writeFile(join(fixture, "hard-source.txt"), "linked content");
+  for (const name of WINDOWS_RESERVED_PREFIX_ALLOWED)
+    await writeFile(join(fixture, name), SAFE_TEXT);
   await writeFile(join(outside, "outside.txt"), "outside\n");
   await writeFile(join(outside, "outside-dir", "outside.txt"), "outside\n");
   await symlink(
@@ -253,25 +297,34 @@ async function assertProtocolCases(binary, fixture, outside) {
 }
 
 async function assertWindowsPolicies(binary, fixture) {
-  for (const denied of [
-    "CON",
-    "NUL.txt",
-    "COM1",
-    "LPT9.log",
-    "CLOCK$",
-    "GLOBALROOT",
-    "DEVICE",
-    "??",
-    "nested/good.txt:stream",
-    "name?",
-    "name.",
-    "name ",
-    "PROGRA~1",
-  ]) {
-    assert.equal(response(await run(binary, request(fixture, denied))).status, 3);
+  for (const denied of WINDOWS_RESERVED_DENIED) {
+    assert.equal(
+      response(await run(binary, request(fixture, denied))).status,
+      3,
+      `Windows reserved-name policy mismatch for ${JSON.stringify(denied)}`,
+    );
   }
-  for (const invalidRoot of ["C:relative", "\\\\server\\share", "relative"])
-    assert.equal(response(await run(binary, request(invalidRoot, "safe.txt"))).status, 1);
+  for (const allowed of WINDOWS_RESERVED_PREFIX_ALLOWED) {
+    assert.equal(
+      response(await run(binary, request(fixture, allowed))).status,
+      0,
+      `Windows reserved-name prefix was over-rejected: ${JSON.stringify(allowed)}`,
+    );
+  }
+  for (const denied of ["nested/good.txt:stream", "name?", "name.", "name ", "PROGRA~1"]) {
+    assert.equal(
+      response(await run(binary, request(fixture, denied))).status,
+      3,
+      `Windows path policy mismatch for ${JSON.stringify(denied)}`,
+    );
+  }
+  for (const invalidRoot of ["C:relative", "\\\\server\\share", "relative"]) {
+    assert.equal(
+      response(await run(binary, request(invalidRoot, "safe.txt"))).status,
+      1,
+      `Windows root policy mismatch for ${JSON.stringify(invalidRoot)}`,
+    );
+  }
 }
 
 function assertRaceResult(result) {

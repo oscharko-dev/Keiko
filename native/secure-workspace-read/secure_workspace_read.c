@@ -43,12 +43,19 @@ static int valid_utf8(const unsigned char *s, size_t n) {
   return 1;
 }
 
+#if defined(_WIN32)
+static int ascii_name_equals(const char *value, size_t length, const char *expected) {
+  size_t i = 0;
+  while (i < length && expected[i] != '\0') { char c = value[i]; if (c >= 'a' && c <= 'z') c = (char)(c - ('a' - 'A')); if (c != expected[i]) return 0; ++i; }
+  return i == length && expected[i] == '\0';
+}
+#endif
+
 static int windows_reserved_component(const char *component, size_t length) {
 #if defined(_WIN32)
-  char name[10]; size_t n = 0;
-  while (n < length && component[n] != '.' && n + 1 < sizeof(name)) { char c = component[n]; name[n] = (c >= 'a' && c <= 'z') ? (char)(c - ('a' - 'A')) : c; ++n; }
-  name[n] = '\0';
-  return strcmp(name, "CON") == 0 || strcmp(name, "PRN") == 0 || strcmp(name, "AUX") == 0 || strcmp(name, "NUL") == 0 || strcmp(name, "CLOCK$") == 0 || ((strncmp(name, "COM", 3) == 0 || strncmp(name, "LPT", 3) == 0) && n == 4 && name[3] >= '1' && name[3] <= '9') || strcmp(name, "GLOBALROOT") == 0 || strcmp(name, "DEVICE") == 0 || strcmp(name, "??") == 0;
+  size_t name_length = 0;
+  while (name_length < length && component[name_length] != '.') ++name_length;
+  return ascii_name_equals(component, name_length, "CON") || ascii_name_equals(component, name_length, "PRN") || ascii_name_equals(component, name_length, "AUX") || ascii_name_equals(component, name_length, "NUL") || ascii_name_equals(component, name_length, "CLOCK$") || (name_length == 4 && (ascii_name_equals(component, 3, "COM") || ascii_name_equals(component, 3, "LPT")) && component[3] >= '1' && component[3] <= '9') || ascii_name_equals(component, name_length, "GLOBALROOT") || ascii_name_equals(component, name_length, "DEVICE") || ascii_name_equals(component, name_length, "??");
 #else
   (void)component; (void)length; return 0;
 #endif
