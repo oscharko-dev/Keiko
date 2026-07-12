@@ -209,4 +209,80 @@ describe("ProjectPanel", () => {
     await user.keyboard("{End}");
     expect(screen.getByRole("treeitem", { name: /Investigate shell audit/ })).toHaveFocus();
   });
+
+  // ArrowLeft on a level-2 chat item routes to focusParentTreeItem because
+  // the chat button has no aria-expanded="true" attribute.
+  it("ArrowLeft on a chat item moves focus to its parent project (PA-03)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
+    chatItem.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("treeitem", { name: /Keiko/ })).toHaveFocus();
+  });
+
+  // ArrowLeft on an expanded project collapses it (aria-expanded="true" → click).
+  it("ArrowLeft collapses an expanded project (PA-03)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
+    projectItem.focus();
+    expect(projectItem).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{ArrowLeft}");
+    expect(projectItem).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // ArrowRight on an already-expanded project moves focus to its first child.
+  it("ArrowRight on an expanded project moves focus to the first child (PA-03)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
+    projectItem.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("treeitem", { name: /Investigate shell audit/ })).toHaveFocus();
+  });
+
+  // ArrowRight on a collapsed project triggers a click to expand it.
+  it("ArrowRight on a collapsed project expands it (PA-03)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
+    projectItem.focus();
+    // First collapse the project (it starts expanded because it is the active project).
+    await user.keyboard("{ArrowLeft}");
+    expect(projectItem).toHaveAttribute("aria-expanded", "false");
+    // Now ArrowRight should re-expand.
+    await user.keyboard("{ArrowRight}");
+    expect(projectItem).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // handleTreeKey guards: non-registered keys don't crash, non-treeitem targets are ignored.
+  it("ignores non-tree navigation keys (PA-03)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
+    projectItem.focus();
+    await user.keyboard("a");
+    expect(projectItem).toHaveFocus();
+  });
 });

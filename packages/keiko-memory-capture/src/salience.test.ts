@@ -570,4 +570,15 @@ describe("parseSalienceItems", () => {
       '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]';
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
+
+  // Covers the escape-tracking branch in consumeStringOrEscape: a backslash
+  // inside a JSON string must not close/open the string on the next character.
+  // Without escape handling, "\"" would be misread as an unescaped ".
+  it("handles escaped quotes and backslashes inside JSON string values", () => {
+    const raw =
+      '[{"body":"He said \\"hi\\" then a backslash \\\\ arrived","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
+    const items = parseSalienceItems(raw);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.body).toBe('He said "hi" then a backslash \\ arrived');
+  });
 });
