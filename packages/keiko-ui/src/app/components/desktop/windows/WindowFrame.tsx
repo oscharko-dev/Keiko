@@ -10,7 +10,6 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
@@ -42,6 +41,8 @@ import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
+
+type CurrentRef<T> = { current: T };
 
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 type Handle = (typeof HANDLES)[number];
@@ -542,7 +543,7 @@ function attachResizeListeners(
   api: WorkspaceApi,
   config: ResizeGestureConfig,
   suppressAutoGrowForManualResize: () => void,
-  resizeCleanupRef: MutableRefObject<((flushPending?: boolean) => void) | null>,
+  resizeCleanupRef: CurrentRef<((flushPending?: boolean) => void) | null>,
 ): void {
   const { winId, type, dir, start, sx, sy, zoom } = config;
   let last = start;

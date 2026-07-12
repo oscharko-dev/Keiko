@@ -14,7 +14,7 @@
 // while the written answer stays untouched (AC4). The hook holds no credential and never persists the
 // synthesized audio: the object URL lives only for the duration of one spoken turn.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceProfile } from "@/lib/types";
 import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/lib/api";
@@ -26,6 +26,8 @@ import {
   createBrowserAssistantSpeechStreamingSink,
   type AssistantSpeechStreamingSink,
 } from "./assistant-speech-streaming";
+
+type CurrentRef<T> = { current: T };
 
 // The minimal audio-element surface the engine drives. `HTMLAudioElement` satisfies it structurally,
 // so production passes `new Audio()`; tests inject a controllable fake without a real media element.
@@ -132,9 +134,9 @@ interface HandledTurn {
 // attachment (effect re-run / unmount / stop) still short-circuits the handler.
 function attachBufferedAudioHandlers(
   audio: AssistantSpeechAudioElement,
-  playbackRef: MutableRefObject<VoicePlaybackBinding>,
+  playbackRef: CurrentRef<VoicePlaybackBinding>,
   teardown: () => void,
-  cancelledRef: MutableRefObject<boolean>,
+  cancelledRef: CurrentRef<boolean>,
 ): void {
   audio.onplaying = (): void => {
     if (!cancelledRef.current) {
@@ -160,9 +162,9 @@ function attachBufferedAudioHandlers(
 // for the same nesting reason.
 function playBufferedAudio(
   audio: AssistantSpeechAudioElement,
-  playbackRef: MutableRefObject<VoicePlaybackBinding>,
+  playbackRef: CurrentRef<VoicePlaybackBinding>,
   teardown: () => void,
-  cancelledRef: MutableRefObject<boolean>,
+  cancelledRef: CurrentRef<boolean>,
 ): Promise<void> {
   return Promise.resolve(audio.play()).catch((error: unknown) => {
     if (!cancelledRef.current && !isAbortError(error)) {
@@ -266,7 +268,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
       return;
     }
 
-    const cancelledRef: MutableRefObject<boolean> = { current: false };
+    const cancelledRef: CurrentRef<boolean> = { current: false };
     const controller = new AbortController();
     abortRef.current = controller;
     pb.prepare();

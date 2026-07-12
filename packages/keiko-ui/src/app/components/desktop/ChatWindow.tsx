@@ -26,7 +26,6 @@ import {
   type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
-  type MutableRefObject,
   type PointerEvent,
   type ReactNode,
   type Ref,
@@ -140,6 +139,8 @@ import type {
   ModelCapability,
   VoiceCapabilityResolution,
 } from "@/lib/types";
+
+type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
@@ -2214,8 +2215,8 @@ function composerRealtimeVoiceChatContext(
 // toggle — programmatic auto-leave never sets `restoreFocusRef`.
 function syncVoiceDialogLayerFocus(params: {
   readonly active: boolean;
-  readonly previousActiveRef: MutableRefObject<boolean>;
-  readonly restoreFocusRef: MutableRefObject<boolean>;
+  readonly previousActiveRef: CurrentRef<boolean>;
+  readonly restoreFocusRef: CurrentRef<boolean>;
   readonly voiceDialogButton: HTMLButtonElement | null;
   readonly normalVoiceDialogButton: HTMLButtonElement | null;
 }): void {
@@ -4222,8 +4223,8 @@ function composerFooterEffectiveFlags(
 // scroll back near it themselves.
 function handleChatWindowLogScroll(
   el: HTMLDivElement,
-  stickRef: MutableRefObject<boolean>,
-  pendingQuestionScrollRef: MutableRefObject<string | null>,
+  stickRef: CurrentRef<boolean>,
+  pendingQuestionScrollRef: CurrentRef<string | null>,
   focusedQuestionId: string | null,
   setFocusedQuestionId: (id: string | null) => void,
 ): void {
@@ -4332,8 +4333,8 @@ function ChatWindowLog({
   lastSentDocuments,
 }: {
   readonly scrollRef: RefObject<HTMLDivElement | null>;
-  readonly stickRef: MutableRefObject<boolean>;
-  readonly pendingQuestionScrollRef: MutableRefObject<string | null>;
+  readonly stickRef: CurrentRef<boolean>;
+  readonly pendingQuestionScrollRef: CurrentRef<string | null>;
   readonly focusedQuestionId: string | null;
   readonly setFocusedQuestionId: (id: string | null) => void;
   readonly visible: readonly ChatMessage[];

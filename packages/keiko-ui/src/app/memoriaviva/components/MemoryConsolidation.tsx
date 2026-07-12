@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
-import type { ChangeEvent, FormEvent, ReactNode, WheelEvent } from "react";
+import type { ChangeEvent, ReactNode, WheelEvent } from "react";
 import Link from "next/link";
 import {
   cancelMemoryConsolidationJob,
@@ -19,6 +19,8 @@ import {
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
+
+type FormSubmitEvent = { preventDefault: () => void };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -447,7 +449,7 @@ interface ConsolidationSettingsFormProps {
   readonly canCancel: boolean;
   readonly formError: string | null;
   readonly activeJob: MemoryConsolidationJob | null;
-  readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly onSubmit: (event: FormSubmitEvent) => void;
   readonly onChangeSetting: (name: keyof StartMemoryConsolidationInput, value: number) => void;
   readonly onRefresh: (jobId: string) => void;
   readonly onCancel: () => void;
@@ -1097,7 +1099,7 @@ export function MemoryConsolidation({
   }, [activeJob, pollIntervalMs, refreshJob]);
 
   const handleStart = useCallback(
-    async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    async (event: FormSubmitEvent): Promise<void> => {
       event.preventDefault();
       // Guard for aria-disabled submit (uiux-fix F005): native disabled would
       // throw keyboard focus to <body> while the action runs.

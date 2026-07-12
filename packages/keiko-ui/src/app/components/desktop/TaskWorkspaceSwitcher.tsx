@@ -17,7 +17,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type FormEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -29,6 +28,8 @@ import {
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { Icons } from "./Icons";
+
+type FormSubmitEvent = { preventDefault: () => void };
 
 type Tone = "success" | "warning" | "danger" | "info" | "muted";
 
@@ -436,7 +437,7 @@ function createProvisionSubmitHandler(params: {
   readonly createDisabled: boolean;
   readonly setTaskId: (value: string) => void;
   readonly setBaseBranch: (value: string) => void;
-}): (event: FormEvent<HTMLFormElement>) => void {
+}): (event: FormSubmitEvent) => void {
   return (event) => {
     event.preventDefault();
     if (params.createDisabled) {

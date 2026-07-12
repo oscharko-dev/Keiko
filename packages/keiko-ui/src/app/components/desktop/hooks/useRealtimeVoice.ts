@@ -10,7 +10,7 @@
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { Dispatch, MutableRefObject } from "react";
+import type { Dispatch } from "react";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   type VoicePersona,
@@ -38,6 +38,8 @@ import {
   type VoiceLatencyObserver,
   type VoiceLatencyObserverSink,
 } from "./voice-latency-observer";
+
+type CurrentRef<T> = { current: T };
 
 // A transient WebRTC `disconnected` state is recoverable (a brief network blip, an ICE restart): the
 // connection often returns to `connected` on its own. Tearing the session down the instant it appears
@@ -534,9 +536,9 @@ function optionsMemoryToolActive(options: UseRealtimeVoiceOptions): boolean {
 // `createIceDisconnectGraceTimeoutHandler`. Extracted to a named factory so the returned callback is
 // defined at module scope instead of nested inline inside the grace-timeout handler.
 function createReconnectRetryHandler(
-  mountedRef: MutableRefObject<boolean>,
-  reconnectTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>,
-  startRef: MutableRefObject<(() => void) | undefined>,
+  mountedRef: CurrentRef<boolean>,
+  reconnectTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>,
+  startRef: CurrentRef<(() => void) | undefined>,
 ): () => void {
   return () => {
     reconnectTimerRef.current = undefined;
@@ -546,11 +548,11 @@ function createReconnectRetryHandler(
 }
 
 interface IceDisconnectGraceTimeoutDeps {
-  readonly graceTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>;
-  readonly mountedRef: MutableRefObject<boolean>;
-  readonly reconnectAttemptsRef: MutableRefObject<number>;
-  readonly reconnectTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>;
-  readonly startRef: MutableRefObject<(() => void) | undefined>;
+  readonly graceTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>;
+  readonly mountedRef: CurrentRef<boolean>;
+  readonly reconnectAttemptsRef: CurrentRef<number>;
+  readonly reconnectTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>;
+  readonly startRef: CurrentRef<(() => void) | undefined>;
   readonly cleanupRefs: (options?: { readonly discardControl?: boolean }) => void;
   readonly dispatch: Dispatch<RealtimeVoiceAction>;
   readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
@@ -597,9 +599,9 @@ function createIceDisconnectGraceTimeoutHandler(deps: IceDisconnectGraceTimeoutD
 }
 
 interface AssistantTranscriptDedupeRefs {
-  readonly assistantTranscriptItemsRef: MutableRefObject<Set<string>>;
-  readonly assistantResponseTextItemsRef: MutableRefObject<Set<string>>;
-  readonly assistantTranscriptTextItemsRef: MutableRefObject<Set<string>>;
+  readonly assistantTranscriptItemsRef: CurrentRef<Set<string>>;
+  readonly assistantResponseTextItemsRef: CurrentRef<Set<string>>;
+  readonly assistantTranscriptTextItemsRef: CurrentRef<Set<string>>;
 }
 
 // Determines whether an assistant transcript-committed event has already been recorded, marking it
@@ -643,9 +645,9 @@ function applyAssistantTranscriptToTurn(
   event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
   normalizedText: string,
   refs: {
-    readonly assistantTranscriptBufferRef: MutableRefObject<string>;
-    readonly assistantTranscriptResponseRef: MutableRefObject<string | undefined>;
-    readonly assistantTranscriptItemRef: MutableRefObject<string | undefined>;
+    readonly assistantTranscriptBufferRef: CurrentRef<string>;
+    readonly assistantTranscriptResponseRef: CurrentRef<string | undefined>;
+    readonly assistantTranscriptItemRef: CurrentRef<string | undefined>;
   },
 ): void {
   turn.assistantText = normalizedText;
@@ -695,7 +697,7 @@ interface RealtimeResponseSettlementDeps {
     readonly force?: boolean;
   }) => void;
   readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
-  readonly latencyRef: MutableRefObject<VoiceLatencyObserver | undefined>;
+  readonly latencyRef: CurrentRef<VoiceLatencyObserver | undefined>;
 }
 
 // Settles a `response.done` event: recovers any pending user-transcript fallback, then commits the

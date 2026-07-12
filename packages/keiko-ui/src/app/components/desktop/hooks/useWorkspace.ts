@@ -9,7 +9,6 @@ import {
   useState,
   type DependencyList,
   type Dispatch,
-  type MutableRefObject,
   type RefObject,
   type SetStateAction,
 } from "react";
@@ -50,6 +49,8 @@ import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
 export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
+
+type CurrentRef<T> = { current: T };
 
 const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
@@ -311,7 +312,7 @@ interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
   readonly cameraSmoothness: number;
-  readonly winsRef: MutableRefObject<AppWindow[]>;
+  readonly winsRef: CurrentRef<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
@@ -322,7 +323,7 @@ interface QueueViewOptions {
 }
 
 interface PanZoomResult {
-  readonly viewRef: MutableRefObject<View>;
+  readonly viewRef: CurrentRef<View>;
   readonly worldVP: () => ViewportWorld | null;
   readonly zoomTo: (z: number) => void;
   readonly fitView: () => void;
@@ -684,8 +685,8 @@ interface UseHydrateArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
-  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
+  readonly zc: CurrentRef<number>;
+  readonly lastAppliedSerializedRef: CurrentRef<string | null>;
 }
 
 interface WorkspaceSnapshot {
@@ -958,7 +959,7 @@ function applyPersistedWorkspaceSnapshot(
   snapshot: { readonly wins: AppWindow[]; readonly conns: Connection[] },
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   setConns: Dispatch<SetStateAction<Connection[]>>,
-  zc: MutableRefObject<number>,
+  zc: CurrentRef<number>,
 ): void {
   zc.current = snapshot.wins.reduce((maxZ, win) => Math.max(maxZ, win.z), 1);
   setWins(snapshot.wins);
@@ -989,10 +990,10 @@ function useHydrate({
 interface UseStorageSyncArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
+  readonly zc: CurrentRef<number>;
   readonly beforeApplyRemote: () => void;
-  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
-  readonly suppressNextLocalPersistRef: MutableRefObject<boolean>;
+  readonly lastAppliedSerializedRef: CurrentRef<string | null>;
+  readonly suppressNextLocalPersistRef: CurrentRef<boolean>;
 }
 
 // Serialize a persisted snapshot to a stable equality key. Uses the sanitize path
@@ -1056,8 +1057,8 @@ interface UseServerSyncArgs {
   readonly conns: readonly Connection[];
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
-  readonly suppressNextPersistRef: MutableRefObject<boolean>;
+  readonly zc: CurrentRef<number>;
+  readonly suppressNextPersistRef: CurrentRef<boolean>;
 }
 
 function useWorkspaceServerSync({
@@ -1245,11 +1246,11 @@ interface SnapChordActions {
 interface UseKeyboardArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
-  readonly cancelConnectRef: MutableRefObject<() => void>;
+  readonly cancelConnectRef: CurrentRef<() => void>;
   // GEN-UI-KEYBOARD-009 — the snap actions the keyboard snap chords drive. Held in
   // a ref because the snap actions are assembled after this hook is called; the ref
   // is populated in the same render before any keydown can fire.
-  readonly snapRef: MutableRefObject<SnapChordActions | null>;
+  readonly snapRef: CurrentRef<SnapChordActions | null>;
 }
 
 // GEN-UI-KEYBOARD-009 — the keyboard equivalent of an edge/quadrant drag snap.
@@ -1352,7 +1353,7 @@ function isSnapChord(e: KeyboardEvent): boolean {
 
 function runSnapChordKey(
   e: KeyboardEvent,
-  snapRef: MutableRefObject<SnapChordActions | null>,
+  snapRef: CurrentRef<SnapChordActions | null>,
   targetId: string | null,
 ): void {
   // ArrowDown maps to null (no lower snap zone); an unmapped key is undefined.
@@ -1430,7 +1431,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
 
 interface UseFitMaximizedArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
-  readonly viewRef: MutableRefObject<View>;
+  readonly viewRef: CurrentRef<View>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 

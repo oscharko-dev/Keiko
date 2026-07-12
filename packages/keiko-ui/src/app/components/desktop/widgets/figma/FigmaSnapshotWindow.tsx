@@ -31,10 +31,8 @@ import {
   useState,
   type Dispatch,
   type DragEvent,
-  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
-  type MutableRefObject,
   type PointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -86,6 +84,9 @@ import {
   type FigmaImageDropDetail,
 } from "../../figma-image-drag";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
+
+type CurrentRef<T> = { current: T };
+type FormSubmitEvent = { preventDefault: () => void };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -952,7 +953,7 @@ interface RenameFigmaSnapshotParams {
   readonly summaryRunId: string | undefined;
   readonly t: I18nTranslate;
   readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
-  readonly snapshotManagementAbortRef: MutableRefObject<AbortController | null>;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
   readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
   readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
   readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
@@ -1025,7 +1026,7 @@ interface DeleteFigmaSnapshotByRunIdParams {
   readonly t: I18nTranslate;
   readonly deleteImpl: typeof deleteFigmaSnapshot;
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
-  readonly snapshotManagementAbortRef: MutableRefObject<AbortController | null>;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
   readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
   readonly setBuildState: Dispatch<SetStateAction<BuildState>>;
   readonly setCodeState: Dispatch<SetStateAction<"idle" | "generating" | "done" | "error">>;
@@ -1460,7 +1461,7 @@ export function FigmaSnapshotWindow({
   );
 
   const handleSubmit = useCallback(
-    (e: FormEvent<HTMLFormElement>): void => {
+    (e: FormSubmitEvent): void => {
       e.preventDefault();
       if (!linkValid || busy) return;
       if (!consentChecked) {

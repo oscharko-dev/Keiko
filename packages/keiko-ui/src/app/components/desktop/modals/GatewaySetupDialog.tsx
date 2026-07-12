@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type FormEvent,
   type ReactNode,
   type RefObject,
   type SetStateAction,
@@ -17,6 +16,8 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
+
+type FormSubmitEvent = { preventDefault: () => void };
 
 // Human-readable message first; the machine code (useful for support) is kept
 // separate and rendered as a secondary mono line, never as a raw
@@ -1649,7 +1650,7 @@ export function GatewaySetupDialog({
     }
   }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function submit(event: FormSubmitEvent): Promise<void> {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
