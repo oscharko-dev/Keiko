@@ -77,7 +77,7 @@ describe("secure workspace text-read artifact proof", () => {
     ["short source tree", { sourceTreeSha256: "c".repeat(63) }],
   ] as const)("fails closed for %s without verifier invocation", async (_label, overrides) => {
     const verify = vi.fn(() => true);
-    const malformed = { ...artifact(), ...overrides } as SecureWorkspaceTextReadArtifact;
+    const malformed = { ...artifact(), ...overrides };
 
     await expect(
       resolveSecureWorkspaceReadArtifact(malformed, { os: "darwin", arch: "arm64" }, { verify }),

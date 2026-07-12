@@ -115,6 +115,25 @@ export default tseslint.config(
       "@typescript-eslint/explicit-function-return-type": "off",
     },
   },
+  // Native protocol harnesses are executable Node ESM outside the TypeScript program.
+  { files: ["native/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["native/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        URL: "readonly",
+        clearTimeout: "readonly",
+        console: "readonly",
+        process: "readonly",
+        setTimeout: "readonly",
+      },
+    },
+    rules: {
+      "no-console": "off",
+      "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
   {
     files: ["tests/e2e/fixtures/*.js"],
     languageOptions: { globals: { Buffer: "readonly", process: "readonly" } },
