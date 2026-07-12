@@ -190,4 +190,20 @@ describe("editorProblemsStore aggregation", () => {
     setPaneDiagnostics("/ws", "window-z", "src/a.ts", [shared]);
     expect(getEditorProblems("/ws")).toEqual(first);
   });
+
+  it("orders producer and path keys with an explicit Unicode-aware collation", () => {
+    const shared = diagnostic("error", 0, "same problem");
+    setPaneDiagnostics("/ws", "z-window", "src/shared.ts", [shared]);
+    setPaneDiagnostics("/ws", "ä-window", "src/shared.ts", [shared]);
+    setPaneDiagnostics("/ws", "paths", "src/z.ts", [diagnostic("error", 0, "z")]);
+    setPaneDiagnostics("/ws", "paths", "src/ä.ts", [diagnostic("error", 0, "umlaut")]);
+
+    const problems = getEditorProblems("/ws");
+    expect(problems.map((problem) => problem.file)).toEqual([
+      "src/shared.ts",
+      "src/ä.ts",
+      "src/z.ts",
+    ]);
+    expect(problems[0]?.id).toContain(":z-window:");
+  });
 });

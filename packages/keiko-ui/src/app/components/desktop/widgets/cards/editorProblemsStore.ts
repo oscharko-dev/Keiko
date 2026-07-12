@@ -42,6 +42,12 @@ function normalizeSeverity(severity: EditorDiagnostic["severity"]): EditorProble
   return severity === "error" || severity === "warning" ? severity : "info";
 }
 
+function compareProblemKey(left: string, right: string): number {
+  const localeOrder = left.localeCompare(right, "en", { numeric: false, sensitivity: "variant" });
+  if (localeOrder !== 0 || left === right) return localeOrder;
+  return left < right ? -1 : 1;
+}
+
 // EditorRange positions are zero-based (LSP 3.17); EditorProblem line/column are 1-based when present.
 export function diagnosticToProblem(
   path: string,
@@ -100,10 +106,10 @@ function buildAllProblems(
   report: VerificationReport | null,
 ): readonly EditorProblem[] {
   const deduped = new Map<string, EditorProblem>();
-  for (const producerId of [...diagnosticsByProducer.keys()].sort()) {
+  for (const producerId of [...diagnosticsByProducer.keys()].sort(compareProblemKey)) {
     const byPath = diagnosticsByProducer.get(producerId);
     if (byPath === undefined) continue;
-    for (const path of [...byPath.keys()].sort()) {
+    for (const path of [...byPath.keys()].sort(compareProblemKey)) {
       const diagnostics = byPath.get(path) ?? [];
       diagnostics.forEach((diagnostic, index) => {
         const problem = diagnosticToProblem(path, diagnostic, index, producerId);
