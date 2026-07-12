@@ -1,4 +1,4 @@
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   qualifyLongLivedRuntime,
@@ -31,6 +31,8 @@ export interface RuntimeProcessTree {
   readonly treeId: string;
   readonly stdout: Readable;
   readonly stderr: Readable;
+  /** Present only for duplex runtimes such as the Codex app-server transport. */
+  readonly stdin?: Writable | undefined;
   onTreeExit(callback: (code: number | null) => void): void;
 }
 

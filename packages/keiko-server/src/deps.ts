@@ -43,6 +43,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
   buildUiStoreOverDatabase,
@@ -261,6 +262,9 @@ export interface UiHandlerDeps {
     CodingSidecarGatewayModelSourceResolver | undefined;
   // Server-owned runtime availability gate. #2256 wires verified activated Codex provenance.
   readonly codexRuntimeAvailability?: { readonly isApprovedVerified: () => boolean } | undefined;
+  // Optional server-scoped Codex account profile coordinator. Concrete managed-runtime composition
+  // injects it only alongside verified runtime provenance; absence preserves the fail-closed profile.
+  readonly codexSubscriptionProfileCoordinator?: CodexSubscriptionProfileCoordinator | undefined;
   // Optional server-private final mutation claim for managed-runtime editor changesets. #2256 owns
   // composition; absence preserves the established local editor action path.
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
