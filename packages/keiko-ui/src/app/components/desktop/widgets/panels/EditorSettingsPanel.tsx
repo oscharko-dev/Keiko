@@ -419,7 +419,7 @@ function AiActivationConfirmDialog({
     };
   }, [onDecline]);
   return (
-    <div className={styles.confirmBackdrop} role="presentation">
+    <div className={styles.confirmBackdrop}>
       <div
         className={styles.confirmDialog}
         ref={dialogRef}
