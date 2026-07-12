@@ -118,6 +118,14 @@ static int same_identity(const struct stat *a, const struct stat *b) {
   return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_mode == b->st_mode && a->st_nlink == b->st_nlink && a->st_size == b->st_size && a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec && a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec && a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec && a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
 }
 
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+/* Test binary only: signal the harness after the final fd baseline, then wait. */
+static void pause_after_final_open(void) {
+  unsigned char byte = 1;
+  if (write(3, &byte, 1) != 1 || read(4, &byte, 1) != 1) _exit(127);
+}
+#endif
+
 static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) {
   int fds[KSR_MAX_COMPONENTS + 1], fd = -1, count = 0; char *copy = NULL, *part, *next; struct stat root_st, dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; ssize_t chunk; size_t got = 0; int changed = 0;
   *content = NULL; *length = 0;
@@ -137,8 +145,13 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
   fd = openat(fds[count - 1], part, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
   free(copy);
   if (fd < 0) { while (count) close(fds[--count]); return KSR_ACCESS_DENIED; }
-  if (fstat(fd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_dev != root_st.st_dev || before.st_size < 0) { close(fd); while (count) close(fds[--count]); return KSR_NOT_REGULAR; }
+  if (fstat(fd, &before) != 0) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
+  if (before.st_nlink == 0) { close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
+  if (!S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_dev != root_st.st_dev || before.st_size < 0) { close(fd); while (count) close(fds[--count]); return KSR_NOT_REGULAR; }
   if ((uintmax_t)before.st_size > request->cap) { close(fd); while (count) close(fds[--count]); return KSR_CONTENT_TOO_LARGE; }
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+  pause_after_final_open();
+#endif
   buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
   while (got < (size_t)request->cap + 1) {
     chunk = read(fd, buffer + got, (size_t)request->cap + 1 - got);

@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -55,6 +65,50 @@ function run(binary, input) {
   });
 }
 
+function runPaused(binary, input, mutate) {
+  const started = performance.now();
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"], env: {} });
+    const stdout = [];
+    const stderr = [];
+    const deadline = setTimeout(() => child.kill("SIGKILL"), HELPER_DEADLINE_MS);
+    let mutationError;
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.stdio[3].once("data", async (signal) => {
+      try {
+        assert.deepEqual(signal, Buffer.of(1));
+        await mutate();
+      } catch (error) {
+        mutationError = error;
+      }
+      child.stdio[4].end(Buffer.of(1));
+    });
+    child.once("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(deadline);
+      if (mutationError !== undefined) {
+        reject(mutationError);
+        return;
+      }
+      if (signal !== null) {
+        reject(new Error("paused helper exceeded its execution deadline"));
+        return;
+      }
+      resolve({
+        code,
+        durationMs: performance.now() - started,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
+      });
+    });
+    child.stdin.end(input);
+  });
+}
+
 function response(result) {
   assert.equal(result.code, 0);
   assert.ok(result.durationMs < HELPER_DEADLINE_MS);
@@ -76,6 +130,7 @@ function assertSafeResult(result) {
 }
 
 async function compile(binary) {
+  const testPause = binary.endsWith("-paused");
   await new Promise((resolve, reject) => {
     const compiler = spawn("xcrun", [
       "clang",
@@ -85,6 +140,7 @@ async function compile(binary) {
       "-Werror",
       "-O2",
       "-D_DARWIN_C_SOURCE",
+      ...(testPause ? ["-DKSR_TEST_PAUSE_AFTER_FINAL_OPEN"] : []),
       "-o",
       binary,
       source.pathname,
@@ -170,6 +226,63 @@ async function assertProtocolCases(binary, fixture) {
   const path65 = `${Array.from({ length: 64 }, (_, index) => `d${index}`).join("/")}/deep.txt`;
   assert.equal(response(await run(binary, request(fixture, path64))).status, 0);
   assert.equal(response(await run(binary, request(fixture, path65))).status, 3);
+  assert.equal(response(await run(binary, request(fixture, "nested"))).status, 5);
+  assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
+  assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
+}
+
+function assertRaceResult(result) {
+  const decoded = response(result);
+  assert.ok([0, 6, 8].includes(decoded.status), `unexpected race status: ${decoded.status}`);
+  if (decoded.status === 0) assert.equal(decoded.content.toString("utf8"), SAFE_TEXT);
+}
+
+async function resetRaceFile(fixture) {
+  await writeFile(join(fixture, "nested", "race.txt"), SAFE_TEXT);
+}
+
+async function assertAdversarialRaces(binary, fixture) {
+  const nested = join(fixture, "nested");
+  const target = join(nested, "race.txt");
+  const moved = join(fixture, "moved-nested");
+  const race = (mutate) => runPaused(binary, request(fixture, "nested/race.txt"), mutate);
+
+  await resetRaceFile(fixture);
+  assertRaceResult(await race(() => writeFile(target, "evil text\n")));
+
+  await resetRaceFile(fixture);
+  assertRaceResult(await race(() => writeFile(target, "x".repeat(65537))));
+
+  await resetRaceFile(fixture);
+  assertRaceResult(
+    await race(async () => {
+      const replacement = join(fixture, "replacement.txt");
+      await writeFile(replacement, "replacement\n");
+      await rename(replacement, target);
+    }),
+  );
+
+  await resetRaceFile(fixture);
+  assertRaceResult(
+    await race(async () => {
+      await rename(nested, moved);
+      await rename(moved, nested);
+    }),
+  );
+
+  await resetRaceFile(fixture);
+  try {
+    assertRaceResult(
+      await race(async () => {
+        await rename(nested, moved);
+        await mkdir(nested);
+        await writeFile(target, "replacement\n");
+      }),
+    );
+  } finally {
+    await rm(nested, { recursive: true, force: true });
+    await rename(moved, nested);
+  }
 }
 
 async function assertLoadEvidence(binary, fixture) {
@@ -206,10 +319,13 @@ try {
   binaryRoot = await mkdtemp(join(tmpdir(), "ksr-bin-"));
   fixture = await mkdtemp(join(tmpdir(), "ksr-fixture-"));
   const binary = join(binaryRoot, "secure-workspace-read");
+  const pausedBinary = join(binaryRoot, "secure-workspace-read-paused");
   await assertWindowsSourceContract();
   await compile(binary);
+  await compile(pausedBinary);
   await setupFixture(fixture);
   await assertProtocolCases(binary, fixture);
+  await assertAdversarialRaces(pausedBinary, fixture);
   await assertLoadEvidence(binary, fixture);
   console.log("secure-workspace-read protocol tests: PASS");
 } finally {
