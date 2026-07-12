@@ -1,13 +1,4 @@
-import {
-  type Dirent,
-  lstatSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-  type FSWatcher,
-  type Stats,
-  watch,
-} from "node:fs";
+import { type FSWatcher, type Stats, watch } from "node:fs";
 import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
@@ -212,40 +203,6 @@ async function metadataFor(root: string, relativePath: string): Promise<Metadata
   }
 }
 
-function readDirectoryEntriesSync(directory: string): readonly Dirent[] {
-  try {
-    return readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
-function metadataForSync(root: string, relativePath: string): MetadataResult {
-  if (!eventPathAllowed(relativePath)) return { kind: "unsafe" };
-  const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
-  try {
-    const linkStats = lstatSync(candidate);
-    const real = realpathSync(candidate);
-    if (!containsPath(root, real)) return { kind: "unsafe" };
-    const realRelativePath = relativePathFromNative(root, real);
-    if (!eventPathAllowed(realRelativePath)) return { kind: "unsafe" };
-    const targetStats = statSync(real);
-    const kind = entryKind(linkStats, targetStats);
-    return {
-      kind: "present",
-      metadata: {
-        relativePath,
-        entryKind: kind,
-        sizeBytes: targetStats.size,
-        modifiedAt: targetStats.mtimeMs,
-        metadataHash: metadataHash(kind, targetStats),
-      },
-    };
-  } catch {
-    return { kind: "absent" };
-  }
-}
-
 function eventFromMetadata(
   sequence: number,
   kind: EditorM7WatchEventKind,
@@ -324,6 +281,7 @@ class WorkspaceWatchSession {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private baselineReady: Promise<void> | null = null;
   private flushing = false;
   private disposed = false;
 
@@ -406,7 +364,7 @@ class WorkspaceWatchSession {
           this.enterDegraded("native-watch-unavailable");
         },
       });
-      this.seedBaseline();
+      this.startBaselineSeed();
       if (!this.handle.recursive) this.enterDegraded("unsupported-recursive-watch");
     } catch {
       this.enterDegraded("native-watch-unavailable");
@@ -460,6 +418,7 @@ class WorkspaceWatchSession {
     if (this.flushing) return;
     this.flushing = true;
     try {
+      await this.awaitBaseline();
       while (this.pending.size > 0 && !this.disposed) {
         const batch = [...this.pending.values()].slice(0, this.config.maxBatchSize);
         for (const change of batch) this.pending.delete(change.relativePath);
@@ -520,54 +479,19 @@ class WorkspaceWatchSession {
     }
   }
 
-  private seedBaseline(): void {
-    const next = this.scanTreeSync();
+  private startBaselineSeed(): void {
+    this.baselineReady ??= this.seedBaseline();
+  }
+
+  private async awaitBaseline(): Promise<void> {
+    if (this.baselineReady !== null) await this.baselineReady;
+  }
+
+  private async seedBaseline(): Promise<void> {
+    const next = await this.scanTree();
     if (next === null || this.disposed) return;
     this.known.clear();
-    for (const [path, metadata] of next) this.known.set(path, metadata);
-  }
-
-  private scanTreeSync(): Map<string, FileMetadata> | null {
-    try {
-      const rootStats = statSync(this.root);
-      if (!rootStats.isDirectory()) return this.rootReplaced();
-      return this.scanDirectorySync("");
-    } catch {
-      return this.rootReplaced();
-    }
-  }
-
-  private scanDirectorySync(start: string): Map<string, FileMetadata> {
-    const found = new Map<string, FileMetadata>();
-    const queue = [start];
-    while (queue.length > 0) {
-      const current = queue.shift() ?? "";
-      if (found.size > this.config.maxScanEntries) {
-        this.emitRescan("event-overflow", "overflow");
-        break;
-      }
-      this.scanOneDirectorySync(current, found, queue);
-    }
-    return found;
-  }
-
-  private scanOneDirectorySync(
-    relativeDirectory: string,
-    found: Map<string, FileMetadata>,
-    queue: string[],
-  ): void {
-    const directory =
-      relativeDirectory.length === 0 ? this.root : join(this.root, relativeDirectory);
-    const entries = readDirectoryEntriesSync(directory);
-    for (const entry of entries) {
-      const relativePath =
-        relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
-      if (!eventPathAllowed(relativePath)) continue;
-      const result = metadataForSync(this.root, relativePath);
-      if (result.kind !== "present") continue;
-      found.set(relativePath, result.metadata);
-      if (result.metadata.entryKind === "directory") queue.push(relativePath);
-    }
+    for (const metadata of next.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {

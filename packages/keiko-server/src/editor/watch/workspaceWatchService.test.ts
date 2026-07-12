@@ -77,6 +77,14 @@ function service(
   });
 }
 
+async function drainInitialBaseline(
+  manager: ReturnType<typeof createWorkspaceWatchService>,
+  adapter: FakeAdapter,
+): Promise<void> {
+  adapter.emit({ eventType: "change", filename: "__baseline_probe__.missing" });
+  await waitForCondition(() => manager.snapshot(root).queueDepth === 0);
+}
+
 describe("workspace watch service", () => {
   it("shares one native watcher per canonical root and closes it after the last unsubscribe", async () => {
     const adapter = new FakeAdapter();
@@ -99,6 +107,7 @@ describe("workspace watch service", () => {
     const manager = service(adapter);
     const events: EditorM7WatchEvent[] = [];
     manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
 
     await writeFile(join(root, "a.txt"), "one", "utf8");
     adapter.emit({ eventType: "rename", filename: "a.txt" });
@@ -184,6 +193,7 @@ describe("workspace watch service", () => {
     const manager = service(adapter);
     const firstEvents: EditorM7WatchEvent[] = [];
     manager.subscribe({ root, onEvent: (event) => firstEvents.push(event) });
+    await drainInitialBaseline(manager, adapter);
 
     for (const name of ["a.txt", "b.txt", "c.txt"]) {
       await writeFile(join(root, name), name, "utf8");
