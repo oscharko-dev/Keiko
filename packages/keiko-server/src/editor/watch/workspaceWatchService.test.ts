@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -226,5 +226,214 @@ describe("workspace watch service", () => {
     adapter.emit({ eventType: "rename", filename: "late.txt" });
 
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("falls back to polling after an async native watcher error", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    adapter.fail();
+    expect(adapter.handles[0]?.close).toHaveBeenCalledOnce();
+    expect(manager.snapshot(root).nativeWatcherCount).toBe(0);
+
+    await writeFile(join(root, "after-failure.txt"), "one", "utf8");
+    await waitForCondition(() =>
+      events.some(
+        (event) => event.kind === "created" && event.relativePath === "after-failure.txt",
+      ),
+    );
+  });
+
+  it("applies additionalExclusions to suppress matching watch events", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({
+      root,
+      onEvent: (event) => events.push(event),
+      additionalExclusions: ["generated"],
+    });
+    await drainInitialBaseline(manager, adapter);
+
+    await mkdir(join(root, "generated"), { recursive: true });
+    await writeFile(join(root, "generated", "file.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "generated/file.txt" });
+
+    await writeFile(join(root, "allowed.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "allowed.txt" });
+    await waitForCondition(() => events.some((event) => event.relativePath === "allowed.txt"));
+
+    expect(events.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+  });
+
+  it("keeps the first subscriber's exclusions fixed for the session, ignoring a later subscriber's different set", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const firstEvents: EditorM7WatchEvent[] = [];
+    manager.subscribe({
+      root,
+      onEvent: (event) => firstEvents.push(event),
+      additionalExclusions: ["generated"],
+    });
+    await drainInitialBaseline(manager, adapter);
+
+    const secondEvents: EditorM7WatchEvent[] = [];
+    manager.subscribe({
+      root,
+      onEvent: (event) => secondEvents.push(event),
+      additionalExclusions: [],
+    });
+
+    await mkdir(join(root, "generated"), { recursive: true });
+    await writeFile(join(root, "generated", "file.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "generated/file.txt" });
+
+    await writeFile(join(root, "allowed.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "allowed.txt" });
+    await waitForCondition(() =>
+      secondEvents.some((event) => event.relativePath === "allowed.txt"),
+    );
+
+    expect(firstEvents.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+    expect(secondEvents.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+  });
+
+  it("does not fabricate deleted events when a fallback rescan is truncated by maxScanEntries", async () => {
+    const adapter = new FakeAdapter();
+    await mkdir(join(root, "dirA"), { recursive: true });
+    await writeFile(join(root, "dirA", "existing.txt"), "existing", "utf8");
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+      maxScanEntries: 1,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    await mkdir(join(root, "dirB"), { recursive: true });
+    await writeFile(join(root, "dirB", "new.txt"), "new", "utf8");
+
+    adapter.fail();
+    await waitForCondition(() => events.some((event) => event.kind === "overflow"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    expect(events.some((event) => event.kind === "deleted")).toBe(false);
+  });
+
+  it("signals a root-replaced rescan when the watched root is moved out from under the watcher", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    await rename(root, join(outside, "relocated-root"));
+    adapter.fail();
+
+    await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+    const snapshot = manager.snapshot(root);
+    expect(snapshot.health).toBe("rescanRequired");
+    expect(snapshot.degradedReasons).toEqual(
+      expect.arrayContaining(["native-watch-unavailable", "root-replaced"]),
+    );
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "root-replaced",
+      health: "rescanRequired",
+      relativePath: "",
+    });
+  });
+
+  it("signals a root-replaced rescan when the watched root is replaced by a non-directory", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    await rename(root, join(outside, "relocated-root-file"));
+    await writeFile(root, "now-a-file", "utf8");
+    adapter.fail();
+
+    await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+    expect(manager.snapshot(root).degradedReasons).toContain("root-replaced");
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "root-replaced",
+    });
+  });
+
+  it("stays healthy when a native event's file vanishes before its metadata stat (ENOENT race)", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    // The OS delivers a create event, but the file is deleted before reconciliation stats it —
+    // the same shape as an ENOENT racing a stat() between readdir and stat. It was never known,
+    // so no delta is fabricated and the watcher must not degrade or crash.
+    adapter.emit({ eventType: "rename", filename: "vanished-before-stat.txt" });
+    await waitForCondition(() => manager.snapshot(root).queueDepth === 0);
+
+    expect(events).toHaveLength(0);
+    expect(manager.snapshot(root).health).toBe("healthy");
+    expect(manager.snapshot(root).degradedReasons).toEqual([]);
+  });
+
+  it("reports the observed size for a truncated mid-write and reconciles when the write completes", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    // First observation catches the file mid-write (partial bytes on disk); the watcher reports
+    // whatever size it saw rather than blocking or erroring.
+    await writeFile(join(root, "streamed.txt"), "AB", "utf8");
+    adapter.emit({ eventType: "rename", filename: "streamed.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "created"));
+
+    // The write then completes; a subsequent change event reconciles the final size.
+    await writeFile(join(root, "streamed.txt"), "ABCDEFGH", "utf8");
+    adapter.emit({ eventType: "change", filename: "streamed.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "changed"));
+
+    expect(events.find((event) => event.kind === "created")).toMatchObject({
+      relativePath: "streamed.txt",
+      sizeBytes: 2,
+    });
+    expect(events.find((event) => event.kind === "changed")).toMatchObject({
+      relativePath: "streamed.txt",
+      sizeBytes: 8,
+    });
+    expect(manager.snapshot(root).health).toBe("healthy");
   });
 });

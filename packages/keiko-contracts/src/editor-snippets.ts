@@ -240,14 +240,55 @@ function safeSnippetSyntax(line: string): boolean {
 }
 
 function safeSnippetPlaceholders(line: string): boolean {
-  const placeholders = line.match(/\$\{([^}]*)\}/gu) ?? [];
-  for (const raw of placeholders) {
-    const inner = raw.slice(2, -1);
-    if (inner.includes("/") || inner.includes("$(") || inner.includes("`")) return false;
-    if (/^\d+(?::.*)?$/u.test(inner) || /^\d+\|[^|]*\|$/u.test(inner)) continue;
-    if (!SAFE_VARIABLES.includes(inner as (typeof SAFE_VARIABLES)[number])) return false;
+  const spans = topLevelPlaceholderSpans(line);
+  return spans?.every((inner) => validPlaceholderInner(inner)) ?? false;
+}
+
+// Extracts the inner content of each top-level `${...}` span in `text`, honoring nested `${`
+// braces (matching `safeSnippetSyntax`'s own depth convention: only `${` opens a level, any `}`
+// while depth > 0 closes one). Returns undefined for unbalanced input.
+function topLevelPlaceholderSpans(text: string): readonly string[] | undefined {
+  const spans: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] === "$" && text[index + 1] === "{") {
+      const end = matchingBraceEnd(text, index + 1);
+      if (end === undefined) return undefined;
+      spans.push(text.slice(index + 2, end));
+      index = end + 1;
+    } else {
+      index += 1;
+    }
   }
-  return true;
+  return spans;
+}
+
+function matchingBraceEnd(text: string, openBraceIndex: number): number | undefined {
+  let depth = 1;
+  for (let index = openBraceIndex + 1; index < text.length; index += 1) {
+    if (text[index] === "{" && text[index - 1] === "$") depth += 1;
+    else if (text[index] === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return undefined;
+}
+
+// Validates one placeholder's inner content (the text between `${` and its matching `}`).
+// Nested placeholders inside a tabstop default (e.g. `${1:${ENV}}`) are recursively validated
+// against SAFE_VARIABLES rather than being swallowed by the default's `.*` — a non-nesting-aware
+// single regex pass previously let an unsafe variable smuggle itself inside a default value.
+function validPlaceholderInner(inner: string): boolean {
+  if (inner.includes("/") || inner.includes("$(") || inner.includes("`")) return false;
+  if (/^\d+$/u.test(inner) || /^\d+\|[^|]*\|$/u.test(inner)) return true;
+  const withDefault = /^\d+:([\s\S]*)$/u.exec(inner);
+  const defaultText = withDefault?.[1];
+  if (defaultText !== undefined) {
+    const nested = topLevelPlaceholderSpans(defaultText);
+    return nested?.every((entry) => validPlaceholderInner(entry)) ?? false;
+  }
+  return SAFE_VARIABLES.includes(inner as (typeof SAFE_VARIABLES)[number]);
 }
 
 function validSnippetIdentity(value: UnknownRecord): boolean {

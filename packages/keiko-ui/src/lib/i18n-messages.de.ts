@@ -151,6 +151,9 @@ export const DE_MESSAGES = {
   // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
   // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the
   // source-control labels it touches live in the lazy `editor-source-control-i18n.ts` namespace.
+  // The Epic #2095 audit follow-up added the AI-assist activation confirm dialog's
+  // confirmTitle/confirmAccept/confirmDecline keys to the lazy `settings-i18n.ts` namespace
+  // (replacing a window.confirm() call) rather than this shell catalog.
   "chat.regenerate.cancelled": "Regenerierung abgebrochen",
   "chat.regenerate.running": "Antwort wird neu generiert",
   "chat.regenerate.cancel": "Regenerierung abbrechen",

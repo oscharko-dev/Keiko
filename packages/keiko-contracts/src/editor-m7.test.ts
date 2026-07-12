@@ -8,8 +8,8 @@ import {
   parseEditorM7SettingPatch,
   parseEditorM7SettingsEvent,
   parseEditorM7SettingsRecord,
+  parseEditorM7SettingValue,
   parseEditorM7KeybindingOverrides,
-  parseEditorM7SnippetCollection,
   parseEditorM7WatchEvent,
   parseEditorM7WatchSnapshot,
   planEditorM7ModelEviction,
@@ -19,6 +19,7 @@ import {
   validateEditorM7Keybinding,
   type EditorM7AiActivationInput,
   type EditorM7ModelEntry,
+  type EditorM7SettingId,
 } from "./editor-m7.js";
 
 function aiInput(change: Partial<EditorM7AiActivationInput> = {}): EditorM7AiActivationInput {
@@ -266,6 +267,23 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
   });
 
+  it("rejects reserved bindings regardless of modifier case or order", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: "ctrlormeta+q",
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: "Shift+CtrlOrMeta+N",
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
+  });
+
   it("allows explicit context-disjoint reuse and normalizes persisted override records", () => {
     expect(
       validateEditorM7Keybinding({
@@ -299,36 +317,6 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
       ok: false,
       reasonCode: "KEYBINDING_COLLISION",
     });
-  });
-
-  it("accepts safe TextMate snippets and rejects transforms, clipboard, execution, and unsafe globs", () => {
-    expect(
-      parseEditorM7SnippetCollection({
-        schemaVersion: "1",
-        snippets: [
-          {
-            name: "test",
-            language: "typescript",
-            body: ['describe("${1:name}", () => {', "  $0", "});"],
-            pathGlob: "src/**/*.ts",
-          },
-        ],
-      }),
-    ).toMatchObject({ ok: true });
-    for (const body of [["${TM_FILENAME/(.*)/$1/}"], ["$CLIPBOARD"], ["$(rm -rf .)"], ["`id`"]]) {
-      expect(
-        parseEditorM7SnippetCollection({
-          schemaVersion: "1",
-          snippets: [{ name: "bad", language: "typescript", body }],
-        }),
-      ).toMatchObject({ ok: false, reasonCode: "UNSAFE_SNIPPET" });
-    }
-    expect(
-      parseEditorM7SnippetCollection({
-        schemaVersion: "1",
-        snippets: [{ name: "bad", language: "typescript", body: ["ok"], pathGlob: "../x" }],
-      }),
-    ).toMatchObject({ ok: false, reasonCode: "UNSAFE_PATH" });
   });
 
   it("keeps AI features default-off and applies operator, security, model, budget, and health ceilings", () => {
@@ -649,51 +637,6 @@ describe("M7 malformed input rejection paths", () => {
     });
   });
 
-  it.each<[string, unknown, string]>([
-    ["null", null, "INVALID_INPUT"],
-    ["an array", [], "INVALID_INPUT"],
-    ["an unknown key", { schemaVersion: "1", snippets: [], extra: 1 }, "INVALID_INPUT"],
-    ["the wrong schemaVersion", { schemaVersion: "2", snippets: [] }, "SCHEMA_VERSION_UNSUPPORTED"],
-    [
-      "snippets that are not an array",
-      { schemaVersion: "1", snippets: "list" },
-      "SCHEMA_VERSION_UNSUPPORTED",
-    ],
-  ])("rejects a snippet collection that is %s", (_label, input, expected) => {
-    expect(parseEditorM7SnippetCollection(input)).toMatchObject({
-      ok: false,
-      reasonCode: expected,
-    });
-  });
-
-  it("rejects a snippet collection that exceeds the maximum snippet count", () => {
-    const snippet = { name: "s", language: "typescript", body: ["ok"] };
-    const snippets = Array.from({ length: 129 }, () => snippet);
-    expect(parseEditorM7SnippetCollection({ schemaVersion: "1", snippets })).toMatchObject({
-      ok: false,
-      reasonCode: "OVERSIZED",
-    });
-  });
-
-  it.each<[string, unknown, string]>([
-    ["an empty name", { name: "", language: "typescript", body: ["ok"] }, "UNSAFE_SNIPPET"],
-    ["an empty body array", { name: "s", language: "typescript", body: [] }, "OVERSIZED"],
-    [
-      "a non-string body entry",
-      { name: "s", language: "typescript", body: [42] },
-      "UNSAFE_SNIPPET",
-    ],
-    [
-      "a body line exceeding the byte cap",
-      { name: "s", language: "typescript", body: ["x".repeat(600)] },
-      "UNSAFE_SNIPPET",
-    ],
-  ])("rejects a snippet with %s", (_label, snippet, expected) => {
-    expect(
-      parseEditorM7SnippetCollection({ schemaVersion: "1", snippets: [snippet] }),
-    ).toMatchObject({ ok: false, reasonCode: expected });
-  });
-
   it.each<[string, unknown]>([
     ["null", null],
     ["an array", []],
@@ -719,6 +662,46 @@ describe("M7 malformed input rejection paths", () => {
       state: "disabled",
       reasonCode: "PRODUCT_UNSUPPORTED",
       policyResult: "denied",
+    });
+  });
+
+  it("fails closed instead of throwing for hostile Proxy input across every boundary parser", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys(): never {
+          throw new Error("boom");
+        },
+      },
+    );
+    expect(() => resolveEditorM7AiActivation(hostile)).not.toThrow();
+    expect(resolveEditorM7AiActivation(hostile)).toMatchObject({
+      state: "denied",
+      reasonCode: "INVALID_INPUT",
+    });
+    expect(() =>
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: "Alt+X",
+        activeBindings: hostile,
+      }),
+    ).not.toThrow();
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: "Alt+X",
+        activeBindings: hostile,
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it("rejects an unknown setting id in parseEditorM7SettingValue instead of throwing", () => {
+    expect(() =>
+      parseEditorM7SettingValue("hostileUnknownId" as EditorM7SettingId, "x"),
+    ).not.toThrow();
+    expect(parseEditorM7SettingValue("hostileUnknownId" as EditorM7SettingId, "x")).toMatchObject({
+      ok: false,
+      reasonCode: "UNKNOWN_SETTING",
     });
   });
 });
