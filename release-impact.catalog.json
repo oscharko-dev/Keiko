@@ -783,7 +783,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.15",
-      "releaseNoteCategory": "improvements",
+      "releaseNoteCategory": "update-notes",
       "releaseNotePriority": "normal",
       "userVisibleChange": "observable",
       "userVisibleSummary": "Documentation and verification evidence for the governed feedback flow.",

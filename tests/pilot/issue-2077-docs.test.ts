@@ -99,6 +99,7 @@ describe("issue #2077 documentation", () => {
     );
     expect(entry).toMatchObject({
       packageVersion: "0.2.15",
+      releaseNoteCategory: "update-notes",
       userVisibleSummary: "Documentation and verification evidence for the governed feedback flow.",
       review: { status: "reviewed", humanApproved: true },
     });
