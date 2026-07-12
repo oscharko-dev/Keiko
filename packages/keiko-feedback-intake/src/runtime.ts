@@ -96,15 +96,17 @@ function migrationSources(
   if (options.migrationSource !== undefined) {
     return async () => [{ version: 1, source: (await options.migrationSource?.()) ?? "" }];
   }
+  const definitions = [
+    [1, "feedback_intake"],
+    [2, "feedback_review"],
+    [3, "feedback_publication"],
+  ] as const;
   return async () =>
     Promise.all(
-      [1, 2].map(async (version) => ({
+      definitions.map(async ([version, name]) => ({
         version,
         source: await readFile(
-          new URL(
-            `../migrations/${String(version).padStart(3, "0")}_${version === 1 ? "feedback_intake" : "feedback_review"}.sql`,
-            import.meta.url,
-          ),
+          new URL(`../migrations/${String(version).padStart(3, "0")}_${name}.sql`, import.meta.url),
           "utf8",
         ),
       })),

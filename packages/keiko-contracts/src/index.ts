@@ -26,6 +26,7 @@ export const KEIKO_CONTRACTS_VERSION = "0.2.14" as const;
 export const KEIKO_PRODUCT_VERSION = "0.2.14" as const;
 
 export * from "./feedback-maintainer.js";
+export * from "./feedback-publication.js";
 
 export type {
   FeedbackApprovalBindingV1,

@@ -80,6 +80,7 @@ describe("PostgreSQL feedback review integration", () => {
           "INSERT INTO feedback_payloads (id, semantic_group_id, exact_body_sha256, canonical_bytes, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$5::timestamptz + interval '90 days')",
           [secondId, groupId, secondDigest, secondBytes, AT],
         );
+        await setup.query(await migration("003_feedback_publication.sql"));
       } finally {
         setup.release();
       }

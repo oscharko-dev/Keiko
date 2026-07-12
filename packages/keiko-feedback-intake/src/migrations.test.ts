@@ -33,6 +33,7 @@ class MigrationClient implements PgClientLike {
 const migrations = [
   { version: 1, source: "MIGRATION ONE" },
   { version: 2, source: "MIGRATION TWO" },
+  { version: 3, source: "MIGRATION THREE" },
 ] as const;
 
 async function run(versions: readonly number[] | undefined): Promise<MigrationClient> {
@@ -42,16 +43,19 @@ async function run(versions: readonly number[] | undefined): Promise<MigrationCl
 }
 
 describe("feedback migration runner", () => {
-  it("applies all migrations to an empty schema and only v2 to v1", async () => {
+  it("applies all migrations to an empty schema and only later migrations to older schemas", async () => {
     expect((await run(undefined)).calls).toEqual(
-      expect.arrayContaining(["MIGRATION ONE", "MIGRATION TWO", "COMMIT"]),
+      expect.arrayContaining(["MIGRATION ONE", "MIGRATION TWO", "MIGRATION THREE", "COMMIT"]),
     );
     const upgraded = await run([1]);
     expect(upgraded.calls).not.toContain("MIGRATION ONE");
     expect(upgraded.calls).toContain("MIGRATION TWO");
+    expect(upgraded.calls).toContain("MIGRATION THREE");
+    const v2 = await run([1, 2]);
+    expect(v2.calls).toContain("MIGRATION THREE");
   });
 
-  it.each([{ versions: [2] }, { versions: [1, 3] }, { versions: [1, 2, 3] }])(
+  it.each([{ versions: [2] }, { versions: [1, 3] }, { versions: [1, 2, 4] }])(
     "fails closed for gapped or unknown $versions",
     async ({ versions }) => {
       const client = new MigrationClient(versions);

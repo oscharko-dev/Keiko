@@ -29,6 +29,7 @@ describe("PostgreSQL maintainer authentication store", () => {
         await setup.query(`SET search_path TO "${schema}"`);
         await setup.query(await migration("001_feedback_intake.sql"));
         await setup.query(await migration("002_feedback_review.sql"));
+        await setup.query(await migration("003_feedback_publication.sql"));
       } finally {
         setup.release();
       }
