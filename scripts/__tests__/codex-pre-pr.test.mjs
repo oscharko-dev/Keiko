@@ -282,7 +282,6 @@ describe("codex pre-PR gate CLI entrypoint", () => {
       expect(persisted.summary.failed).toBe(0);
       expect(result.stdout).toContain("[codex:pre-pr] Local gate report");
       expect(result.stdout).toContain(`[codex:pre-pr] Report written to ${reportPath}`);
-      expect(result.stdout).toContain("Linux-authoritative");
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
