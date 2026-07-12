@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -52,14 +53,14 @@ function view(overrides: Partial<WorkspaceSnippetsView> = {}): WorkspaceSnippets
     mutating: false,
     issue: undefined,
     refresh: vi.fn(),
-    replace: vi.fn(() => Promise.resolve()),
-    reset: vi.fn(() => Promise.resolve()),
+    replace: vi.fn(() => Promise.resolve(true)),
+    reset: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
 }
 
-function renderPanel(root?: string): void {
-  render(
+function renderPanel(root?: string): ReturnType<typeof render> {
+  return render(
     <I18nProvider>
       <WorkspaceSnippetsPanel root={root} />
     </I18nProvider>,
@@ -76,6 +77,11 @@ describe("WorkspaceSnippetsPanel", () => {
     vi.restoreAllMocks();
   });
 
+  it("has no axe violations in its normal rendered state", async () => {
+    const { container } = renderPanel("/repo");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("renders snippets in stable name order and deletes through the server snapshot", () => {
     renderPanel("/repo");
     const cards = screen.getAllByRole("article");
@@ -90,7 +96,7 @@ describe("WorkspaceSnippetsPanel", () => {
     ]);
   });
 
-  it("previews and saves a new snippet as a bounded workspace input", () => {
+  it("previews and saves a new snippet as a bounded workspace input", async () => {
     renderPanel("/repo");
 
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "React Hook" } });
@@ -99,7 +105,11 @@ describe("WorkspaceSnippetsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
 
-    expect(screen.getByText((content) => content.includes("const ${1:name}"))).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByText((content) => content.includes("const ${1:name}")),
+      ).toBeInTheDocument();
+    });
     expect(snippetsView.current.replace).toHaveBeenCalledWith([
       expect.objectContaining({ id: "zeta" }),
       expect.objectContaining({ id: "alpha" }),

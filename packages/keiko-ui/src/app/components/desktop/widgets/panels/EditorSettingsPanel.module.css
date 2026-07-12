@@ -181,3 +181,46 @@
   white-space: nowrap;
   border: 0;
 }
+
+.confirmBackdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 45%);
+  z-index: 60;
+}
+
+.confirmDialog {
+  display: grid;
+  gap: 10px;
+  max-width: min(420px, 92vw);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  padding: 16px;
+}
+
+.confirmDialog:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.confirmTitle {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.confirmBody {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -316,6 +316,17 @@ async function produceOutcome(
   }
 }
 
+// ADR-0133 D7: discard in-flight work at the activation revision boundary rather than surfacing a
+// stale-authorized result if activation was revoked while the model call ran.
+async function testGenerationActivationStillActive(
+  deps: UiHandlerDeps,
+  realRoot: string,
+): Promise<boolean> {
+  return editorAiStatusActive(
+    await resolveEditorAiAssistStatusForRoot(deps, realRoot, "testGeneration"),
+  );
+}
+
 export async function handleEditorTestGeneration(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -341,12 +352,7 @@ export async function handleEditorTestGeneration(
     if (containment !== undefined) {
       return containment;
     }
-    const activation = await resolveEditorAiAssistStatusForRoot(
-      deps,
-      root.realRoot,
-      "testGeneration",
-    );
-    if (!editorAiStatusActive(activation)) {
+    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
       return { status: 200, body: deps.redactor(disabledResponse()) };
     }
     const nowMs = (options.now ?? Date.now)();
@@ -364,6 +370,9 @@ export async function handleEditorTestGeneration(
       { request, deps, realRoot: root.realRoot, signal, nowMs, options },
       discovery,
     );
+    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
+      return { status: 200, body: deps.redactor(disabledResponse()) };
+    }
     recordTestGenerationEvidence(deps.evidenceStore, deps.redactor, outcome, nowMs);
     return { status: 200, body: deps.redactor(outcome) };
   });

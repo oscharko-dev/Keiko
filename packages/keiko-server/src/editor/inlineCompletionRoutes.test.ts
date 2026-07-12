@@ -309,6 +309,27 @@ describe("POST /api/editor/inline-completion — degradation (model-only)", () =
     expect(wire.provenance.modelMode).toBe("manual");
   });
 
+  it("discards a model outcome if AI activation is revoked while the model call is in flight", async () => {
+    let reads = 0;
+    const revokingDeps = {
+      ...deps({ config: fimConfig("standard") }),
+      editorSettingsControl: {
+        read: () => {
+          reads += 1;
+          return Promise.resolve(editorSettingsSnapshot({ inlineCompletion: reads === 1 }));
+        },
+      },
+    } as unknown as UiHandlerDeps;
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ triggerKind: "explicit" })),
+      revokingDeps,
+      permissiveOptions(),
+    );
+    const wire = body(result);
+    expect(wire.items).toEqual([]);
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
   it("applies the server-owned low cost ceiling when the client omits maxCostClass", async () => {
     const chat = vi.fn(() => Promise.resolve("a + b;"));
     const result = await handleEditorInlineCompletion(

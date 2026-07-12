@@ -3838,8 +3838,6 @@ export type {
   EditorM7CommandDefinition,
   EditorM7KeybindingOverride,
   EditorM7ActiveKeybinding,
-  EditorM7Snippet,
-  EditorM7SnippetCollection,
   EditorM7AiFeature,
   EditorM7AiState,
   EditorM7AiActivationInput,
@@ -3876,7 +3874,6 @@ export {
   serializeEditorM7KeybindingOverride,
   parseEditorM7KeybindingOverrideRecord,
   parseEditorM7KeybindingOverrides,
-  parseEditorM7SnippetCollection,
   resolveEditorM7AiActivation,
 } from "./editor-m7.js";
 export {

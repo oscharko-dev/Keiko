@@ -580,6 +580,23 @@ function buildWireResponse(outcome: InlineModelOutcome): EditorInlineCompletionW
 
 // ─── Routes ───────────────────────────────────────────────────────────────────────────────────
 
+function noItemsRouteResult(deps: UiHandlerDeps): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor(
+      buildWireResponse(noItemOutcome("deterministic", undefined, undefined, undefined)),
+    ),
+  };
+}
+
+// ADR-0133 D7: discard in-flight work at the activation revision boundary rather than surfacing a
+// stale-authorized result if activation was revoked while the model call ran.
+async function activationStillActive(deps: UiHandlerDeps, realRoot: string): Promise<boolean> {
+  return editorAiStatusActive(
+    await resolveEditorAiAssistStatusForRoot(deps, realRoot, "inlineCompletion"),
+  );
+}
+
 export async function handleEditorInlineCompletion(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -598,18 +615,8 @@ export async function handleEditorInlineCompletion(
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     // Containment check for the overlay document path (throws on escape → handled by runFilesHandler).
     resolveOverlayPath(root.realRoot, request.document.path);
-    const activation = await resolveEditorAiAssistStatusForRoot(
-      deps,
-      root.realRoot,
-      "inlineCompletion",
-    );
-    if (!editorAiStatusActive(activation)) {
-      return {
-        status: 200,
-        body: deps.redactor(
-          buildWireResponse(noItemOutcome("deterministic", undefined, undefined, undefined)),
-        ),
-      };
+    if (!(await activationStillActive(deps, root.realRoot))) {
+      return noItemsRouteResult(deps);
     }
     const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
     if (isRouteResult(sanitizedRequest)) {
@@ -623,6 +630,9 @@ export async function handleEditorInlineCompletion(
       deps,
       options,
     );
+    if (!(await activationStillActive(deps, root.realRoot))) {
+      return noItemsRouteResult(deps);
+    }
     return { status: 200, body: deps.redactor(buildWireResponse(outcome)) };
   });
 }

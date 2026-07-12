@@ -399,6 +399,18 @@
     "en": "Enable governed AI patch apply for this workspace? Keiko will still require explicit human review for each patch, revalidate the diff server-side, and will not grant delivery, merge, or authority-widening rights.",
     "de": "Governten KI-Patch-Apply für diesen Arbeitsbereich aktivieren? Keiko verlangt weiterhin explizites menschliches Review für jeden Patch, validiert den Diff serverseitig erneut und gewährt keine Delivery-, Merge- oder Authority-Erweiterung."
   },
+  "settings.editor.confirmTitle": {
+    "en": "Confirm AI-assist activation",
+    "de": "KI-Unterstützung aktivieren bestätigen"
+  },
+  "settings.editor.confirmAccept": {
+    "en": "Enable",
+    "de": "Aktivieren"
+  },
+  "settings.editor.confirmDecline": {
+    "en": "Cancel",
+    "de": "Abbrechen"
+  },
   "settings.editor.scopeUnavailable": {
     "en": "This setting cannot be changed at the selected scope.",
     "de": "Diese Einstellung kann im ausgewählten Geltungsbereich nicht geändert werden."

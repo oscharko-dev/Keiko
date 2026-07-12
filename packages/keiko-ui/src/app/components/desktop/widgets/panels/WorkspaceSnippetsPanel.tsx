@@ -48,9 +48,11 @@ export function WorkspaceSnippetsPanel({
         onPreview={() => setPreview(previewDraft(draft))}
         onSave={() => {
           const next = [...snippets.map(snippetToInput), draftToInput(draft)];
-          void view.replace(next);
-          setDraft(defaultDraft());
-          setPreview(undefined);
+          void view.replace(next).then((succeeded) => {
+            if (!succeeded) return;
+            setDraft(defaultDraft());
+            setPreview(undefined);
+          });
         }}
       />
       <div className={styles.toolbar}>
