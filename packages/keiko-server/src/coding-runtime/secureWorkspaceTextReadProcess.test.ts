@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createSecureWorkspaceReadProcessPort,
@@ -9,6 +9,10 @@ import {
 
 type Listener = (code?: number | null) => void;
 type DataListener = (chunk: Uint8Array) => void;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function fakeChild(): {
   readonly child: SecureWorkspaceReadChild;
@@ -87,10 +91,58 @@ describe("secure workspace text-read supervised process", () => {
       env: {},
     });
     expect(fake.end).toHaveBeenCalledExactlyOnceWith(input);
-    fake.emitStdout(Buffer.from("KSS1"));
+    const stdoutChunk = Buffer.from("KSS1");
+    fake.emitStdout(stdoutChunk);
     fake.close(0);
     await expect(run).resolves.toEqual(Buffer.from("KSS1"));
+    expect(stdoutChunk).toEqual(Buffer.alloc(4));
     expect(fake.reap).toHaveBeenCalledOnce();
+  });
+
+  it.each(["stderr", "nonzero", "cancel"] as const)(
+    "does not concatenate retained stdout when settling a %s failure",
+    async (failure) => {
+      const fake = fakeChild();
+      const controller = new AbortController();
+      const concat = vi.spyOn(Buffer, "concat");
+      const port = processPort(() => fake.child);
+      const run = port.run({ stdin: Buffer.from("request"), signal: controller.signal });
+      const stdoutChunk = Buffer.from("private workspace content");
+      const stderrChunk = Buffer.from("private OS detail");
+
+      fake.emitStdout(stdoutChunk);
+      if (failure === "stderr") fake.emitStderr(stderrChunk);
+      else if (failure === "nonzero") fake.close(1);
+      else controller.abort();
+
+      await expect(run).rejects.toBeInstanceOf(Error);
+      expect(concat).not.toHaveBeenCalled();
+      expect(stdoutChunk).toEqual(Buffer.alloc(stdoutChunk.byteLength));
+      if (failure === "stderr") expect(stderrChunk).toEqual(Buffer.alloc(stderrChunk.byteLength));
+    },
+  );
+
+  it("clears retained stdout only after the child is reaped", async () => {
+    const fake = fakeChild();
+    let releaseReap: (() => void) | undefined;
+    fake.reap.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseReap = resolve;
+      }),
+    );
+    const fill = vi.spyOn(Buffer.prototype, "fill");
+    const port = processPort(() => fake.child);
+    const run = port.run({ stdin: new Uint8Array([1]), signal: new AbortController().signal });
+    const stdoutChunk = new Uint8Array([75, 83, 83, 49]);
+
+    fake.emitStdout(stdoutChunk);
+    fake.close(1);
+    expect(stdoutChunk).toEqual(new Uint8Array(4));
+    expect(fill).not.toHaveBeenCalled();
+
+    releaseReap?.();
+    await expect(run).rejects.toThrow("secure-workspace-read-process-failed");
+    expect(fill).toHaveBeenCalledOnce();
   });
 
   it("awaits reap before settling cancellation and never queues a killed helper", async () => {
@@ -154,8 +206,10 @@ describe("secure workspace text-read supervised process", () => {
       stdin: Buffer.from("request"),
       signal: new AbortController().signal,
     });
-    stderrFake.emitStderr(Buffer.from("private OS detail", "utf8"));
+    const stderrChunk = Buffer.from("private OS detail", "utf8");
+    stderrFake.emitStderr(stderrChunk);
     await expect(stderrRun).rejects.toThrow("secure-workspace-read-stderr");
+    expect(stderrChunk).toEqual(Buffer.alloc(stderrChunk.byteLength));
     expect(stderrFake.kill).toHaveBeenCalledOnce();
     expect(stderrFake.reap).toHaveBeenCalledOnce();
 
@@ -165,8 +219,10 @@ describe("secure workspace text-read supervised process", () => {
       stdin: Buffer.from("request"),
       signal: new AbortController().signal,
     });
-    overflowFake.emitStdout(Buffer.alloc(65_549));
+    const overflowChunk = Buffer.alloc(65_549, 0x41);
+    overflowFake.emitStdout(overflowChunk);
     await expect(overflowRun).rejects.toThrow("secure-workspace-read-aborted");
+    expect(overflowChunk).toEqual(Buffer.alloc(overflowChunk.byteLength));
     expect(overflowFake.kill).toHaveBeenCalledOnce();
     expect(overflowFake.reap).toHaveBeenCalledOnce();
   });

@@ -102,10 +102,14 @@ function runOneShot(
       } catch {
         /* closed error only */
       }
+      if (error !== undefined) {
+        stdout.forEach((chunk) => chunk.fill(0));
+        reject(error);
+        return;
+      }
       const result = Buffer.concat(stdout);
       stdout.forEach((chunk) => chunk.fill(0));
-      if (error === undefined) resolve(result);
-      else reject(error);
+      resolve(result);
     };
     const abort = (): void => {
       child.kill();
@@ -126,18 +130,31 @@ function runOneShot(
       return;
     }
     child.stdout.on("data", (chunk) => {
+      if (settled) {
+        chunk.fill(0);
+        return;
+      }
       stdoutBytes += chunk.byteLength;
       if (stdoutBytes > MAX_STDOUT_BYTES) {
+        chunk.fill(0);
         child.kill();
         void finish(
           new SecureWorkspaceReadProcessError("protocol-invalid", "secure-workspace-read-aborted"),
         );
-      } else stdout.push(Buffer.from(chunk));
+      } else {
+        try {
+          stdout.push(Buffer.from(chunk));
+        } finally {
+          chunk.fill(0);
+        }
+      }
     });
     child.stdout.on("error", () => {
       abort();
     });
-    child.stderr.on("data", () => {
+    child.stderr.on("data", (chunk) => {
+      chunk.fill(0);
+      if (settled) return;
       child.kill();
       void finish(
         new SecureWorkspaceReadProcessError("protocol-invalid", "secure-workspace-read-stderr"),
