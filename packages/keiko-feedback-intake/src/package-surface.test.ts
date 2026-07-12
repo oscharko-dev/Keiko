@@ -112,6 +112,7 @@ function expectedPaths(): readonly string[] {
     "migrations/003_feedback_publication.sql",
     "migrations/004_feedback_publication_worker.sql",
     "migrations/005_feedback_publication_circuit.sql",
+    "migrations/006_feedback_review_projection.sql",
     "package.json",
     ...compiled,
   ].sort();

@@ -32,6 +32,7 @@ describe("PostgreSQL maintainer authentication store", () => {
         await setup.query(await migration("003_feedback_publication.sql"));
         await setup.query(await migration("004_feedback_publication_worker.sql"));
         await setup.query(await migration("005_feedback_publication_circuit.sql"));
+        await setup.query(await migration("006_feedback_review_projection.sql"));
       } finally {
         setup.release();
       }

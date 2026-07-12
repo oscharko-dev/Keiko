@@ -41,7 +41,9 @@ interface ReviewSummaryRow extends Omit<ReviewQueryRow, "canonical_bytes"> {
   readonly category: unknown;
   readonly feature_area: unknown;
   readonly impact: unknown;
-  readonly severity_counts: unknown;
+  readonly errors: unknown;
+  readonly warnings: unknown;
+  readonly infos: unknown;
 }
 
 interface AuditRow {
@@ -129,24 +131,16 @@ function listItem(
   };
 }
 
-function summaryCounts(value: unknown): FeedbackSeverityCountsV1 | undefined {
-  if (value === null) return undefined;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new FeedbackReviewError("payload-digest-drift");
-  }
-  const counts = value as Record<string, unknown>;
-  if (
-    Object.keys(counts).sort().join(",") !== "errors,infos,warnings" ||
-    ![counts.errors, counts.warnings, counts.infos].every(
-      (count) => Number.isSafeInteger(count) && Number(count) >= 0,
-    )
-  ) {
+function summaryCounts(row: ReviewSummaryRow): FeedbackSeverityCountsV1 | undefined {
+  const values = [row.errors, row.warnings, row.infos];
+  if (values.every((value) => value === null)) return undefined;
+  if (!values.every((value) => Number.isSafeInteger(value) && Number(value) >= 0)) {
     throw new FeedbackReviewError("payload-digest-drift");
   }
   return {
-    errors: Number(counts.errors),
-    warnings: Number(counts.warnings),
-    infos: Number(counts.infos),
+    errors: Number(row.errors),
+    warnings: Number(row.warnings),
+    infos: Number(row.infos),
   };
 }
 
@@ -159,7 +153,7 @@ function summaryItem(row: ReviewSummaryRow): FeedbackReviewListItemV1 {
   ) {
     throw new FeedbackReviewError("payload-digest-drift");
   }
-  const severityCounts = summaryCounts(row.severity_counts);
+  const severityCounts = summaryCounts(row);
   return {
     itemId: row.id,
     reviewGroupId: row.opaque_id,
@@ -206,7 +200,7 @@ export class PostgresFeedbackReviewQuery {
     const client = await acquirePostgresClient(this.pool, this.deadlineMs);
     try {
       const result = await client.query<ReviewSummaryRow>(
-        "SELECT i.id, g.opaque_id, COALESCE((SELECT max(d.bounded_count)::text FROM feedback_dedupe_entries d WHERE d.semantic_group_id = i.semantic_group_id AND d.expires_at > transaction_timestamp()), '1') AS group_count, i.payload_digest, p.exact_body_sha256, i.state, i.version, i.created_at, i.updated_at, report.value #>> '{diagnostics,category}' AS category, report.value #>> '{diagnostics,featureArea}' AS feature_area, report.value ->> 'impact' AS impact, report.value #> '{diagnostics,severityCounts}' AS severity_counts FROM feedback_review_items i JOIN feedback_payloads p ON p.id = i.payload_id JOIN LATERAL (SELECT convert_from(p.canonical_bytes,'UTF8')::jsonb AS value) report ON true JOIN feedback_review_groups g ON g.semantic_group_id = i.semantic_group_id LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id = i.semantic_group_id LEFT JOIN feedback_legal_holds hold ON hold.item_id = i.id AND hold.expires_at > transaction_timestamp() WHERE ($1::text IS NULL OR i.state = $1) AND (p.expires_at > transaction_timestamp() OR hold.item_id IS NOT NULL) AND ($2::boolean OR (i.state <> 'private-security' AND private.semantic_group_id IS NULL)) AND ($3::timestamptz IS NULL OR (i.updated_at, i.id) < ($3,$4::uuid)) ORDER BY i.updated_at DESC, i.id DESC LIMIT $5",
+        "SELECT i.id, g.opaque_id, COALESCE((SELECT max(d.bounded_count)::text FROM feedback_dedupe_entries d WHERE d.semantic_group_id = i.semantic_group_id AND d.expires_at > transaction_timestamp()), '1') AS group_count, i.payload_digest, p.exact_body_sha256, i.state, i.version, i.created_at, i.updated_at, p.report_category AS category, p.report_feature_area AS feature_area, p.report_impact AS impact, p.report_errors AS errors, p.report_warnings AS warnings, p.report_infos AS infos FROM feedback_review_items i JOIN feedback_payloads p ON p.id = i.payload_id JOIN feedback_review_groups g ON g.semantic_group_id = i.semantic_group_id LEFT JOIN feedback_private_semantic_groups private ON private.semantic_group_id = i.semantic_group_id LEFT JOIN feedback_legal_holds hold ON hold.item_id = i.id AND hold.expires_at > transaction_timestamp() WHERE ($1::text IS NULL OR i.state = $1) AND (p.expires_at > transaction_timestamp() OR hold.item_id IS NOT NULL) AND ($2::boolean OR (i.state <> 'private-security' AND private.semantic_group_id IS NULL)) AND ($3::timestamptz IS NULL OR (i.updated_at, i.id) < ($3,$4::uuid)) ORDER BY i.updated_at DESC, i.id DESC LIMIT $5",
         [
           input.state ?? null,
           input.includePrivate,

@@ -21,8 +21,9 @@ async function migration(name: string): Promise<string> {
 }
 
 function expectListProjectionExcludesCanonicalBytes(observed: readonly ObservedQuery[]): void {
-  const listSql = observed.find((entry) => entry.text.includes("report.value"))?.text;
+  const listSql = observed.find((entry) => entry.text.includes("p.report_category"))?.text;
   expect(listSql?.split(" FROM feedback_review_items", 1)[0]).not.toContain("canonical_bytes");
+  expect(listSql).not.toMatch(/convert_from|::jsonb/iu);
 }
 
 describe("PostgreSQL feedback review query", () => {
@@ -45,6 +46,7 @@ describe("PostgreSQL feedback review query", () => {
         await setup.query(`SET search_path TO "${schema}"`);
         await setup.query(await migration("001_feedback_intake.sql"));
         await setup.query(await migration("002_feedback_review.sql"));
+        await setup.query(await migration("006_feedback_review_projection.sql"));
         await setup.query(
           "INSERT INTO feedback_semantic_groups (id, created_at) VALUES ($1, transaction_timestamp())",
           [groupId],

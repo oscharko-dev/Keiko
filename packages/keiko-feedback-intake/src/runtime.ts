@@ -129,6 +129,7 @@ function migrationSources(
     [3, "feedback_publication"],
     [4, "feedback_publication_worker"],
     [5, "feedback_publication_circuit"],
+    [6, "feedback_review_projection"],
   ] as const;
   return async () =>
     Promise.all(
