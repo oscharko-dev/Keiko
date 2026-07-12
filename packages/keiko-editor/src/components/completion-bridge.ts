@@ -94,6 +94,7 @@ export interface MonacoCompletionSuggestion {
   readonly label: string;
   readonly kind: number;
   readonly insertText: string;
+  readonly insertTextRules?: number | undefined;
   readonly range: MonacoRange;
   readonly detail?: string;
   readonly sortText?: string;
@@ -118,6 +119,7 @@ export interface MonacoCompletionItemProvider {
 export interface MonacoLanguagesRegistrar {
   readonly CompletionItemKind: MonacoCompletionItemKinds;
   readonly CompletionTriggerKind: MonacoCompletionTriggerKinds;
+  readonly CompletionItemInsertTextRule?: { readonly InsertAsSnippet: number } | undefined;
   registerCompletionItemProvider(
     languageSelector: string | readonly string[],
     provider: MonacoCompletionItemProvider,
@@ -209,11 +211,15 @@ export function editorItemToMonacoSuggestion(
   item: EditorCompletionItem,
   fallbackRange: MonacoRange,
   kinds: MonacoCompletionItemKinds,
+  insertAsSnippetRule?: number,
 ): MonacoCompletionSuggestion {
   return {
     label: item.label,
     kind: editorKindToMonaco(item.kind, kinds),
     insertText: item.insertText,
+    ...(item.insertAsSnippet === true && insertAsSnippetRule !== undefined
+      ? { insertTextRules: insertAsSnippetRule }
+      : {}),
     range: item.range === undefined ? fallbackRange : editorRangeToMonaco(item.range),
     ...(item.detail === undefined ? {} : { detail: item.detail }),
     ...(item.sortText === undefined ? {} : { sortText: item.sortText }),
@@ -225,10 +231,11 @@ export function responseToCompletionList(
   response: EditorCompletionResponse,
   fallbackRange: MonacoRange,
   kinds: MonacoCompletionItemKinds,
+  insertAsSnippetRule?: number,
 ): MonacoCompletionList {
   return {
     suggestions: response.items.map((item) =>
-      editorItemToMonacoSuggestion(item, fallbackRange, kinds),
+      editorItemToMonacoSuggestion(item, fallbackRange, kinds, insertAsSnippetRule),
     ),
     incomplete: response.isIncomplete,
   };
@@ -340,6 +347,7 @@ export function createKeikoCompletionProvider(
           response,
           wordRangeAt(model, position),
           deps.languages.CompletionItemKind,
+          deps.languages.CompletionItemInsertTextRule?.InsertAsSnippet,
         );
       } catch {
         // AC4: a completion failure (network, abort, host error) must never break editing.

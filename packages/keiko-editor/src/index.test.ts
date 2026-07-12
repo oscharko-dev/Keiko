@@ -244,6 +244,12 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "exceedsLineCount",
       "LARGE_FILE_DEGRADED_BYTES",
       "LARGE_FILE_DEGRADED_LINES",
+      // Bounded Monaco model retention (#2322).
+      "EditorModelRegistry",
+      "DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS",
+      "UNPROTECTED_EDITOR_MODEL",
+      "estimateEditorModelBytes",
+      "getEditorModelRegistryDiagnostics",
       // Source-control read integrations and conflict grammar (#2229-#2231, ADR-0127).
       "registerEditorGitGutter",
       "registerEditorBlame",

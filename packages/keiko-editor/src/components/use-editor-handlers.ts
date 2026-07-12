@@ -73,6 +73,15 @@ import {
   type InlineCompletionTelemetry,
 } from "./inline-completion-telemetry.js";
 import { deriveLargeFileMode } from "./large-file-mode.js";
+import {
+  attachRetainedEditorModel,
+  updateRetainedEditorModelProtection,
+  type EditorModelProtection,
+  type RetainedEditorModelAttachment,
+  type RetainedEditorModel,
+  type RetainedEditorModelEditor,
+  type RetainedEditorModelNamespace,
+} from "./editor-model-registry.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
@@ -105,6 +114,7 @@ interface EditorRefs {
   readonly containerRef: MutableRefObject<HTMLElement | null>;
   readonly viewStateRef: MutableRefObject<unknown>;
   readonly disposeRef: MutableRefObject<(() => void) | null>;
+  readonly modelAttachmentRef: MutableRefObject<RetainedEditorModelAttachment | null>;
   readonly revealDecorationIdsRef: MutableRefObject<string[]>;
   readonly revealTimeoutRef: MutableRefObject<number | null>;
   readonly gitGutterBridgeRef: MutableRefObject<EditorGitGutterBridge | null>;
@@ -116,6 +126,7 @@ function useEditorRefs(): EditorRefs {
   const containerRef = useRef<HTMLElement | null>(null);
   const viewStateRef = useRef<unknown>(null);
   const disposeRef = useRef<(() => void) | null>(null);
+  const modelAttachmentRef = useRef<RetainedEditorModelAttachment | null>(null);
   const revealDecorationIdsRef = useRef<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
   const gitGutterBridgeRef = useRef<EditorGitGutterBridge | null>(null);
@@ -126,6 +137,7 @@ function useEditorRefs(): EditorRefs {
       containerRef,
       viewStateRef,
       disposeRef,
+      modelAttachmentRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
       gitGutterBridgeRef,
@@ -136,6 +148,7 @@ function useEditorRefs(): EditorRefs {
       containerRef,
       viewStateRef,
       disposeRef,
+      modelAttachmentRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
       gitGutterBridgeRef,
@@ -809,6 +822,105 @@ function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
   return { streamId, inlineStreamId, telemetry };
 }
 
+function modelProtectionForProps(props: KeikoCodeEditorProps): EditorModelProtection {
+  const extra = props.modelRetentionProtection;
+  return {
+    dirty: props.fileModel.dirty,
+    active: true,
+    pendingSave: props.saveStatus === "saving",
+    pendingConflict: props.saveStatus === "conflict",
+    hotExitRecovery: extra?.hotExitRecovery === true,
+    agentReview: extra?.agentReview === true,
+    pinned: extra?.pinned === true,
+  };
+}
+
+function modelRootKey(props: KeikoCodeEditorProps): string {
+  const root = props.fileModel.identity.uri.split("/").slice(0, -1).join("/");
+  return root.length === 0 ? props.fileModel.identity.uri : root;
+}
+
+function modelViewStateKey(props: KeikoCodeEditorProps): string {
+  return props.modelViewStateKey ?? props.fileModel.identity.uri;
+}
+
+function hasModelNamespace(
+  editor: MountMonaco["editor"],
+): editor is MountMonaco["editor"] &
+  Required<Pick<MountMonaco["editor"], "createModel" | "getModel">> {
+  return typeof editor.createModel === "function" && typeof editor.getModel === "function";
+}
+
+function monacoModelNamespace(monaco: MountMonaco): RetainedEditorModelNamespace | null {
+  const editorNamespace = monaco.editor;
+  if (!hasModelNamespace(editorNamespace)) return null;
+  return {
+    createModel: (text, language, uri) => editorNamespace.createModel(text, language, uri),
+    getModel: (uri) => editorNamespace.getModel(uri),
+  };
+}
+
+function isRetainedEditorModel(value: unknown): value is RetainedEditorModel {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "uri" in value &&
+    "getValue" in value &&
+    "dispose" in value
+  );
+}
+
+function retainedModelEditor(editor: MountEditor): RetainedEditorModelEditor {
+  return {
+    getModel: (): RetainedEditorModel | null => {
+      const model = editor.getModel?.();
+      return isRetainedEditorModel(model) ? model : null;
+    },
+    setModel: (model): void => {
+      editor.setModel?.(model);
+    },
+    saveViewState: () => editor.saveViewState(),
+    restoreViewState: (state): void => {
+      editor.restoreViewState(state);
+    },
+  };
+}
+
+function attachRegistryModel(args: {
+  readonly editor: MountEditor;
+  readonly monaco: MountMonaco;
+  readonly props: KeikoCodeEditorProps;
+}): RetainedEditorModelAttachment | null {
+  const namespace = monacoModelNamespace(args.monaco);
+  const uri = args.monaco.Uri?.parse(args.props.fileModel.identity.uri);
+  if (namespace === null || uri === undefined || args.editor.setModel === undefined) return null;
+  const content = args.props.buffer.content;
+  const degraded = deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text });
+  return attachRetainedEditorModel({
+    key: args.props.fileModel.identity.uri,
+    rootKey: modelRootKey(args.props),
+    uri,
+    language: args.props.fileModel.identity.language,
+    text: content.text,
+    sizeBytes: content.sizeBytes,
+    degraded: degraded === "degraded",
+    viewStateKey: modelViewStateKey(args.props),
+    namespace,
+    editor: retainedModelEditor(args.editor),
+    protection: modelProtectionForProps(args.props),
+  });
+}
+
+function attachModelOnMount(args: MountRuntimeArgs, monaco: MountMonaco): void {
+  const modelAttachment = attachRegistryModel({
+    editor: args.editor,
+    monaco,
+    props: args.latestProps.current,
+  });
+  args.refs.modelAttachmentRef.current = modelAttachment;
+  if (modelAttachment === null) applyViewState(args.editor, args.refs.viewStateRef.current);
+}
+
 interface MountRuntimeArgs {
   readonly editor: MountEditor;
   readonly monaco: unknown;
@@ -831,7 +943,7 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
   args.refs.editorRef.current = args.editor;
   args.refs.monacoRef.current = args.monaco as MountMonaco;
   args.refs.containerRef.current = args.editor.getContainerDomNode();
-  applyViewState(args.editor, args.refs.viewStateRef.current);
+  attachModelOnMount(args, args.monaco as MountMonaco);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
     monaco: args.monaco as MountMonaco,
@@ -895,6 +1007,8 @@ function refreshEditorRuntime(args: RuntimeWiringRefreshArgs): void {
   args.refs.viewStateRef.current = captureViewState(editor);
   args.refs.disposeRef.current?.();
   args.refs.disposeRef.current = null;
+  args.refs.modelAttachmentRef.current?.detach();
+  args.refs.modelAttachmentRef.current = null;
   mountEditorRuntime({ ...args, editor, monaco, autoFocus: false });
 }
 
@@ -969,7 +1083,7 @@ function useMountHandler(
 }
 
 function useUnmountDisposal(refs: EditorRefs): void {
-  const { editorRef, viewStateRef, disposeRef } = refs;
+  const { editorRef, viewStateRef, disposeRef, modelAttachmentRef } = refs;
   useEffect((): (() => void) => {
     return (): void => {
       clearRevealDecoration(refs);
@@ -978,9 +1092,11 @@ function useUnmountDisposal(refs: EditorRefs): void {
       }
       disposeRef.current?.();
       disposeRef.current = null;
+      modelAttachmentRef.current?.detach();
+      modelAttachmentRef.current = null;
       editorRef.current = null;
     };
-  }, [editorRef, viewStateRef, disposeRef]);
+  }, [editorRef, viewStateRef, disposeRef, modelAttachmentRef]);
 }
 
 function useRevealRequest(props: KeikoCodeEditorProps, refs: EditorRefs): void {
@@ -1013,6 +1129,22 @@ function useThemeReapply(props: KeikoCodeEditorProps, refs: EditorRefs): void {
   }, [themeVariant, onRuntimeError, refs.monacoRef, refs.containerRef]);
 }
 
+function useModelProtectionSync(props: KeikoCodeEditorProps): void {
+  useEffect(() => {
+    updateRetainedEditorModelProtection(
+      props.fileModel.identity.uri,
+      modelProtectionForProps(props),
+    );
+  }, [
+    props.fileModel.dirty,
+    props.fileModel.identity.uri,
+    props.modelRetentionProtection?.agentReview,
+    props.modelRetentionProtection?.hotExitRecovery,
+    props.modelRetentionProtection?.pinned,
+    props.saveStatus,
+  ]);
+}
+
 /** Wire change/mount handlers and unmount disposal; returns the handlers for `<Editor>`. */
 export function useEditorHandlers(
   props: KeikoCodeEditorProps,
@@ -1043,6 +1175,7 @@ export function useEditorHandlers(
   useHostEditRequest(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
+  useModelProtectionSync(props);
   return {
     onChange,
     onMount,

@@ -31,6 +31,7 @@ import type {
   EditorSymbolsResolver,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
+import type { KeikoEditorPreferenceOptions } from "./editor-options.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
 import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
 import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
@@ -114,6 +115,18 @@ export interface KeikoCodeEditorProps {
    */
   readonly showStatusFooter?: boolean | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  /** Server-resolved M7 editor options; live-updated through Monaco updateOptions. */
+  readonly editorPreferences?: KeikoEditorPreferenceOptions | undefined;
+  /** Stable per-pane key for retained Monaco view state; content-free and host-defined. */
+  readonly modelViewStateKey?: string | undefined;
+  /** Extra model-retention protection flags for host review/recovery states. */
+  readonly modelRetentionProtection?:
+    | {
+        readonly hotExitRecovery?: boolean | undefined;
+        readonly agentReview?: boolean | undefined;
+        readonly pinned?: boolean | undefined;
+      }
+    | undefined;
   /** Accessible name for the editor control; hosts may include workspace/root context. */
   readonly ariaLabel?: string | undefined;
   readonly autoFocus?: boolean | undefined;

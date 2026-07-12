@@ -6,10 +6,18 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  resolveEditorM7Settings,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-contracts";
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type {
   CostClass,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsSnapshot,
   EditorInlineCompletionWireResponse,
   LatencyClass,
 } from "@oscharko-dev/keiko-contracts";
@@ -48,15 +56,55 @@ function deps(
     config?: GatewayConfig;
     env?: Record<string, string | undefined>;
     evidenceStore?: EvidenceStore;
+    aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
   } = {},
 ): UiHandlerDeps {
+  const aiSettings = input.aiSettings ?? { inlineCompletion: true };
   return {
     store,
     redactor: buildRedactor(input.env ?? {}, input.config),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
+    editorSettingsControl: editorSettingsControl(aiSettings),
     ...(input.config === undefined ? {} : { config: input.config }),
   } as unknown as UiHandlerDeps;
+}
+
+function editorSettingsSnapshot(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): EditorM7SettingsSnapshot {
+  const userValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  const workspaceValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  if (values.inlineCompletion !== undefined) {
+    userValues.inlineCompletion = values.inlineCompletion;
+  }
+  if (values.testGeneration !== undefined) {
+    workspaceValues.testGeneration = values.testGeneration;
+  }
+  if (values.patchApply !== undefined) {
+    workspaceValues.patchApply = values.patchApply;
+  }
+  return {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 1,
+    workspaceRevision: 1,
+    revision: 1_000_001,
+    etag: '"edm7-test-inline"',
+    root,
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM7Settings({
+      user: { scope: "user", values: userValues },
+      workspace: { scope: "workspace", values: workspaceValues },
+    }),
+    eventSequence: 1,
+  };
+}
+
+function editorSettingsControl(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): { readonly read: (realRoot: string) => Promise<EditorM7SettingsSnapshot> } {
+  return { read: () => Promise.resolve(editorSettingsSnapshot(values)) };
 }
 
 function sha256Hex(value: string): string {
@@ -204,6 +252,18 @@ describe("POST /api/editor/inline-completion — validation & containment", () =
 });
 
 describe("POST /api/editor/inline-completion — degradation (model-only)", () => {
+  it("returns zero items without calling the model until the user explicitly opts in", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), aiSettings: { inlineCompletion: false } }),
+      permissiveOptions(() => chat),
+    );
+    expect(result.status).toBe(200);
+    expect(body(result).items).toEqual([]);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it("returns zero items with a degrade reason when no gateway is configured", async () => {
     const result = await handleEditorInlineCompletion(postContext(inlineBody()), deps());
     expect(result.status).toBe(200);

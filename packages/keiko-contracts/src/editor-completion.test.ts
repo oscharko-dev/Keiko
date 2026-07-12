@@ -31,6 +31,7 @@ describe("editor-completion constants", () => {
     expect(EDITOR_COMPLETION_ITEM_ORIGINS).toEqual(["deterministic", "model-assisted"]);
     expect(EDITOR_COMPLETION_SOURCES).toEqual([
       "deterministic-language-service",
+      "workspace-snippet",
       "model-assisted",
       "repository-context",
       "local-knowledge",

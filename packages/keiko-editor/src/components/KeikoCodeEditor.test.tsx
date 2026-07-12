@@ -1149,9 +1149,9 @@ describe("KeikoCodeEditor — large-file degraded mode (Issue #1207)", () => {
     expect(captured.options?.largeFileOptimizations).toBe(true);
   });
 
-  it("lets @monaco-editor/react dispose the current model when the editor unmounts", () => {
+  it("keeps Monaco models across unmount so the bounded registry owns disposal", () => {
     render(<KeikoCodeEditor {...baseProps()} />);
-    expect(captured.keepCurrentModel).toBe(false);
+    expect(captured.keepCurrentModel).toBe(true);
   });
 
   it("passes degraded Monaco options for a buffer over the 500 KB size threshold", () => {
