@@ -34,6 +34,23 @@ function TestDialogWithFormControl(): ReactElement {
   );
 }
 
+function TestDialogWithHiddenBoundaries(): ReactElement {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogTabTrap(dialogRef);
+  return (
+    <div ref={dialogRef} tabIndex={-1} data-testid="dialog">
+      <button type="button" style={{ display: "none" }}>
+        Hidden Leading
+      </button>
+      <button type="button">Visible First</button>
+      <button type="button">Visible Last</button>
+      <button type="button" hidden>
+        Hidden Trailing
+      </button>
+    </div>
+  );
+}
+
 describe("useDialogTabTrap", () => {
   it("wraps Tab from the last focusable element back to the first", () => {
     render(<TestDialog />);
@@ -101,5 +118,27 @@ describe("useDialogTabTrap", () => {
 
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(submit);
+  });
+
+  it("wraps Tab from the last VISIBLE element, ignoring a hidden trailing match", () => {
+    render(<TestDialogWithHiddenBoundaries />);
+    const visibleLast = screen.getByRole("button", { name: "Visible Last" });
+    const visibleFirst = screen.getByRole("button", { name: "Visible First" });
+
+    visibleLast.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+
+    expect(document.activeElement).toBe(visibleFirst);
+  });
+
+  it("wraps Shift+Tab from the first VISIBLE element, ignoring a hidden leading match", () => {
+    render(<TestDialogWithHiddenBoundaries />);
+    const visibleFirst = screen.getByRole("button", { name: "Visible First" });
+    const visibleLast = screen.getByRole("button", { name: "Visible Last" });
+
+    visibleFirst.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+
+    expect(document.activeElement).toBe(visibleLast);
   });
 });
