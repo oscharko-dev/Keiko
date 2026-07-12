@@ -348,7 +348,7 @@ export function rovingTabTargetFile(
   if (key === "ArrowLeft") return order[index <= 0 ? order.length - 1 : index - 1];
   if (key === "ArrowRight") return order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
   if (key === "Home") return order[0];
-  return order[order.length - 1];
+  return order.at(-1);
 }
 
 interface TabNodeRect {

@@ -85,6 +85,7 @@ type LoadState =
 type BusyAction =
   "checking" | "starting" | "retrying" | "cancelling" | "restart" | "remediation" | undefined;
 
+type ManualInstallDisplayState = "standard" | "verified";
 type ManualCopyState = "idle" | "pressed" | "copied" | "selected" | "failed";
 type ManualCopyResult = Exclude<ManualCopyState, "idle" | "pressed" | "failed">;
 
@@ -169,12 +170,13 @@ async function writeTextWithFallback(
 function versionText(
   report: UpdatePreflightReport,
   t: I18nTranslate,
-  manualInstallVerified = false,
+  manualInstallState: ManualInstallDisplayState,
   session?: UpdateSessionStatus | undefined,
   visibleSession?: UpdateSession | undefined,
 ): string {
-  if (manualInstallVerified)
+  if (manualInstallState === "verified") {
     return t("updates.versionInstalled", { version: report.currentVersion });
+  }
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.versionExternallyManaged", { current: report.currentVersion });
   }
@@ -396,10 +398,10 @@ function primaryActionText(
   session: UpdateSessionStatus,
   remediation: UpdateRemediationStatusReport,
   t: I18nTranslate,
-  manualInstallVerified = false,
+  manualInstallState: ManualInstallDisplayState,
 ): string {
   const visibleSession = sessionForDisplay(session, report);
-  if (manualInstallVerified) return t("updates.primary.installed");
+  if (manualInstallState === "verified") return t("updates.primary.installed");
   const sessionText = primaryActionTextForSession(visibleSession, remediation, t);
   if (sessionText !== undefined) return sessionText;
   const portableText = primaryActionTextForPortable(report, session, t);
@@ -437,13 +439,13 @@ function SummaryCard({
   report,
   session,
   remediation,
-  manualInstallVerified,
+  manualInstallState,
   titleRef,
 }: {
   readonly report: UpdatePreflightReport;
   readonly session: UpdateSessionStatus;
   readonly remediation: UpdateRemediationStatusReport;
-  readonly manualInstallVerified: boolean;
+  readonly manualInstallState: ManualInstallDisplayState;
   readonly titleRef: RefObject<HTMLHeadingElement>;
 }): ReactNode {
   const t = useTranslate();
@@ -457,7 +459,7 @@ function SummaryCard({
       <div>
         <p className="upd-kicker">{t("updates.window.kicker")}</p>
         <h2 id="updates-window-title" ref={titleRef} tabIndex={-1} className="upd-title">
-          {manualInstallVerified
+          {manualInstallState === "verified"
             ? t("updates.status.success")
             : isPortableExternallyManaged(report, session)
               ? t("updates.status.portableExternallyManaged")
@@ -466,7 +468,7 @@ function SummaryCard({
                 : statusTitle(report, visibleSession, t)}
         </h2>
         <p className="upd-body">
-          {versionText(report, t, manualInstallVerified, session, visibleSession)}
+          {versionText(report, t, manualInstallState, session, visibleSession)}
         </p>
       </div>
     </div>
@@ -1380,17 +1382,20 @@ function applyReleaseNotesState(
   }
 }
 
-function applyManualInstallState(
-  manualInstallVerified: boolean,
+function applyVerifiedManualInstallState(
   previousManualTarget: string | undefined,
-  report: UpdatePreflightReport,
   setVerifiedManualTargetVersion: (value: string | undefined) => void,
   setManualInstructionsOpen: (open: boolean) => void,
 ): void {
-  if (manualInstallVerified) {
-    setVerifiedManualTargetVersion(previousManualTarget);
-    setManualInstructionsOpen(false);
-  } else if (report.updateAvailable) {
+  setVerifiedManualTargetVersion(previousManualTarget);
+  setManualInstructionsOpen(false);
+}
+
+function applyAvailableUpdateManualInstallState(
+  report: UpdatePreflightReport,
+  setVerifiedManualTargetVersion: (value: string | undefined) => void,
+): void {
+  if (report.updateAvailable) {
     setVerifiedManualTargetVersion(undefined);
   }
 }
@@ -1398,10 +1403,10 @@ function applyManualInstallState(
 function checkFeedbackMessage(
   report: UpdatePreflightReport,
   session: UpdateSessionStatus,
-  manualInstallVerified: boolean,
+  manualInstallState: ManualInstallDisplayState,
   t: I18nTranslate,
 ): string {
-  if (manualInstallVerified) {
+  if (manualInstallState === "verified") {
     return t("updates.check.manualInstalled", { version: report.currentVersion });
   }
   if (isPortableExternallyManaged(report, session)) {
@@ -1444,17 +1449,22 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           loadRemediation(api, report),
         ]);
         const manualInstallVerified = computeManualInstallVerified(previousManualTarget, report);
+        const manualInstallState: ManualInstallDisplayState = manualInstallVerified
+          ? "verified"
+          : "standard";
         setState({ status: "ready", report, session, remediation });
         applyReleaseNotesState(report, setReleaseNotesReport);
-        applyManualInstallState(
-          manualInstallVerified,
-          previousManualTarget,
-          report,
-          setVerifiedManualTargetVersion,
-          setManualInstructionsOpen,
-        );
+        if (manualInstallVerified) {
+          applyVerifiedManualInstallState(
+            previousManualTarget,
+            setVerifiedManualTargetVersion,
+            setManualInstructionsOpen,
+          );
+        } else {
+          applyAvailableUpdateManualInstallState(report, setVerifiedManualTargetVersion);
+        }
         if (manual) {
-          setCheckFeedback(checkFeedbackMessage(report, session, manualInstallVerified, t));
+          setCheckFeedback(checkFeedbackMessage(report, session, manualInstallState, t));
         }
       } catch (error) {
         setCheckFeedback(undefined);
@@ -1540,6 +1550,9 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
     verifiedManualTargetVersion !== undefined &&
     !report.updateAvailable &&
     report.currentVersion === verifiedManualTargetVersion;
+  const manualInstallState: ManualInstallDisplayState = manualInstallVerified
+    ? "verified"
+    : "standard";
   const patchNotesReport = patchNotesReportFor(report, visibleSession, releaseNotesReport);
   const outcomePatchNotesVisible =
     visibleSession?.phase === "succeeded" && hasReleaseNotes(patchNotesReport);
@@ -1557,13 +1570,13 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         report={report}
         session={session}
         remediation={remediation}
-        manualInstallVerified={manualInstallVerified}
+        manualInstallState={manualInstallState}
         titleRef={titleRef}
       />
       <div className="upd-primary">
         <div>
           <strong>{t("updates.primary.title")}</strong>
-          <span>{primaryActionText(report, session, remediation, t, manualInstallVerified)}</span>
+          <span>{primaryActionText(report, session, remediation, t, manualInstallState)}</span>
         </div>
         <PrimaryActions
           report={report}

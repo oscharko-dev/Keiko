@@ -7,7 +7,7 @@
 // Empty state when queue is clear. motion-safe on any animated element.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
@@ -19,6 +19,15 @@ import {
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
+
+type ReviewAction = "accept" | "reject" | "archive";
+
+const REVIEW_ACTION_FIELDSET_STYLE: CSSProperties = {
+  border: 0,
+  margin: 0,
+  minInlineSize: 0,
+  padding: 0,
+};
 
 function typeLabel(type: MemoryRecord["type"], t: I18nTranslate): string {
   switch (type) {
@@ -93,7 +102,7 @@ function sensitivityLabel(
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
-  readonly busyAction: "accept" | "reject" | "archive" | null;
+  readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
@@ -237,7 +246,7 @@ function ReviewRowActions({
   t,
 }: {
   readonly record: MemoryRecord;
-  readonly busyAction: "accept" | "reject" | "archive" | null;
+  readonly busyAction: ReviewAction | null;
   readonly labelId: string;
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
@@ -246,7 +255,11 @@ function ReviewRowActions({
 }): ReactNode {
   if (record.status === "proposed") {
     return (
-      <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
+      <fieldset
+        className="mc-review-actions"
+        aria-labelledby={labelId}
+        style={REVIEW_ACTION_FIELDSET_STYLE}
+      >
         <RowActionButton
           variant="primary"
           busyAction={busyAction}
@@ -263,13 +276,17 @@ function ReviewRowActions({
           idleLabel={t("memoria.reject")}
           onClick={() => onReject(record)}
         />
-      </div>
+      </fieldset>
     );
   }
 
   if (record.status === "conflicted") {
     return (
-      <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
+      <fieldset
+        className="mc-review-actions"
+        aria-labelledby={labelId}
+        style={REVIEW_ACTION_FIELDSET_STYLE}
+      >
         {/* Honest label: this action permanently sets status=rejected (no UI
             path back) — "Dismiss" suggested a mere hide (uiux-fix F035). */}
         <RowActionButton
@@ -280,12 +297,16 @@ function ReviewRowActions({
           idleLabel={t("memoria.rejectConflict")}
           onClick={() => onReject(record)}
         />
-      </div>
+      </fieldset>
     );
   }
 
   return (
-    <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
+    <fieldset
+      className="mc-review-actions"
+      aria-labelledby={labelId}
+      style={REVIEW_ACTION_FIELDSET_STYLE}
+    >
       <RowActionButton
         variant="ghost"
         busyAction={busyAction}
@@ -294,7 +315,7 @@ function ReviewRowActions({
         idleLabel={t("memoria.archiveStale")}
         onClick={() => onArchive(record)}
       />
-    </div>
+    </fieldset>
   );
 }
 
@@ -390,9 +411,7 @@ export function ReviewQueue({
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyById, setBusyById] = useState<
-    Partial<Record<string, "accept" | "reject" | "archive">>
-  >({});
+  const [busyById, setBusyById] = useState<Partial<Record<string, ReviewAction>>>({});
   const [rowErrorsById, setRowErrorsById] = useState<Partial<Record<string, string>>>({});
   // Result announcement + focus management after a row is removed: the pressed
   // button unmounts with its row, which would drop focus to <body> and leave

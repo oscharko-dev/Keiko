@@ -210,36 +210,28 @@ export interface WorkspaceDescriptorValidationError {
 function validateLifecycleEnum(
   objectType: string,
   lifecycle: readonly WorkspaceObjectLifecycleState[],
-): WorkspaceDescriptorValidationError[] {
-  const errors: WorkspaceDescriptorValidationError[] = [];
-  for (const state of lifecycle) {
-    if (!WORKSPACE_LIFECYCLE_STATES.includes(state)) {
-      errors.push({
-        objectType,
-        field: "lifecycle",
-        message: `unknown lifecycle state '${state}'`,
-      });
-    }
-  }
-  return errors;
+): readonly WorkspaceDescriptorValidationError[] {
+  return lifecycle
+    .filter((state) => !WORKSPACE_LIFECYCLE_STATES.includes(state))
+    .map((state) => ({
+      objectType,
+      field: "lifecycle",
+      message: `unknown lifecycle state '${state}'`,
+    }));
 }
 
 // R1 (trustBoundary) — closed-set membership for the trust boundary array.
 function validateTrustBoundaryEnum(
   objectType: string,
   trustBoundary: readonly WorkspaceObjectTrustBoundary[],
-): WorkspaceDescriptorValidationError[] {
-  const errors: WorkspaceDescriptorValidationError[] = [];
-  for (const tb of trustBoundary) {
-    if (!WORKSPACE_TRUST_BOUNDARIES.includes(tb)) {
-      errors.push({
-        objectType,
-        field: "trustBoundary",
-        message: `unknown trust boundary '${tb}'`,
-      });
-    }
-  }
-  return errors;
+): readonly WorkspaceDescriptorValidationError[] {
+  return trustBoundary
+    .filter((tb) => !WORKSPACE_TRUST_BOUNDARIES.includes(tb))
+    .map((tb) => ({
+      objectType,
+      field: "trustBoundary",
+      message: `unknown trust boundary '${tb}'`,
+    }));
 }
 
 // R1 (authority) — closed-set membership for the authority requirement.
@@ -310,45 +302,31 @@ function validatePersistenceRequiresTrustBoundary(
   };
 }
 
-// Pushes `error` onto `errors` when present; keeps the composed validator a
-// flat sequence of calls instead of repeating null-checks at each call site.
-function pushIfPresent(
-  errors: WorkspaceDescriptorValidationError[],
+function presentError(
   error: WorkspaceDescriptorValidationError | null,
-): void {
-  if (error !== null) {
-    errors.push(error);
-  }
+): readonly WorkspaceDescriptorValidationError[] {
+  return error === null ? [] : [error];
 }
 
 export function validateWorkspaceDescriptorMeta(
   objectType: string,
   meta: WorkspaceDescriptorMeta,
 ): readonly WorkspaceDescriptorValidationError[] {
-  const errors: WorkspaceDescriptorValidationError[] = [];
-
-  errors.push(...validateLifecycleEnum(objectType, meta.lifecycle));
-  errors.push(...validateTrustBoundaryEnum(objectType, meta.trustBoundary));
-  pushIfPresent(errors, validateAuthorityEnum(objectType, meta.authority));
-  pushIfPresent(errors, validatePersistenceEnum(objectType, meta.persistence));
-
-  pushIfPresent(errors, validateUiOnlyConsistency(objectType, meta));
-  pushIfPresent(
-    errors,
-    validatePersistenceRequiresTrustBoundary(objectType, meta, "evidence-reference", "evidence"),
-  );
-  pushIfPresent(
-    errors,
-    validatePersistenceRequiresTrustBoundary(objectType, meta, "fs-reference", "fs"),
-  );
-  pushIfPresent(
-    errors,
-    validatePersistenceRequiresTrustBoundary(objectType, meta, "memory-reference", "memory"),
-  );
-  pushIfPresent(
-    errors,
-    validatePersistenceRequiresTrustBoundary(objectType, meta, "durable.ui", "ui"),
-  );
-
-  return errors;
+  return [
+    ...validateLifecycleEnum(objectType, meta.lifecycle),
+    ...validateTrustBoundaryEnum(objectType, meta.trustBoundary),
+    ...presentError(validateAuthorityEnum(objectType, meta.authority)),
+    ...presentError(validatePersistenceEnum(objectType, meta.persistence)),
+    ...presentError(validateUiOnlyConsistency(objectType, meta)),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "evidence-reference", "evidence"),
+    ),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "fs-reference", "fs"),
+    ),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "memory-reference", "memory"),
+    ),
+    ...presentError(validatePersistenceRequiresTrustBoundary(objectType, meta, "durable.ui", "ui")),
+  ];
 }

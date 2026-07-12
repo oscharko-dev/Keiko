@@ -923,14 +923,31 @@ function resolveBindAcceptance(
       return onScopeBind?.(chatWindowId, boundScope) ?? true;
     }
     if (connectorScope !== null) {
-      return chatWindowId !== null
-        ? (onConnectorBind?.(chatWindowId, connectorScope) ?? true)
-        : false;
+      if (chatWindowId === null) return false;
+      return onConnectorBind?.(chatWindowId, connectorScope) ?? true;
     }
     return true;
   } catch {
     return false;
   }
+}
+
+function connectionConnectorFields(
+  connectorScope: ChatLocalKnowledgeScope | null,
+): Partial<Pick<Connection, "boundConnectorKind" | "boundConnectorId">> {
+  if (connectorScope === null) {
+    return {};
+  }
+  if (connectorScope.kind === "capsule") {
+    return {
+      boundConnectorKind: "capsule",
+      boundConnectorId: connectorScope.capsuleId,
+    };
+  }
+  return {
+    boundConnectorKind: "capsule-set",
+    boundConnectorId: connectorScope.capsuleSetId,
+  };
 }
 
 // The bind-time snapshot fields a new Connection carries, derived from what confirmConnect just
@@ -960,17 +977,7 @@ function connectionScopeFields(
           boundRelativePath: boundScope.relativePaths[0],
         }
       : {}),
-    ...(connectorScope !== null
-      ? connectorScope.kind === "capsule"
-        ? {
-            boundConnectorKind: "capsule" as const,
-            boundConnectorId: connectorScope.capsuleId as string,
-          }
-        : {
-            boundConnectorKind: "capsule-set" as const,
-            boundConnectorId: connectorScope.capsuleSetId as string,
-          }
-      : {}),
+    ...connectionConnectorFields(connectorScope),
   };
 }
 

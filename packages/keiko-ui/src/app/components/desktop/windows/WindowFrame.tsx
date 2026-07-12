@@ -333,6 +333,13 @@ function cancelDragFrame(frame: number): void {
   }
 }
 
+function cancelPendingDragFrame(frame: number | null): null {
+  if (frame !== null) {
+    cancelDragFrame(frame);
+  }
+  return null;
+}
+
 function attachDragListeners(
   api: WorkspaceApi,
   geo: DragGeometry,
@@ -373,11 +380,6 @@ function attachDragListeners(
     if (frame !== null) return;
     frame = requestDragFrame(flush);
   };
-  const cancelFrame = (): void => {
-    if (frame === null) return;
-    cancelDragFrame(frame);
-    frame = null;
-  };
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
     const py = geo.toWY(ev.clientY);
@@ -403,7 +405,7 @@ function attachDragListeners(
     // last coordinates are applied; commitSnap then overrides them only when a
     // snap zone is armed (it is a no-op for free drags). Cancel the scheduled
     // frame first so flush() cannot also run on the next tick.
-    cancelFrame();
+    frame = cancelPendingDragFrame(frame);
     flush();
     api.commitSnap(session.winId);
     releaseBodyStyle();
@@ -448,11 +450,6 @@ function attachGroupDragListeners(
     if (frame !== null) return;
     frame = requestDragFrame(flush);
   };
-  const cancelFrame = (): void => {
-    if (frame === null) return;
-    cancelDragFrame(frame);
-    frame = null;
-  };
   const move = (ev: PointerEvent): void => {
     pendingX = geo.toWX(ev.clientX);
     pendingY = geo.toWY(ev.clientY);
@@ -463,7 +460,7 @@ function attachGroupDragListeners(
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", up);
-    cancelFrame();
+    frame = cancelPendingDragFrame(frame);
     flush();
     releaseBodyStyle();
     onDragEnd?.();

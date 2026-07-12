@@ -146,9 +146,7 @@ function truncateToByteLimit(raw: string, totalBytes: number): TruncateResult {
 function splitDiffLines(input: string): string[] {
   const rawLines = input.split("\n");
   // Remove the single trailing empty string that results from a terminal newline.
-  return rawLines.length > 0 && rawLines[rawLines.length - 1] === ""
-    ? rawLines.slice(0, -1)
-    : rawLines;
+  return rawLines.at(-1) === "" ? rawLines.slice(0, -1) : rawLines;
 }
 
 function markLastFileTruncated(files: MutableFile[]): void {
@@ -272,10 +270,8 @@ function handleFileHeaderPlusLine(line: string, state: ParserState): boolean {
 // Hunk header
 function handleHunkHeaderLine(line: string, state: ParserState): boolean {
   if (!line.startsWith("@@ ")) return false;
-  if (state.current === null) {
-    // Hunk without a file header — create an anonymous file entry
-    state.current = mutableFile("(unknown)");
-  }
+  // Hunk without a file header — create an anonymous file entry
+  state.current ??= mutableFile("(unknown)");
   flushHunk(state);
   const pos = parseHunkHeader(line);
   state.oldLine = pos?.oldStart ?? 1;

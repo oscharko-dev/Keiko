@@ -374,7 +374,7 @@ function instanceListItem(props: {
 }): ReactNode {
   const { instance, isActive } = props;
   return (
-    <div key={instance.workspaceId} role="listitem" className="tw-switcher-list-item">
+    <li key={instance.workspaceId} className="tw-switcher-list-item">
       <span className="tw-switcher-list-label" title={instance.managedWorktreePath}>
         <strong>{instance.taskId}</strong>
         <span>{instance.lifecycleState}</span>
@@ -388,7 +388,7 @@ function instanceListItem(props: {
         enabled: !isActive && canSwitchTo(instance),
         busy: props.switching,
       })}
-    </div>
+    </li>
   );
 }
 
@@ -408,7 +408,11 @@ function AvailableInstancesSection(props: {
           {props.loading ? t("taskWorkspace.loading") : t("taskWorkspace.noneManaged")}
         </p>
       ) : (
-        <div className="tw-switcher-list" role="list" aria-label={t("taskWorkspace.list")}>
+        <ul
+          className="tw-switcher-list"
+          aria-label={t("taskWorkspace.list")}
+          style={{ listStyle: "none", margin: 0, padding: 0 }}
+        >
           {instances.map((instance) =>
             instanceListItem({
               instance,
@@ -418,7 +422,7 @@ function AvailableInstancesSection(props: {
               t,
             }),
           )}
-        </div>
+        </ul>
       )}
     </div>
   );

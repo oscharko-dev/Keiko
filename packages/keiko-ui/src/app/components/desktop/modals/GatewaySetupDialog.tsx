@@ -172,6 +172,8 @@ interface DerivedSubmitFields {
   readonly parsedVoiceTimeoutMs: number | undefined;
 }
 
+type GatewaySuccessMode = "standard" | "voice";
+
 interface CoreGatewayFields {
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -343,7 +345,7 @@ interface GatewayFormFields {
 function buildSetupGatewayPayload(
   fields: GatewayFormFields,
   derived: DerivedSubmitFields,
-  submittedVoiceCredential: boolean,
+  voiceCredentialFields: Partial<GatewaySetupInput>,
 ): GatewaySetupInput {
   return {
     baseUrl: trimOrUndefined(fields.baseUrl),
@@ -355,75 +357,83 @@ function buildSetupGatewayPayload(
     ...(derived.parsedImageInputModelIds.length === 0
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
-    ...(submittedVoiceCredential
-      ? buildVoiceCredentialFields({
-          voiceBaseUrl: fields.voiceBaseUrl,
-          voiceApiKey: fields.voiceApiKey,
-          voiceApiKeyHeaderName: fields.voiceApiKeyHeaderName,
-          voiceModelId: fields.voiceModelId,
-          voiceRealtimeModelId: fields.voiceRealtimeModelId,
-          voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
-          voiceOutputVoiceId: fields.voiceOutputVoiceId,
-          voiceProviderLocality: fields.voiceProviderLocality,
-          voiceTimeoutMs: derived.parsedVoiceTimeoutMs,
-        })
-      : {}),
+    ...voiceCredentialFields,
     ...(fields.figmaAccessToken.trim() === ""
       ? {}
       : { figmaAccessToken: fields.figmaAccessToken.trim() }),
   };
 }
 
-function figmaOnlyMessage(t: I18nTranslate, submittedVoiceCredential: boolean): string {
-  return submittedVoiceCredential
-    ? t("gatewaySetup.voice.success.audioAndFigma")
-    : "Verified Figma access token. Reloading Keiko…";
+function voiceCredentialFieldsForMode(
+  fields: GatewayFormFields,
+  derived: DerivedSubmitFields,
+  mode: GatewaySuccessMode,
+): Partial<GatewaySetupInput> {
+  if (mode === "standard") {
+    return {};
+  }
+  return buildVoiceCredentialFields({
+    voiceBaseUrl: fields.voiceBaseUrl,
+    voiceApiKey: fields.voiceApiKey,
+    voiceApiKeyHeaderName: fields.voiceApiKeyHeaderName,
+    voiceModelId: fields.voiceModelId,
+    voiceRealtimeModelId: fields.voiceRealtimeModelId,
+    voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
+    voiceOutputVoiceId: fields.voiceOutputVoiceId,
+    voiceProviderLocality: fields.voiceProviderLocality,
+    voiceTimeoutMs: derived.parsedVoiceTimeoutMs,
+  });
 }
 
-function figmaAndGatewaySettingsMessage(
-  t: I18nTranslate,
-  submittedVoiceCredential: boolean,
-): string {
-  return submittedVoiceCredential
-    ? t("gatewaySetup.voice.success.gatewayAudioAndFigma")
-    : "Updated model gateway settings and verified Figma access token. Reloading Keiko…";
+function figmaOnlyMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+  if (mode === "voice") {
+    return t("gatewaySetup.voice.success.audioAndFigma");
+  }
+  return "Verified Figma access token. Reloading Keiko…";
 }
 
-function noFigmaNoGatewayCredentialsMessage(
-  t: I18nTranslate,
-  submittedVoiceCredential: boolean,
-): string {
-  return submittedVoiceCredential
-    ? t("gatewaySetup.voice.success.audio")
-    : "Updated model gateway settings. Reloading Keiko…";
+function figmaAndGatewaySettingsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+  if (mode === "voice") {
+    return t("gatewaySetup.voice.success.gatewayAudioAndFigma");
+  }
+  return "Updated model gateway settings and verified Figma access token. Reloading Keiko…";
+}
+
+function noFigmaNoGatewayCredentialsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+  if (mode === "voice") {
+    return t("gatewaySetup.voice.success.audio");
+  }
+  return "Updated model gateway settings. Reloading Keiko…";
 }
 
 function figmaAndVerifiedModelsMessage(
   t: I18nTranslate,
-  submittedVoiceCredential: boolean,
+  mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
 ): string {
-  return submittedVoiceCredential
-    ? t("gatewaySetup.voice.success.verifiedAudioAndFigma", {
-        verified: verifiedModelSummary,
-        skipped: skippedSummary,
-      })
-    : `${verifiedModelSummary} and Figma access token. Reloading Keiko…${skippedSummary}`;
+  if (mode === "voice") {
+    return t("gatewaySetup.voice.success.verifiedAudioAndFigma", {
+      verified: verifiedModelSummary,
+      skipped: skippedSummary,
+    });
+  }
+  return `${verifiedModelSummary} and Figma access token. Reloading Keiko…${skippedSummary}`;
 }
 
 function verifiedModelsMessage(
   t: I18nTranslate,
-  submittedVoiceCredential: boolean,
+  mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
 ): string {
-  return submittedVoiceCredential
-    ? t("gatewaySetup.voice.success.verifiedAudio", {
-        verified: verifiedModelSummary,
-        skipped: skippedSummary,
-      })
-    : `${verifiedModelSummary}. Reloading Keiko…${skippedSummary}`;
+  if (mode === "voice") {
+    return t("gatewaySetup.voice.success.verifiedAudio", {
+      verified: verifiedModelSummary,
+      skipped: skippedSummary,
+    });
+  }
+  return `${verifiedModelSummary}. Reloading Keiko…${skippedSummary}`;
 }
 
 interface ResolveSuccessMessageInput {
@@ -431,7 +441,7 @@ interface ResolveSuccessMessageInput {
   readonly submittedFigmaCredential: boolean;
   readonly submittedGatewaySettings: boolean;
   readonly submittedGatewayCredentials: boolean;
-  readonly submittedVoiceCredential: boolean;
+  readonly mode: GatewaySuccessMode;
   readonly verifiedModelSummary: string;
   readonly skippedSummary: string;
 }
@@ -442,28 +452,23 @@ function resolveSuccessMessage(input: ResolveSuccessMessageInput): string {
     submittedFigmaCredential,
     submittedGatewaySettings,
     submittedGatewayCredentials,
-    submittedVoiceCredential,
+    mode,
     verifiedModelSummary,
     skippedSummary,
   } = input;
   if (submittedFigmaCredential && !submittedGatewaySettings) {
-    return figmaOnlyMessage(t, submittedVoiceCredential);
+    return figmaOnlyMessage(t, mode);
   }
   if (submittedFigmaCredential && !submittedGatewayCredentials) {
-    return figmaAndGatewaySettingsMessage(t, submittedVoiceCredential);
+    return figmaAndGatewaySettingsMessage(t, mode);
   }
   if (!submittedFigmaCredential && !submittedGatewayCredentials) {
-    return noFigmaNoGatewayCredentialsMessage(t, submittedVoiceCredential);
+    return noFigmaNoGatewayCredentialsMessage(t, mode);
   }
   if (submittedFigmaCredential) {
-    return figmaAndVerifiedModelsMessage(
-      t,
-      submittedVoiceCredential,
-      verifiedModelSummary,
-      skippedSummary,
-    );
+    return figmaAndVerifiedModelsMessage(t, mode, verifiedModelSummary, skippedSummary);
   }
-  return verifiedModelsMessage(t, submittedVoiceCredential, verifiedModelSummary, skippedSummary);
+  return verifiedModelsMessage(t, mode, verifiedModelSummary, skippedSummary);
 }
 
 type GatewaySubmissionOutcome =
@@ -489,14 +494,15 @@ async function performGatewaySubmission(
     parsedTimeoutMs: timeoutsResult.timeoutMs,
     parsedVoiceTimeoutMs: timeoutsResult.voiceTimeoutMs,
   };
-  const submittedVoiceCredential = hasVoiceCredentialInput(fields);
+  const successMode: GatewaySuccessMode = hasVoiceCredentialInput(fields) ? "voice" : "standard";
+  const voiceCredentialFields = voiceCredentialFieldsForMode(fields, derived, successMode);
   const submittedGatewayCredentials =
     !fields.preserveExisting || hasCoreGatewayFieldInput(fields, derived);
   const submittedGatewaySettings =
     submittedGatewayCredentials || derived.parsedTimeoutMs !== undefined;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
-    buildSetupGatewayPayload(fields, derived, submittedVoiceCredential),
+    buildSetupGatewayPayload(fields, derived, voiceCredentialFields),
   );
   const count = result.testedModelIds.length;
   const verifiedModelSummary = `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}`;
@@ -507,7 +513,7 @@ async function performGatewaySubmission(
       submittedFigmaCredential,
       submittedGatewaySettings,
       submittedGatewayCredentials,
-      submittedVoiceCredential,
+      mode: successMode,
       verifiedModelSummary,
       skippedSummary: skippedModelSummary(result.skippedModelIds ?? []),
     }),

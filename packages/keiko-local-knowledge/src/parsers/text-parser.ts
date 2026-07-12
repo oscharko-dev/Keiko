@@ -303,15 +303,23 @@ function emitMarkdownTableRows(
   const diagnostics: ParserDiagnostic[] = [];
   const lines = markdownLines(text);
   let inFence = false;
-  for (let i = 0; i < lines.length; i += 1) {
+  let i = 0;
+  while (i < lines.length) {
     const line = lines[i];
     if (line === undefined) break;
     if (isFenceLine(line.text)) {
       inFence = !inFence;
+      i += 1;
       continue;
     }
-    if (inFence) continue;
-    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) continue;
+    if (inFence) {
+      i += 1;
+      continue;
+    }
+    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) {
+      i += 1;
+      continue;
+    }
     const scan = scanTableRows(
       lines,
       i + 2,

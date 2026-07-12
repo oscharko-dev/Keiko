@@ -23,11 +23,19 @@ const ADR_FILE = /^ADR-(\d{4})-.*\.md$/;
  *  unless a specific ADR is intentionally excluded — an entry here is an explicit waiver. */
 const INDEX_EXCLUSIONS = new Set();
 
+function adrNumber(name) {
+  const match = ADR_FILE.exec(name);
+  if (match?.[1] === undefined) {
+    throw new Error(`Expected ADR file name, got: ${name}`);
+  }
+  return match[1];
+}
+
 // 1. unique numbering — no ADR number is claimed by more than one file.
 function duplicateNumberProblems(files) {
   const byNumber = new Map();
   for (const name of files) {
-    const num = ADR_FILE.exec(name)[1];
+    const num = adrNumber(name);
     byNumber.set(num, [...(byNumber.get(num) ?? []), name]);
   }
   return [...byNumber.entries()]
@@ -43,7 +51,11 @@ function duplicateNumberProblems(files) {
 function readmeLinkTargets(adrDir) {
   const readme = readFileSync(join(adrDir, "README.md"), "utf8");
   const linkTarget = /\]\((?:\.\/)?(ADR-\d{4}-[^)]*\.md)(?:#[^)]*)?\)/g;
-  return new Set([...readme.matchAll(linkTarget)].map((m) => m[1]));
+  return new Set(
+    [...readme.matchAll(linkTarget)]
+      .map((m) => m[1])
+      .filter((target) => typeof target === "string"),
+  );
 }
 
 /**

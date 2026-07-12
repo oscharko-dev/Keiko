@@ -212,7 +212,7 @@ function isAsciiDigitCode(code: number): boolean {
 function scanDigitRunEnd(line: string, start: number): number {
   let j = start;
   const len = line.length;
-  while (j < len && isAsciiDigitCode(line.charCodeAt(j))) {
+  while (j < len && isAsciiDigitCode(line.codePointAt(j) ?? 0)) {
     j += 1;
   }
   return j;
@@ -233,7 +233,7 @@ function firstUnixTimestamp(line: string): number | undefined {
   let i = 0;
   const len = line.length;
   while (i < len) {
-    if (!isAsciiDigitCode(line.charCodeAt(i))) {
+    if (!isAsciiDigitCode(line.codePointAt(i) ?? 0)) {
       i += 1;
       continue;
     }

@@ -1098,18 +1098,20 @@ export function RunLauncher({
     );
   }
 
-  function renderCapsuleOptionList(isCapsule: boolean): ReactNode {
-    return isCapsule
-      ? capsules.map((cap) => (
-          <option key={cap.id} value={cap.id}>
-            {cap.displayName}
-          </option>
-        ))
-      : capsuleSets.map((set) => (
-          <option key={set.id} value={set.id}>
-            {`${set.displayName} (${String(set.capsuleCount)} pods)`}
-          </option>
-        ));
+  function renderCapsuleOptions(): ReactNode {
+    return capsules.map((cap) => (
+      <option key={cap.id} value={cap.id}>
+        {cap.displayName}
+      </option>
+    ));
+  }
+
+  function renderCapsuleSetOptions(): ReactNode {
+    return capsuleSets.map((set) => (
+      <option key={set.id} value={set.id}>
+        {`${set.displayName} (${String(set.capsuleCount)} pods)`}
+      </option>
+    ));
   }
 
   function renderCapsuleSourceField(): ReactNode {
@@ -1140,7 +1142,7 @@ export function RunLauncher({
                 : t("qi.launcher.noKnowledgePodSets")}
             </option>
           ) : null}
-          {renderCapsuleOptionList(isCapsule)}
+          {isCapsule ? renderCapsuleOptions() : renderCapsuleSetOptions()}
         </select>
         {selectedSourceGuidance !== undefined ? (
           <span

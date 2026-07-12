@@ -110,7 +110,11 @@ function nextEnabledIndex(
 }
 
 function resolveTypeaheadStartIndex(activeIndex: number, selectedIndex: number): number {
-  return activeIndex >= 0 ? activeIndex : selectedIndex >= 0 ? selectedIndex : 0;
+  return activeIndex >= 0 ? activeIndex : Math.max(selectedIndex, 0);
+}
+
+function triggerOpenDirectionClass(openUp: boolean): string {
+  return openUp ? "ksel-trigger-open-up" : "ksel-trigger-open-down";
 }
 
 function findTypeaheadIndex(options: readonly FlatOption[], start: number, query: string): number {
@@ -142,9 +146,7 @@ function buildTriggerClasses(params: {
     params.triggerClassName ?? "",
     params.open ? "ksel-trigger-open" : "",
     params.open && params.position?.attached === true
-      ? params.openUp
-        ? "ksel-trigger-open-up"
-        : "ksel-trigger-open-down"
+      ? triggerOpenDirectionClass(params.openUp)
       : "",
     params.disabled ? "ksel-trigger-disabled" : "",
   ]

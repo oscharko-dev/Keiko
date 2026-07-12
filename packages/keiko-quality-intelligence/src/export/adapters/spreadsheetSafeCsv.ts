@@ -186,8 +186,12 @@ function consumeUnquotedChar(body: string, index: number, state: CsvParseState):
 
 function parseCsvRows(body: string): readonly (readonly string[])[] {
   const state: CsvParseState = { rows: [], row: [], cell: "", inQuotes: false };
-  for (let i = 0; i < body.length; i += 1) {
-    i = state.inQuotes ? consumeQuotedChar(body, i, state) : consumeUnquotedChar(body, i, state);
+  let i = 0;
+  while (i < body.length) {
+    const next = state.inQuotes
+      ? consumeQuotedChar(body, i, state)
+      : consumeUnquotedChar(body, i, state);
+    i = next + 1;
   }
   if (state.cell.length > 0 || state.row.length > 0) {
     finalizeCsvRow(state);

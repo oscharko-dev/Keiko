@@ -115,11 +115,13 @@ export interface DecodedText {
   readonly bomBytes: number;
 }
 
+type Utf16Codec = "utf-16le" | "utf-16be";
+
 // GRD-012: detect UTF-16 LE/BE by BOM (common Windows .txt/.csv/.json exports) and re-decode
 // with the matching codec. Without this they decode as UTF-8 mojibake (every other byte a NUL /
 // replacement char) and are silently chunked/embedded as garbage. UTF-32 LE (FF FE 00 00) is
 // explicitly excluded so it is not mis-read as UTF-16 LE.
-function utf16CodecForBom(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
+function utf16CodecForBom(bytes: Uint8Array): Utf16Codec | undefined {
   if (bytes.byteLength < 2) return undefined;
   const b0 = bytes[0];
   const b1 = bytes[1];

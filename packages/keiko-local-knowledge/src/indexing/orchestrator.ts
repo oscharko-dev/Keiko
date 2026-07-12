@@ -791,7 +791,7 @@ async function prepareChunksToEmbedSafely(
 
 function lastChunkIdOfBatch(vectors: EmbedBatchResult["vectors"]): ChunkId | null {
   if (vectors.length === 0) return null;
-  const last = vectors[vectors.length - 1];
+  const last = vectors.at(-1);
   return last === undefined ? null : last.chunkId;
 }
 

@@ -77,8 +77,12 @@ import {
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
-import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
-import type { AttachmentRejectionReason, SentDocumentDisclosure } from "./hooks/useChatSession";
+import type {
+  AttachmentRejectionReason,
+  ChatSessionApi,
+  SendStatus,
+  SentDocumentDisclosure,
+} from "./hooks/useChatSession";
 import {
   supportsDictation,
   supportsRealtimeVoice,
@@ -4188,7 +4192,7 @@ function lastVisibleChatMessage(
   visible: readonly ChatMessage[],
 ): ChatMessage | undefined {
   if (hasLiveStreamingAssistant) return streamingAssistantMessage;
-  if (visible.length > 0) return visible[visible.length - 1];
+  if (visible.length > 0) return visible.at(-1);
   return undefined;
 }
 
