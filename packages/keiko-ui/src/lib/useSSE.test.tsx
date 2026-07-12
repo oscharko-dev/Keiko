@@ -165,6 +165,17 @@ describe("useSSE", () => {
   // leading commit plus one trailing frame flush.
   it("coalesces an event burst into a leading commit plus one frame flush", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
+    let frameCallback: FrameRequestCallback | undefined;
+    let nextFrameHandle = 1;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallback = callback;
+        nextFrameHandle += 1;
+        return nextFrameHandle;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const renders = { count: 0 };
     const view = renderHook(() => {
       renders.count += 1;
@@ -182,6 +193,10 @@ describe("useSSE", () => {
         await Promise.resolve();
       });
     }
+    await act(async () => {
+      frameCallback?.(performance.now());
+      await Promise.resolve();
+    });
     await waitFor(() => expect(view.result.current.events).toHaveLength(30));
     expect(renders.count - before).toBeLessThanOrEqual(6);
     view.unmount();
