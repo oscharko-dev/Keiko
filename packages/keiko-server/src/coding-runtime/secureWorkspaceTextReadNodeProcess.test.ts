@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/no-unsafe-call, @typescript-eslint/unbound-method */
+/* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/unbound-method */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -29,15 +29,22 @@ const binding: PortableSecureWorkspaceReadBinding = {
 
 function fakeChild() {
   const events = new EventEmitter();
+  const stdout = new PassThrough();
   const child: SecureWorkspaceReadNodeChild = {
     stdin: new PassThrough(),
-    stdout: new PassThrough(),
+    stdout,
     stderr: new PassThrough(),
     kill: vi.fn(() => true),
     on: events.on.bind(events),
     once: events.once.bind(events),
   };
-  return { child, close: (code: number | null): void => events.emit("close", code) };
+  return {
+    child,
+    close: (code: number | null): void => {
+      events.emit("close", code);
+    },
+    stdout,
+  };
 }
 
 describe("Node secure workspace-read process adapter", () => {
@@ -66,7 +73,7 @@ describe("Node secure workspace-read process adapter", () => {
         windowsHide: true,
       }),
     );
-    fake.child.stdout.write("KSS1");
+    fake.stdout.write("KSS1");
     fake.close(0);
     await expect(run).resolves.toEqual(Buffer.from("KSS1"));
   });

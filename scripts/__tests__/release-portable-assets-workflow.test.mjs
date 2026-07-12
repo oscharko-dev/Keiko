@@ -63,6 +63,15 @@ describe("portable secure-read qualification", () => {
     }
     expect(secureReadSmoke).toContain("index < 1_000");
     expect(secureReadSmoke).toContain("length: 100");
+    expect(secureReadSmoke).toContain("await runBounded(");
+    expect(secureReadSmoke).toContain("    8,");
+    expect(secureReadSmoke).toContain("maxInFlight > 8");
+    expect(secureReadSmoke).toContain("assertExactRead(await runDecoded(executable, frame))");
+    expect(
+      secureReadSmoke.indexOf("assertExactRead(await runDecoded(executable, frame))"),
+    ).toBeLessThan(
+      secureReadSmoke.indexOf("const before = await stableResourceCount(nodePlatform)"),
+    );
     expect(secureReadSmoke).toContain("p95 > 500");
     expect(secureReadSmoke).toContain("after !== before");
     expect(secureReadSmoke).toContain("HandleCount");

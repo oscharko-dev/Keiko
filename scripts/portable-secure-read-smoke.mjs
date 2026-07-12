@@ -143,8 +143,11 @@ function assertExactRead(result) {
 }
 
 async function smokeLoad(executable, fixture, nodePlatform) {
-  const before = await stableResourceCount(nodePlatform);
   const frame = request(fixture, "src/safe.txt");
+  // The native helper initializes lazily on its first spawn. Finish that transition before
+  // sampling the parent so the resource delta check cannot hide a one-time descriptor leak.
+  assertExactRead(await runDecoded(executable, frame));
+  const before = await stableResourceCount(nodePlatform);
   const durations = [];
   for (let index = 0; index < 1_000; index += 1) {
     const result = await runDecoded(executable, frame);
@@ -155,14 +158,40 @@ async function smokeLoad(executable, fixture, nodePlatform) {
   const p95 = durations[Math.ceil(durations.length * 0.95) - 1];
   if (p95 > 500 || durations.at(-1) >= 2_000) fail("sequential load qualification exceeded bounds");
   const batchStarted = performance.now();
-  const concurrent = await Promise.all(
-    Array.from({ length: 100 }, () => runDecoded(executable, frame)),
+  const { maxInFlight, results: concurrent } = await runBounded(
+    Array.from({ length: 100 }, () => () => runDecoded(executable, frame)),
+    8,
   );
+  if (maxInFlight > 8) fail("concurrent load qualification exceeded bounded concurrency");
   concurrent.forEach(assertExactRead);
   if (performance.now() - batchStarted > 10_000)
     fail("concurrent load qualification exceeded bounds");
   const after = await stableResourceCount(nodePlatform);
   if (after !== before) fail("load qualification detected a parent resource delta");
+}
+
+export async function runBounded(tasks, maxInFlight) {
+  if (!Number.isSafeInteger(maxInFlight) || maxInFlight < 1) throw new Error("invalid concurrency");
+  const results = new Array(tasks.length);
+  let nextIndex = 0;
+  let inFlight = 0;
+  let observedMaxInFlight = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= tasks.length) return;
+      inFlight += 1;
+      observedMaxInFlight = Math.max(observedMaxInFlight, inFlight);
+      try {
+        results[index] = await tasks[index]();
+      } finally {
+        inFlight -= 1;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(maxInFlight, tasks.length) }, worker));
+  return { maxInFlight: observedMaxInFlight, results };
 }
 
 async function stableResourceCount(nodePlatform) {

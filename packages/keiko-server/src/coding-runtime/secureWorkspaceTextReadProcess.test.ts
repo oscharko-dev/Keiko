@@ -33,7 +33,11 @@ function fakeChild(): {
           if (event === "data") stdoutListeners.push(listener);
         },
       },
-      stderr: { on: (_event, listener): void => stderrListeners.push(listener) },
+      stderr: {
+        on: (_event, listener): void => {
+          stderrListeners.push(listener);
+        },
+      },
       stdin: { end },
       on: (event, listener): void => {
         if (event === "close") closeListeners.push(listener);
