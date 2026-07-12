@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const docs = [
+  "README.md",
   "docs/feedback-intake/2077-verification-matrix.md",
+  "docs/feedback-intake/operator-runbook.md",
+  "docs/feedback-intake/user-guide.md",
   "docs/troubleshooting/feedback-flow.md",
   "docs/troubleshooting/README.md",
 ] as const;
@@ -32,11 +35,32 @@ function withoutFragment(link: string): string {
   return target;
 }
 
+function markdownAnchor(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(/\s+/gu, "-")
+    .replace(/-+/gu, "-");
+}
+
+function assertLocalAnchor(relativePath: string, link: string): void {
+  const fragment = link.split("#", 2)[1];
+  if (fragment === undefined || fragment === "") return;
+  const target = withoutFragment(link);
+  const targetPath = target === "" ? relativePath : resolve(dirname(relativePath), target);
+  const anchors = read(targetPath)
+    .split("\n")
+    .filter((line) => /^#{1,6}\s/u.test(line))
+    .map((line) => markdownAnchor(line.replace(/^#{1,6}\s+/u, "")));
+  expect(anchors, `${relativePath} -> ${link}`).toContain(decodeURIComponent(fragment));
+}
+
 describe("issue #2077 documentation", () => {
   it("contains the verification matrix and four template-shaped troubleshooting entries", () => {
-    const matrix = read(docs[0]);
-    const troubleshooting = read(docs[1]);
-    const index = read(docs[2]);
+    const matrix = read("docs/feedback-intake/2077-verification-matrix.md");
+    const troubleshooting = read("docs/troubleshooting/feedback-flow.md");
+    const index = read("docs/troubleshooting/README.md");
 
     expect(matrix).toContain("# Issue #2077");
     expect(matrix).toContain("## Verification scope");
@@ -61,7 +85,7 @@ describe("issue #2077 documentation", () => {
     expect(troubleshooting).not.toMatch(/keiko feedback(?:\s|`)/u);
     expect(troubleshooting).not.toMatch(/(?:wait|retry)[^\n]{0,100}rate-limited/iu);
     expect(troubleshooting).toContain(
-      "Publication needs manual remediation. Do not repeat the action.",
+      "Publication needs manual reconciliation. Do not repeat the action.",
     );
   });
 
@@ -74,6 +98,7 @@ describe("issue #2077 documentation", () => {
         if (/^(?:https?:|mailto:|#)/u.test(link)) continue;
         const target = withoutFragment(link);
         expect(existsSync(resolve(repoRoot, dirname(relativePath), target))).toBe(true);
+        assertLocalAnchor(relativePath, link);
       }
     }
     expect(markdown).toContain("[`SECURITY.md`](../../SECURITY.md)");
@@ -81,11 +106,11 @@ describe("issue #2077 documentation", () => {
   });
 
   it("pins safe stable codes and release wording without sensitive detail", () => {
-    const troubleshooting = read(docs[1]);
+    const troubleshooting = read("docs/troubleshooting/feedback-flow.md");
     for (const code of [
       "unavailable",
       "rate-limited",
-      "Publication needs manual remediation. Do not repeat the action.",
+      "permission-denied",
       "raw-log-content/unsafe-content/rewrite-required",
     ]) {
       expect(troubleshooting).toContain(`\`${code}\``);
@@ -109,6 +134,10 @@ describe("issue #2077 documentation", () => {
 
     const forbidden =
       /(?:api\s*key|customer\s+data|internal\s+(?:ip|endpoint|url)|raw\s+logs?|hmac|\bip\s+address|thresholds?|private\s+key|access\s+token|abuse\s+detail)/iu;
-    for (const relativePath of docs.slice(0, 2)) expect(read(relativePath)).not.toMatch(forbidden);
+    for (const relativePath of [
+      "docs/feedback-intake/2077-verification-matrix.md",
+      "docs/troubleshooting/feedback-flow.md",
+    ])
+      expect(read(relativePath)).not.toMatch(forbidden);
   });
 });

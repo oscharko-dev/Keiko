@@ -54,7 +54,7 @@ service admission decision, not an indication that the report text is unsafe.
 
 **Diagnostic Steps**
 
-Record the exact `rate-limited` outcome from the hermetic #2077 integration test or the feedback
+Record the exact `rate-limited` outcome from the isolated PostgreSQL #2077 integration test or the feedback
 surface's content-free response. Do not resubmit the report to diagnose this state. `unavailable`
 indicates a destination/readiness problem; consult that entry instead.
 
@@ -67,17 +67,17 @@ indicates a destination/readiness problem; consult that entry instead.
 
 ## GitHub publication permission failed
 
-| Field             | Value                                                             |
-| ----------------- | ----------------------------------------------------------------- |
-| Severity          | High                                                              |
-| Surface           | Workflows / Evidence                                              |
-| Stable identifier | `Publication needs manual remediation. Do not repeat the action.` |
+| Field             | Value                |
+| ----------------- | -------------------- |
+| Severity          | High                 |
+| Surface           | Workflows / Evidence |
+| Stable identifier | `permission-denied`  |
 
 **Symptom**
 
-A maintainer-approved item cannot be published and the maintainer surface reports
-`Publication needs manual remediation. Do not repeat the action.` The reviewed item remains available
-for reconciliation; the underlying provider state is content-free `unavailable`.
+A maintainer-approved item cannot be published. The provider failure is `permission-denied`, and the
+item enters `manual-reconciliation` with no public issue linkage. The maintainer surface reports
+`Publication needs manual reconciliation. Do not repeat the action.`
 
 **Root Cause**
 
@@ -86,7 +86,7 @@ The adapter fails closed rather than widening authority or retrying an unverifie
 
 **Diagnostic Steps**
 
-Record the exact maintainer message and content-free `unavailable` publication status, then follow
+Record the exact maintainer message, `permission-denied` failure, and `manual-reconciliation` state, then follow
 the [operator runbook publication-readiness checklist](../feedback-intake/operator-runbook.md#github-app-setup-and-publication-readiness).
 A `rate-limited` result concerns intake admission and is not a provider permission failure.
 

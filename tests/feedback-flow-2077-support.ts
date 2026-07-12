@@ -11,11 +11,16 @@ import {
   payloadCount,
   preview,
   previewAndSubmit,
+  receiptIsContentFree,
   safeDraft,
   storedPayload,
   submitPrepared,
 } from "./feedback-flow-2077-infrastructure.js";
-import { publish } from "./feedback-flow-2077-publication.js";
+import {
+  publicationPreservesRedaction,
+  publish,
+  verifyMaintainerBoundary,
+} from "./feedback-flow-2077-publication.js";
 
 export type { FeedbackFlowResult } from "./feedback-flow-2077-common.js";
 
@@ -32,6 +37,11 @@ export async function runFeedbackFlow(databaseUrl: string): Promise<FeedbackFlow
   try {
     const prepared = await previewAndSubmit(harness.bff.origin);
     const payload = await storedPayload(harness.pool, harness.schema);
+    const receiptContentFree = await receiptIsContentFree(harness.intake.origin, prepared);
+    const maintainerBoundaryEnforced = await verifyMaintainerBoundary(
+      harness.scopedPool,
+      payload.id,
+    );
     const transport = await publish(harness.scopedPool, harness.installationScopedPool, payload);
     const linkage = await publicIssueLinkage(harness.pool, harness.schema);
     return flowResult(
@@ -40,6 +50,9 @@ export async function runFeedbackFlow(databaseUrl: string): Promise<FeedbackFlow
       payload.exactBodySha256,
       transport.createdIssueCount(),
       linkage,
+      maintainerBoundaryEnforced,
+      publicationPreservesRedaction(transport, payload.canonicalBytes),
+      receiptContentFree,
     );
   } finally {
     await harness.close();
@@ -79,14 +92,20 @@ function flowResult(
   exactBodySha256: string,
   createdIssues: number,
   linkage: { readonly number: number; readonly url: string },
+  maintainerBoundaryEnforced: boolean,
+  redactionPreserved: boolean,
+  receiptContentFree: boolean,
 ): FeedbackFlowResult {
   return {
     createdIssues,
     exactBytesPreserved:
       Buffer.from(prepared.canonicalJson).equals(canonicalBytes) &&
       prepared.exactBodySha256 === exactBodySha256,
+    maintainerBoundaryEnforced,
     publicIssueNumber: linkage.number,
     publicIssueUrl: linkage.url,
+    receiptContentFree,
+    redactionPreserved,
   };
 }
 

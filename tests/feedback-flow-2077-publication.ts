@@ -12,15 +12,19 @@ import { createMaintainerHttpHandler } from "../packages/keiko-feedback-intake/s
 import { MaintainerLoginLimiter } from "../packages/keiko-feedback-intake/src/maintainer-login-limiter.js";
 import { PostgresFeedbackPublicationQuery } from "../packages/keiko-feedback-intake/src/feedback-publication-query.js";
 import { PostgresFeedbackPublicationRepository } from "../packages/keiko-feedback-intake/src/feedback-publication-store.js";
+import { recomputeFeedbackIssueProjectionV1 } from "../packages/keiko-feedback-intake/src/feedback-publication-projection.js";
 import { FeedbackPublicationWorker } from "../packages/keiko-feedback-intake/src/feedback-publication-worker.js";
 import { PostgresFeedbackPublicationWorkerStore } from "../packages/keiko-feedback-intake/src/feedback-publication-worker-store.js";
 import { PostgresFeedbackReviewQuery } from "../packages/keiko-feedback-intake/src/feedback-review-query.js";
 import { PostgresFeedbackReviewRepository } from "../packages/keiko-feedback-intake/src/feedback-review-store.js";
 import type { PgPoolLike } from "../packages/keiko-feedback-intake/src/postgres.js";
+import type { FeedbackReportV1 } from "@oscharko-dev/keiko-contracts/feedback-report";
 
 import {
   ACTOR,
+  BENIGN_CANARY,
   NOW,
+  SENSITIVE_CANARY,
   TARGET,
   type StartedServer,
   type StoredPayload,
@@ -44,6 +48,7 @@ interface MaintainerHandlerContext {
   readonly origin: string;
   readonly capability: string;
   readonly csrfToken: string;
+  readonly permissions: readonly ("feedback.review" | "feedback.publish")[];
 }
 
 export class FakeGithubTransport implements GithubTransport {
@@ -58,6 +63,13 @@ export class FakeGithubTransport implements GithubTransport {
 
   createdIssueCount(): number {
     return this.operations.filter((operation) => operation.kind === "create-issue").length;
+  }
+
+  createdIssue(): Extract<GithubHttpOperation, { readonly kind: "create-issue" }> | undefined {
+    return this.operations.find(
+      (operation): operation is Extract<GithubHttpOperation, { readonly kind: "create-issue" }> =>
+        operation.kind === "create-issue",
+    );
   }
 
   private responseFor(operation: GithubHttpOperation): GithubHttpResponse {
@@ -136,6 +148,10 @@ function csrfHash(token: string): Uint8Array {
 async function startMaintainer(
   pool: PgPoolLike,
   publication: PostgresFeedbackPublicationRepository,
+  permissions: readonly ("feedback.review" | "feedback.publish")[] = [
+    "feedback.review",
+    "feedback.publish",
+  ],
 ): Promise<MaintainerServer> {
   const capability = "A".repeat(43);
   const csrfToken = "feedback-flow-csrf";
@@ -152,6 +168,7 @@ async function startMaintainer(
       origin: started.origin,
       capability,
       csrfToken,
+      permissions,
     }),
   );
   return { ...started, csrfToken, cookie: `__Host-keiko-feedback-session=${capability}` };
@@ -162,7 +179,7 @@ function maintainerHandlerDependencies(
 ): Parameters<typeof createMaintainerHttpHandler>[0] {
   return {
     publicOrigin: context.origin,
-    auth: maintainerAuth(context.capability, context.csrfToken),
+    auth: maintainerAuth(context.capability, context.csrfToken, context.permissions),
     query: new PostgresFeedbackReviewQuery(context.pool),
     review: new PostgresFeedbackReviewRepository(context.pool, 2_000, [], () => new Date()),
     publication: {
@@ -192,6 +209,7 @@ function maintainerHandlerDependencies(
 function maintainerAuth(
   capability: string,
   csrfToken: string,
+  permissions: readonly ("feedback.review" | "feedback.publish")[],
 ): Parameters<typeof createMaintainerHttpHandler>[0]["auth"] {
   return {
     login: (): Promise<never> => Promise.reject(new Error("not used")),
@@ -201,7 +219,7 @@ function maintainerAuth(
         value === capability
           ? {
               ...ACTOR,
-              permissions: ["feedback.review", "feedback.publish"],
+              permissions,
               csrfHash: csrfHash(csrfToken),
               absoluteExpiresAt: new Date(Date.now() + 60_000),
             }
@@ -227,6 +245,87 @@ export async function publish(
   const maintainer = await startMaintainer(pool, repository);
   const approval = await approvePublication(maintainer, payload.id);
   return runPublicationWorker(pool, installationPool, approval.targetPolicyDigest, denySearch);
+}
+
+export async function verifyMaintainerBoundary(
+  pool: PgPoolLike,
+  payloadId: string,
+): Promise<boolean> {
+  const repository = new PostgresFeedbackPublicationRepository(
+    pool,
+    ACTOR.permissionPolicyVersion,
+    () => TARGET,
+    2_000,
+    () => NOW,
+  );
+  const maintainer = await startMaintainer(pool, repository, ["feedback.review"]);
+  try {
+    const request = (headers: Record<string, string>): Promise<Response> =>
+      fetch(`${maintainer.origin}/v1/maintainer/reviews/${payloadId}/publication/prepare`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "prepare-publication",
+          expectedVersion: 1,
+          targetKey: TARGET.targetKey,
+          idempotencyKey: "feedback-flow-boundary",
+        }),
+      });
+    const missingSession = await request({
+      "Content-Type": "application/json",
+      Origin: maintainer.origin,
+      "keiko-feedback-csrf": maintainer.csrfToken,
+    });
+    const invalidCsrf = await request({
+      ...maintainerHeaders(maintainer),
+      "keiko-feedback-csrf": "invalid-feedback-flow-csrf",
+    });
+    const missingPermission = await request(maintainerHeaders(maintainer));
+    return (
+      missingSession.status === 401 &&
+      invalidCsrf.status === 403 &&
+      missingPermission.status === 403 &&
+      (await publicationPreparationCount(pool)) === 0
+    );
+  } finally {
+    await close(maintainer.server);
+  }
+}
+
+export function publicationPreservesRedaction(
+  transport: FakeGithubTransport,
+  canonicalBytes: Buffer,
+): boolean {
+  const operation = transport.createdIssue();
+  if (operation === undefined) return false;
+  const publicProjection = `${operation.title}\n${operation.body}`;
+  const marker = /<!-- keiko-feedback-reconciliation-v1:[A-Za-z0-9_-]{43} -->$/u.exec(
+    operation.body,
+  )?.[0];
+  if (marker === undefined) return false;
+  const expected = recomputeFeedbackIssueProjectionV1(
+    JSON.parse(canonicalBytes.toString("utf8")) as FeedbackReportV1,
+    TARGET,
+    marker,
+  );
+  return (
+    operation.title === expected.title &&
+    operation.body === expected.body &&
+    publicProjection.includes(BENIGN_CANARY) &&
+    !publicProjection.includes(SENSITIVE_CANARY)
+  );
+}
+
+async function publicationPreparationCount(pool: PgPoolLike): Promise<number> {
+  const client = await pool.connect();
+  try {
+    const result = await client.query<{ readonly count: string }>(
+      "SELECT count(*)::text AS count FROM feedback_publication_preparations",
+    );
+    return Number(result.rows[0]?.count ?? "0");
+  } finally {
+    client.release();
+  }
 }
 
 async function approvePublication(

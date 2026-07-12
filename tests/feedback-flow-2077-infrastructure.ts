@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Pool } from "pg";
+import {
+  FEEDBACK_INTAKE_RECEIPT_PATH_PREFIX_V1,
+  FEEDBACK_RECEIPT_AUTH_SCHEME_V1,
+} from "@oscharko-dev/keiko-contracts/feedback-intake";
 
 import { buildCspHeader } from "../packages/keiko-server/src/csp.js";
 import { buildRedactor, type UiHandlerDeps } from "../packages/keiko-server/src/deps.js";
@@ -28,10 +32,13 @@ import { createPostgresFeedbackIntake } from "../packages/keiko-feedback-intake/
 import type { IntakeSecretProvider } from "../packages/keiko-feedback-intake/src/types.js";
 
 import {
+  BENIGN_CANARY,
   NOW,
+  SENSITIVE_CANARY,
   type PreparedFeedback,
   type StartedServer,
   type StoredPayload,
+  type SubmittedFeedback,
 } from "./feedback-flow-2077-common.js";
 
 interface StartedBff extends StartedServer {
@@ -45,6 +52,7 @@ export interface FeedbackFlowHarness {
   readonly scopedPool: PgPoolLike;
   readonly installationScopedPool: PgPoolLike;
   readonly bff: StartedBff;
+  readonly intake: StartedServer;
   readonly close: () => Promise<void>;
 }
 
@@ -93,6 +101,7 @@ export async function createFeedbackFlowHarness(
     scopedPool: scoped,
     installationScopedPool: scopedPool(installationPool, schema),
     bff,
+    intake,
     close: async (): Promise<void> => {
       await close(bff.server);
       await bff.cleanup();
@@ -237,6 +246,7 @@ function handlerDeps(intakeOrigin: string): UiHandlerDeps {
     },
     env: {},
     redactor: buildRedactor({}),
+    redactionSecrets: [SENSITIVE_CANARY],
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
@@ -277,17 +287,59 @@ async function startBff(intakeOrigin: string): Promise<StartedBff> {
   };
 }
 
-export async function previewAndSubmit(origin: string): Promise<PreparedFeedback> {
+export async function previewAndSubmit(origin: string): Promise<SubmittedFeedback> {
   const previewResponse = await preview(origin, positiveDraft());
   const previewText = await previewResponse.text();
   if (!previewResponse.ok) throw new Error(`Feedback preview was rejected: ${previewText}`);
   const prepared = JSON.parse(previewText) as PreparedFeedback;
+  if (prepared.canonicalJson.includes(SENSITIVE_CANARY)) {
+    throw new Error("Prepared feedback retained the sensitive canary");
+  }
+  if (!prepared.canonicalJson.includes(BENIGN_CANARY)) {
+    throw new Error("Prepared feedback removed the benign false-positive canary");
+  }
   const submitted = await submitPrepared(origin, prepared);
   const submittedText = await submitted.text();
-  if (!submitted.ok || (JSON.parse(submittedText) as { outcome?: string }).outcome !== "accepted") {
+  const outcome = JSON.parse(submittedText) as {
+    readonly outcome?: string;
+    readonly receipt?: SubmittedFeedback["receipt"];
+  };
+  if (!submitted.ok || outcome.outcome !== "accepted" || outcome.receipt === undefined) {
     throw new Error(`Feedback submission was not accepted: ${submittedText}`);
   }
-  return prepared;
+  if (
+    submittedText.includes(prepared.canonicalJson) ||
+    submittedText.includes(SENSITIVE_CANARY) ||
+    submittedText.includes(BENIGN_CANARY)
+  ) {
+    throw new Error("Feedback admission response echoed report content");
+  }
+  return { ...prepared, receipt: outcome.receipt };
+}
+
+export async function receiptIsContentFree(
+  intakeOrigin: string,
+  submitted: SubmittedFeedback,
+): Promise<boolean> {
+  const response = await fetch(
+    `${intakeOrigin}${FEEDBACK_INTAKE_RECEIPT_PATH_PREFIX_V1}${submitted.receipt.receiptId}`,
+    {
+      headers: {
+        Authorization: `${FEEDBACK_RECEIPT_AUTH_SCHEME_V1} ${submitted.receipt.receiptSecret}`,
+      },
+    },
+  );
+  const text = await response.text();
+  if (!response.ok) return false;
+  const body = JSON.parse(text) as Record<string, unknown>;
+  return (
+    Object.keys(body).sort().join(",") === "expiresAt,receiptId,status" &&
+    body.receiptId === submitted.receipt.receiptId &&
+    body.status === "received" &&
+    !text.includes(submitted.canonicalJson) &&
+    !text.includes(SENSITIVE_CANARY) &&
+    !text.includes(BENIGN_CANARY)
+  );
 }
 
 export function requestHeaders(): Record<string, string> {
@@ -313,8 +365,8 @@ export function safeDraft(): Record<string, string> {
 function positiveDraft(): Record<string, string> {
   return {
     ...safeDraft(),
-    title: "Feedback flow contract",
-    description: "The governed report reaches maintainer review.",
+    title: BENIGN_CANARY,
+    description: `The governed report reaches maintainer review at ${SENSITIVE_CANARY}.`,
     expectedBehavior: "The report is reviewed before publication.",
     actualBehavior: "The report is ready for review.",
   };

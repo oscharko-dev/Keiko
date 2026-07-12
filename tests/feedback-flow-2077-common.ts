@@ -2,6 +2,8 @@ import type { FeedbackPublicationTargetPolicySnapshotV1 } from "@oscharko-dev/ke
 import type { Server } from "node:http";
 
 export const NOW = new Date("2026-07-12T21:30:00.000Z");
+export const SENSITIVE_CANARY = "feedback-secret.example.test";
+export const BENIGN_CANARY = "Bearer";
 
 export const TARGET: FeedbackPublicationTargetPolicySnapshotV1 = {
   apiOrigin: "https://api.github.com",
@@ -24,8 +26,11 @@ export const ACTOR = {
 export interface FeedbackFlowResult {
   readonly createdIssues: number;
   readonly exactBytesPreserved: boolean;
+  readonly maintainerBoundaryEnforced: boolean;
   readonly publicIssueNumber: number;
   readonly publicIssueUrl: string;
+  readonly receiptContentFree: boolean;
+  readonly redactionPreserved: boolean;
 }
 
 export interface StartedServer {
@@ -42,6 +47,14 @@ export interface StoredPayload {
 export interface PreparedFeedback {
   readonly canonicalJson: string;
   readonly exactBodySha256: string;
+}
+
+export interface SubmittedFeedback extends PreparedFeedback {
+  readonly receipt: {
+    readonly receiptId: string;
+    readonly receiptSecret: string;
+    readonly expiresAt: string;
+  };
 }
 
 export type NegativeScenario = "unsafe" | "unavailable" | "rate-limited" | "github-permission";

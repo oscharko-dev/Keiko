@@ -14,8 +14,11 @@ describe("governed feedback flow", () => {
       expect(result).toEqual({
         createdIssues: 1,
         exactBytesPreserved: true,
+        maintainerBoundaryEnforced: true,
         publicIssueNumber: 2077,
         publicIssueUrl: "https://github.com/keiko-feedback/public-findings/issues/2077",
+        receiptContentFree: true,
+        redactionPreserved: true,
       });
     },
     30_000,
