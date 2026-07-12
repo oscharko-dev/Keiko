@@ -23,6 +23,72 @@ interface SourceContext {
   readonly startedAt: number;
 }
 
+interface SourceExpiry {
+  readonly expiresAt: number;
+  readonly sourceKey: string;
+  readonly startedAt: number;
+}
+
+class SourceExpiryQueue {
+  private readonly records: SourceExpiry[] = [];
+
+  get size(): number {
+    return this.records.length;
+  }
+
+  peek(): SourceExpiry | undefined {
+    return this.records[0];
+  }
+
+  push(record: SourceExpiry): void {
+    this.records.push(record);
+    let index = this.records.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if ((this.records[parent]?.expiresAt ?? 0) <= record.expiresAt) break;
+      this.records[index] = this.recordAt(parent);
+      index = parent;
+    }
+    this.records[index] = record;
+  }
+
+  pop(): SourceExpiry | undefined {
+    const first = this.records[0];
+    const last = this.records.pop();
+    if (first === undefined || last === undefined || this.records.length === 0) return first;
+    this.records[0] = last;
+    this.siftDown();
+    return first;
+  }
+
+  private siftDown(): void {
+    let index = 0;
+    let smaller = this.smallerChild(index);
+    while (
+      smaller !== undefined &&
+      this.recordAt(index).expiresAt > this.recordAt(smaller).expiresAt
+    ) {
+      [this.records[index], this.records[smaller]] = [this.recordAt(smaller), this.recordAt(index)];
+      index = smaller;
+      smaller = this.smallerChild(index);
+    }
+  }
+
+  private smallerChild(index: number): number | undefined {
+    const left = 2 * index + 1;
+    if (left >= this.records.length) return undefined;
+    const right = left + 1;
+    if (right >= this.records.length) return left;
+    return this.recordAt(right).expiresAt < this.recordAt(left).expiresAt ? right : left;
+  }
+
+  private recordAt(index: number): SourceExpiry {
+    const record = this.records[index];
+    if (record === undefined) throw new Error("Maintainer login expiry heap invariant violated");
+    return record;
+  }
+}
+
 function retainedSourceCapacity(limits: MaintainerLoginLimits): number {
   // Inactive source windows live for at most W and therefore overlap at most two
   // global W windows (2 * global). Older live entries must be active (concurrency).
@@ -32,6 +98,7 @@ function retainedSourceCapacity(limits: MaintainerLoginLimits): number {
 export class MaintainerLoginLimiter {
   private readonly key = randomBytes(32);
   private readonly sources = new Map<string, SourceWindow>();
+  private readonly expiries = new SourceExpiryQueue();
   private readonly maxTrackedSources: number;
   private globalInitialized = false;
   private globalStartedAt = 0;
@@ -56,7 +123,7 @@ export class MaintainerLoginLimiter {
     this.recordAdmission(sourceKey, context.source);
     this.globalCount += 1;
     this.globalActive += 1;
-    return this.releaseHandle(context.source);
+    return this.releaseHandle(sourceKey, context.source);
   }
 
   private sourceContext(sourceKey: string, at: number): SourceContext | undefined {
@@ -79,7 +146,7 @@ export class MaintainerLoginLimiter {
     this.sources.set(sourceKey, source);
   }
 
-  private releaseHandle(source: SourceWindow): MaintainerLoginAdmission {
+  private releaseHandle(sourceKey: string, source: SourceWindow): MaintainerLoginAdmission {
     let released = false;
     return {
       ok: true,
@@ -88,8 +155,22 @@ export class MaintainerLoginLimiter {
         released = true;
         source.active -= 1;
         this.globalActive -= 1;
+        if (source.active === 0) this.scheduleExpiry(sourceKey, source);
       },
     };
+  }
+
+  private scheduleExpiry(sourceKey: string, source: SourceWindow): void {
+    // Each record represents an admitted active-to-inactive transition. At most
+    // two global admission windows plus concurrency can remain live together.
+    if (this.expiries.size >= this.maxTrackedSources) {
+      throw new Error("Maintainer login expiry capacity invariant violated");
+    }
+    this.expiries.push({
+      expiresAt: source.startedAt + this.limits.windowMs,
+      sourceKey,
+      startedAt: source.startedAt,
+    });
   }
 
   private denied(at: number, resetAt: number): MaintainerLoginAdmission {
@@ -117,10 +198,14 @@ export class MaintainerLoginLimiter {
       this.globalStartedAt = at;
       this.globalCount = 0;
     }
-    for (const [key, source] of this.sources) {
-      if (source.active === 0 && at - source.startedAt >= this.limits.windowMs) {
-        this.sources.delete(key);
+    let expiry = this.expiries.peek();
+    while (expiry !== undefined && expiry.expiresAt <= at) {
+      this.expiries.pop();
+      const source = this.sources.get(expiry.sourceKey);
+      if (source?.active === 0 && source.startedAt === expiry.startedAt) {
+        this.sources.delete(expiry.sourceKey);
       }
+      expiry = this.expiries.peek();
     }
   }
 }
