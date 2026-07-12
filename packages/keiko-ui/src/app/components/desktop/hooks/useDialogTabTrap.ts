@@ -40,7 +40,7 @@ export function useDialogTabTrap(dialogRef: RefObject<HTMLElement | null>): void
         return;
       }
       const first = focusable[0];
-      const last = focusable[focusable.length - 1];
+      const last = focusable.at(-1);
       if (first === undefined || last === undefined) return;
       const active = document.activeElement;
       // Initial focus lands on the dialog container itself, not on a button, so a Shift+Tab
