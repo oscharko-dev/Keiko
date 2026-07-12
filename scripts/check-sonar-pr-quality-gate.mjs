@@ -57,7 +57,8 @@ function findingFailures(issuesTotal, measures) {
 }
 
 function coverageFailures(measures) {
-  if (measures.new_lines === undefined) return ["New-code coverable-line metric is missing."];
+  if (measures.new_lines === undefined)
+    return ["Cannot evaluate new-code coverage: Sonar did not report a new-code line count."];
   if (!hasAnalyzableNewCode(measures)) return [];
   if (measures.new_coverage === undefined)
     return ["New-code coverage is missing despite coverable new lines."];

@@ -138,7 +138,7 @@ describe("SonarCloud PR quality gate", () => {
         "New-code line count metric is missing.",
         "New-code duplication metric is missing.",
         "New-code security-hotspot review metric is missing.",
-        "New-code coverable-line metric is missing.",
+        "Cannot evaluate new-code coverage: Sonar did not report a new-code line count.",
       ]),
     );
     expect(failures).not.toContain(expect.stringContaining("undefined"));
