@@ -27,6 +27,10 @@ function analysisFailures(analysis, headSha) {
   return failures;
 }
 
+function hasAnalyzableNewCode(measures) {
+  return measures.new_lines_to_cover !== undefined && measures.new_lines_to_cover > 0;
+}
+
 function findingFailures(issuesTotal, measures) {
   const failures = [];
   if (issuesTotal === undefined) failures.push("SonarCloud issue total is missing.");
@@ -35,24 +39,25 @@ function findingFailures(issuesTotal, measures) {
   if (measures.new_violations === undefined) failures.push("New-code violation metric is missing.");
   else if (measures.new_violations !== 0)
     failures.push(`SonarCloud reports ${String(measures.new_violations)} new violation(s).`);
-  if (measures.new_duplicated_lines_density === undefined)
-    failures.push("New-code duplication metric is missing.");
-  else if (measures.new_duplicated_lines_density > 3)
+  const analyzable = hasAnalyzableNewCode(measures);
+  if (measures.new_duplicated_lines_density === undefined) {
+    if (analyzable) failures.push("New-code duplication metric is missing.");
+  } else if (measures.new_duplicated_lines_density > 3) {
     failures.push("New-code duplication exceeds 3%.");
-  if (measures.new_security_hotspots_reviewed === undefined)
-    failures.push("New-code security-hotspot review metric is missing.");
-  else if (measures.new_security_hotspots_reviewed < 100)
+  }
+  if (measures.new_security_hotspots_reviewed === undefined) {
+    if (analyzable) failures.push("New-code security-hotspot review metric is missing.");
+  } else if (measures.new_security_hotspots_reviewed < 100) {
     failures.push("Not all new security hotspots are reviewed.");
+  }
   return failures;
 }
 
 function coverageFailures(measures) {
-  if (measures.new_lines_to_cover === undefined)
-    return ["New-code coverable-line metric is missing."];
-  if (measures.new_lines_to_cover > 0 && measures.new_coverage === undefined) {
+  if (!hasAnalyzableNewCode(measures)) return [];
+  if (measures.new_coverage === undefined)
     return ["New-code coverage is missing despite coverable new lines."];
-  }
-  if (measures.new_coverage !== undefined && measures.new_coverage < 85)
+  if (measures.new_coverage < 85)
     return [`New-code coverage ${String(measures.new_coverage)}% is below 85%.`];
   return [];
 }

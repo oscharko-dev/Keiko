@@ -94,9 +94,27 @@ describe("SonarCloud PR quality gate", () => {
         measures: { ...passingMeasures, new_coverage: undefined, new_lines_to_cover: 0 },
       }),
     ).toEqual([]);
+    expect(
+      evaluate({
+        measures: { ...passingMeasures, new_coverage: undefined, new_lines_to_cover: undefined },
+      }),
+    ).toEqual([]);
   });
 
-  it("fails closed when required Sonar measures are absent", () => {
+  it("treats doc-only PRs (no coverable/analyzable new code) as trivially satisfied for duplication, hotspots, and coverage", () => {
+    const failures = evaluate({
+      measures: {
+        new_coverage: undefined,
+        new_duplicated_lines_density: undefined,
+        new_lines_to_cover: undefined,
+        new_security_hotspots_reviewed: undefined,
+        new_violations: 0,
+      },
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it("still fails closed on missing violation metric or unresolved issue total regardless of analyzability", () => {
     const failures = evaluate({
       measures: {
         new_coverage: undefined,
@@ -106,9 +124,14 @@ describe("SonarCloud PR quality gate", () => {
         new_violations: undefined,
       },
     });
-    expect(failures).toHaveLength(4);
-    expect(failures).toContain("New-code violation metric is missing.");
+    expect(failures).toEqual(["New-code violation metric is missing."]);
     expect(failures).not.toContain(expect.stringContaining("undefined"));
+
+    const issuesFailure = evaluate({
+      issuesTotal: undefined,
+      measures: { ...passingMeasures, new_violations: 0 },
+    });
+    expect(issuesFailure).toContain("SonarCloud issue total is missing.");
   });
 
   it("reports a missing issue total explicitly", () => {
