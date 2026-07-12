@@ -15,7 +15,7 @@ rules:
       # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
       # build and cannot be verified on this platform.
       - portable-assets.yml:115
-      - portable-assets.yml:181
+      - portable-assets.yml:185
   adhoc-packages:
     ignore:
       # npm Trusted Publishing requires npm CLI >= 11.5.1, which Node 22.x does not bundle;
