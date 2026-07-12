@@ -19,7 +19,7 @@ operator service; that narrow egress does not turn the local product into a host
 | Undo scope             | Undo/redo must not rewrite evidence, applied patches, verification records, or model-call records.                                                                                                                                                                                                                                                                                                                  |
 | Credentials            | API tokens and related secrets are accepted only from local configuration, local environment, or explicit local setup flows. Persisted local credentials (model-gateway API keys, Figma PAT) are sealed with AES-256-GCM in local vaults; `keiko.config.json` holds only references, never plaintext secrets (ADR-0046). They are never returned to the browser, logged intentionally, or serialized into evidence. |
 | Memory                 | The memory vault is local-only and uses approved Keiko state locations. Workspace-local memory paths are rejected. Audit events are redacted before persistence.                                                                                                                                                                                                                                                    |
-| Feedback submission    | Remote feedback is disabled unless an operator configures one exact HTTPS origin. The local BFF may send only the exact previewed canonical sanitized JSON through `gatewayFetch` to fixed `POST /v1/feedback/reports`; it accepts no user URL/redirect/path/query/credential, original or quarantined unit, local disposition sidecar, file object, raw log, multipart body, or browser-direct request (ADR-0125). |
+| Feedback submission    | Remote feedback is disabled unless an operator configures one exact HTTPS origin. The local BFF may send only the exact previewed canonical sanitized JSON through `gatewayFetch` to fixed `POST /v1/feedback/reports`; it accepts no user URL/redirect/path/query/credential, original or quarantined unit, local disposition sidecar, file object, raw log, multipart body, or browser-direct request (ADR-0134). |
 | Hosted feedback intake | Anonymous intake/receipt operations, redacted queue storage, abuse controls, semantic dedupe, OIDC/server authorization, maintainer review, and GitHub App credentials belong to a separately deployed operator service. They are not `createUiServer` routes or `keiko-server` authentication responsibilities.                                                                                                    |
 
 ## Workspace trust-boundary rules
@@ -37,7 +37,7 @@ redaction primitives, and architecture/test gates.
 
 ## Optional feedback egress and hosted intake
 
-[ADR-0125](adr/ADR-0125-governed-feedback-intake.md) separates two security boundaries:
+[ADR-0134](adr/ADR-0134-governed-feedback-intake.md) separates two security boundaries:
 
 - **Local Keiko plane.** `createUiServer` stays bound to loopback and owns only report assembly,
   the bounded strict-UTF-8 accepted-text predicate, structural detection, deterministic disposition,

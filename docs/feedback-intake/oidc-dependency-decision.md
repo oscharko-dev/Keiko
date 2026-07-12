@@ -12,7 +12,7 @@ for confidential clients, identifies S256 as the non-disclosing challenge method
 redirect matching, plus [OIDC Core](https://openid.net/specs/openid-connect-core-1_0-18.html), which
 requires nonce and ID-token issuer/audience/signature/time validation.
 
-V1 is a confidential server client because ADR-0125 places the OIDC client secret in the hosted
+V1 is a confidential server client because ADR-0134 places the OIDC client secret in the hosted
 secret boundary. Only `client_secret_basic` and `client_secret_post` are configurable. Public-client
 authentication (`none`), refresh tokens, UserInfo, implicit/hybrid flows, and hand-rolled token
 validation are out of scope.

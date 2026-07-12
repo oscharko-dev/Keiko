@@ -418,5 +418,5 @@ that remote deletion is not implied by intake deletion.
   properties, and issue-creation permission boundaries.
 
 See also the [threat model](threat-model.md), [reuse analysis](reuse-analysis.md),
-[ADR-0125](../adr/ADR-0125-governed-feedback-intake.md), and
+[ADR-0134](../adr/ADR-0134-governed-feedback-intake.md), and
 [security boundaries](../security-and-audit-boundaries.md).

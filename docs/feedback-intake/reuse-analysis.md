@@ -12,7 +12,7 @@ Those gaps require a separately deployed service. They do not justify turning th
 a hosted listener, duplicating Keiko's local workspace/evidence/memory systems, or widening the
 governed pull-request gateway. The normative outcomes are in the [privacy contract](privacy-contract.md),
 [threat model](threat-model.md), and
-[ADR-0125](../adr/ADR-0125-governed-feedback-intake.md).
+[ADR-0134](../adr/ADR-0134-governed-feedback-intake.md).
 
 The hosted maintainer HTML cannot import the local product `globals.css` across this deployment boundary.
 Its package therefore emits byte-for-byte copies of the canonical Design System token artifacts

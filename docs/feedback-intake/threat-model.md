@@ -4,7 +4,7 @@
 
 This threat model covers the Epic #2070 path from local report assembly through optional GitHub
 Issue creation. It complements the normative [privacy contract](privacy-contract.md) and
-[ADR-0125](../adr/ADR-0125-governed-feedback-intake.md). It does not turn the Keiko product into a
+[ADR-0134](../adr/ADR-0134-governed-feedback-intake.md). It does not turn the Keiko product into a
 hosted service: the existing UI/BFF remains loopback-only, while intake is a separate
 operator-deployed system.
 

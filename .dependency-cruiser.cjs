@@ -81,7 +81,7 @@ module.exports = {
     {
       name: "adr-0125-feedback-intake-hosted-boundary",
       comment:
-        "ADR-0125: hosted feedback intake may depend only on contracts and security; it must stay independent of the local BFF and UI planes. The dedicated negative fixture proves this boundary remains live.",
+        "ADR-0134: hosted feedback intake may depend only on contracts and security; it must stay independent of the local BFF and UI planes. The dedicated negative fixture proves this boundary remains live.",
       severity: "error",
       from: {
         path: "^(packages/keiko-feedback-intake/src/|tests/architecture/fixtures/feedback-intake-hosted-boundary/)",
