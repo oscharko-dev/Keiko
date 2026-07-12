@@ -6,6 +6,7 @@ import {
 } from "./secureWorkspaceTextRead.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
+import { decodeSecureWorkspaceReadRequest } from "./secureWorkspaceTextReadProtocol.js";
 
 const MAX_TEXT_BYTES = 65_536;
 const artifact: SecureWorkspaceTextReadArtifact = {
@@ -34,6 +35,8 @@ function createPort(
     readonly signal: AbortSignal;
   }) => Promise<Uint8Array>,
   platform: { readonly os: string; readonly arch: string } = { os: "darwin", arch: "arm64" },
+  resolveWorkspaceRoot: () => string | undefined | Promise<string | undefined> = () =>
+    "/server-owned/workspace",
 ): {
   readonly port: ReturnType<typeof createSecureWorkspaceTextReadPort>;
   readonly verify: ReturnType<typeof vi.fn>;
@@ -44,7 +47,7 @@ function createPort(
   const processFactory: SecureWorkspaceTextReadProcessFactory = { create };
   return {
     port: createSecureWorkspaceTextReadPort({
-      workspaceRoot: "/server-owned/workspace",
+      resolveWorkspaceRoot,
       artifact,
       artifactVerifier: { verify },
       processFactory,
@@ -64,6 +67,44 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("SecureWorkspaceTextReadPort", () => {
+  it("fails closed when no live workspace is bound without verification or spawn", async () => {
+    const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
+    const resolveWorkspaceRoot = vi.fn(() => undefined);
+    const unavailable = createPort(run, { os: "darwin", arch: "arm64" }, resolveWorkspaceRoot);
+
+    await expect(unavailable.port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "workspace-unavailable",
+    });
+    expect(resolveWorkspaceRoot).toHaveBeenCalledOnce();
+    expect(unavailable.verify).not.toHaveBeenCalled();
+    expect(unavailable.create).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves the live workspace root for sequential reads", async () => {
+    let root = "/workspace/one";
+    const roots: string[] = [];
+    const { port } = createPort(
+      ({ stdin }) => {
+        roots.push(decodeSecureWorkspaceReadRequest(stdin).root);
+        return Promise.resolve(response(0, Buffer.from("ok")));
+      },
+      { os: "darwin", arch: "arm64" },
+      () => root,
+    );
+
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: true,
+      text: "ok",
+    });
+    root = "/workspace/two";
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: true,
+      text: "ok",
+    });
+    expect(roots).toEqual(["/workspace/one", "/workspace/two"]);
+  });
+
   it("fails closed for Linux and unknown targets before artifact verification or helper spawn", async () => {
     const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
     const linux = createPort(run, { os: "linux", arch: "x64" });

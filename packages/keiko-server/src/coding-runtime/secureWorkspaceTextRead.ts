@@ -19,6 +19,7 @@ import {
 
 export type SecureWorkspaceTextReadFailure =
   | "unsupported-platform"
+  | "workspace-unavailable"
   | "artifact-unverified"
   | "busy"
   | "cancelled"
@@ -43,8 +44,8 @@ export interface SecureWorkspaceTextReadPort {
 }
 
 export interface SecureWorkspaceTextReadDeps {
-  /** Resolved at server composition time, never supplied by a runtime consumer. */
-  readonly workspaceRoot: string;
+  /** Resolves the current active binding for every admitted read. */
+  readonly resolveWorkspaceRoot: () => string | undefined | Promise<string | undefined>;
   readonly artifact: SecureWorkspaceTextReadArtifact;
   readonly artifactVerifier: SecureWorkspaceTextReadArtifactVerifier;
   readonly processFactory: SecureWorkspaceTextReadProcessFactory;
@@ -76,6 +77,8 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     this.live += 1;
     let frame: Buffer | undefined;
     try {
+      const workspaceRoot = await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot);
+      if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
       const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
         this.deps.artifact,
         platform,
@@ -83,7 +86,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       );
       if (verifiedArtifact === undefined) return { ok: false, reason: "artifact-unverified" };
       frame = encodeSecureWorkspaceReadRequest({
-        root: this.deps.workspaceRoot,
+        root: workspaceRoot,
         relativePath: request.relativePath,
         byteCap: 65_536,
       });
@@ -125,6 +128,17 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       frame?.fill(0);
       this.live -= 1;
     }
+  }
+}
+
+async function resolveLiveWorkspaceRoot(
+  resolve: SecureWorkspaceTextReadDeps["resolveWorkspaceRoot"],
+): Promise<string | undefined> {
+  try {
+    const root = await resolve();
+    return typeof root === "string" && root.length > 0 ? root : undefined;
+  } catch {
+    return undefined;
   }
 }
 
