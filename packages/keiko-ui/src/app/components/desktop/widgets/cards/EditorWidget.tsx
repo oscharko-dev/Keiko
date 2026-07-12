@@ -99,6 +99,7 @@ export interface EditorWidgetWorkspacePatch {
 export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
+  readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -256,6 +257,7 @@ export function EditorWidget({
   openFiles: configuredOpenFiles,
   layoutJson,
   onWorkspaceChange,
+  onOpenProblems,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
@@ -1287,6 +1289,7 @@ export function EditorWidget({
       dirtyCount: dirtyFileList.length,
       verificationRunning: verification.verificationRunning,
       verifiableTarget: verification.verifiableTarget,
+      verificationCatalog: verification.catalog,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1297,6 +1300,9 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
+      trustWorkspaceScripts: verification.trustWorkspaceScripts,
+      revokeWorkspaceScriptTrust: verification.revokeWorkspaceScriptTrust,
+      openProblems: () => onOpenProblems?.(workspaceRoot),
     }),
     [
       activeFile,
@@ -1305,13 +1311,17 @@ export function EditorWidget({
       dirtyFileList.length,
       layout,
       nextTab,
+      onOpenProblems,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
       splitActivePane,
       verification.cancelVerification,
+      verification.catalog,
+      verification.revokeWorkspaceScriptTrust,
       verification.runFileTests,
       verification.runWorkspaceVerification,
+      verification.trustWorkspaceScripts,
       verification.verifiableTarget,
       verification.verificationRunning,
       workspaceRoot,

@@ -763,6 +763,19 @@ describe("EditorAgentToolHost editor_request_verification", () => {
     expect(body.targetPath).toBe("src/a.test.ts");
   });
 
+  it.each([
+    ["targeted-test without targetPath", { sessionId: "session-1", kind: "targeted-test" }],
+    [
+      "a non-targeted kind with targetPath",
+      { sessionId: "session-1", kind: "typecheck", targetPath: "src/a.test.ts" },
+    ],
+  ])("rejects %s before any route call", async (_label, args) => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_request_verification", args);
+    expect(route.requests).toHaveLength(0);
+    expect(parseOutput(result)).toMatchObject({ ok: false, error: { code: "INVALID_ARGUMENTS" } });
+  });
+
   it("surfaces a governance not-run disposition as a typed, non-throwing output", async () => {
     const route = recordingRoute(queued, {
       outcome: "not-run",

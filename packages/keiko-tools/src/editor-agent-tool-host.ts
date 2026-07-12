@@ -515,10 +515,17 @@ export class EditorAgentToolHost implements ToolPort {
     const args = request.arguments;
     expectOnly(args, ["sessionId", "kind", "targetPath"]);
     const targetPath = optionalString(args, "targetPath");
+    const kind = requireVerificationKind(args, "kind");
+    if (kind === "targeted-test" && targetPath === undefined) {
+      throw new InvalidArgumentsError("A targeted test requires 'targetPath'.");
+    }
+    if (kind !== "targeted-test" && targetPath !== undefined) {
+      throw new InvalidArgumentsError("Only a targeted test may carry 'targetPath'.");
+    }
     const body: EditorAgentVerificationRunRequest = {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       sessionId: requireString(args, "sessionId"),
-      kind: requireVerificationKind(args, "kind"),
+      kind,
       ...(targetPath === undefined ? {} : { targetPath }),
       authorityRef: this.authorityRef,
     };

@@ -126,6 +126,8 @@ import {
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGrantWorkspaceScriptTrust,
+  handleRevokeWorkspaceScriptTrust,
   handleVerificationCatalog,
   handleVerificationEvents,
 } from "./editor/verificationRoutes.js";
@@ -868,6 +870,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/verification/events",
     handler: handleVerificationEvents,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/trust",
+    handler: handleGrantWorkspaceScriptTrust,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/verification/trust",
+    handler: handleRevokeWorkspaceScriptTrust,
   },
   {
     method: "POST",

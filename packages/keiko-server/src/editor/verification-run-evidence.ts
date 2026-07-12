@@ -12,7 +12,7 @@ import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
 import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 import { summarizeForAudit } from "@oscharko-dev/keiko-verification";
-import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
+import { HARNESS_CODES, type VerificationReport } from "@oscharko-dev/keiko-contracts";
 
 export const EDITOR_VERIFICATION_RUN_EVIDENCE_KIND = "editor-verification-run" as const;
 
@@ -23,6 +23,13 @@ export interface EditorVerificationRunEvidenceInput {
   readonly projectId: string;
   readonly report: VerificationReport;
   readonly startedAt: number;
+}
+
+export interface EditorVerificationInterruptedEvidenceInput {
+  readonly runId: string;
+  readonly startedAt: number;
+  readonly finishedAt: number;
+  readonly cancelled: boolean;
 }
 
 function verificationRunOutcome(report: VerificationReport): RunOutcome {
@@ -74,6 +81,40 @@ export function buildEditorVerificationRunEvidenceEntry(
     toolCalls: [],
     commandExecutions: [],
     verification: summarizeForAudit(input.report),
+  };
+}
+
+// A thrown execution has no VerificationReport to summarize. Persist only static classification and
+// timing so the failed/cancelled attempt remains auditable without copying an error message or path.
+export function buildEditorVerificationInterruptedEvidenceEntry(
+  input: EditorVerificationInterruptedEvidenceInput,
+): EditorVerificationRunEvidenceEntry {
+  const durationMs = Math.max(0, input.finishedAt - input.startedAt);
+  return {
+    evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
+    run: {
+      runId: input.runId,
+      fingerprint: input.runId,
+      harnessVersion: HARNESS_VERSION,
+      taskType: EDITOR_VERIFICATION_RUN_EVIDENCE_KIND,
+      outcome: input.cancelled ? "cancelled" : "failed",
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
+      durationMs,
+    },
+    model: { modelId: "editor-verification-runner", costClass: "unknown" },
+    usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+    stateTransitions: [],
+    toolCalls: [],
+    commandExecutions: [],
+    ...(input.cancelled
+      ? {}
+      : {
+          failure: {
+            category: HARNESS_CODES.INTERNAL,
+            message: "Verification execution failed unexpectedly.",
+          },
+        }),
   };
 }
 

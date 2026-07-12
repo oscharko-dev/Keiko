@@ -1325,6 +1325,8 @@ function EditorRuntimeWidget({
     activeFile: file !== undefined && file.length > 0 ? file : null,
   });
   const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
+  const generatedId = useId();
+  const diagnosticsProducerId = windowId ?? generatedId;
   // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
   // active review surface is actually reviewing, never to the pane's currently active file. This
   // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
@@ -1354,13 +1356,12 @@ function EditorRuntimeWidget({
   const onPaneDiagnostics = useCallback(
     (diagnostics: readonly EditorDiagnostic[]): void => {
       if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
-        setPaneDiagnostics(root, file, diagnostics);
+        setPaneDiagnostics(root, diagnosticsProducerId, file, diagnostics);
       }
     },
-    [root, file],
+    [diagnosticsProducerId, root, file],
   );
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
-  const generatedId = useId();
   const editorModelScope = useMemo(
     () => safeDomIdSegment(windowId ?? generatedId),
     [generatedId, windowId],
@@ -1388,15 +1389,19 @@ function EditorRuntimeWidget({
     documentTabsRef.current = documentTabs;
     if (root === undefined || root.length === 0) return;
     for (const previousPath of previousTabs) {
-      if (!documentTabs.includes(previousPath)) removePaneDiagnostics(root, previousPath);
+      if (!documentTabs.includes(previousPath)) {
+        removePaneDiagnostics(root, diagnosticsProducerId, previousPath);
+      }
     }
-  }, [documentTabs, root]);
+  }, [diagnosticsProducerId, documentTabs, root]);
   useEffect(() => {
     return (): void => {
       if (root === undefined || root.length === 0) return;
-      for (const openPath of documentTabsRef.current) removePaneDiagnostics(root, openPath);
+      for (const openPath of documentTabsRef.current) {
+        removePaneDiagnostics(root, diagnosticsProducerId, openPath);
+      }
     };
-  }, [root]);
+  }, [diagnosticsProducerId, root]);
   const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {

@@ -15,7 +15,7 @@
 // visible source line (mirroring editor-baseline-1377.spec.ts's F12/Shift+F12 verification pattern) —
 // not merely that some editor surface remained visible, which would pass even if the jump were broken.
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -36,21 +36,67 @@ const FAILING_TEST_BODY =
   "test('sum', () => { expect(sum(1, 1)).toBe(2); });\n";
 const BROKEN_SOURCE = "export const sum = (a: number, b: number): number => a - b;\n";
 const FIXED_SOURCE = "export const sum = (a: number, b: number): number => a + b;\n";
+const PACKAGE_JSON = JSON.stringify(
+  {
+    name: "keiko-editor-verification-e2e",
+    private: true,
+    type: "module",
+    scripts: {
+      build: "node scripts/block-build.mjs",
+      test: "vitest run",
+      typecheck: "tsc --noEmit",
+    },
+    devDependencies: { typescript: "*", vitest: "*" },
+  },
+  null,
+  2,
+);
+const TSCONFIG = JSON.stringify(
+  {
+    compilerOptions: {
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      noEmit: true,
+      strict: true,
+      target: "ES2022",
+    },
+    include: ["src/**/*.ts"],
+  },
+  null,
+  2,
+);
+const BLOCKING_BUILD = "setInterval(() => undefined, 1_000);\n";
 // vitest's default reporter stack-frames a failing assertion at the `expect(...)` call site — the
 // third line of the (deliberately minimal) failing-test fixture above.
 const FAILING_LINE = 3;
 
 const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
+const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 function workspace(): { readonly root: string } {
-  return createEditorWorkspace([
+  const fixture = createEditorWorkspace([
+    { path: "package.json", content: `${PACKAGE_JSON}\n` },
+    { path: "tsconfig.json", content: `${TSCONFIG}\n` },
+    { path: "scripts/block-build.mjs", content: BLOCKING_BUILD },
     { path: SOURCE, content: BROKEN_SOURCE },
     { path: FAILING_TEST, content: FAILING_TEST_BODY },
   ]);
+  // `npx vitest` resolves from the target workspace, not from Playwright's process PATH. Link the
+  // repository's lockfile-pinned installation into the disposable fixture so the real sandboxed run
+  // is deterministic and never attempts a registry download. The sandbox inherits the host
+  // filesystem policy for verification and separately enforces network:none.
+  symlinkSync(join(process.cwd(), "node_modules"), join(fixture.root, "node_modules"), "dir");
+  return fixture;
 }
 
 async function openEditorFor(page: Page, root: string): Promise<Locator> {
+  const project = await page.request.post("/api/projects", {
+    headers: MUTATION_HEADERS,
+    data: { path: root, name: "Editor verification E2E" },
+  });
+  expect(project.ok(), await project.text()).toBe(true);
   await seedEditorWindow(page, { root, active: SOURCE, openFiles: [SOURCE, FAILING_TEST] });
+  await page.goto("/");
   return openEditorWorkspace(page);
 }
 
@@ -62,8 +108,8 @@ async function runPaletteCommand(page: Page, commandTitle: string): Promise<void
   await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
-  await combobox.fill(commandTitle);
-  const option = page.getByRole("option", { name: commandTitle, exact: true });
+  await combobox.fill(`>${commandTitle}`);
+  const option = page.getByRole("option").filter({ hasText: commandTitle }).first();
   await expect(option).toBeVisible();
   await option.click();
 }
@@ -79,12 +125,38 @@ async function awaitProblemsRow(page: Page): Promise<Locator> {
   return row;
 }
 
-// Waits for the status bar's run field to settle back to idle (Issue #2212's status-bar affordance),
-// the user-visible proof a run reached ANY terminal state (passed, failed, or cancelled) without
-// reading the SSE wire directly.
-async function awaitRunIdle(pane: Locator): Promise<void> {
+async function openProblems(page: Page): Promise<void> {
+  await runPaletteCommand(page, "Open Problems");
+  // The filter exists in both empty and populated states, so it proves the project-bound panel
+  // opened without presuming the result that each scenario asserts immediately afterwards.
+  await expect(page.locator(`[data-testid="problems-filter-severity"]`)).toBeVisible();
+}
+
+async function trustWorkspaceScripts(page: Page): Promise<void> {
+  const trustResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/verification/trust"),
+  );
+  const catalogRefresh = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      response.url().includes("/api/editor/verification/catalog?projectId="),
+  );
+  await runPaletteCommand(page, "Trust Workspace Scripts");
+  expect((await trustResponse).status()).toBe(200);
+  expect((await catalogRefresh).status()).toBe(200);
+}
+
+async function awaitRunCompletion(pane: Locator): Promise<void> {
   const runField = pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`);
-  await expect(runField).toHaveCount(0, { timeout: 30_000 });
+  // Terminal labels intentionally remain visible for four seconds so the result is perceivable.
+  // Wait for one of the closed terminal states without requiring the transient "starting" label:
+  // a healthy stream may advance to step-started before Playwright's first locator poll. The
+  // terminal state still proves that the subscriber observed the complete run lifecycle.
+  await expect(runField).toHaveText(/^Verification: (?:passed|failed|cancelled)$/u, {
+    timeout: 30_000,
+  });
 }
 
 test.afterEach(() => {
@@ -101,6 +173,8 @@ test("running tests for the active file through the command palette streams to t
   // Drives the SAME "Run Tests for File" affordance a human clicks — never the verification route
   // directly. src/sum.ts (the active file) resolves to its src/sum.test.ts counterpart.
   await runPaletteCommand(page, "Run Tests for File");
+  await awaitRunCompletion(pane);
+  await openProblems(page);
 
   const row = await awaitProblemsRow(page);
   await expect(row).toContainText(/sum\.(ts|test\.ts)/);
@@ -116,8 +190,8 @@ test("running tests for the active file through the command palette streams to t
     new RegExp(`^Line ${String(FAILING_LINE)}, column \\d+$`),
   );
   await expect(
-    workspaceLocator.locator(".monaco-editor .view-line").filter({ hasText: "expect(sum(1, 1))" }),
-  ).toBeVisible();
+    workspaceLocator.locator(`${EDITOR_SELECTORS.tabHit}[aria-selected="true"]`),
+  ).toContainText(FAILING_TEST);
 });
 
 test("running a workspace typecheck through the command palette exercises the non-file-targeted path", async ({
@@ -127,14 +201,15 @@ test("running a workspace typecheck through the command palette exercises the no
   const workspaceLocator = await openEditorFor(page, ws.root);
   const pane = firstPane(workspaceLocator);
 
+  await trustWorkspaceScripts(page);
   await runPaletteCommand(page, "Run Typecheck");
-  await awaitRunIdle(pane);
+  await awaitRunCompletion(pane);
 
   // The command becomes available again once idle — proving the run genuinely reached a terminal
   // state (not merely that the UI stopped showing a spinner for an unrelated reason).
   await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
-  await page.getByRole("combobox", { name: "Command query" }).fill("Run Typecheck");
-  await expect(page.getByRole("option", { name: "Run Typecheck", exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Command query" }).fill(">Run Typecheck");
+  await expect(page.getByRole("option").filter({ hasText: "Run Typecheck" }).first()).toBeVisible();
   await page.keyboard.press("Escape");
 });
 
@@ -145,33 +220,61 @@ test("cancelling a run mid-flight through the command palette settles without le
   const workspaceLocator = await openEditorFor(page, ws.root);
   const pane = firstPane(workspaceLocator);
 
-  await runPaletteCommand(page, "Run Tests for File");
-  // Cancel immediately — a real spawn may already have finished by the time this activates (the
-  // fixture is tiny), which is fine: either outcome is a legitimate terminal state and both are
-  // proven the same way, by the run affordance settling rather than hanging.
-  await runPaletteCommand(page, "Cancel Verification").catch(() => {
-    // "Cancel Verification" is only available while a run is active (editorCommands.ts); if the run
-    // already finished before this activates, the command is gone — that is itself a valid terminal
-    // outcome, proven by awaitRunIdle below.
-  });
-  await awaitRunIdle(pane);
+  await trustWorkspaceScripts(page);
+  const cancelledResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      /\/api\/editor\/verification\/runs\/[^/]+$/u.test(response.url()),
+  );
+  const startedResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/verification/runs"),
+  );
+  await runPaletteCommand(page, "Run Build");
+  expect((await startedResponse).ok()).toBe(true);
+  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`)).toHaveText(
+    "Verification: build…",
+  );
+  await runPaletteCommand(page, "Cancel Verification");
+  expect((await cancelledResponse).status()).toBe(200);
+  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`)).toHaveText(
+    "Verification: cancelled",
+  );
+
+  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  await page.getByRole("combobox", { name: "Command query" }).fill(">Run Build");
+  await expect(page.getByRole("option").filter({ hasText: "Run Build" }).first()).toBeVisible();
+  await page.keyboard.press("Escape");
 });
 
-test("fixing the source on disk and rerunning through the command palette clears the problem", async ({
-  page,
-}) => {
+test("fixing and saving in Monaco before rerunning clears the problem", async ({ page }) => {
   const ws = workspace();
   const workspaceLocator = await openEditorFor(page, ws.root);
   const pane = firstPane(workspaceLocator);
 
   await runPaletteCommand(page, "Run Tests for File");
+  await awaitRunCompletion(pane);
+  await openProblems(page);
   await awaitProblemsRow(page);
 
-  // The verification run reads the REAL file from disk (a spawned test runner), not the editor's
-  // in-memory buffer, so writing the fix directly to disk is the correct fixture shape here.
-  writeFileSync(join(ws.root, SOURCE), FIXED_SOURCE, "utf8");
-  await runPaletteCommand(page, "Run Tests for File");
-  await awaitRunIdle(pane);
+  await page.getByRole("button", { name: "Close Problems window" }).click();
+  await expect(page.locator(`[data-testid="problems-row"]`)).toHaveCount(0);
 
+  const editorInput = pane.getByRole("textbox", { name: /^Editor:/u }).first();
+  await editorInput.focus();
+  // The fixture source is intentionally one line. Select that line through Monaco's keyboard
+  // surface and replace it, preserving the existing trailing newline. This is a real editor edit;
+  // the disk assertion below proves the Save affordance persisted it.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  await page.keyboard.insertText(FIXED_SOURCE.trimEnd());
+  await workspaceLocator.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(workspaceLocator.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");
+  await expect.poll(() => readFileSync(join(ws.root, SOURCE), "utf8")).toBe(FIXED_SOURCE);
+  await runPaletteCommand(page, "Run Tests for File");
+  await awaitRunCompletion(pane);
+
+  await openProblems(page);
   await expect(page.locator(`[data-testid="problems-empty"]`)).toBeVisible({ timeout: 30_000 });
 });

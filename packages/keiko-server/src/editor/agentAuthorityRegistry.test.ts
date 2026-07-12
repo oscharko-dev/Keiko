@@ -203,6 +203,74 @@ describe("EditorAgentAuthorityRegistry", () => {
     ).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 
+  it("rolls back exactly one pre-dispatch reservation without underflow", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const limited = envelope({
+      budget: {
+        maxRuntimeMs: 60_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 1,
+        maxPatchBytes: 5,
+      },
+    });
+    const registered = registry.register(limited, "autonomous-delivery", NOW);
+    if (!registered.ok) throw new Error("expected registration");
+
+    expect(
+      registry.reserveForAction(
+        registered.authorityRef,
+        action(),
+        ROOT,
+        "autonomous-delivery",
+        3,
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(registry.rollbackActionReservation(registered.authorityRef, 3)).toBe(true);
+    expect(registry.rollbackActionReservation(registered.authorityRef, 3)).toBe(false);
+    expect(
+      registry.reserveForAction(
+        registered.authorityRef,
+        action(),
+        ROOT,
+        "autonomous-delivery",
+        3,
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("binds external editor authority to its first session and denies cross-session reuse", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const registered = registry.register(envelope(), "autonomous-delivery", NOW);
+    if (!registered.ok) throw new Error("expected registration");
+    const firstSession = action({ sessionId: "session-1" });
+    const secondSession = action({
+      sessionId: "session-2",
+      actionId: "action-2",
+      idempotencyKey: "key-2",
+    });
+
+    expect(
+      registry.resolveForAction(
+        registered.authorityRef,
+        firstSession,
+        ROOT,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      registry.resolveForAction(
+        registered.authorityRef,
+        secondSession,
+        ROOT,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+
   it("does not reset cumulative budgets when the same envelope is registered again", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const limited = envelope({

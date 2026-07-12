@@ -1,6 +1,7 @@
 "use client";
 
 import type { IconName } from "./Icons";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import {
   availablePaletteCommands,
@@ -67,6 +68,7 @@ export function commandIdsForEvidence(
 export function buildUnifiedQuickAccessCommands(
   appCommands: readonly Command[],
   editorHost: EditorPaletteHost | null,
+  translate?: (key: MessageKey) => string,
 ): readonly QuickAccessCommand[] {
   const out: QuickAccessCommand[] = appCommands.map((command) => ({
     id: command.id,
@@ -79,7 +81,10 @@ export function buildUnifiedQuickAccessCommands(
     for (const command of availablePaletteCommands(editorHost)) {
       out.push({
         id: command.id,
-        label: command.title,
+        label:
+          command.titleKey === undefined || translate === undefined
+            ? command.title
+            : translate(command.titleKey),
         group: "Editor",
         shortcut: command.keybinding,
         run: () => command.run(editorHost),

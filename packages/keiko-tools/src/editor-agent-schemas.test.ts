@@ -51,6 +51,18 @@ describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
       },
       required: ["sessionId", "kind"],
       additionalProperties: false,
+      oneOf: [
+        {
+          properties: { kind: { const: "targeted-test" } },
+          required: ["targetPath"],
+        },
+        {
+          properties: {
+            kind: { enum: ["test", "typecheck", "lint", "build"] },
+          },
+          not: { required: ["targetPath"] },
+        },
+      ],
     });
   });
 
