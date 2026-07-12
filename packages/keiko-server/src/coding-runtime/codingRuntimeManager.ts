@@ -74,6 +74,7 @@ export type CodingRuntimeFailureCode =
   | "runtime-crashed"
   | "runtime-run-mismatch"
   | "runtime-profile-open"
+  | "runtime-reap-unproven"
   | "runtime-unqualified"
   | "sidecar-missing"
   | "sidecar-unmanaged"
@@ -83,7 +84,7 @@ export type CodingRuntimeFailureCode =
   | "start-timeout";
 
 export type CodingRuntimeStatus =
-  "ready" | "recovery-required" | "restart-denied" | "stopped" | "stopping";
+  "ready" | "recovery-required" | "restart-denied" | "starting" | "stopped" | "stopping";
 
 export interface CodingRuntimeLaunchRequest {
   readonly runId: string;
@@ -122,7 +123,7 @@ export type CodingRuntimeStartResult =
 export type CodingRuntimeHealthReport =
   | { readonly status: "stopped" }
   | {
-      readonly status: "ready" | "stopping";
+      readonly status: "ready" | "starting" | "stopping";
       readonly activeRunId: string;
     }
   | {
@@ -176,6 +177,7 @@ export interface CodingRuntimeManagerDeps {
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly openCodeLifecycleAdapter?: OpenCodeLifecycleAdapter | undefined;
   readonly portableRuntimeResolver?:
     | ((request: CodingRuntimeLaunchRequest) =>
         | {
@@ -192,6 +194,44 @@ export interface CodingRuntimeManagerDeps {
     runId: string,
     receipt: RuntimeReapReceipt,
   ) => boolean | Promise<boolean>;
+}
+
+export interface OpenCodeLifecycleHandshakeRequest {
+  readonly runId: string;
+  readonly startupOutput: OpenCodeStartupOutput;
+  readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs: number;
+}
+
+export interface OpenCodeStartupOutput {
+  readonly nextLine: (signal?: AbortSignal) => Promise<string>;
+}
+
+export interface OpenCodeLifecyclePrepareRequest {
+  readonly runId: string;
+  readonly executablePath: string;
+  readonly env: Readonly<Record<string, string>>;
+  readonly verification: PortableSidecarRuntimeVerification;
+  readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs: number;
+}
+
+export type OpenCodeLifecyclePrepareResult =
+  | { readonly ok: true; readonly env?: Readonly<Record<string, string>> | undefined }
+  | { readonly ok: false; readonly reason: string };
+
+export interface OpenCodeLifecycleMonitorRequest {
+  readonly runId: string;
+  readonly onFailure: () => void;
+}
+
+export interface OpenCodeLifecycleAdapter {
+  prepare?: (request: OpenCodeLifecyclePrepareRequest) => Promise<OpenCodeLifecyclePrepareResult>;
+  handshake(
+    request: OpenCodeLifecycleHandshakeRequest,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
+  monitor?: ((request: OpenCodeLifecycleMonitorRequest) => (() => void) | undefined) | undefined;
+  dispose?: ((runId: string) => boolean | Promise<boolean>) | undefined;
 }
 
 export interface CodingRuntimeSidecarLaunchTarget {
@@ -212,6 +252,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly portableRuntimeResolver:
     | ((request: CodingRuntimeLaunchRequest) =>
         | {
@@ -231,7 +272,9 @@ interface NormalizedCodingRuntimeManagerDeps {
 }
 
 export interface CodingRuntimeManager {
-  start(request: CodingRuntimeLaunchRequest): CodingRuntimeStartResult;
+  start(
+    request: CodingRuntimeLaunchRequest,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult>;
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   stop(runId: string): Promise<CodingRuntimeStopResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
@@ -267,6 +310,9 @@ interface ActiveRuntime {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
+  readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
+  startupOutput: OpenCodeStartupMailbox | undefined;
+  lifecycleMonitorDispose: (() => void) | undefined;
   stdoutBuffer: string;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
@@ -291,9 +337,22 @@ interface ResolvedPortableRuntime {
   readonly executablePath: string;
 }
 
+interface OpenCodeStartupMailbox extends OpenCodeStartupOutput {
+  offer(line: string): void;
+  close(): void;
+}
+
 const MAX_SIDECAR_EVENT_LINE_BYTES = 8192;
 const SECRET_ENV_NAME = /(AUTH|CREDENTIAL|KEY|PASSWORD|SECRET|TOKEN)/iu;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const FIXED_OPENCODE_ARGS = Object.freeze([
+  "serve",
+  "--hostname",
+  "127.0.0.1",
+  "--port",
+  "0",
+  "--no-mdns",
+] as const);
 
 export function createCodingRuntimeManager(deps: CodingRuntimeManagerDeps): CodingRuntimeManager {
   return new CodingRuntimeManagerImpl(normalizeDeps(deps));
@@ -328,6 +387,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     diagnostics: deps.diagnostics,
+    openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
     abortInFlightActions: deps.abortInFlightActions,
@@ -357,7 +417,10 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   public constructor(private readonly deps: NormalizedCodingRuntimeManagerDeps) {}
 
-  public start(request: CodingRuntimeLaunchRequest): CodingRuntimeStartResult {
+  // eslint-disable-next-line complexity -- closed preflight and adapter preparation gates fail independently.
+  public start(
+    request: CodingRuntimeLaunchRequest,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
     if (this.active !== undefined && this.active.status !== "stopped") {
       return failure("runtime-already-running", true);
     }
@@ -375,7 +438,32 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (!preflight.ok) return this.recordLaunchFailure(request, preflight);
     const env = buildRuntimeEnv(request, this.deps.processEnv);
     if (!env.ok) return this.recordLaunchFailure(request, env);
-    return this.spawnRuntime(request, preflight.executablePath, env.value, portable.value);
+    const lifecycle = this.deps.openCodeLifecycleAdapter;
+    if (request.adapterKind === "opencode-compatible" && lifecycle !== undefined) {
+      return lifecycle.prepare === undefined
+        ? this.spawnRuntime(
+            request,
+            preflight.executablePath,
+            env.value,
+            portable.value,
+            FIXED_OPENCODE_ARGS,
+            lifecycle,
+          )
+        : this.prepareAndSpawnOpenCode(
+            request,
+            preflight.executablePath,
+            env.value,
+            portable.value,
+            lifecycle,
+          );
+    }
+    return this.spawnRuntime(
+      request,
+      preflight.executablePath,
+      env.value,
+      portable.value,
+      request.args,
+    );
   }
 
   public async stop(runId: string): Promise<CodingRuntimeStopResult> {
@@ -391,7 +479,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
-    if (!(await this.releaseAfterReap(active, receipt))) {
+    if (!(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
@@ -422,7 +510,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
-    if (!(await this.releaseAfterReap(active, result.receipt))) {
+    if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
@@ -485,13 +573,15 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     executablePath: string,
     env: Record<string, string>,
     portable: ResolvedPortableRuntime | undefined,
-  ): CodingRuntimeStartResult {
+    args: readonly string[],
+    lifecycleAdapter?: OpenCodeLifecycleAdapter,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined) {
       return this.recordLaunchFailure(request, portableAvailability);
     }
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env),
+      supervisorLaunchRequest(request, executablePath, env, args),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(
@@ -505,11 +595,77 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.deps.approvalStore,
       this.deps.now,
       this.deps.nowIso,
+      lifecycleAdapter,
     );
     this.active = active;
     this.attachRuntime(active);
     this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
+    if (request.adapterKind === "opencode-compatible" && lifecycleAdapter !== undefined) {
+      return this.completeOpenCodeStart(request, active, lifecycleAdapter);
+    }
+    active.status = "ready";
     return { ok: true, runId: request.runId, status: "ready" };
+  }
+
+  private async prepareAndSpawnOpenCode(
+    request: CodingRuntimeLaunchRequest,
+    executablePath: string,
+    env: Record<string, string>,
+    portable: ResolvedPortableRuntime | undefined,
+    adapter: OpenCodeLifecycleAdapter,
+  ): Promise<CodingRuntimeStartResult> {
+    if (portable === undefined)
+      return this.recordLaunchFailure(request, failure("qualification-missing", false));
+    const prepared = await prepareOpenCodeLaunch(
+      adapter,
+      request,
+      executablePath,
+      env,
+      portable.verification,
+    );
+    if (!prepared.ok) return this.recordLaunchFailure(request, prepared);
+    return await this.spawnRuntime(
+      request,
+      executablePath,
+      prepared.env,
+      portable,
+      FIXED_OPENCODE_ARGS,
+      adapter,
+    );
+  }
+
+  private async completeOpenCodeStart(
+    request: CodingRuntimeLaunchRequest,
+    active: ActiveRuntime,
+    adapter: OpenCodeLifecycleAdapter,
+  ): Promise<CodingRuntimeStartResult> {
+    const handshakeFailure = await openCodeHandshakeFailure(adapter, request, active);
+    active.startupOutput?.close();
+    active.startupOutput = undefined;
+    active.stdoutBuffer = "";
+    if (
+      handshakeFailure === undefined &&
+      this.active === active &&
+      !active.stopRequested &&
+      active.status === "starting"
+    ) {
+      active.status = "ready";
+      this.startLifecycleMonitor(active);
+      return { ok: true, runId: request.runId, status: "ready" };
+    }
+    if (handshakeFailure === undefined || this.active !== active) {
+      return failure("runtime-crashed", false);
+    }
+    active.stopRequested = true;
+    active.status = "stopping";
+    const receipt = await this.revokeAndTerminate(active);
+    if (receipt === undefined || !(await this.disposeAndReleaseAfterReap(active, receipt))) {
+      await this.enterRecoveryRequired(active);
+      return failure("runtime-reap-unproven", false);
+    }
+    active.status = "stopped";
+    this.active = undefined;
+    return handshakeFailure;
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
@@ -517,6 +673,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       if (!(await this.deps.revokeRuntime(active.context.runId))) return undefined;
       this.deps.approvalStore.invalidateRun(active.context.runId);
       if (!(await this.deps.abortInFlightActions(active.context.runId))) return undefined;
+      if (!this.disposeLifecycleMonitor(active)) return undefined;
       active.shutdownBarrierComplete = true;
       this.deps.supervisor.terminate(active.tree, "graceful");
       let exit = await this.deps.supervisor.waitForCompleteTreeExit(
@@ -550,6 +707,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (this.active !== active || active.stopRequested || active.status === "stopped") return;
     active.stopRequested = true;
     active.status = "stopping";
+    active.startupOutput?.close();
     void this.finalizeUnexpectedExit(active, code);
   }
 
@@ -561,7 +719,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
       return;
     }
-    if (!(await this.releaseAfterReap(active, receipt))) {
+    if (!(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
       return;
@@ -591,15 +749,75 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
   }
 
+  private async disposeAndReleaseAfterReap(
+    active: ActiveRuntime,
+    receipt: RuntimeReapReceipt,
+  ): Promise<boolean> {
+    try {
+      if (
+        active.openCodeLifecycleAdapter?.dispose !== undefined &&
+        !(await active.openCodeLifecycleAdapter.dispose(active.context.runId))
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return this.releaseAfterReap(active, receipt);
+  }
+
+  private startLifecycleMonitor(active: ActiveRuntime): void {
+    const monitor = active.openCodeLifecycleAdapter?.monitor;
+    if (monitor === undefined) return;
+    try {
+      active.lifecycleMonitorDispose = monitor({
+        runId: active.context.runId,
+        onFailure: (): void => {
+          if (this.active !== active || active.stopRequested || active.status !== "ready") return;
+          this.emit(
+            runtimeEvent(active, this.nextSequence(active), "failure-redacted", {
+              failureCode: "failure-redacted",
+              failureSummary: "runtime-event-failed",
+              retryable: false,
+            }),
+          );
+          void this.stop(active.context.runId).catch(() => {
+            if (this.active === active) void this.enterRecoveryRequired(active);
+          });
+        },
+      });
+    } catch {
+      if (this.active === active && !active.stopRequested && active.status === "ready") {
+        void this.stop(active.context.runId).catch(() => {
+          if (this.active === active) void this.enterRecoveryRequired(active);
+        });
+      }
+    }
+  }
+
+  private disposeLifecycleMonitor(active: ActiveRuntime): boolean {
+    const dispose = active.lifecycleMonitorDispose;
+    active.lifecycleMonitorDispose = undefined;
+    if (dispose === undefined) return true;
+    try {
+      dispose();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private handleStdout(active: ActiveRuntime, chunk: string): void {
     if (active.stopRequested) {
       active.stdoutBuffer = "";
       return;
     }
+    if (active.openCodeLifecycleAdapter !== undefined && active.startupOutput === undefined) return;
     active.stdoutBuffer += chunk;
     if (active.stdoutBuffer.length > MAX_SIDECAR_EVENT_LINE_BYTES) {
       active.stdoutBuffer = "";
-      this.emitFailure(active);
+      if (active.openCodeLifecycleAdapter === undefined) this.emitFailure(active);
+      else active.startupOutput?.close();
       return;
     }
     this.drainStdoutLines(active);
@@ -610,6 +828,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       const index = active.stdoutBuffer.indexOf("\n");
       const line = active.stdoutBuffer.slice(0, index);
       active.stdoutBuffer = active.stdoutBuffer.slice(index + 1);
+      active.startupOutput?.offer(`${line}\n`);
+      if (active.openCodeLifecycleAdapter !== undefined) continue;
       const event = normalizeSidecarLine(active, this.nextSequence(active), line.trim());
       if (event !== undefined) this.emit(event);
     }
@@ -725,6 +945,96 @@ function cancellationFailure(
   }
 }
 
+type OpenCodeHandshakeOutcome = "aborted" | "failed" | "ok" | "timeout";
+
+async function prepareOpenCodeLaunch(
+  adapter: OpenCodeLifecycleAdapter,
+  request: CodingRuntimeLaunchRequest,
+  executablePath: string,
+  env: Record<string, string>,
+  verification: PortableSidecarRuntimeVerification,
+): Promise<{ readonly ok: true; readonly env: Record<string, string> } | FailureResult> {
+  if (adapter.prepare === undefined) return { ok: true, env };
+  try {
+    const result = await adapter.prepare({
+      runId: request.runId,
+      executablePath,
+      env,
+      verification,
+      signal: request.signal,
+      timeoutMs: request.startTimeoutMs,
+    });
+    if (!result.ok) return failure("protocol-schema-mismatch", false);
+    return { ok: true, env: mergePreparedOpenCodeEnv(env, result.env) };
+  } catch {
+    return failure(request.signal?.aborted === true ? "start-aborted" : "start-timeout", true);
+  }
+}
+
+function mergePreparedOpenCodeEnv(
+  managerEnv: Readonly<Record<string, string>>,
+  preparedEnv: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const merged = { ...managerEnv, ...preparedEnv };
+  for (const [name, value] of Object.entries(managerEnv)) {
+    if (
+      name.startsWith("KEIKO_CODING_") ||
+      name === "KEIKO_MODEL_GATEWAY_URL" ||
+      name === "KEIKO_MODEL_PROFILE_ID"
+    ) {
+      merged[name] = value;
+    }
+  }
+  return merged;
+}
+
+async function openCodeHandshakeFailure(
+  adapter: OpenCodeLifecycleAdapter,
+  request: CodingRuntimeLaunchRequest,
+  active: ActiveRuntime,
+): Promise<FailureResult | undefined> {
+  const controller = new AbortController();
+  let resolveCancellation: ((outcome: OpenCodeHandshakeOutcome) => void) | undefined;
+  const cancellation = new Promise<OpenCodeHandshakeOutcome>((resolve) => {
+    resolveCancellation = resolve;
+  });
+  const abort = (): void => {
+    controller.abort();
+    resolveCancellation?.("aborted");
+  };
+  if (request.signal?.aborted === true) abort();
+  else request.signal?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => {
+    controller.abort();
+    resolveCancellation?.("timeout");
+  }, request.startTimeoutMs);
+  timer.unref();
+  const handshake = Promise.resolve()
+    .then(() =>
+      adapter.handshake({
+        runId: request.runId,
+        startupOutput: active.startupOutput ?? closedStartupOutput,
+        signal: controller.signal,
+        timeoutMs: request.startTimeoutMs,
+      }),
+    )
+    .then(
+      (result): OpenCodeHandshakeOutcome => (result.ok ? "ok" : "failed"),
+      (): OpenCodeHandshakeOutcome => "failed",
+    );
+  try {
+    const outcome = await Promise.race([handshake, cancellation]);
+    if (outcome === "ok") return undefined;
+    if (outcome === "aborted") return failure("start-aborted", true);
+    if (outcome === "timeout") return failure("start-timeout", true);
+    return failure("protocol-schema-mismatch", false);
+  } finally {
+    clearTimeout(timer);
+    request.signal?.removeEventListener("abort", abort);
+    resolveCancellation = undefined;
+  }
+}
+
 function validateAdapterSelection(
   request: CodingRuntimeLaunchRequest,
 ): { readonly ok: true } | FailureResult {
@@ -744,6 +1054,7 @@ function createActiveRuntime(
   approvalStore: SupervisedCodingApprovalStore,
   nowMs: () => number,
   nowIso: () => string,
+  openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
@@ -752,10 +1063,14 @@ function createActiveRuntime(
     approvalStore,
     nowMs,
     nowIso,
+    openCodeLifecycleAdapter,
+    startupOutput:
+      openCodeLifecycleAdapter === undefined ? undefined : createOpenCodeStartupMailbox(),
+    lifecycleMonitorDispose: undefined,
     stdoutBuffer: "",
     shutdownBarrierComplete: false,
     stopRequested: false,
-    status: "ready",
+    status: "starting",
     sequence: 0,
   };
 }
@@ -773,6 +1088,9 @@ function createInactiveRuntime(
     approvalStore,
     nowMs,
     nowIso,
+    openCodeLifecycleAdapter: undefined,
+    startupOutput: undefined,
+    lifecycleMonitorDispose: undefined,
     stdoutBuffer: "",
     shutdownBarrierComplete: false,
     stopRequested: false,
@@ -800,6 +1118,58 @@ function inertTree(): RuntimeProcessTree {
     stdout: empty,
     stderr: empty,
     onTreeExit: (): void => undefined,
+  };
+}
+
+const closedStartupOutput: OpenCodeStartupOutput = {
+  nextLine: () => Promise.reject(new Error("runtime-startup-output-closed")),
+};
+
+function createOpenCodeStartupMailbox(): OpenCodeStartupMailbox {
+  let retained: string | undefined;
+  let waiter: ((line: string) => void) | undefined;
+  let rejectWaiter: ((error: Error) => void) | undefined;
+  let closed = false;
+  return {
+    nextLine(signal): Promise<string> {
+      if (retained !== undefined) {
+        const line = retained;
+        retained = undefined;
+        return Promise.resolve(line);
+      }
+      if (closed || signal?.aborted === true) {
+        return Promise.reject(new Error("runtime-startup-output-closed"));
+      }
+      return new Promise<string>((resolve, reject) => {
+        waiter = resolve;
+        rejectWaiter = reject;
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("runtime-startup-output-aborted"));
+          },
+          { once: true },
+        );
+      });
+    },
+    offer(line): void {
+      if (closed || retained !== undefined) return;
+      if (waiter !== undefined) {
+        const resolve = waiter;
+        waiter = undefined;
+        rejectWaiter = undefined;
+        resolve(line);
+        return;
+      }
+      retained = line;
+    },
+    close(): void {
+      closed = true;
+      retained = undefined;
+      rejectWaiter?.(new Error("runtime-startup-output-closed"));
+      waiter = undefined;
+      rejectWaiter = undefined;
+    },
   };
 }
 
@@ -900,12 +1270,13 @@ function supervisorLaunchRequest(
   request: CodingRuntimeLaunchRequest,
   executable: string,
   env: Record<string, string>,
+  args: readonly string[],
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
     runId: request.runId,
     treeBindingId: request.treeBindingId,
     executable,
-    args: request.args,
+    args,
     cwd: request.workspaceRoot,
     env,
     qualification: request.confinement ?? {

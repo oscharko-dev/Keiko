@@ -1,11 +1,14 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { CodingWorkbenchRuntimeAdapterKind } from "@oscharko-dev/keiko-contracts";
 
+export type RuntimeCapabilityAudience = "model-gateway" | "tool-facade";
+
 export interface RuntimeCapabilityBinding {
   readonly runId: string;
   readonly workspaceRootDigest: string;
   readonly envelopeDigest: string;
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
+  readonly audience: RuntimeCapabilityAudience;
   readonly expiresAtMs: number;
 }
 
@@ -42,6 +45,7 @@ interface StoredCapability {
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const CAPABILITY_AUDIENCES: ReadonlySet<string> = new Set(["model-gateway", "tool-facade"]);
 const DEFAULT_MAX_RECORDS = 64;
 
 /**
@@ -148,6 +152,7 @@ function validBinding(binding: RuntimeCapabilityBinding): boolean {
     DIGEST_PATTERN.test(binding.workspaceRootDigest) &&
     DIGEST_PATTERN.test(binding.envelopeDigest) &&
     ["model-gateway-sidecar", "codex-cli-adapter"].includes(binding.adapterKind) &&
+    CAPABILITY_AUDIENCES.has(binding.audience) &&
     Number.isSafeInteger(binding.expiresAtMs) &&
     binding.expiresAtMs > 0
   );
@@ -162,6 +167,7 @@ function bindingsEqual(
     expected.workspaceRootDigest === actual.workspaceRootDigest &&
     expected.envelopeDigest === actual.envelopeDigest &&
     expected.adapterKind === actual.adapterKind &&
+    expected.audience === actual.audience &&
     expected.expiresAtMs === actual.expiresAtMs
   );
 }

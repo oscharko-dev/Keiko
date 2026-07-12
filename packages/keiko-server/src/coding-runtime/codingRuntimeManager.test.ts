@@ -32,8 +32,13 @@ import {
 } from "./runtimeProcessSupervisor.js";
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+} from "./opencodeProtocolSurface.js";
 
 const tempDirs: string[] = [];
+const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   platform: "win32",
   arch: "x64",
@@ -360,6 +365,9 @@ function createPortableRuntimeFixture(): {
       licenseEvidenceSha256: licenseDigest,
       sbomEvidencePath: `${payloadRootPath}/sbom.cdx.json`,
       sbomEvidenceSha256: sbomDigest,
+      protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
+      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,
@@ -491,6 +499,9 @@ describe("coding runtime manager", () => {
       licenseEvidenceSha256: "a".repeat(64),
       sbomEvidencePath: "runtime/sidecars/opencode-adapter/sbom.evidence.json",
       sbomEvidenceSha256: "b".repeat(64),
+      protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
+      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,
@@ -778,7 +789,7 @@ describe("coding runtime manager", () => {
       },
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const child = harness.children[0];
@@ -872,7 +883,7 @@ describe("coding runtime manager", () => {
       processEnv: {},
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const stop = manager.stop("run-1988");
@@ -900,7 +911,7 @@ describe("coding runtime manager", () => {
       abortInFlightActions,
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.exit(1);
@@ -928,7 +939,7 @@ describe("coding runtime manager", () => {
       revokeRuntime,
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.exit(0);
@@ -952,7 +963,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -998,7 +1009,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -1045,7 +1056,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -1111,7 +1122,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -1179,7 +1190,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const issued = manager.issueApproval({
@@ -1245,7 +1256,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const pushApproval = manager.issueApproval({
@@ -1323,7 +1334,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const issued = manager.issueApproval({
@@ -1372,7 +1383,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -1442,7 +1453,7 @@ describe("coding runtime manager", () => {
         nowIso: () => "2026-07-07T13:00:00.000Z",
       });
 
-      manager.start(
+      await manager.start(
         governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       );
       harness.children[0]?.stdout.write(
@@ -1486,7 +1497,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(
@@ -1552,7 +1563,7 @@ describe("coding runtime manager", () => {
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });
 
-    manager.start(
+    await manager.start(
       autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.stdout.write(pushPermissionLine("perm-1993-push-denied"));
@@ -1596,7 +1607,7 @@ describe("coding runtime manager", () => {
       processEnv: {},
     });
 
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     const result = await manager.stop("run-1988");
@@ -1659,7 +1670,7 @@ describe("coding runtime manager", () => {
         return true;
       },
     });
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
@@ -1704,7 +1715,7 @@ describe("coding runtime manager", () => {
           return true;
         },
       });
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       );
 
@@ -1726,6 +1737,374 @@ describe("coding runtime manager", () => {
     },
   );
 
+  it("does not report ready until the injected OpenCode lifecycle handshake completes", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let releaseReady: (() => void) | undefined;
+    const handshake = vi.fn(
+      () =>
+        new Promise<{ readonly ok: true }>((resolve) => {
+          releaseReady = (): void => {
+            resolve({ ok: true });
+          };
+        }),
+    );
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle),
+      openCodeLifecycleAdapter: { handshake },
+    });
+
+    let settled = false;
+    const starting = Promise.resolve(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(handshake).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    expect(manager.health()).toMatchObject({ status: "starting", activeRunId: "run-1988" });
+    releaseReady?.();
+    await expect(starting).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+  });
+
+  it("prepares the fixed OpenCode invocation before spawn and never forwards caller arguments", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let spawnedArgs: readonly string[] | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: { PATH: "/safe/bin" },
+      supervisor: testSupervisor((_, args) => {
+        spawnedArgs = args;
+        return child.handle;
+      }),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true })),
+      },
+    } as never);
+
+    const request = {
+      ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      args: ["--caller-supplied-open-code-argument"],
+    };
+
+    await expect(manager.start(request)).resolves.toMatchObject({ ok: true });
+    expect(spawnedArgs).not.toContain("--caller-supplied-open-code-argument");
+  });
+
+  it("preserves manager-owned run and gateway env while accepting server launch isolation", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let spawnedEnv: Record<string, string> | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: { PATH: "/safe/bin", HOME: "/caller/home" },
+      supervisor: testSupervisor((_executable, _args, env) => {
+        spawnedEnv = env;
+        return child.handle;
+      }),
+      openCodeLifecycleAdapter: {
+        prepare: () =>
+          Promise.resolve({
+            ok: true,
+            env: {
+              HOME: "/server/run/home",
+              KEIKO_MODEL_GATEWAY_URL: "http://127.0.0.1:9/hostile",
+              KEIKO_MODEL_PROFILE_ID: "hostile-profile",
+              KEIKO_CODING_RUN_ID: "hostile-run",
+            },
+          }),
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(spawnedEnv).toMatchObject({
+      HOME: "/server/run/home",
+      KEIKO_MODEL_GATEWAY_URL: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      KEIKO_MODEL_PROFILE_ID: "coding-safe-openai-compatible",
+      KEIKO_CODING_RUN_ID: "run-1988",
+    });
+  });
+
+  it("uses OpenCode stdout only for startup then drains without legacy event parsing", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      supervisor: testSupervisor(() => child.handle),
+      openCodeLifecycleAdapter: {
+        handshake: async ({ startupOutput }) => {
+          await startupOutput.nextLine();
+          return { ok: true } as const;
+        },
+      },
+    });
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    child.stdout.write("opencode server listening on http://127.0.0.1:43123\n");
+    await expect(starting).resolves.toMatchObject({ ok: true });
+    child.stdout.write('{"level":"info","message":"runtime log"}\n');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(events.filter((event) => event.kind === "failure-redacted")).toEqual([]);
+  });
+
+  it("revokes and proves complete-tree reap when OpenCode readiness fails", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const order: string[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          order.push(`signal:${signal}`);
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason: "gateway-handshake-failed" })),
+      },
+      revokeRuntime: (runId): true => {
+        order.push(`revoke:${runId}`);
+        return true;
+      },
+      abortInFlightActions: (runId): true => {
+        order.push(`abort:${runId}`);
+        return true;
+      },
+      releaseRuntimeAfterReap: (runId, receipt): true => {
+        expect(verifyRuntimeReapReceipt(receipt, runId, "c".repeat(64))).toBe(true);
+        order.push(`release:${runId}`);
+        return true;
+      },
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toMatchObject({ ok: false });
+    expect(order).toEqual([
+      "revoke:run-1988",
+      "abort:run-1988",
+      "signal:SIGTERM",
+      "release:run-1988",
+    ]);
+    expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      let observedSignal: AbortSignal | undefined;
+      let resolveHandshake: ((result: { readonly ok: true }) => void) | undefined;
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        openCodeLifecycleAdapter: {
+          handshake: ({ signal }) => {
+            observedSignal = signal;
+            return new Promise<{ readonly ok: true }>((resolve) => {
+              resolveHandshake = resolve;
+            });
+          },
+        },
+      });
+
+      const starting = Promise.resolve(
+        manager.start({
+          ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          startTimeoutMs: 50,
+        }),
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(starting).resolves.toEqual({
+        ok: false,
+        failureCode: "start-timeout",
+        retryable: true,
+      });
+      expect(observedSignal?.aborted).toBe(true);
+      resolveHandshake?.({ ok: true });
+      await Promise.resolve();
+      expect(manager.health()).toEqual({ status: "stopped" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a post-ready lifecycle monitor failure as a fail-closed stop", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const revokeRuntime = vi.fn(() => true);
+    const abortInFlightActions = vi.fn(() => true);
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    let failMonitor: (() => void) | undefined;
+    const monitor = vi.fn(
+      ({ onFailure }: { readonly runId: string; readonly onFailure: () => void }): (() => void) => {
+        failMonitor = onFailure;
+        return (): void => undefined;
+      },
+    );
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      revokeRuntime,
+      abortInFlightActions,
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true })),
+        // #2254 lifecycle monitor contract: failures after ready must route through manager stop.
+        monitor,
+      } as never,
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toMatchObject({ ok: true, status: "ready" });
+    expect(monitor).toHaveBeenCalledOnce();
+    const [monitorInput] = monitor.mock.calls[0] ?? [];
+    expect(monitorInput?.runId).toBe("run-1988");
+    expect(typeof monitorInput?.onFailure).toBe("function");
+    failMonitor?.();
+    await vi.waitFor(() => {
+      expect(revokeRuntime).toHaveBeenCalledWith("run-1988");
+      expect(abortInFlightActions).toHaveBeenCalledWith("run-1988");
+      expect(manager.health()).toEqual({ status: "stopped" });
+    });
+    const terminalEvents = events.filter(
+      (event) => event.kind === "failure-redacted" || event.kind === "runtime-stopped",
+    );
+    expect(terminalEvents.map((event) => event.kind)).toEqual([
+      "failure-redacted",
+      "runtime-stopped",
+    ]);
+    expect(terminalEvents[0]).toMatchObject({
+      failureCode: "failure-redacted",
+      failureSummary: "runtime-event-failed",
+      retryable: false,
+    });
+    expect(validateCodingWorkbenchRuntimeEvent(terminalEvents[0]).ok).toBe(true);
+    expect(JSON.stringify(terminalEvents[0])).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("disposes adapter state only after authentic reap and before authority release", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const order: string[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          order.push(`signal:${signal}`);
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      revokeRuntime: (runId): true => {
+        order.push(`revoke:${runId}`);
+        return true;
+      },
+      abortInFlightActions: (runId): true => {
+        order.push(`abort:${runId}`);
+        return true;
+      },
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+        dispose: (runId): true => {
+          order.push(`dispose:${runId}`);
+          return true;
+        },
+      },
+      releaseRuntimeAfterReap: (runId, receipt): true => {
+        expect(verifyRuntimeReapReceipt(receipt, runId, "c".repeat(64))).toBe(true);
+        order.push(`release:${runId}`);
+        return true;
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(order).toEqual([
+      "revoke:run-1988",
+      "abort:run-1988",
+      "signal:SIGTERM",
+      "dispose:run-1988",
+      "release:run-1988",
+    ]);
+  });
+
+  it("does not dispose or release a runtime whose complete-tree reap is unproven", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const dispose = vi.fn(() => true);
+    const releaseRuntimeAfterReap = vi.fn(() => true);
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle, {
+        setTimer: (callback): unknown => {
+          callback();
+          return undefined;
+        },
+      }),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+        dispose,
+      },
+      releaseRuntimeAfterReap,
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await expect(manager.stop("run-1988")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(child.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(dispose).not.toHaveBeenCalled();
+    expect(releaseRuntimeAfterReap).not.toHaveBeenCalled();
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
+  });
+
   it("keeps the slot in recovery when tree signalling fails", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
@@ -1738,7 +2117,7 @@ describe("coding runtime manager", () => {
         },
       })),
     });
-    manager.start(
+    await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
