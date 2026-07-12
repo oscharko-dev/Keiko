@@ -43,7 +43,10 @@ import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
-import { useEditorQuickAccessTrigger } from "../../EditorQuickAccessTriggerContext";
+import {
+  useEditorQuickAccessTrigger,
+  type EditorQuickAccessTrigger,
+} from "../../EditorQuickAccessTriggerContext";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
@@ -51,6 +54,12 @@ import {
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { useEditorSettings } from "./useEditorSettings";
+import {
+  bindingFromKeyboardEvent,
+  resolveEffectiveKeyboardShortcuts,
+  type EffectiveKeyboardShortcutRegistry,
+} from "../../keyboardShortcutsRegistry";
 import {
   completeEditorAgentReconciliation,
   enqueueEditorAgentReconciliation,
@@ -120,6 +129,50 @@ const TAB_POINTER_DRAG_THRESHOLD_PX = 6;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
 const CLOSED_TAB_HISTORY_LIMIT = 20;
+
+function editorShortcutCommandId(
+  registry: EffectiveKeyboardShortcutRegistry,
+  event: globalThis.KeyboardEvent,
+): string | null {
+  const binding = bindingFromKeyboardEvent(event);
+  if (binding === null) return null;
+  const match = registry.commands.find(
+    (entry) =>
+      entry.binding === binding &&
+      entry.command.dispatchOwner === "keiko" &&
+      entry.command.contexts.includes("editor"),
+  );
+  return match?.command.id ?? null;
+}
+
+function dispatchEditorShortcut(
+  commandId: string,
+  host: EditorPaletteHost,
+  trigger: EditorQuickAccessTrigger | null,
+): boolean {
+  if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
+  if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "view.splitRight") host.splitActive("row");
+  else if (commandId === "view.splitDown") host.splitActive("column");
+  else if (commandId === "view.closeSplit") host.closeActiveSplit();
+  else if (commandId === "tab.next") host.nextTab();
+  else if (commandId === "tab.prev") host.prevTab();
+  else if (commandId === "tab.close") host.closeActiveTab();
+  else if (commandId === "tab.reopenClosed") host.reopenClosed();
+  else if (commandId === "files.saveAll") host.saveAll();
+  else return false;
+  return true;
+}
+
+function dispatchQuickAccess(
+  trigger: EditorQuickAccessTrigger | null,
+  mode: "files" | "commands",
+): boolean {
+  if (trigger === null) return false;
+  if (mode === "files") trigger.openFiles();
+  else trigger.openCommands();
+  return true;
+}
 
 function DirtyCloseDialog(props: {
   readonly pending: PendingDirtyClose;
@@ -275,6 +328,13 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
+  const editorSettings = useEditorSettings(workspaceRoot.length > 0 ? workspaceRoot : undefined);
+  const editorShortcutRegistry = useMemo(
+    () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
+    [editorSettings.applied.keybindingOverrides],
+  );
+  const editorShortcutRegistryRef = useRef(editorShortcutRegistry);
+  editorShortcutRegistryRef.current = editorShortcutRegistry;
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
   const [outlineByPane, setOutlineByPane] = useState<
     Readonly<Record<string, EditorOutlineSnapshot>>
@@ -1341,35 +1401,17 @@ export function EditorWidget({
     const node = workspaceRef.current;
     if (node === null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey)) return;
-      const host = commandHostRef.current;
-      const key = event.key.toLowerCase();
-      // Cmd/Ctrl+P must still open the unified quick-access palette while the cursor is inside
-      // the editor. This listener is a capture-phase DOM listener on the editor container, so it
-      // fires before Monaco sees the event and regardless of useKeyboardShortcuts' editable-target
-      // guard (which would otherwise swallow the shell-level chord — see
-      // EditorQuickAccessTriggerContext.tsx).
-      if (key === "p" && !event.altKey) {
-        const trigger = quickAccessTriggerRef.current;
-        if (trigger !== null) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.shiftKey) trigger.openCommands();
-          else trigger.openFiles();
-        }
-        return;
-      }
-      if (!event.altKey) return;
-      const handled = (action: () => void): void => {
+      const commandId = editorShortcutCommandId(editorShortcutRegistryRef.current, event);
+      if (commandId === null) return;
+      const dispatched = dispatchEditorShortcut(
+        commandId,
+        commandHostRef.current,
+        quickAccessTriggerRef.current,
+      );
+      if (dispatched) {
         event.preventDefault();
         event.stopPropagation();
-        action();
-      };
-      if (key === "arrowright") handled(host.nextTab);
-      else if (key === "arrowleft") handled(host.prevTab);
-      else if (key === "t") handled(host.reopenClosed);
-      else if (key === "\\") handled(() => host.splitActive("row"));
-      else if (key === "s") handled(host.saveAll);
+      }
     };
     node.addEventListener("keydown", onKeyDown, true);
     return () => node.removeEventListener("keydown", onKeyDown, true);

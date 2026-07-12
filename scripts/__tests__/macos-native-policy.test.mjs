@@ -334,6 +334,22 @@ exit 0
       const p12 = join(dir, "identity.p12");
       const run = (command, args, env = process.env) =>
         spawnSync(command, args, { env, stdio: "ignore" });
+      const exportPkcs12 = (extraArgs) =>
+        run("openssl", [
+          "pkcs12",
+          "-export",
+          ...extraArgs,
+          "-inkey",
+          key,
+          "-in",
+          certificate,
+          "-name",
+          "Keiko Provider-Free Test",
+          "-out",
+          p12,
+          "-passout",
+          "pass:fixture-password",
+        ]);
       expect(
         run("clang", [
           "-Wall",
@@ -368,20 +384,8 @@ exit 0
           "extendedKeyUsage=codeSigning",
         ]).status,
       ).toBe(0);
-      expect(
-        run("openssl", [
-          "pkcs12",
-          "-export",
-          "-inkey",
-          key,
-          "-in",
-          certificate,
-          "-out",
-          p12,
-          "-passout",
-          "pass:fixture-password",
-        ]).status,
-      ).toBe(0);
+      const legacyExport = exportPkcs12(["-legacy"]);
+      expect((legacyExport.status === 0 ? legacyExport : exportPkcs12([])).status).toBe(0);
       const keychain = join(dir, "valid.keychain-db");
       const env = {
         ...process.env,

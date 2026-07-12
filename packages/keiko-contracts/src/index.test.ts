@@ -1040,4 +1040,41 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspEvidence>();
     pin<import("./index.js").ManagedLspEvidenceParseResult>();
   });
+
+  it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
+    const m = await import("./index.js");
+    expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");
+    expect(m.EDITOR_M7_SETTING_REGISTRY.map((entry) => entry.id)).toContain("fontSize");
+    expect(m.EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
+    expect(m.EDITOR_M7_KEYBINDING_OVERRIDE_VERSION).toBe("1");
+    expect(m.defaultEditorM7Settings().inlineCompletion).toBe(false);
+    expect(m.defaultEditorM7Settings().testGeneration).toBe(false);
+    expect(m.defaultEditorM7Settings().patchApply).toBe(false);
+    expect(m.parseEditorM7SettingPatch("workspace", { minimap: true })).toMatchObject({
+      ok: false,
+      reasonCode: "WORKSPACE_SCOPE_DENIED",
+    });
+    expect(
+      m.resolveEditorM7AiActivation({
+        schemaVersion: "1",
+        feature: "inlineCompletion",
+        productSupported: true,
+        operatorCeiling: "allowed",
+        explicitOptIn: false,
+        modelCapability: "available",
+        budget: "available",
+        providerHealth: "healthy",
+        securityPrerequisites: "satisfied",
+      }),
+    ).toMatchObject({ state: "available", reasonCode: "EXPLICIT_OPT_IN_REQUIRED" });
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").EditorM7SettingDefinition>();
+    pin<import("./index.js").EditorM7WatchEvent>();
+    pin<import("./index.js").EditorM7ModelEvictionPlan>();
+    pin<import("./index.js").EditorM7CommandDefinition>();
+    pin<import("./index.js").EditorM7SnippetCollection>();
+    pin<import("./index.js").EditorM7AiActivationStatus>();
+    pin<import("./index.js").EditorM7AiActivationSummary>();
+  });
 });

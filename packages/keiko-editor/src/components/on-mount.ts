@@ -152,6 +152,24 @@ import {
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar & {
     readonly MouseTargetType?: { readonly GUTTER_GLYPH_MARGIN: number } | undefined;
+    createModel?(
+      text: string,
+      language: string,
+      uri: MonacoUriLike,
+    ): {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    };
+    getModel?(uri: MonacoUriLike): {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    } | null;
   };
   readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
@@ -399,6 +417,15 @@ export interface MountEditor {
     }) => void,
   ): monaco.IDisposable;
   focus(): void;
+  setModel?(
+    model: {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    } | null,
+  ): void;
   setSelection(range: MonacoRange): void;
   setPosition(position: { readonly lineNumber: number; readonly column: number }): void;
   revealRangeInCenterIfOutsideViewport(range: MonacoRange): void;
@@ -413,6 +440,7 @@ export interface MountEditor {
   pushUndoStop?(): boolean;
   getModel?(): {
     getValue(): string;
+    setValue?(text: string): void;
     getVersionId?(): number;
     getPositionAt?(offset: number): { readonly lineNumber: number; readonly column: number };
     onDidChangeContent?(listener: () => void): monaco.IDisposable;

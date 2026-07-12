@@ -203,6 +203,14 @@ function restoreEventSource(): void {
   }
 }
 
+function latestAgentEventSource(): FakeEventSource {
+  for (let index = FakeEventSource.instances.length - 1; index >= 0; index -= 1) {
+    const source = FakeEventSource.instances[index];
+    if (source?.url.includes("/api/editor/agent/events") === true) return source;
+  }
+  throw new Error("agent EventSource was not opened");
+}
+
 function fileResponse(
   path: string,
   content: string,
@@ -330,7 +338,7 @@ async function renderAgentEditor(
     vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
   );
   return {
-    source: FakeEventSource.instances.at(-1) as FakeEventSource,
+    source: latestAgentEventSource(),
     sessionId,
     view,
     onCloseOpenFile,
@@ -377,6 +385,12 @@ const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
       }),
   } as Response);
 });
+
+function fetchCallFor(url: string): [url: string, init?: RequestInit | undefined] {
+  const call = verificationFetchMock.mock.calls.find(([candidate]) => candidate === url);
+  if (call === undefined) throw new Error(`fetch was not called for ${url}`);
+  return call;
+}
 
 beforeEach(() => {
   surface.props = null;
@@ -675,21 +689,11 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     act(() => {
       diffSurface.props?.onRunVerification?.();
     });
-    await waitFor(() =>
-      expect(
-        verificationFetchMock.mock.calls.some(
-          ([url, init]) =>
-            url === "/api/editor/verification/runs" &&
-            (init as RequestInit | undefined)?.method === "POST",
-        ),
-      ).toBe(true),
-    );
-    const [runUrl, runInit] =
-      verificationFetchMock.mock.calls.find(
-        ([url, init]) =>
-          url === "/api/editor/verification/runs" &&
-          (init as RequestInit | undefined)?.method === "POST",
-      ) ?? [];
+    const [runUrl, runInit] = await waitFor(() => {
+      const runCall = fetchCallFor("/api/editor/verification/runs");
+      expect(runCall[1]?.method).toBe("POST");
+      return runCall;
+    });
     expect(runUrl).toBe("/api/editor/verification/runs");
     const runBody = JSON.parse((runInit as RequestInit).body as string) as {
       kinds: readonly string[];

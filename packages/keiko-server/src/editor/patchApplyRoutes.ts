@@ -53,12 +53,14 @@ import {
   type PostApplyVerificationPreflightPort,
   type PostApplyVerificationPort,
 } from "./postApplyVerification.js";
+import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
 
 // A unified diff plus the apply envelope; bounded generously (validatePatch enforces the real patch
 // byte/line/file limits). 2 MiB of body accommodates a large multi-file candidate diff.
 const MAX_PATCH_APPLY_BODY_BYTES = 2 * 1_048_576;
 
-// Gate A — surfaces editor-driven patch apply at all (default OFF: a wave-2 feature shipped switched off).
+// Gate A — deployment ceiling (default OFF: this mutating wave-2 feature remains unavailable unless
+// the operator explicitly permits it; M7 settings still provide the separate explicit opt-in).
 const PATCH_APPLY_POLICY_ENV = "KEIKO_EDITOR_PATCH_APPLY";
 // Post-apply verification runs by DEFAULT; a deployment disables it only by setting this to a disable
 // token (the other branch of AC: "skipped only when explicitly disabled by configured policy").
@@ -85,7 +87,7 @@ function envToken(value: string | undefined): string | undefined {
   return value === undefined ? undefined : value.trim().toLowerCase();
 }
 
-/** Whether editor-driven patch apply is surfaced by deployment policy (Gate A; default off). */
+/** Whether editor-driven patch apply is permitted by deployment policy (Gate A; default off). */
 export function isPatchApplyEnabledByPolicy(env: EnvSource | undefined): boolean {
   const token = envToken(env?.[PATCH_APPLY_POLICY_ENV]);
   return token !== undefined && ENABLE_TOKENS.has(token);
@@ -394,6 +396,29 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   return appliedOutcome(ctx, result, restoreDiff);
 }
 
+function rejectedDecisionRouteResult(
+  request: EditorPatchApplyWireRequest,
+  deps: UiHandlerDeps,
+  nowMs: number,
+): RouteResult {
+  const applyRunId = recordPatchApplyEvidence(
+    deps.evidenceStore,
+    deps.redactor,
+    {
+      patchId: request.patchId,
+      decision: "reject",
+      status: "rejected",
+      applied: false,
+      allowOverwrite: request.allowOverwrite === true,
+    },
+    nowMs,
+  );
+  return {
+    status: 200,
+    body: deps.redactor(rejectedResponse(request.patchId, { applyRunId })),
+  };
+}
+
 export async function handleEditorPatchApply(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -414,25 +439,14 @@ export async function handleEditorPatchApply(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const activation = await resolveEditorAiAssistStatusForRoot(deps, root.realRoot, "patchApply");
+    if (!editorAiStatusActive(activation)) {
+      return { status: 200, body: deps.redactor(disabledResponse()) };
+    }
     const nowMs = (options.now ?? Date.now)();
     const signal = clientAbortSignal(ctx);
     if (request.decision === "reject") {
-      const applyRunId = recordPatchApplyEvidence(
-        deps.evidenceStore,
-        deps.redactor,
-        {
-          patchId: request.patchId,
-          decision: "reject",
-          status: "rejected",
-          applied: false,
-          allowOverwrite: request.allowOverwrite === true,
-        },
-        nowMs,
-      );
-      return {
-        status: 200,
-        body: deps.redactor(rejectedResponse(request.patchId, { applyRunId })),
-      };
+      return rejectedDecisionRouteResult(request, deps, nowMs);
     }
     const response = await handleApply({
       request,

@@ -183,6 +183,20 @@ import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
 import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
+import { createNodeEditorSettingsControl } from "./editor/settings/editorSettingsControlFactory.js";
+import type { EditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
+import {
+  createEditorSettingsEventBus,
+  type EditorSettingsEventBus,
+} from "./editor/settings/editorSettingsEvents.js";
+import {
+  createWorkspaceWatchService,
+  type WorkspaceWatchService,
+} from "./editor/watch/workspaceWatchService.js";
+import {
+  createWorkspaceSnippetsService,
+  type WorkspaceSnippetsService,
+} from "./editor/snippets/workspaceSnippetsService.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -385,6 +399,14 @@ export interface UiHandlerDeps {
   // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
   // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
   readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Epic #2095 / Issue #2318 — canonical server-owned editor settings control plane.
+  // Optional for legacy dependency fixtures; production wires it over the same private state dir.
+  readonly editorSettingsControl?: EditorSettingsControlService | undefined;
+  readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
+  // Epic #2095 / Issue #2319 — root-scoped workspace watch/reconciliation service.
+  readonly workspaceWatchService?: WorkspaceWatchService | undefined;
+  // Epic #2095 / Issue #2323 — governed workspace snippets.
+  readonly workspaceSnippets?: WorkspaceSnippetsService | undefined;
   // Test-only runtime detector seams. Production leaves this undefined so detection uses
   // metadata-only PATH scanning plus contained manifest reads.
   readonly runtimeCapabilityRouteOptions?: RuntimeCapabilityRouteOptions | undefined;
@@ -541,6 +563,11 @@ export interface BuildHandlerDepsOptions {
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
   // Deterministic activation-control seam for route/bootstrap tests.
   readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Deterministic editor-settings control seam for route/bootstrap tests.
+  readonly editorSettingsControl?: EditorSettingsControlService | undefined;
+  readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
+  readonly workspaceWatchService?: WorkspaceWatchService | undefined;
+  readonly workspaceSnippets?: WorkspaceSnippetsService | undefined;
   // Optional injected governed update remediation manager (tests); production composes one over
   // updateLocalState and the Local Knowledge reindex port.
   readonly updateRemediation?: UpdateRemediationManager | undefined;
@@ -1495,6 +1522,10 @@ interface PeripheralManagers {
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly managedLspControl: ManagedLspControlService;
+  readonly editorSettingsControl: EditorSettingsControlService;
+  readonly editorSettingsEvents: EditorSettingsEventBus;
+  readonly workspaceWatchService: WorkspaceWatchService;
+  readonly workspaceSnippets: WorkspaceSnippetsService;
   readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
@@ -1553,6 +1584,14 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   const workspaceScriptTrust =
     args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
+  const managedLspControl =
+    args.options.managedLspControl ??
+    createNodeManagedLspControl({
+      stateDir: args.runtimeStateDir,
+      processEnv: args.options.env,
+      redact: args.liveRedactor,
+      evidenceStore: args.evidenceStore,
+    });
   return {
     terminal: buildTerminalManager({
       store: args.uiStore,
@@ -1603,13 +1642,21 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
         stateDir: args.runtimeStateDir,
         env: args.options.env,
       }),
-    managedLspControl:
-      args.options.managedLspControl ??
-      createNodeManagedLspControl({
+    managedLspControl,
+    editorSettingsControl:
+      args.options.editorSettingsControl ??
+      createNodeEditorSettingsControl({
         stateDir: args.runtimeStateDir,
+        managedLspControl,
         processEnv: args.options.env,
-        redact: args.liveRedactor,
-        evidenceStore: args.evidenceStore,
+      }),
+    editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
+    workspaceWatchService: args.options.workspaceWatchService ?? createWorkspaceWatchService(),
+    workspaceSnippets:
+      args.options.workspaceSnippets ??
+      createWorkspaceSnippetsService({
+        stateDir: args.runtimeStateDir,
+        mutex: createWorkspaceMutexRegistry(),
       }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
@@ -1944,7 +1991,21 @@ function atlassianConnectorCredentialFields(
   };
 }
 
+function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralManagers {
+  return buildPeripherals({
+    options: args.options,
+    uiStore: args.bundle.uiStore,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
+    liveRedactor: args.liveRedactor,
+    runtimeConfig: args.runtimeConfig,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    runtimeStateDir: dirname(args.resolvedUiDbPath),
+  });
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  const peripherals = buildAssemblyPeripherals(args);
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -1976,20 +2037,12 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
-    ...buildPeripherals({
-      options: args.options,
-      uiStore: args.bundle.uiStore,
-      evidenceStore: args.evidenceStore,
-      redactString: args.redactString,
-      liveRedactor: args.liveRedactor,
-      runtimeConfig: args.runtimeConfig,
-      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
-      runtimeStateDir: dirname(args.resolvedUiDbPath),
-    }),
+    ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
     dispose: async (): Promise<void> => {
       await shutdownHostLspPool();
+      peripherals.workspaceWatchService.disposeAll();
       args.bundle.dispose?.();
     },
   };

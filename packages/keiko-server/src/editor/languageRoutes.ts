@@ -59,6 +59,8 @@ export interface EditorLanguageRouteOptions {
   readonly hostLanguageCommandRules?: readonly CommandRule[] | undefined;
   /** Test-only LSP spawn seam for host-provider operation coverage. */
   readonly hostLanguageSpawn?: LspSpawnFn | undefined;
+  /** Test-only LSP process timeout/config seam for host-provider operation coverage. */
+  readonly hostLanguageProcessConfig?: HostLanguageOperationOptions["lspProcessConfig"] | undefined;
 }
 
 // Exported for reuse by the completion route (#1199), which maps the same deterministic
@@ -221,6 +223,7 @@ export async function handleEditorLanguageSemanticTokens(
       overlayAbsolutePath,
       signal: clientAbortSignal(ctx),
       now: options.now,
+      lspProcessConfig: options.hostLanguageProcessConfig,
       ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
       ...managedHostOptions(authorization, root.realRoot),
     });
@@ -271,6 +274,7 @@ export async function runEditorLanguageOperation(
     signal,
     limits: options.limits,
     now: options.now,
+    lspProcessConfig: options.hostLanguageProcessConfig,
     ...(options.hostLanguageSpawn !== undefined ? { spawn: options.hostLanguageSpawn } : {}),
     ...managedHostOptions(authorization, realRoot),
   });
