@@ -21,6 +21,7 @@ import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
+import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
 vi.mock("../../../../../lib/api", async () => {
@@ -166,6 +167,64 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     ...overrides,
   };
 }
+
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  readonly listeners = new Map<string, Set<EventListener>>();
+  readonly close = vi.fn();
+
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  emit(type: string, data: unknown): void {
+    const event = new MessageEvent<string>(type, { data: JSON.stringify(data) });
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
+
+function installFakeEventSource(): void {
+  FakeEventSource.instances = [];
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: FakeEventSource,
+  });
+}
+
+function restoreEventSource(): void {
+  if (ORIGINAL_EVENT_SOURCE === undefined) {
+    Reflect.deleteProperty(globalThis, "EventSource");
+    return;
+  }
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: ORIGINAL_EVENT_SOURCE,
+  });
+}
+
+function workspaceWatchEventSources(): readonly FakeEventSource[] {
+  return FakeEventSource.instances.filter((source) =>
+    source.url.startsWith("/api/editor/workspace-watch/events"),
+  );
+}
+
+afterEach(() => {
+  resetSharedEventSourcesForTests();
+  FakeEventSource.instances = [];
+  restoreEventSource();
+});
 
 function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessionApi {
   render(<ChatSessionProvider value={session}>{ui}</ChatSessionProvider>);
@@ -341,6 +400,52 @@ describe("FilesWidget", () => {
 
     await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(3));
     expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
+  });
+
+  it("refreshes only the watch event's parent directory while preserving explorer state", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "app.ts", path: "src/app.ts", kind: "file" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "app.ts", path: "src/app.ts", kind: "file" },
+          { ...treeEntryBase, name: "new.ts", path: "src/new.ts", kind: "file" },
+        ],
+      });
+
+    render(<FilesWidget root="/repo" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /expand folder: src/i }));
+    expect(await screen.findByRole("treeitem", { name: /app\.ts/i })).toBeInTheDocument();
+    await waitFor(() => expect(workspaceWatchEventSources()).toHaveLength(1));
+
+    act(() => {
+      workspaceWatchEventSources()[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 10,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      });
+    });
+
+    expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /src/i })).toHaveAttribute("aria-expanded", "true");
+    expect(fetchFilesTree).not.toHaveBeenLastCalledWith("/repo", "");
   });
 
   it("settles Git status after the root tree resolves to the same root", async () => {

@@ -6,7 +6,9 @@ import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import { LOCALE_LABELS, useLocale, useSetLocale } from "@/lib/i18n";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
+import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -897,7 +899,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
   );
 }
 
-type Tab = "models" | "general" | "languages" | "security";
+type Tab = "models" | "general" | "editor" | "languages" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -1180,6 +1182,16 @@ export function SettingsPanel({
     return bindGatewaySetupRequestListener(claim);
   }, []);
 
+  useEffect(() => {
+    const onOpenEditorSettings = (): void => {
+      setTab("editor");
+    };
+    window.addEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
+    return () => {
+      window.removeEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
+    };
+  }, []);
+
   // Issue #1399: open the dialog only once config has RESOLVED (loaded without error) so
   // preserveExisting (edit-mode wording + Figma-token focus) is settled before the dialog mounts.
   // On a load failure the request stays latched — the panel shows its own error + Retry, and a
@@ -1219,7 +1231,7 @@ export function SettingsPanel({
   return (
     <div className="set">
       <div className="set-tabs">
-        {(["models", "general", "languages", "security"] as readonly Tab[]).map((id) => (
+        {(["models", "general", "editor", "languages", "security"] as readonly Tab[]).map((id) => (
           <button
             type="button"
             key={id}
@@ -1260,6 +1272,7 @@ export function SettingsPanel({
         {tab === "general" && (
           <GeneralPrefs voicePersonas={voicePersonas} openUpdatesWindow={openUpdatesWindow} />
         )}
+        {tab === "editor" && <EditorSettingsPanel root={root} />}
         {tab === "languages" && <ManagedLanguageSettings root={root} />}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
@@ -1272,6 +1285,7 @@ export function SettingsPanel({
 function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
   if (tab === "models") return t("settings.tabs.models");
   if (tab === "general") return t("settings.tabs.general");
+  if (tab === "editor") return t("settings.tabs.editor");
   if (tab === "languages") return t("settings.tabs.languages");
   return t("settings.tabs.security");
 }

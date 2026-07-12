@@ -16,6 +16,8 @@ import type {
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
+  fetchEditorSettings,
+  fetchWorkspaceSnippets,
   fetchEditorAgentAudit,
   fetchFilesContent,
   fetchGitStatus,
@@ -41,9 +43,18 @@ import {
   requestEditorSymbols,
   requestEditorTestGeneration,
   saveFilesContent,
+  mutateWorkspaceSnippets,
 } from "../../../../../lib/api";
 import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  resolveEditorM7Settings,
+  type EditorM7SettingId,
+  type EditorM7SettingValue,
+  type EditorM7SettingsSnapshot,
+  type EditorM7WorkspaceSnippetSnapshot,
   type EditorHotExitSnapshotV1,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -51,6 +62,7 @@ import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
+import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import {
   useWorkspaceReplaceBuffers,
@@ -68,12 +80,15 @@ vi.mock("../../../../../lib/api", async () => {
   return {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
+    fetchEditorSettings: vi.fn(),
+    fetchWorkspaceSnippets: vi.fn(),
     fetchEditorAgentAudit: vi.fn(),
     fetchFilesContent: vi.fn(),
     fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
+    mutateWorkspaceSnippets: vi.fn(),
     requestEditorCompletion: vi.fn(),
     requestEditorInlineCompletion: vi.fn(),
     reportEditorInlineCompletionTelemetry: vi.fn(() => Promise.resolve()),
@@ -240,6 +255,14 @@ class FakeEventSource {
     }
   }
 
+  emit(type: string, data: unknown): void {
+    const event = new MessageEvent<string>(type, { data: JSON.stringify(data) });
+    for (const listener of this.listeners.get(type) ?? []) {
+      if (typeof listener === "function") listener(event);
+      else listener.handleEvent(event);
+    }
+  }
+
   emitRaw(data: string): void {
     const event = new MessageEvent<string>("editor-agent:action", { data });
     for (const listener of this.listeners.get("editor-agent:action") ?? []) {
@@ -272,6 +295,24 @@ function restoreEventSource(): void {
     configurable: true,
     value: ORIGINAL_EVENT_SOURCE,
   });
+}
+
+function agentEventSources(sources: readonly FakeEventSource[]): readonly FakeEventSource[] {
+  return sources.filter((source) => source.url.startsWith("/api/editor/agent/events"));
+}
+
+function latestAgentEventSource(sources: readonly FakeEventSource[]): FakeEventSource | undefined {
+  return agentEventSources(sources).at(-1);
+}
+
+function liveAgentEventSources(sources: readonly FakeEventSource[]): readonly FakeEventSource[] {
+  return agentEventSources(sources).filter((source) => source.close.mock.calls.length === 0);
+}
+
+function workspaceWatchEventSources(
+  sources: readonly FakeEventSource[],
+): readonly FakeEventSource[] {
+  return sources.filter((source) => source.url.startsWith("/api/editor/workspace-watch/events"));
 }
 
 let agentActionSequence = 0;
@@ -321,6 +362,23 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
   };
 }
 
+function editorSettingsSnapshot(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> = {},
+): EditorM7SettingsSnapshot {
+  return {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 1,
+    workspaceRevision: 0,
+    revision: 1_000_000,
+    etag: '"edm7-1-0-test"',
+    root: "/repo",
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM7Settings({ user: { scope: "user", values } }),
+    eventSequence: 1,
+  };
+}
+
 function recoverySnapshotFixture(over?: Partial<EditorHotExitSnapshotV1>): EditorHotExitSnapshotV1 {
   return {
     schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -338,6 +396,20 @@ function recoverySnapshotFixture(over?: Partial<EditorHotExitSnapshotV1>): Edito
   };
 }
 
+function workspaceSnippetSnapshot(
+  over: Partial<EditorM7WorkspaceSnippetSnapshot> = {},
+): EditorM7WorkspaceSnippetSnapshot {
+  return {
+    schemaVersion: EDITOR_M7_SNIPPET_COLLECTION_VERSION,
+    storeState: "absent",
+    revision: 0,
+    etag: '"edsn-0-test"',
+    workspaceFingerprint: "a".repeat(64),
+    snippets: [],
+    ...over,
+  };
+}
+
 afterEach(() => {
   surface.props = null;
   surface.mounts = 0;
@@ -348,6 +420,7 @@ afterEach(() => {
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   _resetEditorAgentBridgeStateForTests();
+  resetSharedEventSourcesForTests();
   resetEditorProblemsStoreForTests();
   agentActionSequence = 0;
   vi.clearAllMocks();
@@ -355,6 +428,15 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(fetchEditorSettings).mockResolvedValue(editorSettingsSnapshot());
+  vi.mocked(fetchWorkspaceSnippets).mockResolvedValue(workspaceSnippetSnapshot());
+  vi.mocked(mutateWorkspaceSnippets).mockResolvedValue({
+    kind: "ok",
+    changed: false,
+    revision: 0,
+    etag: '"edsn-0-test"',
+    snapshot: workspaceSnippetSnapshot(),
+  });
   vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
   vi.mocked(fetchGitStatus).mockResolvedValue({
     schemaVersion: "1",
@@ -878,6 +960,159 @@ describe("EditorWidget — edit and save", () => {
     expect(surface.props?.fileModel.dirty).toBe(false);
   });
 
+  it("surfaces a clean external disk edit and reloads only after the user chooses Reload", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 3,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      });
+    });
+
+    const banner = await screen.findByTestId("editor-external-change-banner");
+    expect(banner).toHaveTextContent("The file changed on disk: src/app.ts.");
+    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
+
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 4, content: "const value = 4;\n" }),
+    );
+    await userEvent.click(within(banner).getByRole("button", { name: "Reload external changes" }));
+
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe("const value = 4;\n");
+    });
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+  });
+
+  it("compares a dirty external disk edit and keeps the local buffer without overwriting it", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 4,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "fedcba9876543210",
+      });
+    });
+
+    const banner = await screen.findByTestId("editor-external-change-banner");
+    expect(banner).toHaveTextContent(
+      "The file changed on disk while you have unsaved edits: src/app.ts.",
+    );
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 5, content: "const value = 5;\n" }),
+    );
+
+    await userEvent.click(within(banner).getByRole("button", { name: "Compare" }));
+
+    expect(await screen.findByTestId("editor-diff-surface")).toBeInTheDocument();
+    expect(diffSurface.props?.model.files[0]).toMatchObject({
+      original: "const value = 5;\n",
+      modified: "const value = 2;\n",
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Keep local" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("editor-diff-surface")).toBeNull();
+    });
+    expect(surface.props?.buffer.content.text).toBe("const value = 2;\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+  });
+
+  it("does not warn for the duplicate watch event produced by its own save", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 2, content: "const value = 2;\n" }),
+    );
+
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("saved");
+    });
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 5,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0011223344556677",
+      });
+    });
+
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+  });
+
+  it("formats once through the governed formatter before format-on-save persists", async () => {
+    vi.mocked(fetchEditorSettings).mockResolvedValue(
+      editorSettingsSnapshot({ formatOnSave: true, insertSpaces: false, tabSize: 4 }),
+    );
+    await renderLoaded();
+    vi.mocked(requestEditorFormatting).mockResolvedValueOnce({
+      edits: [
+        {
+          range: { start: { line: 0, character: 11 }, end: { line: 0, character: 12 } },
+          newText: " = ",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 2, content: "const value = 2;\n", sizeBytes: 17 }),
+    );
+
+    act(() => {
+      surface.props?.onContentChange({ text: "const value=2;\n", sizeBytes: 15 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(requestEditorFormatting).toHaveBeenCalledWith(
+        {
+          root: "/repo",
+          path: "src/app.ts",
+          languageId: "typescript",
+          text: "const value=2;\n",
+          options: { tabSize: 4, insertSpaces: false },
+        },
+        expect.any(AbortSignal),
+      );
+    });
+    await waitFor(() => {
+      expect(saveFilesContent).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "src/app.ts",
+        content: "const value = 2;\n",
+        baseVersion: BASE_VERSION,
+      });
+    });
+  });
+
   it("adopts the persisted version so the next save sends the fresh baseVersion token", async () => {
     await renderLoaded();
     const nextVersion = { sizeBytes: 17, modifiedAt: 2, contentHash: "c".repeat(64) };
@@ -1163,7 +1398,9 @@ describe("EditorWidget — concurrent save safety", () => {
       surface.props?.onSaveRequested(saveRequest());
       surface.props?.onSaveRequested(saveRequest());
     });
-    expect(saveFilesContent).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(saveFilesContent).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByRole("button", { name: "Saving…" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1307,6 +1544,61 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     expect(response.items[0]?.label).toBe("value");
     expect(response.items[0]?.provenance).toEqual({ origin: "deterministic-completion" });
     expect(surface.props?.completionTriggerCharacters).toContain(".");
+  });
+
+  it("adds safe workspace snippets as distinct snippet completions", async () => {
+    vi.mocked(requestEditorCompletion).mockResolvedValueOnce(wireResponse());
+    vi.mocked(fetchWorkspaceSnippets).mockResolvedValueOnce(
+      workspaceSnippetSnapshot({
+        storeState: "ready",
+        revision: 1,
+        snippets: [
+          {
+            id: "test-log",
+            name: "Test log",
+            prefixes: ["tlog"],
+            description: "Insert a deterministic test log",
+            languages: ["typescript"],
+            include: ["src/**/*.ts"],
+            body: ["console.log(${1:value});", "$0"],
+            revision: 1,
+            provenance: { source: "workspace", workspaceFingerprint: "b".repeat(64) },
+          },
+        ],
+      }),
+    );
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+    await waitFor(() =>
+      expect(fetchWorkspaceSnippets).toHaveBeenCalledWith("/repo", expect.any(AbortSignal)),
+    );
+
+    const resolver = surface.props?.provideCompletions;
+    expect(resolver).toBeDefined();
+    if (resolver === undefined) return;
+
+    const response = await resolver(
+      {
+        request: {
+          request: { requestId: "r-snippet", streamId: "s-snippet", sequence: 1 },
+          document: { uri: "keiko://doc", language: "typescript", version: 1 },
+          position: { line: 0, column: 2 },
+          triggerKind: "invoked",
+          contextBudgetBytes: 4096,
+        },
+        documentText: "tl",
+      },
+      new AbortController().signal,
+    );
+
+    expect(response.items.map((item) => item.label)).toEqual(["tlog", "value"]);
+    expect(response.items[0]).toMatchObject({
+      kind: "snippet",
+      insertAsSnippet: true,
+      insertText: "console.log(${1:value});\n$0",
+    });
+    expect(response.provenance.sources).toContain("workspace-snippet");
   });
 
   it("forwards connected Files and Local Knowledge context selectors to completion", async () => {
@@ -2955,7 +3247,7 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
     });
     const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
     expect(snapshot).toEqual(
@@ -2972,7 +3264,7 @@ describe("EditorWidget — agent bridge", () => {
       { paneId: "pane-1", activeFile: "src/app.ts", openFiles: ["src/app.ts"] },
       { paneId: "pane-2", activeFile: "README.md", openFiles: ["README.md"] },
     ]);
-    const source = FakeSource.instances.at(-1);
+    const source = latestAgentEventSource(FakeSource.instances);
     expect(source).toBeDefined();
     // The bridge carries the exact session and its memory-only decision capability.
     const eventUrl = new URL(source?.url ?? "", "http://localhost");
@@ -2999,12 +3291,12 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
     );
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
     vi.mocked(saveFilesContent).mockResolvedValueOnce(
       fileResponse({ content: "let value = 1;\n", modifiedAt: 2 }),
     );
@@ -3082,16 +3374,16 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances).toHaveLength(1);
+      expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
     });
-    const source = FakeSource.instances[0] as FakeEventSource;
+    const source = agentEventSources(FakeSource.instances)[0] as FakeEventSource;
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
     );
 
     view.rerender(<EditorRuntimeWidget {...props} onSelectOpenFile={secondSelect} />);
 
-    expect(FakeSource.instances).toHaveLength(1);
+    expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
     expect(source.close).not.toHaveBeenCalled();
     act(() => {
       source.emitAction(agentAction(sessionId, "focusTab", { target: { file: "README.md" } }));
@@ -3109,14 +3401,14 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
     );
 
     act(() => {
-      (FakeSource.instances.at(-1) as FakeEventSource).emitAction(
+      (latestAgentEventSource(FakeSource.instances) as FakeEventSource).emitAction(
         agentAction(sessionId, "format", {
           target: { file: "notes.md", paneId: "pane-1" },
         }),
@@ -3161,7 +3453,7 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await act(async () => {});
     expect(postEditorAgentSessionSnapshot).not.toHaveBeenCalled();
-    expect(FakeSource.instances).toHaveLength(0);
+    expect(agentEventSources(FakeSource.instances)).toHaveLength(0);
   });
 
   it("keeps the active pane event stream stable across handler rerenders", async () => {
@@ -3184,12 +3476,12 @@ describe("EditorWidget — agent bridge", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances).toHaveLength(1);
+      expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
     );
-    const source = FakeSource.instances[0] as FakeEventSource;
+    const source = agentEventSources(FakeSource.instances)[0] as FakeEventSource;
 
     view.rerender(
       <EditorRuntimeWidget
@@ -3202,7 +3494,7 @@ describe("EditorWidget — agent bridge", () => {
       />,
     );
 
-    expect(FakeSource.instances).toHaveLength(1);
+    expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
     expect(source.close).not.toHaveBeenCalled();
     act(() => {
       source.emitAction(agentAction(sessionId, "openFile", { target: { file: "README.md" } }));
@@ -3234,9 +3526,7 @@ describe("EditorWidget — agent bridge", () => {
       .mock.calls.map(([snapshot]) => snapshot.sessionId);
 
     await waitFor(() => {
-      const liveSources = FakeSource.instances.filter(
-        (source) => source.close.mock.calls.length === 0,
-      );
+      const liveSources = liveAgentEventSources(FakeSource.instances);
       expect(liveSources).toHaveLength(1);
       const [source] = liveSources;
       for (const sessionId of sessionIds) {
@@ -3245,7 +3535,9 @@ describe("EditorWidget — agent bridge", () => {
     });
 
     view.unmount();
-    expect(FakeSource.instances.every((source) => source.close.mock.calls.length > 0)).toBe(true);
+    expect(
+      agentEventSources(FakeSource.instances).every((source) => source.close.mock.calls.length > 0),
+    ).toBe(true);
   });
 
   it("rounds fractional modifiedAt values before posting agent snapshots", async () => {
@@ -3347,10 +3639,10 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
     });
     const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
     return { source, sessionId: String(snapshot?.sessionId) };
   }
 
@@ -3739,6 +4031,8 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
       expect(surface.props?.buffer.content.text).toBe("const value = 99;\n");
+      expect(surface.props?.hostEditRequest?.text).toBe("const value = 99;\n");
+      expect(surface.props?.hostEditRequest?.origin).toBe("applied-patch");
       const results = agentResults().filter((result) => result.actionId === action.actionId);
       expect(results).toHaveLength(1);
       expect(results[0]?.status).toBe("succeeded");
@@ -4192,12 +4486,12 @@ describe("EditorWidget — agent layout-controller bridge actions", () => {
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
     );
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
     return { source, sessionId };
   }
 

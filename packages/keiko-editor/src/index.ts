@@ -185,6 +185,19 @@ export {
 
 // ─── Runtime: file-model reducer ─────────────────────────────────────────────────
 export { createFileModel, editorFileModelReducer, isDocumentDirty } from "./file-model.js";
+export {
+  EditorModelRegistry,
+  DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS,
+  UNPROTECTED_EDITOR_MODEL,
+  estimateEditorModelBytes,
+  getEditorModelRegistryDiagnostics,
+} from "./components/editor-model-registry.js";
+export type {
+  EditorModelRegistryDiagnostics,
+  EditorModelRegistryDiagnosticsEntry,
+  EditorModelRegistryOptions,
+  EditorModelProtection,
+} from "./components/editor-model-registry.js";
 
 // ─── Runtime: cancellation identity ──────────────────────────────────────────────
 export {
@@ -592,6 +605,7 @@ export type {
   EditorSelectionCapture,
   AskKeikoAboutSelectionHandler,
 } from "./components/types.js";
+export type { KeikoEditorPreferenceOptions } from "./components/editor-options.js";
 // The controlled component renders the host-owned save lifecycle; these pure helpers let a host
 // (e.g. keiko-ui in #1196) drive `saveStatus` and detect optimistic-concurrency conflicts
 // consistently with what the component expects, without re-implementing the FSM.

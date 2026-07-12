@@ -191,6 +191,23 @@ import {
   handlePutManagedLspControl,
 } from "./editor/lsp/managedLspRoutes.js";
 import {
+  handleEditorSettingsEvents,
+  handleGetEditorSettings,
+  handlePatchEditorSettings,
+} from "./editor/settings/editorSettingsRoutes.js";
+import {
+  handleGetWorkspaceSnippets,
+  handleMutateWorkspaceSnippets,
+  handlePreviewWorkspaceSnippet,
+  handleValidateWorkspaceSnippets,
+  handleWorkspaceSnippetsEvents,
+} from "./editor/snippets/workspaceSnippetsRoutes.js";
+import {
+  handleEditorWorkspaceWatchEvents,
+  handleEditorWorkspaceWatchHealth,
+  handleEditorWorkspaceWatchSnapshot,
+} from "./editor/watch/workspaceWatchRoutes.js";
+import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
   handleEditorRepoSearch,
@@ -851,6 +868,61 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "PUT",
     pattern: "/api/editor/lsp/settings",
     handler: handlePutManagedLspControl,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/snapshot",
+    handler: handleEditorWorkspaceWatchSnapshot,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/health",
+    handler: handleEditorWorkspaceWatchHealth,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/events",
+    handler: handleEditorWorkspaceWatchEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/events",
+    handler: handleEditorSettingsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings",
+    handler: handleGetEditorSettings,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/settings",
+    handler: handlePatchEditorSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets/events",
+    handler: handleWorkspaceSnippetsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets",
+    handler: handleGetWorkspaceSnippets,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/snippets",
+    handler: handleMutateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/validate",
+    handler: handleValidateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/preview",
+    handler: handlePreviewWorkspaceSnippet,
   },
   {
     method: "POST",

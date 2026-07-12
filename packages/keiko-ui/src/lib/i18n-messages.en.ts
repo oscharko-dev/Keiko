@@ -137,6 +137,8 @@ export const EN_MESSAGES = {
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized
   // agent-presence-indicator labels to that lazy namespace (EN/DE) rather than this shell catalog.
+  // M7 editor personalization messages likewise live in the lazy `settings-i18n.ts` namespace;
+  // this catalog touch records the required English-copy review without preloading editor settings.
   // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
   // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
   // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.

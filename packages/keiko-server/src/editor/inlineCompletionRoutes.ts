@@ -61,6 +61,7 @@ import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
 } from "./inlineCompletionRateLimiter.js";
+import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
 import {
   estimateEditorModelReservationTokens,
   settleModelUsage,
@@ -597,6 +598,19 @@ export async function handleEditorInlineCompletion(
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     // Containment check for the overlay document path (throws on escape → handled by runFilesHandler).
     resolveOverlayPath(root.realRoot, request.document.path);
+    const activation = await resolveEditorAiAssistStatusForRoot(
+      deps,
+      root.realRoot,
+      "inlineCompletion",
+    );
+    if (!editorAiStatusActive(activation)) {
+      return {
+        status: 200,
+        body: deps.redactor(
+          buildWireResponse(noItemOutcome("deterministic", undefined, undefined, undefined)),
+        ),
+      };
+    }
     const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
     if (isRouteResult(sanitizedRequest)) {
       return sanitizedRequest;

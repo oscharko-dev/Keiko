@@ -5,10 +5,16 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type {
-  EditorPatchApplyWireResponse,
-  EditorPatchVerificationSummary,
-  EvidenceStore,
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  resolveEditorM7Settings,
+  type EditorM7SettingId,
+  type EditorM7SettingValue,
+  type EditorM7SettingsSnapshot,
+  type EditorPatchApplyWireResponse,
+  type EditorPatchVerificationSummary,
+  type EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
@@ -52,14 +58,57 @@ function rawPostContext(body: string): RouteContext {
 }
 
 function deps(
-  input: { env?: Record<string, string | undefined>; evidenceStore?: EvidenceStore } = {},
+  input: {
+    env?: Record<string, string | undefined>;
+    evidenceStore?: EvidenceStore;
+    aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+  } = {},
 ): UiHandlerDeps {
+  const aiSettings = input.aiSettings ?? { patchApply: true };
   return {
     store,
     redactor: buildRedactor(input.env ?? {}, undefined),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
+    editorSettingsControl: editorSettingsControl(aiSettings),
   } as unknown as UiHandlerDeps;
+}
+
+function editorSettingsSnapshot(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): EditorM7SettingsSnapshot {
+  const userValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  const workspaceValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  if (values.inlineCompletion !== undefined) {
+    userValues.inlineCompletion = values.inlineCompletion;
+  }
+  if (values.testGeneration !== undefined) {
+    workspaceValues.testGeneration = values.testGeneration;
+  }
+  if (values.patchApply !== undefined) {
+    workspaceValues.patchApply = values.patchApply;
+  }
+  return {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 1,
+    workspaceRevision: 1,
+    revision: 1_000_003,
+    etag: '"edm7-test-patch-apply"',
+    root,
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM7Settings({
+      user: { scope: "user", values: userValues },
+      workspace: { scope: "workspace", values: workspaceValues },
+    }),
+    eventSequence: 1,
+  };
+}
+
+function editorSettingsControl(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): { readonly read: (realRoot: string) => Promise<EditorM7SettingsSnapshot> } {
+  return { read: () => Promise.resolve(editorSettingsSnapshot(values)) };
 }
 
 const ENABLED = { KEIKO_EDITOR_PATCH_APPLY: "on" };
@@ -192,6 +241,17 @@ describe("POST /api/editor/patch-apply — switched off (v1 default)", () => {
       options(),
     );
     expect(result.status).toBe(400);
+  });
+
+  it("keeps legacy env enablement as a ceiling until workspace activation explicitly opts in", async () => {
+    const result = await handleEditorPatchApply(
+      postContext(body()),
+      deps({ env: ENABLED, aiSettings: { patchApply: false } }),
+      options(),
+    );
+    const response = wire(result);
+    expect(response.status).toBe("disabled");
+    expect(await exists("src/a.test.ts")).toBe(false);
   });
 });
 

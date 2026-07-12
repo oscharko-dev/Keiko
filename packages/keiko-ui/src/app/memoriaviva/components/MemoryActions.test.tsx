@@ -132,4 +132,164 @@ describe("MemoryActions", () => {
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
   });
+
+  // Covers PinToggleButton (pin path): non-pinned, non-forgotten → click Pin.
+  it("pins an unpinned memory via PinToggleButton", async () => {
+    const pinned = makeRecord({ pinned: true });
+    const pinImpl = vi.fn().mockResolvedValue({ memory: pinned });
+    const onRecordChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions
+        record={makeRecord({ pinned: false })}
+        onRecordChange={onRecordChange}
+        pinImpl={pinImpl}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /pin this memory for priority retrieval/i }),
+    );
+
+    await waitFor(() => {
+      expect(pinImpl).toHaveBeenCalledWith("mem-actions-1");
+      expect(onRecordChange).toHaveBeenCalledWith(pinned);
+    });
+  });
+
+  // Covers PinToggleButton (unpin path): pinned, non-forgotten → click Unpin.
+  it("unpins a pinned memory via PinToggleButton", async () => {
+    const unpinned = makeRecord({ pinned: false });
+    const unpinImpl = vi.fn().mockResolvedValue({ memory: unpinned });
+    const onRecordChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions
+        record={makeRecord({ pinned: true })}
+        onRecordChange={onRecordChange}
+        unpinImpl={unpinImpl}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /unpin this memory/i }));
+
+    await waitFor(() => {
+      expect(unpinImpl).toHaveBeenCalledWith("mem-actions-1");
+      expect(onRecordChange).toHaveBeenCalledWith(unpinned);
+    });
+  });
+
+  // Covers ArchiveButton for canArchive statuses.
+  it("archives a memory in an archivable status (accepted)", async () => {
+    const archived = makeRecord({ status: "archived" as MemoryRecord["status"] });
+    const archiveImpl = vi.fn().mockResolvedValue({ memory: archived });
+    const onRecordChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions
+        record={makeRecord({ status: "accepted" })}
+        onRecordChange={onRecordChange}
+        archiveImpl={archiveImpl}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /archive this memory/i }));
+
+    await waitFor(() => {
+      expect(archiveImpl).toHaveBeenCalledWith("mem-actions-1", "archived by user in MemoriaViva");
+      expect(onRecordChange).toHaveBeenCalledWith(archived);
+    });
+  });
+
+  // Covers ArchiveButton's non-rendered branch (canArchive false).
+  it("does not render the archive button for non-archivable statuses (proposed)", () => {
+    render(<MemoryActions record={makeRecord({ status: "proposed" })} onRecordChange={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /archive this memory/i })).toBeNull();
+  });
+
+  // Covers ForgetButton path: opens the ForgetConfirmDialog.
+  it("opens the forget confirmation dialog when Forget memory is clicked", async () => {
+    const user = userEvent.setup();
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /forget this memory/i }));
+
+    expect(await screen.findByRole("heading", { name: /forget this memory/i })).toBeInTheDocument();
+  });
+
+  // Covers the forgotten-record branch: EditCorrectButtons, PinToggleButton
+  // and ForgetButton return null; only Delete is shown.
+  it("hides edit/correct/pin/forget when the record is already forgotten", () => {
+    render(<MemoryActions record={makeRecord({ status: "forgotten" })} onRecordChange={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /edit memory body/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /create a correction proposal/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /pin this memory/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /forget this memory/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /delete this memory record/i })).toBeInTheDocument();
+  });
+
+  // Covers handleOpenEdit body + onEditClose (edit-dialog cancel path).
+  it("opens the edit dialog and closes it via the cancel control", async () => {
+    const user = userEvent.setup();
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /edit memory body/i }));
+    expect(await screen.findByLabelText(/^body$/i, { selector: "textarea" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/^body$/i, { selector: "textarea" })).toBeNull();
+    });
+  });
+
+  // Covers handleOpenCorrect body + onCorrectClose (correct-dialog cancel path).
+  it("opens the correction dialog and closes it via the cancel control", async () => {
+    const user = userEvent.setup();
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: /create a correction proposal for this memory/i }),
+    );
+    expect(
+      await screen.findByLabelText(/corrected body/i, { selector: "textarea" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/corrected body/i, { selector: "textarea" })).toBeNull();
+    });
+  });
+
+  // Covers onForgetClose (forget-dialog cancel path).
+  it("opens the forget dialog and closes it via the cancel control", async () => {
+    const user = userEvent.setup();
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /forget this memory/i }));
+    expect(await screen.findByRole("heading", { name: /forget this memory/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /forget this memory/i })).toBeNull();
+    });
+  });
+
+  // Covers onDeleteClose (delete-dialog cancel path).
+  it("opens the delete dialog and closes it via the cancel control", async () => {
+    const user = userEvent.setup();
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /delete this memory record/i }));
+    expect(
+      await screen.findByRole("heading", { name: /delete this memory record/i }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: /delete this memory record/i })).toBeNull();
+    });
+  });
 });

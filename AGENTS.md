@@ -103,17 +103,34 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
+For PR-bound work, use the Codex pre-PR gate instead of manually stitching a partial checklist
+together:
+
+```bash
+npm run codex:pre-pr
+```
+
+This gate runs the local-first sequence in a fixed order: typecheck, lint, format, UI package
+checks, unit tests, coverage quality, LCOV source mapping, architecture checks, ADR/dependency
+hygiene, clean build, UI build, package-surface, editor bundle size, and smoke coverage. It writes a
+machine-readable report to `.codex/pre-pr-report.json` so the exact local outcome is inspectable
+before the first push, a PR update, or a merge.
+
 ### Local-first gate policy
 
 Never use GitHub Actions as the first test environment for a change. Before pushing,
 force-pushing, updating a pull request, or merging:
 
 1. Identify every GitHub quality gate that the change can affect.
-2. Run the corresponding local command before the push.
+2. Run `npm run codex:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
+   already covered by that command.
 3. If a GitHub gate is already red, reproduce that exact failure locally, or reduce it to the
    nearest deterministic local gate, before pushing another fix.
-4. Push only after the relevant local gate is green.
-5. Report the exact local commands and outcomes.
+4. Fix every local finding before pushing; after any fix, rerun the failed targeted gate and then
+   rerun the full `npm run codex:pre-pr` gate before the next push.
+5. Push only after the relevant local gate is green or a documented platform-specific local skip is
+   unavoidable.
+6. Report the exact local commands and outcomes from the generated pre-PR report.
 
 If a required gate cannot be run locally, stop and state that before any push. Do not let the
 remote pull request be the first place where format, lint, typecheck, package-surface,
