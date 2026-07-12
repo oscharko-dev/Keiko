@@ -135,10 +135,26 @@ describe("portable secure-read qualification", () => {
       "PRN",
       "AUX.log",
       "NUL.txt",
+      "CONIN$",
+      "conin$.txt",
+      "CONOUT$",
+      "conout$.log",
       "COM1",
       "COM9.log",
+      "COM¹",
+      "com¹.txt",
+      "COM²",
+      "com².log",
+      "COM³",
+      "com³.txt",
       "LPT1",
       "LPT9.log",
+      "LPT¹",
+      "lpt¹.txt",
+      "LPT²",
+      "lpt².log",
+      "LPT³",
+      "lpt³.txt",
       "CLOCK$",
       "GLOBALROOT",
       "GLOBALROOT.txt",
@@ -148,7 +164,18 @@ describe("portable secure-read qualification", () => {
     ]) {
       expect(secureReadHarness).toContain(JSON.stringify(denied));
     }
-    for (const allowed of ["GLOBALROOTED", "CONSOLE", "DEVICEFUL", "CLOCK$X", "COM10", "LPT10"]) {
+    for (const allowed of [
+      "GLOBALROOTED",
+      "CONSOLE",
+      "DEVICEFUL",
+      "CLOCK$X",
+      "COM10",
+      "LPT10",
+      "CONIN$X",
+      "CONOUT$X",
+      "COM¹0",
+      "LPT²X",
+    ]) {
       expect(secureReadHarness).toContain(JSON.stringify(allowed));
     }
     expect(secureReadHarness).toContain("Windows reserved-name policy mismatch");
@@ -157,6 +184,8 @@ describe("portable secure-read qualification", () => {
       "PRN",
       "AUX",
       "NUL",
+      "CONIN$",
+      "CONOUT$",
       "COM",
       "LPT",
       "CLOCK$",
@@ -170,9 +199,10 @@ describe("portable secure-read qualification", () => {
       /while \(name_length < length && component\[name_length\] != '\.'\)/u,
     );
     expect(secureReadNative).toContain('ascii_name_equals(component, name_length, "GLOBALROOT")');
-    expect(secureReadNative).toMatch(
-      /name_length == 4 && \(ascii_name_equals.*component\[3\] >= '1'/u,
-    );
+    expect(secureReadNative).toContain("windows_reserved_port_name(component, name_length)");
+    expect(secureReadNative).toContain("bytes[3] == 0xc2");
+    expect(secureReadNative).toContain("bytes[4] == 0xb9 || bytes[4] == 0xb2 || bytes[4] == 0xb3");
+    expect(secureReadNative).toContain("_Static_assert(sizeof(KSR_SUPERSCRIPT_ONE_UTF8) == 3");
     expect(secureReadNative).not.toContain("char name[10]");
     expect(secureReadHarness).toContain(
       "if (pausedBinary !== undefined) await assertAdversarialRaces",

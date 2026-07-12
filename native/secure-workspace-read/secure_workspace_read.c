@@ -10,6 +10,13 @@
 #define KSR_MAX_PATH 4096u
 #define KSR_CAP 65536u
 #define KSR_MAX_COMPONENTS 64u
+#define KSR_SUPERSCRIPT_ONE_UTF8 "\xC2\xB9"
+#define KSR_SUPERSCRIPT_TWO_UTF8 "\xC2\xB2"
+#define KSR_SUPERSCRIPT_THREE_UTF8 "\xC2\xB3"
+
+_Static_assert(sizeof(KSR_SUPERSCRIPT_ONE_UTF8) == 3, "superscript one must be two UTF-8 bytes");
+_Static_assert(sizeof(KSR_SUPERSCRIPT_TWO_UTF8) == 3, "superscript two must be two UTF-8 bytes");
+_Static_assert(sizeof(KSR_SUPERSCRIPT_THREE_UTF8) == 3, "superscript three must be two UTF-8 bytes");
 
 enum ksr_status {
   KSR_OK = 0, KSR_MALFORMED_REQUEST = 1, KSR_UNSUPPORTED_PLATFORM = 2,
@@ -49,13 +56,23 @@ static int ascii_name_equals(const char *value, size_t length, const char *expec
   while (i < length && expected[i] != '\0') { char c = value[i]; if (c >= 'a' && c <= 'z') c = (char)(c - ('a' - 'A')); if (c != expected[i]) return 0; ++i; }
   return i == length && expected[i] == '\0';
 }
+
+static int windows_reserved_port_name(const char *name, size_t length) {
+  const unsigned char *bytes = (const unsigned char *)name;
+  if (length < 4 ||
+      (!ascii_name_equals(name, 3, "COM") && !ascii_name_equals(name, 3, "LPT")))
+    return 0;
+  if (length == 4) return bytes[3] >= '1' && bytes[3] <= '9';
+  return length == 5 && bytes[3] == 0xc2 &&
+         (bytes[4] == 0xb9 || bytes[4] == 0xb2 || bytes[4] == 0xb3);
+}
 #endif
 
 static int windows_reserved_component(const char *component, size_t length) {
 #if defined(_WIN32)
   size_t name_length = 0;
   while (name_length < length && component[name_length] != '.') ++name_length;
-  return ascii_name_equals(component, name_length, "CON") || ascii_name_equals(component, name_length, "PRN") || ascii_name_equals(component, name_length, "AUX") || ascii_name_equals(component, name_length, "NUL") || ascii_name_equals(component, name_length, "CLOCK$") || (name_length == 4 && (ascii_name_equals(component, 3, "COM") || ascii_name_equals(component, 3, "LPT")) && component[3] >= '1' && component[3] <= '9') || ascii_name_equals(component, name_length, "GLOBALROOT") || ascii_name_equals(component, name_length, "DEVICE") || ascii_name_equals(component, name_length, "??");
+  return ascii_name_equals(component, name_length, "CON") || ascii_name_equals(component, name_length, "PRN") || ascii_name_equals(component, name_length, "AUX") || ascii_name_equals(component, name_length, "NUL") || ascii_name_equals(component, name_length, "CONIN$") || ascii_name_equals(component, name_length, "CONOUT$") || ascii_name_equals(component, name_length, "CLOCK$") || windows_reserved_port_name(component, name_length) || ascii_name_equals(component, name_length, "GLOBALROOT") || ascii_name_equals(component, name_length, "DEVICE") || ascii_name_equals(component, name_length, "??");
 #else
   (void)component; (void)length; return 0;
 #endif

@@ -26,6 +26,8 @@ const WINDOWS_RESERVED_STEMS = [
   "PRN",
   "AUX",
   "NUL",
+  "CONIN$",
+  "CONOUT$",
   "COM",
   "LPT",
   "CLOCK$",
@@ -39,10 +41,26 @@ const WINDOWS_RESERVED_DENIED = [
   "PRN",
   "AUX.log",
   "NUL.txt",
+  "CONIN$",
+  "conin$.txt",
+  "CONOUT$",
+  "conout$.log",
   "COM1",
   "COM9.log",
+  "COM¹",
+  "com¹.txt",
+  "COM²",
+  "com².log",
+  "COM³",
+  "com³.txt",
   "LPT1",
   "LPT9.log",
+  "LPT¹",
+  "lpt¹.txt",
+  "LPT²",
+  "lpt².log",
+  "LPT³",
+  "lpt³.txt",
   "CLOCK$",
   "GLOBALROOT",
   "GLOBALROOT.txt",
@@ -57,6 +75,10 @@ const WINDOWS_RESERVED_PREFIX_ALLOWED = [
   "CLOCK$X",
   "COM10",
   "LPT10",
+  "CONIN$X",
+  "CONOUT$X",
+  "COM¹0",
+  "LPT²X",
 ];
 const isWindows = process.platform === "win32";
 
@@ -206,7 +228,10 @@ async function assertWindowsSourceContract() {
   for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSource.includes(`"${stem}"`));
   assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
   assert.match(nativeSource, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
-  assert.match(nativeSource, /name_length == 4 && \(ascii_name_equals.*component\[3\] >= '1'/u);
+  assert.match(nativeSource, /windows_reserved_port_name\(component, name_length\)/u);
+  assert.match(nativeSource, /bytes\[3\] == 0xc2/u);
+  assert.match(nativeSource, /bytes\[4\] == 0xb9 \|\| bytes\[4\] == 0xb2 \|\| bytes\[4\] == 0xb3/u);
+  assert.match(nativeSource, /_Static_assert\(sizeof\(KSR_SUPERSCRIPT_ONE_UTF8\) == 3/u);
   assert.doesNotMatch(nativeSource, /char name\[10\]/u);
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
