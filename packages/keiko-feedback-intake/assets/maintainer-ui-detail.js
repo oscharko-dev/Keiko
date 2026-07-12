@@ -42,7 +42,7 @@ export async function openMaintainerDetail(itemId, options) {
   const generation = state.detailGeneration + 1;
   state.detailGeneration = generation;
   state.detailAbort?.abort();
-  const controller = new AbortController();
+  const controller = new globalThis.AbortController();
   state.detailAbort = controller;
   try {
     setBusy(true);
@@ -56,7 +56,8 @@ export async function openMaintainerDetail(itemId, options) {
     if (publicationEnabled(state.session))
       await publication.load(detail, generation, controller.signal);
   } catch (error) {
-    if (!(error instanceof DOMException && error.name === "AbortError")) errorView(error);
+    if (!(error instanceof globalThis.DOMException && error.name === "AbortError"))
+      errorView(error);
   } finally {
     setBusy(false);
   }
