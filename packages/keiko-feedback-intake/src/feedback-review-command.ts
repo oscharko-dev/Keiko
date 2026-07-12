@@ -57,8 +57,7 @@ export function assertFeedbackReviewCommand(command: FeedbackReviewCommand): voi
   if (!isFeedbackReviewActorV1(command.actor)) throw new FeedbackReviewError("invalid-actor");
   if (
     !isCanonicalFeedbackReviewId(command.itemId) ||
-    (command.action === "mark-duplicate" &&
-      !isCanonicalFeedbackReviewId(command.targetItemId))
+    (command.action === "mark-duplicate" && !isCanonicalFeedbackReviewId(command.targetItemId))
   ) {
     throw new FeedbackReviewError("invalid-request");
   }

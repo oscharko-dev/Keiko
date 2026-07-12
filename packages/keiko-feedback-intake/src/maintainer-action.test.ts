@@ -53,7 +53,9 @@ describe("maintainer action contract", () => {
   });
 
   it("rejects non-canonical path and duplicate-target UUIDs", () => {
-    expect(parseMaintainerAction({ ...base, action: "archive" }, "not-a-uuid", actor)).toBeUndefined();
+    expect(
+      parseMaintainerAction({ ...base, action: "archive" }, "not-a-uuid", actor),
+    ).toBeUndefined();
     expect(
       parseMaintainerAction(
         { ...base, action: "mark-duplicate", targetItemId: "not-a-uuid" },

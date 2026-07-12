@@ -261,9 +261,7 @@ async function handleReviewItem(
   options: MaintainerHttpOptions,
   identity: Session,
 ): Promise<void> {
-  const match = /^\/v1\/maintainer\/reviews\/([^/]+)(?:\/(actions|hold))?$/u.exec(
-    url.pathname,
-  );
+  const match = /^\/v1\/maintainer\/reviews\/([^/]+)(?:\/(actions|hold))?$/u.exec(url.pathname);
   if (match?.[1] === undefined || !isCanonicalFeedbackReviewId(match[1])) {
     fail(res, 404);
     return;
