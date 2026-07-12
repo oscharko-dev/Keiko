@@ -9,7 +9,10 @@ import { parseChangedFiles } from "./check-mutation-scope.mjs";
 const defaultReports = [
   "coverage/packages/lcov.info",
   "packages/keiko-ui/coverage/lcov.info",
-  "coverage/lcov.info",
+  // Written by test:coverage:scripts into its own reports directory (not the ambiguous default
+  // ./coverage, which any unscoped `vitest --coverage` invocation using the root config could
+  // write to or clean).
+  "coverage/scripts/lcov.info",
 ];
 
 export function parseLcovSources(contents, root) {
