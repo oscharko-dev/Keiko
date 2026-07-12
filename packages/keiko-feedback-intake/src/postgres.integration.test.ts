@@ -39,7 +39,6 @@ describe("PostgreSQL production intake integration", () => {
           "003_feedback_publication.sql",
           "004_feedback_publication_worker.sql",
           "005_feedback_publication_circuit.sql",
-          "006_feedback_review_projection.sql",
         ]) {
           await migrationClient.query(
             await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"),

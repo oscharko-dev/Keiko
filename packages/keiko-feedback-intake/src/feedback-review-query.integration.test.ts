@@ -46,7 +46,6 @@ describe("PostgreSQL feedback review query", () => {
         await setup.query(`SET search_path TO "${schema}"`);
         await setup.query(await migration("001_feedback_intake.sql"));
         await setup.query(await migration("002_feedback_review.sql"));
-        await setup.query(await migration("006_feedback_review_projection.sql"));
         await setup.query(
           "INSERT INTO feedback_semantic_groups (id, created_at) VALUES ($1, transaction_timestamp())",
           [groupId],

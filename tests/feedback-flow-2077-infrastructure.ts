@@ -143,7 +143,6 @@ function migrationNames(): readonly string[] {
     "003_feedback_publication.sql",
     "004_feedback_publication_worker.sql",
     "005_feedback_publication_circuit.sql",
-    "006_feedback_review_projection.sql",
   ];
 }
 
