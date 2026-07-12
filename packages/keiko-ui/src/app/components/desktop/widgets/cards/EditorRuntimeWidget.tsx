@@ -44,12 +44,14 @@ import {
   buildPatchPreview,
   buildTestGenerationPreview,
   buildRenamePreview,
+  configureEditorModelRegistry,
   createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
   deriveLargeFileMode,
   deriveEditorStatusBar,
   describeTestGenerationStatus,
+  disposeAllUnattachedEditorModels,
   editorFileModelReducer,
   editorLanguageLabel,
   EditorStatusBar,
@@ -1432,6 +1434,30 @@ function EditorRuntimeWidget({
   const t = useEditorAgentTranslate();
   const editorSettings = useEditorSettings(root);
   const workspaceSnippets = useWorkspaceSnippets(root);
+  // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
+  // Monaco model registry. Every mounted editor surface renders this component, so the registry
+  // stays configured to the current effective values without a dedicated global subscriber.
+  useEffect(() => {
+    configureEditorModelRegistry({
+      countBudget: editorSettings.applied.modelRetentionCount,
+      byteBudget: editorSettings.applied.modelRetentionBytes,
+    });
+  }, [editorSettings.applied.modelRetentionCount, editorSettings.applied.modelRetentionBytes]);
+  // AC7: releases retained-but-inactive Monaco models when this pane's root changes (the pane
+  // itself is keyed by pane id, not root, so it stays mounted across a root switch) or when the
+  // pane closes/the window unmounts.
+  const previousRuntimeRootRef = useRef(root);
+  useEffect(() => {
+    if (previousRuntimeRootRef.current !== root) {
+      disposeAllUnattachedEditorModels("root-disposed");
+      previousRuntimeRootRef.current = root;
+    }
+  }, [root]);
+  useEffect(() => {
+    return () => {
+      disposeAllUnattachedEditorModels("shutdown");
+    };
+  }, []);
   const snippetInsertionSafeRef = useRef(false);
   // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
   // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
@@ -1880,13 +1906,18 @@ function EditorRuntimeWidget({
         symbolCacheRef.current = null;
         setOutlineSymbols([]);
       }
+      // Consume the local-write marker on first match: a save produces exactly one reconciling
+      // watch event, so leaving the marker live for its full window would let an unrelated
+      // third-party write to the same path within that window be silently treated as Keiko's own.
+      const originatedByKeiko = localWriteMatchesEvent(recentLocalWriteRef.current, event);
+      if (originatedByKeiko) recentLocalWriteRef.current = null;
       dispatchExternalChange({
         type: "observed",
         event,
         activePath: file,
         dirty: dirtyRef.current,
         saving: savingRef.current,
-        originatedByKeiko: localWriteMatchesEvent(recentLocalWriteRef.current, event),
+        originatedByKeiko,
       });
     },
     [diagnosticsProducerId, file, root],
@@ -2081,6 +2112,16 @@ function EditorRuntimeWidget({
     }
     reload();
   }, [reload]);
+
+  // ADR-0133 D3: clean buffers may reload only per the effective externalReload setting.
+  // "cleanChanged" is only ever dispatched for a non-dirty, non-saving buffer (statusForObserved),
+  // so reloading here can never discard unsaved edits — dirty buffers stay on "prompt" regardless.
+  const externalReloadPolicy = editorSettings.applied.externalReload;
+  useEffect(() => {
+    if (externalReloadPolicy === "autoClean" && externalChange.status === "cleanChanged") {
+      reload();
+    }
+  }, [externalChange.sequence, externalChange.status, externalReloadPolicy, reload]);
 
   const confirmReloadDiscard = useCallback((): void => {
     setReloadConfirm(false);
@@ -5223,7 +5264,14 @@ function EditorRuntimeWidget({
     );
   }
 
-  const showExternalChangeBanner = externalChange.status !== "idle" && !externalChange.compareOpen;
+  // ADR-0133 D3: "manual" never proactively offers a reload for a clean external change — the
+  // operator discovers and reloads it deliberately (e.g. by reopening the file). Dirty/deleted/
+  // renamed/degraded statuses still surface regardless of the setting; only unmodified content is
+  // affected by this ceiling.
+  const suppressCleanBanner =
+    externalReloadPolicy === "manual" && externalChange.status === "cleanChanged";
+  const showExternalChangeBanner =
+    externalChange.status !== "idle" && !externalChange.compareOpen && !suppressCleanBanner;
   const workspaceWatchNeedsAttention =
     workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 

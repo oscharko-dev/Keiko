@@ -50,6 +50,7 @@ export interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly additionalExclusions?: readonly string[] | undefined;
 }
 
 export type WorkspaceWatchSubscribeResult =
@@ -98,6 +99,11 @@ type MetadataResult =
   | { readonly kind: "absent" }
   | { readonly kind: "unsafe" };
 
+interface ScanResult {
+  readonly entries: Map<string, FileMetadata>;
+  readonly truncated: boolean;
+}
+
 interface WatchConfig {
   readonly adapter: WorkspaceWatchAdapter;
   readonly coalesceMs: number;
@@ -124,6 +130,30 @@ const DEFAULT_CONFIG: Omit<WatchConfig, "adapter"> = {
 const EXCLUDED_SEGMENTS = new Set(["node_modules", ".next", ".turbo", "dist", "build", "out"]);
 const EXCLUDED_PREFIXES = [".git/objects", ".git/logs", ".codex", ".keiko/private"] as const;
 
+// User/workspace-configurable `watcherExclusions` (validated upstream by keiko-contracts'
+// `safeSettingPathToken`, so entries are already NUL/traversal/absolute-path free). A pattern
+// containing "/" is treated as a relative path prefix; a bare pattern is treated as a segment
+// name, mirroring EXCLUDED_SEGMENTS/EXCLUDED_PREFIXES.
+interface WatchExclusions {
+  readonly segments: ReadonlySet<string>;
+  readonly prefixes: readonly string[];
+}
+
+const NO_EXCLUSIONS: WatchExclusions = Object.freeze({
+  segments: new Set<string>(),
+  prefixes: [],
+});
+
+function exclusionsFromPatterns(patterns: readonly string[]): WatchExclusions {
+  const segments = new Set<string>();
+  const prefixes: string[] = [];
+  for (const pattern of patterns) {
+    if (pattern.includes("/")) prefixes.push(pattern);
+    else segments.add(pattern);
+  }
+  return { segments, prefixes };
+}
+
 function bufferToString(value: string | Buffer | null | undefined): string | null {
   if (typeof value === "string") return value;
   if (Buffer.isBuffer(value)) return value.toString("utf8");
@@ -143,18 +173,23 @@ function normalizeEventPath(filename: string | Buffer | null | undefined): strin
   return normalized;
 }
 
-function hardExcluded(relativePath: string): boolean {
+function matchesPrefix(relativePath: string, prefix: string): boolean {
+  return relativePath === prefix || relativePath.startsWith(`${prefix}/`);
+}
+
+function hardExcluded(relativePath: string, additional: WatchExclusions): boolean {
   const segments = relativePath.split("/").filter((part) => part.length > 0);
   return (
-    segments.some((segment) => EXCLUDED_SEGMENTS.has(segment)) ||
-    EXCLUDED_PREFIXES.some(
-      (prefix) => relativePath === prefix || relativePath.startsWith(`${prefix}/`),
-    )
+    segments.some(
+      (segment) => EXCLUDED_SEGMENTS.has(segment) || additional.segments.has(segment),
+    ) ||
+    EXCLUDED_PREFIXES.some((prefix) => matchesPrefix(relativePath, prefix)) ||
+    additional.prefixes.some((prefix) => matchesPrefix(relativePath, prefix))
   );
 }
 
-function eventPathAllowed(relativePath: string): boolean {
-  return !pathIsDenied(relativePath) && !hardExcluded(relativePath);
+function eventPathAllowed(relativePath: string, additional: WatchExclusions): boolean {
+  return !pathIsDenied(relativePath) && !hardExcluded(relativePath, additional);
 }
 
 function relativePathFromNative(root: string, target: string): string {
@@ -177,15 +212,19 @@ function entryKind(linkStats: Stats, targetStats: Stats): EditorM7WatchEntryKind
   return "unknown";
 }
 
-async function metadataFor(root: string, relativePath: string): Promise<MetadataResult> {
-  if (!eventPathAllowed(relativePath)) return { kind: "unsafe" };
+async function metadataFor(
+  root: string,
+  relativePath: string,
+  additional: WatchExclusions,
+): Promise<MetadataResult> {
+  if (!eventPathAllowed(relativePath, additional)) return { kind: "unsafe" };
   const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
   try {
     const linkStats = await lstat(candidate);
     const real = await realpath(candidate);
     if (!containsPath(root, real)) return { kind: "unsafe" };
     const realRelativePath = relativePathFromNative(root, real);
-    if (!eventPathAllowed(realRelativePath)) return { kind: "unsafe" };
+    if (!eventPathAllowed(realRelativePath, additional)) return { kind: "unsafe" };
     const targetStats = await stat(real);
     const kind = entryKind(linkStats, targetStats);
     return {
@@ -284,6 +323,7 @@ class WorkspaceWatchSession {
   private baselineReady: Promise<void> | null = null;
   private flushing = false;
   private disposed = false;
+  private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
 
   public constructor(
     private readonly root: string,
@@ -293,6 +333,9 @@ class WorkspaceWatchSession {
 
   public subscribe(args: WorkspaceWatchSubscribeArgs): WorkspaceWatchSubscribeResult {
     this.cancelIdleTimer();
+    if (args.additionalExclusions !== undefined) {
+      this.additionalExclusions = exclusionsFromPatterns(args.additionalExclusions);
+    }
     this.ensureStarted();
     if (this.subscribers.size >= this.config.maxSubscribersPerRoot) {
       return { kind: "subscriberLimit", snapshot: this.snapshot(true) };
@@ -361,7 +404,7 @@ class WorkspaceWatchSession {
           this.handleRawEvent(event);
         },
         onError: () => {
-          this.enterDegraded("native-watch-unavailable");
+          this.handleNativeWatchError();
         },
       });
       this.startBaselineSeed();
@@ -370,6 +413,17 @@ class WorkspaceWatchSession {
       this.enterDegraded("native-watch-unavailable");
       this.startFallbackPolling();
     }
+  }
+
+  // A native watcher can stop delivering events after an async 'error' (watched directory
+  // removed/unmounted, NFS disconnect, inotify limit) without the process ever throwing. Without
+  // falling back to polling here, the session would stay degraded but silently stop reconciling.
+  private handleNativeWatchError(): void {
+    if (this.disposed) return;
+    this.handle?.close();
+    this.handle = null;
+    this.enterDegraded("native-watch-unavailable");
+    this.startFallbackPolling();
   }
 
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
@@ -384,7 +438,7 @@ class WorkspaceWatchSession {
       this.emitRescan("ambiguous-event", "rescan");
       return;
     }
-    if (!eventPathAllowed(relativePath)) {
+    if (!eventPathAllowed(relativePath, this.additionalExclusions)) {
       this.enterDegraded("unsafe-path");
       return;
     }
@@ -436,12 +490,12 @@ class WorkspaceWatchSession {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
     }
-    const current = await metadataFor(this.root, change.relativePath);
+    const current = await metadataFor(this.root, change.relativePath, this.additionalExclusions);
     this.applyMetadataResult(change.relativePath, current);
   }
 
   private async reconcileRename(oldRelativePath: string, relativePath: string): Promise<void> {
-    const current = await metadataFor(this.root, relativePath);
+    const current = await metadataFor(this.root, relativePath, this.additionalExclusions);
     if (current.kind !== "present") {
       this.emitRescan(current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event", "rescan");
       return;
@@ -491,18 +545,24 @@ class WorkspaceWatchSession {
     const next = await this.scanTree();
     if (next === null || this.disposed) return;
     this.known.clear();
-    for (const metadata of next.values()) this.known.set(metadata.relativePath, metadata);
+    for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {
     const next = await this.scanTree();
     if (next === null || this.disposed) return;
-    for (const [path, previous] of this.known)
-      if (!next.has(path)) this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
-    for (const metadata of next.values()) this.applyPresent(metadata);
+    // A truncated scan (maxScanEntries overflow) only saw part of the tree — treating unreached
+    // known paths as deleted would fabricate deletions for files that still exist. Skip the
+    // deletion diff for a truncated pass; the already-emitted overflow/rescan signal owns recovery.
+    if (!next.truncated) {
+      for (const [path, previous] of this.known)
+        if (!next.entries.has(path))
+          this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
+    }
+    for (const metadata of next.entries.values()) this.applyPresent(metadata);
   }
 
-  private async scanTree(): Promise<Map<string, FileMetadata> | null> {
+  private async scanTree(): Promise<ScanResult | null> {
     try {
       const rootStats = await stat(this.root);
       if (!rootStats.isDirectory()) return this.rootReplaced();
@@ -517,18 +577,20 @@ class WorkspaceWatchSession {
     return null;
   }
 
-  private async scanDirectory(start: string): Promise<Map<string, FileMetadata>> {
+  private async scanDirectory(start: string): Promise<ScanResult> {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
+    let truncated = false;
     while (queue.length > 0) {
       const current = queue.shift() ?? "";
       if (found.size > this.config.maxScanEntries) {
         this.emitRescan("event-overflow", "overflow");
+        truncated = true;
         break;
       }
       await this.scanOneDirectory(current, found, queue);
     }
-    return found;
+    return { entries: found, truncated };
   }
 
   private async scanOneDirectory(
@@ -542,8 +604,8 @@ class WorkspaceWatchSession {
     for (const entry of entries) {
       const relativePath =
         relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
-      if (!eventPathAllowed(relativePath)) continue;
-      const result = await metadataFor(this.root, relativePath);
+      if (!eventPathAllowed(relativePath, this.additionalExclusions)) continue;
+      const result = await metadataFor(this.root, relativePath, this.additionalExclusions);
       if (result.kind !== "present") continue;
       found.set(relativePath, result.metadata);
       if (result.metadata.entryKind === "directory") queue.push(relativePath);

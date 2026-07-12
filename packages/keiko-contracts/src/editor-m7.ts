@@ -450,6 +450,7 @@ export function parseEditorM7SettingValue(
   id: EditorM7SettingId,
   value: unknown,
 ): EditorM7ParseResult<EditorM7SettingValue> {
+  if (!isSettingId(id)) return { ok: false, reasonCode: "UNKNOWN_SETTING" };
   const definition = definitionFor(id);
   if (definition.type === "integer") return parseInteger(value, definition);
   if (definition.type === "boolean") return parseBoolean(value);
@@ -939,6 +940,11 @@ function overBudget(
   return retained.length > maximumCount || bytes > maximumBytes;
 }
 
+// D4 baseline reference algorithm. The production runtime
+// (packages/keiko-editor/src/components/editor-model-registry.ts, issue #2322) implements its own
+// eviction policy with a richer protection predicate (pending-save, pending-conflict,
+// hot-exit-recovery, and agent-review states) and does not call this function. See ADR-0133
+// Consequences for #2322.
 export function planEditorM7ModelEviction(args: {
   readonly entries: readonly EditorM7ModelEntry[];
   readonly maximumCount: number;
@@ -1183,6 +1189,21 @@ function normalizeBinding(binding: string): string {
     .join("+");
 }
 
+// Case and modifier-order neutral comparison key. `normalizeBinding` preserves the caller's
+// casing/order for the stored/returned value, so reserved-chord matching must not rely on exact
+// string equality: "shift+ctrlormeta+n" and "CtrlOrMeta+Shift+N" are the same physical chord.
+function canonicalBindingKey(binding: string): string {
+  const parts = binding.split("+").map((part) => part.trim().toLowerCase());
+  const key = parts.at(-1) ?? "";
+  const modifiers = parts.slice(0, -1).sort();
+  return [...modifiers, key].join("+");
+}
+
+function isReservedBinding(binding: string): boolean {
+  const canonical = canonicalBindingKey(binding);
+  return RESERVED_BINDINGS.some((reserved) => canonicalBindingKey(reserved) === canonical);
+}
+
 function syntacticallyValidBinding(binding: string): boolean {
   const parts = binding.split("+");
   const key = parts.at(-1);
@@ -1231,21 +1252,25 @@ export function validateEditorM7Keybinding(args: {
   readonly binding: string;
   readonly activeBindings: Readonly<Record<string, string>> | readonly EditorM7ActiveKeybinding[];
 }): EditorM7ParseResult<string> {
-  const command = commandFor(args.commandId);
-  if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
-  const normalized = normalizeBinding(args.binding);
-  if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
-  if (RESERVED_BINDINGS.includes(normalized)) {
-    return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
+  try {
+    const command = commandFor(args.commandId);
+    if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
+    const normalized = normalizeBinding(args.binding);
+    if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
+    if (isReservedBinding(normalized)) {
+      return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
+    }
+    if (!syntacticallyValidBinding(normalized)) return { ok: false, reasonCode: "INVALID_INPUT" };
+    const active = Array.isArray(args.activeBindings)
+      ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
+      : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
+    const collision = active.find((entry) => collidesWithCommand(command, normalized, entry));
+    return collision === undefined
+      ? { ok: true, value: normalized }
+      : { ok: false, reasonCode: "KEYBINDING_COLLISION" };
+  } catch {
+    return { ok: false, reasonCode: "INVALID_INPUT" };
   }
-  if (!syntacticallyValidBinding(normalized)) return { ok: false, reasonCode: "INVALID_INPUT" };
-  const active = Array.isArray(args.activeBindings)
-    ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
-    : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
-  const collision = active.find((entry) => collidesWithCommand(command, normalized, entry));
-  return collision === undefined
-    ? { ok: true, value: normalized }
-    : { ok: false, reasonCode: "KEYBINDING_COLLISION" };
 }
 
 function collidesWithCommand(
@@ -1325,123 +1350,14 @@ function parseEditorM7KeybindingOverrideSetting(
   };
 }
 
-export interface EditorM7Snippet {
-  readonly name: string;
-  readonly language: string;
-  readonly body: readonly string[];
-  readonly pathGlob?: string | undefined;
-}
+// Note: workspace snippets are NOT defined here. The single canonical snippet contract is
+// packages/keiko-contracts/src/editor-snippets.ts (issue #2323), which is what
+// keiko-server/editor/snippets and keiko-ui actually consume. Do not reintroduce a second
+// snippet contract in this module (AGENTS.md §5, ADR-0133 D6).
 
-export interface EditorM7SnippetCollection {
-  readonly schemaVersion: typeof EDITOR_M7_SCHEMA_VERSION;
-  readonly snippets: readonly EditorM7Snippet[];
-}
-
-const SAFE_SNIPPET_VARIABLES = Object.freeze([
-  "TM_FILENAME",
-  "TM_FILENAME_BASE",
-  "CURRENT_YEAR",
-  "CURRENT_MONTH",
-  "CURRENT_DATE",
-] as const);
-const MAX_SNIPPETS = 128;
-const MAX_SNIPPET_LINE_BYTES = 512;
-const MAX_SNIPPET_LINES = 64;
 const SAFE_KEYBINDING_CHARS = new Set(
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,./;'[]`-",
 );
-
-function boundedToken(value: unknown, maxBytes: number): value is string {
-  return typeof value === "string" && value.length > 0 && utf8ByteLength(value) <= maxBytes;
-}
-
-function snippetLineSafe(line: string): boolean {
-  if (utf8ByteLength(line) > MAX_SNIPPET_LINE_BYTES) return false;
-  if (line.includes("$(") || line.includes("`") || line.includes("CLIPBOARD")) return false;
-  const variables = line.match(/\$[A-Z_]+|\$\{[A-Z_]+(?:[:/][^}]*)?\}/gu) ?? [];
-  return variables.every((raw) => safeSnippetVariable(raw));
-}
-
-function safeSnippetVariable(raw: string): boolean {
-  const name = raw.startsWith("${") ? raw.slice(2, -1).split(/[:/]/u)[0] : raw.slice(1);
-  const transform = raw.startsWith("${") && raw.includes("/");
-  return (
-    !transform && SAFE_SNIPPET_VARIABLES.includes(name as (typeof SAFE_SNIPPET_VARIABLES)[number])
-  );
-}
-
-function parseSnippet(value: unknown): EditorM7ParseResult<EditorM7Snippet> {
-  if (!validSnippetEnvelope(value)) {
-    return { ok: false, reasonCode: "UNSAFE_SNIPPET" };
-  }
-  if (!validSnippetBody(value.body)) {
-    return { ok: false, reasonCode: "OVERSIZED" };
-  }
-  if (!value.body.every(snippetLineValueSafe)) {
-    return { ok: false, reasonCode: "UNSAFE_SNIPPET" };
-  }
-  if (!validOptionalSnippetGlob(value.pathGlob)) {
-    return { ok: false, reasonCode: "UNSAFE_PATH" };
-  }
-  return { ok: true, value: value as unknown as EditorM7Snippet };
-}
-
-function validSnippetEnvelope(value: unknown): value is UnknownRecord {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["name", "language", "body", "pathGlob"]) &&
-    boundedToken(value.name, 96) &&
-    boundedToken(value.language, 64)
-  );
-}
-
-function validSnippetBody(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value) && value.length > 0 && value.length <= MAX_SNIPPET_LINES;
-}
-
-function snippetLineValueSafe(value: unknown): boolean {
-  return typeof value === "string" && snippetLineSafe(value);
-}
-
-function validOptionalSnippetGlob(value: unknown): boolean {
-  return value === undefined || (typeof value === "string" && safeSettingPathToken(value, 256));
-}
-
-export function parseEditorM7SnippetCollection(
-  value: unknown,
-): EditorM7ParseResult<EditorM7SnippetCollection> {
-  try {
-    return parseEditorM7SnippetCollectionUnsafe(value);
-  } catch {
-    return { ok: false, reasonCode: "INVALID_INPUT" };
-  }
-}
-
-function parseEditorM7SnippetCollectionUnsafe(
-  value: unknown,
-): EditorM7ParseResult<EditorM7SnippetCollection> {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["schemaVersion", "snippets"])) {
-    return { ok: false, reasonCode: "INVALID_INPUT" };
-  }
-  if (value.schemaVersion !== EDITOR_M7_SCHEMA_VERSION || !Array.isArray(value.snippets)) {
-    return { ok: false, reasonCode: "SCHEMA_VERSION_UNSUPPORTED" };
-  }
-  if (value.snippets.length > MAX_SNIPPETS) return { ok: false, reasonCode: "OVERSIZED" };
-  const snippets = value.snippets.map(parseSnippet);
-  const failure = snippets.find((entry) => !entry.ok);
-  if (failure !== undefined) return failure;
-  return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
-      snippets: Object.freeze(
-        snippets.map(
-          (entry) => (entry as { readonly ok: true; readonly value: EditorM7Snippet }).value,
-        ),
-      ),
-    },
-  };
-}
 
 export type EditorM7AiFeature =
   "inlineCompletion" | "testGeneration" | "patchApply" | "verification";
@@ -1525,10 +1441,14 @@ function stringIn<T extends string>(value: unknown, values: readonly T[]): value
 }
 
 export function resolveEditorM7AiActivation(value: unknown): EditorM7AiActivationStatus {
-  if (!validAiInput(value)) {
+  try {
+    if (!validAiInput(value)) {
+      return aiStatus("inlineCompletion", "denied", "INVALID_INPUT");
+    }
+    return firstAiActivationStatus(value) ?? aiStatus(value.feature, "active", "ACTIVE");
+  } catch {
     return aiStatus("inlineCompletion", "denied", "INVALID_INPUT");
   }
-  return firstAiActivationStatus(value) ?? aiStatus(value.feature, "active", "ACTIVE");
 }
 
 function firstAiActivationStatus(

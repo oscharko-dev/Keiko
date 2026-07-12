@@ -375,6 +375,15 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   if (preflightResponse !== undefined) {
     return preflightResponse;
   }
+  // ADR-0133 D7: revocation discards in-flight work at the activation revision boundary. The
+  // preflight await above is the only async gap before the write; re-check status immediately
+  // before applying so a mid-flight revoke prevents the mutation rather than merely hiding it.
+  const stillActive = editorAiStatusActive(
+    await resolveEditorAiAssistStatusForRoot(ctx.deps, ctx.realRoot, "patchApply"),
+  );
+  if (!stillActive) {
+    return disabledResponse();
+  }
   let restoreDiff: string | undefined;
   try {
     restoreDiff = buildRestorePatch(workspace, validation.normalizedDiff ?? ctx.request.diff, {

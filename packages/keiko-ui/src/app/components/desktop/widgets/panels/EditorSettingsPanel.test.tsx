@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -61,8 +62,11 @@ function view(overrides: Partial<EditorSettingsView> = {}): EditorSettingsView {
       renderWhitespace: "selection",
       minimap: false,
       formatOnSave: true,
+      externalReload: "prompt",
       largeFileMode: "default",
       keybindingOverrides: [],
+      modelRetentionCount: 32,
+      modelRetentionBytes: 64 * 1024 * 1024,
     },
     loading: false,
     mutating: false,
@@ -75,8 +79,8 @@ function view(overrides: Partial<EditorSettingsView> = {}): EditorSettingsView {
   };
 }
 
-function renderPanel(): void {
-  render(
+function renderPanel(): ReturnType<typeof render> {
+  return render(
     <I18nProvider>
       <EditorSettingsPanel root="/repo" />
     </I18nProvider>,
@@ -94,6 +98,11 @@ describe("EditorSettingsPanel", () => {
     expect(screen.getByRole("spinbutton", { name: "Font size" })).toHaveValue(16);
     expect(screen.getAllByText("Source: user").length).toBeGreaterThan(0);
     expect(screen.getByRole("checkbox", { name: "Format on save" })).toBeChecked();
+  });
+
+  it("has no axe violations in its normal rendered state", async () => {
+    const { container } = renderPanel();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("submits settings and resets only through the selected server scope", () => {
@@ -318,13 +327,25 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     vi.restoreAllMocks();
   });
 
+  it("has no axe violations while the AI activation confirmation dialog is open", async () => {
+    const { container } = renderPanel();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("applies inline AI completion after the operator accepts the confirmation prompt", () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPanel();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("inline AI completion"));
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+    expect(within(dialog).getByText(/inline AI completion/u)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Enable" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(editorSettingsView.current.setValue).toHaveBeenCalledWith(
       "user",
       "inlineCompletion",
@@ -332,8 +353,7 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     );
   });
 
-  it("skips the mutation and shows the test-generation copy when the operator declines", () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("skips the mutation and closes the dialog when the operator declines", () => {
     renderPanel();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Scope" }), {
@@ -341,7 +361,11 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "AI test generation" }));
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("AI test generation"));
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+    expect(within(dialog).getByText(/AI test generation/u)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(editorSettingsView.current.setValue).not.toHaveBeenCalledWith(
       "workspace",
       "testGeneration",
@@ -349,8 +373,23 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     );
   });
 
+  it("closes the dialog on Escape without mutating the setting", () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(editorSettingsView.current.setValue).not.toHaveBeenCalledWith(
+      "user",
+      "inlineCompletion",
+      true,
+    );
+  });
+
   it("prompts with the patch-apply copy for the AI patch apply toggle", () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPanel();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Scope" }), {
@@ -358,7 +397,10 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "AI patch apply" }));
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("AI patch apply"));
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+    expect(within(dialog).getByText(/AI patch apply/u)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Enable" }));
+
     expect(editorSettingsView.current.setValue).toHaveBeenCalledWith(
       "workspace",
       "patchApply",

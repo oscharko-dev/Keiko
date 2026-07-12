@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type {
   EditorM7AiActivationStatus,
@@ -23,6 +23,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
   const [scope, setScope] = useState<EditorM7SettingScope>("user");
   const [query, setQuery] = useState("");
   const [modifiedOnly, setModifiedOnly] = useState(false);
+  const [pendingAiConfirm, setPendingAiConfirm] = useState<EditorM7SettingId | null>(null);
   const rows = useMemo(
     () =>
       filteredRows(
@@ -133,6 +134,10 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
               void view.reset(scope, [id]);
             }}
             onSet={(id, value) => {
+              if (value === true && requiresAiConfirmation(id)) {
+                setPendingAiConfirm(id);
+                return;
+              }
               void view.setValue(scope, id, value);
             }}
           />
@@ -140,6 +145,19 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
       </div>
       <KeyboardShortcutsPanel root={root} scope={scope} view={view} />
       <WorkspaceSnippetsPanel root={root} />
+      {pendingAiConfirm === null ? null : (
+        <AiActivationConfirmDialog
+          id={pendingAiConfirm}
+          t={t}
+          onAccept={() => {
+            void view.setValue(scope, pendingAiConfirm, true);
+            setPendingAiConfirm(null);
+          }}
+          onDecline={() => {
+            setPendingAiConfirm(null);
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -282,15 +300,7 @@ function SettingControl({
           checked={setting.value === true}
           disabled={disabled}
           onChange={(event) => {
-            const next = event.target.checked;
-            if (
-              next &&
-              requiresAiConfirmation(definition.id) &&
-              !confirmAiActivation(definition.id, t)
-            ) {
-              return;
-            }
-            onSet(definition.id, next);
+            onSet(definition.id, event.target.checked);
           }}
         />
         {String(setting.value)}
@@ -348,14 +358,76 @@ function requiresAiConfirmation(id: EditorM7SettingId): boolean {
   return id === "inlineCompletion" || id === "testGeneration" || id === "patchApply";
 }
 
-function confirmAiActivation(id: EditorM7SettingId, t: I18nTranslate): boolean {
-  return window.confirm(aiActivationMessage(id, t));
-}
-
 function aiActivationMessage(id: EditorM7SettingId, t: I18nTranslate): string {
   if (id === "inlineCompletion") return t("settings.editor.confirmInlineCompletion");
   if (id === "testGeneration") return t("settings.editor.confirmTestGeneration");
   return t("settings.editor.confirmPatchApply");
+}
+
+// Replaces window.confirm() (WCAG 2.2 AA: a native browser confirm is not keyboard/screen-reader
+// operable, unstylable, and traps focus outside the app's control). Mirrors the accessible-dialog
+// pattern already established by EditorWidget's dirty-close dialog: capture/restore focus, move
+// focus into the dialog on mount, and close on Escape.
+function AiActivationConfirmDialog({
+  id,
+  t,
+  onAccept,
+  onDecline,
+}: {
+  readonly id: EditorM7SettingId;
+  readonly t: I18nTranslate;
+  readonly onAccept: () => void;
+  readonly onDecline: () => void;
+}): ReactNode {
+  const titleId = "editor-settings-ai-confirm-title";
+  const descriptionId = "editor-settings-ai-confirm-description";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
+        opener.focus();
+      }
+    };
+  }, []);
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") onDecline();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onDecline]);
+  return (
+    <div className={styles.confirmBackdrop} role="presentation">
+      <div
+        className={styles.confirmDialog}
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+      >
+        <h4 className={styles.confirmTitle} id={titleId}>
+          {t("settings.editor.confirmTitle")}
+        </h4>
+        <p className={styles.confirmBody} id={descriptionId}>
+          {aiActivationMessage(id, t)}
+        </p>
+        <div className={styles.confirmActions}>
+          <button type="button" className={styles.button} onClick={onDecline}>
+            {t("settings.editor.confirmDecline")}
+          </button>
+          <button type="button" className={styles.button} onClick={onAccept}>
+            {t("settings.editor.confirmAccept")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function unavailable(

@@ -74,6 +74,13 @@ import {
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 
+const disposeAllUnattachedEditorModels = vi.hoisted(() => vi.fn());
+
+vi.mock("@oscharko-dev/keiko-editor", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  disposeAllUnattachedEditorModels,
+}));
+
 vi.mock("../../../../../lib/api", async () => {
   const actual =
     await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
@@ -992,6 +999,80 @@ describe("EditorWidget — edit and save", () => {
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
   });
 
+  it("auto-reloads a clean external disk edit when externalReload is autoClean", async () => {
+    vi.mocked(fetchEditorSettings).mockResolvedValue(
+      editorSettingsSnapshot({ externalReload: "autoClean" }),
+    );
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 4, content: "const value = 4;\n" }),
+    );
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 3,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      });
+    });
+
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe("const value = 4;\n");
+    });
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+  });
+
+  it("does not offer a reload for a clean external disk edit when externalReload is manual", async () => {
+    vi.mocked(fetchEditorSettings).mockResolvedValue(
+      editorSettingsSnapshot({ externalReload: "manual" }),
+    );
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 3,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      });
+    });
+
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
+  });
+
+  it("releases retained-but-inactive Monaco models when this pane's root changes", async () => {
+    const view = await renderLoaded();
+    disposeAllUnattachedEditorModels.mockClear();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
+
+    await waitFor(() => {
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("root-disposed");
+    });
+  });
+
+  it("releases retained-but-inactive Monaco models when the pane unmounts", async () => {
+    const view = await renderLoaded();
+    disposeAllUnattachedEditorModels.mockClear();
+
+    view.unmount();
+
+    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+  });
+
   it("compares a dirty external disk edit and keeps the local buffer without overwriting it", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();
@@ -1066,6 +1147,53 @@ describe("EditorWidget — edit and save", () => {
     });
 
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+  });
+
+  it("still surfaces a genuine external write that lands right after its own save", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({ modifiedAt: 2, content: "const value = 2;\n" }),
+    );
+
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("saved");
+    });
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 5,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0011223344556677",
+      });
+    });
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+
+    // A second write to the same path landing inside the same suppression window is not Keiko's
+    // own save — the marker was already consumed by the first (self-)event above, so this one
+    // must surface normally instead of being silently swallowed as a duplicate self-write.
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 6,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "7766554433221100",
+      });
+    });
+
+    expect(await screen.findByTestId("editor-external-change-banner")).toHaveTextContent(
+      "The file changed on disk: src/app.ts.",
+    );
   });
 
   it("formats once through the governed formatter before format-on-save persists", async () => {

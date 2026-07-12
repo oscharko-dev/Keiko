@@ -10,7 +10,7 @@ import {
 import { fetchWorkspaceSnippets, mutateWorkspaceSnippets } from "../../../../../lib/api";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 
-export type WorkspaceSnippetsIssue = "load" | "mutation" | "conflict";
+export type WorkspaceSnippetsIssue = "load" | "mutation" | "conflict" | "invalid" | "unavailable";
 
 export interface WorkspaceSnippetsView {
   readonly snapshot: EditorM7WorkspaceSnippetSnapshot | undefined;
@@ -18,8 +18,8 @@ export interface WorkspaceSnippetsView {
   readonly mutating: boolean;
   readonly issue: WorkspaceSnippetsIssue | undefined;
   readonly refresh: () => Promise<void>;
-  readonly replace: (snippets: readonly EditorM7WorkspaceSnippetInput[]) => Promise<void>;
-  readonly reset: () => Promise<void>;
+  readonly replace: (snippets: readonly EditorM7WorkspaceSnippetInput[]) => Promise<boolean>;
+  readonly reset: () => Promise<boolean>;
 }
 
 let fallbackId = 0;
@@ -89,7 +89,7 @@ export function useWorkspaceSnippets(root: string | undefined): WorkspaceSnippet
   }, [refresh, root]);
 
   const replace = useCallback(
-    (snippets: readonly EditorM7WorkspaceSnippetInput[]): Promise<void> =>
+    (snippets: readonly EditorM7WorkspaceSnippetInput[]): Promise<boolean> =>
       mutate({
         action: "replace",
         root,
@@ -98,12 +98,13 @@ export function useWorkspaceSnippets(root: string | undefined): WorkspaceSnippet
         setIssue,
         setMutating,
         setSnapshot,
+        refresh,
         snippets,
       }),
-    [root, snapshot],
+    [root, snapshot, refresh],
   );
   const reset = useCallback(
-    (): Promise<void> =>
+    (): Promise<boolean> =>
       mutate({
         action: "reset",
         root,
@@ -112,8 +113,9 @@ export function useWorkspaceSnippets(root: string | undefined): WorkspaceSnippet
         setIssue,
         setMutating,
         setSnapshot,
+        refresh,
       }),
-    [root, snapshot],
+    [root, snapshot, refresh],
   );
   return { snapshot, loading, mutating, issue, refresh, replace, reset };
 }
@@ -126,11 +128,15 @@ interface MutateArgs {
   readonly setSnapshot: (snapshot: EditorM7WorkspaceSnippetSnapshot) => void;
   readonly setMutating: (mutating: boolean) => void;
   readonly setIssue: (issue: WorkspaceSnippetsIssue | undefined) => void;
+  readonly refresh: () => Promise<void>;
   readonly snippets?: readonly EditorM7WorkspaceSnippetInput[] | undefined;
 }
 
-async function mutate(args: MutateArgs): Promise<void> {
-  if (args.root === undefined || args.snapshot === undefined) return;
+// Maps every non-"ok" mutation outcome to a distinct, user-visible issue instead of silently
+// discarding it. Conflicts trigger a refresh so the local revision/etag reconciles with the
+// server; callers use the returned boolean to decide whether it is safe to discard a draft.
+async function mutate(args: MutateArgs): Promise<boolean> {
+  if (args.root === undefined || args.snapshot === undefined) return false;
   args.signalRef.current?.abort();
   const controller = new AbortController();
   args.signalRef.current = controller;
@@ -149,10 +155,24 @@ async function mutate(args: MutateArgs): Promise<void> {
       idempotencyKey(),
       controller.signal,
     );
-    if (controller.signal.aborted || result.kind !== "ok") return;
-    args.setSnapshot(result.snapshot);
+    if (controller.signal.aborted) return false;
+    if (result.kind === "ok") {
+      args.setSnapshot(result.snapshot);
+      return true;
+    }
+    if (result.kind === "conflict" || result.kind === "idempotencyConflict") {
+      // Reconcile the local revision/etag before flagging the conflict, so the notice reflects
+      // the settled state (refresh() clears `issue` on success) instead of being immediately
+      // overwritten by it.
+      await args.refresh();
+      args.setIssue("conflict");
+    } else {
+      args.setIssue(result.kind);
+    }
+    return false;
   } catch (error: unknown) {
     if (!aborted(error)) args.setIssue("mutation");
+    return false;
   } finally {
     if (!controller.signal.aborted) args.setMutating(false);
   }

@@ -162,4 +162,22 @@ describe("useEditorSettings M7 cross-window integration", () => {
       expect.any(AbortSignal),
     );
   });
+
+  it("resolves effective modelRetentionCount/modelRetentionBytes from the snapshot", async () => {
+    api.currentSnapshot = {
+      ...snapshot(0, 13),
+      settings: resolveEditorM7Settings({
+        workspace: {
+          scope: "workspace",
+          values: { modelRetentionCount: 5, modelRetentionBytes: 8 * 1024 * 1024 },
+        },
+      }),
+    };
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => {
+      expect(result.current.applied.modelRetentionCount).toBe(5);
+      expect(result.current.applied.modelRetentionBytes).toBe(8 * 1024 * 1024);
+    });
+  });
 });

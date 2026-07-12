@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 297
+    "fileCount": 296
   },
   "b1": {
     "firstLoadScriptCount": 14,
@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1180165,
-    "loadedTotalBytes": 1180165,
+    "shipsTotalBytes": 1178401,
+    "loadedTotalBytes": 1178401,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 106160,
+    "largestWorkerBytes": 105690,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 106160,
+    "largestLoadedWorkerBytes": 105690,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,12 +30,12 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 105525,
+      "gzipBytes": 105466,
       "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 106160,
+      "gzipBytes": 105690,
       "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js"
     }
   ],
@@ -44,40 +44,40 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/2tklwylfuzj8q.js",
-      "gzipBytes": 922728,
+      "gzipBytes": 921648,
       "rawBytes": 3764223,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js",
-      "gzipBytes": 106160,
+      "gzipBytes": 105690,
       "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js",
-      "gzipBytes": 105525,
+      "gzipBytes": 105466,
       "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/chunks/1-p5yem7n8812.js",
-      "gzipBytes": 17520,
+      "gzipBytes": 17459,
       "rawBytes": 54017,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/453tgpamemniv.js",
-      "gzipBytes": 15166,
+      "gzipBytes": 15115,
       "rawBytes": 45905,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/3bqqnjy_9bwsu.js",
-      "gzipBytes": 13066,
+      "gzipBytes": 13023,
       "rawBytes": 38698,
       "workerLabel": null
     }
   ],
-  "measurementSha256": "1ca89822ccd32bd7657c81b03a8272e49a08b3205cba3bdaaa880373a9f04661"
+  "measurementSha256": "d128a349dcff8abcb6803a77d3465a4fae43c20b862d7a3a81a036126b4c7e5e"
 }
