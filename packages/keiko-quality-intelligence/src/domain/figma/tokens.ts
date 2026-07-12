@@ -103,14 +103,10 @@ const toColorTokens = (values: ReadonlySet<string>): readonly ColorToken[] =>
     .map((value) => ({ id: `color:${value}`, kind: "color", value }));
 
 const toSpacingTokens = (values: ReadonlySet<number>): readonly SpacingToken[] =>
-  [...values]
-    .sort((a, b) => a - b)
-    .map((value) => ({ id: `spacing:${String(value)}`, kind: "spacing", value }));
+  [...values].sort().map((value) => ({ id: `spacing:${String(value)}`, kind: "spacing", value }));
 
 const toRadiusTokens = (values: ReadonlySet<number>): readonly RadiusToken[] =>
-  [...values]
-    .sort((a, b) => a - b)
-    .map((value) => ({ id: `radius:${String(value)}`, kind: "radius", value }));
+  [...values].sort().map((value) => ({ id: `radius:${String(value)}`, kind: "radius", value }));
 
 /** Extract deduped, stable-ordered design tokens from the pruned screen roots. */
 export const extractDesignTokens = (screens: readonly PrunedNode[]): DesignTokens => {
