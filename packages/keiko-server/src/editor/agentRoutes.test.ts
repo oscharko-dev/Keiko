@@ -445,6 +445,7 @@ async function postActionResult(
   status: EditorAgentActionStatus,
   sessionId = original.sessionId,
   capabilityOverride?: string | null,
+  deps?: Parameters<typeof handleEditorAgentActions>[1],
 ): Promise<Awaited<ReturnType<typeof handleEditorAgentActions>>> {
   const capability =
     capabilityOverride === null ? undefined : (capabilityOverride ?? bridgeDecisionCapability);
@@ -463,7 +464,14 @@ async function postActionResult(
           : {}),
       },
     }),
+    deps,
   );
+}
+
+function runtimeMutationDeps(
+  runtimeMutationLease: NonNullable<UiHandlerDeps["runtimeMutationLease"]>,
+): Parameters<typeof handleEditorAgentActions>[1] {
+  return { runtimeMutationLease, store: {} } as Parameters<typeof handleEditorAgentActions>[1];
 }
 
 function lastEmittedAction(frames: string): EditorAgentAction {
@@ -3574,6 +3582,165 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+  });
+
+  it("keeps a local changeset with an authority reference on the established audit path", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    registerTestAuthority(workspaceRoot);
+    const runtimeMutationLease = {
+      matches: vi.fn((): boolean => false),
+      claim: vi.fn((): boolean => {
+        throw new Error("a local editor action must not claim a runtime lease");
+      }),
+    } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+
+    expect(
+      (
+        await handleEditorAgentActions(
+          context(arranged.action),
+          runtimeMutationDeps(runtimeMutationLease),
+        )
+      ).status,
+    ).toBe(202);
+    const committed = await postActionResult(
+      arranged.action,
+      "succeeded",
+      arranged.action.sessionId,
+      undefined,
+      runtimeMutationDeps(runtimeMutationLease),
+    );
+
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(2);
+    expect(runtimeMutationLease.claim).not.toHaveBeenCalled();
+    expect(auditRecords().at(-2)).toMatchObject({ targetPath: "src/a.txt" });
+    expect(auditRecords().at(-1)).toMatchObject({ targetPath: "src/a.txt" });
+  });
+
+  it.each([
+    ["false", (): boolean => false],
+    [
+      "throw",
+      (): never => {
+        throw new Error("revoked");
+      },
+    ],
+    ["replayed", (): boolean => false],
+  ] as const)(
+    "fails closed when a matching runtime mutation lease claim returns %s",
+    async (_outcome, claim) => {
+      const sentinelPath = "src/SENTINEL_RUNTIME_PATH.txt";
+      const sentinelPatch = "SENTINEL_RUNTIME_PATCH";
+      writeWorkspaceFile(workspaceRoot, sentinelPath, "before\n");
+      const proposed = changesetActionFor(
+        workspaceRoot,
+        oneLineModifyPatch([{ file: sentinelPath, before: "before", after: sentinelPatch }]),
+        [sentinelPath],
+      );
+      await registerChangesetSnapshot(workspaceRoot, sentinelPath, [sentinelPath]);
+      registerTestAuthority(workspaceRoot);
+      const writeFileUtf8 = vi.fn((_path: string, _content: string): void => undefined);
+      const mkdirp = vi.fn((_path: string): void => undefined);
+      const remove = vi.fn((_path: string): void => undefined);
+      const rename = vi.fn((_from: string, _to: string): void => undefined);
+      _setEditorAgentPatchWriterForTests({ writeFileUtf8, mkdirp, remove, rename });
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        claim: vi.fn(
+          (
+            _request: Parameters<NonNullable<UiHandlerDeps["runtimeMutationLease"]>["claim"]>[0],
+          ): boolean => claim(),
+        ),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+
+      expect(
+        (
+          await handleEditorAgentActions(
+            context(proposed),
+            runtimeMutationDeps(runtimeMutationLease),
+          )
+        ).status,
+      ).toBe(202);
+      const denied = await postActionResult(
+        proposed,
+        "succeeded",
+        proposed.sessionId,
+        undefined,
+        runtimeMutationDeps(runtimeMutationLease),
+      );
+
+      expect(actionResultStatus(denied.body)).toBe("failed");
+      expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
+      expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
+      const leaseRequest = runtimeMutationLease.claim.mock.calls[0]?.[0];
+      if (leaseRequest === undefined) throw new Error("expected runtime mutation lease request");
+      expect(leaseRequest).toMatchObject({
+        runId: "run-2121",
+        actionId: proposed.actionId,
+        idempotencyKey: proposed.idempotencyKey,
+      });
+      expect(leaseRequest.envelopeDigest).toMatch(/^[a-f0-9]{64}$/u);
+      expect(leaseRequest.workspaceRootDigest).toBe(editorAgentWorkspaceRootDigest(workspaceRoot));
+      expect(writeFileUtf8).not.toHaveBeenCalled();
+      expect(mkdirp).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+      expect(readWorkspaceFile(workspaceRoot, sentinelPath)).toBe("before\n");
+      expect(JSON.stringify(denied.body)).not.toContain("SENTINEL_RUNTIME_");
+      expect(JSON.stringify(auditRecords())).not.toContain("SENTINEL_RUNTIME_");
+      expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
+      expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
+      expect(auditRecords().at(-1)).not.toHaveProperty("targetBasename");
+      expect(auditRecords().at(-1)).not.toHaveProperty("targetPathHash");
+    },
+  );
+
+  it("uses a true runtime mutation claim exactly once immediately before atomic apply", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    registerTestAuthority(workspaceRoot);
+    const order: string[] = [];
+    const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
+      order.push("write");
+    });
+    _setEditorAgentPatchWriterForTests({
+      writeFileUtf8,
+      mkdirp: vi.fn((_path: string): void => undefined),
+      remove: vi.fn((_path: string): void => undefined),
+      rename: vi.fn((_from: string, _to: string): void => undefined),
+    });
+    const runtimeMutationLease = {
+      matches: vi.fn((): boolean => true),
+      claim: vi.fn((): boolean => {
+        order.push("claim");
+        return true;
+      }),
+    } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+
+    expect(
+      (
+        await handleEditorAgentActions(
+          context(arranged.action),
+          runtimeMutationDeps(runtimeMutationLease),
+        )
+      ).status,
+    ).toBe(202);
+    const committed = await postActionResult(
+      arranged.action,
+      "succeeded",
+      arranged.action.sessionId,
+      undefined,
+      runtimeMutationDeps(runtimeMutationLease),
+    );
+
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
+    expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(expect.arrayContaining(["claim", "write"]));
+    expect(order.indexOf("claim")).toBeLessThan(order.indexOf("write"));
+    expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
+    expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
   });
 
   it("revalidates every changeset member after a target becomes an outward symlink", async () => {

@@ -11,10 +11,20 @@ export interface GovernedCodingToolPort<Kind extends CodingToolActionRequest["ac
     request: CodingToolActionOf<Kind>,
     signal: AbortSignal | undefined,
     mutationGuard: CodingToolMutationGuard,
-  ) => Promise<{ readonly status: "completed" | "failed" }>;
+  ) => Promise<GovernedCodingToolResult>;
 }
 
+interface GovernedCodingToolRead {
+  readonly text: string;
+  readonly byteCount: number;
+  readonly digest: string;
+}
+type GovernedCodingToolResult =
+  | { readonly status: "completed"; readonly read?: GovernedCodingToolRead | undefined }
+  | { readonly status: "failed" };
+
 export interface CodingToolGovernedPorts {
+  readonly repositoryRead: GovernedCodingToolPort<"read">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
   readonly commandRunner: GovernedCodingToolPort<"command">;
   readonly verificationRunner: GovernedCodingToolPort<"verification">;
@@ -32,7 +42,9 @@ export function createCodingToolGovernedDelegate(
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const result = await dispatch(ports, request, signal, mutationGuard);
-      return { outcome: result.status };
+      return request.action === "read" && result.status === "completed" && result.read !== undefined
+        ? { outcome: "completed", read: result.read }
+        : { outcome: result.status };
     },
   };
 }
@@ -42,8 +54,10 @@ function dispatch(
   request: CodingToolActionRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): Promise<{ readonly status: "completed" | "failed" }> {
+): Promise<GovernedCodingToolResult> {
   switch (request.action) {
+    case "read":
+      return ports.repositoryRead.execute(request, signal, mutationGuard);
     case "edit":
       return ports.editorChangeset.execute(request, signal, mutationGuard);
     case "command":

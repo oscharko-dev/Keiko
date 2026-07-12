@@ -168,6 +168,7 @@ import {
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
 import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
+import type { CodingRuntimeEditorMutationLeasePort } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import {
@@ -260,6 +261,9 @@ export interface UiHandlerDeps {
     CodingSidecarGatewayModelSourceResolver | undefined;
   // Server-owned runtime availability gate. #2256 wires verified activated Codex provenance.
   readonly codexRuntimeAvailability?: { readonly isApprovedVerified: () => boolean } | undefined;
+  // Optional server-private final mutation claim for managed-runtime editor changesets. #2256 owns
+  // composition; absence preserves the established local editor action path.
+  readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;

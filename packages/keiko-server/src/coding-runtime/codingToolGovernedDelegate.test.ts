@@ -28,6 +28,7 @@ function governedPort<
 
 function governedPorts(): CodingToolGovernedPorts {
   return {
+    repositoryRead: governedPort(),
     editorChangeset: governedPort(),
     commandRunner: governedPort(),
     verificationRunner: governedPort(),
@@ -40,13 +41,18 @@ function governedPorts(): CodingToolGovernedPorts {
 
 const identity = { actionId: "action-1", idempotencyKey: "key-1" } as const;
 const liveGuard = { check: (): true => true } as const;
+const changeset = {
+  patch: "--- a/src/file.ts\n+++ b/src/file.ts\n@@\n-old\n+new\n",
+  files: [{ file: "src/file.ts", expectedContentHash: "a".repeat(64) }],
+};
 
 describe("CodingToolGovernedDelegate", () => {
   it("dispatches every action to exactly one named existing authority port", async () => {
     const ports = governedPorts();
     const delegate = createCodingToolGovernedDelegate(ports);
     const actions: readonly CodingToolActionRequest[] = [
-      { ...identity, action: "edit", targetPath: "src/file.ts", patchBytes: 1 },
+      { ...identity, action: "read", relativePath: "src/a.ts" },
+      { ...identity, action: "edit", changeset },
       { ...identity, action: "command", commandId: "command-1" },
       { ...identity, action: "verification", verifierId: "verification-1" },
       { ...identity, action: "git", operation: "read" },
@@ -60,6 +66,7 @@ describe("CodingToolGovernedDelegate", () => {
         outcome: "completed",
       });
     }
+    expect(ports.repositoryRead.execute).toHaveBeenCalledTimes(1);
     expect(ports.editorChangeset.execute).toHaveBeenCalledTimes(1);
     expect(ports.commandRunner.execute).toHaveBeenCalledTimes(1);
     expect(ports.verificationRunner.execute).toHaveBeenCalledTimes(1);
@@ -91,6 +98,30 @@ describe("CodingToolGovernedDelegate", () => {
     expect(ports.egressAuthority.execute).not.toHaveBeenCalled();
   });
 
+  it("routes a repository read only to its named secure-read adapter", async () => {
+    const ports = governedPorts();
+    const repositoryRead = ports.repositoryRead;
+    const delegate = createCodingToolGovernedDelegate(ports);
+
+    await expect(
+      delegate.execute(
+        {
+          ...identity,
+          action: "read",
+          relativePath: "src/a.ts",
+        },
+        undefined,
+        liveGuard,
+      ),
+    ).resolves.toEqual({ outcome: "completed" });
+    expect(repositoryRead.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "read", relativePath: "src/a.ts" }),
+      undefined,
+      liveGuard,
+    );
+    expect(ports.editorChangeset.execute).not.toHaveBeenCalled();
+  });
+
   it("fails a stop race at the governed port mutation boundary", async () => {
     const ports = governedPorts();
     const delegate = createCodingToolGovernedDelegate(ports);
@@ -104,7 +135,7 @@ describe("CodingToolGovernedDelegate", () => {
 
     await expect(
       delegate.execute(
-        { ...identity, action: "edit", targetPath: "src/file.ts", patchBytes: 1 },
+        { ...identity, action: "edit", changeset },
         undefined,
         revokedBeforeMutation,
       ),
