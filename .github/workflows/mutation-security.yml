@@ -32,6 +32,7 @@ jobs:
           cache: "npm"
           node-version: "22.x"
       - run: npm ci --ignore-scripts
+      - run: npm run build:packages
       - name: Determine whether critical production logic changed
         if: ${{ github.event_name == 'pull_request' }}
         id: scope
