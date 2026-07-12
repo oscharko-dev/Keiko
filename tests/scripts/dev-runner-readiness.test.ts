@@ -123,7 +123,9 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
           KEIKO_DEV_BFF_PORT: String(bffPort),
           KEIKO_DEV_NEXT_PORT: String(nextPort),
           KEIKO_DEV_PID_FILE: join(stateDir, "dev-ui.pid.json"),
+          KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
           KEIKO_STATE_DIR: stateDir,
+          NODE_ENV: "test",
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -145,7 +147,12 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
 
       expect(statuses).toContain(200);
       expect(statuses).not.toContain(500);
-      expect(await statusOf(publicPort, "/api/health")).toBe(200);
+      let healthStatus = await statusOf(publicPort, "/api/health");
+      while (healthStatus !== 200 && Date.now() < deadline) {
+        await sleep(PUBLIC_READY_POLL_MS);
+        healthStatus = await statusOf(publicPort, "/api/health");
+      }
+      expect(healthStatus).toBe(200);
     },
     DEV_RUNNER_TEST_TIMEOUT_MS,
   );

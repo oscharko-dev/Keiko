@@ -367,11 +367,38 @@ const mergeCandidateTags = (
   return Object.freeze(out);
 };
 
+const candidateDiagnosticTags = (
+  evidence: EvidenceIndexResolution,
+  priority: ParsedEnumField<Priority>,
+  riskClass: ParsedEnumField<RiskClass>,
+  expectedResults: readonly string[],
+  expectedResultsAutofilled: boolean,
+): string[] => {
+  const diagnosticTags: string[] = [];
+  if (evidence.provenanceUnverified) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
+  }
+  if (evidence.hasInvalidIndex) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID);
+  }
+  if (evidence.overCited) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED);
+  }
+  if (priority.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED);
+  if (riskClass.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_RISK_DEFAULTED);
+  if (expectedResultsAutofilled) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED);
+  }
+  if (expectedResultsAutofilled || hasVagueExpectedResult(expectedResults)) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER);
+  }
+  return diagnosticTags;
+};
+
 const buildCandidate = (
   raw: Record<string, unknown>,
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
-  // eslint-disable-next-line max-lines-per-function, complexity
 ): Candidate | undefined => {
   const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
   const steps = stepList(raw.steps);
@@ -392,24 +419,13 @@ const buildCandidate = (
   const evidence = resolveDerivedAtomIds(raw.derivedFromEvidenceIndexes, input.atomIds);
   const priority = parsePriority(raw.priority, profile);
   const riskClass = parseRiskClass(raw.riskClass, profile);
-  const diagnosticTags: string[] = [];
-  if (evidence.provenanceUnverified) {
-    diagnosticTags.push(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
-  }
-  if (evidence.hasInvalidIndex) {
-    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID);
-  }
-  if (evidence.overCited) {
-    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED);
-  }
-  if (priority.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED);
-  if (riskClass.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_RISK_DEFAULTED);
-  if (expectedResultsAutofilled) {
-    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED);
-  }
-  if (expectedResultsAutofilled || hasVagueExpectedResult(expectedResults)) {
-    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER);
-  }
+  const diagnosticTags = candidateDiagnosticTags(
+    evidence,
+    priority,
+    riskClass,
+    expectedResults,
+    expectedResultsAutofilled,
+  );
   const tags = mergeCandidateTags(modelTags, diagnosticTags);
   return Object.freeze<Candidate>({
     id: QualityIntelligence.asQualityIntelligenceTestCaseId(

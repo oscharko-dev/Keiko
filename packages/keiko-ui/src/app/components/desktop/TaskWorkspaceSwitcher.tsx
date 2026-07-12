@@ -183,7 +183,7 @@ function actionButton(props: {
 function useCloseOnEscape(
   open: boolean,
   setOpen: (value: boolean) => void,
-  triggerRef: RefObject<HTMLButtonElement>,
+  triggerRef: RefObject<HTMLButtonElement | null>,
 ): void {
   useEffect(() => {
     if (!open) return undefined;
@@ -207,7 +207,7 @@ function useCloseOnEscape(
 function useCloseOnOutsideClick(
   open: boolean,
   setOpen: (value: boolean) => void,
-  rootRef: RefObject<HTMLDivElement>,
+  rootRef: RefObject<HTMLDivElement | null>,
 ): void {
   useEffect(() => {
     if (!open) return undefined;
@@ -242,7 +242,7 @@ function computeTriggerLabel(active: WorkspaceInstance | null, t: I18nTranslate)
 }
 
 function TriggerButton(props: {
-  readonly triggerRef: RefObject<HTMLButtonElement>;
+  readonly triggerRef: RefObject<HTMLButtonElement | null>;
   readonly panelId: string;
   readonly statusId: string;
   readonly open: boolean;

@@ -183,8 +183,8 @@ function recordingStatusLabel(micReady: boolean, heardSpeech: boolean, t: I18nTr
 // action so the alert and its recovery are immediately reachable.
 function focusForPhase(
   phase: DictationPhase,
-  textareaRef: RefObject<HTMLTextAreaElement>,
-  retryRef: RefObject<HTMLButtonElement>,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+  retryRef: RefObject<HTMLButtonElement | null>,
 ): void {
   if (phase === "preview") {
     textareaRef.current?.focus();

@@ -525,7 +525,7 @@ interface GatewayBaseUrlFieldProps {
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
-  readonly inputRef: RefObject<HTMLInputElement>;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
@@ -714,7 +714,7 @@ interface GatewayFieldsSectionProps {
   readonly success: string | undefined;
   readonly baseUrl: string;
   readonly setBaseUrl: Dispatch<SetStateAction<string>>;
-  readonly baseUrlRef: RefObject<HTMLInputElement>;
+  readonly baseUrlRef: RefObject<HTMLInputElement | null>;
   readonly apiKey: string;
   readonly setApiKey: Dispatch<SetStateAction<string>>;
   readonly apiKeyHeaderName: string;
@@ -1433,7 +1433,7 @@ interface FigmaSectionProps {
   readonly success: string | undefined;
   readonly figmaAccessToken: string;
   readonly setFigmaAccessToken: Dispatch<SetStateAction<string>>;
-  readonly figmaAccessTokenRef: RefObject<HTMLInputElement>;
+  readonly figmaAccessTokenRef: RefObject<HTMLInputElement | null>;
 }
 
 function FigmaSection({

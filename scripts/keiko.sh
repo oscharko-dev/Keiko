@@ -81,6 +81,20 @@ running_pid() {
   return 1
 }
 
+wait_until_not_keiko_ui() {
+  pid="$1"
+  iterations="$2"
+  i=0
+  while [ "$i" -lt "$iterations" ]; do
+    if ! is_keiko_ui "$pid"; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 0.5
+  done
+  ! is_keiko_ui "$pid"
+}
+
 cmd_start() {
   require_positive_int KEIKO_START_TIMEOUT_SECS "$START_TIMEOUT_SECS" || return 2
   mkdir -p "$STATE_DIR"
@@ -142,21 +156,15 @@ cmd_stop() {
 
   # Wait for a graceful exit (the server closes its socket on SIGTERM) before SIGKILL.
   stop_iters=$((STOP_TIMEOUT_SECS * 2))
-  i=0
-  while [ "$i" -lt "$stop_iters" ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      rm -f "$PID_FILE"
-      echo "Keiko UI stopped."
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 0.5
-  done
+  if wait_until_not_keiko_ui "$pid" "$stop_iters"; then
+    rm -f "$PID_FILE"
+    echo "Keiko UI stopped."
+    return 0
+  fi
 
   echo "Keiko UI did not exit gracefully; sending SIGKILL." >&2
   kill -KILL "$pid" 2>/dev/null || true
-  sleep 0.5
-  if kill -0 "$pid" 2>/dev/null; then
+  if ! wait_until_not_keiko_ui "$pid" 1; then
     echo "Keiko UI: failed to stop pid ${pid}." >&2
     return 1
   fi

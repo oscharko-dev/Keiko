@@ -26,7 +26,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0 <25"
   },
   "dependencies": {
     "@oscharko-dev/keiko-connectors": "0.2.15",
@@ -50,7 +50,7 @@
     "@oscharko-dev/keiko-workflows": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
     "smol-toml": "^1.7.0",
-    "typescript": "^6.0.3",
+    "typescript": "~6.0.3",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"
   },

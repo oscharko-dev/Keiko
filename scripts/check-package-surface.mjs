@@ -209,6 +209,15 @@ function assertServerRuntimeSurface(paths) {
   }
 }
 
+export function assertTypeScriptRuntimeSurface(paths) {
+  if (!paths.includes("node_modules/typescript/package.json")) {
+    fail(
+      "the tarball does not include the productive TypeScript API runtime " +
+        "(the native compiler must remain development-only).",
+    );
+  }
+}
+
 function assertRootPackageExports(packageExports, contract) {
   if (!WRITE_CONTRACT && stableJson(packageExports) !== stableJson(contract.packageExports ?? {})) {
     fail(
@@ -486,6 +495,11 @@ function assertBuiltArtifactsFresh(paths) {
   }
 }
 
+if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
+  globalThis.__keikoPackageSurfaceCoverageSeam?.(assertTypeScriptRuntimeSurface);
+  throw new Error("package-surface import-only coverage seam must never pass a release gate");
+}
+
 const files = packFiles();
 const paths = files.map((f) => f.path);
 
@@ -526,6 +540,7 @@ for (const hit of findForbiddenPaths(paths)) {
 
 assertCspHashesMatchStaticHtml();
 assertServerRuntimeSurface(paths);
+assertTypeScriptRuntimeSurface(paths);
 await assertRootPublicApiContract(paths);
 assertRootWorkspaceContract();
 assertBundledPayload(paths);

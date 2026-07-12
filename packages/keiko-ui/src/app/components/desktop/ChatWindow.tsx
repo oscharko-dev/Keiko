@@ -3967,7 +3967,7 @@ interface MemoryDisclosureState {
   readonly open: boolean;
   readonly actionStatus: string;
   readonly disclosureId: string;
-  readonly disclosureButtonRef: RefObject<HTMLButtonElement>;
+  readonly disclosureButtonRef: RefObject<HTMLButtonElement | null>;
   readonly memoryCount: number;
   readonly memoryCountLabel: string;
   readonly memoryDisclosureLabel: string;
@@ -4331,7 +4331,7 @@ function ChatWindowLog({
   registerQuestionAnchor,
   lastSentDocuments,
 }: {
-  readonly scrollRef: RefObject<HTMLDivElement>;
+  readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly stickRef: MutableRefObject<boolean>;
   readonly pendingQuestionScrollRef: MutableRefObject<string | null>;
   readonly focusedQuestionId: string | null;

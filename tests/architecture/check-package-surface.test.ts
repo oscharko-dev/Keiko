@@ -18,9 +18,12 @@ describe("check-package-surface script", () => {
     expect(source).toMatch(/^import /m);
   });
 
-  it("exports nothing — it is a script, not a module", () => {
+  it("exposes only governed coverage seams while keeping import-only coverage fail-closed", () => {
     const source = readFileSync(scriptPath, "utf8");
-    expect(source).not.toMatch(/^export[\s{]/m);
+    expect(source).toContain("export function assertTypeScriptRuntimeSurface");
+    expect(source).toContain("KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY");
+    expect(source).toContain("__keikoPackageSurfaceCoverageSeam");
+    expect(source).toContain("must never pass a release gate");
     expect(source).not.toMatch(/^export\s+default\b/m);
   });
 

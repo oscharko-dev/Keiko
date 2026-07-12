@@ -68,7 +68,7 @@ const WorkspaceShader = dynamic(
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
-  readonly wsRef: RefObject<HTMLDivElement>;
+  readonly wsRef: RefObject<HTMLDivElement | null>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
   readonly children?: ReactNode;
@@ -568,7 +568,7 @@ interface WorkspaceSceneProps {
   readonly api: UseWorkspaceResult["api"];
   readonly top: AppWindow | null;
   readonly connStateById: ReadonlyMap<string, ConnState>;
-  readonly wsRef: RefObject<HTMLDivElement>;
+  readonly wsRef: RefObject<HTMLDivElement | null>;
   readonly linkRevision: number;
   readonly selectedWindowIds: ReadonlySet<string>;
 }

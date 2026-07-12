@@ -40,8 +40,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Validate stable tag and immutable source commit
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -89,23 +91,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
-      - name: Ensure zip/unzip are available for staging
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # The stage script extracts the Node .zip runtime with `unzip` and builds the portable
-          # archive with `zip` (Info-ZIP). Neither is on the Windows runner by default; Chocolatey
-          # is preinstalled, so install both before staging.
-          if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
-            choco install unzip --no-progress -y
-          }
-          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
-            choco install zip --no-progress -y
-          }
-          unzip -v | Select-Object -First 1
-          zip -v | Select-Object -First 2
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
@@ -153,19 +142,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
-      - name: Ensure zip/unzip are available for staging
-        shell: pwsh
-        run: |
-          if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
-            choco install unzip --no-progress -y
-          }
-          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
-            choco install zip --no-progress -y
-          }
-          unzip -v | Select-Object -First 1
-          zip -v | Select-Object -First 2
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Configure MSVC environment for the native launcher
         shell: cmd
         run: |
@@ -302,8 +282,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       - name: Validate approved runtime inputs
@@ -371,8 +353,10 @@ jobs:
           ref: ${{ github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       - name: Download immutable verified Windows artifact
@@ -420,8 +404,10 @@ jobs:
           ref: ${{ github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Download immutable verified macOS artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -463,8 +449,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       # Assemble into a NON-hidden directory: actions/upload-artifact does not descend into a

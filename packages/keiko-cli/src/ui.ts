@@ -6,7 +6,8 @@
 // `npm run build` but not `npm run build:ui`).
 //
 // ADR-0013 D2 site 1 — Detect-and-re-exec guard. Node 22.0–22.11 builds require
-// --experimental-sqlite to import node:sqlite; 22.22+ loads it without the flag. The guard tries
+// --experimental-sqlite to import node:sqlite; the governed Node.js 24 LTS line loads it without
+// the flag. The guard tries
 // the import; on failure it re-spawns the current process with --experimental-sqlite prepended,
 // inheriting stdio and forwarding SIGINT/SIGTERM to the child, then propagates the child's exit
 // code. Injected-test invocations skip the guard entirely.
@@ -369,7 +370,7 @@ export function waitForShutdown(
 }
 
 // Default probe: try to require node:sqlite. Any failure (ERR_UNKNOWN_BUILTIN_MODULE on early
-// 22.x, or a thrown ExperimentalWarning that escaped) means we need the flag. The require is
+// an older runtime, or a thrown ExperimentalWarning that escaped) means we need the flag. The require is
 // guarded inside a try; we never throw past here.
 function defaultSqliteProbe(): boolean {
   try {

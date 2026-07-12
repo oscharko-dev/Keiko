@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceProfile } from "@/lib/types";
 import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/lib/api";
+import { decodeBase64ArrayBuffer } from "@/lib/bytes";
 import type { VoiceTurnManagerEngine } from "./voice-turn-manager";
 import { useVoicePlayback, type VoicePlaybackBinding } from "./useVoicePlayback";
 import type { VoicePlaybackFailureKind } from "./voice-playback-state";
@@ -94,11 +95,6 @@ function defaultCreateObjectUrl(blob: Blob): string {
 
 function defaultRevokeObjectUrl(url: string): void {
   URL.revokeObjectURL(url);
-}
-
-function decodeBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function isAbortError(error: unknown): boolean {
@@ -288,7 +284,9 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
           if (cancelledRef.current || controller.signal.aborted) {
             return undefined;
           }
-          const blob = new Blob([decodeBase64(result.audio)], { type: result.mimeType });
+          const blob = new Blob([decodeBase64ArrayBuffer(result.audio)], {
+            type: result.mimeType,
+          });
           const url = createUrlRef.current(blob);
           urlRef.current = url;
           audio.src = url;

@@ -14,6 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
+import { decodeBase64ArrayBuffer } from "@/lib/bytes";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import KeikoSelect from "../../KeikoSelect";
 import { formatError } from "./qiShared";
@@ -44,22 +45,13 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string; tms: boolean }> = [
 
 const DOWNLOAD_URL_REVOKE_DELAY_MS = 250;
 
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
-}
-
 function triggerDownload(
   filename: string,
   contentType: string,
   body: string,
   encoding?: "base64",
 ): void {
-  const data = encoding === "base64" ? base64ToUint8Array(body) : body;
+  const data = encoding === "base64" ? decodeBase64ArrayBuffer(body) : body;
   const blob = new Blob([data], { type: contentType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");

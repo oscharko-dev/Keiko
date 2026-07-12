@@ -22,9 +22,18 @@ Nothing in this ADR migrates domain source files. It only establishes the skelet
 
 ### D1 — Workspace Manager: npm workspaces
 
-We will use **npm workspaces** (npm ≥10, already pinned to `npm@10.9.8` in `package.json`).
+We will use **npm workspaces** (currently pinned to the Node.js 24.18.0 bundled `npm@11.16.0` in
+`package.json`).
 
-The `package.json` `packageManager` field is already pinned to `npm@10.9.8`. The CI `ci` job uses `actions/setup-node` with `cache: "npm"` and `npm ci`; the `ui` job uses `npm --prefix ui ci`. Switching to pnpm would require updating every CI job, regenerating lockfiles, validating `--prefix`-equivalent behaviour, and re-auditing supply-chain tooling — a scope expansion orthogonal to this sprint. npm workspaces satisfy the stated requirements: reproducible installs (`npm ci` + committed `package-lock.json`), workspace package references (`"workspaces": ["packages/*"]`), release checks via the existing `prepack` chain, and enterprise supply-chain governance via the existing CycloneDX SBOM step. pnpm may be reconsidered in a later ADR once extraction is complete and the migration cost is better understood.
+The `package.json` `packageManager` field is pinned to `npm@11.16.0`. CI uses
+`actions/setup-node` with the exact approved Node.js 24.18.0 patch, verifies the bundled npm version,
+and then runs `npm ci`. Switching to pnpm would require updating every CI job, regenerating
+lockfiles, validating equivalent workspace behaviour, and re-auditing supply-chain tooling — a scope
+expansion orthogonal to this decision. npm workspaces satisfy the stated requirements: reproducible
+installs (`npm ci` plus the committed `package-lock.json`), workspace package references
+(`"workspaces": ["packages/*"]`), release checks via the existing `prepack` chain, and enterprise
+supply-chain governance via the existing CycloneDX SBOM step. pnpm may be reconsidered in a later
+ADR once the migration cost is better understood.
 
 ### D2 — Directory Layout
 
@@ -180,7 +189,8 @@ This ADR does not decide:
 
 - **Pros**: Stricter phantom-dependency prevention; content-addressed store; cleaner lockfile format.
 - **Cons**: Requires changing `packageManager` field, all CI `npm ci` steps, `--prefix` patterns, and cache strategy. Introduces lockfile format change.
-- **Why rejected**: `packageManager` is pinned to `npm@10.9.8` and all CI is npm-native. Migration risk is orthogonal to the sprint goal. pnpm remains an option for a later ADR.
+- **Why rejected**: `packageManager` is pinned to `npm@11.16.0` and all CI is npm-native. Migration
+  risk is orthogonal to the sprint goal. pnpm remains an option for a later ADR.
 
 ### Alternative 2: Move ui/ to apps/ui/ in this PR
 

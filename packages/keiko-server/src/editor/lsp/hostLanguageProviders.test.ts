@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   HOST_LSP_POLICY_BLOCKED_REASON,
   type HostLanguageProviderSpec,
 } from "./hostLanguageProviders.js";
+import { executableFixtureName, writeExecutableFixture } from "./testing/executableFixture.js";
 
 let binDir = "";
 let workspaceRoot = "";
@@ -41,10 +42,7 @@ function workspace(root = workspaceRoot): WorkspaceInfo {
 }
 
 function makeExecutable(name: string, dir = binDir): string {
-  const path = join(dir, name);
-  writeFileSync(path, "#!/bin/sh\n", "utf8");
-  chmodSync(path, 0o755);
-  return path;
+  return writeExecutableFixture(dir, name);
 }
 
 function detect(
@@ -166,7 +164,7 @@ describe("detectHostLanguageProviderDescriptors", () => {
     const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "python-lsp");
     if (spec === undefined) throw new Error("expected python provider spec");
     const target = makeExecutable("inside-pyright", workspaceRoot);
-    symlinkSync(target, join(binDir, "pyright-langserver"));
+    symlinkSync(target, join(binDir, executableFixtureName("pyright-langserver")));
 
     const descriptor = detect(spec, [{ executable: "pyright-langserver" }], {
       PATH: binDir,

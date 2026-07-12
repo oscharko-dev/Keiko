@@ -71,7 +71,7 @@ function ConflictActions({
   readonly onDismiss: () => void;
   // GEN-UI-A11Y-005: focus lands on the primary recovery action on mount (Save for DIRTY, Reload for a
   // version/content mismatch, else the sole Dismiss).
-  readonly primaryRef: RefObject<HTMLButtonElement>;
+  readonly primaryRef: RefObject<HTMLButtonElement | null>;
   readonly reloadLabel: string;
   readonly t: I18nTranslate;
 }): ReactNode {

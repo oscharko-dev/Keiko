@@ -8,7 +8,7 @@
 //      rejected as busy.
 //   3. Distinct roots get distinct pooled processes (spawn twice).
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
+import { writeExecutableFixture } from "./testing/executableFixture.js";
 import {
   disposeHostLspPoolEntry,
   runHostLanguageOperation,
@@ -53,9 +54,7 @@ function workspaceAt(root: string): WorkspaceInfo {
 }
 
 function makeExecutable(name: string): void {
-  const path = join(binDir, name);
-  writeFileSync(path, "#!/bin/sh\n", "utf8");
-  chmodSync(path, 0o755);
+  writeExecutableFixture(binDir, name);
 }
 
 function diagnosticsRequest(root: string): LanguageServiceRequest {

@@ -349,7 +349,7 @@ function KeikoSelectMenu({
   readonly menuCountLabel: string | undefined;
   readonly menuId: string;
   readonly menuLabel: string;
-  readonly menuRef: RefObject<HTMLDivElement>;
+  readonly menuRef: RefObject<HTMLDivElement | null>;
   readonly menuTitle: string | undefined;
   readonly onCommit: (option: FlatOption) => void;
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
