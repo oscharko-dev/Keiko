@@ -18,13 +18,19 @@ human-owned issue closure after merge. It contains only synthetic, redacted, bod
 counts, contract names, route paths, and reason codes — never raw tokens, tenant names, endpoints,
 issue/page content, or PII.
 
-> **Coordinator note.** This document is finalized by the epic coordinator after child
-> [#2246](https://github.com/oscharko-dev/Keiko/issues/2246) records its verification evidence and
-> the implementation pull request(s) are opened. The [Local gate outcomes](#local-gate-outcomes) and
-> [Merged pull requests](#merged-pull-requests) sections carry explicit placeholders for that
-> consolidation. Sections above them reflect the implemented behavior on the epic branch and are
-> restatements of [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md);
-> where the two differ, the ADR is authoritative.
+> **Coordinator note.** The delivery pull request
+> [#2301](https://github.com/oscharko-dev/Keiko/pull/2301) merged to `dev` at commit
+> [`257ddbef`](https://github.com/oscharko-dev/Keiko/commit/257ddbef) on 2026-07-11. A post-merge
+> audit-and-ship pass (branch `oscharko/epic-2238-audit-ship-21a730`, 2026-07-12) re-verified every
+> child issue's acceptance criteria against the shipped code and applied the small set of
+> documentation and defensive-guard fixes recorded in
+> [Post-merge audit and closure verification](#post-merge-audit-and-closure-verification). Formal
+> issue closure (each child's checkboxes, the epic closure comment listing merged PRs and gate
+> evidence, and workflow-state transitions on the Product Delivery board) remains a human-owned
+> delivery action per the human-control invariant. Sections above the audit block reflect the
+> implemented behavior on the epic branch and are restatements of
+> [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md); where the two
+> differ, the ADR is authoritative.
 
 Epic #2238 adds a governed Atlassian connector lane: explicit, user-triggered synchronization of
 Confluence spaces and Jira projects into Local Knowledge connector pods, an ad-hoc live Jira JQL read
@@ -122,21 +128,22 @@ task) is tracked separately as Epic
 The full CI-equivalent gate set was run locally and green before delivery (macOS; CI/Linux is
 authoritative for the two platform-artifact gates noted below).
 
-| Gate                                                                                       | Outcome                                                                                                                             |
-| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run typecheck`                                                                        | PASS (package graph aligned; `tsc --noEmit` clean)                                                                                  |
-| `npm run lint` (root + keiko-ui workspace, `--max-warnings=0`)                             | PASS                                                                                                                                |
-| `npm run format:check`                                                                     | PASS                                                                                                                                |
-| `npm test` (full root suite)                                                               | PASS — 1110 files, 19080 passed, 2 pre-existing skipped                                                                             |
-| `npm run arch:check` / `arch:check:negative`                                               | PASS (import-policy + contract boundaries green; negative fixtures fire)                                                            |
-| `npm run check:adr-index`                                                                  | PASS (101 ADRs indexed)                                                                                                             |
-| `npm run check:error-observability`                                                        | PASS                                                                                                                                |
-| `npm run check:version-consistency` / `check:dependency-hygiene`                           | PASS                                                                                                                                |
-| `npm run test:coverage:quality` (fresh)                                                    | PASS — all packages hold their branch floors (keiko-connectors, keiko-server, keiko-ui, keiko-local-knowledge included)             |
-| `npm run check:ui-i18n`                                                                    | PASS (central en + de catalogs at parity)                                                                                           |
-| `npm run check:retrieval-quality` / `grounded-retrieval-quality` / `grounded-faithfulness` | PASS (confluence-connector-pod + jira-connector-pod scorecards and connector grounded fixtures)                                     |
-| Connector integration suites (`tests/atlassian-connectors/*`)                              | PASS — 137 tests (redaction sweep, egress fail-closed, hostile-provider, degradation matrix, scope preservation, policy regression) |
-| Playwright e2e (chromium, `tests/e2e/atlassian-connectors-*.smoke.spec.ts`)                | PASS — setup → verify → scope → sync → grounded ask (connector citation) → governed write → approve → typed result                  |
+| Gate                                                                                               | Outcome                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                                                                                | PASS (package graph aligned; `tsc --noEmit` clean)                                                                                                                                                                        |
+| `npm run lint` (root + keiko-ui workspace, `--max-warnings=0`)                                     | PASS                                                                                                                                                                                                                      |
+| `npm run format:check`                                                                             | PASS                                                                                                                                                                                                                      |
+| `npm test` (full root suite)                                                                       | PASS — 1110 files, 19080 passed, 2 pre-existing skipped                                                                                                                                                                   |
+| `npm run arch:check` / `arch:check:negative`                                                       | PASS (import-policy + contract boundaries green; negative fixtures fire)                                                                                                                                                  |
+| `npm run check:adr-index`                                                                          | PASS (101 ADRs indexed)                                                                                                                                                                                                   |
+| `npm run check:error-observability`                                                                | PASS                                                                                                                                                                                                                      |
+| `npm run check:version-consistency` / `check:dependency-hygiene`                                   | PASS                                                                                                                                                                                                                      |
+| `npm run test:coverage:quality` (fresh)                                                            | PASS — all packages hold their branch floors (keiko-connectors, keiko-server, keiko-ui, keiko-local-knowledge included)                                                                                                   |
+| `npm run check:ui-i18n`                                                                            | PASS (central en + de catalogs at parity)                                                                                                                                                                                 |
+| `npm run check:retrieval-quality` / `grounded-retrieval-quality` / `grounded-faithfulness`         | PASS (confluence-connector-pod + jira-connector-pod scorecards and connector grounded fixtures)                                                                                                                           |
+| Connector integration suites (`tests/atlassian-connectors/*`)                                      | PASS — 137 tests (redaction sweep, egress fail-closed, hostile-provider, degradation matrix, scope preservation, policy regression)                                                                                       |
+| Playwright e2e (chromium, `tests/e2e/atlassian-connectors-*.smoke.spec.ts`) — reviewer walkthrough | PASS — setup → verify → scope → sync → grounded ask (connector citation) → governed write → approve → typed result. This row is the fixture-environment reviewer-walkthrough evidence required by child issue #2247 AC-1. |
+| `markdown-link-check` on the new connector docs                                                    | PASS — no broken links in ADR-0128, ADR-0129, `docs/local-knowledge/atlassian-connector-guide.md`, `docs/troubleshooting/atlassian-connector.md`, and this ledger                                                         |
 
 Two gates fail locally on macOS purely as documented platform artifacts; both pass on CI/Linux,
 which is authoritative:
@@ -153,13 +160,15 @@ which is authoritative:
 ## Delivery pull request
 
 All ten children (#2239–#2248) were implemented in required order on a single integration branch
-(`claude/epic-2238-implementation-55fd37`) from `origin/dev` and are delivered as one consolidated
-epic pull request rather than ten separate ones, so the reviewer sees the connector lane as a single
-coherent change with all gates green together. Merge remains a human-approved delivery action per
-the human-control invariant; this ledger is finalized when the maintainer merges.
+(`claude/epic-2238-implementation-55fd37`) from `origin/dev` and delivered as one consolidated epic
+pull request rather than ten separate ones, so the reviewer saw the connector lane as a single
+coherent change with all gates green together.
 
-- Delivery pull request: [#2301](https://github.com/oscharko-dev/Keiko/pull/2301) (targets `dev`;
-  open for maintainer review).
+- Delivery pull request: [#2301](https://github.com/oscharko-dev/Keiko/pull/2301) — merged to `dev`
+  on 2026-07-11 at commit
+  [`257ddbef`](https://github.com/oscharko-dev/Keiko/commit/257ddbef5d3479c09f1a396b840a8d1273bb56b4)
+  (squash merge, admin override at maintainer instruction after all required gates and SonarCloud
+  Banking Grade were green — recorded in the commit trailer).
 
 Open follow-ups (documented in the ADR and this ledger, not blockers for the epic):
 
@@ -169,6 +178,75 @@ Open follow-ups (documented in the ADR and this ledger, not blockers for the epi
 - Wiring the connector management surface into the desktop shell navigation (it currently ships as a
   dedicated `/atlassian-connectors` route); the ticket-to-workbench handoff Epic
   [#2249](https://github.com/oscharko-dev/Keiko/issues/2249).
+
+## Documented trade-offs
+
+Two intentional design choices are recorded here so the current audit trail matches the code:
+
+- **Confluence footer-comment 401 degradation** (`packages/keiko-connectors/src/confluence-sync-adapter.ts`
+  `fetchCommentBodies`). Comment retrieval is a supplementary enrichment lane run only after the
+  page body fetch succeeds. Any comment-lane failure — including a 401 that would occur only if the
+  token were revoked in the microseconds between the page and comments requests — silently
+  degrades to "page indexed without comments" rather than failing the page. The upstream page fetch
+  is the canonical run-fatal check for `auth-failed`; the next re-sync surfaces a persistent
+  revocation on its first request. This is an accepted robustness trade-off, not a security leak:
+  no credential material can flow out of the comment fetch because the outbound port only
+  materialises the token in the `Authorization` header immediately before the platform fetch call
+  (D2). A `refreshConnectorPod` re-sync remains the correct place to observe token revocation
+  end-to-end.
+
+## Post-merge audit and closure verification
+
+Recorded 2026-07-12 from branch `oscharko/epic-2238-audit-ship-21a730` (worktree of `origin/dev`).
+A coordinator-led multi-agent audit re-verified every child issue's acceptance criteria against
+the shipped code and Epic-level integration:
+
+- **Per-child audit** — 10 parallel auditors (one per child, `#2239`–`#2248`) with per-defect
+  adversarial verify (2 independent skeptic passes). 17 candidate defects; **3 confirmed**, 8
+  requiring human judgment, 6 refuted by strong counter-evidence.
+- **Epic-level integration audit** — 8/8 Target Outcome criteria satisfied end-to-end; 0 defects,
+  0 closure-evidence gaps at the Epic level.
+- **Verified boundary hygiene** (spot-checked directly) — no provider model SDK import in
+  `packages/keiko-connectors` or `packages/keiko-server/src/atlassian`; no `console.*` in product
+  code; no hard-coded Atlassian host; no `packages/keiko-ui/**/globals.css` diff (SHA-pinned gate
+  #1300 undisturbed); dependency-cruiser rule name matches accepted ADR-0128; connector-item
+  fingerprints contain no wall-clock or randomness; 429/`Retry-After` exponential backoff
+  implemented at `atlassian-sync-lane.ts`.
+- **Fixes applied to the working tree** (no code-behavior regressions; all owning tests still
+  green):
+  - `packages/keiko-connectors/src/confluence-sync-adapter.ts` — `walkPaginatedList` tightened
+    with a `seen` set of visited cursor URLs so a self-referential `_links.next` fails closed as
+    `malformed-payload` on the second request rather than after the 500-request ceiling.
+    Regression test added in `confluence-sync-adapter.test.ts` ("fails closed on a self-referential
+    pagination cursor"). 14/14 tests pass.
+  - `packages/keiko-server/src/atlassian/syncRoutes.test.ts` — the two redaction assertion tests
+    now scan every observable wire surface (start-route body, poll-route body, activity-route
+    body, capsule record, `KnowledgePodSummary`) in addition to the terminal job state and the
+    activity registry, and add a positive control on the secret-body marker. 9/9 tests pass.
+  - `docs/adr/ADR-0128-atlassian-connector-authority-and-security-design.md` (D4) — wording made
+    precise: `connector-write` is a `CodingWorkbenchSupervisedActionKind` that maps back to the
+    `connector-access` `CodingWorkbenchActionClass` in `actionKindToPerm` for the shared policy
+    matrix while carrying the higher approval-risk signal on the supervised-action path. The
+    "Action class / kind" column and the contract-extension paragraph now name both identifiers
+    explicitly. No governance behavior changes; the amendment closes a documentation-vs-contract
+    drift only.
+  - This ledger — the post-merge status is now recorded, the reviewer-walkthrough evidence and
+    `markdown-link-check` gate are named explicitly in the gate table, and the intentional
+    comment-fetch 401 trade-off is documented above.
+- **Deferred to human-approved closure actions** (per human-control invariant / AGENTS.md §12):
+  - Formal per-child issue closure (checking acceptance-criteria and expected-verification boxes
+    on `#2239`–`#2248` after human confirmation).
+  - Epic
+    [#2238](https://github.com/oscharko-dev/Keiko/issues/2238) closure comment listing merged PR
+    `#2301`, the gate evidence rolled up in this ledger, and the follow-ups already tracked here
+    and in ADR-0128.
+  - Issue [#2246](https://github.com/oscharko-dev/Keiko/issues/2246) evidence comment pasting the
+    concrete outputs from `check:retrieval-quality`, `check:grounded-retrieval-quality`,
+    `check:grounded-faithfulness`, `test:coverage:quality`, and the Playwright smoke run recorded
+    above. The draft closure and evidence comments are staged in this session's scratchpad for the
+    maintainer.
+  - Project Delivery board `Workflow State: Done` transitions for the epic and children after
+    those closure comments land.
 
 ## Related documentation
 
