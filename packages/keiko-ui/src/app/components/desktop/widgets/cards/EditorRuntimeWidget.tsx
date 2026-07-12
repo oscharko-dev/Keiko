@@ -4479,6 +4479,11 @@ function EditorRuntimeWidget({
           : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+      setActiveHostEditRequest({
+        id: createEditorRequestId(),
+        text: review.modified,
+        origin: "applied-patch",
+      });
       return true;
     },
     [largeFileDegraded, t, verifyExactPatchTarget],
@@ -4919,7 +4924,12 @@ function EditorRuntimeWidget({
           >
             Keep local
           </button>
-          <button type="button" className="ed-reload" onClick={reloadExternalChange}>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
             Reload
           </button>
           <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
@@ -5500,7 +5510,12 @@ function EditorRuntimeWidget({
           <button type="button" className="ed-save" onClick={keepExternalLocal}>
             Keep local
           </button>
-          <button type="button" className="ed-reload" onClick={reloadExternalChange}>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
             Reload
           </button>
         </div>

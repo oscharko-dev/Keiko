@@ -233,7 +233,7 @@ describe("EditorModelRegistry", () => {
     });
   });
 
-  it("refreshes inactive clean models and preserves dirty or attached buffers", () => {
+  it("refreshes inactive models unless both retained and incoming buffers are dirty", () => {
     const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
     const namespace = new FakeNamespace();
     const clean = attach(registry, namespace, "clean.ts");
@@ -254,6 +254,29 @@ describe("EditorModelRegistry", () => {
     });
 
     expect(namespace.created[0]?.getValue()).toBe("updated\n");
+
+    const reloaded = attach(registry, namespace, "dirty-reloaded.ts");
+    registry.updateProtection(reloaded.attachment.key, {
+      ...UNPROTECTED_EDITOR_MODEL,
+      dirty: true,
+    });
+    reloaded.attachment.detach();
+    registry.attach({
+      key: reloaded.attachment.key,
+      rootKey: "scope:/repo",
+      uri: uri("dirty-reloaded.ts"),
+      language: "typescript",
+      text: "disk-copy\n",
+      sizeBytes: 10,
+      degraded: false,
+      viewStateKey: "pane:dirty-reloaded",
+      namespace,
+      editor: new FakeEditor(),
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+
+    expect(namespace.created[1]?.getValue()).toBe("disk-copy\n");
+
     const dirty = attach(registry, namespace, "dirty-preserved.ts");
     registry.updateProtection(dirty.attachment.key, { ...UNPROTECTED_EDITOR_MODEL, dirty: true });
     dirty.attachment.detach();
@@ -271,7 +294,31 @@ describe("EditorModelRegistry", () => {
       protection: { ...UNPROTECTED_EDITOR_MODEL, dirty: true },
     });
 
-    expect(namespace.created[1]?.getValue()).toBe("// dirty-preserved.ts\n");
+    expect(namespace.created[2]?.getValue()).toBe("// dirty-preserved.ts\n");
+  });
+
+  it("syncs host text when adopting an existing Monaco namespace model", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const modelUri = uri("adopted.ts");
+    const existing = namespace.createModel("stale namespace text\n", "typescript", modelUri);
+
+    const attachment = registry.attach({
+      key: "scope:/repo:adopted.ts",
+      rootKey: "scope:/repo",
+      uri: modelUri,
+      language: "typescript",
+      text: "host text\n",
+      sizeBytes: 10,
+      degraded: false,
+      viewStateKey: "pane:adopted",
+      namespace,
+      editor: new FakeEditor(),
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+
+    expect(attachment.model).toBe(existing);
+    expect(existing.getValue()).toBe("host text\n");
   });
 
   it("disposes by root and all inactive models with default reasons", () => {

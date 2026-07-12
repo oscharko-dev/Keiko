@@ -103,7 +103,8 @@ type CallHierarchyResultHandler = (response: EditorCallHierarchyResponse) => voi
 
 interface ProgrammaticEditorChange {
   readonly text: string;
-  readonly origin: EditorChangeOrigin;
+  readonly origin?: EditorChangeOrigin;
+  readonly suppress?: boolean;
 }
 
 type ProgrammaticEditorChangeRef = MutableRefObject<ProgrammaticEditorChange | null>;
@@ -264,10 +265,11 @@ export function useChangeHandler(
         return;
       }
       const programmatic = programmaticChangeRef?.current;
-      const origin = programmatic?.text === value ? programmatic.origin : "human";
       if (programmaticChangeRef !== undefined && programmatic?.text === value) {
         programmaticChangeRef.current = null;
       }
+      if (programmatic?.text === value && programmatic.suppress === true) return;
+      const origin = programmatic?.text === value ? (programmatic.origin ?? "human") : "human";
       onContentChange({ text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length }, origin);
     },
     [readOnly, onContentChange, programmaticChangeRef],
@@ -338,6 +340,48 @@ function useHostEditRequest(
     }
     applyIfMounted();
   }, [programmaticChangeRef, props.hostEditRequest, props.onContentChange, refs]);
+}
+
+function useControlledModelValueSync(
+  props: KeikoCodeEditorProps,
+  refs: EditorRefs,
+  programmaticChangeRef: ProgrammaticEditorChangeRef,
+): void {
+  useEffect(() => {
+    const expected = props.buffer.content.text;
+    const syncChange: ProgrammaticEditorChange =
+      props.fileModel.lastChangeOrigin === null
+        ? { text: expected, suppress: true }
+        : { text: expected, origin: props.fileModel.lastChangeOrigin, suppress: true };
+    let frame: number | null = null;
+    let cancelled = false;
+    const syncIfMounted = (): boolean => {
+      const model = refs.editorRef.current?.getModel?.();
+      if (model === undefined || model === null) return false;
+      if (model.getValue() === expected || model.setValue === undefined) return true;
+      programmaticChangeRef.current = syncChange;
+      model.setValue(expected);
+      queueMicrotask(() => {
+        if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
+      });
+      return true;
+    };
+    const syncWhenMounted = (): void => {
+      if (cancelled || syncIfMounted()) return;
+      frame = window.requestAnimationFrame(syncWhenMounted);
+    };
+    syncWhenMounted();
+    return () => {
+      cancelled = true;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [
+    programmaticChangeRef,
+    props.buffer.content.text,
+    props.fileModel.identity.uri,
+    props.fileModel.lastChangeOrigin,
+    refs,
+  ]);
 }
 
 // Builds the completion wiring from the live props ref so a resolver swap (e.g. the host opening a
@@ -937,13 +981,18 @@ interface MountRuntimeArgs {
   readonly onRuntimeError: KeikoCodeEditorProps["onRuntimeError"];
   readonly themeVariant: KeikoCodeEditorProps["themeVariant"];
   readonly autoFocus: KeikoCodeEditorProps["autoFocus"];
+  readonly attachModel?: boolean;
 }
 
 function mountEditorRuntime(args: MountRuntimeArgs): void {
   args.refs.editorRef.current = args.editor;
   args.refs.monacoRef.current = args.monaco as MountMonaco;
   args.refs.containerRef.current = args.editor.getContainerDomNode();
-  attachModelOnMount(args, args.monaco as MountMonaco);
+  if (args.attachModel === false) {
+    applyViewState(args.editor, args.refs.viewStateRef.current);
+  } else {
+    attachModelOnMount(args, args.monaco as MountMonaco);
+  }
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
     monaco: args.monaco as MountMonaco,
@@ -1004,12 +1053,17 @@ function refreshEditorRuntime(args: RuntimeWiringRefreshArgs): void {
   const monaco = args.refs.monacoRef.current;
   const container = args.refs.containerRef.current;
   if (editor === null || monaco === null || container === null) return;
+  const preserveModelAttachment = args.refs.modelAttachmentRef.current !== null;
   args.refs.viewStateRef.current = captureViewState(editor);
   args.refs.disposeRef.current?.();
   args.refs.disposeRef.current = null;
-  args.refs.modelAttachmentRef.current?.detach();
-  args.refs.modelAttachmentRef.current = null;
-  mountEditorRuntime({ ...args, editor, monaco, autoFocus: false });
+  mountEditorRuntime({
+    ...args,
+    editor,
+    monaco,
+    autoFocus: false,
+    attachModel: !preserveModelAttachment,
+  });
 }
 
 function useRuntimeWiringRefresh(args: RuntimeWiringRefreshArgs): void {
@@ -1173,6 +1227,7 @@ export function useEditorHandlers(
   }, [refs.gitGutterBridgeRef]);
   useUnmountDisposal(refs);
   useHostEditRequest(props, refs, programmaticChangeRef);
+  useControlledModelValueSync(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
   useModelProtectionSync(props);

@@ -984,7 +984,7 @@ describe("EditorWidget — edit and save", () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(
       fileResponse({ modifiedAt: 4, content: "const value = 4;\n" }),
     );
-    await userEvent.click(within(banner).getByRole("button", { name: "Reload" }));
+    await userEvent.click(within(banner).getByRole("button", { name: "Reload external changes" }));
 
     await waitFor(() => {
       expect(surface.props?.buffer.content.text).toBe("const value = 4;\n");
@@ -4027,6 +4027,8 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
       expect(surface.props?.buffer.content.text).toBe("const value = 99;\n");
+      expect(surface.props?.hostEditRequest?.text).toBe("const value = 99;\n");
+      expect(surface.props?.hostEditRequest?.origin).toBe("applied-patch");
       const results = agentResults().filter((result) => result.actionId === action.actionId);
       expect(results).toHaveLength(1);
       expect(results[0]?.status).toBe("succeeded");

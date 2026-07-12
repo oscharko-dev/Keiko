@@ -261,6 +261,7 @@ export class EditorModelRegistry {
     const model =
       input.namespace.getModel(input.uri) ??
       input.namespace.createModel(input.text, input.language, input.uri);
+    if (model.getValue() !== input.text) model.setValue?.(input.text);
     const entry = this.createEntry(input, model);
     this.entries.set(input.key, entry);
     return entry;
@@ -289,9 +290,10 @@ export class EditorModelRegistry {
   private updateEntry(entry: RegistryEntry, input: RetainedEditorModelAttachInput): void {
     entry.estimatedBytes = estimateEditorModelBytes(input);
     entry.degraded = input.degraded;
+    const preserveDirtyBuffer = entry.protection.dirty && input.protection.dirty;
     if (
-      !entry.protection.dirty &&
       entry.attachmentCount === 0 &&
+      !preserveDirtyBuffer &&
       entry.model.getValue() !== input.text
     ) {
       entry.model.setValue?.(input.text);

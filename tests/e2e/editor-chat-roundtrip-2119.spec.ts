@@ -458,9 +458,14 @@ async function expectPatchReview(
   fixture: RoundTripFixture,
   replacement: string,
 ): Promise<PatchReview> {
-  const review = editorWindow.locator(`[aria-label="Agent patch review for ${RELATIVE_PATH}"]`);
-  const accept = editorWindow.getByTestId("agent-patch-accept");
-  const reject = editorWindow.getByTestId("agent-patch-reject");
+  const reviewHost = editorWindow.getByRole("tabpanel", { name: RELATIVE_PATH });
+  const review = reviewHost.locator(`[aria-label="Agent patch review for ${RELATIVE_PATH}"]`);
+  const accept = reviewHost
+    .getByRole("button", { name: "Accept agent patch and apply changes", exact: true })
+    .last();
+  const reject = reviewHost
+    .getByRole("button", { name: "Reject agent patch and discard changes", exact: true })
+    .last();
   await expect(review).toBeVisible();
   await expect(accept).toHaveAttribute("aria-label", "Accept agent patch and apply changes");
   await expect(reject).toHaveAttribute("aria-label", "Reject agent patch and discard changes");

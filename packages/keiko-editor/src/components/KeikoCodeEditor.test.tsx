@@ -40,6 +40,8 @@ interface CapturedEditor {
   revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   deltaDecorations: ReturnType<typeof vi.fn>;
   executeEdits: ReturnType<typeof vi.fn>;
+  setModelValue: ReturnType<typeof vi.fn>;
+  modelValue: () => string;
   pushUndoStop: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
@@ -194,6 +196,7 @@ vi.mock("@monaco-editor/react", () => {
     pushUndoStop: ReturnType<typeof vi.fn>;
     getModel: () => {
       getValue: () => string;
+      setValue: ReturnType<typeof vi.fn>;
       getVersionId: () => number;
       getLanguageId: () => string;
       getLineCount: () => number;
@@ -206,6 +209,7 @@ vi.mock("@monaco-editor/react", () => {
   }
   interface FakeModelShape {
     getValue: () => string;
+    setValue: ReturnType<typeof vi.fn>;
     getVersionId: () => number;
     getLanguageId: () => string;
     getLineCount: () => number;
@@ -228,6 +232,7 @@ vi.mock("@monaco-editor/react", () => {
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
     executeEdits: ReturnType<typeof vi.fn>;
+    setModelValue: ReturnType<typeof vi.fn>;
     pushUndoStop: ReturnType<typeof vi.fn>;
     modelText: string;
     modelLanguage: string;
@@ -256,6 +261,7 @@ vi.mock("@monaco-editor/react", () => {
           newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
       executeEdits: vi.fn(),
+      setModelValue: vi.fn(),
       pushUndoStop: vi.fn(() => true),
       modelText: "",
       modelLanguage: "plaintext",
@@ -276,6 +282,12 @@ vi.mock("@monaco-editor/react", () => {
         return true;
       },
     );
+    s.setModelValue.mockImplementation((text: string): void => {
+      s.modelText = text;
+      s.modelVersion += 1;
+      s.modelContentListener?.();
+      s.onChange?.(text);
+    });
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
         s.actionRuns.set(descriptor.id, descriptor.run);
@@ -326,6 +338,7 @@ vi.mock("@monaco-editor/react", () => {
       pushUndoStop: s.pushUndoStop,
       getModel: (): FakeModelShape => ({
         getValue: (): string => s.modelText,
+        setValue: s.setModelValue,
         getVersionId: (): number => s.modelVersion,
         getLanguageId: (): string => s.modelLanguage,
         getLineCount: (): number => Math.max(1, s.modelText.split("\n").length),
@@ -371,6 +384,8 @@ vi.mock("@monaco-editor/react", () => {
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
       executeEdits: s.executeEdits,
+      setModelValue: s.setModelValue,
+      modelValue: (): string => s.modelText,
       pushUndoStop: s.pushUndoStop,
       disposed: s.disposed,
     };
@@ -387,7 +402,7 @@ vi.mock("@monaco-editor/react", () => {
     captured.language = props.language ?? null;
     captured.options = props.options ?? null;
     captured.keepCurrentModel = props.keepCurrentModel ?? null;
-    state.modelText = props.value ?? "";
+    if (!state.mounted) state.modelText = props.value ?? "";
     state.modelLanguage = props.language ?? "plaintext";
     state.onChange = props.onChange ?? null;
     scheduleMountOnce(state, props.onMount);
@@ -496,6 +511,28 @@ describe("KeikoCodeEditor — controlled editing", () => {
     ];
     expect(delta.text).toBe("const renamed = 1;\n");
     expect(origin).toBe("applied-patch");
+  });
+
+  it("syncs host-controlled buffer changes into the retained Monaco model without echoing dirty edits", async () => {
+    const onContentChange = vi.fn();
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ onContentChange })} />);
+    await flushMount();
+    onContentChange.mockClear();
+
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          buffer: buildBuffer({ text: "const a = 2;\n" }),
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.setModelValue).toHaveBeenCalledWith("const a = 2;\n");
+      expect(captured.editor?.modelValue()).toBe("const a = 2;\n");
+    });
+    expect(onContentChange).not.toHaveBeenCalled();
   });
 
   it("uses a host-provided accessible editor label", () => {

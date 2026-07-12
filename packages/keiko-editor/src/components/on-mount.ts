@@ -440,6 +440,7 @@ export interface MountEditor {
   pushUndoStop?(): boolean;
   getModel?(): {
     getValue(): string;
+    setValue?(text: string): void;
     getVersionId?(): number;
     getPositionAt?(offset: number): { readonly lineNumber: number; readonly column: number };
     onDidChangeContent?(listener: () => void): monaco.IDisposable;
