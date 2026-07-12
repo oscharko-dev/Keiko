@@ -105,7 +105,7 @@ describe("useEditorShortcutOverrides", () => {
   });
 
   it("falls back to empty overrides after load errors and supports rootless subscriptions", async () => {
-    const changes: readonly string[][] = [];
+    const changes: (readonly string[])[] = [];
     api.fetchEditorSettings.mockRejectedValueOnce(new Error("offline"));
     const unsubscribe = subscribeEditorShortcutOverrides(undefined, (next) => {
       changes.push(next);
