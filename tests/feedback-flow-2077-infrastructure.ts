@@ -153,8 +153,18 @@ export async function listen(server: Server): Promise<StartedServer> {
 }
 
 async function listenOnPort(server: Server, port: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    server.listen(port, UI_HOST, resolve);
+  await new Promise<void>((resolve, reject) => {
+    const listening = (): void => {
+      server.off("error", failed);
+      resolve();
+    };
+    const failed = (error: Error): void => {
+      server.off("listening", listening);
+      reject(error);
+    };
+    server.once("error", failed);
+    server.once("listening", listening);
+    server.listen(port, UI_HOST);
   });
 }
 
@@ -264,6 +274,38 @@ function forwardingOptions(options: RequestInit): RequestInit {
 
 async function startBff(intakeOrigin: string): Promise<StartedBff> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-feedback-flow-"));
+  try {
+    const started = await bindBff(staticRoot, intakeOrigin);
+    return {
+      ...started,
+      cleanup: async (): Promise<void> => rm(staticRoot, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(staticRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function bindBff(staticRoot: string, intakeOrigin: string): Promise<StartedServer> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const port = await reserveLoopbackPort(staticRoot, intakeOrigin);
+    const server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: handlerDeps(intakeOrigin),
+    });
+    try {
+      await listenOnPort(server, port);
+      return { origin: `http://${UI_HOST}:${String(port)}`, server };
+    } catch (error) {
+      if (!isAddressInUse(error) || attempt === 2) throw error;
+    }
+  }
+  throw new Error("BFF bind retry bound exhausted");
+}
+
+async function reserveLoopbackPort(staticRoot: string, intakeOrigin: string): Promise<number> {
   const probe = createUiServer({
     staticRoot,
     csp: buildCspHeader([]),
@@ -273,18 +315,11 @@ async function startBff(intakeOrigin: string): Promise<StartedBff> {
   const reserved = await listen(probe);
   const port = Number(new URL(reserved.origin).port);
   await close(reserved.server);
-  const server = createUiServer({
-    staticRoot,
-    csp: buildCspHeader([]),
-    port,
-    handlerDeps: handlerDeps(intakeOrigin),
-  });
-  await listenOnPort(server, port);
-  return {
-    origin: `http://${UI_HOST}:${String(port)}`,
-    server,
-    cleanup: async (): Promise<void> => rm(staticRoot, { recursive: true, force: true }),
-  };
+  return port;
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EADDRINUSE";
 }
 
 export async function previewAndSubmit(origin: string): Promise<SubmittedFeedback> {
