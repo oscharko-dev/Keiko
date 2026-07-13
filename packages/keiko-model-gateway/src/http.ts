@@ -659,17 +659,21 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
     const onData = (chunk: Buffer): void => {
       chunks.push(chunk);
       const buffer = Buffer.concat(chunks);
-      // Independent of the terminator search below: even if that path is defective, the
-      // accumulated header cannot grow past the bound (fail closed, bounded memory).
-      if (connectResponseHeaderExceedsLimit(buffer.length)) {
-        socket.destroy();
-        settle(() => {
-          reject(connectHeaderLimitError());
-        });
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd === -1) {
+        // Header still unterminated: bound the accumulation. This is the second, independent
+        // exit from this loop — even if the terminator search is defective and never fires, the
+        // buffer cannot grow past the limit (fail closed, bounded memory). Applying the bound only
+        // on the unterminated path keeps a valid, well-formed header immune to any trailing
+        // tunneled bytes that happen to share the terminator's chunk.
+        if (connectResponseHeaderExceedsLimit(buffer.length)) {
+          socket.destroy();
+          settle(() => {
+            reject(connectHeaderLimitError());
+          });
+        }
         return;
       }
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) return;
       const rest = buffer.subarray(headerEnd + 4);
       if (rest.length > 0) socket.unshift(rest);
       settle(() => {

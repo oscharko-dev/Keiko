@@ -1314,6 +1314,54 @@ describe("proxy CONNECT response status codes", () => {
     }
   });
 
+  it("accepts a valid CONNECT header even when >16 KiB of tunneled bytes share its chunk", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-trailing-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end('{"trailing":true}');
+    });
+    const originPort = await listen(origin);
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        // Establish the tunnel, then relay origin bytes to the client. The origin's TLS
+        // ServerHello can legitimately land in the same TCP segment as the CONNECT response
+        // header — the size guard must bound only the pre-terminator header, never the tunneled
+        // payload that follows the terminator.
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/trailing`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+        },
+        timeoutMs: 5_000,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ trailing: true });
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a CONNECT response that floods without a header terminator (bounded read)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-connect-flood-"));
     const caBundlePath = join(dir, "ca.pem");
