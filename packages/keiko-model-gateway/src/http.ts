@@ -659,20 +659,21 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
     const onData = (chunk: Buffer): void => {
       chunks.push(chunk);
       const buffer = Buffer.concat(chunks);
-      const headerEnd = buffer.indexOf("\r\n\r\n");
-      // Bound the header FIRST, before any terminator-dependent branching, so no single mutation
-      // of the branches below can detach this bound from the accumulation loop (fail closed,
-      // bounded memory — the loop's independent second exit). While the header is unterminated the
-      // whole buffer is the header; once terminated only the pre-terminator slice counts, which
-      // leaves a valid, well-formed header immune to trailing tunneled bytes sharing its chunk.
-      const headerBytes = headerEnd === -1 ? buffer.length : headerEnd;
-      if (connectResponseHeaderExceedsLimit(headerBytes)) {
+      // Bound the accumulated buffer FIRST, before any terminator-dependent branching, so no single
+      // defect below can detach this bound from the loop (fail closed, bounded memory — the loop's
+      // independent second exit). The bound covers the whole buffer intentionally: in the HTTPS
+      // CONNECT flow the proxy sends only the response header and then the client drives the TLS
+      // handshake, so no legitimate response carries bulk bytes ahead of the "\r\n\r\n" terminator;
+      // a proxy that floods before terminating is exactly the abusive case this rejects. The 16 KiB
+      // ceiling is far above any real CONNECT header, so well-formed responses never trip it.
+      if (connectResponseHeaderExceedsLimit(buffer.length)) {
         socket.destroy();
         settle(() => {
           reject(connectHeaderLimitError());
         });
         return;
       }
+      const headerEnd = buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) return;
       const rest = buffer.subarray(headerEnd + 4);
       if (rest.length > 0) socket.unshift(rest);
