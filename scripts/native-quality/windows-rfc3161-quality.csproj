@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />
     <Compile Include="../windows-portable-rfc3161.cs" Link="windows-portable-rfc3161.cs" />
   </ItemGroup>
 </Project>

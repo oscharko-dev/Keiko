@@ -127,7 +127,7 @@ function clampUtf8(value: string, maxBytes: number): string {
   }
   return new TextDecoder("utf-8", { fatal: false })
     .decode(encoded.subarray(0, maxBytes))
-    .replace(/\uFFFD+$/u, "");
+    .replace(/\uFFFD$/u, "");
 }
 
 function embeddingText(ctx: EmbeddingContext, value: string): string {

@@ -133,7 +133,7 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       return buffer
         .subarray(0, bytesRead)
         .toString("utf8")
-        .replace(/\uFFFD+$/u, "");
+        .replace(/\uFFFD$/u, "");
     } finally {
       closeSync(fd);
     }

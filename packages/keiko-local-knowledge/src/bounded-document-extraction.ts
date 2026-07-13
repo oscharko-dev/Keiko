@@ -160,7 +160,7 @@ function clampToUtf8Bytes(
     return { text, truncated: false };
   }
   const slice = encoded.subarray(0, maxBytes);
-  const clamped = new TextDecoder("utf-8", { fatal: false }).decode(slice).replace(/\uFFFD+$/u, "");
+  const clamped = new TextDecoder("utf-8", { fatal: false }).decode(slice).replace(/\uFFFD$/u, "");
   return { text: clamped, truncated: true };
 }
 

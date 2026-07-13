@@ -29,14 +29,22 @@ function canonicalCondition(condition) {
   return `${String(condition.metric)}:${String(condition.op)}:${String(condition.error)}`;
 }
 
+function compareCanonicalConditions(left, right) {
+  return left.localeCompare(right);
+}
+
 export function gateContractFailures(gate) {
   if (gate === undefined) return ["Keiko Banking Grade definition is missing."];
   const failures = [];
   if (String(gate.id) !== KEIKO_GATE_ID || gate.name !== KEIKO_GATE_NAME) {
     failures.push("Keiko Banking Grade identity does not match the governed contract.");
   }
-  const expected = KEIKO_GATE_CONDITIONS.map(canonicalCondition).toSorted();
-  const observed = (gate.conditions ?? []).map(canonicalCondition).toSorted();
+  const expected = KEIKO_GATE_CONDITIONS.map(canonicalCondition).toSorted(
+    compareCanonicalConditions,
+  );
+  const observed = (gate.conditions ?? [])
+    .map(canonicalCondition)
+    .toSorted(compareCanonicalConditions);
   if (JSON.stringify(observed) !== JSON.stringify(expected)) {
     failures.push("Keiko Banking Grade conditions drifted from the repository contract.");
   }

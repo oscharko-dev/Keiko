@@ -102,7 +102,7 @@ function memReadFileUtf8Prefix(
   }
   return new TextDecoder("utf-8", { fatal: false })
     .decode(encoded.subarray(0, Math.min(encoded.length, cap)))
-    .replace(/\uFFFD+$/u, "");
+    .replace(/\uFFFD$/u, "");
 }
 
 function memReadFileRange(

@@ -5,12 +5,91 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const binaryExtension =
-  /\.(?:7z|aiff?|avi|bin|bmp|class|dll|dmg|dylib|eot|exe|gif|gz|icns|ico|jpe?g|m4a|map|mov|mp3|mp4|obj|ogg|otf|pdf|png|so|svg|tar|tgz|tiff?|ttf|wasm|wav|webm|webp|woff2?|zip)$/iu;
-const codeExtension =
-  /\.(?:c|cc|cjs|cs|csproj|css|cts|cxx|editorconfig|example|gitattributes|gitignore|h|hh|html?|js|jsx|json|md|mjs|mts|plist|prettierignore|properties|ps1|rc|scss|sh|toml|ts|tsx|txt|webmanifest|xml|ya?ml)$/iu;
-const coverableExtension = /\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/iu;
-const nativeExtension = /\.(?:c|cc|cs|cxx|h|hh)$/iu;
+const binaryExtensions = new Set([
+  "7z",
+  "aif",
+  "aiff",
+  "avi",
+  "bin",
+  "bmp",
+  "class",
+  "dll",
+  "dmg",
+  "dylib",
+  "eot",
+  "exe",
+  "gif",
+  "gz",
+  "icns",
+  "ico",
+  "jpeg",
+  "jpg",
+  "m4a",
+  "map",
+  "mov",
+  "mp3",
+  "mp4",
+  "obj",
+  "ogg",
+  "otf",
+  "pdf",
+  "png",
+  "so",
+  "svg",
+  "tar",
+  "tgz",
+  "tif",
+  "tiff",
+  "ttf",
+  "wasm",
+  "wav",
+  "webm",
+  "webp",
+  "woff",
+  "woff2",
+  "zip",
+]);
+const codeExtensions = new Set([
+  "c",
+  "cc",
+  "cjs",
+  "cs",
+  "csproj",
+  "css",
+  "cts",
+  "cxx",
+  "editorconfig",
+  "example",
+  "gitattributes",
+  "gitignore",
+  "h",
+  "hh",
+  "htm",
+  "html",
+  "js",
+  "jsx",
+  "json",
+  "md",
+  "mjs",
+  "mts",
+  "plist",
+  "prettierignore",
+  "properties",
+  "ps1",
+  "rc",
+  "scss",
+  "sh",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "webmanifest",
+  "xml",
+  "yaml",
+  "yml",
+]);
+const coverableExtensions = new Set(["cjs", "cts", "js", "jsx", "mjs", "mts", "ts", "tsx"]);
+const nativeExtensions = new Set(["c", "cc", "cs", "cxx", "h", "hh"]);
 const generatedPath =
   /(^|\/)(?:\.claude|\.codex|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
 const nativeSupportPath = /^scripts\/native-quality(?:\/|$)/u;
@@ -25,6 +104,12 @@ const nativeSonarExclusions = Object.freeze([
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+function fileExtension(path) {
+  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot < 0 ? "" : name.slice(dot + 1);
 }
 
 function nativeEntryPath(entry) {
@@ -48,7 +133,7 @@ export function isGeneratedOrBinaryPath(input) {
     generatedPath.test(path) ||
     nativeSupportPath.test(path) ||
     path.startsWith("docs/design-system/evidence/") ||
-    binaryExtension.test(path) ||
+    binaryExtensions.has(fileExtension(path)) ||
     path.endsWith(".d.ts") ||
     /\.(?:generated|min)\.[^/]+$/u.test(path)
   );
@@ -56,7 +141,11 @@ export function isGeneratedOrBinaryPath(input) {
 
 export function isCoverableProductSource(input) {
   const path = normalizePath(input);
-  if (isTestPath(path) || isGeneratedOrBinaryPath(path) || !coverableExtension.test(path)) {
+  if (
+    isTestPath(path) ||
+    isGeneratedOrBinaryPath(path) ||
+    !coverableExtensions.has(fileExtension(path))
+  ) {
     return false;
   }
   if (path.startsWith("src/") || path.startsWith("scripts/")) return true;
@@ -67,9 +156,11 @@ export function classifyAnalysisPath(input, nativeSources = new Set()) {
   const path = normalizePath(input);
   if (nativeSources.has(path)) return "native-compensated";
   if (isTestPath(path)) return "test";
-  if (nativeExtension.test(path)) return "unclassified-native";
+  if (nativeExtensions.has(fileExtension(path))) return "unclassified-native";
   if (isGeneratedOrBinaryPath(path)) return "excluded";
-  return codeExtension.test(path) || path.endsWith("/CODEOWNERS") ? "source" : "ignored";
+  return codeExtensions.has(fileExtension(path)) || path.endsWith("/CODEOWNERS")
+    ? "source"
+    : "ignored";
 }
 
 function propertyPatterns(properties, key) {
@@ -154,7 +245,9 @@ function languageGateFailures(language, gates, path) {
 function nativeEntryFailures(entry) {
   const failures = [];
   const path = nativeEntryPath(entry);
-  if (!nativeExtension.test(path)) failures.push(`native quality entry has invalid path: ${path}`);
+  if (!nativeExtensions.has(fileExtension(path))) {
+    failures.push(`native quality entry has invalid path: ${path}`);
+  }
   if (!Array.isArray(entry.platforms) || entry.platforms.length === 0) {
     failures.push(`native quality entry has no owning platform: ${path}`);
   }
@@ -197,9 +290,11 @@ export function analysisScopeFailures({ files, nativeEntries, properties }) {
   const nativeSources = new Set(nativeEntries.map(nativeEntryPath));
   const tracked = new Set(files.map(normalizePath));
   const failures = requiredPropertyFailures(properties);
-  failures.push(...sourceTestDisjointnessFailures(properties));
-  failures.push(...nativeEntries.flatMap(nativeEntryFailures));
-  failures.push(...nativeExclusionFailures(nativeEntries, properties));
+  failures.push(
+    ...sourceTestDisjointnessFailures(properties),
+    ...nativeEntries.flatMap(nativeEntryFailures),
+    ...nativeExclusionFailures(nativeEntries, properties),
+  );
   for (const path of nativeSources) {
     if (!tracked.has(path)) failures.push(`native quality source is not tracked: ${path}`);
   }
@@ -214,7 +309,7 @@ export function analysisScopeFailures({ files, nativeEntries, properties }) {
 export function sourceEncodingFailures({ files, nativeEntries, readText }) {
   const nativeSources = new Set(nativeEntries.map(nativeEntryPath));
   return files.flatMap((path) => {
-    if (!codeExtension.test(path) || isGeneratedOrBinaryPath(path)) return [];
+    if (!codeExtensions.has(fileExtension(path)) || isGeneratedOrBinaryPath(path)) return [];
     const scope = classifyAnalysisPath(path, nativeSources);
     if (scope !== "source" && scope !== "test") return [];
     return readText(path).includes("\uFFFD")
