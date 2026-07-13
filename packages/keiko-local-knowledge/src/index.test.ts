@@ -138,6 +138,6 @@ describe("barrel surface", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<KnowledgeStoreKeyProvider>();
     pin<KnowledgeStoreKeyProviderContext>();
-    pin<KnowledgeStoreProtectionOptions>();
+    expect(pin<KnowledgeStoreProtectionOptions>()).toBeUndefined();
   });
 });

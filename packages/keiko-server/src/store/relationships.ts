@@ -1085,7 +1085,7 @@ function expandFrontier(
   state: WalkState,
 ): WalkNode[] {
   const nextFrontier: WalkNode[] = [];
-  for (const node of frontier) {
+  outer: for (const node of frontier) {
     const neighbours = expandNeighbours(
       outgoingStatement,
       incomingStatement,
@@ -1094,9 +1094,9 @@ function expandFrontier(
       direction,
     );
     for (const rel of neighbours) {
-      if (!admitRelationship(state, rel)) return nextFrontier;
-      if (!admitEndpoint(state, rel.source, nextFrontier)) return nextFrontier;
-      if (!admitEndpoint(state, rel.target, nextFrontier)) return nextFrontier;
+      if (!admitRelationship(state, rel)) break outer;
+      if (!admitEndpoint(state, rel.source, nextFrontier)) break outer;
+      if (!admitEndpoint(state, rel.target, nextFrontier)) break outer;
     }
   }
   return nextFrontier;

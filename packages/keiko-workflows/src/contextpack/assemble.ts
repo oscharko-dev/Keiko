@@ -373,9 +373,7 @@ function buildPlan(
   const plan = emptyBuildPlan(initialUsage, initialUncertainty);
   for (const candidate of ordered) {
     const outcome = processCandidate(plan, candidate, ctx);
-    if (outcome === "budget-clipped") {
-      return plan;
-    }
+    if (outcome === "budget-clipped") break;
   }
   return plan;
 }
