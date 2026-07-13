@@ -495,11 +495,11 @@ async function enforceRedirectTargetPolicy(
   response: Response,
   egress: OutboundHttpEgressConfig | undefined,
   options: { readonly resolveDns: boolean },
-): Promise<Response> {
+): Promise<URL | undefined> {
   const redirected = redirectTarget(original, response);
-  if (redirected === undefined) return response;
+  if (redirected === undefined) return undefined;
   await enforceOutboundTargetPolicy(redirected, egress, options);
-  return response;
+  return redirected;
 }
 
 // Resolves and validates the target's DNS records, returning the vetted address set so the
@@ -626,6 +626,23 @@ function openProxySocket(
   });
 }
 
+// A CONNECT response header is one status line plus a handful of headers; anything larger is a
+// protocol violation from a broken or hostile proxy. The bound doubles as a second, independent
+// exit for the accumulation loop in readConnectHeader: even if the terminator search is defective,
+// the buffer cannot grow without limit (fail closed, bounded memory).
+const MAX_CONNECT_RESPONSE_HEADER_BYTES = 16_384;
+
+export function connectResponseHeaderExceedsLimit(bufferLength: number): boolean {
+  return bufferLength > MAX_CONNECT_RESPONSE_HEADER_BYTES;
+}
+
+function connectHeaderLimitError(): OutboundHttpEgressError {
+  return new OutboundHttpEgressError(
+    "PROXY_EGRESS_FAILED",
+    "Proxy CONNECT response header exceeded the size limit.",
+  );
+}
+
 function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -642,6 +659,20 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
     const onData = (chunk: Buffer): void => {
       chunks.push(chunk);
       const buffer = Buffer.concat(chunks);
+      // Bound the accumulated buffer FIRST, before any terminator-dependent branching, so no single
+      // defect below can detach this bound from the loop (fail closed, bounded memory — the loop's
+      // independent second exit). The bound covers the whole buffer intentionally: in the HTTPS
+      // CONNECT flow the proxy sends only the response header and then the client drives the TLS
+      // handshake, so no legitimate response carries bulk bytes ahead of the "\r\n\r\n" terminator;
+      // a proxy that floods before terminating is exactly the abusive case this rejects. The 16 KiB
+      // ceiling is far above any real CONNECT header, so well-formed responses never trip it.
+      if (connectResponseHeaderExceedsLimit(buffer.length)) {
+        socket.destroy();
+        settle(() => {
+          reject(connectHeaderLimitError());
+        });
+        return;
+      }
       const headerEnd = buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) return;
       const rest = buffer.subarray(headerEnd + 4);
@@ -1029,7 +1060,8 @@ export async function gatewayFetch(
   const redirectPolicy = { resolveDns };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
-    return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    return response;
   }
   const response = await fetchDirectWithCaFallback(
     url,
@@ -1040,7 +1072,8 @@ export async function gatewayFetch(
     maxResponseBytes,
     pinnedAddresses,
   );
-  return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+  await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+  return response;
 }
 
 export async function readJsonCapped(
@@ -1054,9 +1087,14 @@ export async function readJsonCapped(
   const decoder = new TextDecoder();
   const parts: string[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // The stream's own `done` flag terminates the loop directly, so no single defect in the body
+  // can detach the loop from the source and spin it hot on an already-settled reader.
+  let done = false;
+  while (!done) {
+    const result = await reader.read();
+    done = result.done;
+    const value = result.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
@@ -1089,9 +1127,13 @@ export async function readBytesCapped(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
+  let done = false;
+  while (!done) {
+    const result = await reader.read();
+    done = result.done;
+    const value = result.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
@@ -1197,9 +1239,13 @@ export async function* readSseStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let total = 0;
-  for (;;) {
-    const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs);
-    if (done) break;
+  // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
+  let done = false;
+  while (!done) {
+    const read = await readWithIdleTimeout(reader, idleTimeoutMs);
+    done = read.done;
+    const value = read.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();

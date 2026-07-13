@@ -112,17 +112,20 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
 
   process(_inputs, outputs) {
     const channel = outputs[0][0];
-    if (channel === undefined) {
-      return true;
+    if (channel !== undefined) {
+      if (this.primed) {
+        this.drainInto(channel);
+      } else {
+        // Before the prime threshold is reached, output silence (the source node stays alive).
+        channel.fill(0);
+      }
     }
+    // Web Audio contract: return true to keep the processor node alive across quanta.
+    return true;
+  }
+
+  drainInto(channel) {
     const need = channel.length;
-
-    // Before the prime threshold is reached, output silence (the source node stays alive).
-    if (!this.primed) {
-      channel.fill(0);
-      return true;
-    }
-
     let i = 0;
     for (; i < need && this.size > 0; i += 1) {
       channel[i] = this.ring[this.head];
@@ -133,23 +136,23 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     for (; i < need; i += 1) {
       channel[i] = 0; // underrun → silence rather than a glitch
     }
-
-    if (produced > 0) {
-      this.everPlayed = true;
-      this.framesPlayed += produced;
-      this.sinceReport += produced;
-      // Report position roughly every ~50ms so the main thread has a fresh media offset.
-      if (this.sinceReport >= 1200) {
-        this.sinceReport = 0;
-        this.port.postMessage({ type: "position", frames: this.framesPlayed });
-      }
-    }
-
+    this.recordProduced(produced);
     // Natural completion: the sender marked the end and the buffer has fully drained.
     if (this.draining && this.size === 0) {
       this.finish();
     }
-    return true;
+  }
+
+  recordProduced(produced) {
+    if (produced <= 0) return;
+    this.everPlayed = true;
+    this.framesPlayed += produced;
+    this.sinceReport += produced;
+    // Report position roughly every ~50ms so the main thread has a fresh media offset.
+    if (this.sinceReport >= 1200) {
+      this.sinceReport = 0;
+      this.port.postMessage({ type: "position", frames: this.framesPlayed });
+    }
   }
 }
 

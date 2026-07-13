@@ -149,6 +149,6 @@ describe("keiko-harness public surface", () => {
     pin<ToolCallResult>();
     pin<ToolCallStartedEvent>();
     pin<ToolPort>();
-    pin<VerificationResultEvent>();
+    expect(pin<VerificationResultEvent>()).toBeUndefined();
   });
 });

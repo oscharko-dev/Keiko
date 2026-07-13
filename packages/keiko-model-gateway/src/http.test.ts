@@ -15,6 +15,7 @@ import { rootCertificates } from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetWarnedCaBundlePaths,
+  connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
   isMissingIssuerError,
@@ -75,7 +76,34 @@ zd4z7t+If2ThZ1V2mP4iHOUXyxhrjO8jck5v4ibwDkhpZqHZxXJnOlqR+p4Y/x0J
 7HO5cknmZC8MPbbwJajgLRm6+jUqvTjvOP9ZUhmet11ff/YHNctzZkE=
 -----END CERTIFICATE-----`;
 
+// Every server bound by the helpers below is tracked so the module-level afterEach can tear it
+// down even when a test body never reaches its own `finally { await close(...) }` — e.g. when a
+// mutant (mutation testing) or a vitest timeout aborts the body mid-await. Test-runner processes
+// are reused across hundreds of mutant runs; leaked listeners/sockets otherwise accumulate until
+// the CI runner exhausts memory (hermeticity contract, AGENTS.md §7/§9).
+const openServers = new Set<HttpServer | HttpsServer>();
+
+afterEach(async () => {
+  await Promise.all([...openServers].map(async (server) => close(server)));
+});
+
+// Legitimate tests open a handful of connections per server; a mutant that drives the gateway
+// into a reconnect storm would otherwise allocate a fresh socket/TLS pair per attempt until the
+// host runs out of memory. Severing every connection beyond the cap turns that storm into fast,
+// clean connection-refused failures (second bounded exit, independent of the mutated code).
+const MAX_TEST_SERVER_CONNECTIONS = 64;
+
+function capConnections(server: HttpServer | HttpsServer): void {
+  let accepted = 0;
+  server.on("connection", (socket: Socket) => {
+    accepted += 1;
+    if (accepted > MAX_TEST_SERVER_CONNECTIONS) socket.destroy();
+  });
+}
+
 async function listen(server: HttpServer | HttpsServer): Promise<number> {
+  openServers.add(server);
+  capConnections(server);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   return (server.address() as AddressInfo).port;
@@ -84,17 +112,60 @@ async function listen(server: HttpServer | HttpsServer): Promise<number> {
 // Binds without an explicit host (dual-stack `::`) so a hostname whose DNS lookup returns both
 // an IPv6 and an IPv4 loopback address (e.g. "*.localhost") can reach this server either way.
 async function listenOnAllInterfaces(server: HttpServer | HttpsServer): Promise<number> {
+  openServers.add(server);
+  capConnections(server);
   server.listen(0);
   await once(server, "listening");
   return (server.address() as AddressInfo).port;
 }
 
+// Idempotent: per-test `finally` blocks and the afterEach sweep may both close the same server.
+// closeAllConnections() severs kept-alive and mid-flight sockets so close() cannot stall behind
+// a hung request left over from an aborted test body.
 async function close(server: HttpServer | HttpsServer): Promise<void> {
+  openServers.delete(server);
+  if (!server.listening) return;
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
       if (error !== undefined) reject(error);
       else resolve();
     });
+  });
+}
+
+// Bounded relay for the CONNECT tunnels and forward proxies these tests stand up. Mutation runs
+// can drive the gateway into pathological flood behaviour; a plain `pipe()` between loopback
+// sockets then shovels gigabytes per second until the test-runner host runs out of memory.
+// Legitimate tests move a few kilobytes, so the budget is invisible on the green path and turns
+// any flood into a fast, clean teardown (hermeticity contract: bounded resources under all
+// mutations, AGENTS.md §7/§9).
+const TUNNEL_BYTE_BUDGET = 1_048_576;
+
+interface BoundedEnd {
+  destroy?: (error?: Error) => void;
+}
+
+function pipeBounded(
+  from: NodeJS.ReadableStream & BoundedEnd,
+  to: NodeJS.WritableStream & BoundedEnd,
+  budget = TUNNEL_BYTE_BUDGET,
+): void {
+  let relayed = 0;
+  from.on("data", (chunk: Buffer | string) => {
+    relayed += chunk.length;
+    if (relayed > budget) {
+      from.destroy?.();
+      to.destroy?.();
+      return;
+    }
+    to.write(chunk);
+  });
+  from.once("end", () => {
+    to.end();
+  });
+  from.once("error", () => {
+    to.destroy?.();
   });
 }
 
@@ -314,8 +385,8 @@ describe("gatewayFetch", () => {
       const upstream = netConnect(Number(portText), host, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) upstream.write(head);
-        upstream.pipe(clientSocket);
-        clientSocket.pipe(upstream);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
       });
       upstream.on("error", () => clientSocket.destroy());
     });
@@ -373,8 +444,8 @@ describe("gatewayFetch", () => {
       const upstream = netConnect(Number(portText), host, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) upstream.write(head);
-        upstream.pipe(clientSocket);
-        clientSocket.pipe(upstream);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
       });
       upstream.on("error", () => clientSocket.destroy());
     });
@@ -485,8 +556,8 @@ describe("gatewayFetch", () => {
       const upstream = netConnect(Number(portText), host, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) upstream.write(head);
-        upstream.pipe(clientSocket);
-        clientSocket.pipe(upstream);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
       });
       upstream.on("error", () => {
         clientSocket.destroy();
@@ -1192,6 +1263,108 @@ describe("proxy CONNECT response status codes", () => {
   it("CONNECT 502 → PROXY_EGRESS_FAILED", async () => {
     await expect(connectWithStatus(502)).rejects.toMatchObject({ code: "PROXY_EGRESS_FAILED" });
   });
+
+  it("assembles a CONNECT response header that arrives split across chunks", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-split-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end('{"split":true}');
+    });
+    const originPort = await listen(origin);
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        // Deliver the CONNECT response header across two writes: a sub-limit first chunk
+        // without the terminator, then the closing CRLF. The reader must keep accumulating
+        // (not trip the size bound) until the terminator arrives.
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n");
+        setTimeout(() => {
+          clientSocket.write("\r\n");
+          if (head.length > 0) upstream.write(head);
+          pipeBounded(upstream, clientSocket);
+          pipeBounded(clientSocket, upstream);
+        }, 10);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/split`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+        },
+        timeoutMs: 5_000,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ split: true });
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a CONNECT response that floods without a header terminator (bounded read)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-flood-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      // A finite 20 KiB junk blob with no "\r\n\r\n" terminator: over the 16 KiB CONNECT-header
+      // bound, so the size guard must reject — the terminator search alone would wait forever.
+      clientSocket.write("x".repeat(20_480));
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      await expect(
+        gatewayFetch("https://127.0.0.1:9999/path", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            caBundlePath,
+          },
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toMatchObject({
+        code: "PROXY_EGRESS_FAILED",
+        message: "Proxy CONNECT response header exceeded the size limit.",
+      });
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      await close(proxy);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connectResponseHeaderExceedsLimit — exact CONNECT-header bound
+// ---------------------------------------------------------------------------
+
+describe("connectResponseHeaderExceedsLimit", () => {
+  it("accepts buffers up to exactly 16384 bytes", () => {
+    expect(connectResponseHeaderExceedsLimit(64)).toBe(false);
+    expect(connectResponseHeaderExceedsLimit(16_384)).toBe(false);
+  });
+
+  it("rejects buffers beyond 16384 bytes", () => {
+    expect(connectResponseHeaderExceedsLimit(16_385)).toBe(true);
+    expect(connectResponseHeaderExceedsLimit(20_480)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1387,8 +1560,8 @@ describe("Host header via proxy (no default port)", () => {
       const upstream = netConnect(Number(portText), host, () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) upstream.write(head);
-        upstream.pipe(clientSocket);
-        clientSocket.pipe(upstream);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
       });
       upstream.on("error", () => clientSocket.destroy());
     });
@@ -1438,13 +1611,13 @@ describe("Host header via proxy (no default port)", () => {
         },
         (upRes: IncomingMessage) => {
           res.writeHead(upRes.statusCode ?? 200, upRes.headers);
-          upRes.pipe(res);
+          pipeBounded(upRes, res);
         },
       );
       upstream.on("error", () => {
         res.destroy();
       });
-      req.pipe(upstream);
+      pipeBounded(req, upstream);
     });
     const proxyPort = await listen(proxy);
     // We can't test a target on port 80 in test (privileged), so we verify that

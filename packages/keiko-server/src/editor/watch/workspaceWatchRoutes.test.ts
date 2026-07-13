@@ -125,7 +125,9 @@ async function readUntil(response: Response, needle: string): Promise<string> {
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       reject(new Error(`missing SSE frame before deadline: ${needle}`));
-    }, 5_000);
+      // Generous per-frame budget: under coverage instrumentation the SSE round-trip is much
+      // slower than an uninstrumented run, and a too-tight deadline false-REDs the coverage job.
+    }, 15_000);
   });
   try {
     return await Promise.race([
@@ -192,5 +194,7 @@ describe("workspace watch routes", () => {
       controller.abort();
       await stream.body?.cancel().catch(() => undefined);
     }
-  });
+    // Four sequential SSE round-trips; the default 15s test budget is too tight for all of them
+    // once coverage instrumentation slows each frame down, so give the whole case explicit room.
+  }, 60_000);
 });
