@@ -2,10 +2,10 @@
   "issue": 2075,
   "assets": {
     "keiko-tokens.css": {
-      "identityBytes": 20220,
-      "gzipBytes": 5147,
-      "brotliBytes": 4261,
-      "sha256": "f4a3c592cdf5e12119b1e29ce1f62223726e29c4d471cb9f5322a693ac4cf775"
+      "identityBytes": 20218,
+      "gzipBytes": 5150,
+      "brotliBytes": 4264,
+      "sha256": "94c297f8f02184811cdf7b1e856edab863f0466aaff6c608e5cd838705febffd"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
@@ -101,7 +101,7 @@
     "13-audit.png": "ce730c584d6e333bd7f67d898de3beacba77e7e0b33fbadd3fe33f2cf6f00154",
     "14-private-security-active-hold.png": "bf28ac0a408cf242b95dfbe9cbf79dab69fc467c78a16f163899bd46cf2dc5dd",
     "15-expired-hold-cleanup.png": "dbd8cb84d0c9aaa7da266652d018a59dd6670f65eb9bb2d79d517f7647b9e2d2",
-    "16-native-validation-error.png": "b0ca00951e74b171be34c1f50c912989df4b7b6df33aa5ed3785799651e28b80",
+    "16-native-validation-error.png": "3a3e35e32e7de864ad16e65aa4dd9e27bc2c98583a16c26a579edf4f24a54847",
     "17-submitting-busy.png": "4bd9a1d8764a2d32f34b34ddd789a90f36bac746ac6bb25e0fc7daee05a80942",
     "18-loading.png": "2029b6344b44393a7898ba3dfbeb43d08441058c169cee51dc22215371971c85",
     "19-filtered-empty.png": "d8ba87c1174373744fd2df50c3279b7f4f6da184f83c7009368b0b1719f4ee39",

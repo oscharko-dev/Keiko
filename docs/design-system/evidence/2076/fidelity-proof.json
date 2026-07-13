@@ -2,10 +2,10 @@
   "issue": 2076,
   "assets": {
     "keiko-tokens.css": {
-      "sha256": "f4a3c592cdf5e12119b1e29ce1f62223726e29c4d471cb9f5322a693ac4cf775",
-      "identityBytes": 20220,
-      "gzipBytes": 5147,
-      "brotliBytes": 4261
+      "sha256": "94c297f8f02184811cdf7b1e856edab863f0466aaff6c608e5cd838705febffd",
+      "identityBytes": 20218,
+      "gzipBytes": 5150,
+      "brotliBytes": 4264
     },
     "keiko-semantic-tokens.css": {
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
