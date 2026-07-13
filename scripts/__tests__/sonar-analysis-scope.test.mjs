@@ -15,6 +15,7 @@ function property(name) {
 
 describe("SonarCloud analysis scope", () => {
   it("classifies repository tests separately from production source", () => {
+    expect(property("sonar.sources")).toBe(".");
     expect(property("sonar.tests")).toBe(".");
     expect(property("sonar.test.inclusions")?.split(",")).toEqual([
       "**/*.test.ts",
