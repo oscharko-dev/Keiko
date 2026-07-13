@@ -4,12 +4,14 @@ import {
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
+  parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
   validateCodingWorkbenchRuntimeSnapshot,
+  validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSseEvent,
 } from "./index.js";
 
@@ -132,6 +134,42 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("accepts only a content-free requested mode for runtime readiness", () => {
+    const request = { requestedMode: "supervised-coding" };
+    expect(parseCodingWorkbenchRuntimeReadinessRequest(request)).toEqual({
+      ok: true,
+      value: request,
+    });
+    for (const field of ["endpoint", "workspaceRoot", "authority", "profileId"]) {
+      expect(
+        parseCodingWorkbenchRuntimeReadinessRequest({ ...request, [field]: "forged" }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("validates server-owned readiness as the fail-closed effective mode projection", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+    };
+    expect(validateCodingWorkbenchRuntimeReadiness(readiness)).toEqual({
+      ok: true,
+      value: readiness,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        ...readiness,
+        effectiveMode: "supervised-coding",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeAvailable: "yes" }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("projects a content-free runtime snapshot with no authority details", () => {
     const snapshot = {
       schemaVersion: "1",
@@ -193,6 +231,28 @@ describe("Coding Workbench runtime API contracts", () => {
         pendingPermission: { ...pendingPermission, prompt: "secret" },
       }),
     ).toMatchObject({ ok: false });
+  });
+
+  it("projects recovery acknowledgement only as durable recovery-required server truth", () => {
+    const recovery = {
+      schemaVersion: "1",
+      state: "recovery-required",
+      revision: 4,
+      updatedAt: AT,
+      runId: "run-1",
+      failureCode: "recovery-required",
+      recoveryAcknowledged: true,
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(recovery)).toEqual({
+      ok: true,
+      value: recovery,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...recovery, recoveryAcknowledged: false }),
+    ).toMatchObject({ ok: false });
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...recovery, state: "running" })).toMatchObject(
+      { ok: false },
+    );
   });
 
   it("bounds SSE projections and permits no model, process, or workspace content", () => {

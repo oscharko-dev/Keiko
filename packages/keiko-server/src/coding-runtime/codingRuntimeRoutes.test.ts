@@ -12,6 +12,7 @@ import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeEvents,
   handleCreateCodingRuntimeRun,
+  handleCodingRuntimeReadiness,
   openCodingRuntimeSse,
 } from "./codingRuntimeRoutes.js";
 
@@ -26,7 +27,11 @@ const snapshot: CodingWorkbenchRuntimeSnapshot = {
   modelSource: "keiko-model-gateway",
 };
 
-function context(body = "{}", params: Record<string, string> = {}): RouteContext {
+function context(
+  body = "{}",
+  params: Record<string, string> = {},
+  path = "/api/coding-workbench/runtime/runs",
+): RouteContext {
   const req = new PassThrough() as unknown as RouteContext["req"];
   req.headers = {};
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
@@ -34,7 +39,7 @@ function context(body = "{}", params: Record<string, string> = {}): RouteContext
     req,
     res: new FakeResponse() as unknown as RouteContext["res"],
     params,
-    url: new URL("http://localhost/api/coding-workbench/runtime/runs"),
+    url: new URL(`http://localhost${path}`),
   };
 }
 
@@ -107,6 +112,7 @@ describe("coding runtime routes", () => {
     expect(CODING_RUNTIME_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`)).toEqual(
       [
         "POST /api/coding-workbench/runtime/runs",
+        "GET /api/coding-workbench/runtime/readiness",
         "GET /api/coding-workbench/runtime/status",
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
@@ -122,6 +128,71 @@ describe("coding runtime routes", () => {
       "method-not-allowed",
     );
     expect(matchRoute("GET", "/api/coding-workbench/runtime/nope")).toBeUndefined();
+  });
+
+  it("projects only server-owned readiness facts and computes the effective mode fail-closed", () => {
+    const result = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery"),
+      runtime({
+        autonomousDeliveryDeploymentCeiling: "supervised-coding",
+        codingRuntimeHostQualified: true,
+      }),
+    );
+
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        schemaVersion: "1",
+        requestedMode: "autonomous-delivery",
+        deploymentCeiling: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        runtimeAvailable: true,
+      },
+    });
+    const serialized = JSON.stringify(result.body);
+    for (const forbidden of ["workspace", "authority", "endpoint", "credential", "path"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("keeps readiness independently available when the runtime is absent and rejects malformed modes", () => {
+    const unavailable = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist"),
+      runtime({ codingRuntimeOrchestrator: undefined, codingRuntimeEventHub: undefined }),
+    );
+    expect(unavailable).toMatchObject({
+      status: 200,
+      body: {
+        requestedMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: false,
+      },
+    });
+
+    for (const path of [
+      "/api/coding-workbench/runtime/readiness",
+      "/api/coding-workbench/runtime/readiness?requestedMode=nope",
+      "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist&extra=forged",
+      "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist&requestedMode=supervised-coding",
+    ]) {
+      expect(handleCodingRuntimeReadiness(context("", {}, path), runtime())).toMatchObject({
+        status: 400,
+        body: { error: { code: "CODING_RUNTIME_INVALID_INTENT" } },
+      });
+    }
+  });
+
+  it("reports the runtime unavailable when lifecycle collaborators exist without a qualified host", () => {
+    const result = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist"),
+      runtime(),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { runtimeAvailable: false },
+    });
   });
 
   it("parses a bounded JSON body and passes it only to the orchestrator", async () => {

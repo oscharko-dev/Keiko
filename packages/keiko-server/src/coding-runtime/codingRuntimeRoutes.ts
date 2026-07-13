@@ -2,9 +2,12 @@
 // POST CSRF and JSON content-type enforcement is centralized in server.ts.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type {
-  CodingWorkbenchRuntimeFailureCode,
-  CodingWorkbenchRuntimeSseEvent,
+import {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  parseCodingWorkbenchRuntimeReadinessRequest,
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -158,6 +161,32 @@ export function handleCodingRuntimeStatus(_ctx: RouteContext, deps: UiHandlerDep
   return isRouteResult(required) ? required : { status: 200, body: required.orchestrator.status() };
 }
 
+export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const values = ctx.url.searchParams.getAll("requestedMode");
+  const parsed = parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: values[0] });
+  if (
+    values.length !== 1 ||
+    [...ctx.url.searchParams.keys()].some((key) => key !== "requestedMode")
+  ) {
+    return failureResult("invalid-intent");
+  }
+  if (!parsed.ok) return failureResult("invalid-intent");
+  const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  return {
+    status: 200,
+    body: {
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      requestedMode: parsed.value.requestedMode,
+      deploymentCeiling,
+      effectiveMode: resolveEffectiveCodingWorkbenchMode(
+        parsed.value.requestedMode,
+        deploymentCeiling,
+      ),
+      runtimeAvailable: deps.codingRuntimeHostQualified === true,
+    },
+  };
+}
+
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const required = requireRuntime(deps);
   if (isRouteResult(required)) return required;
@@ -269,6 +298,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs",
     handler: handleCreateCodingRuntimeRun,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/readiness",
+    handler: handleCodingRuntimeReadiness,
   },
   {
     method: "GET",

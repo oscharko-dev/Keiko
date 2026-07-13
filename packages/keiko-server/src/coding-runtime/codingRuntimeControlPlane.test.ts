@@ -3,7 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 
 import { runMigrations } from "../store/schema.js";
-import { createCodingRuntimeControlPlane } from "./codingRuntimeControlPlane.js";
+import {
+  createCodingRuntimeControlPlane,
+  type CodingRuntimeHost,
+} from "./codingRuntimeControlPlane.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 
@@ -35,6 +38,7 @@ describe("coding runtime control plane", () => {
     });
 
     expect(control.orchestrator.status().state).toBe("idle");
+    expect(control.runtimeHostQualified).toBe(false);
     await expect(
       control.orchestrator.start({
         requestId: "request-1",
@@ -43,6 +47,85 @@ describe("coding runtime control plane", () => {
       }),
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
     expect(snapshots.create).not.toHaveBeenCalled();
+  });
+
+  it("marks the control plane qualified only when a runtime host is explicitly supplied", () => {
+    const runtimeHost: CodingRuntimeHost = {
+      createManager: () => ({
+        start: () => ({ ok: false, failureCode: "runtime-unqualified", retryable: false }),
+        issueApproval: () => ({
+          ok: false,
+          failureCode: "runtime-stopped",
+          retryable: false,
+        }),
+        stop: () =>
+          Promise.resolve({
+            ok: false,
+            failureCode: "runtime-run-mismatch",
+            retryable: false,
+          }),
+        takeover: () =>
+          Promise.resolve({
+            ok: false,
+            failureCode: "runtime-run-mismatch",
+            retryable: false,
+          }),
+        reconcile: () =>
+          Promise.resolve({
+            ok: false,
+            failureCode: "runtime-run-mismatch",
+            retryable: false,
+          }),
+        health: () => ({ status: "stopped" }),
+      }),
+      launchResolver: {
+        resolve: () => ({
+          taskRef: "task-1",
+          treeBindingId: "tree-1",
+          adapterKind: "codex-cli",
+          runtimeSource: "codex-cli-adapter",
+          modelSource: "keiko-model-gateway",
+          effectiveMode: "supervised-coding",
+          executablePath: "/managed/runtime",
+          managedRoot: "/managed",
+          gatewayUrl: "http://127.0.0.1:4317",
+          modelProfileId: "qualified-profile",
+          args: [],
+          inheritedEnvAllowlist: [],
+          shutdownTimeoutMs: 1_000,
+          startTimeoutMs: 1_000,
+        }),
+      },
+      approvalAuthority: {
+        issue: () => ({
+          ok: false,
+          failureCode: "runtime-stopped",
+          retryable: false,
+        }),
+      },
+      cancellationRegistry: { signalFor: () => undefined },
+    };
+    const control = createCodingRuntimeControlPlane({
+      snapshots: {
+        create: vi.fn(),
+        transition: vi.fn(),
+        get: vi.fn(),
+        listRecentActive: vi.fn(() => []),
+        listAll: vi.fn(() => []),
+        markNonterminalRecoveryRequired: vi.fn(() => []),
+        acknowledgeRecovery: vi.fn(),
+        releaseRecoveryForRetry: vi.fn(),
+        delete: vi.fn(),
+        listPrunableSettled: vi.fn(() => []),
+        deletePruned: vi.fn(),
+      },
+      evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+
+    expect(control.runtimeHostQualified).toBe(true);
   });
 
   it("reconciles a durable active row to one content-free recovery manifest at bootstrap", () => {

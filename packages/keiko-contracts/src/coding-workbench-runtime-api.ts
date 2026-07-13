@@ -1,8 +1,8 @@
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
-  CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
+  resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchMode,
   type CodingWorkbenchPermissionRequest,
@@ -11,6 +11,17 @@ import {
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
 import { validateCodingWorkbenchPermissionRequest } from "./coding-workbench-validation.js";
+import {
+  exactKeys,
+  invalid,
+  isOneOf,
+  isRecord,
+  result,
+  sseEventKeys,
+  validateSafeId,
+  validateSseEventFields,
+  validateStrictUtcInstant,
+} from "./coding-workbench-runtime-api-validation.js";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
@@ -27,6 +38,19 @@ export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRunti
 
 export const CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS = 128;
 export const CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS = 128;
+
+export interface CodingWorkbenchRuntimeReadinessRequest {
+  readonly requestedMode: CodingWorkbenchMode;
+}
+
+/** Content-free server authority and runtime-composition projection used before Start is enabled. */
+export interface CodingWorkbenchRuntimeReadiness {
+  readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly runtimeAvailable: boolean;
+}
 
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
@@ -96,6 +120,8 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /** Present only when durable server truth records acknowledgement for a recovery-required run. */
+  readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
 }
@@ -167,6 +193,17 @@ export function parseCodingWorkbenchRuntimeStartRequest(
 
 export const parseCodingWorkbenchRuntimeRetryRequest = parseCodingWorkbenchRuntimeStartRequest;
 
+export function parseCodingWorkbenchRuntimeReadinessRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadinessRequest> {
+  if (!isRecord(value)) return invalid("runtime readiness request must be an object");
+  const errors = exactKeys(value, ["requestedMode"], "runtimeReadinessRequest");
+  if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
+    errors.push("requestedMode is invalid");
+  }
+  return result(value, errors);
+}
+
 export function parseCodingWorkbenchRuntimeStopRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStopRequest> {
@@ -224,6 +261,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "runtimeSource",
       "modelSource",
       "failureCode",
+      "recoveryAcknowledged",
       "pendingPermission",
     ],
     "runtimeSnapshot",
@@ -234,52 +272,45 @@ export function validateCodingWorkbenchRuntimeSnapshot(
 
 export const validateCodingWorkbenchRuntimeStatus = validateCodingWorkbenchRuntimeSnapshot;
 
+export function validateCodingWorkbenchRuntimeReadiness(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadiness> {
+  if (!isRecord(value)) return invalid("runtime readiness must be an object");
+  const errors = exactKeys(
+    value,
+    ["schemaVersion", "requestedMode", "deploymentCeiling", "effectiveMode", "runtimeAvailable"],
+    "runtimeReadiness",
+  );
+  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
+    errors.push("schemaVersion is invalid");
+  }
+  for (const field of ["requestedMode", "deploymentCeiling", "effectiveMode"] as const) {
+    if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
+  }
+  if (
+    isOneOf(value.requestedMode, CODING_WORKBENCH_MODES) &&
+    isOneOf(value.deploymentCeiling, CODING_WORKBENCH_MODES) &&
+    value.effectiveMode !==
+      resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling)
+  ) {
+    errors.push("effectiveMode does not match requestedMode and deploymentCeiling");
+  }
+  if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
+  return result(value, errors);
+}
+
 export function validateCodingWorkbenchRuntimeSseEvent(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSseEvent> {
   if (!isRecord(value)) return invalid("runtime SSE event must be an object");
   const errors = exactKeys(value, sseEventKeys(value.kind), "runtimeSseEvent");
-  validateSseEventFields(value, errors);
+  validateSseEventFields(
+    value,
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+    CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
+  );
   return result(value, errors);
-}
-
-function sseEventKeys(kind: unknown): readonly string[] {
-  const common = [
-    "schemaVersion",
-    "cursor",
-    "sequence",
-    "occurredAt",
-    "kind",
-    "runId",
-    "state",
-    "revision",
-    "failureCode",
-  ];
-  return kind === "runtime-event" ? [...common, "eventKind"] : common;
-}
-
-function validateSseEventFields(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  validateSafeId(value.cursor, "cursor", errors);
-  if (!Number.isSafeInteger(value.sequence) || Number(value.sequence) < 0) {
-    errors.push("sequence must be a non-negative safe integer");
-  }
-  validateStrictUtcInstant(value.occurredAt, "occurredAt", errors);
-  if (!isOneOf(value.kind, CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS))
-    errors.push("kind is invalid");
-  validateSafeId(value.runId, "runId", errors);
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0) {
-    errors.push("revision must be a non-negative safe integer");
-  }
-  if (value.kind === "runtime-event") {
-    if (!isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) {
-      errors.push("eventKind is invalid");
-    }
-  }
-  validateFailureCode(value.failureCode, errors);
 }
 
 function parseRequestIdOnly<T>(value: unknown, path: string): CodingWorkbenchValidationResult<T> {
@@ -300,11 +331,22 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
   validateOptionalSnapshotFields(value, errors);
   validateFailureCode(value.failureCode, errors);
+  validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
 }
 
+function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {
+  if (value.recoveryAcknowledged === undefined) return;
+  if (value.recoveryAcknowledged !== true) errors.push("recoveryAcknowledged must be true");
+  if (value.state !== "recovery-required") {
+    errors.push("recoveryAcknowledged is only allowed when state is recovery-required");
+  }
+}
+
 function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: string[]): void {
-  if (value.runId !== undefined) validateSafeId(value.runId, "runId", errors);
+  if (value.runId !== undefined) {
+    validateSafeId(value.runId, "runId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
+  }
   validateOptionalEnum(value.requestedMode, CODING_WORKBENCH_MODES, "requestedMode", errors);
   validateOptionalEnum(
     value.runtimeSource,
@@ -349,57 +391,5 @@ function validateFailureCode(value: unknown, errors: string[]): void {
 }
 
 function validateRequestId(value: unknown, errors: string[]): void {
-  validateSafeId(value, "requestId", errors);
-}
-
-function validateSafeId(value: unknown, path: string, errors: string[]): void {
-  const safeId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-  if (
-    typeof value !== "string" ||
-    value.length > CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS ||
-    !safeId.test(value)
-  ) {
-    errors.push(`${path} must be a bounded safe identifier`);
-  }
-}
-
-function validateStrictUtcInstant(value: unknown, path: string, errors: string[]): void {
-  const pattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  const normalized =
-    typeof value === "string" && !value.includes(".") ? `${value.slice(0, -1)}.000Z` : value;
-  if (
-    typeof value !== "string" ||
-    !pattern.test(value) ||
-    Number.isNaN(parsed) ||
-    new Date(parsed).toISOString() !== normalized
-  ) {
-    errors.push(`${path} must be a strict UTC instant`);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  return Object.keys(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
-}
-
-function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
-  return errors.length === 0 ? { ok: true, value: value as T } : { ok: false, errors };
-}
-
-function invalid<T>(error: string): CodingWorkbenchValidationResult<T> {
-  return { ok: false, errors: [error] };
+  validateSafeId(value, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
 }
