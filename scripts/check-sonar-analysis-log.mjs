@@ -29,7 +29,8 @@ export function sonarLogFailures(contents) {
 
 function option(argv, name) {
   const index = argv.indexOf(name);
-  return index === -1 ? undefined : argv[index + 1];
+  const value = index === -1 ? undefined : argv[index + 1];
+  return value === undefined || value.startsWith("--") ? undefined : value;
 }
 
 export function runSonarLogCheck(input = {}) {

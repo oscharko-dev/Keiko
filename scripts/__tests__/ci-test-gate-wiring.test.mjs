@@ -14,6 +14,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const windowsNativeQuality = readFileSync(
+  resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
+  "utf8",
+);
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
 const uiManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
@@ -107,6 +111,13 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps Keiko native warnings strict while treating MSVC SDK headers as external", () => {
+    expect(windowsNativeQuality).toContain('"/nologo", "/std:c17", "/W4", "/WX", "/analyze"');
+    expect(windowsNativeQuality).toContain('"/external:env:INCLUDE", "/external:W0"');
+    expect(windowsNativeQuality).toContain("$env:CAExcludePath = $env:INCLUDE");
+    expect(windowsNativeQuality).toContain("MSVC INCLUDE environment is required");
+  });
+
   it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {
     const runtimeWorkflows = [
       ci,

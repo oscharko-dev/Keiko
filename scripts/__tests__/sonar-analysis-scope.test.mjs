@@ -12,6 +12,7 @@ import {
   isTestPath,
   readNativeScope,
   runAnalysisScopeCheck,
+  systemGitExecutable,
 } from "../sonar-analysis-scope.mjs";
 
 const scriptPath = resolve(import.meta.dirname, "..", "sonar-analysis-scope.mjs");
@@ -77,6 +78,12 @@ describe("Sonar analysis scope", () => {
     );
     expect(coverageDisposition("docs/qa/gate.md", nativeSources)).toBe("static-analysis");
     expect(coverageDisposition("tests/gate.test.ts", nativeSources)).toBeUndefined();
+  });
+
+  it("uses an absolute system Git path on POSIX and the platform executable on Windows", () => {
+    expect(systemGitExecutable("darwin")).toBe("/usr/bin/git");
+    expect(systemGitExecutable("linux")).toBe("/usr/bin/git");
+    expect(systemGitExecutable("win32")).toBe("git.exe");
   });
 
   it("fails on missing properties, missing native files, and unclassified native sources", () => {

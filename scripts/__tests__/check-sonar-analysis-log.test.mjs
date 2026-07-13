@@ -127,7 +127,8 @@ describe("Sonar scanner warning gate", () => {
   it("adapts an absent option and Error failures", () => {
     const runs = [];
     executeSonarLogCli({ argv: [], run: (input) => runs.push(input) });
-    expect(runs).toEqual([{ path: undefined }]);
+    executeSonarLogCli({ argv: ["--log", "--verbose"], run: (input) => runs.push(input) });
+    expect(runs).toEqual([{ path: undefined }, { path: undefined }]);
     const errors = [];
     executeSonarLogCli({
       argv: [],

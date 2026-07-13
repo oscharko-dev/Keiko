@@ -71,7 +71,7 @@ describe("LCOV source mapping", () => {
     });
     expect(calls).toEqual([
       [
-        "git",
+        "/usr/bin/git",
         ["diff", "--name-status", "--diff-filter=ACMR", "base...head"],
         { cwd: "/repo", encoding: "utf8" },
       ],

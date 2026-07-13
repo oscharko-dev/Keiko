@@ -93,6 +93,10 @@ export function coverageDisposition(input, nativeSources = new Set()) {
   return "static-analysis";
 }
 
+export function systemGitExecutable(platform = process.platform) {
+  return platform === "win32" ? "git.exe" : "/usr/bin/git";
+}
+
 export function readNativeScope(root, read = readFileSync) {
   const path = resolve(root, "scripts/native-quality-scope.json");
   const payload = JSON.parse(read(path, "utf8"));
@@ -191,10 +195,14 @@ export function analysisScopeFailures({ files, nativeEntries, properties }) {
 }
 
 function trackedFiles(root, execute = execFileSync) {
-  return execute("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-    cwd: root,
-    encoding: "utf8",
-  })
+  return execute(
+    systemGitExecutable(),
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    {
+      cwd: root,
+      encoding: "utf8",
+    },
+  )
     .split("\0")
     .filter(Boolean);
 }

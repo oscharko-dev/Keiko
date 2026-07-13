@@ -5,7 +5,11 @@ import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
-import { isCoverableProductSource, runAnalysisScopeCheck } from "./sonar-analysis-scope.mjs";
+import {
+  isCoverableProductSource,
+  runAnalysisScopeCheck,
+  systemGitExecutable,
+} from "./sonar-analysis-scope.mjs";
 
 const defaultReports = [
   "coverage/packages/lcov.info",
@@ -53,10 +57,10 @@ export function runLcovSourceMapping(input) {
   const execute = input.execute ?? execFileSync;
   const read = input.read ?? readFileSync;
   const root = input.root ?? process.cwd();
-  const scope = (input.verifyScope ?? runAnalysisScopeCheck)({ root });
+  const scope = (input.verifyScope ?? runAnalysisScopeCheck)({ log: () => undefined, root });
   const changed = parseChangedFiles(
     execute(
-      "git",
+      systemGitExecutable(),
       ["diff", "--name-status", "--diff-filter=ACMR", `${input.base}...${input.head}`],
       { encoding: "utf8", cwd: root },
     ),

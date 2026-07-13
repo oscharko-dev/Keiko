@@ -6,17 +6,25 @@ $scratch = Join-Path $env:RUNNER_TEMP ("keiko-native-quality-" + [Guid]::NewGuid
 New-Item -ItemType Directory -Path $scratch | Out-Null
 
 try {
+  if ([string]::IsNullOrWhiteSpace($env:INCLUDE)) {
+    throw "MSVC INCLUDE environment is required"
+  }
+  $env:CAExcludePath = $env:INCLUDE
+  $nativeFlags = @(
+    "/nologo", "/std:c17", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0"
+  )
+
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
   $launcherObject = Join-Path $scratch "keiko-launcher.obj"
-  & cl.exe /nologo /std:c17 /W4 /WX /analyze '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
     "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher
   if ($LASTEXITCODE -ne 0) { throw "MSVC native quality analysis failed" }
 
   $launcherTest = Join-Path $root "native/portable-launcher/keiko-portable-launcher.windows.test.c"
   $launcherTestOut = Join-Path $scratch "keiko-launcher-test.exe"
   $launcherTestObject = Join-Path $scratch "keiko-launcher-test.obj"
-  & cl.exe /nologo /std:c17 /W4 /WX /analyze '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
     "/Fo:$launcherTestObject" "/Fe:$launcherTestOut" $launcherTest
   if ($LASTEXITCODE -ne 0) { throw "MSVC launcher behavior build failed" }
   & $launcherTestOut
