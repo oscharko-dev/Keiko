@@ -206,7 +206,7 @@ function splitToWindowChunks(line: string): readonly string[] {
   let offset = 0;
   while (offset < encoded.length) {
     const end = Math.min(offset + MAX_DOCUMENT_WINDOW_BYTES, encoded.length);
-    const chunk = decoder.decode(encoded.subarray(offset, end)).replace(/�+$/u, "");
+    const chunk = decoder.decode(encoded.subarray(offset, end)).replace(/\uFFFD+$/u, "");
     const consumed = utf8ByteLength(chunk) || end - offset;
     chunks.push(chunk);
     offset += consumed;

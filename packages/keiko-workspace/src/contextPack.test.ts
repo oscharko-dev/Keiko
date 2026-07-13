@@ -114,7 +114,7 @@ describe("buildContextPack", () => {
     const entry = result.selected[0];
     expect(entry).toBeDefined();
     expect(entry?.excerptBytes).toBeLessThanOrEqual(55);
-    expect(entry?.excerpt.includes("�")).toBe(false);
+    expect(entry?.excerpt.includes("\uFFFD")).toBe(false);
     expect(entry?.truncated).toBe(true);
     expect(result.usedBytes).toBeLessThanOrEqual(55);
   });

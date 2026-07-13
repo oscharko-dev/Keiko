@@ -6,6 +6,12 @@
 #undef wmain
 
 int wmain(void) {
+  keiko_launcher_buffers *buffers = allocate_launcher_buffers();
+  assert(buffers != NULL);
+  assert(sizeof(buffers->root) / sizeof(buffers->root[0]) == (size_t)KEIKO_PATH_CAP);
+  assert(sizeof(buffers->command) / sizeof(buffers->command[0]) == (size_t)KEIKO_COMMAND_CAP);
+  free_launcher_buffers(buffers);
+
   wchar_t path[64] = L"C:\\Keiko\\runtime\\node.exe";
   assert(dirname_in_place(path) == 1);
   assert(wcscmp(path, L"C:\\Keiko\\runtime") == 0);

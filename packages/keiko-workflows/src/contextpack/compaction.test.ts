@@ -72,7 +72,7 @@ describe("compactExcerpt", () => {
     });
     expect(result.excerpt.contentBytes).toBeLessThanOrEqual(7);
     expect(result.excerpt.contentBytes % 3).toBe(0);
-    expect(result.excerpt.content.includes("�")).toBe(false);
+    expect(result.excerpt.content.includes("\uFFFD")).toBe(false);
     expect(result.truncated).toBe(true);
   });
 

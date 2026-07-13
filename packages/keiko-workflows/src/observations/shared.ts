@@ -59,7 +59,7 @@ export function boundExcerpt(text: string, maxBytes: number): string {
     return redacted;
   }
   const buffer = encoded.subarray(0, maxBytes);
-  return new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/�+$/u, "");
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/\uFFFD+$/u, "");
 }
 
 // UTF-8 byte length of a string (the bytes field on a ShapedStreamExcerpt).

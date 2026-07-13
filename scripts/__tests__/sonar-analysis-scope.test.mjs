@@ -12,6 +12,7 @@ import {
   isTestPath,
   readNativeScope,
   runAnalysisScopeCheck,
+  sourceEncodingFailures,
   systemGitExecutable,
 } from "../sonar-analysis-scope.mjs";
 
@@ -37,9 +38,20 @@ const validProperties = [
   "sonar.tests=.",
   "sonar.sourceEncoding=UTF-8",
   "sonar.test.inclusions=tests/**",
-  "sonar.test.exclusions=native/portable-launcher/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
-  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs",
+  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
+  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
 ].join("\n");
+
+function removePropertyPattern(properties, key, pattern) {
+  return properties
+    .split("\n")
+    .map((line) => {
+      if (!line.startsWith(`${key}=`)) return line;
+      const values = line.slice(key.length + 1).split(",");
+      return `${key}=${values.filter((value) => value !== pattern).join(",")}`;
+    })
+    .join("\n");
+}
 
 describe("Sonar analysis scope", () => {
   it("classifies tests, generated artifacts, native sources, and product sources disjointly", () => {
@@ -50,9 +62,13 @@ describe("Sonar analysis scope", () => {
     expect(isGeneratedOrBinaryPath("docs/design-system/evidence/run/capture.mjs")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.png")).toBe(true);
     expect(isGeneratedOrBinaryPath("packages/ui/public/icon.svg")).toBe(true);
+    expect(isGeneratedOrBinaryPath("scripts/native-quality/Keiko.NativeQuality.csproj")).toBe(true);
     expect(classifyAnalysisPath("native/launcher.c", nativeSources)).toBe("native-compensated");
     expect(classifyAnalysisPath("native/new.c", nativeSources)).toBe("unclassified-native");
     expect(classifyAnalysisPath("scripts/__tests__/fixture.cs", nativeSources)).toBe("test");
+    expect(
+      classifyAnalysisPath("scripts/native-quality/Keiko.NativeQuality.csproj", nativeSources),
+    ).toBe("excluded");
     expect(classifyAnalysisPath("coverage/report.json", nativeSources)).toBe("excluded");
     expect(classifyAnalysisPath("packages/a/src/a.ts", nativeSources)).toBe("source");
     expect(classifyAnalysisPath(".dependency-cruiser.cjs", nativeSources)).toBe("source");
@@ -78,6 +94,18 @@ describe("Sonar analysis scope", () => {
     );
     expect(coverageDisposition("docs/qa/gate.md", nativeSources)).toBe("static-analysis");
     expect(coverageDisposition("tests/gate.test.ts", nativeSources)).toBeUndefined();
+  });
+
+  it("rejects replacement characters in analyzable text without reading excluded artifacts", () => {
+    const readText = vi.fn((path) => (path === "src/broken.ts" ? 'const value = "\uFFFD";' : ""));
+    expect(
+      sourceEncodingFailures({
+        files: ["src/broken.ts", "coverage/report.json"],
+        nativeEntries,
+        readText,
+      }),
+    ).toEqual(["analyzable text contains a Unicode replacement character: src/broken.ts"]);
+    expect(readText).toHaveBeenCalledTimes(1);
   });
 
   it("uses an absolute system Git path on POSIX and the platform executable on Windows", () => {
@@ -145,6 +173,30 @@ describe("Sonar analysis scope", () => {
       ),
     });
     expect(failures).toContain("Sonar test inclusion overlaps source scope: **/__tests__/**");
+  });
+
+  it("fails closed when either Sonar lane can analyze a native language", () => {
+    const withoutSourceC = removePropertyPattern(validProperties, "sonar.exclusions", "**/*.c");
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: withoutSourceC,
+      }),
+    ).toContain("sonar.exclusions is missing native exclusion **/*.c");
+
+    const withoutTestCSharp = removePropertyPattern(
+      validProperties,
+      "sonar.test.exclusions",
+      "**/*.cs",
+    );
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: withoutTestCSharp,
+      }),
+    ).toContain("sonar.test.exclusions is missing native exclusion **/*.cs");
   });
 
   it("fails on unsupported native manifest languages and malformed entry fields", () => {

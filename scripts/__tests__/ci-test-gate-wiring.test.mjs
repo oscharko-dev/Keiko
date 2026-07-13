@@ -18,6 +18,10 @@ const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
 );
+const windowsLauncher = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
+  "utf8",
+);
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
 const uiManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
@@ -116,6 +120,13 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsNativeQuality).toContain('"/external:env:INCLUDE", "/external:W0"');
     expect(windowsNativeQuality).toContain("$env:CAExcludePath = $env:INCLUDE");
     expect(windowsNativeQuality).toContain("MSVC INCLUDE environment is required");
+  });
+
+  it("keeps the Windows launcher path and command buffers off the process stack", () => {
+    expect(windowsLauncher).toContain("HeapAlloc(heap, HEAP_ZERO_MEMORY");
+    expect(windowsLauncher).toContain("free_launcher_buffers(buffers)");
+    expect(windowsLauncher).not.toContain("wchar_t root[32768]");
+    expect(windowsLauncher).not.toContain("wchar_t command[98304]");
   });
 
   it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {

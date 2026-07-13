@@ -13,6 +13,15 @@ const coverableExtension = /\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/iu;
 const nativeExtension = /\.(?:c|cc|cs|cxx|h|hh)$/iu;
 const generatedPath =
   /(^|\/)(?:\.claude|\.codex|\.next|\.portable-runtime|coverage|dist|node_modules|out)(\/|$)/u;
+const nativeSupportPath = /^scripts\/native-quality(?:\/|$)/u;
+const nativeSonarExclusions = Object.freeze([
+  "**/*.c",
+  "**/*.cc",
+  "**/*.cxx",
+  "**/*.h",
+  "**/*.hh",
+  "**/*.cs",
+]);
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//u, "");
@@ -37,6 +46,7 @@ export function isGeneratedOrBinaryPath(input) {
   const path = normalizePath(input);
   return (
     generatedPath.test(path) ||
+    nativeSupportPath.test(path) ||
     path.startsWith("docs/design-system/evidence/") ||
     binaryExtension.test(path) ||
     path.endsWith(".d.ts") ||
@@ -159,13 +169,20 @@ function requiredPropertyFailures(properties) {
     "sonar.tests=.",
     "sonar.sourceEncoding=UTF-8",
     "sonar.test.inclusions=",
-    "sonar.test.exclusions=native/portable-launcher/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
+    "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
     "native/portable-launcher/**",
     "scripts/windows-portable-rfc3161.cs",
   ];
-  return required
+  const failures = required
     .filter((entry) => !properties.includes(entry))
     .map((entry) => `sonar-project.properties is missing ${entry}`);
+  for (const key of ["sonar.exclusions", "sonar.test.exclusions"]) {
+    const patterns = new Set(propertyPatterns(properties, key));
+    for (const pattern of nativeSonarExclusions) {
+      if (!patterns.has(pattern)) failures.push(`${key} is missing native exclusion ${pattern}`);
+    }
+  }
+  return failures;
 }
 
 function sourceTestDisjointnessFailures(properties) {
@@ -192,6 +209,18 @@ export function analysisScopeFailures({ files, nativeEntries, properties }) {
     }
   }
   return failures;
+}
+
+export function sourceEncodingFailures({ files, nativeEntries, readText }) {
+  const nativeSources = new Set(nativeEntries.map(nativeEntryPath));
+  return files.flatMap((path) => {
+    if (!codeExtension.test(path) || isGeneratedOrBinaryPath(path)) return [];
+    const scope = classifyAnalysisPath(path, nativeSources);
+    if (scope !== "source" && scope !== "test") return [];
+    return readText(path).includes("\uFFFD")
+      ? [`analyzable text contains a Unicode replacement character: ${normalizePath(path)}`]
+      : [];
+  });
 }
 
 function trackedFiles(root, execute = execFileSync) {
@@ -234,8 +263,12 @@ function scopeReceipt(files, nativeEntries) {
 }
 
 export function runAnalysisScopeCheck(input = {}) {
-  const { files, nativeEntries, properties } = resolveScopeInputs(input);
+  const { files, nativeEntries, properties, root } = resolveScopeInputs(input);
   const failures = analysisScopeFailures({ files, nativeEntries, properties });
+  if (input.files === undefined || input.readText !== undefined) {
+    const readText = input.readText ?? ((path) => readFileSync(resolve(root, path), "utf8"));
+    failures.push(...sourceEncodingFailures({ files, nativeEntries, readText }));
+  }
   if (failures.length > 0) throw new Error(failures.join("\n"));
   (input.log ?? console.log)(scopeReceipt(files, nativeEntries));
   return { failures, files, nativeEntries };
