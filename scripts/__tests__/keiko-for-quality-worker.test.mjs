@@ -398,13 +398,8 @@ describe("Keiko for Quality worker trust boundary", () => {
 
   it("ignores only comments created through this exact app", () => {
     const env = { GITHUB_APP_ID: "999" };
-    expect(
-      isOwnCommentEvent(
-        "issue_comment",
-        { comment: { performed_via_github_app: { id: 999 } } },
-        env,
-      ),
-    ).toBe(true);
+    const payload = { comment: { performed_via_github_app: { id: 999 } } };
+    expect(isOwnCommentEvent("issue_comment", payload, env)).toBe(true);
     expect(
       isOwnCommentEvent(
         "issue_comment",
@@ -413,6 +408,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       ),
     ).toBe(false);
     expect(isOwnCommentEvent("pull_request", {}, env)).toBe(false);
+    expect(isOwnCommentEvent("pull_request", payload, env)).toBe(false);
     expect(isOwnCommentEvent("issue_comment", { comment: null }, env)).toBe(false);
   });
 
@@ -428,14 +424,39 @@ describe("Keiko for Quality worker trust boundary", () => {
     const comments = [
       {
         appId: 827041,
-        body: "0 resolved / 0 findings\n✅ Auto-apply",
+        body: "Options: Auto-apply disabled",
+        updatedAt: "2026-07-13T17:00:00.000Z",
+      },
+      {
+        appId: 827041,
+        body: "0 resolved / 0 findings\n✅\n Auto-apply",
         updatedAt: "2026-07-13T18:00:00.000Z",
+      },
+      {
+        appId: 999,
+        body: "Options: Auto-apply disabled",
+        updatedAt: "2026-07-13T19:00:00.000Z",
       },
     ];
     expect(autoApplyState(comments)).toBe("enabled");
-    expect(autoApplyState([{ ...comments[0], body: "Options: Auto-apply disabled" }])).toBe(
-      "disabled",
-    );
+    expect(
+      autoApplyState([
+        {
+          appId: 827041,
+          body: "Options: Auto-apply disabled",
+          updatedAt: "2026-07-13T17:00:00.000Z",
+        },
+      ]),
+    ).toBe("disabled");
+    expect(
+      autoApplyState([
+        {
+          appId: 827041,
+          body: "No automation option is present.",
+          updatedAt: "2026-07-13T17:00:00.000Z",
+        },
+      ]),
+    ).toBe("not confirmed");
     expect(autoApplyState([])).toBe("not confirmed");
 
     const ready = dashboardComment({
@@ -449,16 +470,38 @@ describe("Keiko for Quality worker trust boundary", () => {
         passed: true,
       },
     });
-    expect(ready).toContain("<!-- keiko-for-quality-dashboard:v1 -->");
-    expect(ready).toContain("✅ **Ready for auto-merge**");
-    expect(ready).toContain("| Required checks | 15/15 successful |");
-    expect(ready).toContain("| SonarQube Cloud | ✅ native quality gate passed |");
-    expect(ready).toContain("| Gitar review | ✅ zero unresolved findings |");
-    expect(ready).toContain("| Socket Security | ✅ zero unresolved alerts |");
-    expect(ready).toContain("updated 2026-07-13T18:00:00.000Z");
-    expect(ready).toContain("| Gitar Auto-Apply | enabled |");
-    expect(ready).toContain("| GitHub Auto-Merge | armed |");
-    expect(ready).toContain(`head ${headSha.slice(0, 12)}`);
+    expect(ready).toBe(
+      [
+        "<!-- keiko-for-quality-dashboard:v1 -->",
+        "## Keiko for Quality",
+        "",
+        "✅ **Ready for auto-merge**",
+        "",
+        "`head aaaaaaaaaaaa` · `updated 2026-07-13T18:00:00.000Z`",
+        "",
+        "| Gate group | Evidence |",
+        "| --- | --- |",
+        "| Required checks | 15/15 successful |",
+        "| SonarQube Cloud | ✅ native quality gate passed |",
+        "| Gitar review | ✅ zero unresolved findings |",
+        "| Socket Security | ✅ zero unresolved alerts |",
+        "| Stability window | ✅ settled |",
+        "",
+        "| Automation | State |",
+        "| --- | --- |",
+        "| Gitar Auto-Apply | enabled |",
+        "| GitHub Auto-Merge | armed |",
+        "",
+        "<details>",
+        "<summary>Validated evidence</summary>",
+        "",
+        "All exact-current-head evidence is valid.",
+        "",
+        "</details>",
+        "",
+        "<sub>Exact-head, app-bound, fail-closed aggregate. This redacted status comment updates in place.</sub>",
+      ].join("\n"),
+    );
     expect(ready).not.toContain(headSha);
 
     const waiting = dashboardComment({
@@ -477,9 +520,14 @@ describe("Keiko for Quality worker trust boundary", () => {
       },
     });
     expect(waiting).toContain("⏳ **Waiting for evidence**");
+    expect(waiting).toContain("| Required checks | 13/15 successful |");
+    expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
     expect(waiting).toContain("Missing current-head check: ci.");
     expect(waiting).toContain(
       "| SonarQube Cloud | ❌ Missing current-head check: SonarCloud Code Analysis. |",
+    );
+    expect(waiting).toContain(
+      "- Missing current-head check: ci.\n- Missing current-head check: SonarCloud Code Analysis.",
     );
 
     const blocked = dashboardComment({
@@ -490,7 +538,26 @@ describe("Keiko for Quality worker trust boundary", () => {
       result: { failures: ["Gitar has 1 unresolved finding(s)."], passed: false },
     });
     expect(blocked).toContain("❌ **Blocked**");
+    expect(blocked).toContain("<details open>");
+    expect(blocked).toContain("<summary>Blocking or waiting evidence (1)</summary>");
     expect(blocked).not.toContain("secret-value");
+
+    const invalidChecks = [
+      { ...checks[0], appId: -1 },
+      { ...checks[0], conclusion: "failure" },
+      { ...checks[0], headSha: "b".repeat(40) },
+      { ...checks[0], name: "wrong check" },
+      { ...checks[0], status: "in_progress" },
+    ];
+    const invalidCount = dashboardComment({
+      checks: invalidChecks,
+      comments: [],
+      headSha,
+      pull: {},
+      result: { failures: [], passed: false },
+    });
+    expect(invalidCount).toContain("| Required checks | 0/15 successful |");
+    expect(invalidCount).toContain("| GitHub Auto-Merge | not armed |");
   });
 
   it("creates one dashboard comment and subsequently updates the app-owned marker", async () => {
@@ -519,6 +586,17 @@ describe("Keiko for Quality worker trust boundary", () => {
       {
         ...baseEvidence,
         comments: [
+          {
+            appId: 998,
+            body: "<!-- keiko-for-quality-dashboard:v1 -->wrong app",
+            id: 74,
+          },
+          {
+            appId: 999,
+            body: "<!-- keiko-for-quality-dashboard:v1 -->invalid id",
+            id: "75",
+          },
+          { appId: 999, body: "no ownership marker", id: 76 },
           {
             appId: 999,
             body: "<!-- keiko-for-quality-dashboard:v1 -->old",
@@ -859,9 +937,13 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("fails closed when an immediate replay misses the eventual KV read", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const state = stateBinding();
     state.get.mockResolvedValue(null);
-    state.put.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("write conflict"));
+    state.put
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("sensitive endpoint write conflict"))
+      .mockRejectedValueOnce("opaque sensitive failure");
     const secret = "test-secret";
     const env = {
       KEIKO_FOR_QUALITY_STATE: state,
@@ -875,10 +957,20 @@ describe("Keiko for Quality worker trust boundary", () => {
 
     const unexpected = await worker.fetch(await signedRequest(payload, secret), env, {});
     const replayed = await worker.fetch(await signedRequest(payload, secret), env, {});
+    const opaqueFailure = await worker.fetch(await signedRequest(payload, secret), env, {});
 
     expect(unexpected.status).toBe(403);
     expect(replayed.status).toBe(409);
     expect(await replayed.text()).toBe("replayed delivery");
+    expect(opaqueFailure.status).toBe(409);
+    expect(errorLog).toHaveBeenCalledWith(
+      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=Error",
+    );
+    expect(errorLog).toHaveBeenCalledWith(
+      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=UnknownError",
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("sensitive endpoint");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("opaque sensitive");
   });
 
   it("accepts only a signed GitHub webhook verification ping without repository data", async () => {

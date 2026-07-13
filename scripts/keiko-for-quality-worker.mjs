@@ -255,8 +255,9 @@ function latestGitarComment(comments) {
 export function autoApplyState(comments) {
   const body = latestGitarComment(comments)?.body;
   if (body === undefined) return "not confirmed";
-  if (/✅\s*Auto-apply/iu.test(body)) return "enabled";
-  return /Auto-apply/iu.test(body) ? "disabled" : "not confirmed";
+  if (body.match(/✅\s*Auto-apply/iu) !== null) return "enabled";
+  if (body.includes("Auto-apply")) return "disabled";
+  return "not confirmed";
 }
 
 function decision(result) {
@@ -410,7 +411,8 @@ async function reserveDelivery(state, key) {
     await state.put(key, "1", { expirationTtl: 86_400 });
     return true;
   } catch (error) {
-    console.error(`reserveDelivery failed for correlationId=${key}`, error);
+    const errorKind = error instanceof Error ? error.name : "UnknownError";
+    console.error(`reserveDelivery failed for correlationId=${key} errorKind=${errorKind}`);
     return false;
   }
 }
