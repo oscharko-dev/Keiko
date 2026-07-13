@@ -80,14 +80,6 @@ function temporarySchemaFixture() {
   return { bundle, generated };
 }
 
-function temporarySchemaCopy(source) {
-  const fixture = temporarySchemaFixture();
-  if (source === undefined) return fixture;
-  rmSync(fixture.generated, { recursive: true, force: true });
-  cpSync(source, fixture.generated, { recursive: true });
-  return fixture;
-}
-
 afterEach(() => {
   while (temporaryRoots.length > 0) rmSync(temporaryRoots.pop(), { recursive: true, force: true });
 });
@@ -141,7 +133,7 @@ describe("Codex app-server schema evidence", () => {
   });
 
   it("rejects a one-character semantic schema drift", () => {
-    const { bundle, generated } = temporarySchemaCopy();
+    const { bundle, generated } = temporarySchemaFixture();
     expect(() => verifyGeneratedSchemaDirectory(generated, bundle)).not.toThrow();
     const file = join(generated, "JSONRPCRequest.json");
     const document = JSON.parse(readFileSync(file, "utf8"));
@@ -154,19 +146,19 @@ describe("Codex app-server schema evidence", () => {
   });
 
   it("rejects missing, extra, and malformed generated schema files", () => {
-    const missing = temporarySchemaCopy();
+    const missing = temporarySchemaFixture();
     unlinkSync(join(missing.generated, "JSONRPCRequest.json"));
     expect(() => verifyGeneratedSchemaDirectory(missing.generated, missing.bundle)).toThrow(
       "Generated schema file count drift",
     );
 
-    const extra = temporarySchemaCopy();
+    const extra = temporarySchemaFixture();
     writeFileSync(join(extra.generated, "unexpected.json"), "{}", "utf8");
     expect(() => verifyGeneratedSchemaDirectory(extra.generated, extra.bundle)).toThrow(
       "Generated schema file count drift",
     );
 
-    const malformed = temporarySchemaCopy();
+    const malformed = temporarySchemaFixture();
     writeFileSync(join(malformed.generated, "JSONRPCRequest.json"), "{", "utf8");
     expect(() => verifyGeneratedSchemaDirectory(malformed.generated, malformed.bundle)).toThrow(
       "is not valid JSON",
