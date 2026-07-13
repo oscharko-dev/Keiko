@@ -503,7 +503,18 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     const text = "const target = 1;\ntarget;\n";
     writeFileSync(join(root, "src", "a.ts"), text, "utf8");
     await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    let languageClockReads = 0;
+    const deps = {
+      store,
+      redactor: buildRedactor({}),
+      env: {},
+      editorLanguageRouteOptions: {
+        now: () => {
+          languageClockReads += 1;
+          return 0;
+        },
+      },
+    } as unknown as UiHandlerDeps;
     try {
       const response = await handleEditorAgentActions(
         context(
@@ -527,6 +538,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
         deps,
       );
       expect(response.status).toBe(200);
+      expect(languageClockReads).toBeGreaterThan(1);
       const result = actionResult(response.body);
       expect(result.status).toBe("succeeded");
       expect(result.data).toMatchObject({ operation: "definition" });

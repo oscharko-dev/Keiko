@@ -2082,6 +2082,7 @@ async function runNavigateSymbolAction(
       "/api/editor/language",
     ),
     deps,
+    deps.editorLanguageRouteOptions,
   );
 }
 
