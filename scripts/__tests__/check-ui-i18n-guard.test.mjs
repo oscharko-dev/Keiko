@@ -87,6 +87,9 @@ test("passes changed UI helper files without user-facing text", async () => {
 
 test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
   expect(hasUserFacingTextLine("<p>Hard-coded text</p>")).toBe(true);
+  expect(hasUserFacingTextLine("<section><p>Nested text</p></section>")).toBe(true);
+  expect(hasUserFacingTextLine("<p>Wrong closing tag</span>")).toBe(false);
+  expect(hasUserFacingTextLine('<p>{t("feature.title")}</p>')).toBe(false);
   expect(hasUserFacingTextLine('<button aria-label="Open">')).toBe(true);
   expect(hasUserFacingTextLine('return "Enter a name.";')).toBe(true);
   expect(

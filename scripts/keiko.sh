@@ -23,6 +23,7 @@ LOG_FILE="$STATE_DIR/ui.log"
 # Clear-text HTTP is intentionally confined to the validated loopback control plane. HTTPS would
 # add no transport boundary on localhost and would require distributing a local trust root.
 LOOPBACK_ORIGIN="http://${HOST}:${PORT}" # NOSONAR -- loopback host is validated before use.
+LOOPBACK_DISPLAY="${HOST}:${PORT} (loopback HTTP)"
 HEALTH_URL="${LOOPBACK_ORIGIN}/api/health"
 # Health-poll and graceful-stop budgets in whole seconds, overridable for slow
 # environments. The poll/stop loops tick twice a second, so iterations = seconds x 2.
@@ -111,7 +112,7 @@ cmd_start() {
   mkdir -p "$STATE_DIR"
 
   if pid="$(running_pid)"; then
-    echo "Keiko UI already running on ${LOOPBACK_ORIGIN} (pid ${pid})."
+    echo "Keiko UI already running on ${LOOPBACK_DISPLAY} (pid ${pid})."
     return 0
   fi
 
@@ -124,7 +125,7 @@ cmd_start() {
     return 1
   fi
 
-  echo "Starting Keiko UI on ${LOOPBACK_ORIGIN} ..."
+  echo "Starting Keiko UI on ${LOOPBACK_DISPLAY} ..."
   nohup node "$ENTRY" ui --port "$PORT" --host "$HOST" >>"$LOG_FILE" 2>&1 &
   pid=$!
   echo "$pid" >"$PID_FILE"
@@ -140,7 +141,7 @@ cmd_start() {
       return 1
     fi
     if curl -fsS "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ok"'; then
-      echo "Keiko UI running on ${LOOPBACK_ORIGIN} (pid ${pid})."
+      echo "Keiko UI running on ${LOOPBACK_DISPLAY} (pid ${pid})."
       echo "Logs: ${LOG_FILE}"
       return 0
     fi
@@ -187,7 +188,7 @@ cmd_stop() {
 cmd_status() {
   require_loopback_host || return 2
   if pid="$(running_pid)"; then
-    echo "Keiko UI is running on ${LOOPBACK_ORIGIN} (pid ${pid})."
+    echo "Keiko UI is running on ${LOOPBACK_DISPLAY} (pid ${pid})."
     return 0
   fi
   echo "Keiko UI is not running."

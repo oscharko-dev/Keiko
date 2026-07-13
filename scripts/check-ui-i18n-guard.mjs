@@ -10,7 +10,8 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
 const USER_FACING_JSX_TEXT_PATTERN =
-  /<([A-Za-z][A-Za-z0-9_.:-]*)(?:\s[^>]*)?>\s*[^<>{}]*[A-Za-z][^<>{}]*<\/\1\s*>/u;
+  /<([A-Za-z][A-Za-z0-9_.:-]*)[^>]*>([^<>{}]*)<\/([A-Za-z][A-Za-z0-9_.:-]*)\s*>/gu;
+const ASCII_LETTER_PATTERN = /[A-Za-z]/u;
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
@@ -66,10 +67,20 @@ function isCommentLine(line) {
   return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
 }
 
+function hasUserFacingJsxText(line) {
+  for (const match of line.matchAll(USER_FACING_JSX_TEXT_PATTERN)) {
+    const [, openingTag, text, closingTag] = match;
+    if (openingTag === closingTag && text !== undefined && ASCII_LETTER_PATTERN.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function hasUserFacingTextLine(line) {
   if (isCommentLine(line)) return false;
   return (
-    USER_FACING_JSX_TEXT_PATTERN.test(line) ||
+    hasUserFacingJsxText(line) ||
     USER_FACING_ATTRIBUTE_PATTERN.test(line) ||
     USER_FACING_STRING_RETURN_PATTERN.test(line)
   );
