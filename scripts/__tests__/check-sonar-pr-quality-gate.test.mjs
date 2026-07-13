@@ -8,22 +8,37 @@ import {
   runSonarPullRequestGateCli,
   sonarJson,
 } from "../check-sonar-pr-quality-gate.mjs";
+import {
+  KEIKO_GATE_CONDITIONS,
+  KEIKO_GATE_ID,
+  KEIKO_GATE_NAME,
+} from "../sonar-quality-gate-contract.mjs";
 
 const passingMeasures = {
   new_coverage: 86.5,
+  new_duplicated_lines: 0,
   new_duplicated_lines_density: 1.2,
   new_lines: 120,
   new_lines_to_cover: 40,
+  new_security_hotspots: 0,
   new_security_hotspots_reviewed: 100,
   new_violations: 0,
+};
+const passingOverallMeasures = { security_hotspots: 0, security_hotspots_reviewed: 100 };
+const passingGate = {
+  conditions: KEIKO_GATE_CONDITIONS,
+  id: Number(KEIKO_GATE_ID),
+  name: KEIKO_GATE_NAME,
 };
 
 function evaluate(overrides = {}) {
   return evaluateSonarPullRequest({
     analysis: { commitSha: "a".repeat(40), qualityGateStatus: "OK" },
+    customGate: passingGate,
     headSha: "a".repeat(40),
     issuesTotal: 0,
     measures: passingMeasures,
+    overallMeasures: passingOverallMeasures,
     ...overrides,
   });
 }
@@ -82,14 +97,14 @@ describe("SonarCloud PR quality gate", () => {
 
   it("rejects insufficient or missing new-code coverage", () => {
     expect(evaluate({ measures: { ...passingMeasures, new_coverage: 84.99 } })).toContain(
-      "New-code coverage 84.99% is below 85%.",
+      "New-code coverage condition failed at 84.99%.",
     );
     expect(evaluate({ measures: { ...passingMeasures, new_coverage: undefined } })).toContain(
-      "New-code coverage is missing despite coverable new lines.",
+      "New-code coverage rate is missing despite a positive applicability count.",
     );
   });
 
-  it("allows absent coverage only when Sonar reports no coverable new lines", () => {
+  it("allows absent coverage only with an explicit zero coverable-line count", () => {
     expect(
       evaluate({
         measures: { ...passingMeasures, new_coverage: undefined, new_lines_to_cover: 0 },
@@ -99,24 +114,29 @@ describe("SonarCloud PR quality gate", () => {
       evaluate({
         measures: { ...passingMeasures, new_coverage: undefined, new_lines_to_cover: undefined },
       }),
-    ).toEqual([]);
+    ).toContain("New-code coverage applicability count is missing.");
   });
 
-  it("treats doc-only PRs (Sonar reports new_lines but omits coverable/duplication/hotspot metrics) as trivially satisfied", () => {
-    // Real doc-only PR shape: Sonar analyzed and saw changed lines, but nothing
-    // that its language plugins treat as coverable source code. new_lines is
-    // reported (analysis-trusted signal), the other new-code metrics are absent.
+  it("fails closed when a doc-only response omits explicit applicability counters", () => {
     const failures = evaluate({
       measures: {
         new_coverage: undefined,
+        new_duplicated_lines: undefined,
         new_duplicated_lines_density: undefined,
         new_lines: 12,
         new_lines_to_cover: undefined,
+        new_security_hotspots: undefined,
         new_security_hotspots_reviewed: undefined,
         new_violations: 0,
       },
     });
-    expect(failures).toEqual([]);
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        "New-code coverage applicability count is missing.",
+        "New-code duplication applicability count is missing.",
+        "New-code security-hotspot review applicability count is missing.",
+      ]),
+    );
   });
 
   it("fails closed on a malformed measures response that omits new_lines even when other metrics are missing", () => {
@@ -126,9 +146,11 @@ describe("SonarCloud PR quality gate", () => {
     const failures = evaluate({
       measures: {
         new_coverage: undefined,
+        new_duplicated_lines: undefined,
         new_duplicated_lines_density: undefined,
         new_lines: undefined,
         new_lines_to_cover: undefined,
+        new_security_hotspots: undefined,
         new_security_hotspots_reviewed: undefined,
         new_violations: 0,
       },
@@ -136,8 +158,8 @@ describe("SonarCloud PR quality gate", () => {
     expect(failures).toEqual(
       expect.arrayContaining([
         "New-code line count metric is missing.",
-        "New-code duplication metric is missing.",
-        "New-code security-hotspot review metric is missing.",
+        "New-code duplication applicability count is missing.",
+        "New-code security-hotspot review applicability count is missing.",
         "Cannot evaluate new-code coverage: Sonar did not report a new-code line count.",
       ]),
     );
@@ -169,12 +191,25 @@ describe("SonarCloud PR quality gate", () => {
       analysis: { commitSha: "a".repeat(40), qualityGateStatus: "ERROR" },
       measures: {
         ...passingMeasures,
+        new_duplicated_lines: 1,
         new_duplicated_lines_density: 3.01,
+        new_security_hotspots: 1,
         new_security_hotspots_reviewed: 99,
         new_violations: 2,
       },
     });
     expect(failures).toHaveLength(4);
+  });
+
+  it("enforces overall hotspot review against the dev main branch", () => {
+    expect(
+      evaluate({
+        overallMeasures: { security_hotspots: 1, security_hotspots_reviewed: 99 },
+      }),
+    ).toContain("Overall security-hotspot review condition failed at 99%.");
+    expect(evaluate({ overallMeasures: {} })).toContain(
+      "Overall security-hotspot review applicability count is missing.",
+    );
   });
 
   it("loads and validates live-shaped Sonar API evidence", async () => {
@@ -188,6 +223,17 @@ describe("SonarCloud PR quality gate", () => {
           ],
         };
       if (path.includes("issues/search")) return { total: 0 };
+      if (path.includes("qualitygates/show")) return passingGate;
+      if (path.includes("metricKeys=security_hotspots")) {
+        return {
+          component: {
+            measures: Object.entries(passingOverallMeasures).map(([metric, measure]) => ({
+              metric,
+              value: String(measure),
+            })),
+          },
+        };
+      }
       return {
         component: {
           measures: Object.entries(passingMeasures).map(([metric, measure]) => ({

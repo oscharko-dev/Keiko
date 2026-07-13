@@ -58,6 +58,21 @@ function editorReleaseEvidenceStep(platform) {
   );
 }
 
+function nativeQualityStep(platform) {
+  if (platform === "darwin") {
+    return npmStep("native-quality", ["run", "check:native:macos"], { platform });
+  }
+  if (platform === "win32") {
+    return npmStep("native-quality", ["run", "check:native:windows"], { platform });
+  }
+  return skippedNpmStep(
+    "native-quality",
+    ["run", "check:native:macos"],
+    "Skipped on Linux because the required native evidence is produced on Windows and macOS.",
+    platform,
+  );
+}
+
 export function commandText(step) {
   return [step.command, ...step.args].join(" ");
 }
@@ -70,6 +85,8 @@ export function createPrePrSteps(options = {}) {
     npmStep("typecheck", ["run", "typecheck"], { platform }),
     npmStep("lint", ["run", "lint"], { env: lintEnv, platform }),
     npmStep("format", ["run", "format:check"], { platform }),
+    npmStep("sonar-scope", ["run", "check:sonar-scope"], { platform }),
+    nativeQualityStep(platform),
     npmStep("ui-typecheck", ["run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"], {
       platform,
     }),

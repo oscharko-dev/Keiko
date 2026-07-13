@@ -159,7 +159,7 @@ function clampToBytes(text: string, maxBytes: number): { text: string; truncated
   }
   const decoded = new TextDecoder("utf-8", { fatal: false })
     .decode(encoded.subarray(0, maxBytes))
-    .replace(/�+$/u, "");
+    .replace(/\uFFFD$/u, "");
   return { text: decoded, truncated: true };
 }
 

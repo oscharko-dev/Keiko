@@ -59,6 +59,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24.18.0"
@@ -166,6 +167,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24.18.0"
@@ -183,6 +185,8 @@ jobs:
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality
+      - name: Verify governed Sonar analysis scope
+        run: npm run check:sonar-scope
       - name: Verify changed production sources are mapped into LCOV
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
@@ -190,26 +194,52 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/check-lcov-source-mapping.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
       - name: Resolve project version for SonarCloud
-        if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Verify manual analysis is bound to remote dev
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        id: sonar-head
+        run: |
+          actual="$(git rev-parse HEAD)"
+          expected="$(git rev-parse refs/remotes/origin/dev)"
+          if [ "$actual" != "$expected" ]; then
+            echo "Manual Sonar analysis checkout is not the fetched remote dev revision."
+            exit 1
+          fi
+          echo "sha=$actual" >> "$GITHUB_OUTPUT"
       - name: Download Sonar Scanner CLI
         # Downloaded and checksum-verified directly rather than through a marketplace action whose
         # license is denied by the repository dependency-review policy.
-        if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         run: |
-          curl --proto '=https' -sSfL -o sonar-scanner-cli.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
-          echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  sonar-scanner-cli.zip" | sha256sum --check
-          unzip -q sonar-scanner-cli.zip
-      - name: SonarCloud CI-based analysis (ADR-0131)
-        if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+          scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
+          curl --proto '=https' -sSfL -o "$scanner_zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
+          echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  $scanner_zip" | sha256sum --check
+          unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
+          echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
+      - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0134)
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        id: sonar-scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           STEPS_SONAR_VERSION_OUTPUTS_VERSION: ${{ steps.sonar-version.outputs.version }}
         run: |
-          ./sonar-scanner-8.1.0.6389-linux-x64/bin/sonar-scanner \
+          set +e
+          "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
+            -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
             -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
-            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
+            2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
+          scanner_status=${PIPESTATUS[0]}
+          set -e
+          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
+          echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            exit 0
+          fi
+          exit "$scanner_status"
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
@@ -217,6 +247,12 @@ jobs:
           SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: node scripts/check-sonar-pr-quality-gate.mjs
+      - name: Verify SonarCloud Banking Grade dev evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: node scripts/check-sonar-main-quality-gate.mjs
 
   ci:
     name: ci
@@ -225,6 +261,7 @@ jobs:
       - protected-branch-gate
       - core-quality
       - coverage-sonar
+      - cross-platform-smoke
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -232,9 +269,10 @@ jobs:
         env:
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
+          CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$CROSS_PLATFORM_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
@@ -383,7 +421,6 @@ jobs:
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
-    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
     # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
     # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
@@ -403,9 +440,36 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: "8.0.x"
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
+      - name: Configure MSVC for native quality analysis
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw "Visual Studio C++ tools were not found" }
+          $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
+          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
+          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
+          $environment = & cmd.exe /d /c $vcvarsWrapper
+          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
+          foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
+            $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
+            if (-not $line) { throw "MSVC environment did not define $name" }
+            $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+      - name: Verify productive native sources on macOS
+        if: runner.os == 'macOS'
+        run: npm run check:native:macos
+      - name: Verify productive native sources on Windows
+        if: runner.os == 'Windows'
+        run: npm run check:native:windows
       - name: Install Linux sandbox isolation backend
         if: runner.os == 'Linux'
         run: |

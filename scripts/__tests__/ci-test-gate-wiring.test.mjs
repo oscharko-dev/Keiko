@@ -14,6 +14,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const windowsNativeQuality = readFileSync(
+  resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
+  "utf8",
+);
+const windowsLauncher = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
+  "utf8",
+);
+const windowsRfc3161QualityProject = readFileSync(
+  resolve(repoRoot, "scripts/native-quality/windows-rfc3161-quality.csproj"),
+  "utf8",
+);
+const windowsRfc3161Source = readFileSync(
+  resolve(repoRoot, "scripts/windows-portable-rfc3161.cs"),
+  "utf8",
+);
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
 const uiManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
@@ -81,6 +97,10 @@ const REQUIRED_CI_COMMANDS = [
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.
   "npm run format:check",
   "npm run check:adr-index",
+  // Sonar scope and native compensation must remain required CI evidence.
+  "npm run check:sonar-scope",
+  "npm run check:native:macos",
+  "npm run check:native:windows",
 ];
 
 const REQUIRED_HTML_MANUAL_RELEASE_GATES = [
@@ -103,6 +123,38 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps Keiko native warnings strict while treating MSVC SDK headers as external", () => {
+    expect(windowsNativeQuality).toContain('"/nologo", "/std:c17", "/W4", "/WX", "/analyze"');
+    expect(windowsNativeQuality).toContain('"/external:env:INCLUDE", "/external:W0"');
+    expect(windowsNativeQuality).toContain("$env:CAExcludePath = $env:INCLUDE");
+    expect(windowsNativeQuality).toContain("MSVC INCLUDE environment is required");
+  });
+
+  it("keeps the Windows launcher path and command buffers off the process stack", () => {
+    expect(windowsLauncher).toContain("HeapAlloc(heap, HEAP_ZERO_MEMORY");
+    expect(windowsLauncher).toContain("free_launcher_buffers(buffers)");
+    expect(windowsLauncher).not.toContain("wchar_t root[32768]");
+    expect(windowsLauncher).not.toContain("wchar_t command[98304]");
+  });
+
+  it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {
+    expect(windowsRfc3161QualityProject).toContain("<TargetFramework>net8.0</TargetFramework>");
+    expect(windowsRfc3161QualityProject).toContain(
+      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
+    );
+  });
+
+  it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {
+    expect(windowsRfc3161Source).toContain("namespace Keiko.Portable;");
+    expect(windowsRfc3161Source).toContain("IReadOnlyList<X509Certificate2> Certificates");
+    expect(
+      windowsRfc3161Source.match(
+        /\[DefaultDllImportSearchPaths\(DllImportSearchPath\.System32\)\]/gu,
+      ),
+    ).toHaveLength(4);
+    expect(windowsRfc3161Source).not.toMatch(/catch\s*\{/gu);
+  });
+
   it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {
     const runtimeWorkflows = [
       ci,
@@ -127,6 +179,8 @@ describe("CI test/gate wiring guard", () => {
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
+    expect(crossPlatform).toContain("Verify productive native sources on macOS");
+    expect(crossPlatform).toContain("Verify productive native sources on Windows");
     expect(crossPlatform).not.toContain("npm test");
   });
 

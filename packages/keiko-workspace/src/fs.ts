@@ -130,7 +130,10 @@ export const nodeWorkspaceFs: WorkspaceFs = {
         return "";
       }
       const bytesRead = readSync(fd, buffer, 0, cap, 0);
-      return buffer.subarray(0, bytesRead).toString("utf8").replace(/�+$/u, "");
+      return buffer
+        .subarray(0, bytesRead)
+        .toString("utf8")
+        .replace(/\uFFFD$/u, "");
     } finally {
       closeSync(fd);
     }

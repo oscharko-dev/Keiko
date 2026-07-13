@@ -1,17 +1,22 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Formats.Asn1;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 
+namespace Keiko.Portable;
+
 public sealed class WindowsPortableTimestampResult
 {
     public bool Valid { get; init; }
     public string Reason { get; init; } = "windows-timestamp-unverified";
-    public X509Certificate2[] Certificates { get; init; } = Array.Empty<X509Certificate2>();
+    public IReadOnlyList<X509Certificate2> Certificates { get; init; } =
+        Array.Empty<X509Certificate2>();
 }
 
 public static class WindowsPortableRfc3161
@@ -33,7 +38,23 @@ public static class WindowsPortableRfc3161
         {
             return VerifyAuthenticodeCms(ReadAuthenticodeCms(path));
         }
-        catch
+        catch (ArgumentException)
+        {
+            return Failure();
+        }
+        catch (CryptographicException)
+        {
+            return Failure();
+        }
+        catch (IOException)
+        {
+            return Failure();
+        }
+        catch (NotSupportedException)
+        {
+            return Failure();
+        }
+        catch (UnauthorizedAccessException)
         {
             return Failure();
         }
@@ -43,6 +64,10 @@ public static class WindowsPortableRfc3161
         byte[] encodedCms,
         X509Certificate2Collection? customTrustRoots = null)
     {
+        if (encodedCms is null)
+        {
+            return Failure();
+        }
         try
         {
             if (encodedCms.Length == 0 || encodedCms.Length > MaxCmsBytes)
@@ -78,7 +103,19 @@ public static class WindowsPortableRfc3161
                 Certificates = certificates,
             };
         }
-        catch
+        catch (ArgumentException)
+        {
+            return Failure();
+        }
+        catch (AsnContentException)
+        {
+            return Failure();
+        }
+        catch (CryptographicException)
+        {
+            return Failure();
+        }
+        catch (InvalidOperationException)
         {
             return Failure();
         }
@@ -296,6 +333,7 @@ public static class WindowsPortableRfc3161
     private static WindowsPortableTimestampResult Failure() => new();
 
     [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern bool CryptQueryObject(
         int objectType,
         string objectPath,
@@ -310,6 +348,7 @@ public static class WindowsPortableRfc3161
         IntPtr context);
 
     [DllImport("crypt32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern bool CryptMsgGetParam(
         IntPtr message,
         int paramType,
@@ -318,9 +357,11 @@ public static class WindowsPortableRfc3161
         ref int dataSize);
 
     [DllImport("crypt32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern bool CryptMsgClose(IntPtr message);
 
     [DllImport("crypt32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern bool CertCloseStore(IntPtr store, int flags);
 
 }

@@ -93,7 +93,7 @@ function clampToBytes(
     return { excerpt: text, truncated: false };
   }
   const buffer = Buffer.from(text, "utf8").subarray(0, maxBytes);
-  const excerpt = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/�+$/u, "");
+  const excerpt = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/\uFFFD$/u, "");
   return { excerpt, truncated: true };
 }
 

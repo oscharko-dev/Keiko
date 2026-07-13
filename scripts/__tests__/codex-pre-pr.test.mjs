@@ -12,6 +12,8 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run typecheck",
   "npm run lint",
   "npm run format:check",
+  "npm run check:sonar-scope",
+  "npm run check:native:macos",
   "npm run typecheck --workspace @oscharko-dev/keiko-ui",
   "npm run lint --workspace @oscharko-dev/keiko-ui",
   "npm test",
@@ -139,7 +141,7 @@ describe("codex pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ failed: 0, passed: 21, planned: 0, skipped: 1 });
+      expect(report.summary).toEqual({ failed: 0, passed: 23, planned: 0, skipped: 1 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);
@@ -211,6 +213,20 @@ describe("codex pre-PR gate step construction", () => {
 
     expect(evidence?.required).toBe(true);
     expect(evidence?.skipReason).toBeUndefined();
+  });
+
+  it.each([
+    { command: "npm run check:native:macos", platform: "darwin", required: true },
+    { command: "npm.cmd run check:native:windows", platform: "win32", required: true },
+    { command: "npm run check:native:macos", platform: "linux", required: false },
+  ])("selects the governed native quality step on $platform", ({ command, platform, required }) => {
+    const native = createPrePrSteps({ env: {}, platform }).find(
+      (step) => step.id === "native-quality",
+    );
+
+    expect(native === undefined ? undefined : commandText(native)).toBe(command);
+    expect(native?.required).toBe(required);
+    expect(native?.skipReason === undefined).toBe(required);
   });
 });
 

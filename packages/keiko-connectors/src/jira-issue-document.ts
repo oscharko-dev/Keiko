@@ -293,7 +293,7 @@ function sliceToBytes(text: string, maxBytes: number): string {
   const decoded = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.subarray(0, Math.max(0, maxBytes)),
   );
-  return decoded.endsWith("�") ? decoded.slice(0, -1) : decoded;
+  return decoded.endsWith("\uFFFD") ? decoded.slice(0, -1) : decoded;
 }
 
 export function boundedJiraIssueTitle(issueKey: string, summary: unknown): string {
