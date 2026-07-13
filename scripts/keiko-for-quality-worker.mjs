@@ -409,7 +409,8 @@ async function reserveDelivery(state, key) {
   try {
     await state.put(key, "1", { expirationTtl: 86_400 });
     return true;
-  } catch {
+  } catch (error) {
+    console.error(`reserveDelivery failed for correlationId=${key}`, error);
     return false;
   }
 }
