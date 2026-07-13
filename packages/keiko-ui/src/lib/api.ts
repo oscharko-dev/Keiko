@@ -111,6 +111,8 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
   GitDeliveryActionSheet,
@@ -145,6 +147,7 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -205,6 +208,11 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
 
 function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
   const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
+  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
+}
+
+function validateCodexAuthSetupPlanResponse(value: unknown): GitRepositoryValidation {
+  const result = validateCodingWorkbenchCodexAuthSetupPlan(value);
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
@@ -390,6 +398,20 @@ export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<Co
     "/api/coding-workbench/codex-subscription/profile",
     { cache: "no-store" },
     validateCodexSubscriptionProfileResponse,
+  );
+}
+
+export async function prepareCodingWorkbenchCodexSubscriptionSetup(
+  method: CodingWorkbenchCodexAuthMethod,
+): Promise<CodingWorkbenchCodexAuthSetupPlan> {
+  return fetchJson(
+    "/api/coding-workbench/codex-subscription/setup",
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ method }),
+    },
+    validateCodexAuthSetupPlanResponse,
   );
 }
 

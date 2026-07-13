@@ -493,6 +493,9 @@ export class CodingRuntimeOrchestrator {
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
+      ...(snapshot.state === "recovery-required" && snapshot.recoveryAcknowledgedAt
+        ? { recoveryAcknowledged: true as const }
+        : {}),
       ...(snapshot.state === "awaiting-approval" && this.approvals.get(snapshot.runId)
         ? { pendingPermission: this.approvals.get(snapshot.runId)?.permission }
         : {}),

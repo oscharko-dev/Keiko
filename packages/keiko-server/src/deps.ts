@@ -326,6 +326,8 @@ export interface UiHandlerDeps {
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
+  /** Content-free control-plane capability; false/absent means no qualified runtime host. */
+  readonly codingRuntimeHostQualified?: boolean | undefined;
   // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
   // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
   readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
@@ -2028,6 +2030,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       ? {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
           codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
+          codingRuntimeHostQualified: codingRuntimeControlPlane.runtimeHostQualified,
           ...(codingRuntimeControlPlane.cancellationRegistry
             ? {
                 codingSidecarGatewayCancellationRegistry:

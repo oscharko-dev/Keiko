@@ -1,0 +1,55 @@
+{
+  "issue": 2257,
+  "surface": "live-coding-workbench",
+  "status": "verified",
+  "verified": true,
+  "standard": "WCAG 2.2 AA",
+  "requiredMaximumSerious": 0,
+  "requiredMaximumCritical": 0,
+  "results": [
+    {
+      "id": "01-dark-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "02-light-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "03-dark-hc-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "04-light-hc-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "05-forced-colors-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "06-reduced-motion-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "07-width-820",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "08-width-768",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "09-width-560",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "10-width-390-focus",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "id": "11-width-320-200pct",
+      "seriousOrCriticalAxeViolations": 0
+    }
+  ]
+}

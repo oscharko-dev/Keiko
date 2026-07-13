@@ -50,6 +50,8 @@ export interface CodingRuntimeControlPlaneInput {
 export interface CodingRuntimeControlPlane {
   readonly orchestrator: CodingRuntimeOrchestrator;
   readonly eventHub: CodingRuntimeEventHub;
+  /** Content-free composition fact: a qualified runtime host was explicitly supplied. */
+  readonly runtimeHostQualified: boolean;
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
@@ -91,6 +93,7 @@ export function createCodingRuntimeControlPlane(
   return {
     orchestrator,
     eventHub,
+    runtimeHostQualified: input.runtimeHost !== undefined,
     ...runtimeHostCapabilities(input.runtimeHost),
   };
 }
