@@ -7,7 +7,7 @@ import { clientAdapter, schemaRows, type ObservedQuery } from "./postgres-integr
 import { PostgresIntakeRepository, type PgClientLike } from "./postgres.js";
 
 const databaseUrl = process.env.DATABASE_URL;
-const integration = databaseUrl === undefined ? it.skip : it;
+const integration = it.skipIf(databaseUrl === undefined);
 const AT = new Date("2026-07-11T12:00:00.000Z");
 const NONCE = "n".repeat(32);
 const VERIFIER = "v".repeat(43);

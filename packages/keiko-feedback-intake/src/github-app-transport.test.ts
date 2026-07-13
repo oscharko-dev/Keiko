@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const nodeMocks = vi.hoisted(() => ({
+  lookup: vi.fn(),
+  request: vi.fn(),
+}));
+
+vi.mock("node:dns/promises", () => ({ lookup: nodeMocks.lookup }));
+vi.mock("node:https", () => ({ request: nodeMocks.request }));
+
 import { FEEDBACK_ISSUE_BODY_MAX_BYTES_V1 } from "./feedback-publication-projection.js";
 import {
   GITHUB_MAX_SEARCH_RESULTS,
@@ -13,6 +23,75 @@ import {
 } from "./github-app-transport.js";
 
 const marker = `<!-- keiko-feedback-reconciliation-v1:${"a".repeat(43)} -->`;
+
+type ResponseHeaders = Record<string, string | string[] | undefined>;
+interface PinnedRequestOptions {
+  readonly method: string;
+  readonly headers: Record<string, string | number>;
+  readonly lookup: (
+    hostname: string,
+    options: unknown,
+    callback: (error: Error | null, address: string, family: 4 | 6) => void,
+  ) => void;
+  readonly servername: string;
+  readonly rejectUnauthorized: boolean;
+}
+type ResponseCallback = (response: MockResponse) => void;
+
+class MockResponse extends EventEmitter {
+  readonly destroy = vi.fn((error?: Error): this => {
+    if (error !== undefined) this.emit("error", error);
+    return this;
+  });
+
+  constructor(
+    readonly statusCode: number,
+    readonly headers: ResponseHeaders = {},
+  ) {
+    super();
+  }
+}
+
+class MockRequest extends EventEmitter {
+  body: unknown;
+  readonly destroy = vi.fn((error?: Error): this => {
+    this.emit("error", error);
+    return this;
+  });
+  readonly end = vi.fn((body?: Uint8Array): void => {
+    this.body = body;
+    this.emit("finish");
+  });
+}
+
+function publicDnsResult(address = "8.8.8.8"): { readonly address: string; readonly family: 4 }[] {
+  return [{ address, family: 4 }];
+}
+
+function mockHttpsResponse(
+  response: MockResponse,
+  callback: ResponseCallback,
+  emit: (response: MockResponse) => void,
+): MockRequest {
+  const call = new MockRequest();
+  call.end.mockImplementation((body?: Uint8Array): void => {
+    call.body = body;
+    call.emit("finish");
+    callback(response);
+    emit(response);
+  });
+  return call;
+}
+
+beforeEach(() => {
+  nodeMocks.lookup.mockReset();
+  nodeMocks.request.mockReset();
+  nodeMocks.lookup.mockResolvedValue(publicDnsResult());
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("fixed-origin GitHub transport address policy", () => {
   it.each([
@@ -62,6 +141,7 @@ describe("fixed-origin GitHub transport address policy", () => {
       `/search/issues?q=${encodeURIComponent(`repo:oscharko-dev/keiko "${marker}" in:body`)}&per_page=1&page=1`,
     );
     expect(() => githubSearchIssuesPath("owner query", "keiko", marker, 1)).toThrow();
+    expect(() => githubSearchIssuesPath("oscharko-dev", "keiko", marker, 3)).toThrow();
   });
 
   it("does no DNS or request work for an already-aborted operation", async () => {
@@ -258,5 +338,204 @@ describe("fixed-origin GitHub transport address policy", () => {
       expect.objectContaining({ requestCommitted: false }),
     );
     expect(requests).toBe(0);
+  });
+});
+
+describe("fixed-origin GitHub transport default network boundary", () => {
+  it("pins a successful request to the approved DNS address and projects safe response headers", async () => {
+    const response = new MockResponse(201, {
+      "content-type": "application/json; charset=utf-8",
+      "retry-after": "60",
+      "x-ratelimit-remaining": "4999",
+      "x-ratelimit-reset": "not-a-number",
+    });
+    let lookupResult: { hostname: string; address: string; family: number } | undefined;
+    const call = new MockRequest();
+    nodeMocks.request.mockImplementation(
+      (url: string, options: PinnedRequestOptions, callback: ResponseCallback): MockRequest => {
+        expect(url).toBe("https://api.github.com/app");
+        options.lookup("api.github.com", {}, (error, address, family) => {
+          expect(error).toBeNull();
+          lookupResult = { hostname: "api.github.com", address, family };
+        });
+        call.end.mockImplementation((): void => {
+          call.emit("finish");
+          callback(response);
+          response.emit("data", Buffer.from('{"ok":true}'));
+          response.emit("end");
+        });
+        return call;
+      },
+    );
+
+    const result = await new FixedOriginGithubTransport().execute({
+      kind: "inspect-app",
+      jwt: "jwt",
+    });
+
+    expect(nodeMocks.lookup).toHaveBeenCalledWith("api.github.com", { all: true, verbatim: true });
+    expect(nodeMocks.request).toHaveBeenCalledTimes(1);
+    expect(nodeMocks.request.mock.calls[0]?.[1]).toMatchObject({
+      method: "GET",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: "Bearer jwt",
+        "user-agent": "keiko-feedback-intake",
+        "x-github-api-version": "2022-11-28",
+      },
+      servername: "api.github.com",
+      rejectUnauthorized: true,
+    });
+    expect(lookupResult).toEqual({ hostname: "api.github.com", address: "8.8.8.8", family: 4 });
+    expect(result).toMatchObject({
+      status: 201,
+      contentType: "application/json; charset=utf-8",
+      requestCommitted: true,
+      retryAfter: "60",
+      rateLimitRemaining: "4999",
+    });
+    expect(Buffer.from(result.body)).toEqual(Buffer.from('{"ok":true}'));
+  });
+
+  it("writes a bounded JSON issue body only with its matching content headers", async () => {
+    const response = new MockResponse(200);
+    nodeMocks.request.mockImplementation(
+      (_url: string, _options: PinnedRequestOptions, callback: ResponseCallback): MockRequest => {
+        return mockHttpsResponse(response, callback, (value) => {
+          value.emit("end");
+        });
+      },
+    );
+
+    await new FixedOriginGithubTransport().execute({
+      kind: "create-issue",
+      repositoryId: "43",
+      title: "Governed title",
+      body: "Governed body",
+      labels: ["user-finding"],
+      token: "installation-token",
+    });
+
+    const options = nodeMocks.request.mock.calls[0]?.[1] as PinnedRequestOptions;
+    expect(options).toMatchObject({
+      method: "POST",
+      headers: {
+        authorization: "Bearer installation-token",
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(
+          '{"title":"Governed title","body":"Governed body","labels":["user-finding"]}',
+        ),
+      },
+    });
+    const call = nodeMocks.request.mock.results[0]?.value as MockRequest;
+    expect(call.end).toHaveBeenCalledWith(
+      Buffer.from('{"title":"Governed title","body":"Governed body","labels":["user-finding"]}'),
+    );
+  });
+
+  it("fails closed when DNS rejects, returns no address, or returns an unapproved address", async () => {
+    const transport = new FixedOriginGithubTransport();
+    nodeMocks.lookup.mockRejectedValueOnce(new Error("resolver unavailable"));
+    await expect(transport.execute({ kind: "inspect-app", jwt: "jwt" })).rejects.toEqual(
+      expect.objectContaining({ requestCommitted: false }),
+    );
+
+    nodeMocks.lookup.mockResolvedValueOnce([]);
+    await expect(transport.execute({ kind: "inspect-app", jwt: "jwt" })).rejects.toEqual(
+      expect.objectContaining({ requestCommitted: false }),
+    );
+
+    nodeMocks.lookup.mockResolvedValueOnce(publicDnsResult("127.0.0.1"));
+    await expect(transport.execute({ kind: "inspect-app", jwt: "jwt" })).rejects.toEqual(
+      expect.objectContaining({ requestCommitted: false }),
+    );
+    expect(nodeMocks.request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a Location header", 200, { location: "https://github.com/redirect" }],
+    ["a redirect status", 302, {}],
+  ])("rejects a response with %s", async (_reason, statusCode, headers) => {
+    const response = new MockResponse(statusCode, headers);
+    nodeMocks.request.mockImplementation(
+      (_url: string, _options: PinnedRequestOptions, callback: ResponseCallback): MockRequest => {
+        return mockHttpsResponse(response, callback, (value) => {
+          value.emit("end");
+        });
+      },
+    );
+
+    await expect(
+      new FixedOriginGithubTransport().execute({ kind: "inspect-app", jwt: "jwt" }),
+    ).rejects.toEqual(expect.objectContaining({ requestCommitted: true }));
+  });
+
+  it("fails closed when the response exceeds its byte limit or emits an error", async () => {
+    const oversized = new MockResponse(200);
+    nodeMocks.request.mockImplementation(
+      (_url: string, _options: PinnedRequestOptions, callback: ResponseCallback): MockRequest => {
+        return mockHttpsResponse(oversized, callback, (value) => {
+          value.emit("data", Buffer.alloc(GITHUB_MAX_RESPONSE_BYTES + 1));
+        });
+      },
+    );
+    await expect(
+      new FixedOriginGithubTransport().execute({ kind: "inspect-app", jwt: "jwt" }),
+    ).rejects.toEqual(expect.objectContaining({ requestCommitted: true }));
+    expect(oversized.destroy).toHaveBeenCalledOnce();
+
+    const errored = new MockResponse(200);
+    nodeMocks.request.mockImplementation(
+      (_url: string, _options: PinnedRequestOptions, callback: ResponseCallback): MockRequest => {
+        return mockHttpsResponse(errored, callback, (value) => {
+          value.emit("error", new Error("socket read failure"));
+        });
+      },
+    );
+    await expect(
+      new FixedOriginGithubTransport().execute({ kind: "inspect-app", jwt: "jwt" }),
+    ).rejects.toEqual(expect.objectContaining({ requestCommitted: true }));
+  });
+
+  it("reports request errors and aborts without following through to a response", async () => {
+    const requestFailure = new MockRequest();
+    requestFailure.end.mockImplementation((): void => {
+      requestFailure.emit("error", new Error("connection refused"));
+    });
+    nodeMocks.request.mockImplementation((): MockRequest => requestFailure);
+    await expect(
+      new FixedOriginGithubTransport().execute({ kind: "inspect-app", jwt: "jwt" }),
+    ).rejects.toEqual(expect.objectContaining({ requestCommitted: false }));
+
+    const abortable = new MockRequest();
+    nodeMocks.request.mockImplementation((): MockRequest => abortable);
+    const controller = new AbortController();
+    const pending = new FixedOriginGithubTransport().execute(
+      { kind: "inspect-app", jwt: "jwt" },
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => {
+      expect(nodeMocks.request).toHaveBeenCalledTimes(2);
+    });
+    controller.abort();
+    await expect(pending).rejects.toEqual(expect.objectContaining({ requestCommitted: true }));
+    expect(abortable.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("enforces the pinned-request deadline with a deterministic clock", async () => {
+    vi.useFakeTimers();
+    const stalled = new MockRequest();
+    nodeMocks.request.mockImplementation((): MockRequest => stalled);
+    const pending = new FixedOriginGithubTransport().execute(
+      { kind: "inspect-app", jwt: "jwt" },
+      { timeoutMs: 25 },
+    );
+
+    const rejection = expect(pending).rejects.toEqual(
+      expect.objectContaining({ requestCommitted: true }),
+    );
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expect(stalled.destroy).toHaveBeenCalledOnce();
   });
 });

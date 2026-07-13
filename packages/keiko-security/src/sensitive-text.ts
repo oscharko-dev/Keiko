@@ -26,10 +26,10 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = [
 ];
 
 const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /\.ssh\/id_[A-Za-z0-9_-]+/i,
+  /\.ssh\/id_[a-z0-9_-]+/i,
   /\.aws\/credentials\b/i,
   /(^|[\s/])\.npmrc\b/i,
-  /(^|[\s/])\.env(\.[A-Za-z0-9_-]+)?\b/i,
+  /(^|[\s/])\.env(\.[a-z0-9_-]+)?\b/i,
 ];
 
 const URL_CANDIDATE_RE = /\bhttps?:\/\/[^\s"'`<>]+/gi;
@@ -39,7 +39,7 @@ const ISO_LOG_TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})
 const LOG_SEVERITY_RE = /\b(trace|debug|info|warn(?:ing)?|error|fatal)\b/i;
 const STACK_TRACE_MARKER_RE = /\b(stack trace|traceback|exception stack)\b/i;
 const STACK_FRAME_RE = /\bat\s+[A-Za-z_$][\w.$<>]*(?:\s+\[[^\]]+\])?\s*\([^)\n]*\)/g;
-const GERMAN_IBAN_RE = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/i;
+const GERMAN_IBAN_RE = /\bDE\d{2}(?: ?\d{4}){4} ?\d{2}\b/i;
 const GERMAN_TAX_ID_CANDIDATE_RE = /\b\d(?:[ -]?\d){10}\b/;
 const GERMAN_PHONE_RE = /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){5,12}\b/;
 
@@ -63,7 +63,7 @@ function looksLikeProviderBaseUrl(value: string): boolean {
       continue;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
-    const normalizedPath = parsed.pathname.replace(/\/+$/u, "");
+    const normalizedPath = withoutTrailingSlashes(parsed.pathname);
     const openAiPath =
       normalizedPath === "/v1" ||
       normalizedPath === "/openai/v1" ||
@@ -76,6 +76,12 @@ function looksLikeProviderBaseUrl(value: string): boolean {
     if (PROVIDER_CONTEXT_RE.test(snippet) || openAiPath) return true;
   }
   return false;
+}
+
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
 }
 
 function looksLikeRawLog(value: string): boolean {

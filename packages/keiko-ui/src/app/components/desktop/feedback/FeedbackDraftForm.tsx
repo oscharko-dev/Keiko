@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type FormEvent, type ReactNode, type RefObject } from "react";
+import { useId, type ReactNode, type RefObject, type SubmitEvent } from "react";
 
 import type { FeedbackBrowserDraftV1 } from "@/lib/feedback-api";
 import { useFeedbackTranslate, type FeedbackTranslate } from "./feedback-i18n";
@@ -199,7 +199,7 @@ export function FeedbackDraftForm({
   readonly onAttachmentControlRef: (index: number, node: HTMLButtonElement | null) => void;
   readonly onAttachmentFiles: (files: readonly File[]) => void;
   readonly onRemoveAttachment: (index: number) => void;
-  readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
 }): ReactNode {
   const t = useFeedbackTranslate();
   const errorId = useId();
@@ -240,13 +240,13 @@ export function FeedbackDraftForm({
         onRemove={onRemoveAttachment}
       />
       {optionalRemovalStatus === undefined ? null : (
-        <p className="feedback-status" role="status">
+        <output className="feedback-status">
           {t(
             optionalRemovalStatus === "browserDescription"
               ? "feedback.form.removed.browserDescription"
               : "feedback.form.removed.handwrittenEvidence",
           )}
-        </p>
+        </output>
       )}
       {error === undefined ? null : (
         <p id={errorId} className="feedback-error" role="alert">

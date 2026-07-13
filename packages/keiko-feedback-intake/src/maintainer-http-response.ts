@@ -42,18 +42,14 @@ export function fail(
   status: number,
   headers: Readonly<Record<string, string>> = {},
 ): void {
-  const error =
-    status === 404
-      ? "not-found"
-      : status === 409
-        ? "conflict"
-        : status === 422
-          ? "invalid-domain"
-          : status === 429
-            ? "rate-limited"
-            : status === 503
-              ? "temporarily-unavailable"
-              : "request-rejected";
+  const errors: Readonly<Record<number, string>> = {
+    404: "not-found",
+    409: "conflict",
+    422: "invalid-domain",
+    429: "rate-limited",
+    503: "temporarily-unavailable",
+  };
+  const error = errors[status] ?? "request-rejected";
   json(res, status, { error }, headers);
 }
 
@@ -90,11 +86,9 @@ export function setCookie(
 ): void {
   const value = `${name}=${capability}; Path=/; Max-Age=${String(maxAge)}; Secure; HttpOnly; SameSite=Lax`;
   const existing = res.getHeader("Set-Cookie");
-  const values = Array.isArray(existing)
-    ? existing.map(String)
-    : existing === undefined
-      ? []
-      : [String(existing)];
+  let values: string[] = [];
+  if (Array.isArray(existing)) values = existing.map(String);
+  else if (existing !== undefined) values = [String(existing)];
   res.setHeader("Set-Cookie", [...values, value]);
 }
 

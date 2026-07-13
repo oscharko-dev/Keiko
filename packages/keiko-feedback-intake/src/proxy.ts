@@ -55,7 +55,7 @@ function ipv6Groups(value: string): readonly string[] | undefined {
   const right = halves[1]?.split(":").filter(Boolean) ?? [];
   const groups =
     halves.length === 2
-      ? [...left, ...Array<string>(8 - left.length - right.length).fill("0"), ...right]
+      ? [...left, ...new Array<string>(8 - left.length - right.length).fill("0"), ...right]
       : left;
   return groups.length === 8 ? groups : undefined;
 }

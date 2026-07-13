@@ -4,7 +4,20 @@ import { useId, type ReactNode, type RefObject } from "react";
 
 import type { FeedbackReceiptV1, PreparedFeedbackSnapshotV1 } from "@/lib/feedback-api";
 import { Icons } from "../Icons";
-import { useFeedbackTranslate } from "./feedback-i18n";
+import { useFeedbackTranslate, type FeedbackTranslate } from "./feedback-i18n";
+
+const InfoIcon = Icons.info;
+
+function submissionActionLabel(
+  step: Extract<FeedbackSubmissionStep, "unavailable" | "rejected" | "rate-limited" | "error">,
+  busy: boolean,
+  t: FeedbackTranslate,
+): string {
+  if (busy) return t("feedback.submission.submitting");
+  if (step === "rejected") return t("feedback.submission.rejected.editAndRescan");
+  if (step === "rate-limited") return t("feedback.submission.rateLimited.editAndRescan");
+  return t("feedback.submission.retry");
+}
 
 export type FeedbackRetryableSubmissionStep = "unavailable" | "error";
 export type FeedbackSubmissionStep =
@@ -23,8 +36,8 @@ export interface FeedbackSubmissionReviewControls {
   readonly step: FeedbackSubmissionStep;
   readonly busy: boolean;
   readonly confirmationHeadingRef: RefObject<HTMLHeadingElement | null>;
-  readonly acceptedStatusRef: RefObject<HTMLParagraphElement | null>;
-  readonly copiedStatusRef: RefObject<HTMLParagraphElement | null>;
+  readonly acceptedStatusRef: RefObject<HTMLOutputElement | null>;
+  readonly copiedStatusRef: RefObject<HTMLOutputElement | null>;
   readonly resultRef: RefObject<HTMLElement | null>;
   readonly receipt: FeedbackReceiptV1;
   readonly receiptCopyState: FeedbackReceiptCopyState;
@@ -54,30 +67,29 @@ function FeedbackSubmissionResult({
   const t = useFeedbackTranslate();
   const headingId = useId();
   const rateLimited = step === "rate-limited";
-  const content =
-    step === "unavailable"
-      ? {
-          title: "feedback.submission.unavailable.title" as const,
-          message: "feedback.submission.unavailable.message" as const,
-          role: "status" as const,
-        }
-      : step === "rejected"
-        ? {
-            title: "feedback.submission.rejected.title" as const,
-            message: "feedback.submission.rejected.message" as const,
-            role: "alert" as const,
-          }
-        : step === "rate-limited"
-          ? {
-              title: "feedback.submission.rateLimited.title" as const,
-              message: "feedback.submission.rateLimited.message" as const,
-              role: "status" as const,
-            }
-          : {
-              title: "feedback.submission.error.title" as const,
-              message: "feedback.submission.error.message" as const,
-              role: "alert" as const,
-            };
+  const contentByStep = {
+    unavailable: {
+      title: "feedback.submission.unavailable.title" as const,
+      message: "feedback.submission.unavailable.message" as const,
+      role: "status" as const,
+    },
+    rejected: {
+      title: "feedback.submission.rejected.title" as const,
+      message: "feedback.submission.rejected.message" as const,
+      role: "alert" as const,
+    },
+    "rate-limited": {
+      title: "feedback.submission.rateLimited.title" as const,
+      message: "feedback.submission.rateLimited.message" as const,
+      role: "status" as const,
+    },
+    error: {
+      title: "feedback.submission.error.title" as const,
+      message: "feedback.submission.error.message" as const,
+      role: "alert" as const,
+    },
+  };
+  const content = contentByStep[step];
   return (
     <section
       ref={resultRef}
@@ -88,27 +100,25 @@ function FeedbackSubmissionResult({
     >
       {rateLimited ? (
         <p className="feedback-submission-outcome">
-          <Icons.info size={16} />
+          <InfoIcon size={16} />
           <span>{t("feedback.submission.rateLimited.label")}</span>
         </p>
       ) : null}
       <h3 id={headingId}>{t(content.title)}</h3>
-      <p className="feedback-result-message" role={content.role}>
-        {t(content.message)}
-      </p>
+      {content.role === "alert" ? (
+        <p className="feedback-result-message" role="alert">
+          {t(content.message)}
+        </p>
+      ) : (
+        <output className="feedback-result-message">{t(content.message)}</output>
+      )}
       <button
         className="feedback-primary-action feedback-submission-action"
         type="button"
         disabled={busy}
         onClick={step === "rejected" || step === "rate-limited" ? onEditAndRescan : onRetry}
       >
-        {busy
-          ? t("feedback.submission.submitting")
-          : step === "rejected"
-            ? t("feedback.submission.rejected.editAndRescan")
-            : step === "rate-limited"
-              ? t("feedback.submission.rateLimited.editAndRescan")
-              : t("feedback.submission.retry")}
+        {submissionActionLabel(step, busy, t)}
       </button>
     </section>
   );
@@ -201,14 +211,9 @@ export function FeedbackSubmissionReview({
           className="feedback-submission-result"
           aria-label={t("feedback.submission.accepted")}
         >
-          <p
-            ref={acceptedStatusRef}
-            className="feedback-submission-status"
-            role="status"
-            tabIndex={-1}
-          >
+          <output ref={acceptedStatusRef} className="feedback-submission-status" tabIndex={-1}>
             {t("feedback.submission.accepted")}
-          </p>
+          </output>
           {receiptCopyState !== "copied" ? (
             <>
               <p className="feedback-result-message">
@@ -240,14 +245,9 @@ export function FeedbackSubmissionReview({
             </>
           ) : null}
           {receiptCopyState === "copied" ? (
-            <p
-              ref={copiedStatusRef}
-              className="feedback-result-message"
-              role="status"
-              tabIndex={-1}
-            >
+            <output ref={copiedStatusRef} className="feedback-result-message" tabIndex={-1}>
               {t("feedback.submission.receipt.copied")}
-            </p>
+            </output>
           ) : null}
         </section>
       ) : null}

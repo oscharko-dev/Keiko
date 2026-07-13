@@ -58,6 +58,7 @@ export interface FeedbackFlowHarness {
 
 export type IntakeMode =
   { readonly kind: "available"; readonly perIdentity?: number } | { readonly kind: "unavailable" };
+const DEFAULT_INTAKE_MODE: IntakeMode = { kind: "available" };
 
 export function scopedPool(pool: Pool, schema: string): PgPoolLike {
   return {
@@ -86,7 +87,7 @@ function createScopedClient(client: PgClientLike): PgClientLike {
 
 export async function createFeedbackFlowHarness(
   databaseUrl: string,
-  intakeMode: IntakeMode = { kind: "available" },
+  intakeMode: IntakeMode = DEFAULT_INTAKE_MODE,
 ): Promise<FeedbackFlowHarness> {
   const pool = new Pool({ connectionString: databaseUrl, max: 6 });
   const installationPool = new Pool({ connectionString: databaseUrl, max: 2 });

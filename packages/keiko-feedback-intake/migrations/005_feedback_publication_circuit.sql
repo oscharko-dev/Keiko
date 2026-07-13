@@ -23,7 +23,7 @@ ON feedback_publication_preparations (item_id, created_at DESC, id DESC);
 ALTER TABLE feedback_publication_outbox
   ADD COLUMN reconciled_exact boolean NOT NULL DEFAULT false,
   ADD CONSTRAINT feedback_publication_outbox_reconciled_exact_check CHECK (
-    NOT reconciled_exact OR (status = 'succeeded' AND create_eligible = false)
+    NOT reconciled_exact OR (status = 'succeeded' AND create_eligible = false) -- NOSONAR - state literal is local to this independent database constraint.
   );
 
 CREATE OR REPLACE FUNCTION validate_feedback_publication_outbox_arm_state() RETURNS trigger

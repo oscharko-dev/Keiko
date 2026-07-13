@@ -17,6 +17,6 @@ async function main(): Promise<void> {
   process.once("SIGTERM", stop);
 }
 
-void main().catch(() => {
+await main().catch(() => {
   process.exitCode = 1;
 });

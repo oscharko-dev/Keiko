@@ -27,7 +27,7 @@ import { PostgresIntakeRepository } from "./postgres.js";
 import type { PgClientLike, PgPoolLike, PgQueryResult } from "./postgres-types.js";
 
 const databaseUrl = process.env.DATABASE_URL;
-const integration = databaseUrl === undefined ? it.skip : it;
+const integration = it.skipIf(databaseUrl === undefined);
 const AT = new Date("2026-07-12T12:00:00.000Z");
 const DAY_MS = 86_400_000;
 const ACTOR = {

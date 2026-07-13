@@ -16,16 +16,16 @@
 
 const POSIX_ABSOLUTE_PATH_PATTERN =
   /(^|[^A-Za-z0-9._~/-])\/(?!\/)(?=[^\n\r"'`<>]*\/)[^\n\r"'`<>]+/gu;
-const POSIX_SINGLE_SEGMENT_PATH_PATTERN = /(^|[^A-Za-z0-9._~/-])\/(?!\/)[^\s\n\r"'`<>,;]+/gu;
+const POSIX_SINGLE_SEGMENT_PATH_PATTERN = /(^|[^A-Za-z0-9._~/-])\/(?!\/)[^\s"'`<>,;]+/gu;
 const WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
   /(^|[^A-Za-z0-9._~/-])[A-Za-z]:[\\/](?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
 const WINDOWS_DRIVE_SINGLE_SEGMENT_PATH_PATTERN =
-  /(^|[^A-Za-z0-9._~/-])[A-Za-z]:[\\/][^\s\n\r"'`<>,;]+/gu;
+  /(^|[^A-Za-z0-9._~/-])[A-Za-z]:[\\/][^\s"'`<>,;]+/gu;
 const WINDOWS_BACKSLASH_UNC_ABSOLUTE_PATH_PATTERN =
   /(^|[^A-Za-z0-9._~/-])\\\\(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
 const SLASH_UNC_ABSOLUTE_PATH_PATTERN =
   /(^|[^A-Za-z0-9._~:/-])\/\/(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
-const FILE_URI_ABSOLUTE_PATH_PATTERN = /\bfile:\/\/[A-Za-z0-9%._~!$&'()*+,;=:@\-/]+/giu;
+const FILE_URI_ABSOLUTE_PATH_PATTERN = /\bfile:\/\/[a-z0-9%._~!$&'()*+,;=:@\-/]+/giu;
 const CHAT_ROLE_MARKERS = ["user", "assistant", "system"] as const;
 const REDACTED_PATH = "[REDACTED_PATH]";
 
@@ -50,7 +50,6 @@ function isBidiOrZeroWidthCodePoint(cp: number): boolean {
     (cp >= 0x200b && cp <= 0x200f) ||
     (cp >= 0x202a && cp <= 0x202e) ||
     (cp >= 0x2060 && cp <= 0x206f) ||
-    (cp >= 0x2066 && cp <= 0x2069) ||
     cp === 0xfeff
   );
 }
@@ -65,12 +64,9 @@ function isStrippableControlCodePoint(cp: number): boolean {
 /** True when every UTF-16 code unit sequence represents a Unicode scalar value. */
 export function isUnicodeScalarString(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const unit = value.charCodeAt(index);
-    if (unit < 0xd800 || unit > 0xdfff) continue;
-    if (unit > 0xdbff || index + 1 >= value.length) return false;
-    const trail = value.charCodeAt(index + 1);
-    if (trail < 0xdc00 || trail > 0xdfff) return false;
-    index += 1;
+    const point = value.codePointAt(index);
+    if (point === undefined || (point >= 0xd800 && point <= 0xdfff)) return false;
+    if (point > 0xffff) index += 1;
   }
   return true;
 }

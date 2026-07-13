@@ -1,6 +1,6 @@
 import type { GithubAppSignerSnapshot } from "./github-app-key.js";
 
-const APP_ID = /^[1-9][0-9]{0,19}$/u;
+const APP_ID = /^[1-9]\d{0,19}$/u;
 
 function encode(value: Uint8Array | string): string {
   return Buffer.from(value).toString("base64url");

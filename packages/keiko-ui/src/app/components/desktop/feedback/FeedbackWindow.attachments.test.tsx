@@ -8,10 +8,50 @@ import { FeedbackWindow } from "./FeedbackWindow";
 import {
   preparedSnapshotWithAttachmentDispositions,
   preparedSnapshotWithSafeAttachment,
+  preparedSnapshot,
   unreadFile,
 } from "./FeedbackWindow.test-helpers";
 
 describe("FeedbackWindow attachment recovery", () => {
+  it("assigns distinct stable UI identities to attachments with identical bytes", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const base = preparedSnapshot();
+      const report = Object.freeze({
+        ...base.report,
+        attachments: Object.freeze(["same safe remainder", "same safe remainder"]),
+      });
+      const prepared = Object.freeze({ ...base, report, canonicalJson: JSON.stringify(report) });
+      const previewReport = vi.fn().mockResolvedValue(prepared);
+      const user = userEvent.setup();
+      render(
+        <I18nProvider>
+          <FeedbackWindow previewReport={previewReport} />
+        </I18nProvider>,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Continue with ordinary feedback" }));
+      const attachmentInput = screen.getByLabelText<HTMLInputElement>("Add text attachment");
+      await user.upload(attachmentInput, [
+        new File(["same bytes"], "first.txt", { type: "text/plain" }),
+        new File(["same bytes"], "second.txt", { type: "text/plain" }),
+      ]);
+
+      expect(await screen.findByText("Attachment 1")).toBeInTheDocument();
+      expect(screen.getByText("Attachment 2")).toBeInTheDocument();
+      const form = screen.getByRole("heading", { name: "Share feedback" }).closest("form");
+      expect(form).not.toBeNull();
+      fireEvent.submit(form!);
+      const preview = await screen.findByRole("region", { name: "Sanitized preview" });
+      expect(within(preview).getAllByText("same safe remainder")).toHaveLength(2);
+      expect(consoleError.mock.calls.flat().join(" ")).not.toContain(
+        "Encountered two children with the same key",
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("stages bounded text attachments as anonymous envelopes and removes one safely", async () => {
     const safeRaw = "Safe attachment remainder.\npassword=opaque-first-source";
     const unsafeRaw = '"password=opaque-second-source"';

@@ -10,7 +10,7 @@ export const GITHUB_MAX_RESPONSE_BYTES = 256 * 1024;
 // Search is bounded to two results: one valid reconciliation candidate plus duplicate detection.
 export const GITHUB_SEARCH_PAGE_SIZE = 1;
 export const GITHUB_MAX_SEARCH_RESULTS = 2;
-const DECIMAL_ID = /^[1-9][0-9]{0,19}$/u;
+const DECIMAL_ID = /^[1-9]\d{0,19}$/u;
 
 export type GithubHttpOperation =
   | { readonly kind: "inspect-app"; readonly jwt: string }
@@ -177,29 +177,29 @@ const blockedV4 = new BlockList();
 const blockedV6 = new BlockList();
 for (const [address, prefix, family] of [
   ["0.0.0.0", 8, "ipv4"],
-  ["10.0.0.0", 8, "ipv4"],
-  ["100.64.0.0", 10, "ipv4"],
+  ["10.0.0.0", 8, "ipv4"], // NOSONAR -- RFC 1918 SSRF blocklist range.
+  ["100.64.0.0", 10, "ipv4"], // NOSONAR -- RFC 6598 SSRF blocklist range.
   ["127.0.0.0", 8, "ipv4"],
-  ["169.254.0.0", 16, "ipv4"],
-  ["172.16.0.0", 12, "ipv4"],
-  ["192.0.0.0", 24, "ipv4"],
+  ["169.254.0.0", 16, "ipv4"], // NOSONAR -- Link-local SSRF blocklist range.
+  ["172.16.0.0", 12, "ipv4"], // NOSONAR -- RFC 1918 SSRF blocklist range.
+  ["192.0.0.0", 24, "ipv4"], // NOSONAR -- IETF special-use SSRF blocklist range.
   ["192.0.2.0", 24, "ipv4"],
-  ["192.168.0.0", 16, "ipv4"],
-  ["198.18.0.0", 15, "ipv4"],
+  ["192.168.0.0", 16, "ipv4"], // NOSONAR -- RFC 1918 SSRF blocklist range.
+  ["198.18.0.0", 15, "ipv4"], // NOSONAR -- Benchmarking SSRF blocklist range.
   ["198.51.100.0", 24, "ipv4"],
   ["203.0.113.0", 24, "ipv4"],
-  ["224.0.0.0", 4, "ipv4"],
-  ["240.0.0.0", 4, "ipv4"],
+  ["224.0.0.0", 4, "ipv4"], // NOSONAR -- Multicast SSRF blocklist range.
+  ["240.0.0.0", 4, "ipv4"], // NOSONAR -- Reserved SSRF blocklist range.
   ["::", 128, "ipv6"],
   ["::1", 128, "ipv6"],
-  ["::ffff:0:0", 96, "ipv6"],
-  ["64:ff9b::", 96, "ipv6"],
-  ["100::", 64, "ipv6"],
-  ["2001::", 23, "ipv6"],
-  ["2002::", 16, "ipv6"],
-  ["fc00::", 7, "ipv6"],
-  ["fe80::", 10, "ipv6"],
-  ["ff00::", 8, "ipv6"],
+  ["::ffff:0:0", 96, "ipv6"], // NOSONAR -- IPv4-mapped SSRF blocklist range.
+  ["64:ff9b::", 96, "ipv6"], // NOSONAR -- IPv4 translation SSRF blocklist range.
+  ["100::", 64, "ipv6"], // NOSONAR -- Discard-only SSRF blocklist range.
+  ["2001::", 23, "ipv6"], // NOSONAR -- IETF special-use SSRF blocklist range.
+  ["2002::", 16, "ipv6"], // NOSONAR -- 6to4 SSRF blocklist range.
+  ["fc00::", 7, "ipv6"], // NOSONAR -- Unique-local SSRF blocklist range.
+  ["fe80::", 10, "ipv6"], // NOSONAR -- Link-local SSRF blocklist range.
+  ["ff00::", 8, "ipv6"], // NOSONAR -- Multicast SSRF blocklist range.
   ["2001:db8::", 32, "ipv6"],
 ] as const) {
   (family === "ipv4" ? blockedV4 : blockedV6).addSubnet(address, prefix, family);
@@ -258,7 +258,7 @@ function collectResponse(
 }
 
 function boundedRateHeader(value: string | string[] | undefined): string | undefined {
-  return typeof value === "string" && /^[0-9]{1,12}$/u.test(value) ? value : undefined;
+  return typeof value === "string" && /^\d{1,12}$/u.test(value) ? value : undefined;
 }
 
 function projectResponse(
@@ -345,7 +345,6 @@ function pinnedRequestOptions(
 }
 
 // Request, abort, absolute-deadline, and response listeners stay together so cleanup is auditable.
-// eslint-disable-next-line max-lines-per-function
 function executePinnedRequest(
   projection: RequestProjection,
   selected: ApprovedAddress,
@@ -355,12 +354,13 @@ function executePinnedRequest(
   let committed = false;
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (action: () => void): void => {
+    const finish = (error: GithubTransportError | undefined, value?: GithubHttpResponse): void => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
       signal?.removeEventListener("abort", abort);
-      action();
+      if (error === undefined && value !== undefined) resolve(value);
+      else reject(error ?? new GithubTransportError(committed));
     };
     const call = request(
       `${ORIGIN}${projection.path}`,
@@ -368,14 +368,10 @@ function executePinnedRequest(
       (response) => {
         void collectResponse(response, committed).then(
           (value) => {
-            finish(() => {
-              resolve(value);
-            });
+            finish(undefined, value);
           },
           () => {
-            finish(() => {
-              reject(new GithubTransportError(committed));
-            });
+            finish(new GithubTransportError(committed));
           },
         );
       },
@@ -390,9 +386,7 @@ function executePinnedRequest(
       committed = true;
     });
     call.on("error", () => {
-      finish(() => {
-        reject(new GithubTransportError(committed));
-      });
+      finish(new GithubTransportError(committed));
     });
     if (projection.body === undefined) call.end();
     else call.end(projection.body);

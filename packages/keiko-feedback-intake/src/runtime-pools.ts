@@ -20,14 +20,13 @@ export interface RuntimePools {
 
 export const MAINTAINER_POOL_MAX = 4;
 
-function optionalPool(
+function enabledPool(
   factory: RuntimePoolFactory,
   databaseUrl: string,
   maximum: number,
   connectTimeoutMs: number,
-  enabled: boolean,
-): RuntimePool | undefined {
-  return enabled ? factory(databaseUrl, maximum, connectTimeoutMs) : undefined;
+): RuntimePool {
+  return factory(databaseUrl, maximum, connectTimeoutMs);
 }
 
 function trackedPublicationPool(pool: RuntimePool): RuntimePool {
@@ -50,7 +49,7 @@ function trackedPublicationPool(pool: RuntimePool): RuntimePool {
     },
     end: () => pool.end(),
     abortCheckedOut: (error): void => {
-      for (const client of [...checkedOut]) client.release(error);
+      for (const client of checkedOut) client.release(error);
     },
   };
 }
@@ -70,30 +69,20 @@ export async function createRuntimePools(
   const intake = factory(databaseUrl, intakeMax, connectTimeoutMs);
   const created: RuntimePool[] = [intake];
   try {
-    const maintainer = optionalPool(
-      factory,
-      databaseUrl,
-      MAINTAINER_POOL_MAX,
-      connectTimeoutMs,
-      maintainerEnabled,
-    );
+    const maintainer = maintainerEnabled
+      ? enabledPool(factory, databaseUrl, MAINTAINER_POOL_MAX, connectTimeoutMs)
+      : undefined;
     if (maintainer !== undefined) created.push(maintainer);
-    const rawPublicationPrimary = optionalPool(
-      factory,
-      databaseUrl,
-      publicationConcurrency,
-      connectTimeoutMs,
-      publicationConcurrency > 0,
-    );
+    const rawPublicationPrimary =
+      publicationConcurrency > 0
+        ? enabledPool(factory, databaseUrl, publicationConcurrency, connectTimeoutMs)
+        : undefined;
     const publicationPrimary = trackedOptional(rawPublicationPrimary);
     if (rawPublicationPrimary !== undefined) created.push(rawPublicationPrimary);
-    const rawPublicationSessions = optionalPool(
-      factory,
-      databaseUrl,
-      publicationConcurrency,
-      connectTimeoutMs,
-      publicationConcurrency > 0,
-    );
+    const rawPublicationSessions =
+      publicationConcurrency > 0
+        ? enabledPool(factory, databaseUrl, publicationConcurrency, connectTimeoutMs)
+        : undefined;
     const publicationSessions = trackedOptional(rawPublicationSessions);
     if (rawPublicationSessions !== undefined) created.push(rawPublicationSessions);
     if (new Set(created).size !== created.length)

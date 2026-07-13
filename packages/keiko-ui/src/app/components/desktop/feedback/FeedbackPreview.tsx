@@ -122,15 +122,19 @@ export function FeedbackPreview({
       <PreviewText label={t("feedback.preview.steps")} value={report.steps} />
       <PreviewText label={t("feedback.preview.expected")} value={report.expectedResult} />
       <PreviewText label={t("feedback.preview.actual")} value={report.actualResult} />
-      {report.attachments?.map((attachment, index) => (
-        <PreviewText
-          key={index}
-          label={t("feedback.preview.attachment", {
-            ordinal: (sourceOrdinals[index] ?? index) + 1,
-          })}
-          value={attachment}
-        />
-      ))}
+      {report.attachments?.map((attachment, index) => {
+        const sourceOrdinal = sourceOrdinals[index];
+        if (sourceOrdinal === undefined) {
+          throw new Error("Prepared feedback attachment provenance is inconsistent");
+        }
+        return (
+          <PreviewText
+            key={`attachment-${sourceOrdinal}`}
+            label={t("feedback.preview.attachment", { ordinal: sourceOrdinal + 1 })}
+            value={attachment}
+          />
+        );
+      })}
       <FeedbackSubmissionReview prepared={prepared} {...submission} />
       <FeedbackPublicHandoff
         prepared={prepared}

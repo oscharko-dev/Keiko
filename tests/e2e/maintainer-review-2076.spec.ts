@@ -506,7 +506,7 @@ test("multiple targets, reload recovery, cancel friction, and modes remain acces
   page,
   browserName,
 }) => {
-  test.skip(browserName !== "chromium", "forced-colors evidence requires Chromium");
+  test.skip(browserName !== "chromium", "forced-colors evidence requires Chromium"); // NOSONAR -- Playwright exposes forced-colors emulation only in Chromium.
   const multi = [
     ...catalog,
     {

@@ -46,8 +46,6 @@ function parseMaintainerJson(bytes: Uint8Array): unknown {
   return JSON.parse(source) as unknown;
 }
 
-// The bounded scanner keeps duplicate-key rejection auditable at the trust boundary.
-// eslint-disable-next-line complexity
 function hasDuplicateKeys(source: string): boolean {
   const scopes: Set<string>[] = [];
   for (let index = 0; index < source.length; index += 1) {
@@ -55,15 +53,29 @@ function hasDuplicateKeys(source: string): boolean {
     if (character === "{") scopes.push(new Set());
     else if (character === "}") scopes.pop();
     else if (character === '"' && scopes.length > 0) {
-      const end = quotedEnd(source, index + 1);
-      if (end === undefined) return false;
-      let cursor = end + 1;
-      while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
-      if (source[cursor] === ":" && duplicateKey(source, index, end, scopes.at(-1))) return true;
-      index = end;
+      const inspected = inspectQuotedKey(source, index, scopes.at(-1));
+      if (inspected === undefined) return false;
+      if (inspected.duplicate) return true;
+      const end = inspected.end;
+      index = end; // NOSONAR -- Required bounded scanner advancement after consuming a JSON string token.
     }
   }
   return false;
+}
+
+function inspectQuotedKey(
+  source: string,
+  start: number,
+  scope: Set<string> | undefined,
+): { readonly duplicate: boolean; readonly end: number } | undefined {
+  const end = quotedEnd(source, start + 1);
+  if (end === undefined) return undefined;
+  let cursor = end + 1;
+  while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+  return {
+    duplicate: source[cursor] === ":" && duplicateKey(source, start, end, scope),
+    end,
+  };
 }
 
 function quotedEnd(source: string, start: number): number | undefined {

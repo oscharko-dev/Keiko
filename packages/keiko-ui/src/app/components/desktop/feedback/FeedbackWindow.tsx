@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 
 import {
   FeedbackPreviewPreparationError,
@@ -49,13 +49,22 @@ function withoutOptionalField(
   field: FeedbackOptionalTextField,
 ): FeedbackBrowserDraftV1 {
   if (field === "browserDescription") {
-    const { browserDescription, ...remaining } = draft;
-    void browserDescription;
+    const { browserDescription: _browserDescription, ...remaining } = draft;
     return remaining;
   }
-  const { handwrittenEvidence, ...remaining } = draft;
-  void handwrittenEvidence;
+  const { handwrittenEvidence: _handwrittenEvidence, ...remaining } = draft;
   return remaining;
+}
+
+function errorFocusTarget(
+  errorTarget: FeedbackRecoveryTarget | undefined,
+  attachmentInput: HTMLInputElement | null,
+  heading: HTMLHeadingElement | null,
+  controls: Partial<Record<FeedbackTextField, FeedbackTextControlElement | null>>,
+): FeedbackTextControlElement | HTMLInputElement | HTMLHeadingElement | null | undefined {
+  if (errorTarget === "attachments") return attachmentInput;
+  if (errorTarget === undefined) return heading;
+  return controls[errorTarget];
 }
 
 export function FeedbackWindow({
@@ -95,8 +104,8 @@ export function FeedbackWindow({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previewHeadingRef = useRef<HTMLHeadingElement>(null);
   const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
-  const acceptedStatusRef = useRef<HTMLParagraphElement>(null);
-  const copiedStatusRef = useRef<HTMLParagraphElement>(null);
+  const acceptedStatusRef = useRef<HTMLOutputElement>(null);
+  const copiedStatusRef = useRef<HTMLOutputElement>(null);
   const securityAlertRef = useRef<HTMLElement>(null);
   const submissionResultRef = useRef<HTMLElement>(null);
   const submissionInFlightRef = useRef(false);
@@ -132,12 +141,12 @@ export function FeedbackWindow({
   }, [ordinary]);
   useEffect(() => {
     if (busy || error === undefined) return;
-    const target =
-      errorTarget === "attachments"
-        ? attachmentInputRef.current
-        : errorTarget === undefined
-          ? headingRef.current
-          : controlRefs.current[errorTarget];
+    const target = errorFocusTarget(
+      errorTarget,
+      attachmentInputRef.current,
+      headingRef.current,
+      controlRefs.current,
+    );
     target?.focus();
   }, [busy, error, errorTarget]);
   useEffect(() => {
@@ -221,7 +230,7 @@ export function FeedbackWindow({
     invalidatePreparedState();
     attachmentInputRef.current?.focus();
   };
-  const submit = (event: FormEvent<HTMLFormElement>): void => {
+  const submit = (event: SubmitEvent<HTMLFormElement>): void => {
     event.preventDefault();
     if (busy || attachmentBusy || submissionInFlightRef.current) return;
     setBusy(true);

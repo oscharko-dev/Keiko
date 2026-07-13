@@ -75,17 +75,29 @@ function draftTarget(field: FeedbackDraftFieldIdV1): FeedbackDispositionTargetV1
   return { kind: "draft-field", field };
 }
 
-function prepareTrackedDraftText(
-  input: string,
-  field: Parameters<typeof prepareFeedbackText>[1],
-  source: FeedbackDraftFieldIdV1,
-  limit: number,
-  required: boolean,
-  policy: FeedbackReportRedactionPolicyV1,
-  counts: MutableRuleCounts,
-  records: FeedbackDispositionRecordV1[],
-  emptyUnitKind?: "optional-field",
-): FeedbackTextResult {
+interface TrackedDraftTextInput {
+  readonly input: string;
+  readonly field: Parameters<typeof prepareFeedbackText>[1];
+  readonly source: FeedbackDraftFieldIdV1;
+  readonly limit: number;
+  readonly required: boolean;
+  readonly policy: FeedbackReportRedactionPolicyV1;
+  readonly counts: MutableRuleCounts;
+  readonly records: FeedbackDispositionRecordV1[];
+  readonly emptyUnitKind?: "optional-field";
+}
+
+function prepareTrackedDraftText({
+  input,
+  field,
+  source,
+  limit,
+  required,
+  policy,
+  counts,
+  records,
+  emptyUnitKind,
+}: TrackedDraftTextInput): FeedbackTextResult {
   const target = draftTarget(source);
   return track(
     prepareFeedbackText(input, field, limit, required, policy, target, emptyUnitKind),
@@ -129,27 +141,27 @@ function prepareSummary(
   if (summaryExceedsCombinedLimit(draft.title, draft.description)) {
     return { ok: false, error: { code: "field-byte-limit", field: "summary" } };
   }
-  const title = prepareTrackedDraftText(
-    draft.title,
-    "summary.title",
-    "title",
-    FEEDBACK_REPORT_LIMITS.summaryBytes,
-    true,
+  const title = prepareTrackedDraftText({
+    input: draft.title,
+    field: "summary.title",
+    source: "title",
+    limit: FEEDBACK_REPORT_LIMITS.summaryBytes,
+    required: true,
     policy,
     counts,
     records,
-  );
+  });
   if (!title.ok) return title;
-  const description = prepareTrackedDraftText(
-    draft.description,
-    "summary.description",
-    "description",
-    FEEDBACK_REPORT_LIMITS.summaryBytes,
-    true,
+  const description = prepareTrackedDraftText({
+    input: draft.description,
+    field: "summary.description",
+    source: "description",
+    limit: FEEDBACK_REPORT_LIMITS.summaryBytes,
+    required: true,
     policy,
     counts,
     records,
-  );
+  });
   if (!description.ok) return description;
   if (summaryExceedsCombinedLimit(title.value, description.value)) {
     return { ok: false, error: { code: "field-byte-limit", field: "summary" } };
@@ -188,16 +200,16 @@ function prepareRequiredText(
   ] as const;
   const values: string[] = [];
   for (const [input, field, source, limit] of fields) {
-    const result = prepareTrackedDraftText(
+    const result = prepareTrackedDraftText({
       input,
       field,
       source,
       limit,
-      true,
+      required: true,
       policy,
       counts,
       records,
-    );
+    });
     if (!result.ok) return result;
     values.push(result.value);
   }
@@ -214,17 +226,17 @@ function prepareOptionalDraftText(
   records: FeedbackDispositionRecordV1[],
 ): FeedbackTextResult | undefined {
   if (input === undefined) return undefined;
-  return prepareTrackedDraftText(
+  return prepareTrackedDraftText({
     input,
     field,
     source,
     limit,
-    false,
+    required: false,
     policy,
     counts,
     records,
-    "optional-field",
-  );
+    emptyUnitKind: "optional-field",
+  });
 }
 
 function nonEmptyPreparedValue(result: FeedbackTextResult | undefined): string | undefined {

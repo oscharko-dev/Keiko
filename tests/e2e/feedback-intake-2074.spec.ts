@@ -252,7 +252,7 @@ async function acceptAndCopy(
   const copy = feedback.getByRole("button", { name: labels.copy });
   await copy.focus();
   await copy.click();
-  const copied = feedback.locator("p").filter({ hasText: labels.copied });
+  const copied = feedback.locator("output").filter({ hasText: labels.copied });
   await expect(copied).toBeFocused();
   await expect(copy).toHaveCount(0);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(COPY_TEXT);
@@ -306,7 +306,7 @@ test.describe("Issue #2074 packaged feedback receipt and conflict journeys", () 
 async function captureAccepted(page: Page, mode: FeedbackMode): Promise<Feedback2074Capture> {
   const feedback = await acceptAndCopy(page, "en", mode);
   const violations = await runAxe(page, '.window[data-window-id="feedback"]');
-  const copied = feedback.locator("p").filter({ hasText: LABELS.en.copied });
+  const copied = feedback.locator("output").filter({ hasText: LABELS.en.copied });
   const file = screenshot(mode, "accepted-copied");
   await feedback.screenshot({ path: feedback2074ScreenshotPath(file), animations: "disabled" });
   return {

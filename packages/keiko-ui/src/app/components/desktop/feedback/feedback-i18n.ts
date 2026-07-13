@@ -10,7 +10,7 @@ import { FEEDBACK_EN_MESSAGES, type FeedbackMessageKey } from "./feedback-i18n-m
 export type FeedbackTranslate = (key: FeedbackMessageKey, values?: MessageValues) => string;
 
 function interpolate(template: string, values: MessageValues): string {
-  return template.replace(/\{([a-zA-Z0-9_]+)\}/gu, (match, name: string) => {
+  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
     const value = values[name];
     return value === undefined ? match : String(value);
   });

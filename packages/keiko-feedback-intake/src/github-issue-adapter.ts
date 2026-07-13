@@ -148,7 +148,7 @@ function safeFailure(committed = false): GithubIssueAdapterError {
 }
 
 function retryAfterHint(value: string | undefined): number | undefined {
-  if (value === undefined || !/^[0-9]{1,5}$/u.test(value)) return undefined;
+  if (value === undefined || !/^\d{1,5}$/u.test(value)) return undefined;
   return Math.min(Number(value), 3600);
 }
 
@@ -156,7 +156,7 @@ function resetHint(response: GithubHttpResponse, trustedNow: Date): number | und
   if (
     response.rateLimitRemaining !== "0" ||
     response.rateLimitReset === undefined ||
-    !/^[0-9]{1,12}$/u.test(response.rateLimitReset) ||
+    !/^\d{1,12}$/u.test(response.rateLimitReset) ||
     !Number.isFinite(trustedNow.getTime())
   ) {
     return undefined;

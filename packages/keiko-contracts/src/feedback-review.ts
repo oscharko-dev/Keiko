@@ -34,6 +34,7 @@ export type FeedbackRejectionReasonV1 = (typeof FEEDBACK_REJECTION_REASONS_V1)[n
 export const FEEDBACK_LEGAL_HOLD_POLICY_KEY_MAX_LENGTH_V1 = 64;
 export const FEEDBACK_LEGAL_HOLD_POLICY_KEY_MAX_COUNT_V1 = 32;
 const LEGAL_HOLD_POLICY_KEY = /^[a-z][a-z0-9-]{0,63}$/u;
+// NOSONAR typescript:S6564 -- exported compatibility name used by contract consumers; removing it breaks their public type import.
 export type FeedbackLegalHoldPolicyKeyV1 = string;
 
 export function isFeedbackLegalHoldPolicyKeyV1(

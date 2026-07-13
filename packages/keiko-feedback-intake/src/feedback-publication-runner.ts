@@ -105,7 +105,7 @@ export class FeedbackPublicationRunner {
       timeout.unref();
     });
     try {
-      await Promise.race([Promise.allSettled([...this.active]).then(() => undefined), deadline]);
+      await Promise.race([Promise.allSettled(this.active).then(() => undefined), deadline]);
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
     }

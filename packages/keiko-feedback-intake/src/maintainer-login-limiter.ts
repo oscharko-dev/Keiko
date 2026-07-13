@@ -53,6 +53,7 @@ class SourceExpiryQueue {
   }
 
   pop(): SourceExpiry | undefined {
+    // NOSONAR -- Heap removal returns the prior root on both singleton and sift-down paths.
     const first = this.records[0];
     const last = this.records.pop();
     if (first === undefined || last === undefined || this.records.length === 0) return first;

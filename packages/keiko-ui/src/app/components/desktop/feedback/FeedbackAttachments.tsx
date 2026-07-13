@@ -79,10 +79,10 @@ export function FeedbackAttachments({
       />
       {attachments.length === 0 ? null : (
         <ul className="feedback-attachments-list" aria-label={t("feedback.attachment.selected")}>
-          {attachments.map((_attachment, index) => {
+          {attachments.map((attachment, index) => {
             const ordinal = index + 1;
             return (
-              <li key={index} className="feedback-attachments-item">
+              <li key={attachment.id} className="feedback-attachments-item">
                 <span>{t("feedback.attachment.item", { ordinal })}</span>
                 <button
                   ref={(node) => onControlRef(index, node)}
@@ -104,9 +104,9 @@ export function FeedbackAttachments({
         </p>
       )}
       {removedOrdinal === undefined ? null : (
-        <p className="feedback-attachments-message feedback-attachments-status" role="status">
+        <output className="feedback-attachments-message feedback-attachments-status">
           {t("feedback.attachment.removed", { ordinal: removedOrdinal })}
-        </p>
+        </output>
       )}
     </section>
   );

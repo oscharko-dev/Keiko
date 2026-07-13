@@ -219,10 +219,11 @@ describe("FeedbackWindow exact submission", () => {
     expect(writeClipboard).toHaveBeenCalledWith(
       `Receipt ID: ${receipt.receiptId}\nReceipt secret: ${receipt.receiptSecret}\nExpires at: ${receipt.expiresAt}`,
     );
-    expect(await screen.findByText(/Receipt copied.*cleared/iu)).toBeVisible();
-    await waitFor(() =>
-      expect(screen.getByText(/Receipt copied.*cleared/iu, { selector: "p" })).toHaveFocus(),
-    );
+    const copiedStatus = await screen.findByText(/Receipt copied.*cleared/iu, {
+      selector: "output",
+    });
+    expect(copiedStatus).toBeVisible();
+    await waitFor(() => expect(copiedStatus).toHaveFocus());
     expect(screen.queryByText(receipt.receiptId)).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy one-time receipt" })).toBeNull();
   });

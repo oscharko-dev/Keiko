@@ -34,11 +34,13 @@ export function element(name, properties, children = []) {
 }
 
 function createNotice(message, kind = "info") {
-  const glyph = kind === "error" ? "!" : kind === "warning" ? "△" : "i";
+  const glyphs = { error: "!", warning: "△" };
+  const noticeClasses = { error: " mq-notice--error", warning: " mq-notice--warning" };
+  const glyph = glyphs[kind] || "i";
   return element(
     "section",
     {
-      className: `mq-notice${kind === "error" ? " mq-notice--error" : kind === "warning" ? " mq-notice--warning" : ""}`,
+      className: `mq-notice${noticeClasses[kind] || ""}`,
       "aria-live": "polite",
       "aria-atomic": "true",
     },
@@ -115,12 +117,8 @@ export function createUiHelpers(root, state, endpoint) {
 }
 
 export function metadata(detail, copy, statusLabel) {
-  const hold =
-    detail.legalHold.status === "active"
-      ? copy.activeHold
-      : detail.legalHold.status === "expired"
-        ? copy.expiredHold
-        : copy.noHold;
+  const holdLabels = { active: copy.activeHold, expired: copy.expiredHold };
+  const hold = holdLabels[detail.legalHold.status] || copy.noHold;
   const values = [
     [copy.status, statusLabel(detail.state)],
     [copy.group, String(detail.groupCount)],
@@ -145,12 +143,16 @@ export function metadata(detail, copy, statusLabel) {
 export function renderError(error, copy, button, notice, replace, signIn, loadQueue) {
   const code = error instanceof Error ? error.message : "failed";
   const retryable = code === "unavailable" || code === "rateLimited";
-  const recovery =
-    code === "session"
-      ? button(copy.signIn, signIn, "mq-button--primary")
-      : retryable
-        ? button(copy.retry, () => void loadQueue())
-        : button(copy.refresh, () => void loadQueue());
+  let recovery;
+  if (code === "session") recovery = button(copy.signIn, signIn, "mq-button--primary");
+  else if (retryable)
+    recovery = button(copy.retry, () => {
+      loadQueue().catch(() => undefined);
+    });
+  else
+    recovery = button(copy.refresh, () => {
+      loadQueue().catch(() => undefined);
+    });
   replace([
     notice(
       copy[code] || copy.failed,

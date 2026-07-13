@@ -185,7 +185,7 @@ export class PostgresFeedbackPublicationRepository {
     if (command.actor.permissionPolicyVersion !== this.permissionPolicyVersion) {
       throw new FeedbackPublicationError("permission-denied");
     }
-    const at = new Date(this.now().getTime());
+    const at = new Date(this.now());
     const digest = feedbackPublicationCommandDigest(command);
     return this.retryTransaction((client) => operation(client, digest, at));
   }
@@ -259,7 +259,7 @@ export class PostgresFeedbackPublicationRepository {
       Math.min(review.payload_expires_at.getTime(), at.getTime() + 30 * 86_400_000),
     );
     const preparationId = this.id();
-    await persistPreparation(
+    await persistPreparation({
       client,
       command,
       projection,
@@ -268,7 +268,7 @@ export class PostgresFeedbackPublicationRepository {
       preparationId,
       at,
       expiresAt,
-    );
+    });
     const preparation = await lockPublicationPreparation(client, preparationId);
     return preparedPublicationResponse(preparation, review.version, false);
   }
@@ -327,16 +327,16 @@ export class PostgresFeedbackPublicationRepository {
     assertCancellationPreparation(preparation, review, command, at);
     const status = cancellationStatus(await lockedOutboxStatus(client, command.preparationId));
     const projection = verifyStoredProjection(review, preparation);
-    const version = await persistPrivateCancellation(
+    const version = await persistPrivateCancellation({
       client,
       command,
       projection,
       digest,
-      review.review_group_id,
-      review.semantic_group_id,
+      reviewGroupId: review.review_group_id,
+      semanticGroupId: review.semantic_group_id,
       at,
-      status,
-    );
+      resultStatus: status,
+    });
     return cancellationResponse(command, status, version);
   }
 

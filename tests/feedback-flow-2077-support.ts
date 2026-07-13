@@ -44,16 +44,16 @@ export async function runFeedbackFlow(databaseUrl: string): Promise<FeedbackFlow
     );
     const transport = await publish(harness.scopedPool, harness.installationScopedPool, payload);
     const linkage = await publicIssueLinkage(harness.pool, harness.schema);
-    return flowResult(
+    return flowResult({
       prepared,
-      payload.canonicalBytes,
-      payload.exactBodySha256,
-      transport.createdIssueCount(),
+      canonicalBytes: payload.canonicalBytes,
+      exactBodySha256: payload.exactBodySha256,
+      createdIssues: transport.createdIssueCount(),
       linkage,
       maintainerBoundaryEnforced,
-      publicationPreservesRedaction(transport, payload.canonicalBytes),
+      redactionPreserved: publicationPreservesRedaction(transport, payload.canonicalBytes),
       receiptContentFree,
-    );
+    });
   } finally {
     await harness.close();
   }
@@ -86,16 +86,27 @@ function intakeMode(scenario: NegativeScenario): Parameters<typeof createFeedbac
   return { kind: "available" };
 }
 
-function flowResult(
-  prepared: PreparedFeedback,
-  canonicalBytes: Buffer,
-  exactBodySha256: string,
-  createdIssues: number,
-  linkage: { readonly number: number; readonly url: string },
-  maintainerBoundaryEnforced: boolean,
-  redactionPreserved: boolean,
-  receiptContentFree: boolean,
-): FeedbackFlowResult {
+interface FlowResultEvidence {
+  readonly prepared: PreparedFeedback;
+  readonly canonicalBytes: Buffer;
+  readonly exactBodySha256: string;
+  readonly createdIssues: number;
+  readonly linkage: { readonly number: number; readonly url: string };
+  readonly maintainerBoundaryEnforced: boolean;
+  readonly redactionPreserved: boolean;
+  readonly receiptContentFree: boolean;
+}
+
+function flowResult({
+  prepared,
+  canonicalBytes,
+  exactBodySha256,
+  createdIssues,
+  linkage,
+  maintainerBoundaryEnforced,
+  redactionPreserved,
+  receiptContentFree,
+}: FlowResultEvidence): FeedbackFlowResult {
   return {
     createdIssues,
     exactBytesPreserved:

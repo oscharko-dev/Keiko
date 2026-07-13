@@ -1,5 +1,5 @@
 import type { FeedbackPublicationTargetPolicySnapshotV1 } from "@oscharko-dev/keiko-contracts/feedback-publication";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   FEEDBACK_ISSUE_BODY_MAX_BYTES_V1,
   digestFeedbackIssueProjectionV1,
@@ -631,9 +631,7 @@ describe("governed GitHub issue adapter", () => {
 
   it("exposes no raw create operation", () => {
     const governed = adapter(new FakeTransport(() => tokenResponse()));
-    type HasRawCreate = "createIssue" extends keyof GithubIssueAdapter ? true : false;
-    const hasRawCreate: HasRawCreate = false;
-    expect(hasRawCreate).toBe(false);
+    expectTypeOf<GithubIssueAdapter>().not.toHaveProperty("createIssue");
     expect("createIssue" in governed).toBe(false);
   });
 

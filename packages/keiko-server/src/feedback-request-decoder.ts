@@ -86,7 +86,7 @@ class JsonDuplicateKeyScanner {
       if (current === '"') return this.finishString(start);
       if (current === "\\" && !this.skipEscape()) return undefined;
       else if (current !== "\\") {
-        if (current === undefined || current.charCodeAt(0) < 0x20) return undefined;
+        if (current === undefined || (current.codePointAt(0) ?? 0) < 0x20) return undefined;
         this.index += 1;
       }
     }
@@ -102,7 +102,7 @@ class JsonDuplicateKeyScanner {
       this.index += 5;
       return true;
     }
-    if (escaped === undefined || !'"\\/bfnrt'.includes(escaped)) return false;
+    if (escaped === undefined || !String.raw`"\/bfnrt`.includes(escaped)) return false;
     this.index += 1;
     return true;
   }

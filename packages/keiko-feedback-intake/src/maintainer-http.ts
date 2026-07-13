@@ -351,7 +351,6 @@ async function handleDetail(
   const detail = await options.query.detail(itemId, permits(identity, "feedback.security"));
   if (detail === undefined) fail(res, 404);
   else json(res, 200, detail);
-  return;
 }
 
 async function handleAction(

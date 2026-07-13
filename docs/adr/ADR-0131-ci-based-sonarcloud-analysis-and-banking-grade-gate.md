@@ -81,6 +81,14 @@ the existing `text`/`json`/`json-summary` reporters used by the local coverage-b
 and TypeScript; the equivalent `sonar.typescript.lcov.reportPaths` key is deprecated upstream and is
 deliberately not set.
 
+The scanner explicitly classifies repository test files (`*.test.*`, `*.spec.*`, `__tests__`, and
+`tests/`) as test code. Sonar still analyzes those files with its test rule profile, but does not
+count test/support code as production LOC or require tests to cover other tests. The existing
+coverage exclusion remains limited to dedicated-realm assets under `packages/keiko-ui/public/`;
+feedback-intake browser assets remain part of the coverage denominator as well as rule analysis.
+This test classification prevents coverage inflation or deflation caused by misclassification
+without broadening production coverage exclusions or weakening zero-tolerance rule analysis.
+
 Coverage-report existence is not accepted as proof that newly added executable source was
 instrumented. `scripts/check-lcov-source-mapping.mjs` compares the exact PR base/head diff with the
 two LCOV reports and fails when a changed production TypeScript/JavaScript source file has no `SF:`

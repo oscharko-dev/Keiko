@@ -179,7 +179,7 @@ export interface FeedbackPublicationStatusV1 {
   readonly linkage?: { readonly issueNumber: number; readonly issueUrl: string } | undefined;
 }
 
-const DECIMAL_ID = /^[1-9][0-9]{0,19}$/u;
+const DECIMAL_ID = /^[1-9]\d{0,19}$/u;
 const MAX_POSTGRES_BIGINT = 9_223_372_036_854_775_807n;
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]{1,100}$/u;

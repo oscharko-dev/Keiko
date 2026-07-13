@@ -143,7 +143,7 @@ describe("publication runtime composition", () => {
         repository: "repository-z",
         installationId: "123456789",
         labels: ["feedback-z"],
-        targetKey: "z-target",
+        targetKey: "A-target",
         labelPolicyVersion: "labels-z",
         targetPolicyVersion: "target-z",
       },
@@ -174,7 +174,7 @@ describe("publication runtime composition", () => {
     );
     expect(single).toEqual([
       {
-        targetKey: "z-target",
+        targetKey: "A-target",
         owner: "owner-z",
         repository: "repository-z",
         labels: ["feedback-z"],
@@ -183,7 +183,7 @@ describe("publication runtime composition", () => {
       },
     ]);
     const catalog = createMaintainerPublicationTargetCatalog(configured);
-    expect(catalog.map((target) => target.targetKey)).toEqual(["a-target", "z-target"]);
+    expect(catalog.map((target) => target.targetKey)).toEqual(["A-target", "a-target"]);
     expect(Object.isFrozen(catalog)).toBe(true);
     expect(
       catalog.every((target) => Object.isFrozen(target) && Object.isFrozen(target.labels)),

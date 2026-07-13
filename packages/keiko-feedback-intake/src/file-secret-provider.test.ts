@@ -167,8 +167,8 @@ describe("durable feedback key custody", () => {
     key(root, "2026-07-11", 7);
     const now = new Date("2026-07-11T12:00:00Z");
     expect(
-      new FileSecretProvider({ directory: root, kind: "abuse", now: (): Date => now }),
-    ).toBeDefined();
+      () => new FileSecretProvider({ directory: root, kind: "abuse", now: (): Date => now }),
+    ).not.toThrow();
 
     key(root, "2026-07-12", 8);
     expect(

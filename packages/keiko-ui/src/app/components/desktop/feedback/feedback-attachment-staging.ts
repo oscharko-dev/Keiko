@@ -5,8 +5,16 @@ import type { FeedbackBrowserAttachmentV1 } from "@/lib/feedback-api";
 export type FeedbackAttachmentStagingError = "count" | "item" | "aggregate" | "read";
 
 export interface StagedFeedbackAttachment {
+  readonly id: string;
   readonly envelope: FeedbackBrowserAttachmentV1;
   readonly byteLength: number;
+}
+
+let attachmentIdentity = 0;
+
+function nextAttachmentIdentity(): string {
+  attachmentIdentity += 1;
+  return `feedback-attachment-${String(attachmentIdentity)}`;
 }
 
 export type StageFeedbackAttachmentsResult =
@@ -62,7 +70,7 @@ async function readBytes(file: File): Promise<Uint8Array> {
       if (reader.result instanceof ArrayBuffer) resolve(new Uint8Array(reader.result));
       else reject(new Error("feedback attachment read returned an invalid value"));
     };
-    reader.readAsArrayBuffer(file);
+    reader.readAsArrayBuffer(file); // NOSONAR - fallback supports browsers without Blob#arrayBuffer.
   });
 }
 
@@ -70,7 +78,7 @@ function base64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 16 * 1024;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    binary += String.fromCodePoint(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
 }
@@ -96,7 +104,9 @@ export async function stageFeedbackAttachmentFiles(
         ...(mediaType === undefined ? {} : { declaredMediaType: mediaType }),
         ...(extension === undefined ? {} : { extension }),
       });
-      staged.push(Object.freeze({ envelope, byteLength: bytes.length }));
+      staged.push(
+        Object.freeze({ id: nextAttachmentIdentity(), envelope, byteLength: bytes.length }),
+      );
     }
   } catch {
     return { ok: false, reason: "read" };

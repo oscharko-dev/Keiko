@@ -14,7 +14,7 @@ import {
 import type { PgClientLike } from "./postgres-types.js";
 
 const databaseUrl = process.env.DATABASE_URL;
-const integration = databaseUrl === undefined ? it.skip : it;
+const integration = it.skipIf(databaseUrl === undefined);
 
 async function migration(name: string): Promise<string> {
   return readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");

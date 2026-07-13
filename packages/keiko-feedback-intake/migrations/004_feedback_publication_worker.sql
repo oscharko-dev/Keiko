@@ -13,10 +13,10 @@ ALTER TABLE feedback_publication_outbox
   ADD COLUMN create_attempt_count integer NOT NULL DEFAULT 0;
 
 UPDATE feedback_publication_outbox
-SET status = CASE WHEN status = 'claimed' THEN 'may-have-committed' ELSE status END,
+SET status = CASE WHEN status = 'claimed' THEN 'may-have-committed' ELSE status END, -- NOSONAR - migration transition state is intentionally explicit and one-time.
     create_eligible = false,
     create_attempt_count = CASE
-      WHEN status IN ('claimed', 'may-have-committed', 'manual-reconciliation', 'succeeded')
+      WHEN status IN ('claimed', 'may-have-committed', 'manual-reconciliation', 'succeeded') -- NOSONAR - migration transition states are intentionally explicit and one-time.
         THEN GREATEST(create_attempt_count, 1)
       ELSE create_attempt_count
     END,
@@ -24,16 +24,16 @@ SET status = CASE WHEN status = 'claimed' THEN 'may-have-committed' ELSE status 
     lease_expires_at = CASE WHEN status = 'claimed' THEN NULL ELSE lease_expires_at END,
     next_attempt_at = CASE WHEN status = 'claimed' THEN NULL ELSE next_attempt_at END,
     failure_code = CASE
-      WHEN status = 'claimed' THEN 'ambiguous-reconciliation'
+      WHEN status = 'claimed' THEN 'ambiguous-reconciliation' -- NOSONAR - migration transition state is intentionally explicit and one-time.
       ELSE failure_code
     END
 WHERE status IN (
-  'claimed', 'may-have-committed', 'manual-reconciliation', 'succeeded', 'cancelled-private'
+  'claimed', 'may-have-committed', 'manual-reconciliation', 'succeeded', 'cancelled-private' -- NOSONAR - migration transition states are intentionally explicit and one-time.
 );
 
 ALTER TABLE feedback_publication_outbox
   ADD CONSTRAINT feedback_publication_outbox_status_check CHECK (status IN (
-    'unclaimed', 'claimed', 'may-have-committed', 'retryable-failure',
+    'unclaimed', 'claimed', 'may-have-committed', 'retryable-failure', -- NOSONAR - state literals must remain local to this independent database constraint.
     'manual-reconciliation', 'succeeded', 'cancelled-private'
   )),
   ADD CONSTRAINT feedback_publication_outbox_attempt_count_check

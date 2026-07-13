@@ -2,22 +2,22 @@
   "issue": 2075,
   "assets": {
     "keiko-tokens.css": {
-      "identityBytes": 20112,
-      "gzipBytes": 5098,
-      "brotliBytes": 4223,
-      "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
+      "identityBytes": 20220,
+      "gzipBytes": 5147,
+      "brotliBytes": 4261,
+      "sha256": "f4a3c592cdf5e12119b1e29ce1f62223726e29c4d471cb9f5322a693ac4cf775"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
-      "gzipBytes": 4278,
+      "gzipBytes": 4302,
       "brotliBytes": 3556,
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
     "maintainer-ui.css": {
-      "identityBytes": 10975,
-      "gzipBytes": 2217,
-      "brotliBytes": 1861,
-      "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e"
+      "identityBytes": 10949,
+      "gzipBytes": 2212,
+      "brotliBytes": 1855,
+      "sha256": "feab58bff7f0c913a16e3a161330033153ad5c8b258a83edc91d532b9a5fb01d"
     },
     "maintainer-ui.html": {
       "identityBytes": 1655,
@@ -26,38 +26,38 @@
       "sha256": "3f497a3754ae9876169d2ab04586093110742360dd09ad908288b483829e57e1"
     },
     "maintainer-ui.js": {
-      "identityBytes": 12660,
-      "gzipBytes": 3711,
-      "brotliBytes": 3248,
-      "sha256": "0c62374308fc6f1788558ae8054ac6d077e3d42b037944d383f30391d26a41e0"
+      "identityBytes": 12747,
+      "gzipBytes": 3752,
+      "brotliBytes": 3276,
+      "sha256": "1be2965f61c2229d629efb7f3395c3d6b9978f6681ee400a8033a59af4f94b94"
     },
     "maintainer-ui-copy.js": {
       "identityBytes": 13806,
-      "gzipBytes": 4059,
+      "gzipBytes": 4080,
       "brotliBytes": 3561,
       "sha256": "4099bd1c9d270cdafac77d88ed305aadbc65546522494af6618cfbe04d3c4327"
     },
     "maintainer-ui-detail.js": {
       "identityBytes": 2629,
-      "gzipBytes": 974,
+      "gzipBytes": 978,
       "brotliBytes": 809,
       "sha256": "f7f78240f0f904ee81a02076664a1470539600e6a15d9f39346b50a602b1f60c"
     },
     "maintainer-ui-dom.js": {
-      "identityBytes": 4777,
-      "gzipBytes": 1667,
-      "brotliBytes": 1410,
-      "sha256": "134cfdb092d7085c19cfb70b268d65d983c11c66a5ad5223735dd36401895eb0"
+      "identityBytes": 4873,
+      "gzipBytes": 1703,
+      "brotliBytes": 1434,
+      "sha256": "ce0d75eadac72b23751fb354ea66b6f20878e28ed3744558deb9c4d213ede5b2"
     },
     "maintainer-ui-publication.js": {
-      "identityBytes": 14698,
-      "gzipBytes": 3745,
+      "identityBytes": 14772,
+      "gzipBytes": 3750,
       "brotliBytes": 3268,
-      "sha256": "41ec170c1cc9e6392f6de29cc86103e4ffe05b3fb9d9c217ec086d3a22478d4b"
+      "sha256": "21dd2ead3bff87c45e3042cce07e092339589707d26e06d6e427b0d070be73ae"
     },
     "maintainer-ui-queue.js": {
       "identityBytes": 1152,
-      "gzipBytes": 530,
+      "gzipBytes": 534,
       "brotliBytes": 440,
       "sha256": "fdef9f0823bc1ccd373282cd32a4f754a2b534e8d76ad16660b9a1c5f22a1b94"
     }

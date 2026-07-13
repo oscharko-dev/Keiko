@@ -53,7 +53,9 @@ function decodedByteLength(value: string): number | undefined {
   if (!BASE64_PATTERN.test(value) || !hasCanonicalTrailingBits(value)) {
     return undefined;
   }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  let padding = 0;
+  if (value.endsWith("==")) padding = 2;
+  else if (value.endsWith("=")) padding = 1;
   return (value.length / 4) * 3 - padding;
 }
 

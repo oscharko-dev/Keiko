@@ -435,9 +435,11 @@ export function createMaintainerPublicationTargetCatalog(
         projectionPolicyVersion: FEEDBACK_PUBLICATION_PROJECTION_VERSION_V1,
       }),
     )
-    .sort((left, right) =>
-      left.targetKey < right.targetKey ? -1 : left.targetKey > right.targetKey ? 1 : 0,
-    );
+    .sort((left, right) => {
+      if (left.targetKey < right.targetKey) return -1;
+      if (left.targetKey > right.targetKey) return 1;
+      return 0;
+    });
   return Object.freeze(targets);
 }
 

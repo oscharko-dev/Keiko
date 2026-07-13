@@ -199,15 +199,21 @@ export function createInMemoryFeedbackIntake(
   };
 }
 
+function rejectionEvent(status: number): "rate-limited" | "unavailable" | "rejected" {
+  if (status === 429) return "rate-limited";
+  if (status === 503) return "unavailable";
+  return "rejected";
+}
+
 function reject(
   status: 413 | 422 | 429 | 503,
   error: "payload-too-large" | "report-rejected" | "rate-limited" | "temporarily-unavailable",
   state: Runtime,
 ): SubmitResult {
-  state.logger.event(status === 429 ? "rate-limited" : status === 503 ? "unavailable" : "rejected");
-  state.metrics.increment(
-    status === 429 ? "rate_limited" : status === 503 ? "unavailable" : "rejected",
-  );
+  const event = rejectionEvent(status);
+  const metric = event === "rate-limited" ? "rate_limited" : event;
+  state.logger.event(event);
+  state.metrics.increment(metric);
   if (status === 429) {
     return {
       status,

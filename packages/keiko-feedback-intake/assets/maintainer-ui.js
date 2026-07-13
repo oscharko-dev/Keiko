@@ -24,6 +24,7 @@ const state = {
 };
 const endpoint = "/v1/maintainer/";
 const { button, notice, replace, request, setBusy } = createUiHelpers(root, state, endpoint);
+const settle = (promise) => promise.catch(() => undefined);
 const publication = createPublicationUi({
   state,
   request,
@@ -36,9 +37,7 @@ const publication = createPublicationUi({
   focusResult: () => document.getElementById("mq-publication-result")?.focus(),
   onSessionExpired: () => detailUi.expireMaintainerSession(state, errorView),
 });
-function signIn() {
-  window.location.assign(`${endpoint}auth/login`);
-}
+const signIn = () => window.location.assign(`${endpoint}auth/login`);
 function signInView(message) {
   replace([
     notice(message || copy.session, "warning"),
@@ -46,9 +45,7 @@ function signInView(message) {
   ]);
 }
 const errorView = (error) => renderError(error, copy, button, notice, replace, signIn, loadQueue);
-function permitted(permission) {
-  return state.session.permissions.includes(permission);
-}
+const permitted = (permission) => state.session.permissions.includes(permission);
 function filterSelect() {
   const label = element("label", { className: "mq-label", textContent: copy.filter });
   const select = element("select", { name: "state" });
@@ -68,7 +65,7 @@ function filterSelect() {
     state.filter = select.value;
     state.cursor = null;
     state.items = [];
-    void loadQueue();
+    settle(loadQueue());
   });
   label.htmlFor = "mq-state-filter";
   select.id = "mq-state-filter";
@@ -82,7 +79,7 @@ function itemRow(item) {
   });
   inspect.addEventListener("click", () => {
     state.lastFocus = inspect;
-    void openDetail(item.itemId);
+    settle(openDetail(item.itemId));
   });
   const cells = [
     inspect,
@@ -115,11 +112,11 @@ function queueTable() {
 }
 function queueView(message) {
   const heading = element("h2", { textContent: copy.queue, tabIndex: "-1" });
-  const audit = permitted("feedback.audit") ? button(copy.audit, () => void loadAudit()) : null;
+  const audit = permitted("feedback.audit") ? button(copy.audit, () => settle(loadAudit())) : null;
   state.auditTrigger = audit;
   const toolbar = element("div", { className: "mq-toolbar" }, [
     filterSelect(),
-    element("div", {}, [audit ?? text(""), button(copy.signOut, () => void logout())]),
+    element("div", {}, [audit ?? text(""), button(copy.signOut, () => settle(logout()))]),
   ]);
   const children = [heading, toolbar];
   if (message) children.push(notice(message));
@@ -139,7 +136,9 @@ function queueView(message) {
     );
   if (state.cursor)
     children.push(
-      element("div", { className: "mq-footer" }, [button(copy.load, () => void loadQueue(true))]),
+      element("div", { className: "mq-footer" }, [
+        button(copy.load, () => settle(loadQueue(undefined, true))),
+      ]),
     );
   replace([
     element(
@@ -150,7 +149,7 @@ function queueView(message) {
   ]);
   heading.id = "mq-queue-heading";
 }
-async function loadQueue(append = false, message) {
+async function loadQueue(message, append = false) {
   try {
     setBusy(true);
     const query = new URLSearchParams({ limit: "25" });
@@ -191,7 +190,7 @@ function actionCard(title, description, action, controls = []) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     form.querySelector(".mq-validation")?.remove();
-    if (form.reportValidity()) void submitAction(action, controls);
+    if (form.reportValidity()) settle(submitAction(action, controls));
     else showValidation();
   });
   form.addEventListener("invalid", showValidation, true);
@@ -324,7 +323,7 @@ async function submitAction(action, controls) {
       },
       body: JSON.stringify(actionData(state.detail, action, controls)),
     });
-    await loadQueue(false, copy.applied);
+    await loadQueue(copy.applied);
     document.getElementById("mq-queue-heading")?.focus();
   } catch (error) {
     errorView(error);
@@ -396,4 +395,4 @@ async function bootstrap() {
 }
 replace([notice(copy.loading)]);
 window.addEventListener("beforeunload", () => state.detailAbort?.abort(), { once: true });
-void bootstrap();
+await bootstrap();

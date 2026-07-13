@@ -27,7 +27,7 @@ CREATE TABLE feedback_private_review_group_tombstones (
   review_group_id uuid PRIMARY KEY,
   restricted_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
-  CHECK (expires_at = restricted_at + interval '365 days')
+  CHECK (expires_at = restricted_at + interval '365 days') -- NOSONAR - retention literal is independently enforced by this schema constraint.
 );
 
 LOCK TABLE feedback_payloads IN SHARE ROW EXCLUSIVE MODE;
@@ -39,9 +39,9 @@ CREATE TABLE feedback_review_items (
   id uuid PRIMARY KEY,
   payload_id uuid NOT NULL UNIQUE REFERENCES feedback_payloads(id) ON DELETE CASCADE,
   semantic_group_id uuid NOT NULL REFERENCES feedback_semantic_groups(id) ON DELETE RESTRICT,
-  payload_digest char(64) NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
+  payload_digest char(64) NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'), -- NOSONAR - digest format is independently enforced by this schema constraint.
   state text NOT NULL CHECK (state IN (
-    'pending', 'approved', 'duplicate', 'rejected', 'archived', 'private-security', 'expired'
+    'pending', 'approved', 'duplicate', 'rejected', 'archived', 'private-security', 'expired' -- NOSONAR - state literals must remain local to this independent database constraint.
   )),
   rejection_reason text CHECK (rejection_reason IN (
     'insufficient-information', 'not-actionable', 'out-of-scope', 'policy-violation'
@@ -72,7 +72,7 @@ CREATE TABLE feedback_review_items (
       AND approval_actor_issuer IS NOT NULL AND approval_actor_sub IS NOT NULL
       AND length(approval_actor_issuer) BETWEEN 1 AND 2048
       AND length(approval_actor_sub) BETWEEN 1 AND 255
-      AND approval_actor_issuer !~ '[[:cntrl:]]'
+      AND approval_actor_issuer !~ '[[:cntrl:]]' -- NOSONAR - schema validation pattern is independently enforced here.
       AND approval_actor_sub !~ '[[:cntrl:]]'
       AND approval_permission_policy_version IS NOT NULL
       AND length(approval_permission_policy_version) BETWEEN 1 AND 64
@@ -222,7 +222,7 @@ BEGIN
     id, payload_id, semantic_group_id, payload_digest, state, created_at, updated_at
   ) VALUES (
     NEW.id, NEW.id, NEW.semantic_group_id, NEW.exact_body_sha256,
-    CASE WHEN EXISTS (
+    CASE WHEN EXISTS ( -- NOSONAR - EXISTS is required to preserve the authorization predicate's semantics.
       SELECT 1 FROM feedback_private_semantic_groups
       WHERE semantic_group_id = NEW.semantic_group_id
     ) THEN 'private-security' ELSE 'pending' END,

@@ -14,13 +14,13 @@ interface PersistenceRow {
   readonly hold_policy_key: string | null;
 }
 
-const TERMINAL_ACTIONS: readonly FeedbackReviewActionV1[] = [
+const TERMINAL_ACTIONS: ReadonlySet<FeedbackReviewActionV1> = new Set([
   "mark-duplicate",
   "reject",
   "archive",
   "route-private-security",
   "expire",
-];
+]);
 
 async function terminalRetention(
   client: PgClientLike,
@@ -28,7 +28,7 @@ async function terminalRetention(
   row: PersistenceRow,
   at: Date,
 ): Promise<void> {
-  if (!TERMINAL_ACTIONS.includes(command.action)) return;
+  if (!TERMINAL_ACTIONS.has(command.action)) return;
   await client.query(
     "UPDATE feedback_payloads SET expires_at = LEAST(expires_at, $2::timestamptz + interval '30 days') WHERE id = $1",
     [row.payload_id, at],
@@ -47,12 +47,11 @@ async function audit(
   version: number,
   at: Date,
 ): Promise<void> {
-  const policyKey =
-    command.action === "place-legal-hold"
-      ? command.policyKey
-      : command.action === "release-legal-hold" || command.action === "expire-legal-hold"
-        ? row.hold_policy_key
-        : null;
+  let policyKey: string | null = null;
+  if (command.action === "place-legal-hold") policyKey = command.policyKey;
+  else if (command.action === "release-legal-hold" || command.action === "expire-legal-hold") {
+    policyKey = row.hold_policy_key;
+  }
   await client.query(
     "INSERT INTO feedback_review_audit (item_id, review_group_id, payload_digest, prior_version, result_version, action, prior_state, result_state, result, event_at, actor_issuer, actor_sub, permission_policy_version, policy_key, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'applied',$9,$10,$11,$12,$13,$9::timestamptz + interval '365 days')",
     [

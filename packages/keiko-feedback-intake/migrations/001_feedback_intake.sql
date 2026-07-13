@@ -143,7 +143,7 @@ CREATE TABLE feedback_global_buckets (
 );
 
 CREATE TABLE feedback_deletion_ledger (
-  class_code text PRIMARY KEY CHECK (class_code IN ('receipt', 'payload', 'dedupe', 'abuse', 'group', 'key-destruction-evidence')),
+  class_code text PRIMARY KEY CHECK (class_code IN ('receipt', 'payload', 'dedupe', 'abuse', 'group', 'key-destruction-evidence')), -- NOSONAR - declarative schema values must be repeated in independent constraints.
   cutoff timestamptz NOT NULL,
   deleted_count integer NOT NULL CHECK (deleted_count >= 0),
   completed_at timestamptz NOT NULL

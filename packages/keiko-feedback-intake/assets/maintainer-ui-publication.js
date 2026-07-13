@@ -68,7 +68,7 @@ function safePreparation(status) {
 function safeLink(linkage) {
   try {
     const url = new globalThis.URL(linkage.issueUrl);
-    const issuePath = /^\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}\/issues\/[1-9][0-9]*$/u;
+    const issuePath = /^\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}\/issues\/[1-9]\d*$/u;
     return url.origin === "https://github.com" &&
       url.username === "" &&
       url.password === "" &&
@@ -292,10 +292,9 @@ function prepareForm(context, submit, detail, generation, publication) {
     selection,
     context.button(copy("prepare"), undefined, "mq-button--primary", "submit"),
   ]);
-  form.addEventListener(
-    "submit",
-    (event) => void submit("prepare-publication", detail, generation, event),
-  );
+  form.addEventListener("submit", (event) => {
+    submit("prepare-publication", detail, generation, event).catch(() => undefined);
+  });
   return form;
 }
 
@@ -305,10 +304,9 @@ function preparedActions(context, submit, detail, generation) {
     element("p", { textContent: copy("approveHelp") }),
     context.button(copy("approve"), undefined, "mq-button--primary", "submit"),
   ]);
-  approval.addEventListener(
-    "submit",
-    (event) => void submit("approve-publication", detail, generation, event),
-  );
+  approval.addEventListener("submit", (event) => {
+    submit("approve-publication", detail, generation, event).catch(() => undefined);
+  });
   const confirmation = element("input", {
     id: "mq-publication-cancel-confirm",
     type: "checkbox",
@@ -323,10 +321,9 @@ function preparedActions(context, submit, detail, generation) {
     ]),
     context.button(copy("cancel"), undefined, "mq-button--danger", "submit"),
   ]);
-  cancel.addEventListener(
-    "submit",
-    (event) => void submit("cancel-publication-route-private", detail, generation, event),
-  );
+  cancel.addEventListener("submit", (event) => {
+    submit("cancel-publication-route-private", detail, generation, event).catch(() => undefined);
+  });
   return element("div", { className: "mq-action-grid" }, [approval, cancel]);
 }
 
@@ -377,7 +374,9 @@ function renderPublication(context, load, submit, detail, generation) {
   if (!publicationEnabled(context.state.session)) return null;
   const content = [element("h3", { id: "mq-publication-heading", textContent: copy("title") })];
   content.push(...publicationBody(context, submit, detail, generation, context.state.publication));
-  const refresh = context.button(copy("refresh"), () => void load(detail, generation));
+  const refresh = context.button(copy("refresh"), () => {
+    load(detail, generation).catch(() => undefined);
+  });
   refresh.id = "mq-publication-refresh";
   content.push(refresh);
   return element(

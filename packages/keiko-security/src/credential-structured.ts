@@ -100,18 +100,19 @@ function quoteTermination(
   };
 }
 
-function quoteResult(
+function governedQuoteResult(
   start: number,
   termination: QuoteTermination,
-  governed: boolean,
   quote: string,
 ): QuoteScanResult {
-  return governed
-    ? {
-        next: termination.next,
-        detection: embeddedQuoteDetection(start, termination.end, termination.closed, quote),
-      }
-    : { next: termination.next };
+  return {
+    next: termination.next,
+    detection: embeddedQuoteDetection(start, termination.end, termination.closed, quote),
+  };
+}
+
+function ungovernedQuoteResult(termination: QuoteTermination): QuoteScanResult {
+  return { next: termination.next };
 }
 
 function isGovernedQuoteSeparator(
@@ -141,7 +142,12 @@ function scanQuotedRegion(
     }
     const termination = quoteTermination(input, start, cursor, quote);
     if (termination !== undefined) {
-      if (termination.closed || !governed) return quoteResult(start, termination, governed, quote);
+      if (termination.closed) {
+        return governed
+          ? governedQuoteResult(start, termination, quote)
+          : ungovernedQuoteResult(termination);
+      }
+      if (!governed) return ungovernedQuoteResult(termination);
       cursor = termination.next;
       continue;
     }
@@ -150,12 +156,10 @@ function scanQuotedRegion(
     }
     cursor += 1;
   }
-  return quoteResult(
-    start,
-    { next: input.length, end: input.length, closed: false },
-    governed,
-    quote,
-  );
+  const termination = { next: input.length, end: input.length, closed: false } as const;
+  return governed
+    ? governedQuoteResult(start, termination, quote)
+    : ungovernedQuoteResult(termination);
 }
 
 function nextCredentialEvent(

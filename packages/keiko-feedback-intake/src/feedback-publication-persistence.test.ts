@@ -104,16 +104,16 @@ describe("feedback publication persistence", () => {
   it("persists preparation bytes, audit context, and idempotency without report content", async () => {
     const client = new PersistenceClient();
 
-    await persistPreparation(
+    await persistPreparation({
       client,
-      prepare(),
-      PROJECTION,
-      TARGET,
-      "request-digest",
-      PREPARATION,
-      AT,
-      new Date("2026-08-01T12:00:00.000Z"),
-    );
+      command: prepare(),
+      projection: PROJECTION,
+      target: TARGET,
+      digest: "request-digest",
+      preparationId: PREPARATION,
+      at: AT,
+      expiresAt: new Date("2026-08-01T12:00:00.000Z"),
+    });
 
     expect(client.calls).toHaveLength(3);
     expect(client.calls[0]?.values).toContainEqual(new TextEncoder().encode(PROJECTION.title));
@@ -152,16 +152,16 @@ describe("feedback publication persistence", () => {
       const client = new PersistenceClient();
 
       await expect(
-        persistPrivateCancellation(
+        persistPrivateCancellation({
           client,
-          cancel(),
-          PROJECTION,
-          "request-digest",
-          "review-group",
-          "semantic-group",
-          AT,
-          status,
-        ),
+          command: cancel(),
+          projection: PROJECTION,
+          digest: "request-digest",
+          reviewGroupId: "review-group",
+          semanticGroupId: "semantic-group",
+          at: AT,
+          resultStatus: status,
+        }),
       ).resolves.toBe(2);
 
       expect(client.calls.some(({ text }) => text.startsWith("UPDATE feedback_review_items"))).toBe(

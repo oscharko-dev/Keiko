@@ -29,6 +29,9 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+
+const NewChatIcon = Icons.newChat;
+
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
 import {
@@ -723,7 +726,7 @@ function GeneralPrefs({
           disabled={openFeedbackWindow === undefined}
           onClick={openFeedbackWindow}
         >
-          <Icons.newChat size={14} />
+          <NewChatIcon size={14} />
           {globalT("settings.feedback.open")}
         </button>
       </div>

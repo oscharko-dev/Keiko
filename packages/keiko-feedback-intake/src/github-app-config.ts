@@ -8,9 +8,9 @@ import { digestFeedbackTargetPolicyV1 } from "./feedback-publication-projection.
 import { validateGithubAppPrivateKeyFile } from "./github-app-key.js";
 import { readSecureOperatorFile } from "./github-secure-file.js";
 
-const APP_ID = /^[1-9][0-9]{0,19}$/u;
+const APP_ID = /^[1-9]\d{0,19}$/u;
 const RFC3339_TIMESTAMP =
-  /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.\d{1,3})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/u;
 const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const MAX_TARGETS = 64;
 const ROOT_KEYS = ["targets", "version"] as const;
@@ -62,7 +62,7 @@ function parseRfc3339Timestamp(value: string): Date | undefined {
   const match = RFC3339_TIMESTAMP.exec(value);
   if (match === null) return undefined;
   const date = rfc3339Date(match);
-  if (date === undefined || !validDay(date)) return undefined;
+  if (date === undefined || !validTimestampParts(match, date)) return undefined;
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
 }
@@ -87,8 +87,18 @@ function validDay(date: Rfc3339Date): boolean {
   return maximumDay !== undefined && date.day <= maximumDay;
 }
 
-// The bounded scanner deliberately counts each JSON structural branch.
-// eslint-disable-next-line complexity
+function validTimestampParts(match: RegExpExecArray, date: Rfc3339Date): boolean {
+  const numeric = (index: number): number => Number(match[index] ?? "");
+  return (
+    validDay(date) &&
+    numeric(2) >= 1 &&
+    numeric(2) <= 12 &&
+    numeric(4) <= 23 &&
+    numeric(5) <= 59 &&
+    numeric(6) <= 59
+  );
+}
+
 function hasDuplicateKeys(source: string): boolean {
   const scopes: Set<string>[] = [];
   for (let index = 0; index < source.length; index += 1) {
@@ -96,22 +106,48 @@ function hasDuplicateKeys(source: string): boolean {
     if (character === "{") scopes.push(new Set());
     else if (character === "}") scopes.pop();
     else if (character === '"' && scopes.length > 0) {
-      let end = index + 1;
-      for (; end < source.length; end += 1) {
-        if (source[end] === "\\") end += 1;
-        else if (source[end] === '"') break;
-      }
-      let cursor = end + 1;
-      while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
-      if (source[cursor] === ":") {
-        const key = JSON.parse(source.slice(index, end + 1)) as string;
-        const scope = scopes.at(-1);
-        if (scope?.has(key) === true) return true;
-        scope?.add(key);
-      }
-      index = end;
+      const inspected = inspectQuotedKey(source, index, scopes.at(-1));
+      if (inspected === undefined) return false;
+      if (inspected.duplicate) return true;
+      const end = inspected.end;
+      index = end; // NOSONAR -- Required bounded scanner advancement after consuming a JSON string token.
     }
   }
+  return false;
+}
+
+function inspectQuotedKey(
+  source: string,
+  start: number,
+  scope: Set<string> | undefined,
+): { readonly duplicate: boolean; readonly end: number } | undefined {
+  const end = quotedEnd(source, start + 1);
+  if (end === undefined) return undefined;
+  let cursor = end + 1;
+  while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+  return {
+    duplicate: source[cursor] === ":" && duplicateKey(source, start, end, scope),
+    end,
+  };
+}
+
+function quotedEnd(source: string, start: number): number | undefined {
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === "\\") index += 1;
+    else if (source[index] === '"') return index;
+  }
+  return undefined;
+}
+
+function duplicateKey(
+  source: string,
+  start: number,
+  end: number,
+  scope: Set<string> | undefined,
+): boolean {
+  const key = JSON.parse(source.slice(start, end + 1)) as string;
+  if (scope?.has(key) === true) return true;
+  scope?.add(key);
   return false;
 }
 
@@ -206,7 +242,7 @@ export function loadGithubAppConfig(
     input.privateKeyRotatedAt,
   ];
   if (values.every((value) => value === undefined)) return { status: "disabled" };
-  if (values.some((value) => value === undefined)) {
+  if (!values.every((value) => value !== undefined)) {
     return { status: "invalid", reason: "configuration-invalid" };
   }
   try {

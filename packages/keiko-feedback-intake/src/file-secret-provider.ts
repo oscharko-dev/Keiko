@@ -92,7 +92,7 @@ function readSecureKey(
   let value: unknown;
   try {
     if (typeof constants.O_NOFOLLOW !== "number") {
-      throw new Error("Feedback secret custody is unavailable");
+      throw new TypeError("Feedback secret custody is unavailable");
     }
     descriptor = openSync(candidate, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stats = fstatSync(descriptor);
@@ -168,7 +168,14 @@ export class FileSecretProvider implements IntakeSecretProvider {
   }
 
   private active(now: Date, keys: readonly KeyFile[]): KeyFile {
-    const active = keys.filter((key) => key.activatedAt <= now).at(-1);
+    let active: KeyFile | undefined;
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const candidate = keys[index];
+      if (candidate !== undefined && candidate.activatedAt <= now) {
+        active = candidate;
+        break;
+      }
+    }
     const cadence = this.options.kind === "abuse" ? DAY_MS : 90 * DAY_MS;
     if (active === undefined || active.activatedAt.getTime() + cadence <= now.getTime()) {
       throw new Error("Feedback secret custody is unavailable");

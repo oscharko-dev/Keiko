@@ -486,12 +486,7 @@ export class PostgresFeedbackPublicationWorkerStore {
     candidate: ClaimedCandidate,
     workerId: string,
   ): Promise<void> {
-    const restored =
-      candidate.row.status === "claimed"
-        ? "unclaimed"
-        : candidate.row.status === "may-have-committed"
-          ? "may-have-committed"
-          : candidate.row.status;
+    const restored = candidate.row.status === "claimed" ? "unclaimed" : candidate.row.status;
     await client.query(
       `UPDATE feedback_publication_outbox SET status=$4,lease_owner=NULL,lease_expires_at=NULL,
        next_attempt_at=CASE WHEN $4='retryable-failure' THEN clock_timestamp() ELSE next_attempt_at END,

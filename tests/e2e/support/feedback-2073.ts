@@ -148,7 +148,7 @@ async function seedSettingsWindow(page: Page, mode: FeedbackMode): Promise<void>
         ]),
       );
       window.localStorage.removeItem("keiko.conns.v1");
-      if (dataHc === null) document.documentElement.removeAttribute("data-hc");
+      if (dataHc === null) delete document.documentElement.dataset.hc;
       else document.documentElement.dataset.hc = dataHc;
     },
     { windowId: SETTINGS_WINDOW_ID, theme: mode.theme, dataHc: mode.dataHc },
@@ -164,7 +164,7 @@ export async function openFeedbackFromSettings(
   await seedSettingsWindow(page, mode);
   await page.goto("/");
   await page.evaluate((dataHc) => {
-    if (dataHc === null) document.documentElement.removeAttribute("data-hc");
+    if (dataHc === null) delete document.documentElement.dataset.hc;
     else document.documentElement.dataset.hc = dataHc;
   }, mode.dataHc);
   const settings = page.locator(`.window[data-window-id="${SETTINGS_WINDOW_ID}"]`);

@@ -277,7 +277,7 @@ export class PostgresFeedbackReviewRepository {
     allowPrivate = false,
   ): Promise<FeedbackReviewMutationResult> {
     assertFeedbackReviewCommand(command);
-    const at = new Date(this.now().getTime());
+    const at = new Date(this.now());
     if (!Number.isFinite(at.getTime())) throw new Error("Feedback review clock is invalid");
     const digest = feedbackReviewCommandDigest(command);
     for (let attempt = 0; attempt < this.maxRetries; attempt += 1) {

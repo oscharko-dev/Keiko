@@ -18,10 +18,6 @@ button,
 input,
 select {
   font: inherit;
-}
-button,
-select,
-input {
   min-height: calc(var(--control-height-lg) + var(--space-2));
 }
 button {

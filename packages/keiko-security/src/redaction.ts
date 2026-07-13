@@ -81,7 +81,8 @@ function replaceTracked(
   counts: MutableRuleCounts,
 ): string {
   pattern.lastIndex = 0;
-  const count = input.match(pattern)?.length ?? 0;
+  let count = 0;
+  while (pattern.exec(input) !== null) count += 1;
   pattern.lastIndex = 0;
   addRuleCount(counts, code, count);
   if (count === 0) return input;
@@ -101,7 +102,7 @@ function pemMarkerEnd(input: string, start: number, prefix: string): number | un
     if (input.startsWith(PEM_MARKER_SUFFIX, cursor)) {
       return cursor + PEM_MARKER_SUFFIX.length;
     }
-    const code = input.charCodeAt(cursor);
+    const code = input.codePointAt(cursor) ?? 0;
     if (code !== 0x20 && (code < 0x41 || code > 0x5a)) return undefined;
     cursor += 1;
   }

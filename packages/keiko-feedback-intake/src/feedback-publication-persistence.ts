@@ -12,16 +12,27 @@ const ENCODER = new TextEncoder();
 export type FeedbackPublicationCancelResultStatus =
   "cancelled-private" | "manual-reconciliation" | "manual-remediation";
 
-export async function persistPreparation(
-  client: PgClientLike,
-  command: FeedbackPublicationPrepareCommandV1,
-  projection: FeedbackIssueProjectionV1,
-  target: import("@oscharko-dev/keiko-contracts/feedback-publication").FeedbackPublicationTargetPolicySnapshotV1,
-  digest: string,
-  preparationId: string,
-  at: Date,
-  expiresAt: Date,
-): Promise<void> {
+interface PreparationPersistenceInput {
+  readonly client: PgClientLike;
+  readonly command: FeedbackPublicationPrepareCommandV1;
+  readonly projection: FeedbackIssueProjectionV1;
+  readonly target: import("@oscharko-dev/keiko-contracts/feedback-publication").FeedbackPublicationTargetPolicySnapshotV1;
+  readonly digest: string;
+  readonly preparationId: string;
+  readonly at: Date;
+  readonly expiresAt: Date;
+}
+
+export async function persistPreparation({
+  client,
+  command,
+  projection,
+  target,
+  digest,
+  preparationId,
+  at,
+  expiresAt,
+}: PreparationPersistenceInput): Promise<void> {
   await client.query(
     "INSERT INTO feedback_publication_preparations (id,item_id,payload_digest,source_record_version,projection_version,title_bytes,body_bytes,projection_digest,reconciliation_marker,target_api_origin,target_repository_id,target_owner,target_repository,target_installation_id,target_labels,target_key,label_policy_version,target_policy_version,target_policy_digest,status,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::bigint,$12,$13,$14::bigint,$15,$16,$17,$18,$19,'prepared',$20,$21)",
     [
@@ -75,12 +86,10 @@ async function persistAudit(
   at: Date,
   resultStatus?: FeedbackPublicationCancelResultStatus,
 ): Promise<void> {
-  const status =
-    command.action === "prepare-publication"
-      ? "prepared"
-      : command.action === "approve-publication"
-        ? "approved"
-        : (resultStatus ?? "cancelled-private");
+  let status: FeedbackPublicationCancelResultStatus | "prepared" | "approved" =
+    resultStatus ?? "cancelled-private";
+  if (command.action === "prepare-publication") status = "prepared";
+  else if (command.action === "approve-publication") status = "approved";
   await client.query(
     "INSERT INTO feedback_publication_audit (item_id,preparation_id,payload_digest,projection_digest,target_policy_digest,prior_version,result_version,action,result_status,event_at,actor_issuer,actor_sub,permission_policy_version,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$10::timestamptz + interval '365 days')",
     [
@@ -231,16 +240,27 @@ async function persistCancellationIdempotency(
   );
 }
 
-export async function persistPrivateCancellation(
-  client: PgClientLike,
-  command: FeedbackPublicationCancelCommandV1,
-  projection: Pick<FeedbackIssueProjectionV1, "projectionDigest" | "targetPolicyDigest">,
-  digest: string,
-  reviewGroupId: string,
-  semanticGroupId: string,
-  at: Date,
-  resultStatus: FeedbackPublicationCancelResultStatus,
-): Promise<number> {
+interface PrivateCancellationPersistenceInput {
+  readonly client: PgClientLike;
+  readonly command: FeedbackPublicationCancelCommandV1;
+  readonly projection: Pick<FeedbackIssueProjectionV1, "projectionDigest" | "targetPolicyDigest">;
+  readonly digest: string;
+  readonly reviewGroupId: string;
+  readonly semanticGroupId: string;
+  readonly at: Date;
+  readonly resultStatus: FeedbackPublicationCancelResultStatus;
+}
+
+export async function persistPrivateCancellation({
+  client,
+  command,
+  projection,
+  digest,
+  reviewGroupId,
+  semanticGroupId,
+  at,
+  resultStatus,
+}: PrivateCancellationPersistenceInput): Promise<number> {
   const version = command.expectedVersion + 1;
   if (resultStatus === "cancelled-private") {
     await client.query(

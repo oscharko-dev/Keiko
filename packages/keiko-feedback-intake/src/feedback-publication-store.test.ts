@@ -201,16 +201,18 @@ describe("Postgres feedback publication repository orchestration", () => {
       replayed: false,
     });
 
-    expect(mocks.persistPreparation).toHaveBeenCalledWith(
-      expect.anything(),
-      prepare(),
-      expect.anything(),
-      TARGET,
-      "command-digest",
-      PREPARATION,
-      expect.any(Date),
-      expect.any(Date),
-    );
+    expect(mocks.persistPreparation).toHaveBeenCalledOnce();
+    const persisted: unknown = mocks.persistPreparation.mock.calls[0]?.[0];
+    expect(persisted).toMatchObject({
+      command: prepare(),
+      target: TARGET,
+      digest: "command-digest",
+      preparationId: PREPARATION,
+    });
+    expect(persisted).toHaveProperty("client");
+    expect(persisted).toHaveProperty("projection");
+    expect(persisted).toHaveProperty("at", expect.any(Date));
+    expect(persisted).toHaveProperty("expiresAt", expect.any(Date));
     expect(mocks.persistApproval).toHaveBeenCalledWith(
       expect.anything(),
       approve(),

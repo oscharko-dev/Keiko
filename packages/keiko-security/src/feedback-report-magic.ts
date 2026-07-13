@@ -52,7 +52,7 @@ function isSvg(bytes: Uint8Array, offset: number): boolean {
     prefix[1] !== undefined &&
     prefix[2] !== undefined &&
     prefix[3] !== undefined &&
-    String.fromCharCode(prefix[1], prefix[2], prefix[3]).toLowerCase() === "svg"
+    String.fromCodePoint(prefix[1], prefix[2], prefix[3]).toLowerCase() === "svg"
   );
 }
 

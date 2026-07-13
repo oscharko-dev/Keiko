@@ -1,5 +1,5 @@
 import dynamic from "next/dynamic";
-import { lazy, Suspense, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { gitObjectId } from "./gitObjectId";
 import type {
   QualityIntelligenceInlineSource,
@@ -23,9 +23,9 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 export function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
   return (
-    <div className="lk-loading" role="status" aria-atomic="true" aria-label={t("common.loading")}>
+    <output className="lk-loading" aria-atomic="true" aria-label={t("common.loading")}>
       {t("common.loading")}
-    </div>
+    </output>
   );
 }
 

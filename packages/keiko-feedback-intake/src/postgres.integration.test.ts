@@ -20,7 +20,7 @@ import { PostgresIntakeRepository, type PgClientLike } from "./postgres.js";
 import { createPostgresFeedbackIntake } from "./production-service.js";
 
 const databaseUrl = process.env.DATABASE_URL;
-const integration = databaseUrl === undefined ? it.skip : it;
+const integration = it.skipIf(databaseUrl === undefined);
 
 describe("PostgreSQL production intake integration", () => {
   integration(

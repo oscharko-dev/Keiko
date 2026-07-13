@@ -17,7 +17,7 @@ BEGIN
     RETURN false;
   END IF;
   FOREACH label IN ARRAY labels LOOP
-    IF octet_length(label) NOT BETWEEN 1 AND 50 OR label ~ '[[:cntrl:]]' THEN
+    IF octet_length(label) NOT BETWEEN 1 AND 50 OR label ~ '[[:cntrl:]]' THEN -- NOSONAR - validation pattern is local to this database function.
       RETURN false;
     END IF;
   END LOOP;
@@ -29,7 +29,7 @@ CREATE TABLE feedback_publication_preparations (
   id uuid PRIMARY KEY,
   item_id uuid NOT NULL REFERENCES feedback_review_items(id) ON DELETE CASCADE
     DEFERRABLE INITIALLY DEFERRED,
-  payload_digest char(64) NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
+  payload_digest char(64) NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'), -- NOSONAR - digest format is independently enforced by this schema constraint.
   source_record_version integer NOT NULL CHECK (source_record_version > 0),
   projection_version text NOT NULL CHECK (projection_version = 'github-issue-v1'),
   title_bytes bytea NOT NULL CHECK (octet_length(title_bytes) BETWEEN 1 AND 256),
@@ -52,13 +52,13 @@ CREATE TABLE feedback_publication_preparations (
     target_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$'
   ),
   label_policy_version text NOT NULL CHECK (
-    label_policy_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'
+    label_policy_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$' -- NOSONAR - validation pattern is local to this database constraint.
   ),
   target_policy_version text NOT NULL CHECK (
     length(target_policy_version) BETWEEN 1 AND 128 AND target_policy_version !~ '[[:cntrl:]]'
   ),
   target_policy_digest char(64) NOT NULL CHECK (target_policy_digest ~ '^[0-9a-f]{64}$'),
-  status text NOT NULL CHECK (status IN ('prepared', 'approved', 'cancelled-private')),
+  status text NOT NULL CHECK (status IN ('prepared', 'approved', 'cancelled-private')), -- NOSONAR - state literals must remain local to this independent database constraint.
   created_at timestamptz NOT NULL,
   approved_at timestamptz,
   cancelled_at timestamptz,
@@ -125,8 +125,8 @@ CREATE TABLE feedback_publication_outbox (
     REFERENCES feedback_publication_preparations(id) ON DELETE CASCADE,
   idempotency_key text NOT NULL UNIQUE CHECK (idempotency_key ~ '^[A-Za-z0-9_-]{16,128}$'),
   status text NOT NULL CHECK (status IN (
-    'unclaimed', 'claimed', 'may-have-committed', 'retryable-failure',
-    'manual-reconciliation', 'succeeded', 'cancelled-private'
+    'unclaimed', 'claimed', 'may-have-committed', 'retryable-failure', -- NOSONAR - state literals must remain local to this independent database constraint.
+    'manual-reconciliation', 'succeeded', 'cancelled-private' -- NOSONAR - state literals must remain local to this independent database constraint.
   )),
   attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0 AND attempt_count <= 10),
   lease_owner text,
@@ -164,7 +164,7 @@ CREATE TABLE feedback_github_issue_linkage (
   github_issue_number integer NOT NULL CHECK (github_issue_number > 0),
   linked_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
-  CHECK (expires_at > linked_at AND expires_at <= linked_at + interval '365 days')
+  CHECK (expires_at > linked_at AND expires_at <= linked_at + interval '365 days') -- NOSONAR - retention literal is independently enforced by this schema constraint.
 );
 
 CREATE FUNCTION validate_feedback_review_publication_binding() RETURNS trigger
@@ -249,7 +249,7 @@ CREATE TABLE feedback_publication_idempotency (
   idempotency_key text PRIMARY KEY CHECK (idempotency_key ~ '^[A-Za-z0-9_-]{16,128}$'),
   request_digest char(64) NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
   action text NOT NULL CHECK (action IN (
-    'prepare-publication', 'approve-publication', 'cancel-publication-route-private'
+    'prepare-publication', 'approve-publication', 'cancel-publication-route-private' -- NOSONAR - action literals must remain local to this independent database constraint.
   )),
   item_id uuid NOT NULL,
   preparation_id uuid NOT NULL,

@@ -293,9 +293,7 @@ function PublicMessages({
   return (
     <>
       {state.copyState === "success" ? (
-        <p className="feedback-public-success" role="status">
-          {t("feedback.public.copySuccess")}
-        </p>
+        <output className="feedback-public-success">{t("feedback.public.copySuccess")}</output>
       ) : null}
       {state.copyState === "error" ? (
         <p className="feedback-public-error" role="alert">

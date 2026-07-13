@@ -41,7 +41,7 @@ function loadPrivateKey(path: string): KeyObject {
 }
 
 export function validateGithubAppPrivateKeyFile(path: string): void {
-  void loadPrivateKey(path);
+  loadPrivateKey(path);
 }
 
 export class GithubAppPrivateKeyProvider {

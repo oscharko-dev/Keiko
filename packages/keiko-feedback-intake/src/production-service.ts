@@ -74,15 +74,22 @@ export type AttemptLease =
   | { readonly ok: true; readonly release: () => void }
   | { readonly ok: false; readonly result: SubmitResult };
 
+function rejectionEvent(status: number): "rate-limited" | "unavailable" | "rejected" {
+  if (status === 429) return "rate-limited";
+  if (status === 503) return "unavailable";
+  return "rejected";
+}
+
 function failure(
   status: 413 | 422 | 429 | 503,
   error: "payload-too-large" | "report-rejected" | "rate-limited" | "temporarily-unavailable",
   options: ProductionServiceOptions,
 ): SubmitResult {
-  const event = status === 429 ? "rate-limited" : status === 503 ? "unavailable" : "rejected";
+  const rateLimited = status === 429;
+  const event = rejectionEvent(status);
   options.logger.event(event);
   options.metrics.increment(event === "rate-limited" ? "rate_limited" : event);
-  if (status === 429) {
+  if (rateLimited) {
     const now = options.now().getTime();
     const untilMidnight = DAY_MS - (now % DAY_MS);
     const retryAfterSeconds = Math.min(
@@ -114,28 +121,39 @@ function admission(
   const dedupeKeys = [dedupeSnapshot.active, ...dedupeSnapshot.predecessors.slice(0, 2)];
   const cap = capability();
   const receiptExpiresAt = new Date(now.getTime() + RECEIPT_LIFETIME_MS);
-  return admissionRecord(
+  return admissionRecord({
     options,
-    verified.value.report,
+    report: verified.value.report,
     bytes,
     digest,
     now,
     dedupeKeys,
     cap,
     receiptExpiresAt,
-  );
+  });
 }
 
-function admissionRecord(
-  options: ProductionServiceOptions,
-  report: Parameters<typeof dedupeIdentity>[1],
-  bytes: Uint8Array,
-  digest: string,
-  now: Date,
-  dedupeKeys: readonly ReturnType<IntakeSecretProvider["snapshot"]>["active"][],
-  cap: ReturnType<typeof capability>,
-  receiptExpiresAt: Date,
-): AdmissionWithCapability {
+interface AdmissionRecordInput {
+  readonly options: ProductionServiceOptions;
+  readonly report: Parameters<typeof dedupeIdentity>[1];
+  readonly bytes: Uint8Array;
+  readonly digest: string;
+  readonly now: Date;
+  readonly dedupeKeys: readonly ReturnType<IntakeSecretProvider["snapshot"]>["active"][];
+  readonly cap: ReturnType<typeof capability>;
+  readonly receiptExpiresAt: Date;
+}
+
+function admissionRecord({
+  options,
+  report,
+  bytes,
+  digest,
+  now,
+  dedupeKeys,
+  cap,
+  receiptExpiresAt,
+}: AdmissionRecordInput): AdmissionWithCapability {
   return {
     groupId: randomBytes(16).toString("hex"),
     payloadId: randomBytes(16).toString("hex"),

@@ -290,7 +290,7 @@ test("localized, empty, unauthenticated, responsive, forced-colors, and reduced-
   page,
   browserName,
 }) => {
-  test.skip(browserName !== "chromium", "forced-colors evidence requires Chromium");
+  test.skip(browserName !== "chromium", "forced-colors evidence requires Chromium"); // NOSONAR -- Playwright exposes forced-colors emulation only in Chromium.
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
   await fixture(page, "empty");
