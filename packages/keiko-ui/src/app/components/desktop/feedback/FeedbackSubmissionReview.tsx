@@ -124,6 +124,58 @@ function FeedbackSubmissionResult({
   );
 }
 
+function FeedbackAcceptedSubmission({
+  acceptedStatusRef,
+  copiedStatusRef,
+  receipt,
+  receiptCopyState,
+  onCopyReceipt,
+}: Pick<
+  FeedbackSubmissionReviewControls,
+  "acceptedStatusRef" | "copiedStatusRef" | "receipt" | "receiptCopyState" | "onCopyReceipt"
+>): ReactNode {
+  const t = useFeedbackTranslate();
+  return (
+    <section className="feedback-submission-result" aria-label={t("feedback.submission.accepted")}>
+      <output ref={acceptedStatusRef} className="feedback-submission-status" tabIndex={-1}>
+        {t("feedback.submission.accepted")}
+      </output>
+      {receiptCopyState !== "copied" ? (
+        <>
+          <p className="feedback-result-message">{t("feedback.submission.receipt.instructions")}</p>
+          <dl>
+            <dt>{t("feedback.submission.receipt.id")}</dt>
+            <dd>
+              <code>{receipt.receiptId}</code>
+            </dd>
+            <dt>{t("feedback.submission.receipt.expires")}</dt>
+            <dd>
+              <time dateTime={receipt.expiresAt}>{receipt.expiresAt}</time>
+            </dd>
+          </dl>
+          {receiptCopyState === "error" ? (
+            <p role="alert">{t("feedback.submission.receipt.copyError")}</p>
+          ) : null}
+          <button
+            className="feedback-primary-action feedback-submission-action"
+            type="button"
+            disabled={receiptCopyState === "copying"}
+            onClick={onCopyReceipt}
+          >
+            {receiptCopyState === "copying"
+              ? t("feedback.submission.receipt.copying")
+              : t("feedback.submission.receipt.copy")}
+          </button>
+        </>
+      ) : (
+        <output ref={copiedStatusRef} className="feedback-result-message" tabIndex={-1}>
+          {t("feedback.submission.receipt.copied")}
+        </output>
+      )}
+    </section>
+  );
+}
+
 export function FeedbackSubmissionReview({
   prepared,
   reviewed,
@@ -207,49 +259,13 @@ export function FeedbackSubmissionReview({
         </section>
       ) : null}
       {step === "accepted" ? (
-        <section
-          className="feedback-submission-result"
-          aria-label={t("feedback.submission.accepted")}
-        >
-          <output ref={acceptedStatusRef} className="feedback-submission-status" tabIndex={-1}>
-            {t("feedback.submission.accepted")}
-          </output>
-          {receiptCopyState !== "copied" ? (
-            <>
-              <p className="feedback-result-message">
-                {t("feedback.submission.receipt.instructions")}
-              </p>
-              <dl>
-                <dt>{t("feedback.submission.receipt.id")}</dt>
-                <dd>
-                  <code>{receipt.receiptId}</code>
-                </dd>
-                <dt>{t("feedback.submission.receipt.expires")}</dt>
-                <dd>
-                  <time dateTime={receipt.expiresAt}>{receipt.expiresAt}</time>
-                </dd>
-              </dl>
-              {receiptCopyState === "error" ? (
-                <p role="alert">{t("feedback.submission.receipt.copyError")}</p>
-              ) : null}
-              <button
-                className="feedback-primary-action feedback-submission-action"
-                type="button"
-                disabled={receiptCopyState === "copying"}
-                onClick={onCopyReceipt}
-              >
-                {receiptCopyState === "copying"
-                  ? t("feedback.submission.receipt.copying")
-                  : t("feedback.submission.receipt.copy")}
-              </button>
-            </>
-          ) : null}
-          {receiptCopyState === "copied" ? (
-            <output ref={copiedStatusRef} className="feedback-result-message" tabIndex={-1}>
-              {t("feedback.submission.receipt.copied")}
-            </output>
-          ) : null}
-        </section>
+        <FeedbackAcceptedSubmission
+          acceptedStatusRef={acceptedStatusRef}
+          copiedStatusRef={copiedStatusRef}
+          receipt={receipt}
+          receiptCopyState={receiptCopyState}
+          onCopyReceipt={onCopyReceipt}
+        />
       ) : null}
       {isRetryableSubmissionStep(step) || step === "rejected" || step === "rate-limited" ? (
         <FeedbackSubmissionResult

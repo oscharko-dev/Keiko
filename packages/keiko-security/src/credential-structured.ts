@@ -126,6 +126,20 @@ function isGovernedQuoteSeparator(
   return governedKeyBounds(input, cursor, policy) !== undefined;
 }
 
+function terminatedQuoteResult(
+  start: number,
+  termination: QuoteTermination,
+  quote: string,
+  governed: boolean,
+): QuoteScanResult | undefined {
+  if (termination.closed) {
+    return governed
+      ? governedQuoteResult(start, termination, quote)
+      : ungovernedQuoteResult(termination);
+  }
+  return governed ? undefined : ungovernedQuoteResult(termination);
+}
+
 function scanQuotedRegion(
   input: string,
   start: number,
@@ -142,12 +156,8 @@ function scanQuotedRegion(
     }
     const termination = quoteTermination(input, start, cursor, quote);
     if (termination !== undefined) {
-      if (termination.closed) {
-        return governed
-          ? governedQuoteResult(start, termination, quote)
-          : ungovernedQuoteResult(termination);
-      }
-      if (!governed) return ungovernedQuoteResult(termination);
+      const result = terminatedQuoteResult(start, termination, quote, governed);
+      if (result !== undefined) return result;
       cursor = termination.next;
       continue;
     }

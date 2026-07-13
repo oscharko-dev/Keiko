@@ -84,10 +84,9 @@ async function persistAudit(
   projection: Pick<FeedbackIssueProjectionV1, "projectionDigest" | "targetPolicyDigest">,
   resultVersion: number,
   at: Date,
-  resultStatus?: FeedbackPublicationCancelResultStatus,
+  resultStatus: FeedbackPublicationCancelResultStatus = "cancelled-private",
 ): Promise<void> {
-  let status: FeedbackPublicationCancelResultStatus | "prepared" | "approved" =
-    resultStatus ?? "cancelled-private";
+  let status: FeedbackPublicationCancelResultStatus | "prepared" | "approved" = resultStatus;
   if (command.action === "prepare-publication") status = "prepared";
   else if (command.action === "approve-publication") status = "approved";
   await client.query(
