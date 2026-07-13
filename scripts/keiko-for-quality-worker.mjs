@@ -256,7 +256,7 @@ export function autoApplyState(comments) {
   const body = latestGitarComment(comments)?.body;
   if (body === undefined) return "not confirmed";
   if (body.match(/✅\s*Auto-apply/iu) !== null) return "enabled";
-  if (body.includes("Auto-apply")) return "disabled";
+  if (/Auto-apply/iu.test(body)) return "disabled";
   return "not confirmed";
 }
 
