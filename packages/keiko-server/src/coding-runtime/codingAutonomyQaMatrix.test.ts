@@ -387,7 +387,7 @@ describe("coding autonomy closeout QA matrix", () => {
     [
       "Model Gateway fake-provider sidecar routing",
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts",
-      "sidecar-gateway-ready",
+      "fails closed when a runtime gateway route has no capability authenticator",
     ],
     [
       "ChatGPT/Codex subscription isolation",

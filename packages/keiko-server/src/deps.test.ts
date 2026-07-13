@@ -265,6 +265,23 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.store.close();
   });
 
+  it("constructs one production runtime control plane over the shared durable stores", () => {
+    const uiDir = tmp("ui-runtime-");
+    const evidenceDir = tmp("ev-runtime-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    expect(deps.codingRuntimeSnapshotStore).toBeDefined();
+    expect(deps.codingRuntimeEvidenceAggregator).toBeDefined();
+    expect(deps.codingRuntimeOrchestrator?.status()).toMatchObject({ state: "idle", revision: 0 });
+    expect(deps.codingRuntimeEventHub).toBeDefined();
+    deps.dispose?.();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");

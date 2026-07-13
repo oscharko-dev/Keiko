@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -1506,7 +1507,7 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const diagnostics = { record: vi.fn() };
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
       processEnv: {},
@@ -1541,7 +1542,7 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const diagnostics = { record: vi.fn() };
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
       processEnv: {},
@@ -1564,7 +1565,15 @@ describe("coding runtime manager", () => {
     expect(child.stderr.writableLength).toBe(0);
     expect(events).toHaveLength(1);
     expect(JSON.stringify(events)).not.toContain("stderr-sentinel-2251");
-    expect(diagnostics.record).not.toHaveBeenCalled();
+    expect(diagnostics.record).toHaveBeenCalled();
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("stderr-sentinel-2251");
+    const diagnostic = diagnostics.record.mock.calls.at(-1)?.[0];
+    expect(diagnostic).toMatchObject({
+      operation: "coding-runtime.stderr",
+      source: "coding-runtime-manager.stderr",
+      errorClass: "RuntimeStderrSummary",
+    });
+    expect(diagnostic?.message).toMatch(/^runtime-stderr-counts:bytes=\d+:lines=\d+:truncated=/u);
 
     const stopped = manager.stop("run-1988");
     child.exit(0);
@@ -1605,7 +1614,7 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toEqual({ status: "stopped" });
   });
 
-  it("fails closed before signalling when the mandatory revocation barrier denies", async () => {
+  it("fails closed but still terminates when the mandatory revocation barrier denies", async () => {
     const fixture = createManagedFixture();
     const portable = createPortableRuntimeFixture();
     const harness = createSpawnHarness();
@@ -1633,7 +1642,39 @@ describe("coding runtime manager", () => {
       failureCode: "runtime-reap-unproven",
       retryable: false,
     });
-    expect(harness.children[0]?.kills).toEqual([]);
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
+  });
+
+  it("fails closed but still terminates when in-flight action cancellation denies", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const manager = createProductionCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      revokeRuntime: (): true => true,
+      abortInFlightActions: (): false => false,
+      markRuntimeRecoveryRequired: (): true => true,
+      releaseRuntimeAfterReap: (): true => true,
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: true });
+    await expect(manager.stop("run-1988")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
     expect(manager.health()).toMatchObject({ status: "recovery-required" });
   });
 
@@ -1659,6 +1700,33 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toMatchObject({ status: "ready", activeRunId: "run-1988" });
     expect(restart).toMatchObject({ ok: true, status: "ready" });
     expect(harness.children).toHaveLength(2);
+  });
+
+  it("completes 50 start-stop cycles without accumulating runtime stream listeners", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+
+    for (let cycle = 0; cycle < 50; cycle += 1) {
+      expect(
+        await manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toMatchObject({ ok: true, status: "ready" });
+      const child = harness.children[cycle];
+      expect(child?.stdout.listenerCount("data")).toBe(1);
+      expect(child?.stderr.listenerCount("data")).toBe(1);
+      const stopping = manager.stop("run-1988");
+      child?.exit(0);
+      await expect(stopping).resolves.toEqual({ ok: true, status: "stopped" });
+      expect(manager.health()).toEqual({ status: "stopped" });
+    }
+
+    expect(harness.children).toHaveLength(50);
+    expect(harness.children.every((child) => child.kills.length === 1)).toBe(true);
   });
 
   it("revokes and proves tree exit before releasing a crashed runtime", async () => {
@@ -2502,6 +2570,7 @@ describe("coding runtime manager", () => {
   it("does not report ready until the injected OpenCode lifecycle handshake completes", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
     let releaseReady: (() => void) | undefined;
     const handshake = vi.fn(
       () =>
@@ -2515,6 +2584,9 @@ describe("coding runtime manager", () => {
       processEnv: {},
       supervisor: testSupervisor(() => child.handle),
       openCodeLifecycleAdapter: { handshake },
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
     });
 
     let settled = false;
@@ -2529,9 +2601,11 @@ describe("coding runtime manager", () => {
 
     expect(handshake).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
+    expect(events.some((event) => event.kind === "runtime-started")).toBe(false);
     expect(manager.health()).toMatchObject({ status: "starting", activeRunId: "run-1988" });
     releaseReady?.();
     await expect(starting).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    expect(events.filter((event) => event.kind === "runtime-started")).toHaveLength(1);
   });
 
   it("prepares the fixed OpenCode invocation before spawn and never forwards caller arguments", async () => {

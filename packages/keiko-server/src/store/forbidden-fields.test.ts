@@ -68,6 +68,32 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "grounded_preview_citations_json",
 ]);
 
+const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
+  "run_id",
+  "schema_version",
+  "state",
+  "revision",
+  "requested_mode",
+  "runtime_source",
+  "model_source",
+  "failure_code",
+  "created_at",
+  "updated_at",
+  "terminal_at",
+  "recovery_acknowledged_at",
+  "predecessor_run_id",
+  "task_digest",
+  "workspace_digest",
+  "operator_digest",
+  "authority_digest",
+  "binding_digest",
+  "provenance_digest",
+  "tool_call_count",
+  "patch_byte_count",
+  "model_request_count",
+  "recovery_handle",
+]);
+
 // ── Forbidden substring patterns (case-insensitive) ─────────────────────────
 // Any column whose name contains one of these substrings leaks a credential-class
 // field into the UI DB in violation of ADR-0013 D8.
@@ -170,6 +196,31 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
     for (const col of cols) {
       const lower = col.toLowerCase();
       for (const forbidden of FORBIDDEN_SUBSTRINGS) {
+        expect(lower).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("coding runtime snapshots are content-free and have no process or credential fields", () => {
+    const dbPath = join(tmpDir, "runtime.db");
+    const store = createNodeUiStore(dbPath);
+    store.close();
+    const inspector = new DatabaseSync(dbPath, { readOnly: true });
+    const cols = columnNames(inspector, "coding_runtime_snapshots");
+    inspector.close();
+    expect(new Set(cols)).toEqual(ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS);
+    for (const col of cols) {
+      const lower = col.toLowerCase();
+      for (const forbidden of [
+        ...FORBIDDEN_SUBSTRINGS,
+        "prompt",
+        "output",
+        "diff",
+        "path",
+        "argv",
+        "env",
+        "approval",
+      ]) {
         expect(lower).not.toContain(forbidden);
       }
     }

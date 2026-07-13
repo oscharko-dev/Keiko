@@ -138,6 +138,44 @@ describe("GET /api/health", () => {
   });
 });
 
+describe("Coding runtime lifecycle transport guards", () => {
+  const path = "/api/coding-workbench/runtime/runs";
+  const body = JSON.stringify({
+    requestId: "request-guard",
+    taskIntent: "bounded intent",
+    requestedMode: "supervised-coding",
+  });
+
+  it("requires CSRF before dispatching a runtime mutation", async () => {
+    const response = await fetchRawWithInit(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("requires JSON and rejects a hostile Origin before runtime dispatch", async () => {
+    const wrongMedia = await fetchRawWithInit(path, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", "X-Keiko-CSRF": "1" },
+      body,
+    });
+    expect(wrongMedia.status).toBe(415);
+
+    const hostileOrigin = await fetchRawWithInit(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        Origin: "https://evil.example.test",
+      },
+      body,
+    });
+    expect(hostileOrigin.status).toBe(403);
+  });
+});
+
 describe("GET/PUT /api/workspace/state", () => {
   it("stores a bounded workspace snapshot for another browser to read", async () => {
     const put = await fetchRawWithInit("/api/workspace/state", {
@@ -598,6 +636,12 @@ describe("unknown API routes", () => {
           });
         };
       },
+      runtimeCapabilityAuthenticator: {
+        authenticate: (capability, audience) =>
+          capability === "runtime-gateway-capability" && audience === "model-gateway"
+            ? { ok: true, binding: { runId: "run-server-test" } }
+            : { ok: false },
+      },
       store,
     };
     await closeServer();
@@ -612,7 +656,10 @@ describe("unknown API routes", () => {
     try {
       const response = await fetch(`${baseUrl()}/api/coding-sidecar/gateway/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer runtime-gateway-capability",
+        },
         body: JSON.stringify({
           messages: [{ role: "user", content: "continue" }],
         }),
@@ -689,6 +736,12 @@ describe("unknown API routes", () => {
         get: () => undefined,
         delete: () => undefined,
       },
+      runtimeCapabilityAuthenticator: {
+        authenticate: (capability, audience) =>
+          capability === "runtime-gateway-capability" && audience === "model-gateway"
+            ? { ok: true, binding: { runId: "run-server-test" } }
+            : { ok: false },
+      },
       store,
     };
     await closeServer();
@@ -703,7 +756,10 @@ describe("unknown API routes", () => {
     try {
       const response = await fetch(`${baseUrl()}/api/coding-sidecar/gateway/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer runtime-gateway-capability",
+        },
         body: JSON.stringify({
           messages: [{ role: "user", content: "continue" }],
         }),
