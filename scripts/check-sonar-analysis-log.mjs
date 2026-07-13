@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { optionValue } from "./sonar-analysis-scope.mjs";
+
 function warningLines(contents) {
   return contents
     .split(/\r?\n/u)
@@ -27,12 +29,6 @@ export function sonarLogFailures(contents) {
   return [...new Set([...warnings, ...forbidden])];
 }
 
-function option(argv, name) {
-  const index = argv.indexOf(name);
-  const value = index === -1 ? undefined : argv[index + 1];
-  return value === undefined || value.startsWith("--") ? undefined : value;
-}
-
 export function runSonarLogCheck(input = {}) {
   const path = input.path;
   if (path === undefined) throw new Error("--log is required");
@@ -46,7 +42,7 @@ export function runSonarLogCheck(input = {}) {
 export function executeSonarLogCli(input = {}) {
   try {
     const argv = input.argv ?? process.argv.slice(2);
-    (input.run ?? runSonarLogCheck)({ path: option(argv, "--log") });
+    (input.run ?? runSonarLogCheck)({ path: optionValue(argv, "--log") });
   } catch (error) {
     (input.error ?? console.error)(
       `sonar-analysis-log: FAIL - ${error instanceof Error ? error.message : String(error)}`,

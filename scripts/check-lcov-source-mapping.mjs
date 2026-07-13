@@ -7,6 +7,7 @@ import { relative, resolve } from "node:path";
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
 import {
   isCoverableProductSource,
+  optionValue,
   runAnalysisScopeCheck,
   systemGitExecutable,
 } from "./sonar-analysis-scope.mjs";
@@ -82,16 +83,11 @@ export function runLcovSourceMapping(input) {
   return { changed, missing };
 }
 
-function option(argv, name) {
-  const index = argv.indexOf(name);
-  return index < 0 ? undefined : argv[index + 1];
-}
-
 export function runLcovSourceMappingCli(input = {}) {
   try {
     const argv = input.argv ?? process.argv;
-    const base = option(argv, "--base");
-    const head = option(argv, "--head") ?? "HEAD";
+    const base = optionValue(argv, "--base");
+    const head = optionValue(argv, "--head") ?? "HEAD";
     if (base === undefined) throw new Error("--base is required.");
     (input.run ?? runLcovSourceMapping)({ base, head });
   } catch (error) {

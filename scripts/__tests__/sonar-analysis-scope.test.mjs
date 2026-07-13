@@ -10,6 +10,7 @@ import {
   isCoverableProductSource,
   isGeneratedOrBinaryPath,
   isTestPath,
+  optionValue,
   readNativeScope,
   runAnalysisScopeCheck,
   sourceEncodingFailures,
@@ -40,6 +41,7 @@ const validProperties = [
   "sonar.test.inclusions=tests/**",
   "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
   "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
+  "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1",
 ].join("\n");
 
 function removePropertyPattern(properties, key, pattern) {
@@ -108,10 +110,17 @@ describe("Sonar analysis scope", () => {
     expect(readText).toHaveBeenCalledTimes(1);
   });
 
-  it("uses an absolute system Git path on POSIX and the platform executable on Windows", () => {
+  it("uses absolute system Git paths on every platform", () => {
     expect(systemGitExecutable("darwin")).toBe("/usr/bin/git");
     expect(systemGitExecutable("linux")).toBe("/usr/bin/git");
-    expect(systemGitExecutable("win32")).toBe("git.exe");
+    expect(systemGitExecutable("win32")).toMatch(/^[A-Za-z]:[\\/]/u);
+    expect(systemGitExecutable("win32").endsWith("/Git/cmd/git.exe")).toBe(true);
+  });
+
+  it("rejects missing CLI option values and following flags", () => {
+    expect(optionValue(["--base", "origin/dev"], "--base")).toBe("origin/dev");
+    expect(optionValue(["--base", "--head", "HEAD"], "--base")).toBeUndefined();
+    expect(optionValue([], "--base")).toBeUndefined();
   });
 
   it("fails on missing properties, missing native files, and unclassified native sources", () => {

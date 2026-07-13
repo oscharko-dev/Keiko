@@ -140,4 +140,18 @@ describe("Sonar scanner warning gate", () => {
     });
     expect(errors).toEqual(["sonar-analysis-log: FAIL - bounded"]);
   });
+
+  it("uses default CLI error adapters when the log option is missing", () => {
+    const exitCode = process.exitCode;
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    process.exitCode = undefined;
+    try {
+      executeSonarLogCli({ argv: [] });
+      expect(error).toHaveBeenCalledWith("sonar-analysis-log: FAIL - --log is required");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = exitCode;
+      error.mockRestore();
+    }
+  });
 });

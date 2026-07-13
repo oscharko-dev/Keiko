@@ -195,7 +195,16 @@ export function coverageDisposition(input, nativeSources = new Set()) {
 }
 
 export function systemGitExecutable(platform = process.platform) {
-  return platform === "win32" ? "git.exe" : "/usr/bin/git";
+  if (platform !== "win32") return "/usr/bin/git";
+  const programFiles = process.env.ProgramFiles ?? "C:/Program Files";
+  const separator = programFiles.endsWith("/") || programFiles.endsWith("\\") ? "" : "/";
+  return `${programFiles}${separator}Git/cmd/git.exe`;
+}
+
+export function optionValue(argv, name) {
+  const index = argv.indexOf(name);
+  const value = index < 0 ? undefined : argv[index + 1];
+  return value === undefined || value.startsWith("--") ? undefined : value;
 }
 
 export function readNativeScope(root, read = readFileSync) {
@@ -263,6 +272,7 @@ function requiredPropertyFailures(properties) {
     "sonar.sourceEncoding=UTF-8",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
+    "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1",
     "native/portable-launcher/**",
     "scripts/windows-portable-rfc3161.cs",
   ];

@@ -114,6 +114,14 @@ describe("LCOV source mapping", () => {
     });
     expect(errors).toEqual(["lcov-source-mapping: FAIL - --base is required."]);
     expect(exitCodes).toEqual([1]);
+
+    const missingValueErrors = [];
+    runLcovSourceMappingCli({
+      argv: ["node", "script", "--base", "--head", "HEAD"],
+      error: (message) => missingValueErrors.push(message),
+      setExitCode: () => undefined,
+    });
+    expect(missingValueErrors).toEqual(["lcov-source-mapping: FAIL - --base is required."]);
   });
 
   it("uses repository-safe defaults for git, file reads, root, reports, and logging", () => {
