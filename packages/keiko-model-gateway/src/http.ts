@@ -660,20 +660,20 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
       chunks.push(chunk);
       const buffer = Buffer.concat(chunks);
       const headerEnd = buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) {
-        // Header still unterminated: bound the accumulation. This is the second, independent
-        // exit from this loop — even if the terminator search is defective and never fires, the
-        // buffer cannot grow past the limit (fail closed, bounded memory). Applying the bound only
-        // on the unterminated path keeps a valid, well-formed header immune to any trailing
-        // tunneled bytes that happen to share the terminator's chunk.
-        if (connectResponseHeaderExceedsLimit(buffer.length)) {
-          socket.destroy();
-          settle(() => {
-            reject(connectHeaderLimitError());
-          });
-        }
+      // Bound the header FIRST, before any terminator-dependent branching, so no single mutation
+      // of the branches below can detach this bound from the accumulation loop (fail closed,
+      // bounded memory — the loop's independent second exit). While the header is unterminated the
+      // whole buffer is the header; once terminated only the pre-terminator slice counts, which
+      // leaves a valid, well-formed header immune to trailing tunneled bytes sharing its chunk.
+      const headerBytes = headerEnd === -1 ? buffer.length : headerEnd;
+      if (connectResponseHeaderExceedsLimit(headerBytes)) {
+        socket.destroy();
+        settle(() => {
+          reject(connectHeaderLimitError());
+        });
         return;
       }
+      if (headerEnd === -1) return;
       const rest = buffer.subarray(headerEnd + 4);
       if (rest.length > 0) socket.unshift(rest);
       settle(() => {
