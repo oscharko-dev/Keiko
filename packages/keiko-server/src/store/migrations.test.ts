@@ -21,6 +21,25 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe("runMigrations", () => {
+  it("v10 creates the strict, content-free coding runtime snapshot ledger and active-slot index", () => {
+    const db = openMem();
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(10);
+    const columns = (
+      db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(columns).toContain("run_id");
+    expect(columns).toContain("recovery_handle");
+    expect(columns).not.toContain("prompt");
+    expect(columns).not.toContain("argv");
+    const index = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='uniq_coding_runtime_active_slot'",
+      )
+      .get() as { sql: string };
+    expect(index.sql).toContain("WHERE terminal_at IS NULL");
+  });
+
   it("creates the v1 schema and bumps user_version", () => {
     const db = openMem();
     expect(userVersion(db)).toBe(0);

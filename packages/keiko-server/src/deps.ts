@@ -158,6 +158,7 @@ import type {
   OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -170,6 +171,20 @@ import {
 } from "./workspace-index-provider.js";
 import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
 import type { CodingRuntimeEditorMutationLeasePort } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import {
+  createCodingRuntimeSnapshotStore,
+  type CodingRuntimeSnapshotStore,
+} from "./coding-runtime/codingRuntimeSnapshotStore.js";
+import {
+  createCodingRuntimeEvidenceAggregator,
+  type CodingRuntimeEvidenceAggregator,
+} from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
+import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
+import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import {
+  createCodingRuntimeControlPlane,
+  type CodingRuntimeHost,
+} from "./coding-runtime/codingRuntimeControlPlane.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import {
@@ -252,6 +267,40 @@ export interface UiHandlerDeps {
   readonly modelPortFactory: ModelPortFactory;
   // Injectable OpenAI-compatible chat seam for the coding-sidecar gateway route.
   readonly codingSidecarGatewayChatFactory?: CodingSidecarGatewayChatFactory | undefined;
+  readonly codingSidecarGatewayChatStreamFactory?:
+    | ((
+        config: GatewayConfig,
+        modelId: string,
+      ) => (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>)
+    | undefined;
+  /** Server-private runtime capability validation; never accepts a browser session credential. */
+  readonly runtimeCapabilityAuthenticator?:
+    | {
+        readonly authenticate: (
+          capability: string,
+          audience: "model-gateway" | "tool-facade",
+        ) => unknown;
+      }
+    | undefined;
+  readonly openCodeGatewayReadinessRegistry?:
+    | {
+        readonly claim: (runId: string) => boolean;
+        readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+        readonly clear: (runId: string) => void;
+      }
+    | undefined;
+  readonly codingSidecarGatewayCancellationRegistry?:
+    { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
+  readonly codingSidecarGatewayEvidenceAggregator?:
+    | {
+        readonly record: (event: {
+          readonly runId: string;
+          readonly outcome: "accepted" | "cancelled" | "failed" | "output-limit";
+          readonly completionTokens: number;
+          readonly outputBytes: number;
+        }) => void | Promise<void>;
+      }
+    | undefined;
   // Issue #1987 — the coding-sidecar gateway must fail closed for subscription-backed model sources
   // even on live routes, so handlers thread this source into the projection helper instead of
   // silently defaulting every request to keiko-model-gateway semantics.
@@ -271,6 +320,12 @@ export interface UiHandlerDeps {
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
+  readonly codingRuntimeSnapshotStore?: CodingRuntimeSnapshotStore | undefined;
+  readonly codingRuntimeEvidenceAggregator?: CodingRuntimeEvidenceAggregator | undefined;
+  /** Optional singleton lifecycle aggregate; runtime routes fail closed when it is not composed. */
+  readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
+  /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
+  readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
   // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
   // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
   readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
@@ -509,6 +564,9 @@ export interface BuildHandlerDepsOptions {
   // Optional coding-sidecar model-source override. Production defaults to deriving the source from
   // the selected coding-safe provider profile; tests and future config surfaces may override it.
   readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
+  /** Qualified runtime host injection. Production remains fail-closed until #2258 supplies it. */
+  readonly codingRuntimeHost?: CodingRuntimeHost | undefined;
+  readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
@@ -1222,6 +1280,7 @@ interface ComposedPersistence {
   // Issue #446: the singleton active-workspace pointer store, composed over the SAME handle (schema.ts
   // §V8). Undefined when a UiStore is injected (tests supply their own lifecycle service).
   readonly activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
 function composePersistence(
@@ -1237,6 +1296,7 @@ function composePersistence(
       relationship: undefined,
       workspaceInstanceStore: undefined,
       activeWorkspacePointerStore: undefined,
+      codingRuntimeSnapshotStore: undefined,
     };
   }
   const db = openNodeUiDatabase(resolvedUiDbPath);
@@ -1264,6 +1324,7 @@ function composePersistence(
     relationship,
     workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
     activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
+    codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
   };
 }
 
@@ -1652,6 +1713,7 @@ interface PersistenceBundle {
   readonly workspaceCleanup: WorkspaceCleanupService | undefined;
   readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
+  readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
 // The #445–#448 task-workspace services, composed over the shared instance/active-pointer stores. Each
@@ -1781,8 +1843,14 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
 ): PersistenceBundle {
-  const { store, dispose, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
-    composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
+  const {
+    store,
+    dispose,
+    relationship,
+    workspaceInstanceStore,
+    activeWorkspacePointerStore,
+    codingRuntimeSnapshotStore,
+  } = composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
   const services = composeTaskWorkspaceServices(
     options,
     workspaceInstanceStore,
@@ -1795,6 +1863,7 @@ function buildPersistenceBundle(
     uiStore: store,
     dispose,
     relationship,
+    codingRuntimeSnapshotStore,
     ...services,
     managedTaskWorkspaceRoot:
       services.workspaceProvisioning === undefined
@@ -1825,6 +1894,9 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
     ...(bundle.workspaceRepair === undefined ? {} : { workspaceRepair: bundle.workspaceRepair }),
     ...(bundle.workspaceHealth === undefined ? {} : { workspaceHealth: bundle.workspaceHealth }),
     ...(bundle.workspaceCleanup === undefined ? {} : { workspaceCleanup: bundle.workspaceCleanup }),
+    ...(bundle.codingRuntimeSnapshotStore === undefined
+      ? {}
+      : { codingRuntimeSnapshotStore: bundle.codingRuntimeSnapshotStore }),
   };
 }
 
@@ -1921,7 +1993,25 @@ function atlassianConnectorCredentialFields(
   };
 }
 
+// eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  const codingRuntimeEvidenceAggregator = createCodingRuntimeEvidenceAggregator(
+    args.codingWorkbenchEvidenceStore,
+  );
+  const codingRuntimeControlPlane =
+    args.bundle.codingRuntimeSnapshotStore && args.bundle.workspaceLifecycle
+      ? createCodingRuntimeControlPlane({
+          snapshots: args.bundle.codingRuntimeSnapshotStore,
+          evidence: codingRuntimeEvidenceAggregator,
+          workspaceLifecycle: args.bundle.workspaceLifecycle,
+          serverPrincipal:
+            args.options.codingRuntimeServerPrincipal ??
+            ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
+          ...(args.options.codingRuntimeHost
+            ? { runtimeHost: args.options.codingRuntimeHost }
+            : {}),
+        })
+      : undefined;
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -1933,6 +2023,45 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
     ...codingSidecarGatewayModelSourceFields(args),
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
+    codingRuntimeEvidenceAggregator,
+    ...(codingRuntimeControlPlane
+      ? {
+          codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
+          codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
+          ...(codingRuntimeControlPlane.cancellationRegistry
+            ? {
+                codingSidecarGatewayCancellationRegistry:
+                  codingRuntimeControlPlane.cancellationRegistry,
+              }
+            : {}),
+          ...(codingRuntimeControlPlane.runtimeCapabilityAuthenticator
+            ? {
+                runtimeCapabilityAuthenticator:
+                  codingRuntimeControlPlane.runtimeCapabilityAuthenticator,
+              }
+            : {}),
+          ...(codingRuntimeControlPlane.openCodeGatewayReadinessRegistry
+            ? {
+                openCodeGatewayReadinessRegistry:
+                  codingRuntimeControlPlane.openCodeGatewayReadinessRegistry,
+              }
+            : {}),
+        }
+      : {}),
+    codingSidecarGatewayEvidenceAggregator: {
+      record: ({ runId, outcome }): void => {
+        codingRuntimeEvidenceAggregator.observe(runId, {
+          kind: "model-request",
+          state:
+            outcome === "accepted" ? "running" : outcome === "cancelled" ? "cancelled" : "failed",
+          ...(outcome === "failed"
+            ? { failureCode: "runtime-failed" }
+            : outcome === "output-limit"
+              ? { failureCode: "authority-budget-exceeded" }
+              : {}),
+        });
+      },
+    },
     ...autonomousDeliveryFields(args.options),
     ...atlassianConnectorCredentialFields(args),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),

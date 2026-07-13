@@ -56,6 +56,13 @@ import {
   type RuntimeQualificationIdentity,
   type RuntimeReapReceipt,
 } from "./runtimeProcessSupervisor.js";
+import {
+  createCodingRuntimeLineParser,
+  createCodingRuntimeStderrDrainer,
+  type CodingRuntimeLineParser,
+  type CodingRuntimeStderrDrainer,
+  type CodingRuntimeStderrSummary,
+} from "./codingRuntimeProcessIo.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -379,7 +386,8 @@ interface ActiveRuntime {
   startupOutput: OpenCodeStartupMailbox | undefined;
   lifecycleMonitorDispose: (() => void) | undefined;
   codexDetach: (() => boolean | Promise<boolean>) | undefined;
-  stdoutBuffer: string;
+  stdoutParser: CodingRuntimeLineParser | undefined;
+  stderrDrainer: CodingRuntimeStderrDrainer | undefined;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
   status: CodingRuntimeStatus;
@@ -408,7 +416,6 @@ interface OpenCodeStartupMailbox extends OpenCodeStartupOutput {
   close(): void;
 }
 
-const MAX_SIDECAR_EVENT_LINE_BYTES = 8192;
 const SECRET_ENV_NAME = /(AUTH|CREDENTIAL|KEY|PASSWORD|SECRET|TOKEN)/iu;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const FIXED_OPENCODE_ARGS = Object.freeze([
@@ -702,11 +709,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     );
     this.active = active;
     this.attachRuntime(active);
-    this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
     if (request.adapterKind === "opencode-compatible" && lifecycleAdapter !== undefined) {
       return this.completeOpenCodeStart(request, active, lifecycleAdapter);
     }
     active.status = "ready";
+    this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
     return { ok: true, runId: request.runId, status: "ready" };
   }
 
@@ -879,7 +886,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const handshakeFailure = await openCodeHandshakeFailure(adapter, request, active);
     active.startupOutput?.close();
     active.startupOutput = undefined;
-    active.stdoutBuffer = "";
+    active.stdoutParser = undefined;
     if (
       handshakeFailure === undefined &&
       this.active === active &&
@@ -888,6 +895,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     ) {
       active.status = "ready";
       this.startLifecycleMonitor(active);
+      this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
       return { ok: true, runId: request.runId, status: "ready" };
     }
     if (handshakeFailure === undefined || this.active !== active) {
@@ -905,29 +913,57 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return handshakeFailure;
   }
 
+  // eslint-disable-next-line complexity -- every independent revocation/reap barrier must fail closed without skipping termination
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    let barrierComplete = true;
     try {
-      if (!(await this.deps.revokeRuntime(active.context.runId))) return undefined;
+      if (!(await this.deps.revokeRuntime(active.context.runId))) barrierComplete = false;
+    } catch {
+      barrierComplete = false;
+    }
+    try {
       this.deps.approvalStore.invalidateRun(active.context.runId);
-      if (!(await this.deps.abortInFlightActions(active.context.runId))) return undefined;
-      if (!this.disposeLifecycleMonitor(active)) return undefined;
-      if (!(await this.detachCodexProtocol(active))) return undefined;
-      active.shutdownBarrierComplete = true;
+    } catch {
+      barrierComplete = false;
+    }
+    try {
+      if (!(await this.deps.abortInFlightActions(active.context.runId))) barrierComplete = false;
+    } catch {
+      barrierComplete = false;
+    }
+    if (!this.disposeLifecycleMonitor(active)) barrierComplete = false;
+    if (!(await this.detachCodexProtocol(active))) barrierComplete = false;
+    active.shutdownBarrierComplete = barrierComplete;
+
+    let receipt: RuntimeReapReceipt | undefined;
+    try {
       this.deps.supervisor.terminate(active.tree, "graceful");
       let exit = await this.deps.supervisor.waitForCompleteTreeExit(
         active.tree,
         active.shutdownTimeoutMs,
       );
-      if (exit.status === "reaped") return exit.receipt;
-      this.deps.supervisor.terminate(active.tree, "force");
-      exit = await this.deps.supervisor.waitForCompleteTreeExit(
-        active.tree,
-        active.shutdownTimeoutMs,
-      );
-      return exit.status === "reaped" ? exit.receipt : undefined;
+      if (exit.status === "reaped") receipt = exit.receipt;
+      else {
+        this.deps.supervisor.terminate(active.tree, "force");
+        exit = await this.deps.supervisor.waitForCompleteTreeExit(
+          active.tree,
+          active.shutdownTimeoutMs,
+        );
+        if (exit.status === "reaped") receipt = exit.receipt;
+      }
     } catch {
-      return undefined;
+      try {
+        this.deps.supervisor.terminate(active.tree, "force");
+        const exit = await this.deps.supervisor.waitForCompleteTreeExit(
+          active.tree,
+          active.shutdownTimeoutMs,
+        );
+        if (exit.status === "reaped") receipt = exit.receipt;
+      } catch {
+        // The caller moves the run to recovery-required when reap cannot be proven.
+      }
     }
+    return barrierComplete ? receipt : undefined;
   }
 
   private attachRuntime(active: ActiveRuntime): void {
@@ -935,12 +971,28 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.handleExit(active, code);
     });
     if (active.codexLifecycleAdapter === undefined) {
-      active.tree.stdout.setEncoding("utf8");
+      active.stdoutParser = createCodingRuntimeLineParser({
+        onLine: (line) => {
+          this.handleStdoutLine(active, line);
+        },
+      });
       active.tree.stdout.on("data", (chunk) => {
-        this.handleStdout(active, String(chunk));
+        this.handleStdout(active, Buffer.isBuffer(chunk) ? chunk : String(chunk));
       });
     }
-    active.tree.stderr.resume();
+    active.stderrDrainer = createCodingRuntimeStderrDrainer({
+      onSummary: (summary) => {
+        emitRuntimeStderrSummary(
+          this.deps.diagnostics,
+          active.context.runId,
+          summary,
+          this.deps.now,
+        );
+      },
+    });
+    active.tree.stderr.on("data", (chunk) => {
+      active.stderrDrainer?.push(Buffer.isBuffer(chunk) ? chunk : String(chunk));
+    });
   }
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
@@ -1068,32 +1120,25 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
   }
 
-  private handleStdout(active: ActiveRuntime, chunk: string): void {
+  private handleStdout(active: ActiveRuntime, chunk: Buffer | string): void {
     if (active.stopRequested) {
-      active.stdoutBuffer = "";
+      active.stdoutParser = undefined;
       return;
     }
     if (active.openCodeLifecycleAdapter !== undefined && active.startupOutput === undefined) return;
-    active.stdoutBuffer += chunk;
-    if (active.stdoutBuffer.length > MAX_SIDECAR_EVENT_LINE_BYTES) {
-      active.stdoutBuffer = "";
+    const result = active.stdoutParser?.push(chunk);
+    if (result?.ok === false) {
+      active.stdoutParser = undefined;
       if (active.openCodeLifecycleAdapter === undefined) this.emitFailure(active);
       else active.startupOutput?.close();
-      return;
     }
-    this.drainStdoutLines(active);
   }
 
-  private drainStdoutLines(active: ActiveRuntime): void {
-    while (active.stdoutBuffer.includes("\n")) {
-      const index = active.stdoutBuffer.indexOf("\n");
-      const line = active.stdoutBuffer.slice(0, index);
-      active.stdoutBuffer = active.stdoutBuffer.slice(index + 1);
-      active.startupOutput?.offer(`${line}\n`);
-      if (active.openCodeLifecycleAdapter !== undefined) continue;
-      const event = normalizeSidecarLine(active, this.nextSequence(active), line.trim());
-      if (event !== undefined) this.emit(event);
-    }
+  private handleStdoutLine(active: ActiveRuntime, line: string): void {
+    active.startupOutput?.offer(`${line}\n`);
+    if (active.openCodeLifecycleAdapter !== undefined) return;
+    const event = normalizeSidecarLine(active, this.nextSequence(active), line.trim());
+    if (event !== undefined) this.emit(event);
   }
 
   private emitFailure(active: ActiveRuntime): void {
@@ -1153,6 +1198,22 @@ function emitInvalidRuntimeEventDiagnostic(
     source: "coding-runtime-manager.emit",
     errorClass: "InvalidRuntimeEvent",
     message: `runtime-event-invalid:${event.kind}`,
+  });
+}
+
+function emitRuntimeStderrSummary(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  summary: CodingRuntimeStderrSummary,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.stderr",
+    source: "coding-runtime-manager.stderr",
+    errorClass: "RuntimeStderrSummary",
+    message: `runtime-stderr-counts:bytes=${String(summary.bytes)}:lines=${String(summary.lines)}:truncated=${String(summary.truncated)}`,
   });
 }
 
@@ -1463,7 +1524,8 @@ function createActiveRuntime(
       openCodeLifecycleAdapter === undefined ? undefined : createOpenCodeStartupMailbox(),
     lifecycleMonitorDispose: undefined,
     codexDetach: undefined,
-    stdoutBuffer: "",
+    stdoutParser: undefined,
+    stderrDrainer: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     status: "starting",
@@ -1489,7 +1551,8 @@ function createInactiveRuntime(
     startupOutput: undefined,
     lifecycleMonitorDispose: undefined,
     codexDetach: undefined,
-    stdoutBuffer: "",
+    stdoutParser: undefined,
+    stderrDrainer: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     status: "stopped",
