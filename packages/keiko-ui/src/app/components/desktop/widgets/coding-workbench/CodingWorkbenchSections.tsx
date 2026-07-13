@@ -1,6 +1,10 @@
 import { type ReactNode, type RefObject } from "react";
 import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type {
   CodingWorkbenchResourceStatus,
@@ -34,14 +38,15 @@ export function WorkbenchHeader({
   readonly state: CodingWorkbenchRuntimeState;
   readonly focusRef: RefObject<HTMLHeadingElement>;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
+  const sharedT = useTranslate();
   const snapshotState = state.run.value?.state ?? "idle";
   return (
     <header className={styles.header}>
       <div>
         <p className={styles.eyebrow}>{t("codingWorkbench.header.eyebrow")}</p>
         <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
-          {t("rail.coding")}
+          {sharedT("rail.coding")}
         </h2>
         <p className={styles.summary}>{t("codingWorkbench.header.summary")}</p>
       </div>
@@ -62,7 +67,7 @@ export function ModeAuthority({
   readonly onModeChange: (mode: CodingWorkbenchMode) => void;
   readonly locked: boolean;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const ceiling = state.runtime.value?.deploymentCeiling;
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-mode-title">
@@ -114,7 +119,7 @@ function ModeOption({
   readonly disabled: boolean;
   readonly capped: boolean;
   readonly onModeChange: (mode: CodingWorkbenchMode) => void;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const id = `coding-workbench-mode-${mode}`;
   return (
@@ -151,7 +156,7 @@ export function TaskStartSection({
   readonly canStart: boolean;
   readonly busy: boolean;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const startDisabled = busy || !canStart || taskIntent.trim().length === 0;
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-task-title">
@@ -197,7 +202,7 @@ export function ReadinessGrid({
   >;
   readonly refreshWorkspace: () => Promise<void>;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-readiness-title">
       <PanelTitle
@@ -223,7 +228,7 @@ interface ReadinessResourceCardsProps {
     "refreshRuntime" | "refreshRun" | "refreshSource"
   >;
   readonly refreshWorkspace: () => Promise<void>;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }
 
 function ReadinessResourceCards({
@@ -253,7 +258,7 @@ function unavailableResourceStatus(
 interface ReadinessResourceCardProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly onRetry: () => Promise<void>;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }
 
 function SourceResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
@@ -352,7 +357,8 @@ function ResourceCard({
   readonly onRetry: () => Promise<void>;
   readonly retryLabel?: string;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
+  const sharedT = useTranslate();
   const retryable = status === "error" || status === "unavailable";
   return (
     <article className={styles.resourceCard} data-status={status}>
@@ -368,7 +374,7 @@ function ResourceCard({
       <p className={styles.resourceDetail}>{detail}</p>
       {retryable ? (
         <button className={styles.button} type="button" onClick={() => void onRetry()}>
-          {retryLabel ?? t("common.retry")}
+          {retryLabel ?? sharedT("common.retry")}
         </button>
       ) : null}
     </article>

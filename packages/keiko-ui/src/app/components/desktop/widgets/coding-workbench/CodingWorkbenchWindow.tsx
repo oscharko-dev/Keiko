@@ -5,7 +5,11 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import {
   useCodingWorkbenchRuntime,
   type CodingWorkbenchRuntimeActions,
@@ -40,7 +44,8 @@ export function CodingWorkbenchWindow(): ReactNode {
   const [taskIntent, setTaskIntent] = useState("");
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
+  const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
   const runState = state.run.value?.state;
   const locked = activeRunState(runState) || state.mutation.status === "pending";
@@ -67,6 +72,7 @@ export function CodingWorkbenchWindow(): ReactNode {
       locked={locked}
       alert={alert}
       t={t}
+      workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
     />
   );
@@ -81,7 +87,8 @@ interface WorkbenchContentProps {
   readonly focusRef: RefObject<HTMLHeadingElement>;
   readonly locked: boolean;
   readonly alert: string | null;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
+  readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
 }
 
@@ -95,13 +102,14 @@ function WorkbenchContent({
   locked,
   alert,
   t,
+  workbenchLabel,
   onDecision,
 }: WorkbenchContentProps): ReactNode {
   const runState = state.run.value?.state;
   return (
     <section
       className={styles.shell}
-      aria-label={t("rail.coding")}
+      aria-label={workbenchLabel}
       aria-busy={state.mutation.status === "pending"}
       data-state={runState ?? "idle"}
     >
@@ -135,7 +143,7 @@ function WorkbenchColumns({
   onTaskIntentChange,
   locked,
   onDecision,
-}: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
   return (
     <div className={styles.grid}>
       <div className={styles.stack}>
@@ -172,7 +180,7 @@ interface LiveSectionProps {
 }
 
 function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const running = activeRunState(state.run.value?.state);
   const busy = state.mutation.status === "pending";
   return (
@@ -213,7 +221,7 @@ function PermissionPrompt({
   readonly state: CodingWorkbenchRuntimeState;
   readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
   if (request === undefined) return null;
   const busy = state.mutation.status === "pending";
@@ -251,7 +259,7 @@ function ApprovalFacts({
   t,
 }: {
   readonly request: CodingWorkbenchRuntimePendingPermission;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <dl className={styles.approvalFacts} aria-label={t("codingWorkbench.approval.facts")}>
@@ -264,7 +272,7 @@ function ApprovalFacts({
 
 function approvalFacts(
   request: CodingWorkbenchRuntimePendingPermission,
-  t: I18nTranslate,
+  t: CodingWorkbenchTranslate,
 ): readonly { readonly label: string; readonly value: string }[] {
   const notSpecified = t("codingWorkbench.approval.notSpecified");
   return [
@@ -313,7 +321,7 @@ function RecoveryPanel({
   taskIntent,
   actions,
 }: LiveSectionProps & { readonly taskIntent: string }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const snapshot = state.run.value;
   if (snapshot?.state !== "recovery-required") return null;
   const busy = state.mutation.status === "pending";

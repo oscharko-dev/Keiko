@@ -4,7 +4,10 @@ import type {
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchRuntimePreference,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useCodingWorkbenchTranslate as useTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import {
@@ -205,7 +208,7 @@ interface SetupMethodsProps {
   readonly profile: CodingWorkbenchCodexSubscriptionProfile;
   readonly state: CodingWorkbenchRuntimeState;
   readonly onPrepare?: ((method: CodingWorkbenchCodexAuthMethod) => Promise<void>) | undefined;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }
 
 function SetupMethods({ profile, state, onPrepare, t }: SetupMethodsProps): ReactNode {
@@ -237,7 +240,7 @@ function SetupStatus({
   t,
 }: {
   readonly status: CodingWorkbenchRuntimeState["codexSetup"]["status"];
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return status === "error" || status === "unavailable" ? (
     <p className={styles.setupStatus}>{t("codingWorkbench.auth.setupUnavailable")}</p>
@@ -249,7 +252,7 @@ function SetupPlan({
   t,
 }: {
   readonly plan: CodingWorkbenchRuntimeState["codexSetup"]["value"];
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (plan === null) return null;
   return (
@@ -288,13 +291,16 @@ function supportedAuthMethods(
   ];
 }
 
-function authMethodLabel(method: CodingWorkbenchCodexAuthMethod, t: I18nTranslate): string {
+function authMethodLabel(
+  method: CodingWorkbenchCodexAuthMethod,
+  t: CodingWorkbenchTranslate,
+): string {
   if (method === "chatgpt-browser-login") return t("codingWorkbench.auth.method.browser");
   if (method === "chatgpt-device-code") return t("codingWorkbench.auth.method.deviceCode");
   return t("codingWorkbench.auth.method.accessToken");
 }
 
-function authLabel(status: string, t: I18nTranslate): string {
+function authLabel(status: string, t: CodingWorkbenchTranslate): string {
   if (status === "connected") return t("codingWorkbench.auth.status.connected");
   if (status === "loading") return t("codingWorkbench.status.checking");
   if (status === "missing") return t("codingWorkbench.auth.status.required");

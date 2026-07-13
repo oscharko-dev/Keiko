@@ -4,7 +4,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
-import type { I18nTranslate } from "@/lib/i18n";
+import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
@@ -16,28 +16,34 @@ export function cx(...classes: readonly (string | undefined | false)[]): string 
   return classes.filter((value): value is string => typeof value === "string").join(" ");
 }
 
-export function modeLabel(mode: CodingWorkbenchMode, t: I18nTranslate): string {
+export function modeLabel(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
   return t(`codingWorkbench.mode.${mode}.label`);
 }
 
-export function modeDescription(mode: CodingWorkbenchMode, t: I18nTranslate): string {
+export function modeDescription(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
   return t(`codingWorkbench.mode.${mode}.description`);
 }
 
-export function modelSourceLabel(source: CodingWorkbenchModelSource, t: I18nTranslate): string {
+export function modelSourceLabel(
+  source: CodingWorkbenchModelSource,
+  t: CodingWorkbenchTranslate,
+): string {
   if (source === "keiko-model-gateway") return t("codingWorkbench.modelSource.gateway");
   if (source === "openai-api-key-through-gateway")
     return t("codingWorkbench.modelSource.openaiGateway");
   return t("codingWorkbench.modelSource.codexSubscription");
 }
 
-export function runStateLabel(state: CodingWorkbenchRuntimeStateName, t: I18nTranslate): string {
+export function runStateLabel(
+  state: CodingWorkbenchRuntimeStateName,
+  t: CodingWorkbenchTranslate,
+): string {
   return t(`codingWorkbench.runState.${state}`);
 }
 
 export function resourceStatusLabel(
   status: CodingWorkbenchResourceStatus,
-  t: I18nTranslate,
+  t: CodingWorkbenchTranslate,
 ): string {
   return t(`codingWorkbench.resourceStatus.${status}`);
 }
@@ -58,7 +64,7 @@ export function resourceTone(status: CodingWorkbenchResourceStatus): CodingWorkb
 
 export function lifecycleAnnouncement(
   state: CodingWorkbenchRuntimeState,
-  t: I18nTranslate,
+  t: CodingWorkbenchTranslate,
 ): string {
   const snapshot = state.run.value;
   const run =
@@ -104,7 +110,7 @@ function readinessAnnouncement(
   resource: "modelSource" | "workspace" | "runtime",
   status: CodingWorkbenchResourceStatus,
   available: boolean,
-  t: I18nTranslate,
+  t: CodingWorkbenchTranslate,
 ): string {
   const state =
     status === "loading"
@@ -121,7 +127,10 @@ function readinessAnnouncement(
   return t(`codingWorkbench.announcement.${resource}.${state}`);
 }
 
-function authenticationAnnouncement(state: CodingWorkbenchRuntimeState, t: I18nTranslate): string {
+function authenticationAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
   if (state.runtimePreference !== "codex-subscription") {
     return t("codingWorkbench.announcement.authenticationNotSelected");
   }
@@ -148,12 +157,18 @@ export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefine
   );
 }
 
-export function eventTitle(event: CodingWorkbenchRuntimeSseEvent, t: I18nTranslate): string {
+export function eventTitle(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
   if (event.kind === "status") return runStateLabel(event.state, t);
   return t(`codingWorkbench.event.${event.eventKind}`);
 }
 
-export function eventDetail(event: CodingWorkbenchRuntimeSseEvent, t: I18nTranslate): string {
+export function eventDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
   return event.failureCode
     ? t("codingWorkbench.event.detailFailure", {
         sequence: event.sequence,
@@ -163,7 +178,10 @@ export function eventDetail(event: CodingWorkbenchRuntimeSseEvent, t: I18nTransl
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
 }
 
-export function visibleAlert(state: CodingWorkbenchRuntimeState, t: I18nTranslate): string | null {
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
   if (state.mutation.error) return t("codingWorkbench.alert.actionFailed");
   for (const [resource, value] of [
     ["authentication", state.profile],

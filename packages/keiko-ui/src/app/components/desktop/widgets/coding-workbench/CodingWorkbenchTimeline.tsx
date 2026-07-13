@@ -1,7 +1,10 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- The virtualized overflow list must receive focus for native keyboard scrolling. */
 import { useState, type ReactNode, type UIEvent } from "react";
 import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -15,7 +18,7 @@ export function Timeline({
 }: {
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
   const timeline = useTimelineWindow(events);
   return (
     <section className={styles.card} aria-labelledby="timeline-title">
@@ -55,7 +58,7 @@ function TimelineContent({
 }: {
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly timeline: TimelineWindow;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (events.length === 0)
     return <p className={styles.emptyText}>{t("codingWorkbench.timeline.empty")}</p>;
@@ -78,7 +81,7 @@ function TimelineList({
 }: {
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly timeline: TimelineWindow;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <ol
@@ -118,7 +121,7 @@ function TimelineRow({
   readonly event: CodingWorkbenchRuntimeSseEvent;
   readonly position: number;
   readonly total: number;
-  readonly t: I18nTranslate;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <li className={styles.timelineItem} aria-posinset={position} aria-setsize={total}>
