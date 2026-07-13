@@ -26,6 +26,10 @@ const windowsRfc3161QualityProject = readFileSync(
   resolve(repoRoot, "scripts/native-quality/windows-rfc3161-quality.csproj"),
   "utf8",
 );
+const windowsRfc3161Source = readFileSync(
+  resolve(repoRoot, "scripts/windows-portable-rfc3161.cs"),
+  "utf8",
+);
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
 const uiManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
@@ -138,6 +142,17 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsRfc3161QualityProject).toContain(
       '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
     );
+  });
+
+  it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {
+    expect(windowsRfc3161Source).toContain("namespace Keiko.Portable;");
+    expect(windowsRfc3161Source).toContain("IReadOnlyList<X509Certificate2> Certificates");
+    expect(
+      windowsRfc3161Source.match(
+        /\[DefaultDllImportSearchPaths\(DllImportSearchPath\.System32\)\]/gu,
+      ),
+    ).toHaveLength(4);
+    expect(windowsRfc3161Source).not.toMatch(/catch\s*\{/gu);
   });
 
   it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {

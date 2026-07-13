@@ -6,6 +6,8 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 
+namespace Keiko.Portable.Tests;
+
 public sealed class WindowsRfc3161Fixture
 {
     public byte[] Cms { get; init; } = Array.Empty<byte>();

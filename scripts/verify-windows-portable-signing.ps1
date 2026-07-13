@@ -39,7 +39,7 @@ function Test-CertificateChain([System.Security.Cryptography.X509Certificates.X5
 }
 
 function Test-Rfc3161Timestamp([string]$Path) {
-  $result = [WindowsPortableRfc3161]::VerifyFile($Path)
+  $result = [Keiko.Portable.WindowsPortableRfc3161]::VerifyFile($Path)
   return $result.Valid -and $result.Certificates.Count -gt 0
 }
 

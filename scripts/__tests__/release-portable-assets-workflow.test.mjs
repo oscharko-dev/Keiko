@@ -304,7 +304,7 @@ describe("Windows portable production signing workflow", () => {
     expect(windowsVerifier).toContain("Get-AuthenticodeSignature");
     expect(windowsNativePolicy).toContain('"1.3.6.1.5.5.7.3.3"');
     expect(windowsNativePolicy).toContain("$ExpectedIdentityEku");
-    expect(windowsVerifier).toContain("[WindowsPortableRfc3161]::VerifyFile");
+    expect(windowsVerifier).toContain("[Keiko.Portable.WindowsPortableRfc3161]::VerifyFile");
     expect(readFileSync("scripts/windows-portable-rfc3161.cs", "utf8")).toContain(
       'found.EnhancedKeyUsages[0].Value == "1.3.6.1.5.5.7.3.8"',
     );
