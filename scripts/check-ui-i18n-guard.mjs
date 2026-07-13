@@ -141,6 +141,7 @@ function sourceHasUserFacingText(source) {
 function hasI18nRelevantChange(repoRoot, file) {
   const changedLines = gitChangedLinesForFile(repoRoot, file);
   if (changedLines !== null) {
+    if (!changedLines.added.some(hasI18nRelevantAddedLine)) return false;
     if (changedLines.added.some(hasUserFacingTextLine)) return true;
     return hasNewI18nSignature(changedLines.added, changedLines.removed);
   }
