@@ -14,8 +14,8 @@ rules:
       # build-scan-sbom-smoke and ui, both attestations: write / id-token: write for artifact
       # attestations) has package-manager-cache: false instead, same as release.yml and
       # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
-      - ci.yml:62
-      - ci.yml:169
+      - ci.yml:78
+      - ci.yml:192
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
