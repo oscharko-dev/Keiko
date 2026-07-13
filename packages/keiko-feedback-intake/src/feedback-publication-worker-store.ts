@@ -48,7 +48,7 @@ function boundedRetryDelay(delayMs: number): number {
 }
 
 export class PostgresFeedbackPublicationWorkerStore {
-  private readonly activeLeases = new WeakSet();
+  private readonly activeLeases = new WeakSet<FeedbackPublicationWorkerLease>();
 
   constructor(
     private readonly pool: PgPoolLike,
