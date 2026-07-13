@@ -258,6 +258,47 @@ export function expandedQueryTerms(queryText: string, caseSensitive: boolean): r
   return out;
 }
 
+interface GroupAppendResult {
+  readonly total: number;
+  readonly shouldStop: boolean;
+}
+
+function expandTokenGroup(rawToken: string, caseSensitive: boolean): string[] {
+  const group: string[] = [];
+  expandToken(group, new Set<string>(), rawToken, caseSensitive);
+  return group;
+}
+
+function appendExpandedGroup(
+  groups: string[][],
+  group: readonly string[],
+  total: number,
+): GroupAppendResult {
+  if (group.length === 0) {
+    return { total, shouldStop: total >= MAX_EXPANDED_QUERY_TERMS };
+  }
+  const remaining = MAX_EXPANDED_QUERY_TERMS - total;
+  if (remaining <= 0) {
+    return { total, shouldStop: true };
+  }
+  const capped = group.slice(0, remaining);
+  groups.push(capped);
+  const nextTotal = total + capped.length;
+  return { total: nextTotal, shouldStop: nextTotal >= MAX_EXPANDED_QUERY_TERMS };
+}
+
+function buildSingleCharacterGroups(tokens: readonly string[], caseSensitive: boolean): string[][] {
+  const groups: string[][] = [];
+  for (const token of tokens) {
+    const group: string[] = [];
+    addTerm(group, new Set<string>(), token, caseSensitive, 1);
+    if (group.length > 0) {
+      groups.push(group);
+    }
+  }
+  return groups;
+}
+
 export function expandedQueryTermGroups(
   queryText: string,
   caseSensitive: boolean,
@@ -269,29 +310,15 @@ export function expandedQueryTermGroups(
     if (match[0].length === 1) {
       singleCharacterFallbacks.push(match[0]);
     }
-    const group: string[] = [];
-    expandToken(group, new Set<string>(), match[0], caseSensitive);
-    if (group.length > 0) {
-      const remaining = MAX_EXPANDED_QUERY_TERMS - total;
-      if (remaining <= 0) {
-        break;
-      }
-      const capped = group.slice(0, remaining);
-      groups.push(capped);
-      total += capped.length;
-    }
-    if (total >= MAX_EXPANDED_QUERY_TERMS) {
+    const group = expandTokenGroup(match[0], caseSensitive);
+    const result = appendExpandedGroup(groups, group, total);
+    total = result.total;
+    if (result.shouldStop) {
       break;
     }
   }
   if (groups.length === 0) {
-    for (const token of singleCharacterFallbacks) {
-      const group: string[] = [];
-      addTerm(group, new Set<string>(), token, caseSensitive, 1);
-      if (group.length > 0) {
-        groups.push(group);
-      }
-    }
+    return buildSingleCharacterGroups(singleCharacterFallbacks, caseSensitive);
   }
   return groups;
 }

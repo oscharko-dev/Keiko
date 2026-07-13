@@ -40,76 +40,133 @@ static CFDataRef read_file(const char *path) {
   return CFDataCreateWithBytesNoCopy(NULL, bytes, size, kCFAllocatorMalloc);
 }
 
-static int setup(void) {
-  const char *path = getenv("KEIKO_KEYCHAIN_PATH");
-  const char *password = getenv("KEIKO_KEYCHAIN_PASSWORD");
-  const char *p12_path = getenv("KEIKO_P12_PATH");
-  const char *p12_password = getenv("APPLE_DEVELOPER_ID_CERT_PASSWORD");
-  if (!path || !password || !p12_path || !p12_password) return 2;
+typedef struct {
+  const char *keychain_path;
+  const char *keychain_password;
+  const char *p12_path;
+  const char *p12_password;
+} setup_env_t;
 
-  SecKeychainRef keychain = NULL;
-  OSStatus status = SecKeychainCreate(path, (UInt32)strlen(password), password, false, NULL, &keychain);
+/* Reads the four env vars setup() needs. Returns 1 when all are present, 0 otherwise. */
+static int read_setup_env(setup_env_t *env) {
+  env->keychain_path = getenv("KEIKO_KEYCHAIN_PATH");
+  env->keychain_password = getenv("KEIKO_KEYCHAIN_PASSWORD");
+  env->p12_path = getenv("KEIKO_P12_PATH");
+  env->p12_password = getenv("APPLE_DEVELOPER_ID_CERT_PASSWORD");
+  return env->keychain_path && env->keychain_password && env->p12_path && env->p12_password;
+}
+
+/* Creates the ephemeral signing keychain and applies its settings. On a settings failure the
+   partially-created keychain is deleted before returning, mirroring the original error path. */
+static int create_signing_keychain(const char *path, const char *password,
+                                    SecKeychainRef *out_keychain) {
+  OSStatus status =
+      SecKeychainCreate(path, (UInt32)strlen(password), password, false, NULL, out_keychain);
   if (failed(status)) return 3;
   SecKeychainSettings settings = { SEC_KEYCHAIN_SETTINGS_VERS1, true, false, 3600 };
-  if (failed(SecKeychainSetSettings(keychain, &settings))) goto fail;
-
-  CFDataRef p12 = read_file(p12_path);
-  CFStringRef passphrase = CFStringCreateWithCString(NULL, p12_password, kCFStringEncodingUTF8);
-  SecTrustedApplicationRef codesign = NULL;
-  if (p12 == NULL || passphrase == NULL) {
-    status = errSecParam;
-    goto fail_data;
+  if (failed(SecKeychainSetSettings(*out_keychain, &settings))) {
+    SecKeychainDelete(*out_keychain);
+    CFRelease(*out_keychain);
+    return 4;
   }
-  status = SecTrustedApplicationCreateFromPath("/usr/bin/codesign", &codesign);
-  if (failed(status)) goto fail_data;
-  const void *trusted_values[] = { codesign };
-  CFArrayRef trusted = CFArrayCreate(NULL, trusted_values, 1, &kCFTypeArrayCallBacks);
-  SecAccessRef access = NULL;
-  if (trusted == NULL) {
-    status = errSecAllocate;
-    goto fail_trusted;
-  }
-  status = SecAccessCreate(CFSTR("Keiko portable signing"), trusted, &access);
-  if (failed(status)) goto fail_trusted;
+  return 0;
+}
 
-  SecItemImportExportKeyParameters parameters = { 0 };
+typedef struct {
+  SecTrustedApplicationRef codesign;
+  CFArrayRef trusted;
+  SecAccessRef access;
+} signing_access_t;
+
+/* Builds the SecAccessRef that scopes the imported identity to codesign. Populates out->access
+   only on success; out->codesign / out->trusted are set as far as construction got, for
+   release_signing_access to clean up either way. */
+static OSStatus build_signing_access(signing_access_t *out) {
+  out->codesign = NULL;
+  out->trusted = NULL;
+  out->access = NULL;
+  OSStatus status = SecTrustedApplicationCreateFromPath("/usr/bin/codesign", &out->codesign);
+  if (failed(status)) return status;
+  const void *trusted_values[] = { out->codesign };
+  out->trusted = CFArrayCreate(NULL, trusted_values, 1, &kCFTypeArrayCallBacks);
+  if (out->trusted == NULL) return errSecAllocate;
+  return SecAccessCreate(CFSTR("Keiko portable signing"), out->trusted, &out->access);
+}
+
+/* Releases the codesign trusted-application resources. The access ref itself is owned by the
+   caller (its lifetime spans the import, unlike codesign/trusted). */
+static void release_signing_access(signing_access_t *access) {
+  if (access->trusted) CFRelease(access->trusted);
+  if (access->codesign) CFRelease(access->codesign);
+}
+
+/* Imports the PKCS#12 blob into keychain under access, then verifies exactly one identity
+   resulted. */
+static OSStatus import_p12(SecKeychainRef keychain, CFDataRef p12, CFStringRef passphrase,
+                            SecAccessRef access) {
   const void *usage_values[] = { kSecAttrCanSign };
   const void *attribute_values[] = { kSecAttrIsPermanent, kSecAttrIsSensitive };
   CFArrayRef key_usage = CFArrayCreate(NULL, usage_values, 1, &kCFTypeArrayCallBacks);
   CFArrayRef key_attributes =
       CFArrayCreate(NULL, attribute_values, 2, &kCFTypeArrayCallBacks);
+  OSStatus status;
   if (key_usage == NULL || key_attributes == NULL) {
     status = errSecAllocate;
-    goto finish_import;
+  } else {
+    SecItemImportExportKeyParameters parameters = { 0 };
+    parameters.version = SEC_KEY_IMPORT_EXPORT_PARAMS_VERSION;
+    parameters.passphrase = passphrase;
+    parameters.accessRef = access;
+    parameters.keyAttributes = key_attributes;
+    parameters.keyUsage = key_usage;
+    SecExternalFormat format = kSecFormatPKCS12;
+    SecExternalItemType type = kSecItemTypeAggregate;
+    CFArrayRef items = NULL;
+    status = SecItemImport(p12, NULL, &format, &type, 0, &parameters, keychain, &items);
+    if (!failed(status)) status = require_one_identity(keychain);
+    if (items) CFRelease(items);
   }
-  parameters.version = SEC_KEY_IMPORT_EXPORT_PARAMS_VERSION;
-  parameters.passphrase = passphrase;
-  parameters.accessRef = access;
-  parameters.keyAttributes = key_attributes;
-  parameters.keyUsage = key_usage;
-  SecExternalFormat format = kSecFormatPKCS12;
-  SecExternalItemType type = kSecItemTypeAggregate;
-  CFArrayRef items = NULL;
-  status = SecItemImport(p12, NULL, &format, &type, 0, &parameters, keychain, &items);
-  if (!failed(status)) status = require_one_identity(keychain);
-  if (items) CFRelease(items);
-finish_import:
   if (key_attributes) CFRelease(key_attributes);
   if (key_usage) CFRelease(key_usage);
-  CFRelease(access);
-fail_trusted:
-  if (trusted) CFRelease(trusted);
-  if (codesign) CFRelease(codesign);
-fail_data:
+  return status;
+}
+
+/* Orchestrates the p12 -> keychain import: loads the file and passphrase, builds the signing
+   access, imports, and releases everything it acquired before returning the final status. */
+static OSStatus import_identity(SecKeychainRef keychain, const char *p12_path,
+                                 const char *p12_password) {
+  CFDataRef p12 = read_file(p12_path);
+  CFStringRef passphrase = CFStringCreateWithCString(NULL, p12_password, kCFStringEncodingUTF8);
+  OSStatus status = errSecParam;
+  if (p12 != NULL && passphrase != NULL) {
+    signing_access_t access = { NULL, NULL, NULL };
+    status = build_signing_access(&access);
+    if (!failed(status)) status = import_p12(keychain, p12, passphrase, access.access);
+    if (access.access) CFRelease(access.access);
+    release_signing_access(&access);
+  }
   if (passphrase) CFRelease(passphrase);
   if (p12) CFRelease(p12);
-  if (failed(status)) goto fail;
+  return status;
+}
+
+static int setup(void) {
+  setup_env_t env;
+  if (!read_setup_env(&env)) return 2;
+
+  SecKeychainRef keychain = NULL;
+  int keychain_status =
+      create_signing_keychain(env.keychain_path, env.keychain_password, &keychain);
+  if (keychain_status != 0) return keychain_status;
+
+  OSStatus status = import_identity(keychain, env.p12_path, env.p12_password);
+  if (failed(status)) {
+    SecKeychainDelete(keychain);
+    CFRelease(keychain);
+    return 4;
+  }
   CFRelease(keychain);
   return 0;
-fail:
-  SecKeychainDelete(keychain);
-  CFRelease(keychain);
-  return 4;
 }
 
 static int cleanup(void) {

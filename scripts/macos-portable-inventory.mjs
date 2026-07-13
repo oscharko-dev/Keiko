@@ -138,7 +138,8 @@ function hasExactKeys(value, keys) {
     value !== null &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    JSON.stringify(Object.keys(value).sort()) === JSON.stringify(keys)
+    JSON.stringify(Object.keys(value).sort((left, right) => left.localeCompare(right))) ===
+      JSON.stringify(keys)
   );
 }
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Issue #2210, Epic #2092, 2026-07-10).
+Accepted (Issue #2210, Epic #2092, 2026-07-10); amended by the closeout audit on 2026-07-11.
 
 ## Amends
 
@@ -121,6 +121,12 @@ aggregation of language diagnostics and verification failures under its own sche
   "bounded aggregation ... a pathological workspace cannot flood the UI" invariant has one canonical,
   tested implementation the panel reuses rather than re-deriving.
 
+**Producer ownership and message normalization (closeout amendment).** Diagnostics are retained per
+producer (editor window/pane plus file), then deterministically aggregated. Removing one producer may
+not evict an equivalent diagnostic still owned by another open pane or window. Every producer uses
+the same Unicode-safe message projection before snapshot construction; no producer may bypass
+`EDITOR_PROBLEM_MESSAGE_MAX_CHARS` by writing directly to the store.
+
 ### D3 - Structured failure-location extension to `VerificationResult`
 
 `VerificationFailureLocation` (workspace-relative `file`, optional `line`/`column`, a length-capped
@@ -191,9 +197,42 @@ tool calls Issue #2211's dedicated verification route directly while reusing
 deliberate and is why the type exists in the contract layer without a new browser-bridge dispatch
 path.
 
+### D6 - Explicit server-owned trust for package scripts
+
+The verification catalog may describe script-backed kinds while the workspace is untrusted, but
+`test | typecheck | lint | build` cannot execute until a local human explicitly grants trust through
+the editor affordance. The BFF owns that decision. A client request can ask the BFF to grant or
+revoke trust for a registered project; it cannot assert a trusted state on a run request.
+
+The grant is bound to the canonical workspace and a digest of the package manifest used to discover
+the scripts. It is process/session scoped and invalidates automatically when that manifest changes.
+The command runner and editor-verification runner consult the same registry, preventing two trust
+models for the same package-script surface. `targeted-test` remains exempt because Keiko synthesizes
+its closed runner invocation rather than executing a workspace-provided package script. Missing,
+unreadable, changed, or non-canonical manifest state fails closed.
+
+### D7 - Canonical untrusted projections and pre-execution agent admission
+
+Every command-derived failure location is canonicalized at the owning verification layer. Absolute
+paths are accepted only when they resolve beneath the canonical workspace and are then projected to
+workspace-relative POSIX paths. Traversal, NUL, foreign drive/UNC, root-prefix collisions, and
+invalid coordinates are discarded before a report reaches SSE, Problems, evidence, or an agent.
+
+Agent request and result handling use exact, deep projections rather than shallow structural checks.
+`targeted-test` requires one contained `targetPath`; every other kind forbids it. Unknown nested
+response fields are dropped before serialization back to the model, including fields added by a
+hostile or future server implementation.
+
+An agent verification authority is bound to both the workspace and the live editor session. The
+admission sequence is classify, compose, reserve, append a content-free admission-audit record, then
+dispatch. The audit append is mandatory and fail-closed: execution does not start if visibility
+cannot be established. A terminal execution/evidence record complements, rather than replaces, that
+pre-execution admission record. Client disconnect cancellation is installed before body parsing so a
+request cannot outlive its authenticated HTTP owner due to a listener-registration race.
+
 ## Human-control invariant
 
-None of the five decisions widens the executable command surface, enables unbounded agent-triggered
+None of the seven decisions widens the executable command surface, enables unbounded agent-triggered
 execution, or routes command-derived content into the audit ledger:
 
 - Runs stay within the closed `VerificationKind` set and the command runner's closed
@@ -205,6 +244,10 @@ execution, or routes command-derived content into the audit ledger:
   audit ledger keeps its "no command-derived content" invariant (D3).
 - Lifecycle events are content-free; only the terminal event carries the already-redacted report
   (D1).
+- Package-script trust is a server-owned, manifest-bound, explicitly human-granted capability shared
+  by both human execution surfaces; a run body cannot widen it (D6).
+- Agent authority is session-bound and a content-free admission record must exist before execution;
+  malformed semantics, missing audit visibility, and disconnected callers all fail closed (D7).
 - Cancellation reuses the existing `DELETE`-by-`runId` convention; no new authority is introduced.
 
 ## Consequences
@@ -219,6 +262,9 @@ execution, or routes command-derived content into the audit ledger:
 - Issue #2214 consumes D4/D5, classifying `requestVerification` through the existing
   `classifyEditorAgentAction`/`composeEditorAgentActionPolicyDecision` path and recording a
   content-free audit record through the existing ledger.
+- The closeout implementation applies D6/D7 to the existing command-runner, verification-runner,
+  editor-agent authority, and audit seams; it does not create a second trust, execution, or audit
+  subsystem.
 - `check-contract-boundaries.mjs` does not yet cover `editor-verification.ts`, `editor-problems.ts`,
   or the `locations` field; keeping these wire shapes owned by `keiko-contracts` remains a
   code-review discipline until a future issue extends that script.

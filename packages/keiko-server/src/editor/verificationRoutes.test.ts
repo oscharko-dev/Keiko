@@ -4,6 +4,9 @@
 
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
@@ -17,6 +20,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGrantWorkspaceScriptTrust,
   handleVerificationCatalog,
   openVerificationSseStream,
 } from "./verificationRoutes.js";
@@ -25,6 +29,8 @@ import type {
   VerificationRunnerEventEmitter,
   VerificationRunnerManager,
 } from "./verificationRunner.js";
+import { createInMemoryUiStore } from "../store/index.js";
+import { createWorkspaceScriptTrustService } from "../workspace-script-trust.js";
 
 class FakeManager implements VerificationRunnerManager {
   public readonly executed: VerificationRunInput[] = [];
@@ -85,12 +91,18 @@ function fakeReq(body?: string): IncomingMessage {
   return req;
 }
 
-function ctx(over: { url?: string; body?: string; runId?: string }): RouteContext {
+function ctx(over: {
+  url?: string;
+  body?: string;
+  runId?: string;
+  correlationId?: string;
+}): RouteContext {
   return {
     req: fakeReq(over.body),
     res: undefined,
     params: over.runId === undefined ? {} : { runId: over.runId },
     url: new URL(over.url ?? "http://127.0.0.1:1983/api/editor/verification/catalog"),
+    ...(over.correlationId === undefined ? {} : { correlationId: over.correlationId }),
   } as unknown as RouteContext;
 }
 
@@ -165,6 +177,18 @@ describe("verification run + cancel routes", () => {
     expect(manager.executed[0]?.projectId).toBe("/ws");
   });
 
+  it("threads the server-minted correlation id into the async run context", async () => {
+    const manager = new FakeManager();
+    await handleCreateVerificationRun(
+      ctx({
+        body: JSON.stringify({ projectId: "/ws", kinds: ["typecheck"] }),
+        correlationId: "verify-correlation-1",
+      }),
+      deps(manager),
+    );
+    expect(manager.executed[0]?.correlationId).toBe("verify-correlation-1");
+  });
+
   it("400s a run request missing projectId", async () => {
     const result = await handleCreateVerificationRun(
       ctx({ body: JSON.stringify({ kinds: ["typecheck"] }) }),
@@ -178,6 +202,32 @@ describe("verification run + cancel routes", () => {
     manager.abortReturns = false;
     const result = handleDeleteVerificationRun(ctx({ runId: "nope" }), deps(manager));
     expect(result.status).toBe(404);
+  });
+});
+
+describe("workspace script trust routes", () => {
+  it("validates that a grant targets a registered project", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-trust-route-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture" }), "utf8");
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    const trust = createWorkspaceScriptTrustService({ store });
+    const routeDeps = { ...deps(new FakeManager()), workspaceScriptTrust: trust };
+    try {
+      const unknown = await handleGrantWorkspaceScriptTrust(
+        ctx({ body: JSON.stringify({ projectId: join(root, "unknown") }) }),
+        routeDeps,
+      );
+      expect(unknown.status).toBe(404);
+      const granted = await handleGrantWorkspaceScriptTrust(
+        ctx({ body: JSON.stringify({ projectId: root }) }),
+        routeDeps,
+      );
+      expect(granted).toMatchObject({ status: 200, body: { trusted: true } });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

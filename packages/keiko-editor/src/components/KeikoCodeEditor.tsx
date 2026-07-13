@@ -247,6 +247,7 @@ function useEditorConstructionOptions(
         signatureHelpEnabled,
         inlayHintsEnabled,
         degraded,
+        preferences: props.editorPreferences,
       }),
     [
       readOnly,
@@ -258,6 +259,7 @@ function useEditorConstructionOptions(
       signatureHelpEnabled,
       inlayHintsEnabled,
       degraded,
+      props.editorPreferences,
     ],
   );
   const monacoLanguage = useMemo(() => inferMonacoLanguageId(relativePath), [relativePath]);
@@ -302,20 +304,12 @@ function ReadyEditorSurface(props: {
       height={EDITOR_HEIGHT}
       loading={<EditorLoadingBox />}
       options={props.options}
-      keepCurrentModel={false}
-      // Monaco model lifecycle (GEN-PERF-MEMORY-002): the host does NOT swap `path` on a live,
-      // mounted `<Editor>`. Each file switch goes through the host's buffer-null loading branch
-      // (EditorRuntimeWidget renders <EditorLoadingBox> while the next buffer loads in a useEffect),
-      // which UNMOUNTS this `<Editor>`. `@monaco-editor/react` disposes the current Monaco model in
-      // its unmount cleanup (`getModel()?.dispose()`) precisely because `keepCurrentModel={false}`;
-      // with `keepCurrentModel={true}` the library would instead KEEP (not dispose) the current
-      // Monaco model on unmount, orphaning and leaking it across each file switch. So the no-leak
-      // invariant (getModels().length stays bounded by mounted panes) rests on the unmount-per-switch
-      // contract + `keepCurrentModel={false}`, NOT on any path-swap-while-mounted path (which would
-      // leave the prior model undisposed). View-state persistence is a SEPARATE concern the library
-      // default does not carry across this unmount: the package restores scroll/fold/cursor across
-      // mounts through the `use-editor-handlers.ts` viewStateRef seam (capture on dispose, apply on
-      // mount). See editor-memory-lifecycle.test.ts for the model-count regression proof.
+      keepCurrentModel
+      // Monaco model lifecycle (Issue #2322): the editor package now keeps Monaco models outside
+      // @monaco-editor/react's unmount disposal path and hands ownership to the bounded
+      // editor-model-registry. `keepCurrentModel` by itself would leak; Keiko's mount hook attaches
+      // the canonical URI model, stores per-pane view state, detaches on unmount, and lets the
+      // registry dispose clean inactive models through deterministic LRU/byte-budget eviction.
       onChange={props.handlers.onChange}
       onMount={props.handlers.onMount}
     />

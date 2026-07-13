@@ -15,7 +15,7 @@ export default defineConfig({
     // into this suite.
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
     // ADR-0013 D2 site 2 — `node:sqlite` requires --experimental-sqlite on Node 22.0–22.11 builds
-    // and emits an ExperimentalWarning on every import on 22.22+ (where the flag is no longer
+    // and emits an ExperimentalWarning on every import on the Node.js 24 baseline (where the flag is no longer
     // strictly required). The flag covers both, and the warning suppressor keeps test output clean.
     // In vitest 4 the worker-process flags live at test.execArgv (was test.poolOptions in vitest 1).
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
@@ -29,7 +29,10 @@ export default defineConfig({
     testTimeout: 15_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "json"],
+      // lcov is additive: check-lcov-source-mapping.mjs reads coverage/lcov.info to prove
+      // changed root-level scripts/*.mjs sources (outside packages/, which has its own scoped
+      // coverage run) are exercised by their scripts/__tests__/*.test.mjs harness.
+      reporter: ["text", "json", "lcov"],
       exclude: ["dist/**", "node_modules/**", "**/*.config.ts"],
     },
   },

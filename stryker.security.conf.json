@@ -3,8 +3,25 @@
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
-    "configFile": "vitest.config.ts"
+    "configFile": "vitest.config.ts",
+    "related": false
   },
+  "testFiles": [
+    "packages/keiko-security/src/**/*.test.ts",
+    "packages/keiko-evidence/src/**/*.test.ts",
+    "packages/keiko-memory-vault/src/**/*.test.ts",
+    "packages/keiko-model-gateway/src/**/*.test.ts",
+    "packages/keiko-sandbox/src/backends.test.ts",
+    "packages/keiko-sandbox/src/index.test.ts",
+    "packages/keiko-sandbox/src/plan.test.ts",
+    "packages/keiko-sandbox/src/probe.test.ts",
+    "packages/keiko-sandbox/src/select.test.ts",
+    "packages/keiko-workflows/src/**/*.test.ts",
+    "packages/keiko-server/src/coding-runtime/**/*.test.ts",
+    "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
+    "scripts/__tests__/banking-quality-gate-core.test.mjs",
+    "scripts/__tests__/banking-quality-gate-worker.test.mjs"
+  ],
   "mutate": [
     "packages/keiko-security/src/redaction.ts",
     "packages/keiko-security/src/secretbox.ts",
@@ -17,20 +34,26 @@
     "packages/keiko-server/src/qualityIntelligence/figma/figmaSnapshotBuilder.ts",
     "packages/keiko-evidence/src/qualityIntelligence/store.ts",
     "packages/keiko-memory-vault/src/cipher.ts",
-    "packages/keiko-memory-vault/src/migrate-encrypt.ts"
+    "packages/keiko-memory-vault/src/migrate-encrypt.ts",
+    "scripts/banking-quality-gate-core.mjs",
+    "scripts/banking-quality-gate-worker.mjs"
   ],
-  "reporters": ["html", "clear-text", "progress"],
+  "reporters": ["html", "json", "clear-text", "progress"],
   "htmlReporter": {
     "fileName": "reports/mutation/security/index.html"
   },
+  "jsonReporter": {
+    "fileName": "reports/mutation/security/mutation-report.json"
+  },
   "thresholds": {
-    "high": 80,
-    "low": 65,
-    "break": 50
+    "high": 90,
+    "low": 80,
+    "break": 0
   },
   "coverageAnalysis": "perTest",
+  "ignoreStatic": true,
   "timeoutMS": 30000,
   "timeoutFactor": 2.5,
-  "concurrency": 4,
+  "concurrency": 16,
   "tempDirName": ".stryker-tmp"
 }

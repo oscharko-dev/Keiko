@@ -63,7 +63,7 @@ require_positive_int() {
 # pid file whose number has been recycled by an unrelated process.
 is_keiko_ui() {
   pid="$1"
-  [ -n "$pid" ] || return 1
+  [[ -n "$pid" ]] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   ps -p "$pid" -o command= 2>/dev/null | grep -q "dist/cli/index.js"
 }
@@ -71,7 +71,7 @@ is_keiko_ui() {
 # Echoes the live Keiko UI pid (and returns 0), or returns 1 if not running.
 # Clears a stale/invalid pid file as a side effect.
 running_pid() {
-  [ -f "$PID_FILE" ] || return 1
+  [[ -f "$PID_FILE" ]] || return 1
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if is_keiko_ui "$pid"; then
     echo "$pid"
@@ -79,6 +79,20 @@ running_pid() {
   fi
   rm -f "$PID_FILE"
   return 1
+}
+
+wait_until_not_keiko_ui() {
+  pid="$1"
+  iterations="$2"
+  i=0
+  while [[ "$i" -lt "$iterations" ]]; do
+    if ! is_keiko_ui "$pid"; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 0.5
+  done
+  ! is_keiko_ui "$pid"
 }
 
 cmd_start() {
@@ -93,7 +107,7 @@ cmd_start() {
   # The built assets must all be present: `npm run build` compiles the CLI/BFF and
   # `npm run build:ui` produces the static export AND the CSP hashes the server resolves
   # at request time. Missing any one of them is a build problem, not a runtime one.
-  if [ ! -f "$ENTRY" ] || [ ! -d "$STATIC_DIR" ] || [ ! -f "$CSP_HASHES" ]; then
+  if [[ ! -f "$ENTRY" ]] || [[ ! -d "$STATIC_DIR" ]] || [[ ! -f "$CSP_HASHES" ]]; then
     echo "Keiko UI: build assets missing." >&2
     echo "Run: npm run build && npm run build:ui" >&2
     return 1
@@ -107,7 +121,7 @@ cmd_start() {
   # Poll the health endpoint until the server answers, it dies, or we time out.
   start_iters=$((START_TIMEOUT_SECS * 2))
   i=0
-  while [ "$i" -lt "$start_iters" ]; do
+  while [[ "$i" -lt "$start_iters" ]]; do
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "Keiko UI failed to start. Last log lines:" >&2
       tail -n 20 "$LOG_FILE" >&2 2>/dev/null || true
@@ -142,21 +156,15 @@ cmd_stop() {
 
   # Wait for a graceful exit (the server closes its socket on SIGTERM) before SIGKILL.
   stop_iters=$((STOP_TIMEOUT_SECS * 2))
-  i=0
-  while [ "$i" -lt "$stop_iters" ]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      rm -f "$PID_FILE"
-      echo "Keiko UI stopped."
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 0.5
-  done
+  if wait_until_not_keiko_ui "$pid" "$stop_iters"; then
+    rm -f "$PID_FILE"
+    echo "Keiko UI stopped."
+    return 0
+  fi
 
   echo "Keiko UI did not exit gracefully; sending SIGKILL." >&2
   kill -KILL "$pid" 2>/dev/null || true
-  sleep 0.5
-  if kill -0 "$pid" 2>/dev/null; then
+  if ! wait_until_not_keiko_ui "$pid" 1; then
     echo "Keiko UI: failed to stop pid ${pid}." >&2
     return 1
   fi

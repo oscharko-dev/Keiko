@@ -126,6 +126,8 @@ import {
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGrantWorkspaceScriptTrust,
+  handleRevokeWorkspaceScriptTrust,
   handleVerificationCatalog,
   handleVerificationEvents,
 } from "./editor/verificationRoutes.js";
@@ -181,8 +183,30 @@ import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepos
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
+  handleEditorLanguageSemanticTokens,
 } from "./editor/languageRoutes.js";
 import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
+import {
+  handleGetManagedLspControl,
+  handlePutManagedLspControl,
+} from "./editor/lsp/managedLspRoutes.js";
+import {
+  handleEditorSettingsEvents,
+  handleGetEditorSettings,
+  handlePatchEditorSettings,
+} from "./editor/settings/editorSettingsRoutes.js";
+import {
+  handleGetWorkspaceSnippets,
+  handleMutateWorkspaceSnippets,
+  handlePreviewWorkspaceSnippet,
+  handleValidateWorkspaceSnippets,
+  handleWorkspaceSnippetsEvents,
+} from "./editor/snippets/workspaceSnippetsRoutes.js";
+import {
+  handleEditorWorkspaceWatchEvents,
+  handleEditorWorkspaceWatchHealth,
+  handleEditorWorkspaceWatchSnapshot,
+} from "./editor/watch/workspaceWatchRoutes.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -397,6 +421,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
     handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/language/semantic-tokens",
+    handler: (ctx, deps) =>
+      handleEditorLanguageSemanticTokens(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
@@ -824,6 +854,71 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
   },
   {
+    method: "GET",
+    pattern: "/api/editor/lsp/settings",
+    handler: handleGetManagedLspControl,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/lsp/settings",
+    handler: handlePutManagedLspControl,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/snapshot",
+    handler: handleEditorWorkspaceWatchSnapshot,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/health",
+    handler: handleEditorWorkspaceWatchHealth,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/events",
+    handler: handleEditorWorkspaceWatchEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/events",
+    handler: handleEditorSettingsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings",
+    handler: handleGetEditorSettings,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/settings",
+    handler: handlePatchEditorSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets/events",
+    handler: handleWorkspaceSnippetsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets",
+    handler: handleGetWorkspaceSnippets,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/snippets",
+    handler: handleMutateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/validate",
+    handler: handleValidateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/preview",
+    handler: handlePreviewWorkspaceSnippet,
+  },
+  {
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",
     handler: handleEditorLocalKnowledgeRetrieve,
@@ -841,6 +936,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/verification/events",
     handler: handleVerificationEvents,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/trust",
+    handler: handleGrantWorkspaceScriptTrust,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/verification/trust",
+    handler: handleRevokeWorkspaceScriptTrust,
   },
   {
     method: "POST",

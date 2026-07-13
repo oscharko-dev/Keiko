@@ -818,29 +818,72 @@ function unknownQueueOutcome(action: ChatOriginEditorAgentAction): ChatEditorApp
   };
 }
 
+interface QueueReplayState {
+  readonly replayedStructuredError: boolean;
+  readonly replayedUncertainOutcome: boolean;
+}
+
+type QueueAttemptResolution =
+  | { readonly kind: "return"; readonly outcome: ChatEditorApplyOutcome }
+  | { readonly kind: "retry"; readonly replayState: QueueReplayState };
+
+function resolveQueueSuccess(
+  action: ChatOriginEditorAgentAction,
+  response: unknown,
+  replayState: QueueReplayState,
+): QueueAttemptResolution {
+  const classified = queueOutcome(action, response);
+  if (classified.kind === "terminal") {
+    return { kind: "return", outcome: classified.outcome };
+  }
+  if (replayState.replayedUncertainOutcome) {
+    return { kind: "return", outcome: unknownQueueOutcome(action) };
+  }
+  return { kind: "retry", replayState: { ...replayState, replayedUncertainOutcome: true } };
+}
+
+function resolveQueueError(
+  action: ChatOriginEditorAgentAction,
+  error: unknown,
+  replayState: QueueReplayState,
+): QueueAttemptResolution {
+  if (shouldReplayStructuredError(error) && !replayState.replayedStructuredError) {
+    return { kind: "retry", replayState: { ...replayState, replayedStructuredError: true } };
+  }
+  if (isUncertainQueueError(error) && !replayState.replayedUncertainOutcome) {
+    return { kind: "retry", replayState: { ...replayState, replayedUncertainOutcome: true } };
+  }
+  return {
+    kind: "return",
+    outcome: isUncertainQueueError(error) ? unknownQueueOutcome(action) : queueErrorOutcome(error),
+  };
+}
+
+async function attemptQueueOnce(
+  action: ChatOriginEditorAgentAction,
+  dependencies: ChatEditorApplyDependencies,
+  replayState: QueueReplayState,
+): Promise<QueueAttemptResolution> {
+  try {
+    const response = await dependencies.queueAction(action);
+    return resolveQueueSuccess(action, response, replayState);
+  } catch (error) {
+    return resolveQueueError(action, error, replayState);
+  }
+}
+
 async function queueWithIdempotentReplay(
   action: ChatOriginEditorAgentAction,
   dependencies: ChatEditorApplyDependencies,
 ): Promise<ChatEditorApplyOutcome> {
-  let replayedStructuredError = false;
-  let replayedUncertainOutcome = false;
+  let replayState: QueueReplayState = {
+    replayedStructuredError: false,
+    replayedUncertainOutcome: false,
+  };
   for (;;) {
-    try {
-      const classified = queueOutcome(action, await dependencies.queueAction(action));
-      if (classified.kind === "terminal") return classified.outcome;
-      if (replayedUncertainOutcome) return unknownQueueOutcome(action);
-      replayedUncertainOutcome = true;
-    } catch (error) {
-      if (shouldReplayStructuredError(error) && !replayedStructuredError) {
-        replayedStructuredError = true;
-      } else if (isUncertainQueueError(error) && !replayedUncertainOutcome) {
-        replayedUncertainOutcome = true;
-      } else {
-        return isUncertainQueueError(error)
-          ? unknownQueueOutcome(action)
-          : queueErrorOutcome(error);
-      }
-    }
+    const resolution = await attemptQueueOnce(action, dependencies, replayState);
+    if (resolution.kind === "return") return resolution.outcome;
+    replayState = resolution.replayState;
   }
 }
 

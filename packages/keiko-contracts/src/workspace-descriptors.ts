@@ -200,97 +200,133 @@ export interface WorkspaceDescriptorValidationError {
 //
 // The validator is pure; the failing entries are returned as a list so the
 // caller decides how to surface them (dev: throw, prod: assert in test).
+//
+// Each rule below is a single-purpose helper composed in
+// validateWorkspaceDescriptorMeta; this keeps every individual check small
+// and independently reviewable while the exported function stays a plain
+// sequence of rule invocations.
 
-// The rules above are individually simple; keeping them in one function
-// keeps the entire contract reviewable in one place.
-// eslint-disable-next-line complexity, max-lines-per-function
+// R1 (lifecycle) — closed-set membership for the lifecycle state array.
+function validateLifecycleEnum(
+  objectType: string,
+  lifecycle: readonly WorkspaceObjectLifecycleState[],
+): readonly WorkspaceDescriptorValidationError[] {
+  return lifecycle
+    .filter((state) => !WORKSPACE_LIFECYCLE_STATES.includes(state))
+    .map((state) => ({
+      objectType,
+      field: "lifecycle",
+      message: `unknown lifecycle state '${state}'`,
+    }));
+}
+
+// R1 (trustBoundary) — closed-set membership for the trust boundary array.
+function validateTrustBoundaryEnum(
+  objectType: string,
+  trustBoundary: readonly WorkspaceObjectTrustBoundary[],
+): readonly WorkspaceDescriptorValidationError[] {
+  return trustBoundary
+    .filter((tb) => !WORKSPACE_TRUST_BOUNDARIES.includes(tb))
+    .map((tb) => ({
+      objectType,
+      field: "trustBoundary",
+      message: `unknown trust boundary '${tb}'`,
+    }));
+}
+
+// R1 (authority) — closed-set membership for the authority requirement.
+function validateAuthorityEnum(
+  objectType: string,
+  authority: WorkspaceObjectAuthority,
+): WorkspaceDescriptorValidationError | null {
+  if (WORKSPACE_AUTHORITY_REQUIREMENTS.includes(authority)) {
+    return null;
+  }
+  return {
+    objectType,
+    field: "authority",
+    message: `unknown authority requirement '${authority}'`,
+  };
+}
+
+// R1 (persistence) — closed-set membership for the persistence expectation.
+function validatePersistenceEnum(
+  objectType: string,
+  persistence: WorkspaceObjectPersistence,
+): WorkspaceDescriptorValidationError | null {
+  if (WORKSPACE_PERSISTENCE_EXPECTATIONS.includes(persistence)) {
+    return null;
+  }
+  return {
+    objectType,
+    field: "persistence",
+    message: `unknown persistence expectation '${persistence}'`,
+  };
+}
+
+// R2 — ui-only authority must not cross any boundary other than ui.
+function validateUiOnlyConsistency(
+  objectType: string,
+  meta: WorkspaceDescriptorMeta,
+): WorkspaceDescriptorValidationError | null {
+  if (meta.authority !== "ui-only") {
+    return null;
+  }
+  const nonUi = meta.trustBoundary.filter((tb) => tb !== "ui");
+  if (nonUi.length === 0) {
+    return null;
+  }
+  return {
+    objectType,
+    field: "consistency",
+    message: `authority 'ui-only' is inconsistent with trust boundary [${nonUi.join(", ")}]`,
+  };
+}
+
+// R3 / R4 / R5 / R6 — a given persistence expectation requires a matching
+// entry in the trust boundary set. The four rules share this exact shape,
+// differing only in which persistence value implies which boundary.
+function validatePersistenceRequiresTrustBoundary(
+  objectType: string,
+  meta: WorkspaceDescriptorMeta,
+  persistence: WorkspaceObjectPersistence,
+  requiredBoundary: WorkspaceObjectTrustBoundary,
+): WorkspaceDescriptorValidationError | null {
+  if (meta.persistence !== persistence || meta.trustBoundary.includes(requiredBoundary)) {
+    return null;
+  }
+  return {
+    objectType,
+    field: "consistency",
+    message: `persistence '${persistence}' requires trustBoundary to include '${requiredBoundary}'`,
+  };
+}
+
+function presentError(
+  error: WorkspaceDescriptorValidationError | null,
+): readonly WorkspaceDescriptorValidationError[] {
+  return error === null ? [] : [error];
+}
+
 export function validateWorkspaceDescriptorMeta(
   objectType: string,
   meta: WorkspaceDescriptorMeta,
 ): readonly WorkspaceDescriptorValidationError[] {
-  const errors: WorkspaceDescriptorValidationError[] = [];
-
-  // R1 — closed-set membership
-  for (const state of meta.lifecycle) {
-    if (!WORKSPACE_LIFECYCLE_STATES.includes(state)) {
-      errors.push({
-        objectType,
-        field: "lifecycle",
-        message: `unknown lifecycle state '${state}'`,
-      });
-    }
-  }
-  for (const tb of meta.trustBoundary) {
-    if (!WORKSPACE_TRUST_BOUNDARIES.includes(tb)) {
-      errors.push({
-        objectType,
-        field: "trustBoundary",
-        message: `unknown trust boundary '${tb}'`,
-      });
-    }
-  }
-  if (!WORKSPACE_AUTHORITY_REQUIREMENTS.includes(meta.authority)) {
-    errors.push({
-      objectType,
-      field: "authority",
-      message: `unknown authority requirement '${meta.authority}'`,
-    });
-  }
-  if (!WORKSPACE_PERSISTENCE_EXPECTATIONS.includes(meta.persistence)) {
-    errors.push({
-      objectType,
-      field: "persistence",
-      message: `unknown persistence expectation '${meta.persistence}'`,
-    });
-  }
-
-  // R2 — ui-only authority must not cross any boundary other than ui
-  if (meta.authority === "ui-only") {
-    const nonUi = meta.trustBoundary.filter((tb) => tb !== "ui");
-    if (nonUi.length > 0) {
-      errors.push({
-        objectType,
-        field: "consistency",
-        message: `authority 'ui-only' is inconsistent with trust boundary [${nonUi.join(", ")}]`,
-      });
-    }
-  }
-
-  // R3 — evidence-reference requires the evidence trust boundary
-  if (meta.persistence === "evidence-reference" && !meta.trustBoundary.includes("evidence")) {
-    errors.push({
-      objectType,
-      field: "consistency",
-      message: `persistence 'evidence-reference' requires trustBoundary to include 'evidence'`,
-    });
-  }
-
-  // R4 — fs-reference requires the fs trust boundary
-  if (meta.persistence === "fs-reference" && !meta.trustBoundary.includes("fs")) {
-    errors.push({
-      objectType,
-      field: "consistency",
-      message: `persistence 'fs-reference' requires trustBoundary to include 'fs'`,
-    });
-  }
-
-  // R5 — memory-reference requires the memory trust boundary
-  if (meta.persistence === "memory-reference" && !meta.trustBoundary.includes("memory")) {
-    errors.push({
-      objectType,
-      field: "consistency",
-      message: `persistence 'memory-reference' requires trustBoundary to include 'memory'`,
-    });
-  }
-
-  // R6 — durable.ui requires the ui trust boundary
-  if (meta.persistence === "durable.ui" && !meta.trustBoundary.includes("ui")) {
-    errors.push({
-      objectType,
-      field: "consistency",
-      message: `persistence 'durable.ui' requires trustBoundary to include 'ui'`,
-    });
-  }
-
-  return errors;
+  return [
+    ...validateLifecycleEnum(objectType, meta.lifecycle),
+    ...validateTrustBoundaryEnum(objectType, meta.trustBoundary),
+    ...presentError(validateAuthorityEnum(objectType, meta.authority)),
+    ...presentError(validatePersistenceEnum(objectType, meta.persistence)),
+    ...presentError(validateUiOnlyConsistency(objectType, meta)),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "evidence-reference", "evidence"),
+    ),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "fs-reference", "fs"),
+    ),
+    ...presentError(
+      validatePersistenceRequiresTrustBoundary(objectType, meta, "memory-reference", "memory"),
+    ),
+    ...presentError(validatePersistenceRequiresTrustBoundary(objectType, meta, "durable.ui", "ui")),
+  ];
 }

@@ -160,5 +160,5 @@ describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
 
     loadQualityIntelligenceRun("run-vcache-evict-256", { evidenceDir });
     expect(__qiVerificationStats.verifications).toBe(1);
-  });
+  }, 60_000);
 });

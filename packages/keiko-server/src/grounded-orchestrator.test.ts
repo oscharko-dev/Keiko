@@ -647,7 +647,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
-    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@10.9.8"\n}\n');
+    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@11.16.0"\n}\n');
     mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });
     writeFileSync(
       join(ROOT, ".keiko/evidence/qi/run.candidates.json"),
@@ -672,7 +672,7 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files.every((file) => !file.scopePath.startsWith(".keiko/"))).toBe(true);
     expect(
       out.pack.files[0]?.excerpts.some((excerpt) =>
-        excerpt.content.includes('"packageManager": "npm@10.9.8"'),
+        excerpt.content.includes('"packageManager": "npm@11.16.0"'),
       ),
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
@@ -681,7 +681,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("uses directory entries instead of stat probes for absent metadata candidates", async () => {
-    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@10.9.8"\n}\n');
+    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@11.16.0"\n}\n');
     const base = countingNodeFs();
     const absentLockfiles = new Set([
       "package-lock.json",
@@ -1150,7 +1150,7 @@ describe("runGroundedExploration", () => {
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(
       join(ROOT, "package.json"),
-      JSON.stringify({ packageManager: "npm@10.9.8" }, null, 2),
+      JSON.stringify({ packageManager: "npm@11.16.0" }, null, 2),
     );
     writeFileSync(join(ROOT, "package-lock.json"), `${"x".repeat(100_000)}\n`);
 

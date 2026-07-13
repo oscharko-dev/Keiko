@@ -11,6 +11,7 @@ import {
   DEFAULT_SANDBOX_POLICY,
   runCommand,
   type RunCommandDeps,
+  type ExecutableResolver,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
@@ -57,6 +58,7 @@ export interface GitHubCodeContextPortOptions {
   readonly workspace: WorkspaceInfo;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly spawn?: SpawnFn | undefined;
+  readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly now?: (() => number) | undefined;
   readonly timeoutMs?: number | undefined;
 }
@@ -79,6 +81,7 @@ function runDepsFor(options: GitHubCodeContextPortOptions): RunCommandDeps {
     policy: DEFAULT_SANDBOX_POLICY,
     commandRules: GH_CODE_CONTEXT_COMMAND_RULES,
     spawn: options.spawn ?? nodeSpawnFn,
+    resolveExecutable: options.resolveExecutable,
     processEnv: options.processEnv,
     now: options.now ?? ((): number => Date.now()),
   };

@@ -4,10 +4,10 @@ Add-Type -Path (Join-Path $PSScriptRoot "..\windows-portable-rfc3161.cs") -Refer
 Add-Type -Path (Join-Path $PSScriptRoot "windows-rfc3161-fixtures.cs") -ReferencedAssemblies $references
 
 function Assert-Result([string]$Mode, [bool]$Expected) {
-  $fixture = [WindowsRfc3161Fixtures]::Create($Mode)
+  $fixture = [Keiko.Portable.Tests.WindowsRfc3161Fixtures]::Create($Mode)
   $roots = [System.Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
   [void]$roots.Add($fixture.TrustRoot)
-  $result = [WindowsPortableRfc3161]::VerifyAuthenticodeCms($fixture.Cms, $roots)
+  $result = [Keiko.Portable.WindowsPortableRfc3161]::VerifyAuthenticodeCms($fixture.Cms, $roots)
   if ($result.Valid -ne $Expected) { throw "RFC3161 fixture failed: $Mode" }
 }
 
@@ -24,7 +24,12 @@ Assert-Result "mixed-eku" $false
 Assert-Result "wrong-root" $false
 Assert-Result "duplicate" $false
 
-$malformed = [WindowsPortableRfc3161]::VerifyAuthenticodeCms([byte[]](1, 2, 3))
+$malformed = [Keiko.Portable.WindowsPortableRfc3161]::VerifyAuthenticodeCms([byte[]](1, 2, 3))
 if ($malformed.Valid -or $malformed.Reason -ne "windows-timestamp-unverified") {
   throw "malformed CMS was not bounded"
+}
+
+$missingCms = [Keiko.Portable.WindowsPortableRfc3161]::VerifyAuthenticodeCms($null)
+if ($missingCms.Valid -or $missingCms.Reason -ne "windows-timestamp-unverified") {
+  throw "missing CMS was not bounded"
 }

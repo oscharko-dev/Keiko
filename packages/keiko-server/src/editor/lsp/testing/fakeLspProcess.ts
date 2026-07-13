@@ -14,7 +14,12 @@ import type { LspSpawnHandle } from "../lspTransport.js";
 // request AND the `exit` notification, so it never goes down on its own — the only way to terminate it
 // is the manager's SIGKILL escalation. "ignore-shutdown" ignores only `shutdown` but still exits on
 // `exit`, modelling a well-behaved server that simply never answers the shutdown RPC.
-export type FakeLspBehavior = "normal" | "slow" | "oversized" | "ignore-shutdown" | "unresponsive";
+// "unresponsive-request" answers `initialize` normally (so the manager reaches READY quickly) but
+// silently drops every other id-bearing request, modelling a provider that hangs mid-operation —
+// this reproduces the manager's real per-request `requestTimeoutMs` deadline deterministically,
+// without paying the much larger `initializeTimeoutMs` wait that "slow" would incur.
+export type FakeLspBehavior =
+  "normal" | "slow" | "oversized" | "ignore-shutdown" | "unresponsive" | "unresponsive-request";
 
 // The spawn-handle surface a manager adapter consumes: the structural stdio handle plus lifecycle
 // hooks. Mirrors the node adapter's `LspSpawnFn` return so the fake is a drop-in for the manager.
@@ -34,11 +39,14 @@ export interface FakeLspOptions {
   readonly sentinel?: string;
   // Fixed result objects keyed by LSP method, returned verbatim for `normal` behavior.
   readonly results?: Readonly<Record<string, unknown>>;
+  readonly initializeResult?: unknown;
+  readonly onMessage?: ((method: string, params: unknown) => void) | undefined;
 }
 
 interface JsonRpcMessage {
   readonly id?: number;
   readonly method?: string;
+  readonly params?: unknown;
 }
 
 export interface FakeLspController {
@@ -54,6 +62,7 @@ export interface FakeLspController {
   emitLateExit(code?: number): void;
   killed(): readonly NodeJS.Signals[];
   exitEmitted(): boolean;
+  receivedMethods(): readonly string[];
 }
 
 export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspController {
@@ -64,6 +73,7 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
   const killedSignals: NodeJS.Signals[] = [];
   const exitCallbacks: ((code: number | null, signal: NodeJS.Signals | null) => void)[] = [];
   let exitEmitted = false;
+  const receivedMethods: string[] = [];
 
   const emitExit = (code: number | null, signal: NodeJS.Signals | null): void => {
     if (exitEmitted) return;
@@ -73,12 +83,41 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
     stderr.end();
   };
 
-  void runResponder(stdin, stdout, behavior, options, emitExit);
+  void runResponder(stdin, stdout, behavior, options, emitExit, (method) => {
+    receivedMethods.push(method);
+  });
   if (options.sentinel !== undefined && behavior !== "oversized") {
     stderr.write(Buffer.from(options.sentinel, "utf8"));
   }
 
-  const handle: FakeLspSpawnHandle = {
+  const handle = fakeSpawnHandle(stdin, stdout, stderr, killedSignals, exitCallbacks, emitExit);
+
+  return {
+    handle,
+    emitStderr: (text): void => {
+      stderr.write(Buffer.from(text, "utf8"));
+    },
+    crash: (code = 1): void => {
+      emitExit(code, null);
+    },
+    emitLateExit: (code = 1): void => {
+      for (const callback of exitCallbacks) callback(code, null);
+    },
+    killed: (): readonly NodeJS.Signals[] => killedSignals,
+    exitEmitted: (): boolean => exitEmitted,
+    receivedMethods: (): readonly string[] => receivedMethods,
+  };
+}
+
+function fakeSpawnHandle(
+  stdin: PassThrough,
+  stdout: PassThrough,
+  stderr: PassThrough,
+  killedSignals: NodeJS.Signals[],
+  exitCallbacks: ((code: number | null, signal: NodeJS.Signals | null) => void)[],
+  emitExit: ExitFn,
+): FakeLspSpawnHandle {
+  return {
     stdin,
     stdout,
     stderr,
@@ -94,21 +133,6 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
       // The fake never emits a spawn-time error; SPAWN_FAILED is exercised via a throwing spawn fn.
     },
   };
-
-  return {
-    handle,
-    emitStderr: (text): void => {
-      stderr.write(Buffer.from(text, "utf8"));
-    },
-    crash: (code = 1): void => {
-      emitExit(code, null);
-    },
-    emitLateExit: (code = 1): void => {
-      for (const callback of exitCallbacks) callback(code, null);
-    },
-    killed: (): readonly NodeJS.Signals[] => killedSignals,
-    exitEmitted: (): boolean => exitEmitted,
-  };
 }
 
 type ExitFn = (code: number | null, signal: NodeJS.Signals | null) => void;
@@ -121,11 +145,12 @@ async function runResponder(
   behavior: FakeLspBehavior,
   options: FakeLspOptions,
   emitExit: ExitFn,
+  onMethod: (method: string) => void,
 ): Promise<void> {
   const reader = createLspFrameReader(stdin, 64 * 1024 * 1024);
   try {
     for await (const body of reader) {
-      handleRequest(parse(body), stdout, behavior, options, emitExit);
+      handleRequest(parse(body), stdout, behavior, options, emitExit, onMethod);
     }
   } catch {
     // Stream closed (dispose/crash); nothing further to read.
@@ -138,8 +163,11 @@ function handleRequest(
   behavior: FakeLspBehavior,
   options: FakeLspOptions,
   emitExit: ExitFn,
+  onMethod: (method: string) => void,
 ): void {
   if (message?.method === undefined) return;
+  onMethod(message.method);
+  options.onMessage?.(message.method, message.params);
   if (message.method === "exit") {
     // "unresponsive" never goes down on its own — it ignores `exit`, so only SIGKILL terminates it.
     if (behavior !== "unresponsive") emitExit(0, null);
@@ -157,6 +185,7 @@ function respond(
   options: FakeLspOptions,
 ): void {
   if (behavior === "slow") return;
+  if (behavior === "unresponsive-request" && method !== "initialize") return;
   if (method === "shutdown" && (behavior === "ignore-shutdown" || behavior === "unresponsive")) {
     return;
   }
@@ -177,7 +206,19 @@ function buildResponse(
 
 function resultFor(method: string, options: FakeLspOptions): unknown {
   if (method === "initialize") {
-    return { capabilities: {}, ...sentinelPayload(options) };
+    return (
+      options.initializeResult ?? {
+        capabilities: {
+          textDocumentSync: 2,
+          diagnosticProvider: true,
+          completionProvider: {},
+          hoverProvider: true,
+          documentSymbolProvider: true,
+          documentFormattingProvider: true,
+        },
+        ...sentinelPayload(options),
+      }
+    );
   }
   if (method === "shutdown") {
     return null;

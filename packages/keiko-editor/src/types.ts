@@ -200,6 +200,7 @@ export interface EditorCompletionItem {
   readonly label: string;
   readonly kind: EditorCompletionItemKind;
   readonly insertText: string;
+  readonly insertAsSnippet?: boolean | undefined;
   readonly range?: EditorRange | undefined;
   readonly sortText?: string | undefined;
   readonly detail?: string | undefined;

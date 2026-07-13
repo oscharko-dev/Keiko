@@ -1603,7 +1603,7 @@ describe("desktop chat routes", () => {
   // failure mode is not `invalid_path`.
   it("does not reject the desktop bootstrap with invalid_path when process.cwd is a Windows drive path", async () => {
     store.deleteProject(projectDir);
-    const windowsCwd = "C:\\Users\\Example\\Project";
+    const windowsCwd = process.platform === "win32" ? projectDir : "C:\\Users\\Example\\Project";
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(windowsCwd);
     try {
       const res = await fetch(`${base()}/api/desktop/chats`, {

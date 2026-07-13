@@ -37,6 +37,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   appendEditorVerificationRunEvidence,
+  buildEditorVerificationInterruptedEvidenceEntry,
   buildEditorVerificationRunEvidenceEntry,
 } from "./verification-run-evidence.js";
 import {
@@ -46,6 +47,7 @@ import {
 } from "./verificationExecution.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 const CATALOG_KINDS: readonly VerificationKind[] = [
@@ -67,6 +69,8 @@ export interface VerificationRunInput {
   readonly kinds: readonly VerificationKind[];
   readonly targetPath?: string | undefined;
   readonly requestId?: string | undefined;
+  // Server-minted request correlation. Never accepted from the parsed client payload.
+  readonly correlationId?: string | undefined;
 }
 
 export interface VerificationRunStart {
@@ -75,7 +79,10 @@ export interface VerificationRunStart {
 }
 
 export type VerificationRunnerEventEmitter = (event: EditorVerificationEvent) => void;
-export type VerificationRunnerWorkspaceTrustDecider = (workspace: WorkspaceInfo) => boolean;
+export type VerificationRunnerWorkspaceTrustDecider = (
+  projectId: string,
+  workspace: WorkspaceInfo,
+) => boolean;
 export type VerificationExecutePort = (
   args: ExecuteVerificationArgs,
 ) => Promise<ExecuteVerificationResult>;
@@ -110,6 +117,7 @@ export interface VerificationRunnerManagerOptions {
   // so unit tests may omit it; production wiring (deps.ts) always supplies both.
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 // ─── Project resolution (private per-module copy, established convention — command-runner.ts:94) ──
@@ -125,7 +133,9 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
 
 interface InFlightRun {
   readonly controller: AbortController;
+  readonly correlationId: string;
   cancelledByUser: boolean;
+  terminalEmitted: boolean;
 }
 
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
@@ -137,6 +147,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly maxConcurrentRuns: number;
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
@@ -149,6 +160,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
     this.evidenceStore = opts.evidenceStore;
     this.redactor = opts.redactor ?? ((input: string): string => input);
+    this.diagnostics = opts.diagnostics;
   }
 
   public readonly inFlightCount = (): number => this.runs.size;
@@ -171,7 +183,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   public readonly discover = (projectId: string): EditorVerificationCatalog => {
     const workspace = this.resolveWorkspace(projectId);
     const catalog = detectScripts(workspace, this.fs);
-    const trusted = this.trustedForScripts(workspace);
+    const trusted = this.trustedForScripts(projectId, workspace);
     const runnable = isRunnableTestFramework(workspace);
     return {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
@@ -186,7 +198,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.assertRunnable(plan);
     const runId = randomUUID();
     const controller = new AbortController();
-    this.runs.set(runId, { controller, cancelledByUser: false });
+    this.runs.set(runId, {
+      controller,
+      correlationId: input.correlationId ?? runId,
+      cancelledByUser: false,
+      terminalEmitted: false,
+    });
     const run: EditorVerificationRun = {
       runId,
       projectId: input.projectId,
@@ -221,7 +238,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     };
     if (signal.aborted) controller.abort();
     else signal.addEventListener("abort", forwardAbort, { once: true });
-    const entry: InFlightRun = { controller, cancelledByUser: false };
+    const entry: InFlightRun = {
+      controller,
+      correlationId: input.correlationId ?? runId,
+      cancelledByUser: false,
+      terminalEmitted: false,
+    };
     this.runs.set(runId, entry);
     const startedAtMs = this.now();
     this.emitRunStarted(runId, input, startedAtMs);
@@ -236,7 +258,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       return report;
     } catch (error) {
       if (!(error instanceof VerificationRunnerError && error.code === "EVIDENCE_WRITE_FAILED")) {
-        this.emitTerminal(runId, entry.cancelledByUser, undefined);
+        this.settleThrownExecution(runId, startedAtMs, entry, error);
       }
       throw error;
     } finally {
@@ -270,15 +292,15 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     try {
       this.persistEvidence(runId, projectId, report, startedAtMs);
     } catch (evidenceError) {
-      this.emitEvidenceWriteFailure(runId);
+      this.emitEvidenceWriteFailure(runId, entry);
       throw evidenceError;
     }
-    this.emitTerminal(runId, entry.cancelledByUser, report);
+    this.emitTerminalOnce(runId, entry, report);
   }
 
   private buildPlan(workspace: WorkspaceInfo, input: VerificationRunInput): VerificationPlan {
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    if (scriptKinds.length > 0 && !this.trustedForScripts(workspace)) {
+    if (scriptKinds.length > 0 && !this.trustedForScripts(input.projectId, workspace)) {
       throw new VerificationRunnerError(
         "WORKSPACE_TRUST_REQUIRED",
         "Repository package scripts require server-side workspace trust before execution.",
@@ -369,12 +391,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       // rethrown (mirrors TerminalExecutionManager.persistEntryOrEmitFailure's non-crashing variant).
       try {
         this.persistEvidence(runId, workspace.root, report, startedAtMs);
-        this.emitTerminal(runId, entry.cancelledByUser, report);
+        this.emitTerminalOnce(runId, entry, report);
       } catch {
-        this.emitEvidenceWriteFailure(runId);
+        this.emitEvidenceWriteFailure(runId, entry);
       }
-    } catch {
-      this.emitTerminal(runId, entry.cancelledByUser, undefined);
+    } catch (error) {
+      this.settleThrownExecution(runId, startedAtMs, entry, error);
     } finally {
       this.runs.delete(runId);
     }
@@ -395,6 +417,16 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   // A cancelled run wins over a failure; a missing report (thrown) becomes a content-free run-failed
   // (a static reason code, never the raw error message which may carry a path).
+  private emitTerminalOnce(
+    runId: string,
+    entry: InFlightRun,
+    report: VerificationReport | undefined,
+  ): void {
+    if (entry.terminalEmitted) return;
+    entry.terminalEmitted = true;
+    this.emitTerminal(runId, entry.cancelledByUser || entry.controller.signal.aborted, report);
+  }
+
   private emitTerminal(
     runId: string,
     cancelled: boolean,
@@ -422,6 +454,39 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       kind: "run-completed",
       runId,
       report,
+    });
+  }
+
+  private settleThrownExecution(
+    runId: string,
+    startedAt: number,
+    entry: InFlightRun,
+    error: unknown,
+  ): void {
+    const finishedAt = this.now();
+    const cancelled = entry.cancelledByUser || entry.controller.signal.aborted;
+    if (!cancelled) this.recordUnexpectedExecution(entry.correlationId, error, finishedAt);
+    try {
+      this.persistInterruptedEvidence(runId, startedAt, finishedAt, cancelled);
+    } catch {
+      this.emitEvidenceWriteFailure(runId, entry);
+      return;
+    }
+    this.emitTerminalOnce(runId, entry, undefined);
+  }
+
+  private recordUnexpectedExecution(
+    correlationId: string,
+    error: unknown,
+    timestampMs: number,
+  ): void {
+    emitServerDiagnostic(this.diagnostics, {
+      correlationId,
+      timestamp: new Date(timestampMs).toISOString(),
+      operation: "editor.verification.execute",
+      source: "editor.verification-runner",
+      errorClass: error instanceof Error ? "Error" : "NonErrorThrow",
+      message: "Verification execution failed unexpectedly.",
     });
   }
 
@@ -456,7 +521,37 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   }
 
-  private emitEvidenceWriteFailure(runId: string): void {
+  private persistInterruptedEvidence(
+    runId: string,
+    startedAt: number,
+    finishedAt: number,
+    cancelled: boolean,
+  ): void {
+    if (this.evidenceStore === undefined) {
+      throw new VerificationRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Verification run evidence store is unavailable.",
+      );
+    }
+    const evidence = buildEditorVerificationInterruptedEvidenceEntry({
+      runId,
+      startedAt,
+      finishedAt,
+      cancelled,
+    });
+    try {
+      appendEditorVerificationRunEvidence(this.evidenceStore, evidence, this.redactor);
+    } catch {
+      throw new VerificationRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Verification run evidence could not be persisted.",
+      );
+    }
+  }
+
+  private emitEvidenceWriteFailure(runId: string, entry: InFlightRun): void {
+    if (entry.terminalEmitted) return;
+    entry.terminalEmitted = true;
     this.emit({
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       kind: "run-failed",
@@ -465,9 +560,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     });
   }
 
-  private trustedForScripts(workspace: WorkspaceInfo): boolean {
+  private trustedForScripts(projectId: string, workspace: WorkspaceInfo): boolean {
     try {
-      return this.isTrusted(workspace);
+      return this.isTrusted(projectId, workspace);
     } catch {
       return false;
     }

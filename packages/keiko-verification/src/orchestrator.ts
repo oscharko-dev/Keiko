@@ -402,7 +402,7 @@ function networkEnforcedOf(result: CommandResult | undefined): boolean {
   return result?.attestation?.networkEnforced ?? false;
 }
 
-function toResult(step: VerificationStep, run: StepRun): VerificationResult {
+function toResult(step: VerificationStep, run: StepRun, workspaceRoot: string): VerificationResult {
   const status = classifyOutcome({
     skipped: false,
     result: run.result,
@@ -414,7 +414,7 @@ function toResult(step: VerificationStep, run: StepRun): VerificationResult {
   // Issue #2211 (ADR-0126 D3): populate structured failure locations from the already-redacted output
   // before outputDigest discards it. Only attached when non-empty, so a result with no parseable
   // failure keeps its exact prior shape (additive, backward-compatible).
-  const locations = extractFailureLocations(step.kind, run.result);
+  const locations = extractFailureLocations(step.kind, run.result, workspaceRoot);
   return {
     kind: step.kind,
     scriptName: step.scriptName,
@@ -549,6 +549,7 @@ async function runPlanSteps(
     const result = toResult(
       step,
       await runStep(step, deps, baseSpawn, monitor, resolution.network),
+      deps.workspace.root,
     );
     results.push(result);
     cancelled ||= result.status === "cancelled";

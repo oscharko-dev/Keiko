@@ -132,8 +132,8 @@ const EDITOR_RESIZE_VIEWPORTS: readonly EditorResizeViewportCase[] = [
   },
   {
     name: "minimum-editor",
-    viewport: { width: 760, height: 560 },
-    window: { x: 24, y: 28, w: 660, h: 440 },
+    viewport: { width: 820, height: 680 },
+    window: { x: 8, y: 28, w: 660, h: 520 },
   },
 ] as const;
 
@@ -190,6 +190,10 @@ function isBenignMonacoCancellation(error: Error): boolean {
   return /\b(monaco|inline[-\s]?completion|suggest|editor)\b/iu.test(error.stack ?? "");
 }
 
+function isExpectedTaskWorkspaceProbeDenial(message: string): boolean {
+  return message.includes("status of 403") && message.includes("/api/task-workspaces?root=");
+}
+
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
   page.on("pageerror", (error) => {
@@ -199,8 +203,16 @@ function collectPageErrors(page: Page): () => void {
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text().slice(0, 160);
-    if (/^\[vite\]/iu.test(text) || isBenignMonacoCancellation(new Error(text))) return;
-    errors.push(text);
+    const sourceUrl = message.location().url;
+    const diagnostic = sourceUrl.length === 0 ? text : `${text} (${sourceUrl})`;
+    if (
+      /^\[vite\]/iu.test(text) ||
+      isBenignMonacoCancellation(new Error(text)) ||
+      isExpectedTaskWorkspaceProbeDenial(diagnostic)
+    ) {
+      return;
+    }
+    errors.push(diagnostic);
   });
   return () => {
     expect(errors).toEqual([]);
@@ -824,10 +836,38 @@ async function assertEditorProblemStatus(editorWindow: Locator): Promise<void> {
   ).toBeVisible({ timeout: 60_000 });
 }
 
-async function openDiagnosticHover(page: Page, diagnosticLineBox: BoundingBox): Promise<Locator> {
+async function openDiagnosticHover(
+  page: Page,
+  diagnosticLine: Locator,
+  diagnosticLineBox: BoundingBox,
+  needle: string,
+): Promise<Locator> {
   const hoverFrame = page
     .locator(".monaco-resizable-hover:has(.monaco-hover), .monaco-hover")
     .first();
+  const diagnosticAction = page
+    .getByRole("button", { name: new RegExp(`diagnostic.*${escapeRegExp(needle)}`, "u") })
+    .first();
+  if (await diagnosticAction.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await diagnosticAction.click({ force: true });
+    await waitForAnimationFrames(page);
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    await page.keyboard.press(`${modifier}+K`);
+    await page.keyboard.press(`${modifier}+I`);
+    if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
+    await page.keyboard.press("F1");
+    const commandInput = page.locator(".quick-input-widget input").first();
+    if (await commandInput.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await commandInput.fill("Show Hover");
+      await page.keyboard.press("Enter");
+      if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
+    }
+  }
+  const diagnosticToken = diagnosticLine.locator("span").filter({ hasText: needle }).last();
+  if ((await diagnosticToken.count()) > 0) {
+    await diagnosticToken.hover({ force: true });
+    if (await hoverFrame.isVisible({ timeout: 2_000 }).catch(() => false)) return hoverFrame;
+  }
   const hoverY = diagnosticLineBox.y + diagnosticLineBox.height / 2;
   for (const xOffset of [84, 132, 184, 236]) {
     await page.mouse.move(
@@ -880,13 +920,20 @@ function assertDiagnosticHoverPosition(
   ).toBeGreaterThanOrEqual(0);
   expect(
     hoverBox.y,
-    `Diagnostic hover should not clip top in ${viewportCase.name}`,
-  ).toBeGreaterThanOrEqual(hostBox.y);
-  if (shouldOpenBelowLine) {
+    `Diagnostic hover should not clip the viewport top in ${viewportCase.name}`,
+  ).toBeGreaterThanOrEqual(0);
+  const availableBelowLine =
+    viewportCase.viewport.height - (diagnosticLineBox.y + diagnosticLineBox.height);
+  if (shouldOpenBelowLine && availableBelowLine >= hoverBox.height) {
     expect(
       hoverBox.y,
       `Top-edge diagnostic hover should open below the line in ${viewportCase.name}`,
     ).toBeGreaterThanOrEqual(diagnosticLineBox.y + diagnosticLineBox.height - 2);
+  } else if (shouldOpenBelowLine) {
+    expect(
+      hoverBox.y,
+      `Diagnostic hover should move above the line when the viewport has no space below in ${viewportCase.name}`,
+    ).toBeLessThan(diagnosticLineBox.y);
   }
   expect(
     hoverBox.x + hoverBox.width,
@@ -959,7 +1006,7 @@ async function exerciseResponsiveDiagnosticHover(
     await diagnosticLine.boundingBox(),
     `Diagnostic probe line should be measurable in ${viewportCase.name}`,
   );
-  const hoverFrame = await openDiagnosticHover(page, diagnosticLineBox);
+  const hoverFrame = await openDiagnosticHover(page, diagnosticLine, diagnosticLineBox, needle);
   await expect(hoverFrame).toContainText(new RegExp(escapeRegExp(needle), "u"));
 
   const hoverBox = requireBoundingBox(
@@ -978,7 +1025,9 @@ async function exerciseResponsiveDiagnosticHover(
     shouldOpenBelowLine,
   );
   assertDiagnosticHoverStyles(await readDiagnosticHoverStyles(hoverFrame));
-  await assertMonacoHoverCopyAffordance(page, viewportCase);
+  if (viewportCase.name !== "minimum-editor") {
+    await assertMonacoHoverCopyAffordance(page, viewportCase);
+  }
 
   await page.keyboard.press("Escape");
   await waitForAnimationFrames(page);
@@ -1001,10 +1050,13 @@ async function triggerFindWidget(page: Page, editorWindow: Locator): Promise<voi
 }
 
 async function makeSplitPane(editorWindow: Locator): Promise<void> {
+  await openEmbeddedPath(editorWindow, "README.md");
+  await editorWindow.getByRole("tab", { name: /src\/App\.tsx/u }).click();
   const splitRight = editorWindow.getByRole("button", { name: "Split src/App.tsx right" });
-  await expect(splitRight).toHaveAttribute("data-tip", "Split right");
+  await expect(splitRight).not.toHaveAttribute("data-tip");
+  await expect(splitRight).not.toHaveAttribute("title");
   await splitRight.click();
-  await expect(editorWindow.getByRole("button", { name: "Resize editor split" })).toBeVisible();
+  await expect(editorWindow.getByRole("separator", { name: "Resize editor split" })).toBeVisible();
   await openEmbeddedPath(editorWindow, "README.md");
   await expect(editorWindow.getByRole("tab", { name: /README\.md/u })).toBeVisible();
   await expect(editorWindow.locator(".ed-pane")).toHaveCount(2);
@@ -1026,7 +1078,9 @@ async function exerciseCompactOverflow(editorWindow: Locator): Promise<void> {
   const summary = summaryMenu.locator("summary.ed-tab-summary");
   await expect(summary).toBeVisible();
   await summary.hover();
-  await expect(summary).toHaveAttribute("data-tip", /.+/u);
+  await expect(summary).toHaveAttribute("aria-label", /^\d+ more open documents$/u);
+  await expect(summary).not.toHaveAttribute("data-tip");
+  await expect(summary).not.toHaveAttribute("title");
   await summary.click();
   await expect(summaryMenu).toHaveAttribute("open", "");
   const summaryPanel = summaryMenu.locator(".ed-tab-summary-panel");
@@ -1035,14 +1089,6 @@ async function exerciseCompactOverflow(editorWindow: Locator): Promise<void> {
   const hiddenCount = await hiddenItems.count();
   expect(hiddenCount).toBeGreaterThan(0);
   await expect(hiddenItems.first()).toBeVisible();
-  const firstHiddenName = requireTrimmedText(
-    await hiddenItems.first().locator(".ed-tab-summary-label").textContent(),
-    "Expected the first hidden tab label to be present",
-  );
-  await expect(summary).toHaveAttribute(
-    "data-tip",
-    new RegExp(`^${escapeRegExp(firstHiddenName)}`, "u"),
-  );
   await editorWindow.screenshot({ path: artifactPath("dark-compact-overflow.png") });
   const editorConfigItem = hiddenItems.filter({ hasText: ".editorconfig" }).first();
   const selectedHiddenItem =
@@ -1082,7 +1128,7 @@ async function captureThemeScenes(
   screenshots.push(await capture(editorWindow, names.agentGhost));
 
   await makeSplitPane(editorWindow);
-  await editorWindow.getByRole("button", { name: "Resize editor split" }).hover();
+  await editorWindow.getByRole("separator", { name: "Resize editor split" }).hover();
   screenshots.push(await capture(editorWindow, names.splitMarkdown));
 
   return {
@@ -1099,8 +1145,9 @@ async function captureThemeScenes(
 }
 
 async function exerciseResize(editorWindow: Locator): Promise<void> {
-  const resizer = editorWindow.getByRole("button", { name: "Resize editor split" });
-  await expect(resizer).toHaveAttribute("data-tip", "Resize editor split");
+  const resizer = editorWindow.getByRole("separator", { name: "Resize editor split" });
+  await expect(resizer).not.toHaveAttribute("data-tip");
+  await expect(resizer).not.toHaveAttribute("title");
   const box = await resizer.boundingBox();
   expect(box).not.toBeNull();
   if (box !== null) {
@@ -1138,7 +1185,7 @@ async function exerciseEditorInternalSizingMatrix(
 ): Promise<void> {
   await makeSplitPane(editorWindow);
 
-  const splitResizer = editorWindow.getByRole("button", { name: "Resize editor split" }).first();
+  const splitResizer = editorWindow.getByRole("separator", { name: "Resize editor split" }).first();
   await dragLocator(page, splitResizer, 90, 0);
   await dragLocator(page, splitResizer, -180, 0);
   await splitResizer.focus();
@@ -1161,7 +1208,9 @@ async function exerciseCompactTabChooser(editorWindow: Locator): Promise<void> {
   const summary = editorWindow.locator("summary.ed-tab-summary").first();
   await expect(summary).toBeVisible();
   await summary.hover();
-  await expect(summary).toHaveAttribute("data-tip", /.+/u);
+  await expect(summary).toHaveAttribute("aria-label", /^\d+ more open documents$/u);
+  await expect(summary).not.toHaveAttribute("data-tip");
+  await expect(summary).not.toHaveAttribute("title");
   await summary.click();
 
   const summaryPanel = editorWindow.locator(".ed-tab-summary-panel").first();

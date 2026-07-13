@@ -177,75 +177,131 @@ interface LineState {
   inBlock: boolean;
 }
 
+interface TokenChunk {
+  readonly token: Token;
+  readonly length: number;
+}
+
+interface TokenStep extends TokenChunk {
+  readonly stop: boolean;
+}
+
+interface MatchContext {
+  readonly line: string;
+  readonly i: number;
+  readonly rest: string;
+  readonly cs: CommentStyle;
+  readonly state: LineState;
+}
+
+type TokenMatcher = (ctx: MatchContext) => TokenStep | null;
+
+// Consumes the rest of an already-open block comment carried over from a previous line.
+function continueOpenBlockComment(
+  line: string,
+  state: LineState,
+  cs: CommentStyle,
+): TokenChunk | null {
+  if (!state.inBlock || cs.block === null) return null;
+  const end = line.indexOf(cs.block[1]);
+  if (end === -1) {
+    return { token: ["com", line], length: line.length };
+  }
+  const closeIndex = end + cs.block[1].length;
+  state.inBlock = false;
+  return { token: ["com", line.slice(0, closeIndex)], length: closeIndex };
+}
+
+function matchLineComment(ctx: MatchContext): TokenStep | null {
+  if (ctx.cs.line === null || !ctx.rest.startsWith(ctx.cs.line)) return null;
+  return { token: ["com", ctx.rest], length: ctx.rest.length, stop: true };
+}
+
+function matchBlockCommentOpen(ctx: MatchContext): TokenStep | null {
+  const { cs, rest, line, i, state } = ctx;
+  if (cs.block === null || !rest.startsWith(cs.block[0])) return null;
+  const end = line.indexOf(cs.block[1], i + cs.block[0].length);
+  if (end === -1) {
+    state.inBlock = true;
+    return { token: ["com", rest], length: rest.length, stop: true };
+  }
+  const closeIndex = end + cs.block[1].length;
+  return { token: ["com", line.slice(i, closeIndex)], length: closeIndex - i, stop: false };
+}
+
+function matchString(ctx: MatchContext): TokenStep | null {
+  const sm = /^(?:"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)/.exec(ctx.rest);
+  if (sm === null || sm[0].length <= 1) return null;
+  return { token: ["str", sm[0]], length: sm[0].length, stop: false };
+}
+
+function matchNumber(ctx: MatchContext): TokenStep | null {
+  if (!/^\d/.test(ctx.rest)) return null;
+  const nm = /^\d[\w.]*/.exec(ctx.rest);
+  const matched = nm?.[0] ?? ctx.rest.charAt(0);
+  return { token: ["num", matched], length: matched.length, stop: false };
+}
+
+function classifyIdentifier(word: string, line: string, i: number): TokenKind {
+  if (CODE_KW.has(word) || CODE_KW.has(word.toLowerCase())) return "key";
+  if (word.startsWith("@")) return "type";
+  if (/^[A-Z]/.test(word)) return "type";
+  if (line.charAt(i + word.length) === "(") return "fn";
+  return "id";
+}
+
+function matchIdentifier(ctx: MatchContext): TokenStep | null {
+  const im = /^[@A-Za-z_$][\w$]*/.exec(ctx.rest);
+  if (im === null) return null;
+  const w = im[0];
+  const cls = classifyIdentifier(w, ctx.line, ctx.i);
+  return { token: [cls, w], length: w.length, stop: false };
+}
+
+function matchWhitespace(ctx: MatchContext): TokenStep | null {
+  const wm = /^\s+/.exec(ctx.rest);
+  if (wm === null) return null;
+  return { token: ["ws", wm[0]], length: wm[0].length, stop: false };
+}
+
+function matchPunctuation(ctx: MatchContext): TokenStep | null {
+  const pm = /^[^\w\s$@"']+/.exec(ctx.rest);
+  if (pm === null) return null;
+  return { token: ["punct", pm[0]], length: pm[0].length, stop: false };
+}
+
+const TOKEN_MATCHERS: readonly TokenMatcher[] = [
+  matchLineComment,
+  matchBlockCommentOpen,
+  matchString,
+  matchNumber,
+  matchIdentifier,
+  matchWhitespace,
+  matchPunctuation,
+];
+
+// Tries each matcher in priority order; falls back to a single raw character.
+function nextToken(ctx: MatchContext): TokenStep {
+  for (const matcher of TOKEN_MATCHERS) {
+    const step = matcher(ctx);
+    if (step !== null) return step;
+  }
+  return { token: ["id", ctx.rest.charAt(0)], length: 1, stop: false };
+}
+
 function tokenizeLine(line: string, state: LineState, cs: CommentStyle): Token[] {
   const toks: Token[] = [];
   let i = 0;
-  if (state.inBlock && cs.block !== null) {
-    const end = line.indexOf(cs.block[1]);
-    if (end === -1) {
-      toks.push(["com", line]);
-      return toks;
-    }
-    toks.push(["com", line.slice(0, end + cs.block[1].length)]);
-    i = end + cs.block[1].length;
-    state.inBlock = false;
+  const opening = continueOpenBlockComment(line, state, cs);
+  if (opening !== null) {
+    toks.push(opening.token);
+    i = opening.length;
   }
   while (i < line.length) {
-    const rest = line.slice(i);
-    if (cs.line !== null && rest.startsWith(cs.line)) {
-      toks.push(["com", rest]);
-      break;
-    }
-    if (cs.block !== null && rest.startsWith(cs.block[0])) {
-      const end = line.indexOf(cs.block[1], i + cs.block[0].length);
-      if (end === -1) {
-        toks.push(["com", rest]);
-        state.inBlock = true;
-        break;
-      }
-      toks.push(["com", line.slice(i, end + cs.block[1].length)]);
-      i = end + cs.block[1].length;
-      continue;
-    }
-    const sm = /^(?:"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)/.exec(rest);
-    if (sm !== null && sm[0].length > 1) {
-      toks.push(["str", sm[0]]);
-      i += sm[0].length;
-      continue;
-    }
-    if (/^\d/.test(rest)) {
-      const nm = /^\d[\w.]*/.exec(rest);
-      const matched = nm?.[0] ?? rest.charAt(0);
-      toks.push(["num", matched]);
-      i += matched.length;
-      continue;
-    }
-    const im = /^[@A-Za-z_$][\w$]*/.exec(rest);
-    if (im !== null) {
-      const w = im[0];
-      let cls: TokenKind = "id";
-      if (CODE_KW.has(w) || CODE_KW.has(w.toLowerCase())) cls = "key";
-      else if (w.startsWith("@")) cls = "type";
-      else if (/^[A-Z]/.test(w)) cls = "type";
-      else if (line.charAt(i + w.length) === "(") cls = "fn";
-      toks.push([cls, w]);
-      i += w.length;
-      continue;
-    }
-    const wm = /^\s+/.exec(rest);
-    if (wm !== null) {
-      toks.push(["ws", wm[0]]);
-      i += wm[0].length;
-      continue;
-    }
-    const pm = /^[^\w\s$@"']+/.exec(rest);
-    if (pm !== null) {
-      toks.push(["punct", pm[0]]);
-      i += pm[0].length;
-      continue;
-    }
-    toks.push(["id", rest.charAt(0)]);
-    i += 1;
+    const step = nextToken({ line, i, rest: line.slice(i), cs, state });
+    toks.push(step.token);
+    i += step.length;
+    if (step.stop) break;
   }
   return toks;
 }

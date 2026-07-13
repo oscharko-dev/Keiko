@@ -128,53 +128,75 @@ export function encodeSpreadsheetSafeRow(cells: readonly string[], delimiter = "
   return `${encoded.join(delimiter)}\r\n`;
 }
 
-// eslint-disable-next-line complexity
+// Mutable scan state shared by the quoted/unquoted character handlers below.
+interface CsvParseState {
+  rows: string[][];
+  row: string[];
+  cell: string;
+  inQuotes: boolean;
+}
+
+// Consumes one character while inside a quoted cell: a doubled `""` is an embedded literal
+// quote, a lone `"` closes the quoted region, anything else is appended to the cell. Returns
+// the index to resume scanning from (mirrors the original inline extra-advance for `""`).
+function consumeQuotedChar(body: string, index: number, state: CsvParseState): number {
+  const ch = body.charAt(index);
+  if (ch !== '"') {
+    state.cell += ch;
+    return index;
+  }
+  if (body.charAt(index + 1) === '"') {
+    state.cell += '"';
+    return index + 1;
+  }
+  state.inQuotes = false;
+  return index;
+}
+
+// Pushes the current cell and row onto `rows`, then resets both for the next row.
+function finalizeCsvRow(state: CsvParseState): void {
+  state.row.push(state.cell);
+  state.rows.push(state.row);
+  state.row = [];
+  state.cell = "";
+}
+
+// Consumes one character outside a quoted cell: an opening quote, the `,` delimiter, a
+// `\r`/`\n` line ending, or a literal character appended to the current cell. Returns the
+// index to resume scanning from (mirrors the original inline extra-advance for a CRLF pair).
+function consumeUnquotedChar(body: string, index: number, state: CsvParseState): number {
+  const ch = body.charAt(index);
+  if (ch === '"' && state.cell.length === 0) {
+    state.inQuotes = true;
+    return index;
+  }
+  if (ch === ",") {
+    state.row.push(state.cell);
+    state.cell = "";
+    return index;
+  }
+  if (ch === "\r" || ch === "\n") {
+    const isCrlfPair = ch === "\r" && body.charAt(index + 1) === "\n";
+    finalizeCsvRow(state);
+    return isCrlfPair ? index + 1 : index;
+  }
+  state.cell += ch;
+  return index;
+}
+
 function parseCsvRows(body: string): readonly (readonly string[])[] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = "";
-  let inQuotes = false;
-  for (let i = 0; i < body.length; i += 1) {
-    const ch = body.charAt(i);
-    if (inQuotes) {
-      if (ch === '"') {
-        if (body.charAt(i + 1) === '"') {
-          cell += '"';
-          i += 1;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        cell += ch;
-      }
-      continue;
-    }
-    if (ch === '"' && cell.length === 0) {
-      inQuotes = true;
-      continue;
-    }
-    if (ch === ",") {
-      row.push(cell);
-      cell = "";
-      continue;
-    }
-    if (ch === "\r" || ch === "\n") {
-      if (ch === "\r" && body.charAt(i + 1) === "\n") {
-        i += 1;
-      }
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = "";
-      continue;
-    }
-    cell += ch;
+  const state: CsvParseState = { rows: [], row: [], cell: "", inQuotes: false };
+  let i = 0;
+  while (i < body.length) {
+    const next = state.inQuotes
+      ? consumeQuotedChar(body, i, state)
+      : consumeUnquotedChar(body, i, state);
+    i = next + 1;
   }
-  if (cell.length > 0 || row.length > 0) {
-    row.push(cell);
-    rows.push(row);
+  if (state.cell.length > 0 || state.row.length > 0) {
+    finalizeCsvRow(state);
   }
-  return rows;
+  return state.rows;
 }
 
 export function convertCsvDelimiter(body: string, delimiter = ";"): string {

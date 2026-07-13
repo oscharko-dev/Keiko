@@ -1,11 +1,16 @@
-import {
-  DEFAULT_LSP_PROCESS_CONFIG,
-  type LanguageProviderDescriptor,
-  type LanguageServiceOperation,
+import type {
+  LanguageProviderDescriptor,
+  LanguageServiceOperation,
 } from "@oscharko-dev/keiko-contracts";
 import { isCommandAllowed, type CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { resolveExecutableOutsideWorkspace } from "./lspNodeAdapter.js";
+import { GO_PROVIDER_SPEC } from "./providers/goProvider.js";
+import { PYTHON_PROVIDER_SPEC } from "./providers/pythonProvider.js";
+import { SHELL_PROVIDER_SPEC } from "./providers/shellProvider.js";
+import { JAVA_PROVIDER_SPEC } from "./providers/javaProvider.js";
+import { RUST_PROVIDER_SPEC } from "./providers/rustProvider.js";
+import type { LspSpawnPrepareFn } from "./lspProcessManager.js";
 
 export interface HostLanguageProviderSpec {
   readonly id: string;
@@ -16,7 +21,12 @@ export interface HostLanguageProviderSpec {
   readonly executableArgs: readonly string[];
   readonly requiredExecutables: readonly string[];
   readonly envAllowlist: readonly string[];
+  readonly fixedEnv?: Readonly<Record<string, string>> | undefined;
+  readonly approvedDescendantExecutables?: readonly string[] | undefined;
   readonly envFlag: string;
+  readonly semanticTokensCandidate: boolean;
+  readonly networkPolicy?: "inherit" | "none" | undefined;
+  readonly prepareSpawn?: LspSpawnPrepareFn | undefined;
 }
 
 export interface HostLanguageProviderDetectionDeps {
@@ -24,6 +34,7 @@ export interface HostLanguageProviderDetectionDeps {
   readonly processEnv: NodeJS.ProcessEnv;
   readonly commandRules: readonly CommandRule[];
   readonly specs?: readonly HostLanguageProviderSpec[] | undefined;
+  readonly ignoreActivationFlag?: boolean | undefined;
 }
 
 export const HOST_LSP_MISSING_REASON =
@@ -32,105 +43,12 @@ export const HOST_LSP_POLICY_BLOCKED_REASON =
   "Required host language tool is blocked by host execution policy." as const;
 export const HOST_LSP_DISABLED_REASON = "Host language provider is disabled by policy." as const;
 
-const DEFAULT_HOST_LSP_ENV_ALLOWLIST: readonly string[] = Object.freeze([
-  ...DEFAULT_LSP_PROCESS_CONFIG.envAllowlist,
-  "TMPDIR",
-  "TEMP",
-  "TMP",
-  "PYTHONPATH",
-  "VIRTUAL_ENV",
-  "GOMODCACHE",
-  "GOCACHE",
-  "GOPATH",
-  "JAVA_HOME",
-  "RUSTUP_HOME",
-  "CARGO_HOME",
-]);
-
 export const HOST_LANGUAGE_PROVIDER_SPECS: readonly HostLanguageProviderSpec[] = Object.freeze([
-  Object.freeze({
-    id: "python-lsp",
-    label: "Pyright",
-    languages: Object.freeze(["python"]),
-    operations: Object.freeze([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-    ] as const satisfies readonly LanguageServiceOperation[]),
-    executableName: "pyright-langserver",
-    executableArgs: Object.freeze(["--stdio"]),
-    requiredExecutables: Object.freeze(["pyright-langserver"]),
-    envAllowlist: DEFAULT_HOST_LSP_ENV_ALLOWLIST,
-    envFlag: "KEIKO_EDITOR_LSP_PYTHON",
-  }),
-  Object.freeze({
-    id: "java-lsp",
-    label: "Eclipse JDT LS",
-    languages: Object.freeze(["java"]),
-    operations: Object.freeze([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-      "formatting",
-    ] as const satisfies readonly LanguageServiceOperation[]),
-    executableName: "jdtls",
-    executableArgs: Object.freeze([]),
-    requiredExecutables: Object.freeze(["java", "jdtls"]),
-    envAllowlist: DEFAULT_HOST_LSP_ENV_ALLOWLIST,
-    envFlag: "KEIKO_EDITOR_LSP_JAVA",
-  }),
-  Object.freeze({
-    id: "go-lsp",
-    label: "gopls",
-    languages: Object.freeze(["go"]),
-    operations: Object.freeze([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-      "formatting",
-    ] as const satisfies readonly LanguageServiceOperation[]),
-    executableName: "gopls",
-    executableArgs: Object.freeze([]),
-    requiredExecutables: Object.freeze(["gopls"]),
-    envAllowlist: DEFAULT_HOST_LSP_ENV_ALLOWLIST,
-    envFlag: "KEIKO_EDITOR_LSP_GO",
-  }),
-  Object.freeze({
-    id: "rust-lsp",
-    label: "rust-analyzer",
-    languages: Object.freeze(["rust"]),
-    operations: Object.freeze([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-      "formatting",
-    ] as const satisfies readonly LanguageServiceOperation[]),
-    executableName: "rust-analyzer",
-    executableArgs: Object.freeze([]),
-    requiredExecutables: Object.freeze(["rust-analyzer"]),
-    envAllowlist: DEFAULT_HOST_LSP_ENV_ALLOWLIST,
-    envFlag: "KEIKO_EDITOR_LSP_RUST",
-  }),
-  Object.freeze({
-    id: "shell-lsp",
-    label: "Bash Language Server",
-    languages: Object.freeze(["shell"]),
-    operations: Object.freeze([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-    ] as const satisfies readonly LanguageServiceOperation[]),
-    executableName: "bash-language-server",
-    executableArgs: Object.freeze(["start"]),
-    requiredExecutables: Object.freeze(["bash-language-server", "shellcheck"]),
-    envAllowlist: DEFAULT_HOST_LSP_ENV_ALLOWLIST,
-    envFlag: "KEIKO_EDITOR_LSP_SHELL",
-  }),
+  PYTHON_PROVIDER_SPEC,
+  JAVA_PROVIDER_SPEC,
+  GO_PROVIDER_SPEC,
+  RUST_PROVIDER_SPEC,
+  SHELL_PROVIDER_SPEC,
 ]);
 
 function trueLike(value: string): boolean {
@@ -184,11 +102,38 @@ function requiredExecutableAvailable(
   }
 }
 
+export function defaultHostLanguageCommandRules(): readonly CommandRule[] {
+  const names = new Set<string>();
+  for (const spec of HOST_LANGUAGE_PROVIDER_SPECS) {
+    names.add(spec.executableName);
+    for (const executable of spec.requiredExecutables) names.add(executable);
+  }
+  return [...names]
+    .sort((left, right) => left.localeCompare(right))
+    .map((executable) => ({ executable }));
+}
+
+export function isHostLanguageProviderProvisioned(
+  language: string,
+  deps: Omit<HostLanguageProviderDetectionDeps, "specs">,
+): boolean {
+  const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((candidate) =>
+    candidate.languages.includes(language),
+  );
+  if (spec === undefined) return false;
+  if (!commandAllowed(deps.commandRules, spec.executableName, spec.executableArgs)) return false;
+  return spec.requiredExecutables.every(
+    (executable) =>
+      commandAllowed(deps.commandRules, executable, []) &&
+      requiredExecutableAvailable(executable, deps),
+  );
+}
+
 function detectSpec(
   spec: HostLanguageProviderSpec,
   deps: HostLanguageProviderDetectionDeps,
 ): LanguageProviderDescriptor {
-  if (!providerEnabled(spec, deps.processEnv)) {
+  if (deps.ignoreActivationFlag !== true && !providerEnabled(spec, deps.processEnv)) {
     return unavailableDescriptor(spec, HOST_LSP_DISABLED_REASON);
   }
   if (!commandAllowed(deps.commandRules, spec.executableName, spec.executableArgs)) {

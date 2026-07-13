@@ -144,7 +144,9 @@ describe("auditLocalState — genuinely-encrypted fixture (#1325 AC3)", () => {
     );
     expect(classById(result, "evidence-qi").status).toBe("pass");
     expect(classById(result, "credentials").status).toBe("pass");
-    expect(classById(result, "file-modes").status).toBe("pass");
+    expect(classById(result, "file-modes").status).toBe(
+      process.platform === "win32" ? "skip" : "pass",
+    );
     expect(classById(result, "editor-hot-exit").status).toBe("pass");
     expect(classById(result, "editor-hot-exit").findings.join(" ")).toContain(
       "1 editor recovery snapshot",
@@ -162,7 +164,9 @@ describe("auditLocalState — genuinely-encrypted fixture (#1325 AC3)", () => {
     const result = auditLocalState(createDriftedFixture(join(root, "drifted", ".keiko")));
     expect(result.ok).toBe(false);
     expect(classById(result, "credentials").status).toBe("fail");
-    expect(classById(result, "file-modes").status).toBe("fail");
+    expect(classById(result, "file-modes").status).toBe(
+      process.platform === "win32" ? "skip" : "fail",
+    );
     // The drift is confined to those two classes; encryption of Memory/LK content still holds.
     expect(classById(result, "memory-encryption").status).toBe("pass");
     expect(classById(result, "local-knowledge-encryption").status).toBe("pass");
@@ -285,7 +289,11 @@ describe("keiko repair --dry-run on the fixture (#1325 AC4)", () => {
   it("flags the drifted fixture: plaintext credentials and loose permissions", () => {
     const { code, output } = captureRepair(createDriftedFixture(join(root, "drifted", ".keiko")));
     expect(output).toContain("[action] Credential storage");
-    expect(output).toContain("[would-fix] Runtime state artifacts");
+    if (process.platform === "win32") {
+      expect(output).not.toContain("[would-fix] Runtime state artifacts");
+    } else {
+      expect(output).toContain("[would-fix] Runtime state artifacts");
+    }
     expect(code).toBe(1);
   });
 });
@@ -636,7 +644,7 @@ describe("auditLocalState — per-class failure detection", () => {
     const stateDir = freshStateDir("qi-quarantined-manifest");
     const qiDir = join(stateDir, "evidence", "qi");
     mkdirSync(qiDir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(qiDir, "run-corrupt.qi.json.corrupt.2026-07-02T00:00:00.000Z"), "{", {
+    writeFileSync(join(qiDir, "run-corrupt.qi.json.corrupt.2026-07-02T00-00-00-000Z"), "{", {
       mode: 0o600,
     });
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");

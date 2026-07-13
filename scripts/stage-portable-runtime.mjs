@@ -33,6 +33,7 @@ import {
   validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
+import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -1385,7 +1386,10 @@ function sha256Text(text) {
 
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
-  createPortableZipAdapter().create(payloadContainer, "Keiko", assetPath);
+  writeZipArchiveFromDirectory(join(payloadContainer, "Keiko"), assetPath, {
+    followSymlinks: true,
+    rootName: "Keiko",
+  });
   if (!existsSync(assetPath)) fail(`expected ZIP asset at ${assetPath}`);
   return assetPath;
 }

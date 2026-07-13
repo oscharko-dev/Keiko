@@ -15,7 +15,7 @@
 // the emitted message. Fixtures are fully controlled — we never assert real-repo drift.
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -140,6 +140,21 @@ describe("check-version-consistency gate", () => {
     expect(result.stdout).toContain(VERSION);
     // A green run must not emit the failure banner.
     expect(result.stderr).not.toContain("version-consistency: FAIL");
+  });
+
+  it("treats Windows CRLF checkout bytes as the same governed source", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    for (const relative of REAL_ROOT_SRC_FILES) {
+      const absolute = join(root, relative);
+      const source = readFileSync(absolute, "utf8").replaceAll("\n", "\r\n");
+      writeFileSync(absolute, source, "utf8");
+    }
+
+    const result = runGate(root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("version-consistency: PASS");
   });
 
   // RED path A: a package's src KEIKO_*_VERSION constant drifts from its own package.json.

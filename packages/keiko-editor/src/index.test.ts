@@ -244,6 +244,12 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "exceedsLineCount",
       "LARGE_FILE_DEGRADED_BYTES",
       "LARGE_FILE_DEGRADED_LINES",
+      // Bounded Monaco model retention (#2322).
+      "EditorModelRegistry",
+      "DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS",
+      "UNPROTECTED_EDITOR_MODEL",
+      "estimateEditorModelBytes",
+      "getEditorModelRegistryDiagnostics",
       // Source-control read integrations and conflict grammar (#2229-#2231, ADR-0127).
       "registerEditorGitGutter",
       "registerEditorBlame",
@@ -251,6 +257,10 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "MAX_TRACKED_CONFLICTS",
       "conflictReplacement",
       "parseConflictMarkers",
+      // Bounded Monaco model registry (#2322).
+      "configureEditorModelRegistry",
+      "disposeAllUnattachedEditorModels",
+      "disposeEditorModelRegistryRoot",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });
@@ -271,7 +281,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
     for (const packageName of ["react", "react-dom"]) {
-      expect(manifest.peerDependencies?.[packageName]).toBe("^18.3.1");
+      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.7");
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       expect(manifest.devDependencies?.[packageName]).toBeUndefined();
     }

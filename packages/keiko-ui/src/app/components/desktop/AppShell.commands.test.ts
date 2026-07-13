@@ -301,6 +301,26 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(onTool).toHaveBeenCalledWith("settings");
   });
 
+  it("exposes a command-palette shortcut directly to Editor settings", () => {
+    const onTool = vi.fn();
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      onTool,
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    const settings = commands.find((c) => c.id === "open-editor-settings");
+    settings?.run();
+    expect(onTool).toHaveBeenCalledWith("settings");
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "keiko:settings:open-editor" }),
+    );
+    dispatch.mockRestore();
+  });
+
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
   // command palette. Pin the visible singleton tools here.
@@ -316,6 +336,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     const ids = new Set(commands.map((c) => c.id));
     expect(ids.has("open-memoria")).toBe(true);
     expect(ids.has("open-settings")).toBe(true);
+    expect(ids.has("open-editor-settings")).toBe(true);
     expect(ids.has("open-localKnowledge")).toBe(true);
     expect(ids.has("open-figma")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);

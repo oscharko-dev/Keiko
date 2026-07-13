@@ -762,4 +762,32 @@ describe("EditorAgentHttpClient.requestVerification", () => {
     ).requestVerification(VERIFY_REQUEST, new AbortController().signal);
     expect(result).toMatchObject({ ok: false, error: { code: "MALFORMED_RESPONSE" } });
   });
+
+  it("rejects a verification response for a different kind", async () => {
+    const decoded = JSON.parse(COMPLETED_BODY) as Record<string, unknown>;
+    const routeResult = decoded.result as Record<string, unknown>;
+    const routeReport = routeResult.report as Record<string, unknown>;
+    routeReport.steps = [{ kind: "lint", status: "failed", durationMs: 5 }];
+    const result = await client(transportWith(JSON.stringify(decoded))).requestVerification(
+      VERIFY_REQUEST,
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "MALFORMED_RESPONSE" } });
+  });
+
+  it("deep-projects a valid response before returning it to the model", async () => {
+    const decoded = JSON.parse(COMPLETED_BODY) as Record<string, unknown>;
+    const routeResult = decoded.result as Record<string, unknown>;
+    const routeReport = routeResult.report as Record<string, unknown>;
+    const steps = routeReport.steps as Record<string, unknown>[];
+    routeResult.secret = "RESULT_SECRET";
+    routeReport.secret = "REPORT_SECRET";
+    steps[0] = { ...steps[0], secret: "STEP_SECRET" };
+    const result = await client(transportWith(JSON.stringify(decoded))).requestVerification(
+      VERIFY_REQUEST,
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ ok: true, value: { outcome: "completed" } });
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+  });
 });

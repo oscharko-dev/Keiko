@@ -73,6 +73,7 @@ import {
   validateGitRepositoryStatusResponse,
   type GitEditorDiffFile,
   type GitRepositoryStatusResponse,
+  type EditorAgentFailureCode,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
   type CodingWorkbenchMode,
@@ -1320,6 +1321,22 @@ function serverActionContext(body: unknown, path: string): RouteContext {
   return { req, res, params: {}, url: new URL(`http://127.0.0.1${path}`) };
 }
 
+function actionAbortSignal(ctx: RouteContext): AbortSignal {
+  const controller = new AbortController();
+  ctx.req.on("aborted", () => {
+    controller.abort();
+  });
+  if (typeof ctx.res.on === "function") {
+    ctx.res.on("close", () => {
+      if (!ctx.res.writableEnded) controller.abort();
+    });
+  }
+  if (ctx.req.destroyed && typeof ctx.req.complete === "boolean" && !ctx.req.complete) {
+    controller.abort();
+  }
+  return controller.signal;
+}
+
 function serverResolvedDocumentText(
   snapshot: EditorAgentSessionSnapshot,
   path: string,
@@ -2062,6 +2079,7 @@ async function runNavigateSymbolAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  signal: AbortSignal,
 ): Promise<RouteResult> {
   const request = action.navigateSymbol;
   if (request === undefined) throw new Error("navigateSymbol payload is missing");
@@ -2083,6 +2101,7 @@ async function runNavigateSymbolAction(
     ),
     deps,
     deps.editorLanguageRouteOptions,
+    signal,
   );
 }
 
@@ -2656,8 +2675,11 @@ function serverResolvedActionRoute(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  signal: AbortSignal,
 ): Promise<RouteResult | QueryGitPolicyDenial | QueryGitCancellation> {
-  if (action.type === "navigateSymbol") return runNavigateSymbolAction(action, snapshot, deps);
+  if (action.type === "navigateSymbol") {
+    return runNavigateSymbolAction(action, snapshot, deps, signal);
+  }
   if (action.type === "queryGit") return runQueryGitAction(action, snapshot, deps);
   return runSearchWorkspaceAction(action, snapshot, deps);
 }
@@ -2666,9 +2688,10 @@ async function executeServerResolvedAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  signal: AbortSignal,
 ): Promise<RouteResult | EditorAgentActionResult | QueryGitPolicyDenial | QueryGitCancellation> {
   try {
-    return await serverResolvedActionRoute(action, snapshot, deps);
+    return await serverResolvedActionRoute(action, snapshot, deps, signal);
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
@@ -2748,6 +2771,30 @@ function finishQueryGitCancellation(
   return { status: 200, body: { result } };
 }
 
+function finishQueryGitDenial(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  outcome: QueryGitPolicyDenial,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult {
+  const result = conflict(
+    action,
+    "OUT_OF_SCOPE",
+    "The requested Git path is outside the workspace scope.",
+  );
+  return serverResolvedFailure(
+    action,
+    snapshot,
+    denyByAuthority(decision, outcome.reason),
+    result,
+    requestHash,
+    403,
+    deps.redactor,
+  );
+}
+
 function finishServerResolvedAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
@@ -2760,22 +2807,21 @@ function finishServerResolvedAction(
     return finishQueryGitCancellation(action, snapshot, decision, deps);
   }
   if (isQueryGitPolicyDenial(outcome)) {
-    const result = conflict(
-      action,
-      "OUT_OF_SCOPE",
-      "The requested Git path is outside the workspace scope.",
-    );
-    return serverResolvedFailure(
-      action,
-      snapshot,
-      denyByAuthority(decision, outcome.reason),
-      result,
-      requestHash,
-      403,
-      deps.redactor,
-    );
+    return finishQueryGitDenial(action, snapshot, decision, outcome, requestHash, deps);
   }
   if ("body" in outcome) {
+    const languageFailure = serverResolvedLanguageFailure(action, outcome);
+    if (languageFailure !== null) {
+      return serverResolvedFailure(
+        action,
+        snapshot,
+        decision,
+        languageFailure,
+        requestHash,
+        outcome.status === 403 ? 403 : 200,
+        deps.redactor,
+      );
+    }
     return finishServerResolvedRouteResult(action, snapshot, decision, requestHash, outcome, deps);
   }
   return serverResolvedFailure(
@@ -2789,11 +2835,42 @@ function finishServerResolvedAction(
   );
 }
 
+function languageFailureCode(outcome: RouteResult): EditorAgentFailureCode | undefined {
+  switch (routeErrorCode(outcome)) {
+    case "TIMED_OUT":
+      return "TIMED_OUT";
+    case "CANCELLED":
+      return "CANCELLED";
+    case "UNSUPPORTED_LANGUAGE":
+      return "PROVIDER_UNAVAILABLE";
+    case "UNSUPPORTED_OPERATION":
+      return "UNSUPPORTED_OPERATION";
+    case "DOCUMENT_TOO_LARGE":
+      return "LIMIT_EXCEEDED";
+    default:
+      return undefined;
+  }
+}
+
+function serverResolvedLanguageFailure(
+  action: EditorAgentAction,
+  outcome: RouteResult,
+): EditorAgentActionResult | null {
+  const code = languageFailureCode(outcome);
+  if (code === undefined) return null;
+  const message = "The server-resolved editor operation was not completed.";
+  return {
+    ...failedResult(action, message),
+    failure: { code, message },
+  };
+}
+
 async function resolveServerAction(
   action: EditorAgentAction,
   requestHash: string,
   snapshot: EditorAgentSessionSnapshot | undefined,
   deps: EditorAgentActionRouteDeps,
+  signal: AbortSignal,
 ): Promise<RouteResult> {
   const baseline = decideActionPolicy(action, snapshot, deps);
   if (snapshot === undefined) {
@@ -2814,7 +2891,7 @@ async function resolveServerAction(
     snapshot,
     baseline,
     requestHash,
-    await executeServerResolvedAction(action, snapshot, deps),
+    await executeServerResolvedAction(action, snapshot, deps, signal),
     deps,
   );
 }
@@ -2873,6 +2950,7 @@ async function admitEditorAction(
   action: EditorAgentAction,
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
+  signal: AbortSignal,
 ): Promise<RouteResult> {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   const decision = decideActionPolicy(action, snapshot, deps);
@@ -2887,7 +2965,7 @@ async function admitEditorAction(
         200,
       );
     }
-    return resolveServerAction(action, requestHash, snapshot, deps);
+    return resolveServerAction(action, requestHash, snapshot, deps, signal);
   }
   const admission = preflight(action, snapshot);
   if (!admission.ok) {
@@ -2932,12 +3010,9 @@ export async function handleEditorAgentActions(
     if (!authorization.ok) return authorization.response;
     action = authorization.action;
   }
-  const abortScope = queryGitAbortScope(action, fullEditorActionDeps(deps), ctx);
-  try {
-    return await admitEditorAction(action, preparation.request.requestHash, abortScope.deps);
-  } finally {
-    abortScope.dispose();
-  }
+  const signal = actionAbortSignal(ctx);
+  const actionDeps = queryGitAbortDeps(action, fullEditorActionDeps(deps), signal);
+  return admitEditorAction(action, preparation.request.requestHash, actionDeps, signal);
 }
 
 function fullEditorActionDeps(
@@ -2946,38 +3021,17 @@ function fullEditorActionDeps(
   return deps !== undefined && "store" in deps ? deps : undefined;
 }
 
-interface QueryGitAbortScope {
-  readonly deps: EditorAgentActionRouteDeps | undefined;
-  readonly dispose: () => void;
-}
-
-function queryGitAbortScope(
+function queryGitAbortDeps(
   action: EditorAgentAction,
   deps: EditorAgentActionRouteDeps | undefined,
-  ctx: RouteContext,
-): QueryGitAbortScope {
+  signal: AbortSignal,
+): EditorAgentActionRouteDeps | undefined {
   if (action.type !== "queryGit" || deps === undefined) {
-    return { deps, dispose: () => undefined };
+    return deps;
   }
-  const controller = new AbortController();
-  const abort = (): void => {
-    controller.abort();
-  };
-  const responseClosed = (): void => {
-    if (!ctx.res.writableEnded) abort();
-  };
-  ctx.req.once("aborted", abort);
-  ctx.res.once("close", responseClosed);
-  if (ctx.req.destroyed && typeof ctx.req.complete === "boolean" && !ctx.req.complete) abort();
   return {
-    deps: {
-      ...deps,
-      gitRouteOptions: { ...deps.gitRouteOptions, abortSignal: controller.signal },
-    },
-    dispose: (): void => {
-      ctx.req.off("aborted", abort);
-      ctx.res.off("close", responseClosed);
-    },
+    ...deps,
+    gitRouteOptions: { ...deps.gitRouteOptions, abortSignal: signal },
   };
 }
 

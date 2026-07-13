@@ -1,116 +1,123 @@
-// Issue #2215 (Epic #2092 closeout) — sandbox-boundary regression evidence for the AGENT verification
-// path (Issue #2214), proving it never gains a broader execution surface than the human path
-// (Issue #2211/#2212). Hermetic: the manager's execution port is INJECTED (a canned report/probe), so
-// no real spawn occurs. This is a NEW file — it does not edit any test a preceding child issue owns.
-//
-// The single governed spawn boundary is `executeVerificationEnforced` (verificationExecution.ts), the
-// enforce-or-fail-closed primitive both the human run affordance and the post-apply phase already use.
-// This spec proves the agent route's synchronous `runToReport` routes through THAT SAME injectable
-// port — there is no separate agent-only execution engine — and that a fail-closed report surfaces
-// honestly (a denied run is reported denied, never as a passed/enforced run it was not).
+// Issue #2215 (Epic #2092 closeout) — independent sandbox-boundary regression evidence for the
+// human and agent verification entry paths. Both paths execute through one injected port backed by
+// the REAL keiko-verification orchestrator. The only fake is the child process at the final spawn
+// seam, which makes the sandbox wrapper and fail-closed no-spawn behavior deterministic and hermetic.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  VerificationKind,
-  VerificationReport,
-  VerificationResult,
-  VerificationStatus,
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  type VerificationReport,
+  type VerificationStep,
 } from "@oscharko-dev/keiko-contracts";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { SpawnFn } from "@oscharko-dev/keiko-tools";
+import { runVerification } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import { executeVerificationEnforced } from "./verificationExecution.js";
-import type {
-  ExecuteVerificationArgs,
-  ExecuteVerificationResult,
-} from "./verificationExecution.js";
 import {
   createVerificationRunnerManager,
   type VerificationExecutePort,
   type VerificationRunInput,
 } from "./verificationRunner.js";
 
+const NO_BACKENDS = {
+  bubblewrap: false,
+  unshare: false,
+  seatbelt: false,
+  docker: false,
+  podman: false,
+} as const;
+const BUBBLEWRAP_BACKEND = { ...NO_BACKENDS, bubblewrap: true } as const;
 const PACKAGE_JSON = JSON.stringify({
   name: "fixture",
-  scripts: { typecheck: "tsc --noEmit", lint: "eslint .", test: "vitest run" },
-  devDependencies: { vitest: "^1.0.0" },
+  scripts: { typecheck: "tsc --noEmit" },
 });
 
-function counts(
-  over: Partial<Record<VerificationStatus, number>>,
-): Record<VerificationStatus, number> {
-  return {
-    passed: 0,
-    failed: 0,
-    skipped: 0,
-    denied: 0,
-    "timed-out": 0,
-    cancelled: 0,
-    "resource-exceeded": 0,
-    ...over,
+interface SpawnCall {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+interface GovernedPort {
+  readonly execute: VerificationExecutePort;
+  readonly plans: VerificationStep[][];
+  readonly spawnCalls: SpawnCall[];
+}
+
+function successfulFakeSpawn(calls: SpawnCall[]): SpawnFn {
+  return (command, args): ChildProcess => {
+    calls.push({ command, args: [...args] });
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      pid: number;
+      kill: () => boolean;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 4242 + calls.length;
+    child.kill = (): boolean => true;
+    queueMicrotask(() => child.emit("close", 0, null));
+    return child as unknown as ChildProcess;
   };
 }
 
-function result(kind: VerificationKind, status: VerificationStatus): VerificationResult {
-  return {
-    kind,
-    scriptName: undefined,
-    command: "npm",
-    args: [],
-    status,
-    exitCode: status === "passed" ? 0 : 1,
-    signal: null,
-    durationMs: 5,
-    truncated: false,
-    redacted: true,
-    outputSummary: "redacted digest",
-    appliedLimits: [],
+function governedPort(backendAvailable: boolean): GovernedPort {
+  const plans: VerificationStep[][] = [];
+  const spawnCalls: SpawnCall[] = [];
+  const spawn = successfulFakeSpawn(spawnCalls);
+  const execute: VerificationExecutePort = async (args) => {
+    plans.push(args.plan.steps.map((step) => ({ ...step, args: [...step.args] })));
+    const report = await runVerification(args.plan, {
+      workspace: args.workspace,
+      signal: args.signal,
+      spawn,
+      monitor: { watch: (): (() => void) => (): void => undefined },
+      networkEnforcement: "enforce-or-fail-closed",
+      enforcedNetworkAvailable: backendAvailable,
+      sandboxAvailability: backendAvailable ? BUBBLEWRAP_BACKEND : NO_BACKENDS,
+      platform: "linux",
+      resolveExecutable: (command) => `/abs/${command}`,
+    });
+    return {
+      report,
+      probe: {
+        available: backendAvailable,
+        backend: backendAvailable ? "bubblewrap" : "none",
+      },
+    };
   };
+  return { execute, plans, spawnCalls };
 }
 
-function report(kind: VerificationKind, status: VerificationStatus): VerificationReport {
-  return {
-    workspaceRoot: "/ws",
-    results: [result(kind, status)],
-    overallStatus: status,
-    startedAtMs: 1,
-    durationMs: 5,
-    counts: counts({ [status]: 1 }),
-  };
-}
-
-interface SpyPort {
-  readonly port: VerificationExecutePort;
-  readonly calls: ExecuteVerificationArgs[];
-}
-
-// A single injected execution port. Both the human `execute` and the agent `runToReport` must route
-// through it — proving one governed boundary, not two.
-function spyPort(rep: VerificationReport): SpyPort {
-  const calls: ExecuteVerificationArgs[] = [];
-  return {
-    calls,
-    port: (args): Promise<ExecuteVerificationResult> => {
-      calls.push(args);
-      return Promise.resolve({ report: rep, probe: { available: true, backend: "test-backend" } });
-    },
-  };
+function waitForHumanReport(
+  manager: ReturnType<typeof createManager>,
+): Promise<VerificationReport> {
+  return new Promise((resolve, reject) => {
+    const unsubscribe = manager.subscribe((event) => {
+      if (event.kind === "run-completed") {
+        unsubscribe();
+        resolve(event.report);
+      } else if (event.kind === "run-failed") {
+        unsubscribe();
+        reject(new Error(`human verification failed: ${event.reason}`));
+      }
+    });
+  });
 }
 
 let workspaceRoot: string;
 let store: UiStore;
-let evidenceStore: EvidenceStore;
 
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-verify-"));
   writeFileSync(join(workspaceRoot, "package.json"), PACKAGE_JSON, "utf8");
-  mkdirSync(join(workspaceRoot, "src"), { recursive: true });
-  writeFileSync(join(workspaceRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
   store = createInMemoryUiStore();
   store.createProject(workspaceRoot, "fixture");
-  evidenceStore = createInMemoryEvidenceStore();
 });
 
 afterEach(() => {
@@ -118,76 +125,80 @@ afterEach(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
-function input(over: Partial<VerificationRunInput> = {}): VerificationRunInput {
-  return { projectId: workspaceRoot, kinds: ["typecheck"], ...over };
+function createManager(port: GovernedPort): ReturnType<typeof createVerificationRunnerManager> {
+  return createVerificationRunnerManager({
+    store,
+    evidenceStore: createInMemoryEvidenceStore(),
+    execute: port.execute,
+    isWorkspaceTrustedForPackageScripts: () => true,
+  });
 }
 
-describe("agent verification stays inside the single governed spawn boundary (Issue #2215)", () => {
-  it("routes the agent path through the SAME injected execution port as the human path", async () => {
-    const spy = spyPort(report("typecheck", "passed"));
-    const manager = createVerificationRunnerManager({
-      store,
-      evidenceStore,
-      execute: spy.port,
-      isWorkspaceTrustedForPackageScripts: () => true,
-    });
+function input(): VerificationRunInput {
+  return { projectId: workspaceRoot, kinds: ["typecheck"] };
+}
 
-    // Human path (Issue #2211/#2212): start-and-stream is fire-and-forget, so await its terminal event.
-    const humanDone = new Promise<void>((resolve) => {
-      manager.subscribe((event) => {
-        if (event.kind === "run-completed" || event.kind === "run-failed") resolve();
-      });
-    });
+function assertEnforced(report: VerificationReport): void {
+  const result = report.results[0];
+  expect(result?.status).toBe("passed");
+  expect(result?.appliedLimits).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        dimension: "network",
+        limit: "none",
+        enforced: true,
+      }),
+      expect.objectContaining({
+        dimension: "wall-time",
+        limit: DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+        enforced: true,
+      }),
+      expect.objectContaining({
+        dimension: "output-size",
+        limit: DEFAULT_VERIFICATION_LIMITS.maxOutputBytes,
+        enforced: true,
+      }),
+    ]),
+  );
+}
+
+describe("human and agent verification share the governed sandbox boundary (Issue #2215)", () => {
+  it("gives both entry paths the same real sandbox wrapper, kinds, and limits", async () => {
+    const port = governedPort(true);
+    const manager = createManager(port);
+    const humanReportPromise = waitForHumanReport(manager);
     manager.execute(input());
-    await humanDone;
-    // Agent path (Issue #2214): synchronous single-shot.
-    await manager.runToReport(input(), new AbortController().signal);
+    const humanReport = await humanReportPromise;
+    const agentReport = await manager.runToReport(input(), new AbortController().signal);
 
-    // Both used the one governed port — there is no second, agent-only execution engine.
-    expect(spy.calls.length).toBe(2);
-    for (const call of spy.calls) {
-      // realPath resolution can canonicalize the temp dir (macOS /var → /private/var); match the
-      // fixture by its unique basename rather than the pre-realpath string.
-      expect(call.workspace.root).toContain("keiko-agent-verify-");
-      expect(call.plan.steps.every((step) => step.kind === "typecheck")).toBe(true);
+    expect(port.plans).toHaveLength(2);
+    expect(port.plans[0]).toEqual(port.plans[1]);
+    expect(port.plans[0]?.map((step) => step.kind)).toEqual(["typecheck"]);
+    expect(port.plans[0]?.[0]?.limits).toEqual(DEFAULT_VERIFICATION_LIMITS);
+    expect(port.spawnCalls).toHaveLength(2);
+    for (const call of port.spawnCalls) {
+      expect(call.command).toBe("/abs/bwrap");
+      expect(call.args).toContain("--unshare-net");
     }
+    assertEnforced(humanReport);
+    assertEnforced(agentReport);
   });
 
-  it("confines an agent run to the requested keiko-verification kind — no broader surface", async () => {
-    const spy = spyPort(report("lint", "passed"));
-    const manager = createVerificationRunnerManager({
-      store,
-      evidenceStore,
-      execute: spy.port,
-      isWorkspaceTrustedForPackageScripts: () => true,
-    });
-    await manager.runToReport(input({ kinds: ["lint"] }), new AbortController().signal);
-    const planned = spy.calls[0]?.plan.steps.map((step) => step.kind) ?? [];
-    expect(planned).toEqual(["lint"]);
-  });
+  it("denies both entry paths before spawn when no enforcing backend is attested", async () => {
+    const port = governedPort(false);
+    const manager = createManager(port);
+    const humanReportPromise = waitForHumanReport(manager);
+    manager.execute(input());
+    const humanReport = await humanReportPromise;
+    const agentReport = await manager.runToReport(input(), new AbortController().signal);
 
-  it("surfaces a fail-closed (denied) run honestly, never as a passed/enforced run", async () => {
-    // A no-enforcing-backend run fails closed: keiko-verification reports the step `denied`. The agent
-    // route must return that verbatim — it must not upgrade a denied run to passed.
-    const spy = spyPort(report("typecheck", "denied"));
-    const manager = createVerificationRunnerManager({
-      store,
-      evidenceStore,
-      execute: spy.port,
-      isWorkspaceTrustedForPackageScripts: () => true,
-    });
-    const result = await manager.runToReport(input(), new AbortController().signal);
-    expect(result.overallStatus).toBe("denied");
-    expect(result.results[0]?.status).toBe("denied");
-  });
-
-  it("uses the enforce-or-fail-closed primitive as the production default execution port", () => {
-    // With no injected port, the manager delegates to executeVerificationEnforced — the SAME primitive
-    // the human run affordance and post-apply phase use, which probes for an enforcing backend and runs
-    // keiko-verification with networkEnforcement: "enforce-or-fail-closed". This is the boundary that
-    // exec.test.ts's "fails closed, never spawns, when no enforcing backend is available" already pins.
-    const managerWithDefault = createVerificationRunnerManager({ store, evidenceStore });
-    expect(managerWithDefault.runToReport).toBeTypeOf("function");
-    expect(executeVerificationEnforced).toBeTypeOf("function");
+    expect(port.spawnCalls).toHaveLength(0);
+    expect(humanReport.results[0]?.status).toBe("denied");
+    expect(agentReport.results[0]?.status).toBe("denied");
+    for (const report of [humanReport, agentReport]) {
+      expect(report.results[0]?.appliedLimits).toContainEqual(
+        expect.objectContaining({ dimension: "network", enforced: false }),
+      );
+    }
   });
 });

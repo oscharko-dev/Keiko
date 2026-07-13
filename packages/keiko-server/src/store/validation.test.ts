@@ -43,7 +43,10 @@ describe("validateProjectPath — happy path", () => {
   });
 
   it("accepts a path with redundant separators and normalizes", () => {
-    const messy = `/${realDir.slice(1).replace(/\//g, "//")}`;
+    const messy =
+      process.platform === "win32"
+        ? realDir.replaceAll("\\", "\\\\")
+        : `/${realDir.slice(1).replace(/\//g, "//")}`;
     const out = validateProjectPath(messy, { mustExist: true });
     expect(out).toBe(realDir);
   });

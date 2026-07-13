@@ -78,7 +78,10 @@ export default function EditorDiffSurface(props: EditorDiffSurfaceProps): ReactE
   const runtime = ensureMonacoRuntime();
   const onRuntimeError = props.onRuntimeError;
   const languages = useMemo(
-    () => Array.from(new Set(props.model.files.map((file) => file.language))).sort(),
+    () =>
+      Array.from(new Set(props.model.files.map((file) => file.language))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
     [props.model.files],
   );
   const languageKey = languages.join("\0");

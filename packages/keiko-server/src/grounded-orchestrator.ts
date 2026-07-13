@@ -1143,7 +1143,7 @@ function metadataRootsForScope(scope: SelectedScope): readonly string[] {
     }
     roots.add(scope.kind === "files" ? dirname(entry) : entry);
   }
-  return [...roots].sort();
+  return [...roots].sort((a, b) => a.localeCompare(b));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1229,7 +1229,7 @@ function canonicalManifestScopePathsInDir(
     .filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
     .map((entry) => joinScopePath(dir, entry.name))
     .filter((scopePath) => isCanonicalMetadataFile(scopePath) && !isDenied(scopePath))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function expandWorkspacePattern(
@@ -1254,7 +1254,7 @@ function expandWorkspacePattern(
   return safeReadDir(searchScope, fs, base)
     .filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
     .map((entry) => entry.name)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .slice(0, MAX_MONOREPO_SERVICE_DIRS)
     .flatMap((name) =>
       canonicalManifestScopePathsInDir(joinScopePath(base, name), searchScope, fs),
@@ -1276,7 +1276,7 @@ function workspacePackageManifestPaths(
   }
   const paths: string[] = [];
   const seen = new Set<string>();
-  for (const pattern of [...patterns].sort()) {
+  for (const pattern of [...patterns].sort((a, b) => a.localeCompare(b))) {
     for (const scopePath of expandWorkspacePattern(pattern, searchScope, fs)) {
       if (seen.has(scopePath)) {
         continue;

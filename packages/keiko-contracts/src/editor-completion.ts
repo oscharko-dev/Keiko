@@ -71,6 +71,7 @@ export interface EditorCompletionWireItem {
 // providers (#1211) that fed the model-assisted prompt.
 export type EditorCompletionSource =
   | "deterministic-language-service"
+  | "workspace-snippet"
   | "model-assisted"
   | "repository-context"
   | "local-knowledge"
@@ -79,6 +80,7 @@ export type EditorCompletionSource =
 
 export const EDITOR_COMPLETION_SOURCES: readonly EditorCompletionSource[] = [
   "deterministic-language-service",
+  "workspace-snippet",
   "model-assisted",
   "repository-context",
   "local-knowledge",

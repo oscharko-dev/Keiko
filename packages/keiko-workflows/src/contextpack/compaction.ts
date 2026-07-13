@@ -42,7 +42,7 @@ const TEXT_ENCODER = new TextEncoder();
 // `fatal: false` so a clamp that lands inside a multi-byte sequence emits U+FFFD instead
 // of throwing — we then strip the replacement char to keep the excerpt boundary clean.
 const TEXT_DECODER = new TextDecoder("utf-8", { fatal: false });
-const REPLACEMENT_CHAR = "�";
+const REPLACEMENT_CHAR = "\uFFFD";
 
 function utf8ByteLength(value: string): number {
   return TEXT_ENCODER.encode(value).length;

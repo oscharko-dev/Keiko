@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "policy": {
+    "scope": "Stryker transitive development dependencies",
+    "automaticExpiry": "Any package version or lockfile integrity change",
+    "reviewedOn": "2026-07-11",
+    "status": "accepted-version-bound"
+  },
+  "acceptances": [
+    {
+      "package": "execa",
+      "version": "9.6.1",
+      "integrity": "sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==",
+      "sha1": "5b90acedc6bdc0fa9b9a6ddf8f9cbb0c75a7c471",
+      "repository": "https://github.com/sindresorhus/execa",
+      "registrySignatureKeyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "finding": "Socket high-severity obfuscated-code heuristic",
+      "assessment": "The locked package is the official readable ESM distribution. The warning is treated as a heuristic false positive only for this exact artifact.",
+      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, npm audit, OSV, Dependency Review, and Socket remain mandatory."
+    },
+    {
+      "package": "underscore",
+      "version": "1.13.8",
+      "integrity": "sha512-DXtD3ZtEQzc7M8m4cXotyHR+FAS18C64asBYY5vqZexfYryNNnDc02W4hKg3rdQuqOYas1jkseX0+nZXjTXnvQ==",
+      "sha1": "a93a21186c049dbf0e847496dba72b7bd8c1e92b",
+      "repository": "https://github.com/jashkenas/underscore",
+      "registrySignatureKeyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "finding": "Socket high-severity obfuscated-code heuristic",
+      "assessment": "The locked package contains the upstream project's generated minified browser builds. The warning is treated as a minification heuristic false positive only for this exact artifact.",
+      "verification": "npm registry metadata contains a package signature; local npm signature verification was inconclusive because the Sigstore TUF certificate chain could not be fetched. Lockfile integrity, npm audit, OSV, Dependency Review, and Socket remain mandatory."
+    }
+  ]
+}

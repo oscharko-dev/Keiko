@@ -14,8 +14,36 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const windowsNativeQuality = readFileSync(
+  resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
+  "utf8",
+);
+const windowsLauncher = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
+  "utf8",
+);
+const windowsRfc3161QualityProject = readFileSync(
+  resolve(repoRoot, "scripts/native-quality/windows-rfc3161-quality.csproj"),
+  "utf8",
+);
+const windowsRfc3161Source = readFileSync(
+  resolve(repoRoot, "scripts/windows-portable-rfc3161.cs"),
+  "utf8",
+);
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
+const uiManifest = JSON.parse(
+  readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
+);
 const extendedE2e = readFileSync(resolve(repoRoot, ".github/workflows/e2e-extended.yml"), "utf8");
+const releaseWorkflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+const mutationSecurityWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/mutation-security.yml"),
+  "utf8",
+);
+const portableAssetsWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/portable-assets.yml"),
+  "utf8",
+);
 const htmlManualReleaseEvidence = readFileSync(
   resolve(repoRoot, "docs/qa/html-manual-retrieval-evaluation-evidence.md"),
   "utf8",
@@ -69,6 +97,10 @@ const REQUIRED_CI_COMMANDS = [
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.
   "npm run format:check",
   "npm run check:adr-index",
+  // Sonar scope and native compensation must remain required CI evidence.
+  "npm run check:sonar-scope",
+  "npm run check:native:macos",
+  "npm run check:native:windows",
 ];
 
 const REQUIRED_HTML_MANUAL_RELEASE_GATES = [
@@ -91,6 +123,67 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps Keiko native warnings strict while treating MSVC SDK headers as external", () => {
+    expect(windowsNativeQuality).toContain('"/nologo", "/std:c17", "/W4", "/WX", "/analyze"');
+    expect(windowsNativeQuality).toContain('"/external:env:INCLUDE", "/external:W0"');
+    expect(windowsNativeQuality).toContain("$env:CAExcludePath = $env:INCLUDE");
+    expect(windowsNativeQuality).toContain("MSVC INCLUDE environment is required");
+  });
+
+  it("keeps the Windows launcher path and command buffers off the process stack", () => {
+    expect(windowsLauncher).toContain("HeapAlloc(heap, HEAP_ZERO_MEMORY");
+    expect(windowsLauncher).toContain("free_launcher_buffers(buffers)");
+    expect(windowsLauncher).not.toContain("wchar_t root[32768]");
+    expect(windowsLauncher).not.toContain("wchar_t command[98304]");
+  });
+
+  it("pins the PKCS assembly required by the RFC3161 analyzer build", () => {
+    expect(windowsRfc3161QualityProject).toContain("<TargetFramework>net8.0</TargetFramework>");
+    expect(windowsRfc3161QualityProject).toContain(
+      '<PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.9" />',
+    );
+  });
+
+  it("keeps the Windows RFC3161 boundary namespaced and P/Invoke resolution constrained", () => {
+    expect(windowsRfc3161Source).toContain("namespace Keiko.Portable;");
+    expect(windowsRfc3161Source).toContain("IReadOnlyList<X509Certificate2> Certificates");
+    expect(
+      windowsRfc3161Source.match(
+        /\[DefaultDllImportSearchPaths\(DllImportSearchPath\.System32\)\]/gu,
+      ),
+    ).toHaveLength(4);
+    expect(windowsRfc3161Source).not.toMatch(/catch\s*\{/gu);
+  });
+
+  it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {
+    const runtimeWorkflows = [
+      ci,
+      extendedE2e,
+      releaseWorkflow,
+      portableAssetsWorkflow,
+      mutationSecurityWorkflow,
+    ].join("\n");
+    const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const verificationCount =
+      runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
+    expect(nodeSetupCount).toBe(16);
+    expect(verificationCount).toBe(nodeSetupCount);
+    expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
+  });
+
+  it("executes typecheck, build, and install smokes on every desktop OS", () => {
+    const start = ci.indexOf("  cross-platform-smoke:");
+    const end = ci.indexOf("\n  ui:", start);
+    const crossPlatform = ci.slice(start, end);
+    expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(crossPlatform).toContain("Typecheck the complete package graph");
+    expect(crossPlatform).toContain("- name: Build");
+    expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
+    expect(crossPlatform).toContain("Verify productive native sources on macOS");
+    expect(crossPlatform).toContain("Verify productive native sources on Windows");
+    expect(crossPlatform).not.toContain("npm test");
+  });
+
   for (const command of REQUIRED_CI_COMMANDS) {
     it(`ci.yml wires \`${command}\``, () => {
       expect(ci.includes(command), `\`${command}\` is not run by any ci.yml job`).toBe(true);
@@ -107,6 +200,15 @@ describe("CI test/gate wiring guard", () => {
   it("runs the excluded UI suite in its own required CI job with a coverage ratchet", () => {
     expect(ci).toContain("npm run test:coverage:ui");
     expect(ci).toContain("npm run check:coverage:ui");
+  });
+
+  it("keeps the supported UI compiler and TypeScript 7 compatibility check separate", () => {
+    expect(uiManifest.devDependencies.typescript).toBe("5.7.3");
+    expect(uiManifest.scripts.typecheck).toBe("tsc --noEmit");
+    expect(uiManifest.scripts["typecheck:native"]).toContain(
+      "node ../../node_modules/@typescript/native/bin/tsc",
+    );
+    expect(ci).toContain("npm run typecheck:native --workspace @oscharko-dev/keiko-ui");
   });
 
   it("machine-pins the HTML manual release evidence gate matrix (AUDIT-E1858-002)", () => {

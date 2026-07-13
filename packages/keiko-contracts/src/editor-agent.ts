@@ -143,10 +143,30 @@ export interface EditorAgentSessionSnapshot {
 }
 
 export type EditorAgentNavigateSymbolOperation =
-  "definition" | "references" | "renamePrepare" | "codeActions" | "signatureHelp";
+  | "diagnostics"
+  | "definition"
+  | "typeDefinition"
+  | "implementation"
+  | "references"
+  | "callHierarchy"
+  | "inlayHints"
+  | "renamePrepare"
+  | "codeActions"
+  | "signatureHelp";
 
 export const EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS: readonly EditorAgentNavigateSymbolOperation[] =
-  ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"] as const;
+  [
+    "diagnostics",
+    "definition",
+    "typeDefinition",
+    "implementation",
+    "references",
+    "callHierarchy",
+    "inlayHints",
+    "renamePrepare",
+    "codeActions",
+    "signatureHelp",
+  ];
 
 export interface EditorAgentNavigateSymbolRequest {
   readonly operation: EditorAgentNavigateSymbolOperation;
@@ -434,12 +454,26 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
 // Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
 // admitted to the bounded queue, distinct from the preflight conflict taxonomy above:
 //   - TIMED_OUT   the connected bridge never reported a result before the action deadline elapsed.
-//   - QUEUE_FULL  the bounded per-session action queue was already saturated when the action arrived.
-export type EditorAgentFailureCode = "TIMED_OUT" | "QUEUE_FULL";
+//   - QUEUE_FULL            the bounded per-session action queue was already saturated.
+//   - CANCELLED             the caller cancelled a server-resolved editor operation.
+//   - PROVIDER_UNAVAILABLE  the current workspace/provider state cannot serve the language.
+//   - UNSUPPORTED_OPERATION the active provider did not negotiate the requested operation.
+//   - LIMIT_EXCEEDED        the bounded request or response exceeded a language-service limit.
+export type EditorAgentFailureCode =
+  | "TIMED_OUT"
+  | "QUEUE_FULL"
+  | "CANCELLED"
+  | "PROVIDER_UNAVAILABLE"
+  | "UNSUPPORTED_OPERATION"
+  | "LIMIT_EXCEEDED";
 
 export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
   "TIMED_OUT",
   "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
 ] as const;
 
 export interface EditorAgentActionFailure {
@@ -1022,14 +1056,28 @@ function isNavigateSymbolDocument(value: unknown): boolean {
   );
 }
 
+function isNavigateSymbolExtrasValid(
+  operation: EditorAgentNavigateSymbolOperation,
+  range: unknown,
+  diagnostics: unknown,
+): boolean {
+  if (operation === "codeActions") {
+    return range !== undefined && diagnostics !== undefined;
+  }
+  // Inlay hints are always scoped to a visible range (matches the tool-host's own
+  // validateNavigateSymbolExtras), unlike every other read-only navigation operation.
+  if (operation === "inlayHints") {
+    return range !== undefined && diagnostics === undefined;
+  }
+  return range === undefined && diagnostics === undefined;
+}
+
 function isNavigateSymbolRequest(value: unknown): value is EditorAgentNavigateSymbolRequest {
   if (!isRecord(value) || !isNavigateSymbolOperation(value.operation)) return false;
   if (!isNavigateSymbolDocument(value.document) || !isPosition(value.position)) return false;
   if (!isUndefinedOr(value.range, isRange)) return false;
   if (!isUndefinedOr(value.diagnostics, isLanguageDiagnosticArray)) return false;
-  return value.operation === "codeActions"
-    ? value.range !== undefined && value.diagnostics !== undefined
-    : value.range === undefined && value.diagnostics === undefined;
+  return isNavigateSymbolExtrasValid(value.operation, value.range, value.diagnostics);
 }
 
 function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWorkspaceRequest {

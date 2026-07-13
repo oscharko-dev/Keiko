@@ -98,6 +98,7 @@ function isHtmlShellRequest(request, url) {
 }
 
 function isActivateWaitingMessage(event) {
+  if (event.origin !== self.location.origin) return false;
   const data = event.data;
   return data !== null && typeof data === "object" && data.type === ACTIVATE_WAITING_MESSAGE_TYPE;
 }

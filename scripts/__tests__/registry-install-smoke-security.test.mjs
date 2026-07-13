@@ -88,6 +88,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
     expect(source).toContain("--include-optional");
     expect(source).toContain("--omit=optional");
+    expect(source).toContain("const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;");
     expect(manifest.scripts["smoke:install:optional"]).toBe(
       "node scripts/installable-package-smoke.mjs --include-optional",
     );

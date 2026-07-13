@@ -119,7 +119,7 @@ function domRect(patch: Partial<DOMRect> = {}): DOMRect {
   } as DOMRect;
 }
 
-function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement> {
+function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement | null> {
   const element = document.createElement("div");
   vi.spyOn(element, "getBoundingClientRect").mockReturnValue(rect);
   return { current: element };

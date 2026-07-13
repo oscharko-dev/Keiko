@@ -248,6 +248,21 @@ describe("pure mappers", () => {
     });
   });
 
+  it("marks workspace snippet insertions with Monaco's snippet insertion rule", () => {
+    const fallback = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 5 };
+    const suggestion = editorItemToMonacoSuggestion(
+      item({ kind: "snippet", insertAsSnippet: true, insertText: "${1:value}$0" }),
+      fallback,
+      KINDS,
+      4,
+    );
+    expect(suggestion).toMatchObject({
+      kind: KINDS.Snippet,
+      insertText: "${1:value}$0",
+      insertTextRules: 4,
+    });
+  });
+
   it("prefers an item's explicit range over the fallback and omits absent optional fields", () => {
     const fallback = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 5 };
     const suggestion = editorItemToMonacoSuggestion(

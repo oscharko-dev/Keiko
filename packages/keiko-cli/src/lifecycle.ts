@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
+import { get as httpGet } from "node:http";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -24,6 +25,7 @@ import type { CliIo } from "./runner.js";
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+type HealthProbeFn = (url: string) => Promise<HealthProbeResult>;
 type SleepFn = (ms: number) => Promise<void>;
 type ProcessKiller = (pid: number, signal?: NodeJS.Signals | 0) => void;
 type PortAvailabilityFn = (host: string, port: number) => Promise<boolean>;
@@ -90,7 +92,7 @@ export interface LifecycleCliDeps {
 
 interface LifecycleRuntimeDeps {
   readonly spawnFn: SpawnFn;
-  readonly fetchImpl: FetchFn;
+  readonly healthProbe: HealthProbeFn;
   readonly sleep: SleepFn;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: ProcessKiller;
@@ -102,6 +104,9 @@ interface HealthProbeResult {
   readonly reachable: boolean;
   readonly version: string | undefined;
 }
+
+const HEALTH_PROBE_TIMEOUT_MS = 1_000;
+const HEALTH_RESPONSE_MAX_BYTES = 64 * 1024;
 
 interface UiLogStdio {
   readonly logPath: string;
@@ -231,24 +236,51 @@ function healthVersion(payload: unknown): string | undefined {
   return typeof version === "string" ? version : undefined;
 }
 
-async function probeHealth(
-  options: LifecycleOptions,
-  fetchImpl: FetchFn,
-): Promise<HealthProbeResult> {
+function healthResult(statusCode: number | undefined, body: string): HealthProbeResult {
+  if (statusCode === undefined || statusCode < 200 || statusCode >= 300) {
+    return { reachable: false, version: undefined };
+  }
   try {
-    const response = await fetchImpl(healthUrl(options), {
-      signal: AbortSignal.timeout(1_000),
+    return { reachable: true, version: healthVersion(JSON.parse(body) as unknown) };
+  } catch {
+    return { reachable: true, version: undefined };
+  }
+}
+
+function defaultHealthProbe(url: string): Promise<HealthProbeResult> {
+  return new Promise((resolveProbe) => {
+    const request = httpGet(url, { timeout: HEALTH_PROBE_TIMEOUT_MS }, (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > HEALTH_RESPONSE_MAX_BYTES) {
+          response.destroy();
+          resolveProbe({ reachable: true, version: undefined });
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.once("end", () => {
+        resolveProbe(healthResult(response.statusCode, Buffer.concat(chunks).toString("utf8")));
+      });
+      response.once("error", () => {
+        resolveProbe({ reachable: false, version: undefined });
+      });
     });
-    if (!response.ok) {
-      return { reachable: false, version: undefined };
-    }
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      return { reachable: true, version: undefined };
-    }
-    return { reachable: true, version: healthVersion(body) };
+    request.once("timeout", () => {
+      request.destroy();
+    });
+    request.once("error", () => {
+      resolveProbe({ reachable: false, version: undefined });
+    });
+  });
+}
+
+async function fetchHealthProbe(url: string, fetchImpl: FetchFn): Promise<HealthProbeResult> {
+  try {
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) });
+    return healthResult(response.status, await response.text());
   } catch {
     return { reachable: false, version: undefined };
   }
@@ -459,12 +491,12 @@ function spawnUiProcess(
 async function waitForHealth(
   options: LifecycleOptions,
   pid: number,
-  deps: Pick<LifecycleRuntimeDeps, "fetchImpl" | "sleep" | "isProcessAlive">,
+  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
 ): Promise<boolean> {
   const deadline = Date.now() + options.startTimeoutMs;
   while (Date.now() <= deadline) {
     if (!deps.isProcessAlive(pid)) return false;
-    const health = await probeHealth(options, deps.fetchImpl);
+    const health = await deps.healthProbe(healthUrl(options));
     if (health.version === SDK_VERSION && deps.isProcessAlive(pid)) {
       return true;
     }
@@ -494,7 +526,7 @@ async function cmdStart(
 ): Promise<number> {
   const running = runningPid(options, deps.isProcessAlive);
   if (running !== undefined) {
-    const health = await probeHealth(options, deps.fetchImpl);
+    const health = await deps.healthProbe(healthUrl(options));
     if (health.version === SDK_VERSION) {
       io.out(
         `Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`,
@@ -607,9 +639,13 @@ async function cmdRestart(
 }
 
 function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
+  const fetchImpl = deps.fetchImpl;
   return {
     spawnFn: deps.spawnFn ?? spawn,
-    fetchImpl: deps.fetchImpl ?? fetch,
+    healthProbe:
+      fetchImpl === undefined
+        ? defaultHealthProbe
+        : (url: string): Promise<HealthProbeResult> => fetchHealthProbe(url, fetchImpl),
     sleep:
       deps.sleep ??
       ((ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))),

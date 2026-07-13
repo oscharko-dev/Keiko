@@ -47,6 +47,17 @@ function expectFigmaInternal(action: () => void): void {
   }
 }
 
+function expectPrivateModeIfSupported(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32") {
+    expect(existsSync(path)).toBe(true);
+    return;
+  }
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+}
+
 describe("createFigmaTokenStore round-trip", () => {
   it("stores then reads back the exact token", () => {
     const store = storeAt();
@@ -84,7 +95,13 @@ describe("createFigmaTokenStore round-trip", () => {
   it("writes the store file with 0600 permissions", () => {
     const storePath = join(dir, "figma-token.enc");
     createFigmaTokenStore({ key: KEY, storePath }).store(TOKEN);
-    expect(statSync(storePath).mode & 0o777).toBe(0o600);
+    expectPrivateModeIfSupported(storePath);
+  });
+
+  it("defers file permissions to inherited ACLs on Windows", () => {
+    const storePath = join(dir, "figma-token.enc");
+    createFigmaTokenStore({ key: KEY, storePath }).store(TOKEN);
+    expectPrivateModeIfSupported(storePath, "win32");
   });
 });
 
@@ -141,8 +158,7 @@ describe("resolveFigmaVaultKey precedence", () => {
     expect(resolved.source).toBe("keyfile");
     expect(resolved.key).toHaveLength(32);
     const keyfile = join(dir, "figma-vault.key");
-    expect(existsSync(keyfile)).toBe(true);
-    expect(statSync(keyfile).mode & 0o777).toBe(0o600);
+    expectPrivateModeIfSupported(keyfile);
   });
 
   it("reuses the same keyfile on a second resolve", () => {

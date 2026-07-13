@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
@@ -30,7 +38,12 @@ import {
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { classifyRunReport, formatRunSummaryFromManifest } from "@/lib/run-summary";
+import {
+  classifyRunReport,
+  formatRunSummaryFromManifest,
+  type RunSummaryFallbackKind,
+  type TerminalRunSummary,
+} from "@/lib/run-summary";
 import type {
   Chat,
   ChatMessage,
@@ -252,6 +265,40 @@ async function appendDesktopChatVoiceTurnWithRetry(
 
 function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+// Sonar S2004 — the upsert/remove/replace/rollback list transforms below are extracted to
+// module scope (out of the deeply nested setState updaters that build them) so each nested
+// callback resets its own nesting depth instead of stacking onto the caller's.
+function upsertChatIntoList(chats: readonly Chat[], chat: Chat): Chat[] {
+  return sortChats([chat, ...chats.filter((existing) => existing.id !== chat.id)]);
+}
+
+function removeChatFromList(chats: readonly Chat[], chatId: string): Chat[] {
+  return chats.filter((chat) => chat.id !== chatId);
+}
+
+function replaceChatInList(chats: readonly Chat[], updatedChat: Chat): Chat[] {
+  return chats.map((chat) => (chat.id === updatedChat.id ? updatedChat : chat));
+}
+
+function restoreChatSelectedModel(
+  chats: readonly Chat[],
+  activeChatId: string,
+  rollbackChats: readonly Chat[],
+): Chat[] {
+  return chats.map((chat) => {
+    if (chat.id !== activeChatId) return chat;
+    const restored = rollbackChats.find((candidate) => candidate.id === activeChatId);
+    return restored !== undefined ? { ...chat, selectedModel: restored.selectedModel } : chat;
+  });
+}
+
+function removeMessagesByIds(
+  messages: readonly ChatMessage[],
+  excludedIds: readonly string[],
+): ChatMessage[] {
+  return messages.filter((message) => !excludedIds.includes(message.id));
 }
 
 function isChatPayload(value: unknown): value is Chat {
@@ -663,6 +710,52 @@ function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatM
   return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
 }
 
+// GEN-PERF-CHAT-011 — outcome of a single poll attempt: a terminal summary was found, the run is
+// still in flight (keep polling), or the fetch failed in a way that should stop the poll
+// outright. Splitting this out of pollRunSummaryPatch keeps each fetch/fallback path
+// independently readable (Sonar S3776).
+type RunSummaryAttemptResult =
+  | { readonly kind: "summary"; readonly summary: TerminalRunSummary }
+  | { readonly kind: "retry" }
+  | { readonly kind: "abort" };
+
+async function runSummaryFromManifestFallback(
+  runId: string,
+  fallbackKind: RunSummaryFallbackKind,
+): Promise<RunSummaryAttemptResult> {
+  try {
+    const response = await fetchEvidenceManifest(runId);
+    const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
+    const workflowStatus =
+      manifestSummary.workflowStatus === "failed" || manifestSummary.workflowStatus === "cancelled"
+        ? manifestSummary.workflowStatus
+        : "completed";
+    return {
+      kind: "summary",
+      summary: { workflowStatus, shortResult: manifestSummary.shortResult },
+    };
+  } catch {
+    // Evidence may not exist yet while the worker is still settling; keep polling.
+    return { kind: "retry" };
+  }
+}
+
+async function attemptRunSummaryFetch(
+  runId: string,
+  fallbackKind: RunSummaryFallbackKind,
+): Promise<RunSummaryAttemptResult> {
+  try {
+    const response = await fetchRunReport(runId);
+    const outcome = classifyRunReport(response.report, fallbackKind);
+    return outcome.kind === "terminal"
+      ? { kind: "summary", summary: outcome.summary }
+      : { kind: "retry" };
+  } catch (caught) {
+    if (!(caught instanceof ApiError) || caught.status !== 404) return { kind: "abort" };
+    return runSummaryFromManifestFallback(runId, fallbackKind);
+  }
+}
+
 async function pollRunSummaryPatch(
   chat: Chat,
   projectPath: string,
@@ -677,40 +770,17 @@ async function pollRunSummaryPatch(
     // GEN-PERF-CHAT-011 — abort at the fetch edge: once the owning hook unmounts, stop issuing
     // network requests instead of running out the remaining attempts.
     if (signal?.aborted === true) return undefined;
-    let summary:
-      | {
-          readonly workflowStatus: "completed" | "failed" | "cancelled";
-          readonly shortResult: string;
-        }
-      | undefined;
 
-    try {
-      const response = await fetchRunReport(runId);
-      const outcome = classifyRunReport(response.report, fallbackKind);
-      if (outcome.kind === "terminal") summary = outcome.summary;
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 404) {
-        try {
-          const response = await fetchEvidenceManifest(runId);
-          const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
-          summary = {
-            workflowStatus:
-              manifestSummary.workflowStatus === "failed" ||
-              manifestSummary.workflowStatus === "cancelled"
-                ? manifestSummary.workflowStatus
-                : "completed",
-            shortResult: manifestSummary.shortResult,
-          };
-        } catch {
-          // Evidence may not exist yet while the worker is still settling; keep polling.
-        }
-      } else {
-        return undefined;
-      }
-    }
+    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind);
+    if (attemptResult.kind === "abort") return undefined;
 
-    if (summary !== undefined) {
-      const patched = await patchChatMessage(message.id, chat.id, projectPath, summary);
+    if (attemptResult.kind === "summary") {
+      const patched = await patchChatMessage(
+        message.id,
+        chat.id,
+        projectPath,
+        attemptResult.summary,
+      );
       return { chatId: chat.id, messageId: message.id, message: patched.message };
     }
 
@@ -835,6 +905,25 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     });
   sharedBootstrapInflight = pending;
   return pending.then(cloneSessionPatch);
+}
+
+// Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
+// inside a `new Promise` executor inside the useCallback body) so this setState updater is not
+// a fifth level of nested function. Takes the specific dispatchers/values it needs rather than
+// closing over hook state, matching the module-scope helpers above.
+function handleStreamUngroundedTransportFailure(
+  caught: unknown,
+  optimisticId: string,
+  setError: Dispatch<SetStateAction<string | undefined>>,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  resolve: (status: SendStatus) => void,
+): void {
+  setError(errorMessage(caught));
+  setState((previous) => ({
+    ...previous,
+    messages: removeMessagesByIds(previous.messages, [optimisticId]),
+  }));
+  resolve("failed");
 }
 
 export interface UseChatSessionOptions {
@@ -1158,7 +1247,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const { chat } = mutation;
         setState((previous) => ({
           ...previous,
-          chats: sortChats([chat, ...previous.chats.filter((existing) => existing.id !== chat.id)]),
+          chats: upsertChatIntoList(previous.chats, chat),
           activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
           selectedModel:
             previous.activeChat?.id === chat.id
@@ -1169,7 +1258,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       setState((previous) => ({
         ...previous,
-        chats: previous.chats.filter((chat) => chat.id !== mutation.chatId),
+        chats: removeChatFromList(previous.chats, mutation.chatId),
         activeChat: previous.activeChat?.id === mutation.chatId ? undefined : previous.activeChat,
         messages: previous.activeChat?.id === mutation.chatId ? [] : previous.messages,
       }));
@@ -1270,7 +1359,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           selectedModel: result.chat.selectedModel,
           activeChat:
             previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
-          chats: previous.chats.map((chat) => (chat.id === result.chat.id ? result.chat : chat)),
+          chats: replaceChatInList(previous.chats, result.chat),
         }));
       })
       .catch((caught) => {
@@ -1295,13 +1384,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
                 : previous.selectedModel,
             activeChat:
               previous.activeChat?.id === activeChatId ? rollback.activeChat : previous.activeChat,
-            chats: previous.chats.map((chat) => {
-              if (chat.id !== activeChatId) return chat;
-              const restored = rollback.chats.find((c) => c.id === activeChatId);
-              return restored !== undefined
-                ? { ...chat, selectedModel: restored.selectedModel }
-                : chat;
-            }),
+            chats: restoreChatSelectedModel(previous.chats, activeChatId, rollback.chats),
           }));
         }
       });
@@ -1524,12 +1607,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           setState((previous) => ({
             ...previous,
             activeChat: payload.chat,
-            chats: sortChats([
-              payload.chat,
-              ...previous.chats.filter((existing) => existing.id !== payload.chat.id),
-            ]),
+            chats: upsertChatIntoList(previous.chats, payload.chat),
             messages: [
-              ...previous.messages.filter((m) => m.id !== optimisticId && m.id !== tempAssistantId),
+              ...removeMessagesByIds(previous.messages, [optimisticId, tempAssistantId]),
               ...Array.from(payload.messages),
             ],
           }));
@@ -1623,12 +1703,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             // UI does not silently swallow the failure. The server has already persisted the
             // user message at this point; removing it here is UI-only — it reappears on reload,
             // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            setError(errorMessage(caught));
-            setState((previous) => ({
-              ...previous,
-              messages: previous.messages.filter((message) => message.id !== optimisticId),
-            }));
-            resolve("failed");
+            handleStreamUngroundedTransportFailure(
+              caught,
+              optimisticId,
+              setError,
+              setState,
+              resolve,
+            );
           }
         });
       });

@@ -195,8 +195,51 @@ function diffLine(raw: string, oldLine: number, newLine: number): GitEditorDiffL
   return undefined;
 }
 
-// Hunk parsing must advance four coupled counters while rejecting malformed line grammars.
-// eslint-disable-next-line complexity
+interface HunkLineAccumulator {
+  readonly parsedLines: GitEditorDiffLine[];
+  oldLine: number;
+  newLine: number;
+  oldConsumed: number;
+  newConsumed: number;
+  malformed: boolean;
+}
+
+function initialHunkLineAccumulator(coordinates: HunkCoordinates): HunkLineAccumulator {
+  return {
+    parsedLines: [],
+    oldLine: coordinates.oldStart,
+    newLine: coordinates.newStart,
+    oldConsumed: 0,
+    newConsumed: 0,
+    malformed: false,
+  };
+}
+
+// Classifies one hunk-body line and advances the two coupled old/new counters it feeds.
+function accumulateHunkLine(accumulator: HunkLineAccumulator, raw: string): void {
+  const parsed = diffLine(raw, accumulator.oldLine, accumulator.newLine);
+  if (
+    parsed === undefined ||
+    accumulator.parsedLines.length >= GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK
+  ) {
+    accumulator.malformed = true;
+    return;
+  }
+  accumulator.parsedLines.push(parsed);
+  if (parsed.kind === "ctx" || parsed.kind === "del") {
+    accumulator.oldLine += 1;
+    accumulator.oldConsumed += 1;
+  }
+  if (parsed.kind === "ctx" || parsed.kind === "add") {
+    accumulator.newLine += 1;
+    accumulator.newConsumed += 1;
+  }
+}
+
+function lineAt(lines: readonly string[], index: number): string {
+  return lines[index] ?? "";
+}
+
 function parseOneHunk(
   lines: readonly string[],
   start: number,
@@ -206,42 +249,26 @@ function parseOneHunk(
   readonly malformed: boolean;
   readonly fatal: boolean;
 } {
-  const coordinates = parseHunkHeader(lines[start] ?? "");
+  const coordinates = parseHunkHeader(lineAt(lines, start));
   let index = start + 1;
   if (coordinates === undefined) return { next: index, malformed: true, fatal: true };
-  const parsedLines: GitEditorDiffLine[] = [];
-  let oldLine = coordinates.oldStart;
-  let newLine = coordinates.newStart;
-  let oldConsumed = 0;
-  let newConsumed = 0;
-  let malformed = false;
-  while (index < lines.length && !(lines[index] ?? "").startsWith("@@ ")) {
-    const raw = lines[index] ?? "";
+  const accumulator = initialHunkLineAccumulator(coordinates);
+  while (index < lines.length && !lineAt(lines, index).startsWith("@@ ")) {
+    const raw = lineAt(lines, index);
     if (raw.length === 0 && index === lines.length - 1) break;
-    const parsed = diffLine(raw, oldLine, newLine);
-    if (parsed === undefined || parsedLines.length >= GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK) {
-      malformed = true;
-    } else {
-      parsedLines.push(parsed);
-      if (parsed.kind === "ctx" || parsed.kind === "del") {
-        oldLine += 1;
-        oldConsumed += 1;
-      }
-      if (parsed.kind === "ctx" || parsed.kind === "add") {
-        newLine += 1;
-        newConsumed += 1;
-      }
-    }
+    accumulateHunkLine(accumulator, raw);
     index += 1;
   }
-  malformed ||= oldConsumed !== coordinates.oldCount || newConsumed !== coordinates.newCount;
-  return malformed
+  accumulator.malformed ||=
+    accumulator.oldConsumed !== coordinates.oldCount ||
+    accumulator.newConsumed !== coordinates.newCount;
+  return accumulator.malformed
     ? { next: index, malformed: true, fatal: false }
     : {
         next: index,
         malformed: false,
         fatal: false,
-        hunk: { ...coordinates, lines: parsedLines, truncated: false },
+        hunk: { ...coordinates, lines: accumulator.parsedLines, truncated: false },
       };
 }
 

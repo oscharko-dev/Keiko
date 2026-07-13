@@ -8,7 +8,15 @@ function writeAll(fd: number, data: Buffer): void {
   }
 }
 
-export function fsyncDirectoryContaining(path: string): void {
+function encodeUtf8(value: string): Buffer {
+  return Buffer.from(new TextEncoder().encode(value));
+}
+
+export function fsyncDirectoryContaining(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32") return;
   let fd: number | undefined;
   try {
     fd = openSync(dirname(path), "r");
@@ -24,7 +32,7 @@ export function writeDurableTempFile(path: string, content: string | Buffer, mod
   let fd: number | undefined;
   try {
     fd = openSync(path, "wx", mode);
-    writeAll(fd, typeof content === "string" ? Buffer.from(content, "utf8") : content);
+    writeAll(fd, typeof content === "string" ? encodeUtf8(content) : content);
     fsyncSync(fd);
   } finally {
     if (fd !== undefined) {

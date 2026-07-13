@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.c",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/macos-keychain-helper.c",
+      "language": "c",
+      "platforms": ["macos"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "keychain-boundary"]
+    },
+    {
+      "path": "scripts/windows-portable-rfc3161.cs",
+      "language": "csharp",
+      "platforms": ["windows"],
+      "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
+    }
+  ]
+}

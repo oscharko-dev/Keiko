@@ -91,7 +91,7 @@ export async function collectWorkspacePackages(root) {
   }
 
   const packages = [];
-  for (const dir of [...packageDirs].sort()) {
+  for (const dir of [...packageDirs].sort((a, b) => a.localeCompare(b))) {
     const pkg = await readWorkspacePackage(repoRootReal, dir);
     if (pkg) {
       packages.push(pkg);

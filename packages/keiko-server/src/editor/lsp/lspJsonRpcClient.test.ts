@@ -5,6 +5,7 @@ import {
   LspRpcCancelledError,
   LspRpcDisposedError,
   LspRpcTimeoutError,
+  LspServerRequestError,
   type LspRpcScheduler,
 } from "./lspJsonRpcClient.js";
 
@@ -82,9 +83,106 @@ function manualScheduler(): { scheduler: LspRpcScheduler; fireAll(): void; activ
 const tick = async (): Promise<void> => {
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 };
 
+function parsedMessages(sent: readonly string[]): Record<string, unknown>[] {
+  return sent.flatMap((body) => {
+    const parsed: unknown = JSON.parse(body);
+    return isRecord(parsed) ? [parsed] : [];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 describe("createLspJsonRpcClient", () => {
+  it("answers a bounded server-initiated request without confusing it for an outbound response", async () => {
+    const io = controllableSource();
+    const sent: string[] = [];
+    const client = createLspJsonRpcClient({
+      source: io.source,
+      sendFrame: (body) => sent.push(body),
+    });
+    client.onRequest((method, params) => ({ method, params }));
+
+    io.push({ jsonrpc: "2.0", id: 77, method: "workspace/configuration", params: { items: [] } });
+    await tick();
+
+    expect(parsedMessages(sent)).toContainEqual({
+      jsonrpc: "2.0",
+      id: 77,
+      result: { method: "workspace/configuration", params: { items: [] } },
+    });
+    expect(client.pendingCount()).toBe(0);
+  });
+
+  it("returns a content-free JSON-RPC error for denied server authority", async () => {
+    const io = controllableSource();
+    const sent: string[] = [];
+    const client = createLspJsonRpcClient({
+      source: io.source,
+      sendFrame: (body) => sent.push(body),
+    });
+    client.onRequest(() => {
+      throw new LspServerRequestError(-32601, "Server request denied");
+    });
+
+    io.push({
+      jsonrpc: "2.0",
+      id: "server-1",
+      method: "workspace/applyEdit",
+      params: { sentinel: "SENTINEL_SECRET_EDIT" },
+    });
+    await tick();
+
+    const response = parsedMessages(sent)[0];
+    expect(response).toEqual({
+      jsonrpc: "2.0",
+      id: "server-1",
+      error: { code: -32601, message: "Server request denied" },
+    });
+    expect(JSON.stringify(response)).not.toContain("SENTINEL_SECRET");
+  });
+
+  it("rejects excess concurrent server requests without retaining their bodies", async () => {
+    const io = controllableSource();
+    const sent: string[] = [];
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = createLspJsonRpcClient({
+      source: io.source,
+      sendFrame: (body) => sent.push(body),
+      maxConcurrentServerRequests: 1,
+    });
+    client.onRequest(async () => {
+      await blocked;
+      return null;
+    });
+
+    io.push({ jsonrpc: "2.0", id: 1, method: "workspace/configuration", params: {} });
+    io.push({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "workspace/configuration",
+      params: { sentinel: "SENTINEL_SECRET_FLOOD" },
+    });
+    await tick();
+
+    const overflow = parsedMessages(sent).find((message) => message.id === 2);
+    expect(overflow).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      error: { code: -32000, message: "Server request limit exceeded" },
+    });
+    expect(JSON.stringify(sent)).not.toContain("SENTINEL_SECRET");
+    release?.();
+  });
+
   it("resolves a request when a matching response arrives", async () => {
     const io = controllableSource();
     const sent: string[] = [];
@@ -166,6 +264,20 @@ describe("createLspJsonRpcClient", () => {
     io.push({ jsonrpc: "2.0", method: "window/logMessage", params: { type: 3 } });
     await tick();
     expect(received).toEqual([{ method: "window/logMessage", params: { type: 3 } }]);
+  });
+
+  it("multiplexes notification observers and supports bounded unsubscription", async () => {
+    const io = controllableSource();
+    const received: string[] = [];
+    const client = createLspJsonRpcClient({ source: io.source, sendFrame: () => undefined });
+    client.onNotification((method) => received.push(`persistent:${method}`));
+    const unsubscribe = client.onNotification((method) => received.push(`request:${method}`));
+    io.push({ jsonrpc: "2.0", method: "first", params: {} });
+    await tick();
+    unsubscribe();
+    io.push({ jsonrpc: "2.0", method: "second", params: {} });
+    await tick();
+    expect(received).toEqual(["persistent:first", "request:first", "persistent:second"]);
   });
 
   it("ignores malformed frames and unknown response ids", async () => {

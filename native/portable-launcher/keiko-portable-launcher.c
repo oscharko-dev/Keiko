@@ -57,50 +57,80 @@ static int quote_arg(wchar_t *out, size_t cap, const wchar_t *value) {
   return written > 0 && (size_t)written < cap;
 }
 
-int wmain(void) {
-  wchar_t root[32768];
-  DWORD len = GetModuleFileNameW(NULL, root, (DWORD)(sizeof(root) / sizeof(root[0])));
-  if (len == 0 || len >= (DWORD)(sizeof(root) / sizeof(root[0]))) {
+enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
+
+typedef struct {
+  wchar_t root[KEIKO_PATH_CAP];
+  wchar_t node[KEIKO_PATH_CAP];
+  wchar_t cli[KEIKO_PATH_CAP];
+  wchar_t quoted_node[KEIKO_PATH_CAP];
+  wchar_t quoted_cli[KEIKO_PATH_CAP];
+  wchar_t quoted_root[KEIKO_PATH_CAP];
+  wchar_t command[KEIKO_COMMAND_CAP];
+} keiko_launcher_buffers;
+
+static keiko_launcher_buffers *allocate_launcher_buffers(void) {
+  HANDLE heap = GetProcessHeap();
+  if (heap == NULL) {
+    return NULL;
+  }
+  return HeapAlloc(heap, HEAP_ZERO_MEMORY, sizeof(keiko_launcher_buffers));
+}
+
+static void free_launcher_buffers(keiko_launcher_buffers *buffers) {
+  HANDLE heap = GetProcessHeap();
+  if (heap != NULL && buffers != NULL) {
+    (void)HeapFree(heap, 0, buffers);
+  }
+}
+
+static int run_launcher(keiko_launcher_buffers *buffers) {
+  DWORD len = GetModuleFileNameW(NULL, buffers->root, KEIKO_PATH_CAP);
+  if (len == 0 || len >= (DWORD)KEIKO_PATH_CAP) {
     return 1;
   }
-  if (!dirname_in_place(root)) {
+  if (!dirname_in_place(buffers->root)) {
     return 1;
   }
 
-  wchar_t node[32768];
-  wchar_t cli[32768];
-  if (!append_path(node, sizeof(node) / sizeof(node[0]), root, L"\\runtime\\node\\node.exe")) {
+  if (!append_path(
+        buffers->node,
+        KEIKO_PATH_CAP,
+        buffers->root,
+        L"\\runtime\\node\\node.exe"
+      )) {
     return 1;
   }
-  if (!append_path(cli, sizeof(cli) / sizeof(cli[0]), root, L"\\app\\dist\\cli\\index.js")) {
-    return 1;
-  }
-
-  wchar_t qnode[32768];
-  wchar_t qcli[32768];
-  wchar_t qroot[32768];
-  if (!quote_arg(qnode, sizeof(qnode) / sizeof(qnode[0]), node)) {
-    return 1;
-  }
-  if (!quote_arg(qcli, sizeof(qcli) / sizeof(qcli[0]), cli)) {
-    return 1;
-  }
-  if (!quote_arg(qroot, sizeof(qroot) / sizeof(qroot[0]), root)) {
+  if (!append_path(
+        buffers->cli,
+        KEIKO_PATH_CAP,
+        buffers->root,
+        L"\\app\\dist\\cli\\index.js"
+      )) {
     return 1;
   }
 
-  wchar_t command[98304];
+  if (!quote_arg(buffers->quoted_node, KEIKO_PATH_CAP, buffers->node)) {
+    return 1;
+  }
+  if (!quote_arg(buffers->quoted_cli, KEIKO_PATH_CAP, buffers->cli)) {
+    return 1;
+  }
+  if (!quote_arg(buffers->quoted_root, KEIKO_PATH_CAP, buffers->root)) {
+    return 1;
+  }
+
   int written = _snwprintf_s(
-    command,
-    sizeof(command) / sizeof(command[0]),
+    buffers->command,
+    KEIKO_COMMAND_CAP,
     _TRUNCATE,
     L"%ls %ls portable launch --target %ls --portable-root %ls",
-    qnode,
-    qcli,
+    buffers->quoted_node,
+    buffers->quoted_cli,
     KEIKO_WIDEN(KEIKO_PORTABLE_TARGET),
-    qroot
+    buffers->quoted_root
   );
-  if (written <= 0 || (size_t)written >= sizeof(command) / sizeof(command[0])) {
+  if (written <= 0 || (size_t)written >= KEIKO_COMMAND_CAP) {
     return 1;
   }
 
@@ -109,7 +139,18 @@ int wmain(void) {
   ZeroMemory(&startup, sizeof(startup));
   ZeroMemory(&process, sizeof(process));
   startup.cb = sizeof(startup);
-  if (!CreateProcessW(node, command, NULL, NULL, FALSE, 0, NULL, root, &startup, &process)) {
+  if (!CreateProcessW(
+        buffers->node,
+        buffers->command,
+        NULL,
+        NULL,
+        FALSE,
+        0,
+        NULL,
+        buffers->root,
+        &startup,
+        &process
+      )) {
     return 1;
   }
   WaitForSingleObject(process.hProcess, INFINITE);
@@ -118,6 +159,16 @@ int wmain(void) {
   CloseHandle(process.hThread);
   CloseHandle(process.hProcess);
   return (int)exit_code;
+}
+
+int wmain(void) {
+  keiko_launcher_buffers *buffers = allocate_launcher_buffers();
+  if (buffers == NULL) {
+    return 1;
+  }
+  int exit_code = run_launcher(buffers);
+  free_launcher_buffers(buffers);
+  return exit_code;
 }
 
 #else

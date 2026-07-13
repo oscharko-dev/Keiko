@@ -70,6 +70,18 @@ function allowLocalProofSkip(): boolean {
   return process.env.CI !== "true" && process.env.KEIKO_ALLOW_EGRESS_PROOF_SKIP === "1";
 }
 
+function failedBeforeNetworkProbe(runResult: ChildRun): boolean {
+  return runResult.stdout.length === 0 && runResult.status !== 0;
+}
+
+function backendStartupFailureMessage(runResult: ChildRun): string {
+  return (
+    `[egress-proof] selected backend stopped before the network probe ran ` +
+    `(status=${String(runResult.status)}, stderr=${JSON.stringify(runResult.stderr)}); ` +
+    `command execution fails closed.`
+  );
+}
+
 const availability = probeBackends();
 const platform = currentPlatform();
 const plan: IsolatedRunPlan = {
@@ -105,13 +117,13 @@ describe("enforced network egress (ADR-0043 / #1202)", () => {
 
       // The enforced run: the child must be unable to reach the remote host.
       const isolated = run(decision.command, decision.args);
-      if (isolated.stdout.length === 0 && process.env.CI !== "true") {
-        note(
-          `[egress-proof] selected backend did not start locally (status=${String(
-            isolated.status,
-          )}, stderr=${JSON.stringify(isolated.stderr)}); command execution fails closed.`,
-        );
-        return;
+      if (failedBeforeNetworkProbe(isolated)) {
+        const message = backendStartupFailureMessage(isolated);
+        if (process.env.CI !== "true") {
+          note(message);
+          return;
+        }
+        throw new Error(`${message} A functional sandbox backend is required in CI.`);
       }
       expect(decision.attestation.networkEnforced).toBe(true);
       expect(["BLOCKED", "TIMEOUT"]).toContain(isolated.stdout);
@@ -192,4 +204,27 @@ describe("enforced filesystem containment (ADR-0043 / #1202)", () => {
       rmSync(temp, { recursive: true, force: true });
     }
   }, 45_000);
+});
+
+describe("egress-proof backend startup handling", () => {
+  it("distinguishes backend startup crashes from successful network-denial probes", () => {
+    expect(failedBeforeNetworkProbe({ status: 1, stdout: "", stderr: "bubblewrap failed" })).toBe(
+      true,
+    );
+    expect(failedBeforeNetworkProbe({ status: null, stdout: "", stderr: "spawn failed" })).toBe(
+      true,
+    );
+    expect(failedBeforeNetworkProbe({ status: 3, stdout: "BLOCKED", stderr: "" })).toBe(false);
+    expect(failedBeforeNetworkProbe({ status: 3, stdout: "TIMEOUT", stderr: "" })).toBe(false);
+  });
+
+  it("surfaces the backend startup failure reason for CI diagnostics", () => {
+    expect(
+      backendStartupFailureMessage({
+        status: 1,
+        stdout: "",
+        stderr: "user namespaces disabled",
+      }),
+    ).toContain("selected backend stopped before the network probe ran");
+  });
 });

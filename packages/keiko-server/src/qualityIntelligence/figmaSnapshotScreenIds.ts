@@ -16,6 +16,8 @@
 //     stable regardless of the order or duplicates the client sent, and dedupe across reconnections and
 //     re-check is exact.
 
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
+
 /** Upper bound on the number of scoped screen ids in one figma-snapshot source (DoS / payload guard). */
 export const MAX_FIGMA_SCREEN_IDS = 200;
 
@@ -78,5 +80,5 @@ export function parseFigmaSnapshotScreenIds(raw: unknown): FigmaScreenIdsResult 
   }
   // Canonical: dedupe (Set) + sort so the derived envelope id / provenance ref is order- and
   // duplicate-stable, and dedupe across reconnections / re-check is exact.
-  return { ok: true, screenIds: [...seen].sort() };
+  return { ok: true, screenIds: sortedStrings(seen) };
 }

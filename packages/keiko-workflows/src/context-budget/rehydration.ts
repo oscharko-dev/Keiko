@@ -67,7 +67,7 @@ function clampToBytes(text: string, maxBytes: number): { content: string; trunca
   }
   const buffer = encoded.subarray(0, maxBytes);
   return {
-    content: new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/�+$/u, ""),
+    content: new TextDecoder().decode(buffer).replace(/\uFFFD$/u, ""),
     truncated: true,
   };
 }

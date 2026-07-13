@@ -17,6 +17,7 @@ const EXPECTED_TIMEOUT_MS = 15_000;
 const CONFIGS = [
   { name: "root suite", path: "vitest.config.ts" },
   { name: "package coverage gate", path: "vitest.coverage.packages.config.ts" },
+  { name: "script coverage gate", path: "vitest.coverage.scripts.config.ts" },
   { name: "keiko-ui coverage gate", path: "packages/keiko-ui/vitest.coverage.config.ts" },
   { name: "keiko-ui suite", path: "packages/keiko-ui/vitest.config.ts" },
 ];

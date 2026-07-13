@@ -59,6 +59,10 @@ import {
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
 import {
+  createWorkspaceScriptTrustService,
+  type WorkspaceScriptTrustService,
+} from "./workspace-script-trust.js";
+import {
   createUpdateSessionManager,
   type UpdateCompletionGate,
   type UpdateSessionManager,
@@ -193,6 +197,23 @@ import {
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
+import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
+import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
+import { createNodeEditorSettingsControl } from "./editor/settings/editorSettingsControlFactory.js";
+import type { EditorSettingsControlService } from "./editor/settings/editorSettingsControl.js";
+import {
+  createEditorSettingsEventBus,
+  type EditorSettingsEventBus,
+} from "./editor/settings/editorSettingsEvents.js";
+import {
+  createWorkspaceWatchService,
+  type WorkspaceWatchService,
+} from "./editor/watch/workspaceWatchService.js";
+import {
+  createWorkspaceSnippetsService,
+  type WorkspaceSnippetsService,
+} from "./editor/snippets/workspaceSnippetsService.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -364,7 +385,7 @@ export interface UiHandlerDeps {
   // Releases process-lifetime resources owned by these deps (today: the shared node:sqlite
   // handle, closed with an explicit WAL checkpoint instead of relying on process exit).
   // Optional and idempotent; hosts call it once the HTTP server has fully shut down.
-  readonly dispose?: (() => void) | undefined;
+  readonly dispose?: (() => void | Promise<void>) | undefined;
   // Project path selected by the process that launched this loopback UI. When set, /api/projects
   // reports this project first so first-run UI state cannot drift to stale persisted rows.
   readonly preferredProjectPath?: string | undefined;
@@ -376,6 +397,7 @@ export interface UiHandlerDeps {
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
   readonly verificationRunner?: VerificationRunnerManager | undefined;
+  readonly workspaceScriptTrust?: WorkspaceScriptTrustService | undefined;
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -441,6 +463,17 @@ export interface UiHandlerDeps {
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
+  // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
+  // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
+  readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Epic #2095 / Issue #2318 — canonical server-owned editor settings control plane.
+  // Optional for legacy dependency fixtures; production wires it over the same private state dir.
+  readonly editorSettingsControl?: EditorSettingsControlService | undefined;
+  readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
+  // Epic #2095 / Issue #2319 — root-scoped workspace watch/reconciliation service.
+  readonly workspaceWatchService?: WorkspaceWatchService | undefined;
+  // Epic #2095 / Issue #2323 — governed workspace snippets.
+  readonly workspaceSnippets?: WorkspaceSnippetsService | undefined;
   // Test-only runtime detector seams. Production leaves this undefined so detection uses
   // metadata-only PATH scanning plus contained manifest reads.
   readonly runtimeCapabilityRouteOptions?: RuntimeCapabilityRouteOptions | undefined;
@@ -559,6 +592,7 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  readonly workspaceScriptTrust?: WorkspaceScriptTrustService | undefined;
   // Optional injected registry (tests); a fresh bounded registry is created otherwise.
   readonly registry?: RunRegistry | undefined;
   // Optional injected ModelPort factory (tests); the GatewayModelPort builder is used otherwise.
@@ -597,6 +631,13 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Deterministic activation-control seam for route/bootstrap tests.
+  readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Deterministic editor-settings control seam for route/bootstrap tests.
+  readonly editorSettingsControl?: EditorSettingsControlService | undefined;
+  readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
+  readonly workspaceWatchService?: WorkspaceWatchService | undefined;
+  readonly workspaceSnippets?: WorkspaceSnippetsService | undefined;
   // Optional injected governed update remediation manager (tests); production composes one over
   // updateLocalState and the Local Knowledge reindex port.
   readonly updateRemediation?: UpdateRemediationManager | undefined;
@@ -1098,11 +1139,14 @@ function buildCommandRunner(options: {
   readonly evidenceStore: EvidenceStore;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): CommandRunnerManager {
   return createCommandRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
+    isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
+      options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1110,11 +1154,9 @@ function buildCommandRunner(options: {
   });
 }
 
-// Issue #2211 — the editor verification runner reuses the same project store as the command runner.
-// The workspace-trust decider is intentionally left at its fail-closed `() => false` default, matching
-// buildCommandRunner's current production wiring, until a future issue wires a real trust source for
-// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
-// OWN redactor (below) only guards the persisted evidence entry, mirroring buildCommandRunner.
+// The editor verification runner and command runner receive the same server-owned, manifest-bound
+// trust service. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
+// own redactor below guards persisted evidence, mirroring buildCommandRunner.
 //
 // Issue #2211 fix-up (Epic #2092): also wires the SAME evidenceStore + live-redactor construction
 // pattern buildCommandRunner uses, so every finished verification run writes a content-free audit
@@ -1123,10 +1165,13 @@ function buildVerificationRunner(options: {
   readonly store: UiStore;
   readonly evidenceStore: EvidenceStore;
   readonly liveRedactor: Redactor;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): VerificationRunnerManager {
   return createVerificationRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
+    isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
+      options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1540,6 +1585,7 @@ interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
   readonly verificationRunner: VerificationRunnerManager;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly updateSession: UpdateSessionManager;
   readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
@@ -1548,6 +1594,11 @@ interface PeripheralManagers {
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
+  readonly managedLspControl: ManagedLspControlService;
+  readonly editorSettingsControl: EditorSettingsControlService;
+  readonly editorSettingsEvents: EditorSettingsEventBus;
+  readonly workspaceWatchService: WorkspaceWatchService;
+  readonly workspaceSnippets: WorkspaceSnippetsService;
   readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
@@ -1604,6 +1655,16 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
+  const workspaceScriptTrust =
+    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
+  const managedLspControl =
+    args.options.managedLspControl ??
+    createNodeManagedLspControl({
+      stateDir: args.runtimeStateDir,
+      processEnv: args.options.env,
+      redact: args.liveRedactor,
+      evidenceStore: args.evidenceStore,
+    });
   return {
     terminal: buildTerminalManager({
       store: args.uiStore,
@@ -1616,12 +1677,15 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       evidenceStore: args.evidenceStore,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      workspaceScriptTrust,
     }),
     verificationRunner: buildVerificationRunner({
       store: args.uiStore,
       evidenceStore: args.evidenceStore,
       liveRedactor: args.liveRedactor,
+      workspaceScriptTrust,
     }),
+    workspaceScriptTrust,
     updateSession: buildUpdateSession({
       injected: args.options.updateSession,
       env: args.options.env,
@@ -1650,6 +1714,22 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       createEditorHotExitStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
+      }),
+    managedLspControl,
+    editorSettingsControl:
+      args.options.editorSettingsControl ??
+      createNodeEditorSettingsControl({
+        stateDir: args.runtimeStateDir,
+        managedLspControl,
+        processEnv: args.options.env,
+      }),
+    editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
+    workspaceWatchService: args.options.workspaceWatchService ?? createWorkspaceWatchService(),
+    workspaceSnippets:
+      args.options.workspaceSnippets ??
+      createWorkspaceSnippetsService({
+        stateDir: args.runtimeStateDir,
+        mutex: createWorkspaceMutexRegistry(),
       }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
@@ -1996,6 +2076,19 @@ function atlassianConnectorCredentialFields(
 }
 
 // eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
+function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralManagers {
+  return buildPeripherals({
+    options: args.options,
+    uiStore: args.bundle.uiStore,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
+    liveRedactor: args.liveRedactor,
+    runtimeConfig: args.runtimeConfig,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    runtimeStateDir: dirname(args.resolvedUiDbPath),
+  });
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const codingRuntimeEvidenceAggregator = createCodingRuntimeEvidenceAggregator(
     args.codingWorkbenchEvidenceStore,
@@ -2014,6 +2107,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
             : {}),
         })
       : undefined;
+  const peripherals = buildAssemblyPeripherals(args);
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2085,19 +2179,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
-    ...buildPeripherals({
-      options: args.options,
-      uiStore: args.bundle.uiStore,
-      evidenceStore: args.evidenceStore,
-      redactString: args.redactString,
-      liveRedactor: args.liveRedactor,
-      runtimeConfig: args.runtimeConfig,
-      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
-      runtimeStateDir: dirname(args.resolvedUiDbPath),
-    }),
+    ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
-    ...(args.bundle.dispose !== undefined ? { dispose: args.bundle.dispose } : {}),
+    dispose: async (): Promise<void> => {
+      await shutdownHostLspPool();
+      peripherals.workspaceWatchService.disposeAll();
+      args.bundle.dispose?.();
+    },
   };
 }
 

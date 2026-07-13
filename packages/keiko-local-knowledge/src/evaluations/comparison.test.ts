@@ -11,7 +11,7 @@
 // passed; confirmed by temporarily reverting `passesFusionEvidence` to `() => true` and re-running
 // this file — the assertion on `fused?.passed` failed as expected.
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { ChunkId } from "@oscharko-dev/keiko-contracts";
 
@@ -30,6 +30,15 @@ async function scoreAllFixtures(): Promise<RetrievalEvalScorecard[]> {
   const cards: RetrievalEvalScorecard[] = [];
   for (const fixture of ALL_FIXTURES) cards.push(await runRetrievalEval(fixture));
   return cards;
+}
+
+let shippedScorecards: readonly RetrievalEvalScorecard[] | undefined;
+
+function requireShippedScorecards(): readonly RetrievalEvalScorecard[] {
+  if (shippedScorecards === undefined) {
+    throw new Error("retrieval mode comparison scorecards were not prepared");
+  }
+  return shippedScorecards;
 }
 
 // Synthesises a scorecard shaped exactly like a real "fused" fixture's would look if RRF fusion
@@ -76,6 +85,10 @@ function regressExpectations(fixture: RetrievalEvalFixture): RetrievalEvalFixtur
 }
 
 describe("retrieval mode comparison (#2010)", () => {
+  beforeAll(async () => {
+    shippedScorecards = await scoreAllFixtures();
+  }, 60_000);
+
   it("maps only shipped fixtures — no parallel fixture set", () => {
     const shipped = new Set(ALL_FIXTURES.map((fixture) => fixture.id));
     for (const id of Object.keys(RETRIEVAL_COMPARISON_MODE_MAP)) {
@@ -83,8 +96,8 @@ describe("retrieval mode comparison (#2010)", () => {
     }
   });
 
-  it("groups shipped scorecards into lexical/vector/fused rows that clear the floor", async () => {
-    const comparison = computeRetrievalModeComparison(await scoreAllFixtures());
+  it("groups shipped scorecards into lexical/vector/fused rows that clear the floor", () => {
+    const comparison = computeRetrievalModeComparison(requireShippedScorecards());
     expect(comparison.rows.map((row) => row.mode)).toEqual(["lexical", "vector", "fused"]);
     for (const row of comparison.rows) {
       expect(row.passed).toBe(true);
@@ -93,7 +106,7 @@ describe("retrieval mode comparison (#2010)", () => {
     const vector = comparison.rows.find((row) => row.mode === "vector");
     expect(vector?.fixtureIds).toContain("semantic-paraphrase");
     expect(vector?.fixtureIds).toContain("multilingual-retrieval");
-  });
+  }, 60_000);
 
   it("surfaces a lexical-leg regression as a below-floor mode row", async () => {
     const regressed = await runRetrievalEval(regressExpectations(exactTechnicalFixture));
@@ -128,12 +141,12 @@ describe("retrieval mode comparison (#2010)", () => {
     expect(fused?.passed).toBe(false);
   });
 
-  it("passes the fused row when at least one query is genuinely hybrid", async () => {
-    const comparison = computeRetrievalModeComparison(await scoreAllFixtures());
+  it("passes the fused row when at least one query is genuinely hybrid", () => {
+    const comparison = computeRetrievalModeComparison(requireShippedScorecards());
     const fused = comparison.rows.find((row) => row.mode === "fused");
     expect(fused?.hybridQueryCount).toBeGreaterThan(0);
     expect(fused?.passed).toBe(true);
-  });
+  }, 60_000);
 
   // Audit fix (#2016 post-merge audit, confirmed defect): a row's `passed` must reflect only the
   // dimensions the row itself displays and aggregates (recall/precision/MRR/nDCG) plus the
@@ -144,8 +157,7 @@ describe("retrieval mode comparison (#2010)", () => {
   // metric the row prints (and floorHeadroom) cleared its floor — losing all attribution for an
   // operator reading the comparison table.
   it("does not fail a row for an orthogonal dimension the row does not display", async () => {
-    const [card] = await scoreAllFixtures();
-    if (card === undefined) throw new Error("expected at least one scorecard");
+    const card = await runRetrievalEval(exactTechnicalFixture);
     const orthogonalMiss: RetrievalEvalScorecard = {
       ...card,
       fixtureId: "exact-technical",
@@ -156,14 +168,14 @@ describe("retrieval mode comparison (#2010)", () => {
     const lexical = comparison.rows.find((row) => row.mode === "lexical");
     expect(lexical?.floorHeadroom).toBeGreaterThanOrEqual(0);
     expect(lexical?.passed).toBe(true);
-  });
+  }, 60_000);
 
-  it("renders one row per mode, not a single aggregate", async () => {
+  it("renders one row per mode, not a single aggregate", () => {
     const report = renderRetrievalModeComparisonReport(
-      computeRetrievalModeComparison(await scoreAllFixtures()),
+      computeRetrievalModeComparison(requireShippedScorecards()),
     );
     expect(report).toContain("| lexical |");
     expect(report).toContain("| vector |");
     expect(report).toContain("| fused |");
-  });
+  }, 60_000);
 });

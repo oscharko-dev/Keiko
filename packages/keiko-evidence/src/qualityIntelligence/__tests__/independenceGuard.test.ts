@@ -11,9 +11,10 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const QI_SRC_DIR = new URL("..", import.meta.url).pathname;
+const QI_SRC_DIR = fileURLToPath(new URL("..", import.meta.url));
 
 // Disjoint-fragment construction so the literal substrings never appear in this source file.
 const NS_PREFIX = "@oscharko-dev/";

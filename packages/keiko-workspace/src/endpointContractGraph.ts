@@ -107,7 +107,7 @@ function javaFieldNames(fields: string): readonly string[] {
     .split(",")
     .map((entry) => /([A-Za-z_$][\w$]*)\s*$/u.exec(entry.trim())?.[1])
     .filter((field): field is string => field !== undefined)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function tsFieldNames(fields: string): readonly string[] {
@@ -118,7 +118,7 @@ function tsFieldNames(fields: string): readonly string[] {
     if (match[1] !== undefined) out.push(match[1]);
     match = regex.exec(fields);
   }
-  return [...new Set(out)].sort();
+  return [...new Set(out)].sort((a, b) => a.localeCompare(b));
 }
 
 function addDtoShape(

@@ -75,11 +75,11 @@ deployment-facing material lives in the editor documentation set:
 ## Embedding the editor without `keiko-ui`
 
 `@oscharko-dev/keiko-editor` is reusable outside `keiko-ui` (ADR-0042 D1): it owns editor rendering
-only and reaches every governed capability through host-injected callbacks, so any React 18 host can
+only and reaches every governed capability through host-injected callbacks, so any React 19 host can
 embed it. A standalone host performs three steps — install the local Monaco runtime once, implement
 the host port, and render the controlled `KeikoCodeEditor`.
 
-The package declares `react` and `react-dom` (`^18.3.1`) as **peer** dependencies and pins
+The package declares `react` and `react-dom` (`^19.2.7`) as **peer** dependencies and pins
 `monaco-editor` (`0.55.1`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
 a browser-only module that imports CSS, so the editor surface must be loaded behind a client-only
 boundary (for example `next/dynamic(..., { ssr: false })` or an equivalent lazy import) — never during
@@ -401,7 +401,7 @@ All dependencies are pinned and permissively licensed. The package manifest decl
 | `@monaco-editor/react`          | `4.7.0`        | MIT        | React lifecycle wrapper for Monaco. Its default loader fetches Monaco from a CDN unless configured.                                       |
 | `@monaco-editor/loader`         | `1.7.0`        | MIT        | Transitive loader used by `@monaco-editor/react`; pinned via a root `overrides` entry.                                                    |
 | `@oscharko-dev/keiko-contracts` | workspace      | Apache-2.0 | Shared contracts. Imported **type-only** (`WorkspaceLanguage`, `FileContent`); no value import.                                           |
-| `react`, `react-dom`            | `^18.3.1` peer | MIT        | Provided by the host (`keiko-ui` ships React 18.3.1). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
+| `react`, `react-dom`            | `^19.2.7` peer | MIT        | Provided by the host (`keiko-ui` ships React 19.2.7). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
 
 Notes:
 

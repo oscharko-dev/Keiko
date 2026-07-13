@@ -127,6 +127,7 @@ interface SyntheticEvent {
   readonly type: string;
   readonly request: { readonly method: string; readonly url: string; readonly mode?: string };
   readonly data?: unknown;
+  readonly origin?: string;
   respondWith(value: Response | Promise<Response>): void;
   waitUntil(value: Promise<unknown>): void;
 }
@@ -212,11 +213,16 @@ function makeEvent(type: string, url: string, sandbox: SwSandbox, mode?: string)
   };
 }
 
-function makeMessageEvent(data: unknown, sandbox: SwSandbox): SyntheticEvent {
+function makeMessageEvent(
+  data: unknown,
+  sandbox: SwSandbox,
+  origin: string = "http://localhost:3000",
+): SyntheticEvent {
   return {
     type: "message",
     request: { method: "GET", url: "http://localhost:3000/" },
     data,
+    origin,
     respondWith(value: Response | Promise<Response>): void {
       sandbox.respondWithCalls.push(value);
     },
@@ -363,5 +369,26 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
 
     expect(skipWaiting).toHaveBeenCalledOnce();
     expect(sandbox.respondWithCalls).toHaveLength(1);
+  });
+
+  it("ignores an activation message from a cross-origin source (SonarCloud S2819)", () => {
+    const { context, sandbox } = makeSandbox();
+    const skipWaiting = vi.fn().mockResolvedValue(undefined);
+    context.self = { ...(context.self as object), skipWaiting };
+    vm.runInContext(SW_SOURCE, context);
+
+    const messageHandler = sandbox.handlers.get("message");
+    expect(messageHandler).toBeDefined();
+
+    messageHandler?.(
+      makeMessageEvent(
+        { type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER" },
+        sandbox,
+        "https://attacker.example",
+      ),
+    );
+
+    expect(skipWaiting).not.toHaveBeenCalled();
+    expect(sandbox.respondWithCalls).toHaveLength(0);
   });
 });

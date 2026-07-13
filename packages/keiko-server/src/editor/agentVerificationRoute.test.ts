@@ -5,6 +5,7 @@
 
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
@@ -12,6 +13,7 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   type CodingWorkbenchActionClass,
   type CodingWorkbenchAuthorityEnvelope,
+  type EditorAgentActionPolicyDecision,
   type EditorAgentSessionSnapshot,
   type VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
@@ -87,12 +89,15 @@ function envelope(
   };
 }
 
-function registerAuthority(actionClasses?: readonly CodingWorkbenchActionClass[]): {
+function registerAuthority(
+  actionClasses?: readonly CodingWorkbenchActionClass[],
+  over: Partial<CodingWorkbenchAuthorityEnvelope> = {},
+): {
   runId: string;
   envelopeDigest: string;
 } {
   const registration = editorAgentAuthorityRegistry.register(
-    envelope(actionClasses === undefined ? {} : { actionClasses }),
+    envelope({ ...over, ...(actionClasses === undefined ? {} : { actionClasses }) }),
     CEILING,
     new Date().toISOString(),
   );
@@ -163,6 +168,8 @@ class FakeManager implements VerificationRunnerManager {
   public lastSignal: AbortSignal | undefined;
   public report: VerificationReport = failingReport();
   public failWith: Error | undefined;
+  public onRun:
+    ((input: VerificationRunInput, signal: AbortSignal) => Promise<VerificationReport>) | undefined;
 
   public readonly discover = (): never => {
     throw new Error("discover not exercised");
@@ -181,6 +188,7 @@ class FakeManager implements VerificationRunnerManager {
     this.lastInput = input;
     this.lastSignal = signal;
     if (this.failWith !== undefined) return Promise.reject(this.failWith);
+    if (this.onRun !== undefined) return this.onRun(input, signal);
     return Promise.resolve(this.report);
   };
 }
@@ -193,21 +201,34 @@ function deps(manager: VerificationRunnerManager | undefined): UiHandlerDeps {
 }
 
 function fakeReq(body: Record<string, unknown>): IncomingMessage {
-  const req = new EventEmitter() as unknown as IncomingMessage;
+  const req = Object.assign(new EventEmitter(), {
+    aborted: false,
+    complete: false,
+    destroyed: false,
+  }) as unknown as IncomingMessage;
   queueMicrotask(() => {
     req.emit("data", Buffer.from(JSON.stringify(body), "utf8"));
+    (req as { complete: boolean }).complete = true;
     req.emit("end");
   });
   return req;
 }
 
-function ctx(body: Record<string, unknown>): RouteContext {
+function routeContext(body: Record<string, unknown>): RouteContext {
+  const res = Object.assign(new EventEmitter(), {
+    writableEnded: false,
+    destroyed: false,
+  }) as unknown as ServerResponse;
   return {
     req: fakeReq(body),
-    res: undefined,
+    res,
     params: {},
     url: new URL("http://127.0.0.1:1983/api/editor/verification/agent-runs"),
-  } as unknown as RouteContext;
+  };
+}
+
+function ctx(body: Record<string, unknown>): RouteContext {
+  return routeContext(body);
 }
 
 function resultBody(result: { status: number; body: unknown }): Record<string, unknown> {
@@ -238,11 +259,34 @@ describe("handleEditorAgentVerificationRun preconditions", () => {
   });
 
   it("400s on a malformed request body", async () => {
+    const authorityRef = registerAuthority(undefined, {
+      budget: {
+        maxRuntimeMs: 3_600_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 65_536,
+      },
+    });
+    const manager = new FakeManager();
     const result = await handleEditorAgentVerificationRun(
-      ctx({ sessionId: SESSION_ID, kind: "not-a-kind" }),
-      deps(new FakeManager()),
+      ctx({
+        schemaVersion: "1",
+        sessionId: SESSION_ID,
+        kind: "targeted-test",
+        authorityRef,
+      }),
+      deps(manager),
     );
     expect(result).toMatchObject({ status: 400 });
+    expect(manager.calls).toBe(0);
+    expect(listEditorAgentActionAudit(SESSION_ID)).toHaveLength(0);
+
+    const valid = await handleEditorAgentVerificationRun(
+      ctx({ schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef }),
+      deps(manager),
+    );
+    expect(valid).toMatchObject({ status: 200 });
+    expect(manager.calls).toBe(1);
   });
 
   it("404s when no governed session matches the request", async () => {
@@ -266,7 +310,7 @@ describe("handleEditorAgentVerificationRun governance (AC2–AC4)", () => {
       ctx({
         schemaVersion: "1",
         sessionId: SESSION_ID,
-        kind: "typecheck",
+        kind: "targeted-test",
         targetPath: ".env",
         authorityRef,
       }),
@@ -308,6 +352,28 @@ describe("handleEditorAgentVerificationRun governance (AC2–AC4)", () => {
     );
     expect(manager.calls).toBe(0);
     expect(resultBody(result)).toMatchObject({ outcome: "not-run", disposition: "denied" });
+  });
+
+  it("does not dispatch a review-required request", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const reviewRequired: EditorAgentActionPolicyDecision = {
+      disposition: "review-required",
+      effectClass: "execution",
+      origin: "agent",
+      reviewReason: "mode-approval-required",
+    };
+    const result = await handleEditorAgentVerificationRun(
+      ctx({ schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef }),
+      deps(manager),
+      { decide: () => reviewRequired },
+    );
+    expect(manager.calls).toBe(0);
+    expect(resultBody(result)).toEqual({
+      outcome: "not-run",
+      disposition: "review-required",
+      reason: "mode-approval-required",
+    });
   });
 });
 
@@ -369,12 +435,77 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
       effectClass: "execution",
       mutating: false,
       disposition: "allowed",
-      outcome: "succeeded",
+      outcome: "queued",
     });
     // Content-free: no raw output, no counts of the verification's own pass/fail results.
     const serialized = JSON.stringify(record);
     expect(serialized).not.toContain("SECRET_VALUE");
     expect(serialized).not.toContain("outputSummary");
+  });
+
+  it("writes the admission audit before dispatch", async () => {
+    const manager = new FakeManager();
+    manager.onRun = (): Promise<VerificationReport> => {
+      expect(listEditorAgentActionAudit(SESSION_ID)).toMatchObject([
+        { actionType: "requestVerification", disposition: "allowed", outcome: "queued" },
+      ]);
+      return Promise.resolve(failingReport());
+    };
+    const authorityRef = registerAuthority();
+    await handleEditorAgentVerificationRun(
+      ctx({ schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef }),
+      deps(manager),
+    );
+    expect(manager.calls).toBe(1);
+  });
+
+  it("fails closed without dispatch when the mandatory admission audit cannot be written", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const result = await handleEditorAgentVerificationRun(
+      ctx({ schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef }),
+      deps(manager),
+      { audit: () => null },
+    );
+    expect(result).toMatchObject({ status: 503 });
+    expect(manager.calls).toBe(0);
+  });
+
+  it("rolls back the authority charge when the admission audit fails", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority(undefined, {
+      budget: {
+        maxRuntimeMs: 3_600_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 65_536,
+      },
+    });
+    const request = { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef };
+
+    const failedAudit = await handleEditorAgentVerificationRun(ctx(request), deps(manager), {
+      audit: () => null,
+    });
+    const retry = await handleEditorAgentVerificationRun(ctx(request), deps(manager));
+
+    expect(failedAudit).toMatchObject({ status: 503 });
+    expect(retry).toMatchObject({ status: 200 });
+    expect(manager.calls).toBe(1);
+  });
+
+  it("retains the admission audit when the runner fails", async () => {
+    const manager = new FakeManager();
+    manager.failWith = new Error("runner failed");
+    const authorityRef = registerAuthority();
+    await expect(
+      handleEditorAgentVerificationRun(
+        ctx({ schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef }),
+        deps(manager),
+      ),
+    ).rejects.toThrow("runner failed");
+    expect(listEditorAgentActionAudit(SESSION_ID)).toMatchObject([
+      { actionType: "requestVerification", disposition: "allowed", outcome: "queued" },
+    ]);
   });
 
   it("records exactly one audit entry for a denied request", async () => {
@@ -391,5 +522,86 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
       disposition: "denied",
       outcome: "conflict",
     });
+  });
+});
+
+function cancelledReport(): VerificationReport {
+  const failing = failingReport();
+  const result = failing.results[0];
+  if (result === undefined) throw new Error("Expected the fixture report to contain one result.");
+  return {
+    ...failing,
+    overallStatus: "cancelled",
+    counts: {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 1,
+      "resource-exceeded": 0,
+    },
+    results: [{ ...result, status: "cancelled" }],
+  };
+}
+
+function waitForAbort(signal: AbortSignal): Promise<VerificationReport> {
+  if (signal.aborted) return Promise.resolve(cancelledReport());
+  return new Promise((resolve) => {
+    signal.addEventListener(
+      "abort",
+      () => {
+        resolve(cancelledReport());
+      },
+      { once: true },
+    );
+  });
+}
+
+describe("handleEditorAgentVerificationRun disconnect cancellation", () => {
+  it.each(["request aborted", "response closed"])(
+    "cancels an in-flight run when the %s",
+    async (event) => {
+      const manager = new FakeManager();
+      let started: (() => void) | undefined;
+      const didStart = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      manager.onRun = (_input, signal): Promise<VerificationReport> => {
+        started?.();
+        return waitForAbort(signal);
+      };
+      const authorityRef = registerAuthority();
+      const context = routeContext({
+        schemaVersion: "1",
+        sessionId: SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      });
+      const pending = handleEditorAgentVerificationRun(context, deps(manager));
+      await didStart;
+      if (event === "request aborted") context.req.emit("aborted");
+      else context.res.emit("close");
+      await pending;
+      expect(manager.lastSignal?.aborted).toBe(true);
+    },
+  );
+
+  it("does not treat normal request end/close as a disconnect", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const context = routeContext({
+      schemaVersion: "1",
+      sessionId: SESSION_ID,
+      kind: "typecheck",
+      authorityRef,
+    });
+    manager.onRun = (_input, signal): Promise<VerificationReport> => {
+      context.req.emit("close");
+      expect(signal.aborted).toBe(false);
+      return Promise.resolve(failingReport());
+    };
+    await handleEditorAgentVerificationRun(context, deps(manager));
+    expect(manager.lastSignal?.aborted).toBe(false);
   });
 });

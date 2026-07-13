@@ -207,6 +207,43 @@ describe("enumerate — spaces and page listings", () => {
     const outcome = await sourceFor(["ENG"]).enumerate(contextFor(http));
     expect(outcome).toEqual({ ok: false, reason: "malformed-payload" });
   });
+
+  it("fails closed on a self-referential pagination cursor after two requests, not the 500-request ceiling", async () => {
+    // Regression for the cursor-loop detection tightening (audit finding, Epic #2238):
+    // a `_links.next` that points back to the current URL must terminate the walk immediately,
+    // not spin against the fail-closed hard ceiling.
+    const requests: AtlassianHttpBodyRequest[] = [];
+    const spacesPath = "/wiki/api/v2/spaces";
+    const http: AtlassianHttpBodyPort = (request) => {
+      requests.push(request);
+      const url = new URL(request.url);
+      if (url.pathname === spacesPath) {
+        return Promise.resolve({
+          kind: "response",
+          status: 200,
+          bodyText: JSON.stringify({
+            results: [{ id: "100", key: "ENG" }],
+            _links: { next: request.url },
+          }),
+          bodyBytes: 200,
+          truncated: false,
+        });
+      }
+      throw new Error(`unexpected request: ${request.url}`);
+    };
+    // Two configured keys keep the walk continuing after the first page (found.size < wanted.size),
+    // forcing the walker to follow the self-referential `next` cursor.
+    const outcome = await createConfluenceSyncSource({
+      baseUrl: BASE_URL,
+      connectorId: "cred-test",
+      spaceKeys: ["ENG", "OPS"],
+    }).enumerate(contextFor(http));
+    expect(outcome).toEqual({ ok: false, reason: "malformed-payload" });
+    // The seen-URL guard must fire on the second iteration; the walker must not touch the
+    // 500-request ceiling. A generous cap (< 10) captures the regression without pinning the exact
+    // request count to an internal implementation detail.
+    expect(requests.length).toBeLessThan(10);
+  });
 });
 
 describe("fetchItem — page bodies, comments, and the failure matrix", () => {

@@ -187,6 +187,110 @@ function EmptyState({
 }
 
 // ---------------------------------------------------------------------------
+// HeaderActionLink
+// ---------------------------------------------------------------------------
+
+// Header secondary actions (consolidation / review queue / health scan) render
+// as an internal-navigation button in workspace-window mode (onClick supplied)
+// or a plain route Link otherwise. Extracted so MemoryListContent doesn't carry
+// the same conditional-render branch three times.
+function HeaderActionLink({
+  href,
+  label,
+  className,
+  onClick,
+}: {
+  readonly href: string;
+  readonly label: string;
+  readonly className: string;
+  readonly onClick?: (() => void) | undefined;
+}): ReactNode {
+  if (onClick !== undefined) {
+    return (
+      <button type="button" className={className} onClick={onClick}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <Link href={href} className={className}>
+      {label}
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryListBody
+// ---------------------------------------------------------------------------
+
+// The section content is one of four mutually exclusive states — loading,
+// error, empty, or populated. Extracted as early returns (same shape as
+// EmptyState above) instead of a nested ternary chain in MemoryListContent.
+function MemoryListBody({
+  loading,
+  error,
+  memories,
+  hasFilters,
+  onOpenDetail,
+  onRetry,
+  t,
+}: {
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly memories: readonly MemoryRecord[];
+  readonly hasFilters: boolean;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly onRetry: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (loading && memories.length === 0) {
+    return (
+      <p role="status" aria-live="polite" className="lk-loading">
+        {t("memoria.loadingMemories")}
+      </p>
+    );
+  }
+
+  if (error !== null) {
+    return (
+      <div role="alert" aria-live="assertive" className="lk-alert">
+        {error}
+        <button type="button" className="lk-alert-retry" onClick={onRetry}>
+          {t("memoria.retry")}
+        </button>
+      </div>
+    );
+  }
+
+  if (memories.length === 0) {
+    return <EmptyState hasFilters={hasFilters} t={t} />;
+  }
+
+  return (
+    <ul
+      aria-label={t("memoria.memoryList")}
+      style={{
+        listStyle: "none",
+        padding: 0,
+        margin: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        // Stale-while-revalidate: keep the previous results visible
+        // (dimmed) during a refetch instead of collapsing the list to a
+        // one-line loading message on every filter click (uiux-fix F035).
+        opacity: loading ? 0.6 : 1,
+        transition: "opacity 0.15s ease",
+      }}
+    >
+      {memories.map((record) => (
+        <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} t={t} />
+      ))}
+    </ul>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MemoryList
 // ---------------------------------------------------------------------------
 
@@ -316,48 +420,24 @@ export function MemoryListContent({
               {t("memoria.backToWorkspace")}
             </Link>
           ) : null}
-          {onOpenConsolidation !== undefined ? (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost lk-btn-lg"
-              onClick={onOpenConsolidation}
-            >
-              {t("memoria.consolidation")}
-            </button>
-          ) : (
-            <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
-              {t("memoria.consolidation")}
-            </Link>
-          )}
-          {onOpenReviewQueue !== undefined ? (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
-              onClick={onOpenReviewQueue}
-            >
-              {t("memoria.reviewQueue")}
-            </button>
-          ) : (
-            <Link
-              href="/memoriaviva/review-queue"
-              className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
-            >
-              {t("memoria.reviewQueue")}
-            </Link>
-          )}
-          {onOpenHealthScan !== undefined ? (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost lk-btn-lg"
-              onClick={onOpenHealthScan}
-            >
-              {t("memoria.healthScan")}
-            </button>
-          ) : (
-            <Link href="/memoriaviva/health-scan" className="lk-btn lk-btn-ghost lk-btn-lg">
-              {t("memoria.healthScan")}
-            </Link>
-          )}
+          <HeaderActionLink
+            href="/memoriaviva/consolidation"
+            label={t("memoria.consolidation")}
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            onClick={onOpenConsolidation}
+          />
+          <HeaderActionLink
+            href="/memoriaviva/review-queue"
+            label={t("memoria.reviewQueue")}
+            className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
+            onClick={onOpenReviewQueue}
+          />
+          <HeaderActionLink
+            href="/memoriaviva/health-scan"
+            label={t("memoria.healthScan")}
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            onClick={onOpenHealthScan}
+          />
         </div>
       </header>
 
@@ -377,47 +457,17 @@ export function MemoryListContent({
         aria-busy={loading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        {loading && memories.length === 0 ? (
-          <p role="status" aria-live="polite" className="lk-loading">
-            {t("memoria.loadingMemories")}
-          </p>
-        ) : error !== null ? (
-          <div role="alert" aria-live="assertive" className="lk-alert">
-            {error}
-            <button
-              type="button"
-              className="lk-alert-retry"
-              onClick={() => {
-                void load(filters);
-              }}
-            >
-              {t("memoria.retry")}
-            </button>
-          </div>
-        ) : memories.length === 0 ? (
-          <EmptyState hasFilters={hasFilters} t={t} />
-        ) : (
-          <ul
-            aria-label={t("memoria.memoryList")}
-            style={{
-              listStyle: "none",
-              padding: 0,
-              margin: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-              // Stale-while-revalidate: keep the previous results visible
-              // (dimmed) during a refetch instead of collapsing the list to a
-              // one-line loading message on every filter click (uiux-fix F035).
-              opacity: loading ? 0.6 : 1,
-              transition: "opacity 0.15s ease",
-            }}
-          >
-            {memories.map((record) => (
-              <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} t={t} />
-            ))}
-          </ul>
-        )}
+        <MemoryListBody
+          loading={loading}
+          error={error}
+          memories={memories}
+          hasFilters={hasFilters}
+          onOpenDetail={onOpenDetail}
+          onRetry={() => {
+            void load(filters);
+          }}
+          t={t}
+        />
       </section>
     </>
   );

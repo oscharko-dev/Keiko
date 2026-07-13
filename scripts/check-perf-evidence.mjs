@@ -29,10 +29,101 @@ function isFiniteNumber(value) {
 }
 
 // ---- Workspace evidence ----------------------------------------------------
+//
+// Each per-gesture budget is checked by its own small predicate below; evaluateWorkspaceEvidence
+// only wires the object/runs guards and the project/gesture walk together, so a single evidence
+// file still yields all breaches at once without any one function carrying the whole decision tree.
 
-// eslint-disable-next-line complexity, max-lines-per-function -- budget gate deliberately re-derives every per-gesture verdict (samples, p75, max, long-task, view/PUT coalescing) in one linear pass so a single evidence file yields all breaches at once.
-export function evaluateWorkspaceEvidence(evidence) {
+function checkFrameGapSamples(gesture, label) {
+  if (!isFiniteNumber(gesture.frameGapSamples) || gesture.frameGapSamples <= 3) {
+    return `${label}: too few frame samples (${String(gesture.frameGapSamples)}) — vacuous evidence`;
+  }
+  return undefined;
+}
+
+function checkFrameGapP75(gesture, label) {
+  if (
+    isFiniteNumber(gesture.frameGapP75Ms) &&
+    isFiniteNumber(gesture.frameGapBudgetP75Ms) &&
+    gesture.frameGapP75Ms > gesture.frameGapBudgetP75Ms
+  ) {
+    return `${label}: frame-gap p75 ${gesture.frameGapP75Ms}ms > budget ${gesture.frameGapBudgetP75Ms}ms`;
+  }
+  return undefined;
+}
+
+function checkFrameGapMax(gesture, label) {
+  if (
+    isFiniteNumber(gesture.frameGapMaxMs) &&
+    isFiniteNumber(gesture.frameGapBudgetMaxMs) &&
+    gesture.frameGapMaxMs > gesture.frameGapBudgetMaxMs
+  ) {
+    return `${label}: frame-gap max ${gesture.frameGapMaxMs}ms > budget ${gesture.frameGapBudgetMaxMs}ms`;
+  }
+  return undefined;
+}
+
+function checkLongTask(gesture, label) {
+  if (
+    gesture.longTaskObserverInstalled === true &&
+    isFiniteNumber(gesture.maxLongTaskMs) &&
+    gesture.maxLongTaskMs > GESTURE_LONG_TASK_BUDGET_MS
+  ) {
+    return `${label}: long task ${gesture.maxLongTaskMs}ms > ${GESTURE_LONG_TASK_BUDGET_MS}ms budget`;
+  }
+  return undefined;
+}
+
+function checkViewWrites(gesture, label) {
+  if (isFiniteNumber(gesture.viewWrites) && gesture.viewWrites > 1) {
+    return `${label}: viewWrites ${gesture.viewWrites} > 1 (write coalescing regressed)`;
+  }
+  return undefined;
+}
+
+function checkWorkspacePuts(gesture, label) {
+  if (isFiniteNumber(gesture.workspacePuts) && gesture.workspacePuts > 1) {
+    return `${label}: workspacePuts ${gesture.workspacePuts} > 1 (PUT coalescing regressed)`;
+  }
+  return undefined;
+}
+
+const GESTURE_CHECKS = [
+  checkFrameGapSamples,
+  checkFrameGapP75,
+  checkFrameGapMax,
+  checkLongTask,
+  checkViewWrites,
+  checkWorkspacePuts,
+];
+
+function evaluateWorkspaceGesture(project, gesture) {
+  const label = `${project}/${gesture.label ?? "?"}`;
   const failures = [];
+  for (const check of GESTURE_CHECKS) {
+    const failure = check(gesture, label);
+    if (failure !== undefined) failures.push(failure);
+  }
+  return failures;
+}
+
+function evaluateWorkspaceRun(project, run) {
+  if (
+    typeof run !== "object" ||
+    run === null ||
+    !Array.isArray(run.gestures) ||
+    run.gestures.length === 0
+  ) {
+    return [`${project}: no gestures recorded`];
+  }
+  const failures = [];
+  for (const gesture of run.gestures) {
+    failures.push(...evaluateWorkspaceGesture(project, gesture));
+  }
+  return failures;
+}
+
+export function evaluateWorkspaceEvidence(evidence) {
   if (typeof evidence !== "object" || evidence === null) {
     return { passed: false, failures: ["workspace evidence is not an object"] };
   }
@@ -40,121 +131,111 @@ export function evaluateWorkspaceEvidence(evidence) {
   if (typeof runs !== "object" || runs === null || Object.keys(runs).length === 0) {
     return { passed: false, failures: ["workspace evidence has no runs"] };
   }
+  const failures = [];
   for (const [project, run] of Object.entries(runs)) {
-    if (
-      typeof run !== "object" ||
-      run === null ||
-      !Array.isArray(run.gestures) ||
-      run.gestures.length === 0
-    ) {
-      failures.push(`${project}: no gestures recorded`);
-      continue;
-    }
-    for (const gesture of run.gestures) {
-      const label = `${project}/${gesture.label ?? "?"}`;
-      if (!isFiniteNumber(gesture.frameGapSamples) || gesture.frameGapSamples <= 3) {
-        failures.push(
-          `${label}: too few frame samples (${String(gesture.frameGapSamples)}) — vacuous evidence`,
-        );
-      }
-      if (
-        isFiniteNumber(gesture.frameGapP75Ms) &&
-        isFiniteNumber(gesture.frameGapBudgetP75Ms) &&
-        gesture.frameGapP75Ms > gesture.frameGapBudgetP75Ms
-      ) {
-        failures.push(
-          `${label}: frame-gap p75 ${gesture.frameGapP75Ms}ms > budget ${gesture.frameGapBudgetP75Ms}ms`,
-        );
-      }
-      if (
-        isFiniteNumber(gesture.frameGapMaxMs) &&
-        isFiniteNumber(gesture.frameGapBudgetMaxMs) &&
-        gesture.frameGapMaxMs > gesture.frameGapBudgetMaxMs
-      ) {
-        failures.push(
-          `${label}: frame-gap max ${gesture.frameGapMaxMs}ms > budget ${gesture.frameGapBudgetMaxMs}ms`,
-        );
-      }
-      if (
-        gesture.longTaskObserverInstalled === true &&
-        isFiniteNumber(gesture.maxLongTaskMs) &&
-        gesture.maxLongTaskMs > GESTURE_LONG_TASK_BUDGET_MS
-      ) {
-        failures.push(
-          `${label}: long task ${gesture.maxLongTaskMs}ms > ${GESTURE_LONG_TASK_BUDGET_MS}ms budget`,
-        );
-      }
-      if (isFiniteNumber(gesture.viewWrites) && gesture.viewWrites > 1) {
-        failures.push(
-          `${label}: viewWrites ${gesture.viewWrites} > 1 (write coalescing regressed)`,
-        );
-      }
-      if (isFiniteNumber(gesture.workspacePuts) && gesture.workspacePuts > 1) {
-        failures.push(
-          `${label}: workspacePuts ${gesture.workspacePuts} > 1 (PUT coalescing regressed)`,
-        );
-      }
-    }
+    failures.push(...evaluateWorkspaceRun(project, run));
   }
   return { passed: failures.length === 0, failures };
 }
 
 // ---- Editor evidence -------------------------------------------------------
+//
+// Each editor budget section (b4/b5/b6/b11, worker-load guards) is evaluated by its own small
+// helper below; evaluateEditorEvidence only wires the object guard and the section results
+// together, so a single evidence file still yields all breaches at once.
 
-// eslint-disable-next-line complexity, max-lines-per-function -- budget gate deliberately re-derives every editor verdict (b4/b5/b6/b11 budgets plus worker-load guards) in one linear pass so a single evidence file yields all breaches at once.
-export function evaluateEditorEvidence(evidence) {
-  const failures = [];
-  if (typeof evidence !== "object" || evidence === null) {
-    return { passed: false, failures: ["editor evidence is not an object"] };
+function checkColdStartP50Budget(b4) {
+  if (isFiniteNumber(b4.p50) && isFiniteNumber(b4.budgetP50) && b4.p50 > b4.budgetP50) {
+    return `b4 cold-start p50 ${b4.p50}ms > budget ${b4.budgetP50}ms`;
   }
-  const b4 = evidence.b4ColdStartMs;
+  return undefined;
+}
+
+function checkColdStartP95Budget(b4) {
+  if (isFiniteNumber(b4.p95) && isFiniteNumber(b4.budgetP95) && b4.p95 > b4.budgetP95) {
+    return `b4 cold-start p95 ${b4.p95}ms > budget ${b4.budgetP95}ms`;
+  }
+  return undefined;
+}
+
+function checkColdStartProbeHealth(b4) {
+  if (!(isFiniteNumber(b4.p50) && b4.p50 > 0)) {
+    return "b4 cold-start p50 is not a positive measurement (probe broken)";
+  }
+  return undefined;
+}
+
+const B4_CHECKS = [checkColdStartP50Budget, checkColdStartP95Budget, checkColdStartProbeHealth];
+
+function evaluateB4ColdStart(b4) {
   if (typeof b4 !== "object" || b4 === null) {
-    failures.push("editor evidence missing b4ColdStartMs");
-  } else {
-    if (isFiniteNumber(b4.p50) && isFiniteNumber(b4.budgetP50) && b4.p50 > b4.budgetP50) {
-      failures.push(`b4 cold-start p50 ${b4.p50}ms > budget ${b4.budgetP50}ms`);
-    }
-    if (isFiniteNumber(b4.p95) && isFiniteNumber(b4.budgetP95) && b4.p95 > b4.budgetP95) {
-      failures.push(`b4 cold-start p95 ${b4.p95}ms > budget ${b4.budgetP95}ms`);
-    }
-    if (!(isFiniteNumber(b4.p50) && b4.p50 > 0)) {
-      failures.push("b4 cold-start p50 is not a positive measurement (probe broken)");
-    }
+    return ["editor evidence missing b4ColdStartMs"];
   }
-  const b5 = evidence.b5KeystrokeMs;
+  const failures = [];
+  for (const check of B4_CHECKS) {
+    const failure = check(b4);
+    if (failure !== undefined) failures.push(failure);
+  }
+  return failures;
+}
+
+function evaluateB5Keystroke(b5) {
   if (typeof b5 !== "object" || b5 === null || b5.captured !== true) {
-    failures.push("b5 keystroke evidence not captured");
-  } else if (
+    return ["b5 keystroke evidence not captured"];
+  }
+  if (
     isFiniteNumber(b5.maxLongTaskMs) &&
     isFiniteNumber(b5.budgetMax) &&
     b5.maxLongTaskMs > b5.budgetMax
   ) {
-    failures.push(`b5 keystroke long task ${b5.maxLongTaskMs}ms > budget ${b5.budgetMax}ms`);
+    return [`b5 keystroke long task ${b5.maxLongTaskMs}ms > budget ${b5.budgetMax}ms`];
   }
-  const b6 = evidence.b6InteractionMs;
+  return [];
+}
+
+function evaluateB6Interaction(b6) {
   if (typeof b6 !== "object" || b6 === null || b6.captured !== true) {
-    failures.push("b6 interaction evidence not captured");
-  } else if (isFiniteNumber(b6.p75) && isFiniteNumber(b6.budgetP75) && b6.p75 > b6.budgetP75) {
-    failures.push(`b6 interaction p75 ${b6.p75}ms > budget ${b6.budgetP75}ms`);
+    return ["b6 interaction evidence not captured"];
   }
-  const b11 = evidence.b11Memory;
+  if (isFiniteNumber(b6.p75) && isFiniteNumber(b6.budgetP75) && b6.p75 > b6.budgetP75) {
+    return [`b6 interaction p75 ${b6.p75}ms > budget ${b6.budgetP75}ms`];
+  }
+  return [];
+}
+
+function evaluateB11Memory(b11) {
   if (typeof b11 !== "object" || b11 === null || b11.supported !== true) {
-    failures.push("b11 memory evidence not supported/measured");
+    return ["b11 memory evidence not supported/measured"];
   }
-  const worker = evidence.workerLoadCapture;
+  return [];
+}
+
+function evaluateWorkerLoadCapture(worker) {
   if (typeof worker !== "object" || worker === null) {
-    failures.push("editor evidence missing workerLoadCapture");
-  } else {
-    if (worker.editorWorkerLoaded !== true) failures.push("editor worker not loaded in evidence");
-    if (worker.languageWorkerLoaded === true) {
-      failures.push("a Monaco language worker was loaded (editor-only budget breached)");
-    }
-    if (worker.tsLanguageWorkerLoaded === true) {
-      failures.push(
-        "the Monaco TypeScript language worker was loaded (editor-only budget breached)",
-      );
-    }
+    return ["editor evidence missing workerLoadCapture"];
   }
+  const failures = [];
+  if (worker.editorWorkerLoaded !== true) failures.push("editor worker not loaded in evidence");
+  if (worker.languageWorkerLoaded === true) {
+    failures.push("a Monaco language worker was loaded (editor-only budget breached)");
+  }
+  if (worker.tsLanguageWorkerLoaded === true) {
+    failures.push("the Monaco TypeScript language worker was loaded (editor-only budget breached)");
+  }
+  return failures;
+}
+
+export function evaluateEditorEvidence(evidence) {
+  if (typeof evidence !== "object" || evidence === null) {
+    return { passed: false, failures: ["editor evidence is not an object"] };
+  }
+  const failures = [
+    ...evaluateB4ColdStart(evidence.b4ColdStartMs),
+    ...evaluateB5Keystroke(evidence.b5KeystrokeMs),
+    ...evaluateB6Interaction(evidence.b6InteractionMs),
+    ...evaluateB11Memory(evidence.b11Memory),
+    ...evaluateWorkerLoadCapture(evidence.workerLoadCapture),
+  ];
   return { passed: failures.length === 0, failures };
 }
 

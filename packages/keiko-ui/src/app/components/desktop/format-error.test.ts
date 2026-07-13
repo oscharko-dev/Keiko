@@ -76,7 +76,7 @@ describe("formatUserError", () => {
       message: "The model gateway timed out before the model returned a response.",
       code: "GATEWAY_TIMEOUT",
       remediation:
-        "Retry the request. If it repeats, choose a smaller prompt or another configured model, then check the gateway base URL, proxy, and model deployment availability in Settings.",
+        "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.",
     });
   });
 

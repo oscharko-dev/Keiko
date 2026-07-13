@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
 import type { AutonomousDeliveryConfirmation } from "./autonomousDeliveryPolicy.js";
 
@@ -18,6 +18,10 @@ interface ApprovalRecord {
   readonly envelopeDigest: string;
   readonly expiresAt: string;
 }
+
+// Domain-separation prefix for the content-addressed envelope digest. Not a secret; keyed
+// integrity of the approval proof still comes from `secret` (the HMAC key in `issue`).
+const ENVELOPE_DIGEST_DOMAIN = "keiko-autonomous-delivery-envelope-v1";
 
 export function createAutonomousDeliveryApprovalStore(
   secret: Buffer = randomBytes(32),
@@ -50,8 +54,13 @@ function expired(nowIso: string, expiresAt: string): boolean {
   return Number.isNaN(nowMs) || Number.isNaN(expiresAtMs) || nowMs >= expiresAtMs;
 }
 
-function digestEnvelope(envelope: CodingWorkbenchAuthorityEnvelope): string {
-  return createHmac("sha256", "keiko-autonomous-delivery-envelope-v1")
+export function digestEnvelope(envelope: CodingWorkbenchAuthorityEnvelope): string {
+  // Content-addressed digest with a fixed public domain-separation prefix — no shared secret is
+  // involved here, so a plain sha256 is appropriate (the approval-proof HMAC in `issue` is the
+  // integrity anchor).
+  return createHash("sha256")
+    .update(ENVELOPE_DIGEST_DOMAIN)
+    .update("\n")
     .update(canonicalJson(envelope))
     .digest("hex");
 }

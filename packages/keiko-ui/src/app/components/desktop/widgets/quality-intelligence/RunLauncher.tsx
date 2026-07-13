@@ -46,6 +46,7 @@ import {
   fetchCapsuleSets,
   type CapsuleListEntry,
   type CapsuleSetListEntry,
+  type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
 import { Icons } from "@/app/components/desktop/Icons";
 import KeikoSelect from "../../KeikoSelect";
@@ -440,6 +441,77 @@ function sourceKindSentenceLabelForUi(source: ConnectedRunSource, t: I18nTransla
   return t("qi.launcher.source.imageLower");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Pure derived-value helpers for RunLauncher (SonarCloud typescript:S3776): each replaces a
+// nested-ternary expression that used to live inline in the component body. Extracting them keeps
+// every branch, condition, and result unchanged while moving the branching out of the component's
+// own cognitive-complexity budget.
+// ---------------------------------------------------------------------------------------------
+
+function isManualSourceReady(
+  sourceKind: ManualSourceKind,
+  text: string,
+  pathReady: boolean,
+  capsuleId: string,
+  capsuleSetId: string,
+): boolean {
+  if (sourceKind === "requirements") return text.trim().length > 0;
+  if (sourceKind === "workspace" || sourceKind === "file") return pathReady;
+  if (sourceKind === "capsule") return capsuleId.trim().length > 0;
+  return capsuleSetId.trim().length > 0;
+}
+
+function isConnectedFallbackAllowed(
+  sourceKind: ManualSourceKind,
+  text: string,
+  pathReady: boolean,
+): boolean {
+  if (sourceKind === "requirements") return text.trim().length === 0;
+  if (sourceKind === "workspace" || sourceKind === "file") return !pathReady;
+  return false;
+}
+
+function resolveSelectedSourceGuidance(
+  sourceKind: ManualSourceKind,
+  selectedCapsule: CapsuleListEntry | undefined,
+  selectedCapsuleSet: CapsuleSetListEntry | undefined,
+): KnowledgePodUiGuidance | undefined {
+  if (sourceKind === "capsule") return selectedCapsule?.knowledgePod?.guidance;
+  if (sourceKind === "capsule-set") return selectedCapsuleSet?.knowledgePod?.guidance;
+  return undefined;
+}
+
+function parseSeedInput(trimmedSeed: string): number | undefined {
+  if (trimmedSeed.length === 0) return undefined;
+  return /^\d+$/u.test(trimmedSeed) ? Number(trimmedSeed) : Number.NaN;
+}
+
+function isSeedValid(parsedSeed: number | undefined): boolean {
+  return (
+    parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed))
+  );
+}
+
+function resolveGenerateDescribedBy(
+  ready: boolean,
+  seedValid: boolean,
+  generateHintId: string,
+  seedErrorId: string,
+): string | undefined {
+  if (!ready) return generateHintId;
+  if (!seedValid) return seedErrorId;
+  return undefined;
+}
+
+// Coverage-notice sentence for sources dropped past the 16-source cap (Epic #729) — the pure
+// sibling of skippedSourcesNotice() above, sharing the same "build once, reuse for the visible
+// notice and the sr-only live region" pattern.
+function droppedSourcesNotice(droppedSourceCount: number): string | null {
+  if (droppedSourceCount === 0) return null;
+  const plural = droppedSourceCount !== 1;
+  return `${droppedSourceCount.toString()} source${plural ? "s" : ""} over the 16-source limit ${plural ? "were" : "was"} not included.`;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -510,27 +582,14 @@ export function RunLauncher({
   const hasConnected = connectedSources.length > 0;
   const selectedCapsule = capsules.find((c) => c.id === capsuleId);
   const selectedCapsuleSet = capsuleSets.find((s) => s.id === capsuleSetId);
-  const selectedSourceGuidance =
-    sourceKind === "capsule"
-      ? selectedCapsule?.knowledgePod?.guidance
-      : sourceKind === "capsule-set"
-        ? selectedCapsuleSet?.knowledgePod?.guidance
-        : undefined;
+  const selectedSourceGuidance = resolveSelectedSourceGuidance(
+    sourceKind,
+    selectedCapsule,
+    selectedCapsuleSet,
+  );
   const pathReady = path.trim().length > 0;
-  const manualReady =
-    sourceKind === "requirements"
-      ? text.trim().length > 0
-      : sourceKind === "workspace" || sourceKind === "file"
-        ? pathReady
-        : sourceKind === "capsule"
-          ? capsuleId.trim().length > 0
-          : capsuleSetId.trim().length > 0;
-  const connectedFallbackAllowed =
-    sourceKind === "requirements"
-      ? text.trim().length === 0
-      : sourceKind === "workspace" || sourceKind === "file"
-        ? !pathReady
-        : false;
+  const manualReady = isManualSourceReady(sourceKind, text, pathReady, capsuleId, capsuleSetId);
+  const connectedFallbackAllowed = isConnectedFallbackAllowed(sourceKind, text, pathReady);
   const ready = manualReady || (connectedFallbackAllowed && hasConnected);
   const qiModels = modelPolicyResponse?.models ?? [];
   const generationModels = qiModels.filter((model) => model.kind === "chat");
@@ -542,14 +601,8 @@ export function RunLauncher({
   const selectedJudgeModelId =
     modelPolicy.judgeModelId ?? recommendedJudgeId ?? judgeModels[0]?.id ?? "";
   const trimmedSeed = seed.trim();
-  const parsedSeed =
-    trimmedSeed.length === 0
-      ? undefined
-      : /^\d+$/u.test(trimmedSeed)
-        ? Number(trimmedSeed)
-        : Number.NaN;
-  const seedValid =
-    parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  const parsedSeed = parseSeedInput(trimmedSeed);
+  const seedValid = isSeedValid(parsedSeed);
   const stepSeed = (delta: number): void => {
     const current = Number.parseInt(seed.trim(), 10);
     const base = Number.isFinite(current) ? current : 0;
@@ -574,7 +627,12 @@ export function RunLauncher({
   const sourceGuidanceId = useId();
   const nativeUnsupportedNoteId = useId();
   const nativeDialogSupported = useNativeFileDialogCapability();
-  const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
+  const generateDescribedBy = resolveGenerateDescribedBy(
+    ready,
+    seedValid,
+    generateHintId,
+    seedErrorId,
+  );
   const chooseSourceKind = useCallback((next: ManualSourceKind): void => {
     setSourceKind(next);
     setError(null);
@@ -980,74 +1038,94 @@ export function RunLauncher({
     );
   }
 
-  function renderSourceInput(): ReactNode {
-    if (sourceKind === "requirements") {
-      return (
-        <label className="qi-field">
-          <span className="qi-field-label">{t("qi.launcher.requirements")}</span>
-          <textarea
-            className="qi-textarea"
-            value={text}
-            rows={6}
-            placeholder={t("qi.launcher.requirementsPlaceholder")}
+  function renderRequirementsSourceField(): ReactNode {
+    return (
+      <label className="qi-field">
+        <span className="qi-field-label">{t("qi.launcher.requirements")}</span>
+        <textarea
+          className="qi-textarea"
+          value={text}
+          rows={6}
+          placeholder={t("qi.launcher.requirementsPlaceholder")}
+          disabled={running}
+          onChange={(e) => {
+            setText(e.target.value);
+          }}
+        />
+      </label>
+    );
+  }
+
+  function renderPathSourceField(): ReactNode {
+    const isFile = sourceKind === "file";
+    return (
+      <div className="qi-field">
+        <span className="qi-field-label" id={sourcePathLabelId}>
+          {isFile ? t("qi.launcher.filePath") : t("qi.launcher.folderPath")}
+        </span>
+        <div className="qi-path-picker">
+          <input
+            type="text"
+            className="qi-path-value qi-monospace"
+            aria-labelledby={sourcePathLabelId}
+            title={path}
+            placeholder={
+              isFile ? t("qi.launcher.chooseLocalFile") : t("qi.launcher.chooseLocalFolder")
+            }
+            value={path}
             disabled={running}
             onChange={(e) => {
-              setText(e.target.value);
+              setPath(e.target.value);
+              setError(null);
             }}
           />
-        </label>
-      );
-    }
-    if (sourceKind === "workspace" || sourceKind === "file") {
-      const isFile = sourceKind === "file";
-      return (
-        <div className="qi-field">
-          <span className="qi-field-label" id={sourcePathLabelId}>
-            {isFile ? t("qi.launcher.filePath") : t("qi.launcher.folderPath")}
-          </span>
-          <div className="qi-path-picker">
-            <input
-              type="text"
-              className="qi-path-value qi-monospace"
-              aria-labelledby={sourcePathLabelId}
-              title={path}
-              placeholder={
-                isFile ? t("qi.launcher.chooseLocalFile") : t("qi.launcher.chooseLocalFolder")
-              }
-              value={path}
-              disabled={running}
-              onChange={(e) => {
-                setPath(e.target.value);
-                setError(null);
-              }}
-            />
-            <button
-              type="button"
-              className="qi-btn qi-btn-secondary qi-browse-btn"
-              disabled={running || !nativeDialogSupported}
-              aria-describedby={nativeDialogSupported ? undefined : nativeUnsupportedNoteId}
-              onClick={openNativeSourcePicker}
-            >
-              {t("common.browse")}
-            </button>
-          </div>
-          {!nativeDialogSupported ? (
-            <span id={nativeUnsupportedNoteId} className="qi-field-note">
-              {t("qi.launcher.nativeDialogUnavailable")}
-            </span>
-          ) : null}
+          <button
+            type="button"
+            className="qi-btn qi-btn-secondary qi-browse-btn"
+            disabled={running || !nativeDialogSupported}
+            aria-describedby={nativeDialogSupported ? undefined : nativeUnsupportedNoteId}
+            onClick={openNativeSourcePicker}
+          >
+            {t("common.browse")}
+          </button>
         </div>
-      );
-    }
+        {!nativeDialogSupported ? (
+          <span id={nativeUnsupportedNoteId} className="qi-field-note">
+            {t("qi.launcher.nativeDialogUnavailable")}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderCapsuleOptions(): ReactNode {
+    return capsules.map((cap) => (
+      <option key={cap.id} value={cap.id}>
+        {cap.displayName}
+      </option>
+    ));
+  }
+
+  function renderCapsuleSetOptions(): ReactNode {
+    return capsuleSets.map((set) => (
+      <option key={set.id} value={set.id}>
+        {`${set.displayName} (${String(set.capsuleCount)} pods)`}
+      </option>
+    ));
+  }
+
+  function renderCapsuleSourceField(): ReactNode {
     const isCapsule = sourceKind === "capsule";
     const options = isCapsule ? capsules : capsuleSets;
+    const selectDisabled =
+      running || connectorLoading || connectorError !== null || options.length === 0;
     return (
       <label className="qi-field">
         <span className="qi-field-label">{isCapsule ? "Knowledge Pod" : "Knowledge Pod Set"}</span>
         <select
           className="qi-select"
           value={isCapsule ? capsuleId : capsuleSetId}
-          disabled={running || connectorLoading || connectorError !== null || options.length === 0}
+          disabled={selectDisabled}
           aria-describedby={selectedSourceGuidance !== undefined ? sourceGuidanceId : undefined}
           onChange={(e) => {
             if (isCapsule) setCapsuleId(e.target.value);
@@ -1064,17 +1142,7 @@ export function RunLauncher({
                 : t("qi.launcher.noKnowledgePodSets")}
             </option>
           ) : null}
-          {isCapsule
-            ? capsules.map((cap) => (
-                <option key={cap.id} value={cap.id}>
-                  {cap.displayName}
-                </option>
-              ))
-            : capsuleSets.map((set) => (
-                <option key={set.id} value={set.id}>
-                  {`${set.displayName} (${String(set.capsuleCount)} pods)`}
-                </option>
-              ))}
+          {isCapsule ? renderCapsuleOptions() : renderCapsuleSetOptions()}
         </select>
         {selectedSourceGuidance !== undefined ? (
           <span
@@ -1090,17 +1158,196 @@ export function RunLauncher({
     );
   }
 
+  function renderSourceInput(): ReactNode {
+    if (sourceKind === "requirements") return renderRequirementsSourceField();
+    if (sourceKind === "workspace" || sourceKind === "file") return renderPathSourceField();
+    return renderCapsuleSourceField();
+  }
+
   // Coverage-notice sentences are built once and shared by the visible notice AND the persistent
   // sr-only live region (uiux-fix F047 C155: the notice was a role="status" element inserted
   // together with its content, which screen readers often skip).
-  const droppedNotice =
-    progress.droppedSourceCount > 0
-      ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
-      : null;
+  const droppedNotice = droppedSourcesNotice(progress.droppedSourceCount);
   const skippedNotice = skippedSourcesNotice(progress.skippedSources);
   const coverageAnnouncement = [droppedNotice, skippedNotice]
     .filter((line): line is string => line !== null)
     .join(" ");
+
+  function renderConnectedSourceSummary(): ReactNode {
+    const first = connectedSources[0];
+    if (connectedSources.length === 1 && first !== undefined) {
+      return (
+        <div className="qi-connected-source" data-testid="qi-connected-source">
+          <span className="qi-connected-kind">
+            {t("qi.launcher.connectedSingle", {
+              source: sourceKindSentenceLabelForUi(first, t),
+            })}
+          </span>
+          <span className="qi-connected-path qi-monospace" title={sourceValue(first)}>
+            {sourceValue(first)}
+          </span>
+          <span className="qi-connected-hint">
+            {manualReady
+              ? t("qi.launcher.manualOverridesSingle")
+              : t("qi.launcher.generateUsesConnectedSingle", {
+                  source: sourceKindSentenceLabelForUi(first, t),
+                })}
+          </span>
+        </div>
+      );
+    }
+    if (connectedSources.length > 1) {
+      return (
+        <div className="qi-connected-source" data-testid="qi-connected-source">
+          <span className="qi-connected-kind">
+            {t("qi.launcher.connectedSources", { count: connectedSources.length })}
+          </span>
+          <ul className="qi-connected-roots" aria-label={t("qi.launcher.connectedSourcesAria")}>
+            {connectedSources.map((s) => (
+              <li key={sourceItemKey(s)} className="qi-connected-root-item">
+                <span className="qi-connected-root-name">{sourceKindLabelForUi(s, t)}</span>
+                <span className="qi-connected-path qi-monospace" title={sourceValue(s)}>
+                  {sourceValue(s)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <span className="qi-connected-hint">
+            {manualReady
+              ? t("qi.launcher.manualOverridesMultiple")
+              : t("qi.launcher.generateUsesAllConnected")}
+          </span>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  function renderSourceLabelField(): ReactNode {
+    return (
+      <label className="qi-field">
+        <span className="qi-field-label">{t("qi.launcher.sourceLabel")}</span>
+        <input
+          type="text"
+          className="qi-input"
+          value={label}
+          placeholder={t("qi.launcher.sourceLabelPlaceholder")}
+          disabled={running}
+          aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
+          onChange={(e) => {
+            setLabel(e.target.value);
+          }}
+        />
+        {hasConnected && !manualReady ? (
+          <span className="qi-field-hint" id={labelHintId}>
+            {t("qi.launcher.manualLabelHint")}
+          </span>
+        ) : null}
+      </label>
+    );
+  }
+
+  function renderSourceKindField(): ReactNode {
+    return (
+      <div className="qi-field qi-field-kind">
+        <span className="qi-field-label" id={sourceTypeLabelId}>
+          {t("qi.launcher.sourceType")}
+        </span>
+        <div
+          className="qi-source-kind-grid"
+          role="radiogroup"
+          aria-labelledby={sourceTypeLabelId}
+          aria-disabled={running || undefined}
+        >
+          {SOURCE_KIND_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="qi-source-kind-option"
+              role="radio"
+              aria-label={manualSourceKindLabel(option.id, t)}
+              data-tip={manualSourceKindLabel(option.id, t)}
+              aria-checked={sourceKind === option.id}
+              tabIndex={sourceKind === option.id ? 0 : -1}
+              disabled={running}
+              onPointerDown={(event) => {
+                onSourceKindPointerDown(event, option.id);
+              }}
+              onClick={() => chooseSourceKind(option.id)}
+              onKeyDown={onSourceKindKeyDown}
+            >
+              <span className="qi-source-kind-label">{manualSourceKindLabel(option.id, t)}</span>
+              <span className="qi-source-kind-icon" aria-hidden="true">
+                <SourceKindIcon kind={option.id} />
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ONE persistent button that swaps label/handler between Generate and Cancel: two
+  // conditionally-rendered buttons would unmount the focused element on every state change and
+  // drop keyboard focus onto <body> (WCAG 2.4.3, audit C031).
+  function renderGenerateButton(): ReactNode {
+    return (
+      <>
+        <button
+          type="button"
+          className={running ? "qi-btn qi-btn-secondary" : "qi-btn qi-btn-primary"}
+          aria-disabled={(!running && generateBlocked) || undefined}
+          aria-describedby={running ? undefined : generateDescribedBy}
+          onClick={() => {
+            if (running) {
+              handleCancel();
+              return;
+            }
+            if (generateBlocked) return;
+            void handleStart();
+          }}
+        >
+          {running ? t("common.cancel") : t("qi.launcher.generateTestCases")}
+        </button>
+        {!running && !ready ? (
+          <span className="qi-generate-hint" id={generateHintId}>
+            {t("qi.launcher.generateHint")}
+          </span>
+        ) : null}
+      </>
+    );
+  }
+
+  function renderProgressBlock(): ReactNode {
+    if (!running) return null;
+    // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
+    // sr-only region below (a11y M-01), so this block must not also be a live region or it would
+    // double-announce. Kept conditional for layout.
+    return (
+      <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
+        <span className="qi-progress-spinner" aria-hidden="true" />
+        <span className="qi-progress-text">
+          {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
+          {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
+          {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count two
+              tokens earlier (uiux-fix F047 C276). */}
+          {progress.findings > 0
+            ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
+            : ""}
+        </span>
+      </div>
+    );
+  }
+
+  function renderCoverageNotice(): ReactNode {
+    if (droppedNotice === null && skippedNotice === null) return null;
+    return (
+      <div className="qi-coverage-notice" data-testid="qi-coverage-notice">
+        {droppedNotice !== null ? <p className="qi-coverage-line">{droppedNotice}</p> : null}
+        {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
+      </div>
+    );
+  }
 
   return (
     <section className="qi-launcher" aria-label={t("qi.launcher.startAria")}>
@@ -1114,106 +1361,10 @@ export function RunLauncher({
             {modelPolicyError}
           </p>
         ) : null}
-        {connectedSources.length === 1 && connectedSources[0] !== undefined ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">
-              {t("qi.launcher.connectedSingle", {
-                source: sourceKindSentenceLabelForUi(connectedSources[0], t),
-              })}
-            </span>
-            <span
-              className="qi-connected-path qi-monospace"
-              title={sourceValue(connectedSources[0])}
-            >
-              {sourceValue(connectedSources[0])}
-            </span>
-            <span className="qi-connected-hint">
-              {manualReady
-                ? t("qi.launcher.manualOverridesSingle")
-                : t("qi.launcher.generateUsesConnectedSingle", {
-                    source: sourceKindSentenceLabelForUi(connectedSources[0], t),
-                  })}
-            </span>
-          </div>
-        ) : connectedSources.length > 1 ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">
-              {t("qi.launcher.connectedSources", { count: connectedSources.length })}
-            </span>
-            <ul className="qi-connected-roots" aria-label={t("qi.launcher.connectedSourcesAria")}>
-              {connectedSources.map((s) => (
-                <li key={sourceItemKey(s)} className="qi-connected-root-item">
-                  <span className="qi-connected-root-name">{sourceKindLabelForUi(s, t)}</span>
-                  <span className="qi-connected-path qi-monospace" title={sourceValue(s)}>
-                    {sourceValue(s)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <span className="qi-connected-hint">
-              {manualReady
-                ? t("qi.launcher.manualOverridesMultiple")
-                : t("qi.launcher.generateUsesAllConnected")}
-            </span>
-          </div>
-        ) : null}
+        {renderConnectedSourceSummary()}
         <div className="qi-launcher-row">
-          <label className="qi-field">
-            <span className="qi-field-label">{t("qi.launcher.sourceLabel")}</span>
-            <input
-              type="text"
-              className="qi-input"
-              value={label}
-              placeholder={t("qi.launcher.sourceLabelPlaceholder")}
-              disabled={running}
-              aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
-              onChange={(e) => {
-                setLabel(e.target.value);
-              }}
-            />
-            {hasConnected && !manualReady ? (
-              <span className="qi-field-hint" id={labelHintId}>
-                {t("qi.launcher.manualLabelHint")}
-              </span>
-            ) : null}
-          </label>
-          <div className="qi-field qi-field-kind">
-            <span className="qi-field-label" id={sourceTypeLabelId}>
-              {t("qi.launcher.sourceType")}
-            </span>
-            <div
-              className="qi-source-kind-grid"
-              role="radiogroup"
-              aria-labelledby={sourceTypeLabelId}
-              aria-disabled={running || undefined}
-            >
-              {SOURCE_KIND_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className="qi-source-kind-option"
-                  role="radio"
-                  aria-label={manualSourceKindLabel(option.id, t)}
-                  data-tip={manualSourceKindLabel(option.id, t)}
-                  aria-checked={sourceKind === option.id}
-                  tabIndex={sourceKind === option.id ? 0 : -1}
-                  disabled={running}
-                  onPointerDown={(event) => {
-                    onSourceKindPointerDown(event, option.id);
-                  }}
-                  onClick={() => chooseSourceKind(option.id)}
-                  onKeyDown={onSourceKindKeyDown}
-                >
-                  <span className="qi-source-kind-label">
-                    {manualSourceKindLabel(option.id, t)}
-                  </span>
-                  <span className="qi-source-kind-icon" aria-hidden="true">
-                    <SourceKindIcon kind={option.id} />
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
+          {renderSourceLabelField()}
+          {renderSourceKindField()}
         </div>
         {renderSourceInput()}
         {connectorError !== null ? (
@@ -1274,48 +1425,9 @@ export function RunLauncher({
               </span>
             ) : null}
           </label>
-          {/* ONE persistent button that swaps label/handler between Generate and Cancel: two
-              conditionally-rendered buttons would unmount the focused element on every state
-              change and drop keyboard focus onto <body> (WCAG 2.4.3, audit C031). */}
-          <button
-            type="button"
-            className={running ? "qi-btn qi-btn-secondary" : "qi-btn qi-btn-primary"}
-            aria-disabled={(!running && generateBlocked) || undefined}
-            aria-describedby={running ? undefined : generateDescribedBy}
-            onClick={() => {
-              if (running) {
-                handleCancel();
-                return;
-              }
-              if (generateBlocked) return;
-              void handleStart();
-            }}
-          >
-            {running ? t("common.cancel") : t("qi.launcher.generateTestCases")}
-          </button>
-          {!running && !ready ? (
-            <span className="qi-generate-hint" id={generateHintId}>
-              {t("qi.launcher.generateHint")}
-            </span>
-          ) : null}
+          {renderGenerateButton()}
         </div>
-        {running ? (
-          // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
-          // sr-only region below (a11y M-01), so this block must not also be a live region or it
-          // would double-announce. Kept conditional for layout.
-          <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
-            <span className="qi-progress-spinner" aria-hidden="true" />
-            <span className="qi-progress-text">
-              {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
-              {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-              {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
-                  two tokens earlier (uiux-fix F047 C276). */}
-              {progress.findings > 0
-                ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
-                : ""}
-            </span>
-          </div>
-        ) : null}
+        {renderProgressBlock()}
         {/* Always-mounted progress live region (a11y M-01): a region inserted together with its
             content is unreliably announced by AT, so the visible block above is aria-hidden and this
             persistent sr-only region carries the announcement — empty string while idle. */}
@@ -1327,12 +1439,7 @@ export function RunLauncher({
         <p className="sr-only" role="status" aria-live="polite">
           {coverageAnnouncement}
         </p>
-        {droppedNotice !== null || skippedNotice !== null ? (
-          <div className="qi-coverage-notice" data-testid="qi-coverage-notice">
-            {droppedNotice !== null ? <p className="qi-coverage-line">{droppedNotice}</p> : null}
-            {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
-          </div>
-        ) : null}
+        {renderCoverageNotice()}
         {degradedNotice !== null ? (
           <p className="qi-degraded-notice" role="status" data-testid="qi-launch-degraded">
             {degradedNotice}

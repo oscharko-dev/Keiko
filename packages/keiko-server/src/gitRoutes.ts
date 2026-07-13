@@ -225,8 +225,158 @@ function toStatusCode(value: string | undefined): GitStatusCode {
     : " ";
 }
 
+interface ParsedStatusRecord {
+  readonly path: string;
+  readonly oldRawPath: string | undefined;
+  readonly indexStatus: GitStatusCode;
+  readonly worktreeStatus: GitStatusCode;
+  readonly consumedOldPathRecord: boolean;
+}
+
+// Parses one non-branch porcelain record ("XY path", with an optional NUL-separated old-path
+// field for renames/copies). Returns null when the record should be skipped entirely.
+function parseStatusRecord(
+  record: string,
+  nextRecord: string | undefined,
+  selectedRootPrefix: string,
+): ParsedStatusRecord | null {
+  if (record.length < 4) return null;
+  const indexStatus = toStatusCode(record[0]);
+  const worktreeStatus = toStatusCode(record[1]);
+  const rawPath = record.slice(3);
+  const path = stripSelectedPrefix(rawPath, selectedRootPrefix);
+  if (path === null || path.length === 0) return null;
+  // Renames/copies carry a NUL-separated original-path field. Since git 2.18 unstaged rename
+  // detection can put R/C in the WORKTREE column too — that field must be skipped either way,
+  // or the old path surfaces as a phantom change record.
+  const hasOldPath =
+    indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C";
+  const oldRawPath = hasOldPath ? nextRecord : undefined;
+  return {
+    path,
+    oldRawPath,
+    indexStatus,
+    worktreeStatus,
+    consumedOldPathRecord: oldRawPath !== undefined,
+  };
+}
+
+function isIgnoredStatus(indexStatus: GitStatusCode, worktreeStatus: GitStatusCode): boolean {
+  return indexStatus === "!" && worktreeStatus === "!";
+}
+
+function isStagedStatus(indexStatus: GitStatusCode, ignored: boolean): boolean {
+  return !ignored && indexStatus !== " " && indexStatus !== "?";
+}
+
+function isUnstagedStatus(worktreeStatus: GitStatusCode, ignored: boolean): boolean {
+  return !ignored && worktreeStatus !== " " && worktreeStatus !== "?";
+}
+
+function isUntrackedStatus(indexStatus: GitStatusCode, worktreeStatus: GitStatusCode): boolean {
+  return indexStatus === "?" && worktreeStatus === "?";
+}
+
+function isConflictedStatus(indexStatus: GitStatusCode, worktreeStatus: GitStatusCode): boolean {
+  return (
+    indexStatus === "U" ||
+    worktreeStatus === "U" ||
+    (indexStatus === "A" && worktreeStatus === "A") ||
+    (indexStatus === "D" && worktreeStatus === "D")
+  );
+}
+
+function buildChangedFile(parsed: ParsedStatusRecord, selectedRootPrefix: string): GitChangedFile {
+  const { path, oldRawPath, indexStatus, worktreeStatus } = parsed;
+  const oldPath =
+    oldRawPath === undefined
+      ? undefined
+      : (stripSelectedPrefix(oldRawPath, selectedRootPrefix) ?? undefined);
+  const ignored = isIgnoredStatus(indexStatus, worktreeStatus);
+  return {
+    path,
+    oldPath,
+    indexStatus,
+    worktreeStatus,
+    staged: isStagedStatus(indexStatus, ignored),
+    unstaged: isUnstagedStatus(worktreeStatus, ignored),
+    untracked: isUntrackedStatus(indexStatus, worktreeStatus),
+    conflicted: isConflictedStatus(indexStatus, worktreeStatus),
+  };
+}
+
+interface StatusCounts {
+  readonly stagedCount: number;
+  readonly unstagedCount: number;
+  readonly untrackedCount: number;
+  readonly conflictedCount: number;
+  readonly dirty: boolean;
+}
+
+function computeStatusCounts(changes: readonly GitChangedFile[]): StatusCounts {
+  const stagedCount = changes.filter((change) => change.staged).length;
+  const unstagedCount = changes.filter((change) => change.unstaged).length;
+  const untrackedCount = changes.filter((change) => change.untracked).length;
+  const conflictedCount = changes.filter((change) => change.conflicted).length;
+  const dirty = changes.some(
+    (change) => change.staged || change.unstaged || change.untracked || change.conflicted,
+  );
+  return { stagedCount, unstagedCount, untrackedCount, conflictedCount, dirty };
+}
+
+function computeStatusTruncated(
+  processTruncated: boolean,
+  recordCount: number,
+  maxChanges: number,
+  scopedPath: string | undefined,
+  scopedChangeCount: number,
+): boolean {
+  return (
+    processTruncated ||
+    (scopedPath === undefined ? recordCount - 1 > maxChanges : scopedChangeCount > maxChanges)
+  );
+}
+
+interface CollectedStatusChanges {
+  readonly branch: string | undefined;
+  readonly detached: boolean;
+  readonly changes: GitChangedFile[];
+  readonly scopedChangeCount: number;
+}
+
+// Walks the NUL-separated porcelain records once, splitting out the branch header from the
+// per-file XY records (including the old-path lookahead for renames/copies).
+function collectStatusChanges(
+  records: readonly string[],
+  selectedRootPrefix: string,
+  maxChanges: number,
+  scopedPath: string | undefined,
+): CollectedStatusChanges {
+  let branch: string | undefined;
+  let detached = false;
+  let scopedChangeCount = 0;
+  const changes: GitChangedFile[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    if (record.startsWith("## ")) {
+      const parsedBranch = parseBranch(record);
+      branch = parsedBranch.branch;
+      detached = parsedBranch.detached;
+      continue;
+    }
+    const parsed = parseStatusRecord(record, records[index + 1], selectedRootPrefix);
+    if (parsed === null) continue;
+    if (parsed.consumedOldPathRecord) index += 1;
+    if (scopedPath !== undefined && parsed.path !== scopedPath) continue;
+    scopedChangeCount += 1;
+    if (changes.length < maxChanges) {
+      changes.push(buildChangedFile(parsed, selectedRootPrefix));
+    }
+  }
+  return { branch, detached, changes, scopedChangeCount };
+}
+
 // Porcelain parsing is intentionally centralized so Git XY semantics stay audited in one place.
-// eslint-disable-next-line max-lines-per-function, complexity
 function parseStatus(
   stdout: string,
   root: string,
@@ -237,82 +387,29 @@ function parseStatus(
   scopedPath?: string,
 ): GitRepositoryStatusResponse {
   const records = stdout.split("\0").filter((record) => record.length > 0);
-  let branch: string | undefined;
-  let detached = false;
-  let scopedChangeCount = 0;
-  const changes: GitChangedFile[] = [];
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index] ?? "";
-    if (record.startsWith("## ")) {
-      const parsed = parseBranch(record);
-      branch = parsed.branch;
-      detached = parsed.detached;
-      continue;
-    }
-    if (record.length < 4) continue;
-    const indexStatus = toStatusCode(record[0]);
-    const worktreeStatus = toStatusCode(record[1]);
-    const rawPath = record.slice(3);
-    const path = stripSelectedPrefix(rawPath, selectedRootPrefix);
-    if (path === null || path.length === 0) continue;
-    // Renames/copies carry a NUL-separated original-path field. Since git 2.18 unstaged rename
-    // detection can put R/C in the WORKTREE column too — that field must be skipped either way,
-    // or the old path surfaces as a phantom change record.
-    const hasOldPath =
-      indexStatus === "R" ||
-      indexStatus === "C" ||
-      worktreeStatus === "R" ||
-      worktreeStatus === "C";
-    const oldRawPath = hasOldPath ? records[index + 1] : undefined;
-    if (oldRawPath !== undefined) index += 1;
-    if (scopedPath !== undefined && path !== scopedPath) continue;
-    scopedChangeCount += 1;
-    if (changes.length < maxChanges) {
-      const oldPath =
-        oldRawPath === undefined
-          ? undefined
-          : (stripSelectedPrefix(oldRawPath, selectedRootPrefix) ?? undefined);
-      const ignored = indexStatus === "!" && worktreeStatus === "!";
-      changes.push({
-        path,
-        oldPath,
-        indexStatus,
-        worktreeStatus,
-        staged: !ignored && indexStatus !== " " && indexStatus !== "?",
-        unstaged: !ignored && worktreeStatus !== " " && worktreeStatus !== "?",
-        untracked: indexStatus === "?" && worktreeStatus === "?",
-        conflicted:
-          indexStatus === "U" ||
-          worktreeStatus === "U" ||
-          (indexStatus === "A" && worktreeStatus === "A") ||
-          (indexStatus === "D" && worktreeStatus === "D"),
-      });
-    }
-  }
-  const stagedCount = changes.filter((change) => change.staged).length;
-  const unstagedCount = changes.filter((change) => change.unstaged).length;
-  const untrackedCount = changes.filter((change) => change.untracked).length;
-  const conflictedCount = changes.filter((change) => change.conflicted).length;
-  const dirty = changes.some(
-    (change) => change.staged || change.unstaged || change.untracked || change.conflicted,
-  );
+  const collected = collectStatusChanges(records, selectedRootPrefix, maxChanges, scopedPath);
+  const counts = computeStatusCounts(collected.changes);
   return {
     schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
     root,
     repositoryRoot,
     state: "available",
     available: true,
-    branch,
-    detached,
-    clean: !dirty,
-    stagedCount,
-    unstagedCount,
-    untrackedCount,
-    conflictedCount,
-    changes,
-    truncated:
-      processTruncated ||
-      (scopedPath === undefined ? records.length - 1 > maxChanges : scopedChangeCount > maxChanges),
+    branch: collected.branch,
+    detached: collected.detached,
+    clean: !counts.dirty,
+    stagedCount: counts.stagedCount,
+    unstagedCount: counts.unstagedCount,
+    untrackedCount: counts.untrackedCount,
+    conflictedCount: counts.conflictedCount,
+    changes: collected.changes,
+    truncated: computeStatusTruncated(
+      processTruncated,
+      records.length,
+      maxChanges,
+      scopedPath,
+      collected.scopedChangeCount,
+    ),
     maxChanges,
   };
 }

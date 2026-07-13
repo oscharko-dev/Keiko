@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorVerificationEvent,
   VerificationKind,
@@ -25,6 +25,7 @@ import {
   type VerificationRunnerManagerOptions,
 } from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
 const PACKAGE_JSON = JSON.stringify({
   name: "fixture",
@@ -242,6 +243,74 @@ describe("VerificationRunnerManager — cancellation (AC5)", () => {
     const port = fakePort(report(["typecheck"]));
     const manager = makeManager({ execute: port.port });
     expect(manager.abort("no-such-run")).toBe(false);
+  });
+
+  it("emits exactly one cancelled terminal for an externally pre-aborted run", async () => {
+    const port: VerificationExecutePort = ({ signal }) => {
+      expect(signal.aborted).toBe(true);
+      return Promise.reject(new Error(`cancelled at ${workspaceRoot}/secret.ts`));
+    };
+    const events: EditorVerificationEvent[] = [];
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    const guarded = createVerificationRunnerManager({
+      store,
+      evidenceStore,
+      execute: port,
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+    guarded.subscribe((event) => events.push(event));
+    await expect(
+      guarded.runToReport(
+        input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+    const terminals = events.filter((event) =>
+      ["run-completed", "run-cancelled", "run-failed"].includes(event.kind),
+    );
+    expect(terminals).toEqual([expect.objectContaining({ kind: "run-cancelled" })]);
+    expect(diagnostics).toEqual([]);
+    expect(guarded.inFlightCount()).toBe(0);
+  });
+});
+
+describe("VerificationRunnerManager — async failure observability", () => {
+  it("persists and emits only static failure data while recording the route correlation id", async () => {
+    const secret = "secret-token-in-error";
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const manager = makeManager({
+      execute: () => Promise.reject(new Error(`${secret} at ${workspaceRoot}/private.ts`)),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      redactor: (value) => value.replaceAll(secret, "[REDACTED]"),
+      now: vi.fn(() => 10),
+    });
+    const { events, done } = collect(manager);
+    const start = manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "verification-correlation-1",
+      }),
+    );
+    await done;
+
+    expect(events.filter((event) => event.kind === "run-failed")).toEqual([
+      expect.objectContaining({ reason: "verification-run-execution-failed" }),
+    ]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        correlationId: "verification-correlation-1",
+        message: "Verification execution failed unexpectedly.",
+      }),
+    ]);
+    const failureEvents = events.filter((event) => event.kind === "run-failed");
+    const serialized = `${JSON.stringify(failureEvents)}${JSON.stringify(diagnostics)}${evidenceStore.get(start.runId) ?? ""}`;
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain(workspaceRoot);
+    expect(evidenceStore.get(start.runId)).toContain('"outcome": "failed"');
+    expect(manager.inFlightCount()).toBe(0);
   });
 });
 

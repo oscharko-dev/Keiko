@@ -23,7 +23,7 @@ export const SEATBELT_DENY_EGRESS_PROFILE: string =
 // Default OCI image for the container fallback. node is needed to run the unit-test toolchain; a
 // pinned, widely cached slim image keeps the fallback deterministic. Egress is removed by
 // --network=none regardless of image contents.
-export const DEFAULT_CONTAINER_IMAGE = "node:22-slim";
+export const DEFAULT_CONTAINER_IMAGE = "node:24.18.0-slim";
 export const EXECUTION_ROOT_MOUNT = "/keiko-execution-root";
 export const EXECUTION_ROOT_TMP = `${EXECUTION_ROOT_MOUNT}/.keiko-sandbox-tmp`;
 const EXECUTION_ROOT_READONLY_BINDS: readonly string[] = Object.freeze([
@@ -137,6 +137,10 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
   ];
 }
 
+function unsupportedBackend(backend: never): never {
+  throw new Error(`Unsupported sandbox backend: ${String(backend)}`);
+}
+
 // Builds the wrapped command for a backend, or undefined for "none" (no enforcing wrapper).
 export function buildWrappedCommand(
   backend: SandboxBackend,
@@ -155,5 +159,7 @@ export function buildWrappedCommand(
       return { command: "podman", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "none":
       return undefined;
+    default:
+      return unsupportedBackend(backend);
   }
 }

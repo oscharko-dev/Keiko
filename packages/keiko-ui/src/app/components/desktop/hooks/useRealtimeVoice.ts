@@ -10,6 +10,7 @@
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type { Dispatch } from "react";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   type VoicePersona,
@@ -37,6 +38,8 @@ import {
   type VoiceLatencyObserver,
   type VoiceLatencyObserverSink,
 } from "./voice-latency-observer";
+
+type CurrentRef<T> = { current: T };
 
 // A transient WebRTC `disconnected` state is recoverable (a brief network blip, an ICE restart): the
 // connection often returns to `connected` on its own. Tearing the session down the instant it appears
@@ -527,6 +530,237 @@ function optionsGroundingToolActive(options: UseRealtimeVoiceOptions): boolean {
 
 function optionsMemoryToolActive(options: UseRealtimeVoiceOptions): boolean {
   return options.memoryToolActive === true;
+}
+
+// Builds the retry callback for the delayed reconnect attempt scheduled by
+// `createIceDisconnectGraceTimeoutHandler`. Extracted to a named factory so the returned callback is
+// defined at module scope instead of nested inline inside the grace-timeout handler.
+function createReconnectRetryHandler(
+  mountedRef: CurrentRef<boolean>,
+  reconnectTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>,
+  startRef: CurrentRef<(() => void) | undefined>,
+): () => void {
+  return () => {
+    reconnectTimerRef.current = undefined;
+    if (!mountedRef.current) return;
+    startRef.current?.();
+  };
+}
+
+interface IceDisconnectGraceTimeoutDeps {
+  readonly graceTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>;
+  readonly mountedRef: CurrentRef<boolean>;
+  readonly reconnectAttemptsRef: CurrentRef<number>;
+  readonly reconnectTimerRef: CurrentRef<ReturnType<typeof setTimeout> | undefined>;
+  readonly startRef: CurrentRef<(() => void) | undefined>;
+  readonly cleanupRefs: (options?: { readonly discardControl?: boolean }) => void;
+  readonly dispatch: Dispatch<RealtimeVoiceAction>;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+}
+
+// Builds the grace-timeout callback for a transient `disconnected` RTC state. Extracted to a named
+// factory (instead of an inline closure inside `onConnectionStateChange`) so neither this callback nor
+// its own nested reconnect-retry timeout add to the lexical nesting depth of the connect() promise chain.
+function createIceDisconnectGraceTimeoutHandler(deps: IceDisconnectGraceTimeoutDeps): () => void {
+  const {
+    graceTimerRef,
+    mountedRef,
+    reconnectAttemptsRef,
+    reconnectTimerRef,
+    startRef,
+    cleanupRefs,
+    dispatch,
+    applyTurnSignal,
+  } = deps;
+  return () => {
+    graceTimerRef.current = undefined;
+    if (!mountedRef.current) return;
+    const attempt = reconnectAttemptsRef.current;
+    cleanupRefs({ discardControl: false });
+    if (attempt >= MAX_REALTIME_RECONNECT_ATTEMPTS) {
+      dispatch({
+        type: "error",
+        reason: "connection-failed",
+        message: "Real-time voice connection was lost.",
+      });
+      return;
+    }
+    reconnectAttemptsRef.current = attempt + 1;
+    applyTurnSignal({ kind: "provider-failure", recoverable: true });
+    const delayMs = Math.min(
+      DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffInitialMs * 2 ** attempt,
+      DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffMaxMs,
+    );
+    reconnectTimerRef.current = setTimeout(
+      createReconnectRetryHandler(mountedRef, reconnectTimerRef, startRef),
+      delayMs,
+    );
+  };
+}
+
+interface AssistantTranscriptDedupeRefs {
+  readonly assistantTranscriptItemsRef: CurrentRef<Set<string>>;
+  readonly assistantResponseTextItemsRef: CurrentRef<Set<string>>;
+  readonly assistantTranscriptTextItemsRef: CurrentRef<Set<string>>;
+}
+
+// Determines whether an assistant transcript-committed event has already been recorded, marking it
+// as seen (by itemId, then responseId, then turn-scoped text) when it has not. Extracted from
+// `commitAssistantTranscript` so the three dedupe strategies read as a flat sequence of checks
+// instead of a nested if/else-if/else chain.
+function isDuplicateAssistantTranscript(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
+  normalizedText: string,
+  ensureVoiceTurn: () => VoiceTurnDraft,
+  refs: AssistantTranscriptDedupeRefs,
+): boolean {
+  if (event.itemId !== undefined) {
+    if (refs.assistantTranscriptItemsRef.current.has(event.itemId)) {
+      return true;
+    }
+    refs.assistantTranscriptItemsRef.current.add(event.itemId);
+    return false;
+  }
+  if (event.responseId !== undefined) {
+    const responseTextKey = `${event.responseId}:${normalizedText}`;
+    if (refs.assistantResponseTextItemsRef.current.has(responseTextKey)) {
+      return true;
+    }
+    refs.assistantResponseTextItemsRef.current.add(responseTextKey);
+    return false;
+  }
+  const turn = ensureVoiceTurn();
+  const textKey = `${String(turn.seq)}:${normalizedText}`;
+  if (refs.assistantTranscriptTextItemsRef.current.has(textKey)) {
+    return true;
+  }
+  refs.assistantTranscriptTextItemsRef.current.add(textKey);
+  return false;
+}
+
+// Applies a freshly committed assistant transcript to the active voice turn and clears the
+// in-flight delta buffer. Extracted so `commitAssistantTranscript` reads as one linear sequence.
+function applyAssistantTranscriptToTurn(
+  turn: VoiceTurnDraft,
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
+  normalizedText: string,
+  refs: {
+    readonly assistantTranscriptBufferRef: CurrentRef<string>;
+    readonly assistantTranscriptResponseRef: CurrentRef<string | undefined>;
+    readonly assistantTranscriptItemRef: CurrentRef<string | undefined>;
+  },
+): void {
+  turn.assistantText = normalizedText;
+  turn.assistantResponseId = event.responseId;
+  turn.assistantItemId = event.itemId;
+  refs.assistantTranscriptBufferRef.current = "";
+  refs.assistantTranscriptResponseRef.current = undefined;
+  refs.assistantTranscriptItemRef.current = undefined;
+}
+
+// Transcript completion is a persistence signal. The audible assistant floor is owned only by
+// provider audio-output lifecycle events, so text can never announce "speaking" ahead of sound —
+// this only decides whether the turn should flush now.
+function shouldFlushOnAssistantTranscript(
+  turn: VoiceTurnDraft,
+  hasVoiceTurnCommittedHandler: boolean,
+): boolean {
+  return (
+    !turn.groundingActive &&
+    !turn.groundedToolPersisted &&
+    (turn.userText !== undefined || !hasVoiceTurnCommittedHandler)
+  );
+}
+
+// Promotes a buffered (uncommitted) user transcript delta to the active voice turn and, when one
+// was recovered, hands it to the client-side grounded-turn executor. Shared by the `error`,
+// `response-done`, `response-cancelled`, and `user-transcript-failed` events in
+// `handleRealtimeEvent` — each of them reacts to the provider abandoning a turn before a final
+// user transcript arrived, and all four need the same "recover it, then execute" step.
+function settlePendingGroundedTurn(
+  promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined,
+  executeClientGroundedTurn: (turn: VoiceTurnDraft) => void,
+  itemId?: string,
+): void {
+  const turn = promoteUserTranscriptFallback(itemId);
+  if (turn !== undefined) {
+    executeClientGroundedTurn(turn);
+  }
+}
+
+interface RealtimeResponseSettlementDeps {
+  readonly promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined;
+  readonly executeClientGroundedTurn: (turn: VoiceTurnDraft) => void;
+  readonly commitBufferedAssistantTranscript: (responseId: string | undefined) => void;
+  readonly flushVoiceTurn: (options: {
+    readonly allowAssistantFallback: boolean;
+    readonly force?: boolean;
+  }) => void;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+  readonly latencyRef: CurrentRef<VoiceLatencyObserver | undefined>;
+}
+
+// Settles a `response.done` event: recovers any pending user-transcript fallback, then commits the
+// buffered assistant transcript and applies the turn signal that matches the response's terminal
+// status. Extracted so `handleRealtimeEvent`'s switch holds one call per case instead of a
+// three-way status branch nested inside the case body.
+function handleResponseDoneEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "response-done" }>,
+  deps: RealtimeResponseSettlementDeps,
+): void {
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  if (event.status === "cancelled") {
+    deps.latencyRef.current?.mark("interrupt_ack");
+    deps.commitBufferedAssistantTranscript(event.responseId);
+    deps.flushVoiceTurn({ allowAssistantFallback: true });
+    deps.applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+    return;
+  }
+  if (event.status === "failed" || event.status === "incomplete") {
+    deps.commitBufferedAssistantTranscript(event.responseId);
+    deps.flushVoiceTurn({ allowAssistantFallback: true });
+    deps.applyTurnSignal({ kind: "provider-failure", recoverable: true });
+    return;
+  }
+  deps.commitBufferedAssistantTranscript(event.responseId);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+}
+
+// Settles a `response.cancelled` event (a provider-acknowledged barge-in): marks the interrupt,
+// recovers any pending user-transcript fallback, then commits and flushes the turn as stopped.
+function handleResponseCancelledEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "response-cancelled" }>,
+  deps: RealtimeResponseSettlementDeps,
+): void {
+  deps.latencyRef.current?.mark("interrupt_ack");
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  deps.commitBufferedAssistantTranscript(event.responseId);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+}
+
+interface RealtimeErrorSettlementDeps {
+  readonly promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined;
+  readonly executeClientGroundedTurn: (turn: VoiceTurnDraft) => void;
+  readonly flushVoiceTurn: (options: {
+    readonly allowAssistantFallback: boolean;
+    readonly force?: boolean;
+  }) => void;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+  readonly dispatch: Dispatch<RealtimeVoiceAction>;
+}
+
+// Settles a provider `error` event: recovers any pending user-transcript fallback, flushes the
+// turn, then surfaces the failure both to the turn manager and to the connection-state reducer.
+function handleRealtimeErrorEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "error" }>,
+  deps: RealtimeErrorSettlementDeps,
+): void {
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "provider-failure", recoverable: true });
+  deps.dispatch({ type: "error", reason: "connection-failed", message: event.message });
 }
 
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
@@ -1205,42 +1439,24 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       if (normalizedText.length === 0) {
         return;
       }
-      if (event.itemId !== undefined) {
-        if (assistantTranscriptItemsRef.current.has(event.itemId)) {
-          return;
-        }
-        assistantTranscriptItemsRef.current.add(event.itemId);
-      } else if (event.responseId !== undefined) {
-        const responseTextKey = `${event.responseId}:${normalizedText}`;
-        if (assistantResponseTextItemsRef.current.has(responseTextKey)) {
-          return;
-        }
-        assistantResponseTextItemsRef.current.add(responseTextKey);
-      } else {
-        const turn = ensureVoiceTurn();
-        const textKey = `${String(turn.seq)}:${normalizedText}`;
-        if (assistantTranscriptTextItemsRef.current.has(textKey)) {
-          return;
-        }
-        assistantTranscriptTextItemsRef.current.add(textKey);
+      const isDuplicate = isDuplicateAssistantTranscript(event, normalizedText, ensureVoiceTurn, {
+        assistantTranscriptItemsRef,
+        assistantResponseTextItemsRef,
+        assistantTranscriptTextItemsRef,
+      });
+      if (isDuplicate) {
+        return;
       }
       if (event.responseId !== undefined) {
         assistantResponseTextItemsRef.current.add(`${event.responseId}:${normalizedText}`);
       }
       const turn = ensureVoiceTurn();
-      turn.assistantText = normalizedText;
-      turn.assistantResponseId = event.responseId;
-      turn.assistantItemId = event.itemId;
-      assistantTranscriptBufferRef.current = "";
-      assistantTranscriptResponseRef.current = undefined;
-      assistantTranscriptItemRef.current = undefined;
-      // Transcript completion is a persistence signal. The audible assistant floor is owned only by
-      // provider audio-output lifecycle events, so text can never announce "speaking" ahead of sound.
-      if (
-        !turn.groundingActive &&
-        !turn.groundedToolPersisted &&
-        (turn.userText !== undefined || onVoiceTurnCommittedRef.current === undefined)
-      ) {
+      applyAssistantTranscriptToTurn(turn, event, normalizedText, {
+        assistantTranscriptBufferRef,
+        assistantTranscriptResponseRef,
+        assistantTranscriptItemRef,
+      });
+      if (shouldFlushOnAssistantTranscript(turn, onVoiceTurnCommittedRef.current !== undefined)) {
         flushVoiceTurn({ allowAssistantFallback: true });
       }
       applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
@@ -1300,12 +1516,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           appendUserTranscriptDelta(event);
           return;
         case "user-transcript-failed":
-          {
-            const turn = promoteUserTranscriptFallback(event.itemId);
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
+          settlePendingGroundedTurn(
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            event.itemId,
+          );
           return;
         case "assistant-output-start":
           latencyRef.current?.mark("first_assistant_audio");
@@ -1335,51 +1550,33 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           executeGroundedFunctionCall(event);
           return;
         case "response-done":
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          if (event.status === "cancelled") {
-            latencyRef.current?.mark("interrupt_ack");
-            commitBufferedAssistantTranscript(event.responseId);
-            flushVoiceTurn({ allowAssistantFallback: true });
-            applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
-            return;
-          }
-          if (event.status === "failed" || event.status === "incomplete") {
-            commitBufferedAssistantTranscript(event.responseId);
-            flushVoiceTurn({ allowAssistantFallback: true });
-            applyTurnSignal({ kind: "provider-failure", recoverable: true });
-            return;
-          }
-          commitBufferedAssistantTranscript(event.responseId);
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+          handleResponseDoneEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            commitBufferedAssistantTranscript,
+            flushVoiceTurn,
+            applyTurnSignal,
+            latencyRef,
+          });
           return;
         case "response-cancelled":
-          latencyRef.current?.mark("interrupt_ack");
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          commitBufferedAssistantTranscript(event.responseId);
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+          handleResponseCancelledEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            commitBufferedAssistantTranscript,
+            flushVoiceTurn,
+            applyTurnSignal,
+            latencyRef,
+          });
           return;
         case "error":
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "provider-failure", recoverable: true });
-          dispatch({ type: "error", reason: "connection-failed", message: event.message });
+          handleRealtimeErrorEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            flushVoiceTurn,
+            applyTurnSignal,
+            dispatch,
+          });
           return;
       }
     },
@@ -1593,31 +1790,19 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           } else if (rtcState === "disconnected") {
             applyTurnSignal({ kind: "provider-failure", recoverable: true });
             if (graceTimerRef.current === undefined) {
-              graceTimerRef.current = setTimeout(() => {
-                graceTimerRef.current = undefined;
-                if (!mountedRef.current) return;
-                const attempt = reconnectAttemptsRef.current;
-                cleanupRefs({ discardControl: false });
-                if (attempt >= MAX_REALTIME_RECONNECT_ATTEMPTS) {
-                  dispatch({
-                    type: "error",
-                    reason: "connection-failed",
-                    message: "Real-time voice connection was lost.",
-                  });
-                  return;
-                }
-                reconnectAttemptsRef.current = attempt + 1;
-                applyTurnSignal({ kind: "provider-failure", recoverable: true });
-                const delayMs = Math.min(
-                  DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffInitialMs * 2 ** attempt,
-                  DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffMaxMs,
-                );
-                reconnectTimerRef.current = setTimeout(() => {
-                  reconnectTimerRef.current = undefined;
-                  if (!mountedRef.current) return;
-                  startRef.current?.();
-                }, delayMs);
-              }, ICE_DISCONNECT_GRACE_MS);
+              graceTimerRef.current = setTimeout(
+                createIceDisconnectGraceTimeoutHandler({
+                  graceTimerRef,
+                  mountedRef,
+                  reconnectAttemptsRef,
+                  reconnectTimerRef,
+                  startRef,
+                  cleanupRefs,
+                  dispatch,
+                  applyTurnSignal,
+                }),
+                ICE_DISCONNECT_GRACE_MS,
+              );
             }
           }
         });

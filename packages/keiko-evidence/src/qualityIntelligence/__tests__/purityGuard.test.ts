@@ -6,9 +6,14 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const QI_SRC_DIR = new URL("..", import.meta.url).pathname;
+const QI_SRC_DIR = fileURLToPath(new URL("..", import.meta.url));
+
+function portableRelativePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
 
 // Files that are *expected* to import node:fs/* primitives — keyed by path RELATIVE to
 // QI_SRC_DIR so that `figmaSnapshot/store.ts` and the top-level `store.ts` are distinct
@@ -66,12 +71,16 @@ async function listProductionSources(dir: string): Promise<readonly string[]> {
     if (entry.name.endsWith(".test.ts")) {
       continue;
     }
-    out.push(relative(QI_SRC_DIR, join(dir, entry.name)));
+    out.push(portableRelativePath(relative(QI_SRC_DIR, join(dir, entry.name))));
   }
   return out.sort();
 }
 
 describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", () => {
+  it("normalizes Windows relative paths for deterministic policy matching", () => {
+    expect(portableRelativePath("figmaSnapshot\\store.ts")).toBe("figmaSnapshot/store.ts");
+  });
+
   it("the QI source dir exists and contains the M1+M2+M3 production files", async () => {
     const dirStat = await stat(QI_SRC_DIR);
     expect(dirStat.isDirectory()).toBe(true);

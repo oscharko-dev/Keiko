@@ -8,7 +8,10 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "../../../../lib/types";
-import { pickWithNativeDialog } from "../../../../lib/native-file-dialog";
+import {
+  pickWithNativeDialog,
+  type NativeDialogPickOutcome,
+} from "../../../../lib/native-file-dialog";
 import { Icons } from "../Icons";
 import { useNativeFileDialogCapability } from "../hooks/useNativeFileDialogCapability";
 import type { FilesWindowContext } from "../hooks/useWorkspace.types";
@@ -387,6 +390,274 @@ function isAbsolutePathLike(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\");
 }
 
+// Resolves the FilesWindowContext's active file to a launcher default ONLY when its root still
+// matches the currently entered workspace — a stale context (workspace edited since) must not
+// leak its file path into a different repository's fields.
+function resolveCurrentFile(
+  filesContext: FilesWindowContext | null,
+  workspace: string,
+): string | null {
+  if (filesContext === null) return null;
+  if (filesContext.root !== workspace) return null;
+  if (filesContext.activeFilePath === undefined) return null;
+  return filesContext.activeFilePath;
+}
+
+function findAgentWorkflow(workflow: ProductionAgentWorkflowId): (typeof AGENT_WORKFLOWS)[number] {
+  return AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
+}
+
+function agentStartLabel(workflow: ProductionAgentWorkflowId): string {
+  return workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
+}
+
+// The native repository dialog opens at the OS default location when no seed is known; the seed
+// below only positions it when one is — the entered workspace first, then the connected Files
+// window's root, then the first registered project.
+function resolveRepositoryBrowseSeed(
+  workspace: string,
+  filesContext: FilesWindowContext | null,
+  firstAvailableProjectRoot: string,
+): string {
+  if (workspace.length > 0) return workspace;
+  return filesContext?.root ?? firstAvailableProjectRoot;
+}
+
+// Fills any still-empty agent-field slots with the workspace-relative current file. Only touches
+// fields the user has not already populated, so a manual edit is never overwritten.
+function fillEmptyAgentFields(
+  current: AgentLauncherFields,
+  normalizedCurrentFile: string,
+): AgentLauncherFields {
+  const patch: Record<string, string> = {};
+  if (current.verifyTargetFiles.trim().length === 0) {
+    patch.verifyTargetFiles = normalizedCurrentFile;
+  }
+  if (current.explainFilePath.trim().length === 0) {
+    patch.explainFilePath = normalizedCurrentFile;
+  }
+  if (current.unitFilePath.trim().length === 0) {
+    patch.unitFilePath = normalizedCurrentFile;
+  }
+  if (current.bugTargetFiles.trim().length === 0) {
+    patch.bugTargetFiles = normalizedCurrentFile;
+  }
+  return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
+}
+
+// Picked source files come back ABSOLUTE from the native dialog; the agent workflows expect
+// repo-relative paths. This folds the raw dialog outcome into a closed set the click handler can
+// react to without re-deriving the same branches.
+type SourceFilePickResolution =
+  | { readonly kind: "picked"; readonly relative: string }
+  | { readonly kind: "outside-workspace" }
+  | { readonly kind: "message"; readonly message: string }
+  | { readonly kind: "noop" };
+
+function resolveSourceFilePick(
+  outcome: NativeDialogPickOutcome,
+  workspace: string,
+): SourceFilePickResolution {
+  if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
+    const relative = normalizeAgentPathForWorkspace(workspace, outcome.paths[0]);
+    return isAbsolutePathLike(relative)
+      ? { kind: "outside-workspace" }
+      : { kind: "picked", relative };
+  }
+  if (outcome.kind === "busy") return { kind: "message", message: NATIVE_DIALOG_BUSY_MESSAGE };
+  if (outcome.kind === "unsupported") {
+    return { kind: "message", message: NATIVE_DIALOG_UNSUPPORTED_MESSAGE };
+  }
+  if (outcome.kind === "error") return { kind: "message", message: outcome.message };
+  return { kind: "noop" };
+}
+
+function isWorkspaceNotRegisteredError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "WORKSPACE_NOT_REGISTERED";
+}
+
+interface AgentTaskFieldsProps {
+  readonly workflow: ProductionAgentWorkflowId;
+  readonly fields: AgentLauncherFields;
+  readonly workspace: string;
+  readonly canBrowseSourceFile: boolean;
+  readonly nativeDialogSupported: boolean;
+  readonly sourceBrowseHelperId: string;
+  readonly updateField: (patch: Partial<AgentLauncherFields>) => void;
+  readonly onBrowseSourceFile: () => void;
+}
+
+function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
+  const {
+    fields,
+    workspace,
+    canBrowseSourceFile,
+    nativeDialogSupported,
+    sourceBrowseHelperId,
+    updateField,
+    onBrowseSourceFile,
+  } = props;
+  return (
+    <label className="dlg-field">
+      <span className="dlg-label">Source file</span>
+      <span className="dlg-dirwrap">
+        <input
+          className="dlg-input mono"
+          placeholder="src/file.ts"
+          value={fields.unitFilePath}
+          onChange={(event) => updateField({ unitFilePath: event.target.value })}
+          onBlur={(event) =>
+            updateField({
+              unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
+            })
+          }
+        />
+        <button
+          type="button"
+          className="dlg-btn dlg-dirbtn"
+          aria-label="Browse source file"
+          disabled={!canBrowseSourceFile}
+          aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
+          onClick={onBrowseSourceFile}
+        >
+          Browse
+        </button>
+      </span>
+      {!canBrowseSourceFile ? (
+        <span id={sourceBrowseHelperId} className="dlg-note">
+          {nativeDialogSupported
+            ? "Select a repository before browsing source files."
+            : NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+        </span>
+      ) : null}
+    </label>
+  );
+}
+
+function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
+  const { fields, workspace, updateField } = props;
+  return (
+    <>
+      <label className="dlg-field">
+        <span className="dlg-label">Observed behavior</span>
+        <textarea
+          className="dlg-input dlg-textarea"
+          rows={2}
+          placeholder="Describe the observed bug."
+          value={fields.bugDescription}
+          onChange={(event) => updateField({ bugDescription: event.target.value })}
+        />
+      </label>
+      <label className="dlg-field">
+        <span className="dlg-label">
+          Failing output <span className="dlg-opt">optional</span>
+        </span>
+        <textarea
+          className="dlg-input dlg-textarea mono"
+          rows={2}
+          value={fields.bugFailingOutput}
+          onChange={(event) => updateField({ bugFailingOutput: event.target.value })}
+        />
+      </label>
+      <label className="dlg-field">
+        <span className="dlg-label">
+          Stack trace <span className="dlg-opt">optional</span>
+        </span>
+        <textarea
+          className="dlg-input dlg-textarea mono"
+          rows={2}
+          value={fields.bugStackTrace}
+          onChange={(event) => updateField({ bugStackTrace: event.target.value })}
+        />
+      </label>
+      <label className="dlg-field">
+        <span className="dlg-label">
+          Related files <span className="dlg-opt">optional</span>
+        </span>
+        <textarea
+          className="dlg-input dlg-textarea mono"
+          rows={2}
+          placeholder="src/file.ts, src/other.ts"
+          value={fields.bugTargetFiles}
+          onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
+          onBlur={(event) =>
+            updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })
+          }
+        />
+      </label>
+    </>
+  );
+}
+
+function renderAgentTaskFields(props: AgentTaskFieldsProps): ReactNode {
+  return props.workflow === "unit-test-generation"
+    ? renderAgentSourceFileField(props)
+    : renderAgentBugFields(props);
+}
+
+function renderAgentRegistrationWarning(
+  workspace: string,
+  registered: boolean,
+  registering: boolean,
+  onRegister: () => void,
+): ReactNode {
+  if (workspace.length === 0 || registered) return null;
+  return (
+    <div className="dlg-agent-warning">
+      <span>Repository is not registered.</span>
+      <button type="button" className="dlg-btn" disabled={registering} onClick={onRegister}>
+        {registering ? "Registering…" : "Register repository"}
+      </button>
+    </div>
+  );
+}
+
+function renderCurrentFileButton(
+  currentFile: string | null,
+  onUseCurrentFile: () => void,
+): ReactNode {
+  if (currentFile === null) return null;
+  return (
+    <button
+      type="button"
+      className="dlg-current-file"
+      onClick={onUseCurrentFile}
+      title={currentFile}
+    >
+      <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
+    </button>
+  );
+}
+
+function renderAgentLoadingStatus(loading: boolean): ReactNode {
+  if (!loading) return null;
+  return (
+    <span id="agent-start-validation" className="dlg-note" role="status">
+      Loading models and projects…
+    </span>
+  );
+}
+
+// uiux-fix F017 C189 — the disabled Start button never reached the click guard, so its
+// validation copy was dead code; surface the reason inline instead.
+function renderAgentValidationStatus(loading: boolean, validation: string | null): ReactNode {
+  if (loading || validation === null) return null;
+  return (
+    <span id="agent-start-validation" className="dlg-note" role="status">
+      {validation}
+    </span>
+  );
+}
+
+function renderRepositoryBrowseNote(canBrowseRepository: boolean, helperId: string): ReactNode {
+  if (canBrowseRepository) return null;
+  return (
+    <span id={helperId} className="dlg-note">
+      {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+    </span>
+  );
+}
+
 function AgentLauncher({
   filesContext,
   setDialogError,
@@ -406,22 +677,19 @@ function AgentLauncher({
   const [starting, setStarting] = useState(false);
 
   const workspace = workspaceRoot.trim();
-  const currentFile =
-    filesContext !== null &&
-    filesContext.root === workspace &&
-    filesContext.activeFilePath !== undefined
-      ? filesContext.activeFilePath
-      : null;
+  const currentFile = resolveCurrentFile(filesContext, workspace);
   const registered = workspace.length > 0 && projects.includes(workspace);
   const validation = validationMessage(workflow, workspace, modelId, fields);
   const canStart = validation === null && registered && !starting && !loading;
-  const selectedAgent = AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
-  const startLabel =
-    workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
+  const selectedAgent = findAgentWorkflow(workflow);
+  const startLabel = agentStartLabel(workflow);
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstAvailableProjectRoot = projects[0] ?? "";
-  const repositoryBrowseSeed =
-    workspace.length > 0 ? workspace : (filesContext?.root ?? firstAvailableProjectRoot);
+  const repositoryBrowseSeed = resolveRepositoryBrowseSeed(
+    workspace,
+    filesContext,
+    firstAvailableProjectRoot,
+  );
   // Native dialogs need no seed root (they open at the OS default location), only platform
   // support; the seed merely positions the dialog when one is known.
   const canBrowseRepository = nativeDialogSupported;
@@ -459,16 +727,7 @@ function AgentLauncher({
   useEffect(() => {
     if (currentFile === null) return;
     const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
-    setFields((current) => {
-      const patch: Record<string, string> = {};
-      if (current.verifyTargetFiles.trim().length === 0)
-        patch.verifyTargetFiles = normalizedCurrentFile;
-      if (current.explainFilePath.trim().length === 0)
-        patch.explainFilePath = normalizedCurrentFile;
-      if (current.unitFilePath.trim().length === 0) patch.unitFilePath = normalizedCurrentFile;
-      if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = normalizedCurrentFile;
-      return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
-    });
+    setFields((current) => fillEmptyAgentFields(current, normalizedCurrentFile));
   }, [currentFile, workspace]);
 
   const useCurrentFile = (): void => {
@@ -522,7 +781,7 @@ function AgentLauncher({
           : {}),
       });
     } catch (error: unknown) {
-      if (error instanceof ApiError && error.code === "WORKSPACE_NOT_REGISTERED") {
+      if (isWorkspaceNotRegisteredError(error)) {
         await refreshProjects().catch(() => undefined);
         setDialogError("Repository is not registered.");
       } else {
@@ -553,110 +812,17 @@ function AgentLauncher({
       title: "Select source file",
       defaultPath: workspace,
     }).then((outcome) => {
-      if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
-        const relative = normalizeAgentPathForWorkspace(workspace, outcome.paths[0]);
-        if (isAbsolutePathLike(relative)) {
-          setDialogError("Choose a file inside the selected repository.");
-          return;
-        }
-        updateField({ unitFilePath: relative });
+      const resolved = resolveSourceFilePick(outcome, workspace);
+      if (resolved.kind === "picked") {
+        updateField({ unitFilePath: resolved.relative });
         return;
       }
-      if (outcome.kind === "busy") setDialogError(NATIVE_DIALOG_BUSY_MESSAGE);
-      if (outcome.kind === "unsupported") setDialogError(NATIVE_DIALOG_UNSUPPORTED_MESSAGE);
-      if (outcome.kind === "error") setDialogError(outcome.message);
+      if (resolved.kind === "outside-workspace") {
+        setDialogError("Choose a file inside the selected repository.");
+        return;
+      }
+      if (resolved.kind === "message") setDialogError(resolved.message);
     });
-  };
-
-  const renderAgentFields = (): ReactNode => {
-    if (workflow === "unit-test-generation") {
-      return (
-        <label className="dlg-field">
-          <span className="dlg-label">Source file</span>
-          <span className="dlg-dirwrap">
-            <input
-              className="dlg-input mono"
-              placeholder="src/file.ts"
-              value={fields.unitFilePath}
-              onChange={(event) => updateField({ unitFilePath: event.target.value })}
-              onBlur={(event) =>
-                updateField({
-                  unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                })
-              }
-            />
-            <button
-              type="button"
-              className="dlg-btn dlg-dirbtn"
-              aria-label="Browse source file"
-              disabled={!canBrowseSourceFile}
-              aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
-              onClick={openSourceFilePicker}
-            >
-              Browse
-            </button>
-          </span>
-          {!canBrowseSourceFile ? (
-            <span id={sourceBrowseHelperId} className="dlg-note">
-              {nativeDialogSupported
-                ? "Select a repository before browsing source files."
-                : NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
-            </span>
-          ) : null}
-        </label>
-      );
-    }
-    return (
-      <>
-        <label className="dlg-field">
-          <span className="dlg-label">Observed behavior</span>
-          <textarea
-            className="dlg-input dlg-textarea"
-            rows={2}
-            placeholder="Describe the observed bug."
-            value={fields.bugDescription}
-            onChange={(event) => updateField({ bugDescription: event.target.value })}
-          />
-        </label>
-        <label className="dlg-field">
-          <span className="dlg-label">
-            Failing output <span className="dlg-opt">optional</span>
-          </span>
-          <textarea
-            className="dlg-input dlg-textarea mono"
-            rows={2}
-            value={fields.bugFailingOutput}
-            onChange={(event) => updateField({ bugFailingOutput: event.target.value })}
-          />
-        </label>
-        <label className="dlg-field">
-          <span className="dlg-label">
-            Stack trace <span className="dlg-opt">optional</span>
-          </span>
-          <textarea
-            className="dlg-input dlg-textarea mono"
-            rows={2}
-            value={fields.bugStackTrace}
-            onChange={(event) => updateField({ bugStackTrace: event.target.value })}
-          />
-        </label>
-        <label className="dlg-field">
-          <span className="dlg-label">
-            Related files <span className="dlg-opt">optional</span>
-          </span>
-          <textarea
-            className="dlg-input dlg-textarea mono"
-            rows={2}
-            placeholder="src/file.ts, src/other.ts"
-            value={fields.bugTargetFiles}
-            onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
-            onBlur={(event) =>
-              updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })
-            }
-          />
-        </label>
-      </>
-    );
   };
 
   return (
@@ -730,55 +896,34 @@ function AgentLauncher({
             Browse
           </button>
         </span>
-        {!canBrowseRepository ? (
-          <span id={repositoryBrowseHelperId} className="dlg-note">
-            {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
-          </span>
-        ) : null}
+        {renderRepositoryBrowseNote(canBrowseRepository, repositoryBrowseHelperId)}
       </label>
-      {workspace.length > 0 && !registered ? (
-        <div className="dlg-agent-warning">
-          <span>Repository is not registered.</span>
-          <button
-            type="button"
-            className="dlg-btn"
-            disabled={registering}
-            onClick={() => void registerWorkspace()}
-          >
-            {registering ? "Registering…" : "Register repository"}
-          </button>
-        </div>
-      ) : null}
-      {currentFile !== null ? (
-        <button
-          type="button"
-          className="dlg-current-file"
-          onClick={useCurrentFile}
-          title={currentFile}
-        >
-          <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
-        </button>
-      ) : null}
+      {renderAgentRegistrationWarning(
+        workspace,
+        registered,
+        registering,
+        () => void registerWorkspace(),
+      )}
+      {renderCurrentFileButton(currentFile, useCurrentFile)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">
           <span className="dlg-agent-task-title">{selectedAgent.label}</span>
           <span className="dlg-agent-task-scope">{selectedAgent.scope}</span>
         </div>
-        {renderAgentFields()}
+        {renderAgentTaskFields({
+          workflow,
+          fields,
+          workspace,
+          canBrowseSourceFile,
+          nativeDialogSupported,
+          sourceBrowseHelperId,
+          updateField,
+          onBrowseSourceFile: openSourceFilePicker,
+        })}
       </div>
       <div className="dlg-agent-actions">
-        {loading ? (
-          <span id="agent-start-validation" className="dlg-note" role="status">
-            Loading models and projects…
-          </span>
-        ) : null}
-        {/* uiux-fix F017 C189 — the disabled Start button never reached the click guard,
-            so its validation copy was dead code; surface the reason inline instead. */}
-        {!loading && validation !== null ? (
-          <span id="agent-start-validation" className="dlg-note" role="status">
-            {validation}
-          </span>
-        ) : null}
+        {renderAgentLoadingStatus(loading)}
+        {renderAgentValidationStatus(loading, validation)}
         <button type="button" className="dlg-btn" onClick={onClose}>
           Cancel
         </button>

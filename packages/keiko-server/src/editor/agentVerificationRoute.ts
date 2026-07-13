@@ -14,7 +14,6 @@
 // and must not, import those private functions or modify agentRoutes.ts. The combined disposition can
 // only be as-or-more restrictive than either governance layer alone (the #2121 stricter-of-two rule).
 
-import type { IncomingMessage } from "node:http";
 import {
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
   EDITOR_AGENT_SCHEMA_VERSION,
@@ -42,6 +41,18 @@ import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
 
 const MAX_AGENT_VERIFICATION_BODY_BYTES = 8_000;
+
+type AuditWriter = typeof recordEditorAgentActionAudit;
+
+export interface AgentVerificationRoutePorts {
+  readonly audit?: AuditWriter | undefined;
+  readonly decide?: typeof decideVerificationPolicy | undefined;
+}
+
+interface RequestLifecycle {
+  readonly signal: AbortSignal;
+  readonly dispose: () => void;
+}
 
 // readJsonObject returns a RouteResult (an error response) or the parsed object; mirror the file-local
 // guard used by files.ts/agentRoutes.ts (neither exports it) to narrow without a shared dependency.
@@ -154,6 +165,10 @@ function reserveVerification(
   ).ok;
 }
 
+function rollbackVerificationReservation(request: EditorAgentVerificationRunRequest): boolean {
+  return editorAgentAuthorityRegistry.rollbackActionReservation(request.authorityRef, 0);
+}
+
 // One content-free audit record per request (AC5). The ledger records execution-class actions when
 // admitted and any action when denied; the record carries only enums, identifiers, and the
 // workspace-relative targetPath — never the verification's own pass/fail counts (those live in the
@@ -162,22 +177,38 @@ function auditVerification(
   request: EditorAgentVerificationRunRequest,
   decision: EditorAgentActionPolicyDecision,
   outcome: EditorAgentActionStatus,
-): void {
-  recordEditorAgentActionAudit({
-    occurredAt: Date.now(),
-    sessionId: request.sessionId,
-    actionId: syntheticVerificationAction(request).actionId,
-    actionType: "requestVerification",
-    decision,
-    outcome,
-    ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
-  });
+  writer: AuditWriter,
+): boolean {
+  return (
+    writer({
+      occurredAt: Date.now(),
+      sessionId: request.sessionId,
+      actionId: syntheticVerificationAction(request).actionId,
+      actionType: "requestVerification",
+      decision,
+      outcome,
+      ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+    }) !== null
+  );
 }
 
 function notRunResult(decision: EditorAgentActionPolicyDecision): RouteResult {
   const disposition = decision.disposition === "review-required" ? "review-required" : "denied";
-  const reason = decision.denyReason ?? decision.reviewReason ?? "policy-denied";
+  const reason =
+    disposition === "review-required"
+      ? (decision.reviewReason ?? "mode-approval-required")
+      : (decision.denyReason ?? "mode-policy-denied");
   return { status: 200, body: { result: { outcome: "not-run", disposition, reason } } };
+}
+
+function auditFailure(): RouteResult {
+  return {
+    status: 503,
+    body: errorBody(
+      "AGENT_VERIFICATION_AUDIT_FAILED",
+      "The governed verification admission record could not be written.",
+    ),
+  };
 }
 
 function verificationRunInput(request: EditorAgentVerificationRunRequest): VerificationRunInput {
@@ -192,39 +223,77 @@ async function runAndRespond(
   runner: VerificationRunnerManager,
   request: EditorAgentVerificationRunRequest,
   snapshot: EditorAgentSessionSnapshot,
-  decision: EditorAgentActionPolicyDecision,
-  req: IncomingMessage,
+  signal: AbortSignal,
 ): Promise<RouteResult> {
-  const controller = new AbortController();
-  const onClose = (): void => {
-    controller.abort();
-  };
-  req.on("close", onClose);
   try {
     const input = { ...verificationRunInput(request), projectId: snapshot.workspaceRoot };
-    const report = await runner.runToReport(input, controller.signal);
-    auditVerification(request, decision, "succeeded");
+    const report = await runner.runToReport(input, signal);
     return {
       status: 200,
       body: { result: { outcome: "completed", report: toRedactedVerificationReport(report) } },
     };
   } catch (error) {
-    auditVerification(request, decision, "failed");
     if (error instanceof VerificationRunnerError) {
       return { status: error.status, body: errorBody(error.code, error.message) };
     }
     throw error;
-  } finally {
-    req.removeListener("close", onClose);
   }
 }
 
-// POST /api/editor/verification/agent-runs — the only agent entry point into the verification route.
-// Fail-closed: an unresolved session, an unmet Authority Envelope, or a review-required/denied
-// disposition all prevent the sandboxed run from starting; each is audited exactly once.
-export async function handleEditorAgentVerificationRun(
+function requestLifecycle(ctx: RouteContext): RequestLifecycle {
+  const controller = new AbortController();
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort("agent verification client disconnected");
+  };
+  const onResponseClose = (): void => {
+    if (!ctx.res.writableEnded) abort();
+  };
+  ctx.req.on("aborted", abort);
+  ctx.res.on("close", onResponseClose);
+  if (ctx.req.destroyed && !ctx.req.complete) abort();
+  if (ctx.res.destroyed && !ctx.res.writableEnded) abort();
+  return {
+    signal: controller.signal,
+    dispose: (): void => {
+      ctx.req.removeListener("aborted", abort);
+      ctx.res.removeListener("close", onResponseClose);
+    },
+  };
+}
+
+async function admitAndRun(
+  request: EditorAgentVerificationRunRequest,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: UiHandlerDeps,
+  runner: VerificationRunnerManager,
+  lifecycle: RequestLifecycle,
+  ports: AgentVerificationRoutePorts,
+): Promise<RouteResult> {
+  const decision = (ports.decide ?? decideVerificationPolicy)(request, snapshot, deps);
+  const audit = ports.audit ?? recordEditorAgentActionAudit;
+  if (decision.disposition !== "allowed") {
+    return auditVerification(request, decision, "conflict", audit)
+      ? notRunResult(decision)
+      : auditFailure();
+  }
+  if (!reserveVerification(request, snapshot, deps)) {
+    const denied = denyByAuthority(decision, "authority-budget-exceeded");
+    return auditVerification(request, denied, "conflict", audit)
+      ? notRunResult(denied)
+      : auditFailure();
+  }
+  if (!auditVerification(request, decision, "queued", audit)) {
+    rollbackVerificationReservation(request);
+    return auditFailure();
+  }
+  return runAndRespond(runner, request, snapshot, lifecycle.signal);
+}
+
+async function handleWithLifecycle(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  lifecycle: RequestLifecycle,
+  ports: AgentVerificationRoutePorts,
 ): Promise<RouteResult> {
   const runner = deps.verificationRunner;
   if (runner === undefined) {
@@ -242,23 +311,28 @@ export async function handleEditorAgentVerificationRun(
   if (!parsed.ok) {
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  const request = parsed.value;
-  const snapshot = editorAgentRegistry.snapshotFor(request.sessionId);
+  const snapshot = editorAgentRegistry.snapshotFor(parsed.value.sessionId);
   if (snapshot === undefined) {
     return {
       status: 404,
       body: errorBody("SESSION_NOT_FOUND", "No governed editor session matches the request."),
     };
   }
-  const decision = decideVerificationPolicy(request, snapshot, deps);
-  if (decision.disposition !== "allowed") {
-    auditVerification(request, decision, "conflict");
-    return notRunResult(decision);
+  return admitAndRun(parsed.value, snapshot, deps, runner, lifecycle, ports);
+}
+
+// POST /api/editor/verification/agent-runs — the only agent entry point into the verification route.
+// Fail-closed: an unresolved session, an unmet Authority Envelope, or a review-required/denied
+// disposition all prevent the sandboxed run from starting; each is audited exactly once.
+export async function handleEditorAgentVerificationRun(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  ports: AgentVerificationRoutePorts = {},
+): Promise<RouteResult> {
+  const lifecycle = requestLifecycle(ctx);
+  try {
+    return await handleWithLifecycle(ctx, deps, lifecycle, ports);
+  } finally {
+    lifecycle.dispose();
   }
-  if (!reserveVerification(request, snapshot, deps)) {
-    const denied = denyByAuthority(decision, "authority-budget-exceeded");
-    auditVerification(request, denied, "conflict");
-    return notRunResult(denied);
-  }
-  return runAndRespond(runner, request, snapshot, decision, ctx.req);
 }

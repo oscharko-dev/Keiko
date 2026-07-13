@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_PALETTE_COMMANDS,
   availablePaletteCommands,
@@ -18,6 +19,15 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     dirtyCount: 0,
     verificationRunning: false,
     verifiableTarget: "src/a.test.ts",
+    verificationCatalog: {
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      projectId: "/repo",
+      kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
+        kind: kind as "test" | "targeted-test" | "typecheck" | "lint" | "build",
+        available: true,
+        trustState: "trusted" as const,
+      })),
+    },
     splitActive: vi.fn(),
     closeActiveSplit: vi.fn(),
     closeActiveTab: vi.fn(),
@@ -28,6 +38,9 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     runFileTests: vi.fn(),
     runWorkspaceVerification: vi.fn(),
     cancelVerification: vi.fn(),
+    trustWorkspaceScripts: vi.fn(),
+    revokeWorkspaceScriptTrust: vi.fn(),
+    openProblems: vi.fn(),
     ...overrides,
   };
 }
@@ -51,12 +64,14 @@ function score(query: string, target: string): number {
 describe("editor command registry", () => {
   it("exposes only commands whose host preconditions are satisfied", () => {
     // No active file, no resolvable target: tab/split/save all require an active file, so only the
-    // workspace-wide run commands (which need only the mounted workspace + idle state) remain.
+    // Problems entry and workspace-wide run commands remain.
     const emptyHost = fakeHost({ activeFile: null, verifiableTarget: null });
     expect(availablePaletteCommands(emptyHost).map((command) => command.id)).toEqual([
+      "editor.openProblems",
       "run.typecheck",
       "run.lint",
       "run.build",
+      "verification.revokeWorkspaceScriptTrust",
     ]);
 
     const fullHost = fakeHost({ paneCount: 2, closedTabCount: 1, dirtyCount: 1 });
@@ -69,10 +84,12 @@ describe("editor command registry", () => {
       "tab.close",
       "tab.reopenClosed",
       "files.saveAll",
+      "editor.openProblems",
       "run.fileTests",
       "run.typecheck",
       "run.lint",
       "run.build",
+      "verification.revokeWorkspaceScriptTrust",
     ]);
   });
 
@@ -87,6 +104,7 @@ describe("editor command registry", () => {
     commandById("tab.close").run(host);
     commandById("tab.reopenClosed").run(host);
     commandById("files.saveAll").run(host);
+    commandById("editor.openProblems").run(host);
 
     expect(host.splitActive).toHaveBeenNthCalledWith(1, "row");
     expect(host.splitActive).toHaveBeenNthCalledWith(2, "column");
@@ -96,6 +114,7 @@ describe("editor command registry", () => {
     expect(host.closeActiveTab).toHaveBeenCalledTimes(1);
     expect(host.reopenClosed).toHaveBeenCalledTimes(1);
     expect(host.saveAll).toHaveBeenCalledTimes(1);
+    expect(host.openProblems).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -143,6 +162,35 @@ describe("run affordances (Issue #2212, ADR-0126)", () => {
     expect(availablePaletteCommands(noTarget).map((c) => c.id)).not.toContain("run.fileTests");
     // The workspace-wide kinds do not depend on a target.
     expect(availablePaletteCommands(noTarget).map((c) => c.id)).toContain("run.typecheck");
+  });
+
+  it("uses the server catalog and exposes exact trust and revoke commands", () => {
+    const approvalRequired = fakeHost({
+      verificationCatalog: {
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        projectId: "/repo",
+        kinds: [
+          { kind: "targeted-test", available: true, trustState: "trusted" },
+          { kind: "typecheck", available: true, trustState: "approval-required" },
+          { kind: "lint", available: false, trustState: "approval-required" },
+          { kind: "build", available: true, trustState: "approval-required" },
+        ],
+      },
+    });
+    const commands = availablePaletteCommands(approvalRequired);
+    expect(commands.map((command) => command.title)).toContain("Trust Workspace Scripts");
+    expect(commands.map((command) => command.title)).not.toContain("Run Typecheck");
+    expect(commands.map((command) => command.title)).not.toContain("Run Build");
+    expect(commands.map((command) => command.title)).not.toContain("Revoke Workspace Script Trust");
+    commandById("verification.trustWorkspaceScripts").run(approvalRequired);
+    expect(approvalRequired.trustWorkspaceScripts).toHaveBeenCalledTimes(1);
+
+    const trusted = fakeHost();
+    expect(availablePaletteCommands(trusted).map((command) => command.title)).toContain(
+      "Revoke Workspace Script Trust",
+    );
+    commandById("verification.revokeWorkspaceScriptTrust").run(trusted);
+    expect(trusted.revokeWorkspaceScriptTrust).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -5,7 +5,7 @@
 // COUNTS bytes (the count advances) without storing them, and that a symlink whose real target lies
 // inside the workspace is rejected at the spawn-containment boundary (I2: EXECUTABLE_NOT_FOUND).
 
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -20,6 +20,7 @@ import { LspProcessError, resolveExecutableOutsideWorkspace } from "./lspNodeAda
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspController } from "./testing/fakeLspProcess.js";
+import { executableFixtureName, writeExecutableFixture } from "./testing/executableFixture.js";
 import {
   _resetLspLifecycleLedgerForTests,
   listLspLifecycleEvents,
@@ -35,9 +36,7 @@ let WORKSPACE_ROOT = "";
 beforeAll(() => {
   BIN_DIR = mkdtempSync(join(tmpdir(), "keiko-sec-bin-"));
   WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), "keiko-sec-ws-"));
-  const exe = join(BIN_DIR, "fakelsp");
-  writeFileSync(exe, "#!/bin/sh\n");
-  chmodSync(exe, 0o755);
+  writeExecutableFixture(BIN_DIR, "fakelsp");
 });
 
 afterAll(() => {
@@ -165,11 +164,9 @@ describe("LSP manager content-free invariant (AC3)", () => {
   });
 
   it("rejects an executable whose symlink resolves inside the workspace (I2)", () => {
-    const realTarget = join(WORKSPACE_ROOT, "inside");
-    writeFileSync(realTarget, "#!/bin/sh\n");
-    chmodSync(realTarget, 0o755);
+    const realTarget = writeExecutableFixture(WORKSPACE_ROOT, "inside");
     const pathDir = mkdtempSync(join(tmpdir(), "keiko-sec-link-"));
-    symlinkSync(realTarget, join(pathDir, "fakelsp"));
+    symlinkSync(realTarget, join(pathDir, executableFixtureName("fakelsp")));
 
     try {
       expect(() =>

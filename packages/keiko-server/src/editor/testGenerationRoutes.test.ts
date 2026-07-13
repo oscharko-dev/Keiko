@@ -5,9 +5,15 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type {
-  EditorTestGenerationWireResponse,
-  EvidenceStore,
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  resolveEditorM7Settings,
+  type EditorM7SettingId,
+  type EditorM7SettingValue,
+  type EditorM7SettingsSnapshot,
+  type EditorTestGenerationWireResponse,
+  type EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
@@ -50,14 +56,57 @@ function rawPostContext(body: string): RouteContext {
 }
 
 function deps(
-  input: { env?: Record<string, string | undefined>; evidenceStore?: EvidenceStore } = {},
+  input: {
+    env?: Record<string, string | undefined>;
+    evidenceStore?: EvidenceStore;
+    aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+  } = {},
 ): UiHandlerDeps {
+  const aiSettings = input.aiSettings ?? { testGeneration: true };
   return {
     store,
     redactor: buildRedactor(input.env ?? {}, undefined),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
+    editorSettingsControl: editorSettingsControl(aiSettings),
   } as unknown as UiHandlerDeps;
+}
+
+function editorSettingsSnapshot(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): EditorM7SettingsSnapshot {
+  const userValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  const workspaceValues: Partial<Record<EditorM7SettingId, EditorM7SettingValue>> = {};
+  if (values.inlineCompletion !== undefined) {
+    userValues.inlineCompletion = values.inlineCompletion;
+  }
+  if (values.testGeneration !== undefined) {
+    workspaceValues.testGeneration = values.testGeneration;
+  }
+  if (values.patchApply !== undefined) {
+    workspaceValues.patchApply = values.patchApply;
+  }
+  return {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    storeState: "ready",
+    userRevision: 1,
+    workspaceRevision: 1,
+    revision: 1_000_002,
+    etag: '"edm7-test-test-generation"',
+    root,
+    definitions: EDITOR_M7_SETTING_REGISTRY,
+    settings: resolveEditorM7Settings({
+      user: { scope: "user", values: userValues },
+      workspace: { scope: "workspace", values: workspaceValues },
+    }),
+    eventSequence: 1,
+  };
+}
+
+function editorSettingsControl(
+  values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>,
+): { readonly read: (realRoot: string) => Promise<EditorM7SettingsSnapshot> } {
+  return { read: () => Promise.resolve(editorSettingsSnapshot(values)) };
 }
 
 function fileBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -249,6 +298,18 @@ describe("POST /api/editor/test-generation — switched off (v1 default)", () =>
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
   });
+
+  it("keeps legacy env enablement as a ceiling until workspace activation explicitly opts in", async () => {
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      deps({ env: ENABLED, aiSettings: { testGeneration: false } }),
+    );
+    expect(result.status).toBe(200);
+    const response = wire(result);
+    expect(response.status).toBe("disabled");
+    expect(response.context).toBeUndefined();
+    expect(response.patch).toBeUndefined();
+  });
 });
 
 describe("POST /api/editor/test-generation — enabled, egress not enforced (deferred)", () => {
@@ -295,6 +356,27 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     expect(body.funnel.mutation).toBe("passed");
     expect(body.patch?.files[0]?.path).toBe("src/a.test.ts");
     expect(body.context?.purpose).toBe("test-generation");
+  });
+
+  it("discards the outcome if activation is revoked while the generation call is in flight", async () => {
+    let reads = 0;
+    const revokingDeps = {
+      ...deps({ env: EXECUTION }),
+      editorSettingsControl: {
+        read: () => {
+          reads += 1;
+          return Promise.resolve(editorSettingsSnapshot({ testGeneration: reads === 1 }));
+        },
+      },
+    } as unknown as UiHandlerDeps;
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody()),
+      revokingDeps,
+      execOptions(),
+    );
+    const body = wire(result);
+    expect(body.status).toBe("disabled");
+    expect(reads).toBeGreaterThanOrEqual(2);
   });
 
   it("forwards Playwright verification to the assured pre-filter", async () => {

@@ -142,46 +142,68 @@ function pythonRange(lines: readonly string[], index: number): { start: number; 
   return { start: start + 1, end: end + 1 };
 }
 
-// eslint-disable-next-line complexity -- Brace balancing is a single bounded state machine.
-function braceRange(lines: readonly string[], index: number): { start: number; end: number } {
-  let start = index;
-  let balanceStart = index;
+function locateBraceStart(
+  lines: readonly string[],
+  index: number,
+): { start: number; balanceStart: number } {
   for (let i = index; i >= Math.max(0, index - MAX_ENCLOSING_RANGE_LINES); i -= 1) {
     const line = lines[i] ?? "";
-    if (line.includes("{")) {
-      const candidate = braceStartLine(lines, i);
-      if (candidate === undefined) {
-        continue;
-      }
-      start = candidate;
-      balanceStart = i;
-      break;
+    if (!line.includes("{")) {
+      continue;
+    }
+    const candidate = braceStartLine(lines, i);
+    if (candidate === undefined) {
+      continue;
+    }
+    return { start: candidate, balanceStart: i };
+  }
+  return { start: index, balanceStart: index };
+}
+
+function countBraceDelta(line: string): { delta: number; sawOpen: boolean } {
+  let delta = 0;
+  let sawOpen = false;
+  for (const char of line) {
+    if (char === "{") {
+      delta += 1;
+      sawOpen = true;
+    } else if (char === "}") {
+      delta -= 1;
     }
   }
-  if (start === index && !looksLikeBlockHeader(lines[index] ?? "")) {
-    return { start: index + 1, end: index + 1 };
-  }
+  return { delta, sawOpen };
+}
+
+function findBraceEnd(
+  lines: readonly string[],
+  balanceStart: number,
+  fallbackIndex: number,
+): number {
   let balance = 0;
   let seenOpen = false;
-  let end = index;
+  let end = fallbackIndex;
   for (
     let i = balanceStart;
     i < Math.min(lines.length, balanceStart + MAX_ENCLOSING_RANGE_LINES);
     i += 1
   ) {
-    for (const char of lines[i] ?? "") {
-      if (char === "{") {
-        balance += 1;
-        seenOpen = true;
-      } else if (char === "}") {
-        balance -= 1;
-      }
-    }
+    const { delta, sawOpen } = countBraceDelta(lines[i] ?? "");
+    balance += delta;
+    seenOpen = seenOpen || sawOpen;
     end = i;
     if (seenOpen && balance <= 0) {
       break;
     }
   }
+  return end;
+}
+
+function braceRange(lines: readonly string[], index: number): { start: number; end: number } {
+  const { start, balanceStart } = locateBraceStart(lines, index);
+  if (start === index && !looksLikeBlockHeader(lines[index] ?? "")) {
+    return { start: index + 1, end: index + 1 };
+  }
+  const end = findBraceEnd(lines, balanceStart, index);
   return { start: start + 1, end: end + 1 };
 }
 

@@ -75,7 +75,7 @@ describe("editor selection capture", () => {
     expect(new TextEncoder().encode(captured.handoff.text)).toHaveLength(
       EDITOR_SELECTION_MAX_BYTES,
     );
-    expect(captured.handoff.text).not.toContain("�");
+    expect(captured.handoff.text).not.toContain("\uFFFD");
     expect(captured.handoff.text).not.toContain("SELECTED_TAIL");
     expect(captured.handoff.truncated).toBe(true);
 

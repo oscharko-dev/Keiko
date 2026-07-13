@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,12 +9,14 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 import {
   LspProcessError,
+  createApprovedExecutablePath,
   createEphemeralHome,
   escalateKill,
   preflightSpawnEnv,
   resolveExecutableOutsideWorkspace,
 } from "./lspNodeAdapter.js";
 import type { KillScheduler, KillableChild } from "./lspNodeAdapter.js";
+import { executableFixtureName, writeExecutableFixture } from "./testing/executableFixture.js";
 
 const cleanups: (() => void)[] = [];
 
@@ -46,10 +48,7 @@ function makeWorkspace(root: string): WorkspaceInfo {
 }
 
 function writeExecutable(dir: string, name: string): string {
-  const path = join(dir, name);
-  writeFileSync(path, "#!/bin/sh\n");
-  chmodSync(path, 0o755);
-  return path;
+  return writeExecutableFixture(dir, name);
 }
 
 describe("resolveExecutableOutsideWorkspace", () => {
@@ -62,6 +61,22 @@ describe("resolveExecutableOutsideWorkspace", () => {
     const resolved = resolveExecutableOutsideWorkspace("fakelsp", makeWorkspace(workspaceDir), env);
 
     expect(resolved).toContain("fakelsp");
+  });
+
+  it("resolves a PATHEXT command fixture on Windows", () => {
+    const binDir = makeTempDir("keiko-bin-");
+    const workspaceDir = makeTempDir("keiko-ws-");
+    writeExecutableFixture(binDir, "fakelsp", "win32");
+    const env: NodeJS.ProcessEnv = { PATH: binDir, PATHEXT: ".EXE;.CMD" };
+
+    const resolved = resolveExecutableOutsideWorkspace(
+      "fakelsp",
+      makeWorkspace(workspaceDir),
+      env,
+      "win32",
+    );
+
+    expect(resolved).toContain("fakelsp.CMD");
   });
 
   it("rejects a name that is not on PATH", () => {
@@ -87,7 +102,7 @@ describe("resolveExecutableOutsideWorkspace", () => {
     const workspaceDir = makeTempDir("keiko-ws-");
     const realTarget = writeExecutable(workspaceDir, "inside");
     const pathDir = makeTempDir("keiko-bin-");
-    symlinkSync(realTarget, join(pathDir, "fakelsp"));
+    symlinkSync(realTarget, join(pathDir, executableFixtureName("fakelsp")));
     const env: NodeJS.ProcessEnv = { PATH: pathDir };
 
     expect(() =>
@@ -133,6 +148,44 @@ describe("createEphemeralHome", () => {
     expect(() => {
       home.cleanup();
     }).not.toThrow();
+  });
+});
+
+describe("createApprovedExecutablePath", () => {
+  it("exposes only exact approved external binaries and cleans the private PATH", () => {
+    const binDir = makeTempDir("keiko-approved-bin-");
+    const workspaceDir = makeTempDir("keiko-approved-ws-");
+    const node = writeExecutable(binDir, "node");
+    const shellcheck = writeExecutable(binDir, "shellcheck");
+    writeExecutable(binDir, "shfmt");
+
+    const approved = createApprovedExecutablePath(
+      ["node", "shellcheck"],
+      [{ executable: "node" }, { executable: "shellcheck" }],
+      makeWorkspace(workspaceDir),
+      { PATH: binDir },
+    );
+
+    expect(readdirSync(approved.path).sort()).toEqual(["node", "shellcheck"]);
+    expect(realpathSync(join(approved.path, "node"))).toBe(realpathSync(node));
+    expect(realpathSync(join(approved.path, "shellcheck"))).toBe(realpathSync(shellcheck));
+    expect(existsSync(join(approved.path, "shfmt"))).toBe(false);
+    approved.cleanup();
+    expect(existsSync(approved.path)).toBe(false);
+  });
+
+  it("rejects workspace PATH shadowing without retaining a private directory", () => {
+    const workspaceDir = makeTempDir("keiko-shadow-ws-");
+    writeExecutable(workspaceDir, "shellcheck");
+
+    expect(() =>
+      createApprovedExecutablePath(
+        ["shellcheck"],
+        [{ executable: "shellcheck" }],
+        makeWorkspace(workspaceDir),
+        { PATH: workspaceDir },
+      ),
+    ).toThrow(LspProcessError);
   });
 });
 

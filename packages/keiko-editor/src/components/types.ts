@@ -31,6 +31,7 @@ import type {
   EditorSymbolsResolver,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
+import type { KeikoEditorPreferenceOptions } from "./editor-options.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
 import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
 import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
@@ -39,6 +40,7 @@ import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
 import type { EditorBlameHost } from "./blame-bridge.js";
 import type { ConflictLabels } from "./conflict-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+import type { WireEditorSemanticTokens } from "./on-mount.js";
 
 export interface EditorUriLike {
   toString(): string;
@@ -113,6 +115,18 @@ export interface KeikoCodeEditorProps {
    */
   readonly showStatusFooter?: boolean | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  /** Server-resolved M7 editor options; live-updated through Monaco updateOptions. */
+  readonly editorPreferences?: KeikoEditorPreferenceOptions | undefined;
+  /** Stable per-pane key for retained Monaco view state; content-free and host-defined. */
+  readonly modelViewStateKey?: string | undefined;
+  /** Extra model-retention protection flags for host review/recovery states. */
+  readonly modelRetentionProtection?:
+    | {
+        readonly hotExitRecovery?: boolean | undefined;
+        readonly agentReview?: boolean | undefined;
+        readonly pinned?: boolean | undefined;
+      }
+    | undefined;
   /** Accessible name for the editor control; hosts may include workspace/root context. */
   readonly ariaLabel?: string | undefined;
   readonly autoFocus?: boolean | undefined;
@@ -196,6 +210,8 @@ export interface KeikoCodeEditorProps {
   readonly onRevealCallHierarchyLocation?: ((location: EditorLocation) => void) | undefined;
   /** Host-injected inlay-hints resolver rendered by Monaco's native hint surface (Issue #2216). */
   readonly provideInlayHints?: EditorInlayHintsResolver | undefined;
+  /** Host-built, bounded semantic-token provider registered through the editor mount seam. */
+  readonly semanticTokens?: WireEditorSemanticTokens | undefined;
   /**
    * Host-injected code-action resolver (Epic #2089). When present, the editor registers Monaco's
    * lightbulb provider and enables the lightbulb UI. Edits are limited to the active model.

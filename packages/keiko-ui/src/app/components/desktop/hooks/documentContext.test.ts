@@ -141,7 +141,7 @@ describe("extractDocumentContext — per-entry budget", () => {
     if (entry === undefined) return;
     expect(utf8Bytes(entry.text)).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
     // Re-encode/decode round-trips with no replacement char => no split surrogate.
-    expect(entry.text).not.toContain("�");
+    expect(entry.text).not.toContain("\uFFFD");
     // 65_536 / 3 = 21_845 whole chars; the 21_846th would overflow.
     expect(entry.text.length).toBe(21_845);
   });

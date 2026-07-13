@@ -159,12 +159,12 @@ function clampToBytes(text: string, maxBytes: number): { excerpt: string; trunca
     return { excerpt: text, truncated: false };
   }
   const buffer = encoded.subarray(0, maxBytes);
-  const excerpt = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/�+$/u, "");
+  const excerpt = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/\uFFFD$/u, "");
   return { excerpt, truncated: true };
 }
 
 function decodeUtf8Prefix(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/�+$/u, "");
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/\uFFFD$/u, "");
 }
 
 function assertQuery(query: RetrievalQuery): void {

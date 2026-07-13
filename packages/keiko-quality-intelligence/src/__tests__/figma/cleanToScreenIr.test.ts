@@ -267,7 +267,7 @@ describe("cleanScopedNodesToScreenIr — design tokens", () => {
     });
     const result = cleanScopedNodesToScreenIr(canvas("0:1", [screen]));
 
-    expect(result.tokens.spacing.map((s) => s.value)).toEqual([8, 16]);
+    expect(result.tokens.spacing.map((s) => s.value)).toEqual([16, 8]);
   });
 
   it("extracts radius tokens from cornerRadius", () => {
@@ -1136,27 +1136,81 @@ describe("cleanScopedNodesToScreenIr — design tokens (sort/boundary)", () => {
     expect(result.tokens.typography.map((t) => t.fontFamily)).toEqual(["Inter", "Roboto"]);
   });
 
-  it("orders radius tokens ascending regardless of insertion order", () => {
-    const big: FigmaSourceNode = {
+  it("orders spacing tokens by persisted lexical token order", () => {
+    const sf = screenFrame("1:1", "A", [text("1:2", "x")], {
+      itemSpacing: 2,
+      paddingTop: 10,
+      paddingBottom: 100,
+    });
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [sf]));
+
+    expect(result.tokens.spacing.map((s) => s.value)).toEqual([10, 100, 2]);
+  });
+
+  it("orders radius tokens by persisted lexical token order", () => {
+    const small: FigmaSourceNode = {
       id: "1:2",
       name: "a",
       type: "RECTANGLE",
       absoluteBoundingBox: bbox(0, 0, 10, 10),
       fills: [solidFill(0, 0, 0)],
-      cornerRadius: 12,
+      cornerRadius: 2,
     };
-    const small: FigmaSourceNode = {
+    const medium: FigmaSourceNode = {
       id: "1:3",
       name: "b",
       type: "RECTANGLE",
       absoluteBoundingBox: bbox(0, 0, 10, 10),
       fills: [solidFill(0, 0, 0)],
-      cornerRadius: 4,
+      cornerRadius: 10,
+    };
+    const large: FigmaSourceNode = {
+      id: "1:4",
+      name: "c",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 100,
     };
     const result = cleanScopedNodesToScreenIr(
-      canvas("0:1", [screenFrame("1:1", "A", [big, small])]),
+      canvas("0:1", [screenFrame("1:1", "A", [small, medium, large])]),
     );
-    expect(result.tokens.radius.map((r) => r.value)).toEqual([4, 12]);
+    expect(result.tokens.radius.map((r) => r.value)).toEqual([10, 100, 2]);
+  });
+
+  it("orders spacing and radius tokens by persisted lexical token order", () => {
+    const radiusTwo: FigmaSourceNode = {
+      id: "1:2",
+      name: "radius-two",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 2,
+    };
+    const radiusHundred: FigmaSourceNode = {
+      id: "1:3",
+      name: "radius-hundred",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 100,
+    };
+    const spacingTwo = frame("1:4", "spacing-two", [], {
+      fills: [solidFill(0, 0, 0)],
+      paddingLeft: 2,
+      cornerRadius: 10,
+    });
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [
+        screenFrame("1:1", "A", [radiusHundred, spacingTwo, radiusTwo], {
+          itemSpacing: 10,
+          paddingTop: 100,
+        }),
+      ]),
+    );
+
+    expect(result.tokens.spacing.map((s) => s.value)).toEqual([10, 100, 2]);
+    expect(result.tokens.radius.map((r) => r.value)).toEqual([10, 100, 2]);
   });
 
   it("omits a zero itemSpacing from layout and from spacing tokens", () => {

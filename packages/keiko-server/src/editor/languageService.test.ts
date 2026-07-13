@@ -370,7 +370,7 @@ describe("hover", () => {
   });
 });
 
-describe("TypeScript-only navigation, hierarchy, and inlay dispatch", () => {
+describe("standard navigation, hierarchy, and inlay dispatch", () => {
   it("routes all four additive operations through the advertised provider", () => {
     const text =
       "interface Worker { run(): string; }\n" +

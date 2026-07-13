@@ -115,11 +115,13 @@ export interface DecodedText {
   readonly bomBytes: number;
 }
 
+type Utf16Codec = "utf-16le" | "utf-16be";
+
 // GRD-012: detect UTF-16 LE/BE by BOM (common Windows .txt/.csv/.json exports) and re-decode
 // with the matching codec. Without this they decode as UTF-8 mojibake (every other byte a NUL /
 // replacement char) and are silently chunked/embedded as garbage. UTF-32 LE (FF FE 00 00) is
 // explicitly excluded so it is not mis-read as UTF-16 LE.
-function utf16CodecForBom(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
+function utf16CodecForBom(bytes: Uint8Array): Utf16Codec | undefined {
   if (bytes.byteLength < 2) return undefined;
   const b0 = bytes[0];
   const b1 = bytes[1];
@@ -140,10 +142,17 @@ function decodeUtf16(bytes: Uint8Array): DecodedText | undefined {
   return { text: stripped, bomBytes: 2 };
 }
 
-// eslint-disable-next-line complexity
-function utf16CodecForNulPattern(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
-  if (bytes.byteLength < 8) return undefined;
-  const sampleLength = Math.min(bytes.byteLength, 4096);
+interface NulParityCounts {
+  readonly evenNuls: number;
+  readonly oddNuls: number;
+  readonly evenTotal: number;
+  readonly oddTotal: number;
+}
+
+// Counts NUL bytes at even vs. odd offsets over the first `sampleLength` bytes. UTF-16 text in
+// the ASCII range has its NULs concentrated on one parity (the all-zero high byte of each code
+// unit), which is what the caller uses to tell LE from BE apart without a BOM.
+function sampleNulParity(bytes: Uint8Array, sampleLength: number): NulParityCounts {
   let evenNuls = 0;
   let oddNuls = 0;
   let evenTotal = 0;
@@ -157,11 +166,28 @@ function utf16CodecForNulPattern(bytes: Uint8Array): "utf-16le" | "utf-16be" | u
       if (bytes[i] === 0x00) oddNuls += 1;
     }
   }
-  const evenRatio = evenTotal === 0 ? 0 : evenNuls / evenTotal;
-  const oddRatio = oddTotal === 0 ? 0 : oddNuls / oddTotal;
+  return { evenNuls, oddNuls, evenTotal, oddTotal };
+}
+
+// Turns NUL-byte ratios into a codec verdict: LE has NULs concentrated on odd offsets (the
+// zero high byte follows the low byte), BE on even offsets. Below-threshold or ambiguous ratios
+// return undefined so the caller falls back to another decode strategy.
+function codecForNulRatios(
+  evenRatio: number,
+  oddRatio: number,
+): "utf-16le" | "utf-16be" | undefined {
   if (oddRatio >= 0.3 && evenRatio <= 0.05) return "utf-16le";
   if (evenRatio >= 0.3 && oddRatio <= 0.05) return "utf-16be";
   return undefined;
+}
+
+function utf16CodecForNulPattern(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
+  if (bytes.byteLength < 8) return undefined;
+  const sampleLength = Math.min(bytes.byteLength, 4096);
+  const { evenNuls, oddNuls, evenTotal, oddTotal } = sampleNulParity(bytes, sampleLength);
+  const evenRatio = evenTotal === 0 ? 0 : evenNuls / evenTotal;
+  const oddRatio = oddTotal === 0 ? 0 : oddNuls / oddTotal;
+  return codecForNulRatios(evenRatio, oddRatio);
 }
 
 function decodeUtf16WithoutBom(bytes: Uint8Array): DecodedText | undefined {

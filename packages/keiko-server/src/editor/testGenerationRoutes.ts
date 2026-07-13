@@ -50,13 +50,15 @@ import {
   type TestGenerationRunResult,
 } from "./testGenerationRunner.js";
 import { defaultAssuredPreFilter, type AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
+import { editorAiStatusActive, resolveEditorAiAssistStatusForRoot } from "./aiAssistActivation.js";
 
 // The overlay buffer(s) may be up to the document-size cap; allow 64 KiB of JSON on top, doubled to
 // accommodate a small changed-file set.
 const MAX_TEST_GENERATION_BODY_BYTES = 2 * (1_048_576 + 64 * 1024);
 const MAX_CHANGED_SET_DOCUMENTS = 32;
 
-// Gate A — surfaces the feature at all (default OFF: this is a wave-2 feature shipped switched off).
+// Gate A — deployment ceiling (default OFF: this wave-2 feature remains unavailable unless the
+// operator explicitly permits it; M7 settings still provide the separate explicit opt-in).
 const TEST_GENERATION_POLICY_ENV = "KEIKO_EDITOR_TEST_GENERATION";
 // Gate B — permits producing a candidate once the enforced egress boundary is available (default OFF).
 const TEST_GENERATION_EXECUTION_ENV = "KEIKO_EDITOR_TEST_GENERATION_EXECUTION";
@@ -80,9 +82,10 @@ function envFlagEnabled(value: string | undefined): boolean {
   return value !== undefined && ENABLE_TOKENS.has(value.trim().toLowerCase());
 }
 
-/** Whether the test-generation feature is surfaced by deployment policy (Gate A; default off). */
+/** Whether the test-generation feature is permitted by deployment policy (Gate A; default off). */
 export function isTestGenerationEnabledByPolicy(env: EnvSource | undefined): boolean {
-  return envFlagEnabled(env?.[TEST_GENERATION_POLICY_ENV]);
+  const token = env?.[TEST_GENERATION_POLICY_ENV]?.trim().toLowerCase();
+  return token !== undefined && ENABLE_TOKENS.has(token);
 }
 
 /**
@@ -313,6 +316,17 @@ async function produceOutcome(
   }
 }
 
+// ADR-0133 D7: discard in-flight work at the activation revision boundary rather than surfacing a
+// stale-authorized result if activation was revoked while the model call ran.
+async function testGenerationActivationStillActive(
+  deps: UiHandlerDeps,
+  realRoot: string,
+): Promise<boolean> {
+  return editorAiStatusActive(
+    await resolveEditorAiAssistStatusForRoot(deps, realRoot, "testGeneration"),
+  );
+}
+
 export async function handleEditorTestGeneration(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -338,6 +352,9 @@ export async function handleEditorTestGeneration(
     if (containment !== undefined) {
       return containment;
     }
+    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
+      return { status: 200, body: deps.redactor(disabledResponse()) };
+    }
     const nowMs = (options.now ?? Date.now)();
     const signal = clientAbortSignal(ctx);
     const executionEnabled = isTestGenerationExecutionEnabledByPolicy(deps.env);
@@ -353,6 +370,9 @@ export async function handleEditorTestGeneration(
       { request, deps, realRoot: root.realRoot, signal, nowMs, options },
       discovery,
     );
+    if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {
+      return { status: 200, body: deps.redactor(disabledResponse()) };
+    }
     recordTestGenerationEvidence(deps.evidenceStore, deps.redactor, outcome, nowMs);
     return { status: 200, body: deps.redactor(outcome) };
   });

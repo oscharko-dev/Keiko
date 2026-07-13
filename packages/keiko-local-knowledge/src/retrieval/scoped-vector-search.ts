@@ -455,7 +455,91 @@ function collectAnnBucket(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
+// Flips a single hash bit off `target` and probes every resulting bucket — the
+// Hamming-distance-1 neighborhood of the query's ANN hash.
+function probeAnnBucketsWithinHammingDistanceOne(
+  index: AnnIndex,
+  target: number,
+  seenBuckets: Set<number>,
+  seenRows: Set<number>,
+  out: number[],
+  limit: number,
+): void {
+  for (let bit = 0; bit < ANN_HASH_BITS && out.length < limit; bit += 1) {
+    collectAnnBucket(index.buckets, target ^ (1 << bit), seenBuckets, seenRows, out, limit);
+  }
+}
+
+// Flips every distinct pair of hash bits off `target` — the Hamming-distance-2
+// neighborhood — widening recall once distance-1 buckets are exhausted.
+function probeAnnBucketsWithinHammingDistanceTwo(
+  index: AnnIndex,
+  target: number,
+  seenBuckets: Set<number>,
+  seenRows: Set<number>,
+  out: number[],
+  limit: number,
+): void {
+  for (let a = 0; a < ANN_HASH_BITS && out.length < limit; a += 1) {
+    for (let b = a + 1; b < ANN_HASH_BITS && out.length < limit; b += 1) {
+      collectAnnBucket(
+        index.buckets,
+        target ^ (1 << a) ^ (1 << b),
+        seenBuckets,
+        seenRows,
+        out,
+        limit,
+      );
+    }
+  }
+}
+
+// Flips every distinct triple of hash bits off `target` — the Hamming-distance-3
+// neighborhood — the widest ring probed before falling back to a full bucket scan.
+function probeAnnBucketsWithinHammingDistanceThree(
+  index: AnnIndex,
+  target: number,
+  seenBuckets: Set<number>,
+  seenRows: Set<number>,
+  out: number[],
+  limit: number,
+): void {
+  for (let a = 0; a < ANN_HASH_BITS && out.length < limit; a += 1) {
+    for (let b = a + 1; b < ANN_HASH_BITS && out.length < limit; b += 1) {
+      for (let c = b + 1; c < ANN_HASH_BITS && out.length < limit; c += 1) {
+        collectAnnBucket(
+          index.buckets,
+          target ^ (1 << a) ^ (1 << b) ^ (1 << c),
+          seenBuckets,
+          seenRows,
+          out,
+          limit,
+        );
+      }
+    }
+  }
+}
+
+// Last-resort fallback when no bucket within Hamming distance 3 held any rows: scans
+// every populated bucket ordered by ascending Hamming distance from `target`.
+function probeAnnBucketsByNearestHamming(
+  index: AnnIndex,
+  target: number,
+  seenBuckets: Set<number>,
+  seenRows: Set<number>,
+  out: number[],
+  limit: number,
+): void {
+  const nearestBuckets = [...index.buckets.keys()].sort((a, b) => {
+    const dist = hammingDistance(a, target) - hammingDistance(b, target);
+    return dist !== 0 ? dist : a - b;
+  });
+  for (const bucket of nearestBuckets) {
+    collectAnnBucket(index.buckets, bucket, seenBuckets, seenRows, out, limit);
+    if (out.length >= limit) break;
+  }
+}
+
 function annCandidateRowsForQuery(
   index: AnnIndex,
   queryVector: Float32Array,
@@ -466,44 +550,18 @@ function annCandidateRowsForQuery(
   const seenRows = new Set<number>();
   const rowIndexes: number[] = [];
   collectAnnBucket(index.buckets, target, seenBuckets, seenRows, rowIndexes, limit);
-  for (let bit = 0; bit < ANN_HASH_BITS && rowIndexes.length < limit; bit += 1) {
-    collectAnnBucket(index.buckets, target ^ (1 << bit), seenBuckets, seenRows, rowIndexes, limit);
-  }
-  for (let a = 0; a < ANN_HASH_BITS && rowIndexes.length < limit; a += 1) {
-    for (let b = a + 1; b < ANN_HASH_BITS && rowIndexes.length < limit; b += 1) {
-      collectAnnBucket(
-        index.buckets,
-        target ^ (1 << a) ^ (1 << b),
-        seenBuckets,
-        seenRows,
-        rowIndexes,
-        limit,
-      );
-    }
-  }
-  for (let a = 0; a < ANN_HASH_BITS && rowIndexes.length < limit; a += 1) {
-    for (let b = a + 1; b < ANN_HASH_BITS && rowIndexes.length < limit; b += 1) {
-      for (let c = b + 1; c < ANN_HASH_BITS && rowIndexes.length < limit; c += 1) {
-        collectAnnBucket(
-          index.buckets,
-          target ^ (1 << a) ^ (1 << b) ^ (1 << c),
-          seenBuckets,
-          seenRows,
-          rowIndexes,
-          limit,
-        );
-      }
-    }
-  }
+  probeAnnBucketsWithinHammingDistanceOne(index, target, seenBuckets, seenRows, rowIndexes, limit);
+  probeAnnBucketsWithinHammingDistanceTwo(index, target, seenBuckets, seenRows, rowIndexes, limit);
+  probeAnnBucketsWithinHammingDistanceThree(
+    index,
+    target,
+    seenBuckets,
+    seenRows,
+    rowIndexes,
+    limit,
+  );
   if (rowIndexes.length === 0) {
-    const nearestBuckets = [...index.buckets.keys()].sort((a, b) => {
-      const dist = hammingDistance(a, target) - hammingDistance(b, target);
-      return dist !== 0 ? dist : a - b;
-    });
-    for (const bucket of nearestBuckets) {
-      collectAnnBucket(index.buckets, bucket, seenBuckets, seenRows, rowIndexes, limit);
-      if (rowIndexes.length >= limit) break;
-    }
+    probeAnnBucketsByNearestHamming(index, target, seenBuckets, seenRows, rowIndexes, limit);
   }
   return rowIndexes
     .map((rowIndex) => index.rows[rowIndex])
@@ -569,12 +627,12 @@ function decodeCacheKey(
 
 function sourceFilterKey(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
   if (sourceFilter === undefined) return "*";
-  return [...new Set(sourceFilter.map(String))].sort().join("\u0000");
+  return [...new Set(sourceFilter.map(String))].sort((a, b) => a.localeCompare(b)).join("\u0000");
 }
 
 function chunkFilterKey(chunkFilter: readonly string[] | undefined): string {
   if (chunkFilter === undefined) return "*";
-  return [...new Set(chunkFilter)].sort().join("\u0000");
+  return [...new Set(chunkFilter)].sort((a, b) => a.localeCompare(b)).join("\u0000");
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {
@@ -2509,7 +2567,9 @@ function embeddingLaneDiagnostics(
     .sort((left, right) => left.laneId.localeCompare(right.laneId))
     .map((lane) => ({
       laneId: lane.laneId,
-      capsuleIds: [...lane.capsuleIds].sort().map((id) => id as KnowledgeCapsuleId),
+      capsuleIds: [...lane.capsuleIds]
+        .sort((a, b) => a.localeCompare(b))
+        .map((id) => id as KnowledgeCapsuleId),
       status: finalLaneStatus(lane),
       queryEmbeddingRequested: lane.queryEmbeddingRequested,
       vectorCount: lane.vectorCount,

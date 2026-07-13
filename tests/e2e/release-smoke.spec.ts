@@ -365,7 +365,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
 
   // Issue #1376 (D1/AC1): reloading from disk over the dirty conflict buffer routes through an
   // explicit discard confirmation before the disk content replaces the unsaved edits.
-  await editorWindow.getByRole("button", { name: "Reload" }).click();
+  await editorWindow.getByRole("button", { name: "Reload", exact: true }).click();
   await editorWindow.getByRole("button", { name: "Discard and reload" }).click();
   await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();

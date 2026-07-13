@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { runLifecycleCli, safeKillProcess } from "./lifecycle.js";
@@ -88,6 +89,61 @@ function requireCapturedLogFds(
   return logFds;
 }
 
+async function withHealthServer<T>(
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
+  run: (port: number) => Promise<T>,
+): Promise<T> {
+  const server = createServer(handler);
+  await new Promise<void>((resolveListen) => {
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Expected TCP address");
+  try {
+    return await run(address.port);
+  } finally {
+    await new Promise<void>((resolveClose) => {
+      server.close(() => {
+        resolveClose();
+      });
+    });
+  }
+}
+
+async function expectNativeHealthStartFailure(
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
+): Promise<void> {
+  await withHealthServer(handler, async (port) => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 600;
+      return now;
+    });
+    try {
+      const code = await runLifecycleCli(
+        "start",
+        ["--port", String(port), "--start-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: () => child,
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          sleep: () => Promise.resolve(),
+        },
+      );
+      expect(code).toBe(1);
+      expect(c.err()).toContain("UI did not become healthy");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -95,6 +151,82 @@ afterEach(() => {
 });
 
 describe("runLifecycleCli", () => {
+  it("uses the bounded native HTTP health probe instead of fetch", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: SDK_VERSION }));
+    });
+    await new Promise<void>((resolveListen) => {
+      server.listen(0, "127.0.0.1", resolveListen);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("Expected TCP address");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not run"));
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    try {
+      const code = await runLifecycleCli(
+        "start",
+        ["--port", String(address.port)],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: () => child,
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+        },
+      );
+      expect(code).toBe(0);
+      expect(c.out()).toContain("Keiko UI running on");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      await new Promise<void>((resolveClose) => {
+        server.close(() => {
+          resolveClose();
+        });
+      });
+    }
+  });
+
+  it("fails closed when the native HTTP health probe returns an HTTP error", async () => {
+    await expectNativeHealthStartFailure((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: SDK_VERSION }));
+    });
+  });
+
+  it("fails closed when the native HTTP health probe returns malformed JSON", async () => {
+    await expectNativeHealthStartFailure((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{not-json");
+    });
+  });
+
+  it("fails closed when the native HTTP health probe returns a different version", async () => {
+    await expectNativeHealthStartFailure((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: "0.0.0-wrong" }));
+    });
+  });
+
+  it("fails closed when the native HTTP health probe response exceeds the size cap", async () => {
+    await expectNativeHealthStartFailure((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: "x".repeat(70 * 1024) }));
+    });
+  });
+
+  it("fails closed when the native HTTP health probe times out", async () => {
+    await expectNativeHealthStartFailure((_request, response) => {
+      response.once("close", () => {
+        response.destroy();
+      });
+    });
+  });
+
   it("reports not running when no pid file exists", async () => {
     const root = makeRoot();
     const c = makeIo();

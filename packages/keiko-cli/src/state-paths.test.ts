@@ -485,15 +485,17 @@ describe("scanRuntimeState — runtime-state manifest", () => {
 });
 
 describe("isInsidePath", () => {
+  const ancestor = join("root", "a", "b");
+
   it("treats a path as inside itself", () => {
-    expect(isInsidePath("/a/b", "/a/b")).toBe(true);
+    expect(isInsidePath(ancestor, ancestor)).toBe(true);
   });
 
   it("recognizes a descendant", () => {
-    expect(isInsidePath("/a/b", join("/a/b", "c", "d"))).toBe(true);
+    expect(isInsidePath(ancestor, join(ancestor, "c", "d"))).toBe(true);
   });
 
   it("rejects a sibling with a shared prefix", () => {
-    expect(isInsidePath("/a/b", "/a/bc")).toBe(false);
+    expect(isInsidePath(ancestor, `${ancestor}c`)).toBe(false);
   });
 });

@@ -36,20 +36,22 @@ import {
   type ButtonHTMLAttributes,
   type CSSProperties,
   type ReactNode,
-  type Reducer,
 } from "react";
+import { toExactArrayBuffer } from "@/lib/bytes";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   applyTextEditsToText,
   buildPatchPreview,
   buildTestGenerationPreview,
   buildRenamePreview,
+  configureEditorModelRegistry,
   createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
   deriveLargeFileMode,
   deriveEditorStatusBar,
   describeTestGenerationStatus,
+  disposeAllUnattachedEditorModels,
   editorFileModelReducer,
   editorLanguageLabel,
   EditorStatusBar,
@@ -68,6 +70,7 @@ import {
   type EditorCodeActionsQuery,
   type EditorCodeActionsResolver,
   type EditorCompletionQuery,
+  type EditorCompletionItem,
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDefinitionQuery,
@@ -122,6 +125,13 @@ import {
   type GitEditorDiffHunk,
   type GitEditorBlameLine,
   GIT_EDITOR_BLAME_MAX_LINES,
+  type EditorM7WatchEvent,
+  MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
+  MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
+  matchingEditorM7Snippets,
+  type EditorCompletionSource,
+  type ManagedLspSemanticTokenLegend,
+  type EditorM7WorkspaceSnippetSnapshot,
   type WorkspaceReplaceApplyFile,
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
@@ -146,6 +156,7 @@ import {
   requestEditorImplementation,
   requestEditorCallHierarchy,
   requestEditorInlayHints,
+  requestEditorSemanticTokens,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -199,7 +210,15 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import {
+  IDLE_EXTERNAL_CHANGE_STATE,
+  editorExternalChangeReducer,
+  type EditorExternalChangeState,
+} from "./editorExternalChangeState";
+import { useEditorSettings } from "./useEditorSettings";
+import { useWorkspaceSnippets } from "./useWorkspaceSnippets";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { useWorkspaceWatch } from "./useWorkspaceWatch";
 import { removePaneDiagnostics, setPaneDiagnostics } from "./editorProblemsStore";
 import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
@@ -211,6 +230,11 @@ import {
 import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import {
+  createEditorSemanticTokensHost,
+  type EditorSemanticTokensQuery,
+  type EditorSemanticTokensResolver,
+} from "./editorSemanticTokens";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
@@ -464,7 +488,39 @@ const TEST_GENERATION_FAILURE_MESSAGE =
 const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
+const FORMAT_ON_SAVE_DEADLINE_MS = 5_000;
 const UTF8_ENCODER = new TextEncoder();
+
+interface FormatOnSaveState {
+  readonly enabled: boolean;
+  readonly canFormat: boolean;
+  readonly document: EditorDocumentIdentity | null;
+  readonly file: string | undefined;
+  readonly root: string | undefined;
+  readonly tabSize: number;
+  readonly insertSpaces: boolean;
+}
+const RUST_SEMANTIC_TOKEN_LEGEND: ManagedLspSemanticTokenLegend = Object.freeze({
+  schemaVersion: "1",
+  legendVersion: 1,
+  tokenTypes: MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
+  tokenModifiers: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
+  returnedTypeCount: MANAGED_LSP_SEMANTIC_TOKEN_TYPES.length,
+  totalTypeCount: MANAGED_LSP_SEMANTIC_TOKEN_TYPES.length,
+  returnedModifierCount: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.length,
+  totalModifierCount: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.length,
+  truncated: false,
+});
+const SEMANTIC_TEXT_ENCODER = new TextEncoder();
+
+function semanticLegendMatches(value: ManagedLspSemanticTokenLegend): boolean {
+  return (
+    value.legendVersion === RUST_SEMANTIC_TOKEN_LEGEND.legendVersion &&
+    value.tokenTypes.join("\0") === RUST_SEMANTIC_TOKEN_LEGEND.tokenTypes.join("\0") &&
+    value.tokenModifiers.join("\0") === RUST_SEMANTIC_TOKEN_LEGEND.tokenModifiers.join("\0")
+  );
+}
+
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
 // GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
 // surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
@@ -664,13 +720,15 @@ async function deleteHotExitSnapshotBestEffort(root: string, file: string): Prom
 async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
-    const digest = await cryptoLike.subtle.digest("SHA-256", bytes);
+    const digest = await cryptoLike.subtle.digest("SHA-256", toExactArrayBuffer(bytes));
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
   for (let index = 0; index < fallbackText.length; index += 1) {
-    hash ^= fallbackText.charCodeAt(index);
+    const code = fallbackText.codePointAt(index) ?? 0;
+    hash ^= code;
     hash = Math.imul(hash, 0x01000193) >>> 0;
+    if (code > 0xffff) index += 1;
   }
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
 }
@@ -992,6 +1050,46 @@ function completionContextSelectors(input: {
   return Object.keys(selectors).length > 0 ? selectors : undefined;
 }
 
+function completionPrefixAt(text: string, line: number, character: number): string {
+  const currentLine = lineAtIndex(text, line);
+  const beforeCursor = currentLine.slice(0, Math.max(0, character));
+  let start = beforeCursor.length;
+  while (start > 0 && completionPrefixChar(beforeCursor[start - 1] ?? "")) start -= 1;
+  return beforeCursor.slice(start);
+}
+
+function completionPrefixChar(value: string): boolean {
+  return /^[A-Za-z0-9._:-]$/u.test(value);
+}
+
+function snippetCompletionItems(input: {
+  readonly snapshot: EditorM7WorkspaceSnippetSnapshot | undefined;
+  readonly languageId: string;
+  readonly relativePath: string;
+  readonly prefix: string;
+  readonly insertionSafe: boolean;
+  readonly signal: AbortSignal;
+}): readonly EditorCompletionItem[] {
+  const snapshot = input.snapshot;
+  if (snapshot === undefined || snapshot.storeState === "unavailable") return [];
+  return matchingEditorM7Snippets({
+    collection: snapshot,
+    languageId: input.languageId,
+    relativePath: input.relativePath,
+    prefix: input.prefix,
+    insertionSafe: input.insertionSafe,
+    signal: input.signal,
+  }).map((item) => ({
+    label: item.label,
+    kind: "snippet",
+    insertText: item.insertText,
+    insertAsSnippet: true,
+    detail: item.detail,
+    sortText: item.sortText,
+    provenance: { origin: "deterministic-completion" },
+  }));
+}
+
 function providerForLanguage(
   capabilities: LanguageServiceCapabilities | null,
   languageId: string | undefined,
@@ -1067,6 +1165,52 @@ function buildAgentPatchDiffModel(
     unsupportedCount: 0,
     truncated: false,
   };
+}
+
+function workspaceWatchEventTouchesPath(
+  event: EditorM7WatchEvent,
+  path: string | undefined,
+): boolean {
+  if (path === undefined || path.length === 0) return event.relativePath.length === 0;
+  return (
+    event.relativePath.length === 0 || event.relativePath === path || event.oldRelativePath === path
+  );
+}
+
+function externalChangeMessage(state: EditorExternalChangeState, file: string | undefined): string {
+  const subject = file !== undefined && file.length > 0 ? file : "this file";
+  switch (state.status) {
+    case "cleanChanged":
+      return `The file changed on disk: ${subject}.`;
+    case "dirtyChanged":
+      return `The file changed on disk while you have unsaved edits: ${subject}.`;
+    case "deleted":
+      return `The file was deleted on disk: ${subject}.`;
+    case "renamed":
+      return state.oldRelativePath === null
+        ? `The file may have moved on disk: ${subject}.`
+        : `The file may have moved on disk from ${state.oldRelativePath}.`;
+    case "rescanRequired":
+      return "Workspace file events fell behind. Refresh before trusting stale editor state.";
+    case "degraded":
+      return state.reason === null
+        ? "Workspace file watching is degraded. Refresh before trusting stale editor state."
+        : `Workspace file watching is degraded: ${state.reason}.`;
+    case "idle":
+      return "";
+  }
+}
+
+function externalChangeCanCompare(state: EditorExternalChangeState): boolean {
+  return state.status === "cleanChanged" || state.status === "dirtyChanged";
+}
+
+function localWriteMatchesEvent(
+  localWrite: { readonly path: string; readonly expiresAt: number } | null,
+  event: EditorM7WatchEvent,
+): boolean {
+  if (localWrite === null || Date.now() > localWrite.expiresAt) return false;
+  return localWrite.path === event.relativePath || localWrite.path === event.oldRelativePath;
 }
 
 type AgentPreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
@@ -1248,6 +1392,14 @@ function changesetSourceExceedsLimit(content: string, maxBytes: number | null): 
   return maxBytes !== null && UTF8_ENCODER.encode(content).length > maxBytes;
 }
 
+// Every editor pane mounts its own EditorRuntimeWidget instance, but disposeAllUnattachedEditorModels
+// clears the *shared* registry with no per-root scoping. Gating it behind this live-instance count
+// keeps a single pane's unmount/root-change from evicting the retained-but-inactive models that
+// sibling panes (split view, multiple windows) are still keeping warm — eager cleanup only fires
+// when this is the sole surviving instance; otherwise the registry's own count/byte-budget eviction
+// still reclaims abandoned entries the next time any pane attaches or detaches a model.
+let liveEditorRuntimeInstances = 0;
+
 function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -1288,6 +1440,40 @@ function EditorRuntimeWidget({
   const sourceControlT = useEditorSourceControlTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
+  const editorSettings = useEditorSettings(root);
+  const workspaceSnippets = useWorkspaceSnippets(root);
+  // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
+  // Monaco model registry. Every mounted editor surface renders this component, so the registry
+  // stays configured to the current effective values without a dedicated global subscriber.
+  useEffect(() => {
+    configureEditorModelRegistry({
+      countBudget: editorSettings.applied.modelRetentionCount,
+      byteBudget: editorSettings.applied.modelRetentionBytes,
+    });
+  }, [editorSettings.applied.modelRetentionCount, editorSettings.applied.modelRetentionBytes]);
+  // AC7: releases retained-but-inactive Monaco models when this pane's root changes (the pane
+  // itself is keyed by pane id, not root, so it stays mounted across a root switch) or when the
+  // pane closes/the window unmounts. Only eager when no sibling pane is alive to depend on the
+  // shared registry — see the liveEditorRuntimeInstances comment above.
+  const previousRuntimeRootRef = useRef(root);
+  useEffect(() => {
+    if (previousRuntimeRootRef.current !== root) {
+      if (liveEditorRuntimeInstances <= 1) {
+        disposeAllUnattachedEditorModels("root-disposed");
+      }
+      previousRuntimeRootRef.current = root;
+    }
+  }, [root]);
+  useEffect(() => {
+    liveEditorRuntimeInstances += 1;
+    return () => {
+      liveEditorRuntimeInstances -= 1;
+      if (liveEditorRuntimeInstances === 0) {
+        disposeAllUnattachedEditorModels("shutdown");
+      }
+    };
+  }, []);
+  const snippetInsertionSafeRef = useRef(false);
   // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
   // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
   const verification = useEditorVerificationRun({
@@ -1295,6 +1481,8 @@ function EditorRuntimeWidget({
     activeFile: file !== undefined && file.length > 0 ? file : null,
   });
   const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
+  const generatedId = useId();
+  const diagnosticsProducerId = windowId ?? generatedId;
   // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
   // active review surface is actually reviewing, never to the pane's currently active file. This
   // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
@@ -1324,13 +1512,12 @@ function EditorRuntimeWidget({
   const onPaneDiagnostics = useCallback(
     (diagnostics: readonly EditorDiagnostic[]): void => {
       if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
-        setPaneDiagnostics(root, file, diagnostics);
+        setPaneDiagnostics(root, diagnosticsProducerId, file, diagnostics);
       }
     },
-    [root, file],
+    [diagnosticsProducerId, root, file],
   );
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
-  const generatedId = useId();
   const editorModelScope = useMemo(
     () => safeDomIdSegment(windowId ?? generatedId),
     [generatedId, windowId],
@@ -1358,15 +1545,19 @@ function EditorRuntimeWidget({
     documentTabsRef.current = documentTabs;
     if (root === undefined || root.length === 0) return;
     for (const previousPath of previousTabs) {
-      if (!documentTabs.includes(previousPath)) removePaneDiagnostics(root, previousPath);
+      if (!documentTabs.includes(previousPath)) {
+        removePaneDiagnostics(root, diagnosticsProducerId, previousPath);
+      }
     }
-  }, [documentTabs, root]);
+  }, [diagnosticsProducerId, documentTabs, root]);
   useEffect(() => {
     return (): void => {
       if (root === undefined || root.length === 0) return;
-      for (const openPath of documentTabsRef.current) removePaneDiagnostics(root, openPath);
+      for (const openPath of documentTabsRef.current) {
+        removePaneDiagnostics(root, diagnosticsProducerId, openPath);
+      }
     };
-  }, [root]);
+  }, [diagnosticsProducerId, root]);
   const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -1494,7 +1685,8 @@ function EditorRuntimeWidget({
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
-    Reducer<TestGenerationFlowState, TestGenerationFlowAction>
+    TestGenerationFlowState,
+    [TestGenerationFlowAction]
   >(testGenerationReducer, IDLE_TEST_GENERATION_STATE);
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);
@@ -1524,6 +1716,11 @@ function EditorRuntimeWidget({
   const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [recoveryCompare, setRecoveryCompare] = useState(false);
+  const [externalChange, dispatchExternalChange] = useReducer(
+    editorExternalChangeReducer,
+    IDLE_EXTERNAL_CHANGE_STATE,
+  );
+  const [externalCompareBaseline, setExternalCompareBaseline] = useState<string | null>(null);
   const [activeContentDigest, setActiveContentDigest] = useState<{
     readonly content: string;
     readonly hash: string;
@@ -1611,10 +1808,22 @@ function EditorRuntimeWidget({
   versionRef.current = version;
   const savingRef = useRef(false);
   savingRef.current = saveStatus === "saving";
+  const recentLocalWriteRef = useRef<{ readonly path: string; readonly expiresAt: number } | null>(
+    null,
+  );
   // The editor stays editable during a save; this ref lets the success handler tell whether the
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  const formatOnSaveStateRef = useRef<FormatOnSaveState>({
+    enabled: false,
+    canFormat: false,
+    document: null,
+    file: undefined,
+    root: undefined,
+    tabSize: 2,
+    insertSpaces: true,
+  });
   const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
   const contentSizeBytes = contentBytes.length;
   const activeContentHash =
@@ -1636,6 +1845,8 @@ function EditorRuntimeWidget({
     setRecoveryCompare(false);
     setReloadConfirm(false);
     setRecoveryDiskBaseline(null);
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "reloadSucceeded" });
     setRenameReview(null);
   }, [file, root]);
 
@@ -1697,6 +1908,36 @@ function EditorRuntimeWidget({
     lastDirtyNotificationRef.current = { file, dirty };
     onDirtyChange?.(file, dirty);
   }, [dirty, file, onDirtyChange]);
+  useEffect(() => {
+    dispatchExternalChange({ type: "dirtyChanged", dirty });
+  }, [dirty]);
+  const handleWorkspaceWatchEvent = useCallback(
+    (event: EditorM7WatchEvent): void => {
+      if (root !== undefined && file !== undefined && workspaceWatchEventTouchesPath(event, file)) {
+        setGitGutterPeek(null);
+        setGitGutterRefreshNonce((value) => value + 1);
+        setDiagnosticsSummary(null);
+        removePaneDiagnostics(root, diagnosticsProducerId, file);
+        symbolCacheRef.current = null;
+        setOutlineSymbols([]);
+      }
+      // Consume the local-write marker on first match: a save produces exactly one reconciling
+      // watch event, so leaving the marker live for its full window would let an unrelated
+      // third-party write to the same path within that window be silently treated as Keiko's own.
+      const originatedByKeiko = localWriteMatchesEvent(recentLocalWriteRef.current, event);
+      if (originatedByKeiko) recentLocalWriteRef.current = null;
+      dispatchExternalChange({
+        type: "observed",
+        event,
+        activePath: file,
+        dirty: dirtyRef.current,
+        saving: savingRef.current,
+        originatedByKeiko,
+      });
+    },
+    [diagnosticsProducerId, file, root],
+  );
+  const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
     const snapshotKey = documentSessionKey(root, file);
@@ -1838,6 +2079,8 @@ function EditorRuntimeWidget({
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
+          setExternalCompareBaseline(null);
+          dispatchExternalChange({ type: "reloadSucceeded" });
           // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
           // The content comparison is the authoritative signal; an additional contentHash check is
           // redundant against it (a content difference implies a hash difference) and can only ever
@@ -1885,8 +2128,20 @@ function EditorRuntimeWidget({
     reload();
   }, [reload]);
 
+  // ADR-0133 D3: clean buffers may reload only per the effective externalReload setting.
+  // "cleanChanged" is only ever dispatched for a non-dirty, non-saving buffer (statusForObserved),
+  // so reloading here can never discard unsaved edits — dirty buffers stay on "prompt" regardless.
+  const externalReloadPolicy = editorSettings.applied.externalReload;
+  useEffect(() => {
+    if (externalReloadPolicy === "autoClean" && externalChange.status === "cleanChanged") {
+      reload();
+    }
+  }, [externalChange.sequence, externalChange.status, externalReloadPolicy, reload]);
+
   const confirmReloadDiscard = useCallback((): void => {
     setReloadConfirm(false);
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "reloadStarted" });
     // The user chose to discard the unsaved buffer for the on-disk version, so the hot-exit snapshot
     // holding those edits must go too — otherwise the reload would immediately re-offer them as a
     // recovery. Serialized store mutations keep this delete ordered ahead of the reload's snapshot read.
@@ -1919,6 +2174,60 @@ function EditorRuntimeWidget({
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
+  const prepareFormatOnSave = useCallback(async (text: string): Promise<string | null> => {
+    const state = formatOnSaveStateRef.current;
+    if (!state.enabled) return text;
+    if (
+      !state.canFormat ||
+      state.document === null ||
+      state.root === undefined ||
+      state.file === undefined
+    ) {
+      return text;
+    }
+    const baseVersion = versionRef.current;
+    const request = {
+      request: {
+        requestId: createEditorRequestId(),
+        streamId: "editor-format-on-save",
+        sequence: Date.now(),
+      },
+      document: state.document,
+      options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
+    };
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
+    try {
+      const wire = await requestEditorFormatting(
+        {
+          root: state.root,
+          path: state.file,
+          languageId: state.document.language,
+          text,
+          options: request.options,
+        },
+        controller.signal,
+      );
+      if (contentRef.current !== text || versionRef.current !== baseVersion) {
+        setSaveError("Format-on-save stopped because the file changed while formatting.");
+        setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+        return null;
+      }
+      const response = mapWireToEditorFormattingResponse(request.request, wire);
+      return response.edits.length === 0 ? text : applyTextEditsToText(text, response.edits);
+    } catch (error: unknown) {
+      setSaveError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "Format-on-save timed out. Save again after formatting is available."
+          : `Format-on-save failed: ${errorMessage(error)}`,
+      );
+      setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+      return null;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, []);
+
   const persist = useCallback(
     async (text: string): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
@@ -1937,33 +2246,52 @@ function EditorRuntimeWidget({
       savingRef.current = true;
       setSaveStatus((status) => saveStatusReducer(status, { type: "request" }));
       setSaveError(undefined);
+      let attemptedSaveText = text;
       try {
+        const preparedText = await prepareFormatOnSave(text);
+        if (preparedText === null) return false;
+        const textToSave = preparedText;
+        attemptedSaveText = textToSave;
+        if (textToSave !== contentRef.current) {
+          contentRef.current = textToSave;
+          setContent(textToSave);
+          setFileModel((model: EditorFileModel | null) =>
+            model === null
+              ? model
+              : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+          );
+        }
         const response = await saveFilesContent({
           root,
           path: file,
-          content: text,
+          content: textToSave,
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
         });
-        notifyWorkspaceFileMutated(root);
+        recentLocalWriteRef.current = { path: file, expiresAt: Date.now() + 2_000 };
+        notifyWorkspaceFileMutated(root, {
+          kind: "changed",
+          relativePath: file,
+          provenance: "local",
+        });
         if (activeSessionKeyRef.current !== saveSessionKey) {
           const cached = sessionCacheRef.current.get(saveSessionKey);
-          const cachedContent = cached?.content ?? text;
+          const cachedContent = cached?.content ?? textToSave;
           const cachedFileModel = cached?.fileModel ?? null;
           sessionCacheRef.current.set(saveSessionKey, {
-            content: cachedContent === text ? response.content : cachedContent,
+            content: cachedContent === textToSave ? response.content : cachedContent,
             fileModel:
               cachedFileModel === null
                 ? cachedFileModel
                 : editorFileModelReducer(cachedFileModel, {
-                    type: cachedContent === text ? "saved" : "edited",
+                    type: cachedContent === textToSave ? "saved" : "edited",
                     origin: "human",
                   }),
             modifiedAt: response.modifiedAt,
             version: response.session.version,
             maxBytes: response.maxBytes,
             loadState: cached?.loadState ?? { status: "ready" },
-            saveStatus: cachedContent === text ? "saved" : "idle",
+            saveStatus: cachedContent === textToSave ? "saved" : "idle",
             saveError: undefined,
             cursor: cached?.cursor ?? null,
             currentSelection: cached?.currentSelection ?? null,
@@ -1977,7 +2305,7 @@ function EditorRuntimeWidget({
         setModifiedAt(response.modifiedAt);
         setVersion(response.session.version);
         setMaxBytes(response.maxBytes);
-        if (contentRef.current === text) {
+        if (contentRef.current === textToSave) {
           // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.
           setContent(response.content);
           setFileModel((model: EditorFileModel | null) =>
@@ -1999,7 +2327,7 @@ function EditorRuntimeWidget({
         if (activeSessionKeyRef.current !== saveSessionKey) {
           const cached = sessionCacheRef.current.get(saveSessionKey);
           sessionCacheRef.current.set(saveSessionKey, {
-            content: cached?.content ?? text,
+            content: cached?.content ?? attemptedSaveText,
             fileModel: cached?.fileModel ?? fileModel,
             modifiedAt: cached?.modifiedAt ?? modifiedAt,
             version: cached?.version ?? versionRef.current,
@@ -2027,7 +2355,7 @@ function EditorRuntimeWidget({
         savingRef.current = false;
       }
     },
-    [file, fileModel, hasTarget, maxBytes, modifiedAt, root],
+    [file, fileModel, hasTarget, maxBytes, modifiedAt, prepareFormatOnSave, root],
   );
 
   const onContentChange = useCallback(
@@ -2113,6 +2441,10 @@ function EditorRuntimeWidget({
   useEffect(() => {
     if (recoveryCompare) recoveryCompareButtonRef.current?.focus();
   }, [recoveryCompare]);
+  const externalCompareButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (externalChange.compareOpen) externalCompareButtonRef.current?.focus();
+  }, [externalChange.compareOpen]);
 
   const closeRecoveryCompare = useCallback((): void => {
     setRecoveryCompare(false);
@@ -2161,9 +2493,43 @@ function EditorRuntimeWidget({
         },
         signal,
       );
-      return mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
+      const response = mapWireToEditorCompletionResponse(query.request.request, wire, Date.now());
+      const snippetItems = snippetCompletionItems({
+        snapshot: workspaceSnippets.snapshot,
+        languageId: query.request.document.language,
+        relativePath: file,
+        prefix: completionPrefixAt(
+          query.documentText,
+          query.request.position.line,
+          query.request.position.column,
+        ),
+        insertionSafe: snippetInsertionSafeRef.current,
+        signal,
+      });
+      const sources: readonly EditorCompletionSource[] = [
+        ...new Set<EditorCompletionSource>(["workspace-snippet", ...response.provenance.sources]),
+      ];
+      return snippetItems.length === 0
+        ? response
+        : {
+            ...response,
+            items: [...snippetItems, ...response.items],
+            provenance: {
+              ...response.provenance,
+              sources,
+            },
+          };
     },
-    [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
+    [
+      file,
+      hasTarget,
+      linkedCapsuleIds,
+      linkedCapsuleSetIds,
+      linkedFilePath,
+      linkedRoot,
+      root,
+      workspaceSnippets.snapshot,
+    ],
   );
 
   // Issue #1200: the governed inline-completion (ghost-text) resolver. The Monaco inline bridge calls
@@ -2338,7 +2704,14 @@ function EditorRuntimeWidget({
   // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
   const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
     async (query: EditorDiagnosticsQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "diagnostics")
+      ) {
         return { request: query.request.request, diagnostics: [] };
       }
       const wire = await requestEditorDiagnostics(
@@ -2347,12 +2720,19 @@ function EditorRuntimeWidget({
       );
       return mapWireToEditorDiagnosticsResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const provideHover = useCallback<EditorHoverResolver>(
     async (query: EditorHoverQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "hover")
+      ) {
         return { request: query.request.request, hover: { contents: null } };
       }
       const wire = await requestEditorHover(
@@ -2370,16 +2750,23 @@ function EditorRuntimeWidget({
       );
       return mapWireToEditorHoverResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const resolveEditorSymbols = useCallback(
     async (query: EditorSymbolsQuery, signal: AbortSignal): Promise<EditorSymbolsResponse> => {
       const request = query.request.request;
-      if (!hasTarget || root === undefined || file === undefined) {
+      const language = query.request.document.language;
+      const provider = providerForLanguage(languageCapabilities, language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "symbols")
+      ) {
         return { request, symbols: [] };
       }
-      const language = query.request.document.language;
       const cacheInput = { root, path: file, language, text: query.documentText };
       if (symbolCacheMatches(symbolCacheRef.current, cacheInput)) {
         return { request, symbols: symbolCacheRef.current.symbols };
@@ -2392,7 +2779,7 @@ function EditorRuntimeWidget({
       symbolCacheRef.current = { ...cacheInput, symbols: response.symbols };
       return response;
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const provideSymbols = useCallback<EditorSymbolsResolver>(
@@ -2409,7 +2796,14 @@ function EditorRuntimeWidget({
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
     async (query: EditorFormattingQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "formatting")
+      ) {
         return { request: query.request.request, edits: [] };
       }
       const wire = await requestEditorFormatting(
@@ -2419,15 +2813,23 @@ function EditorRuntimeWidget({
           languageId: query.request.document.language,
           text: query.documentText,
           options: {
-            tabSize: query.request.options.tabSize,
-            insertSpaces: query.request.options.insertSpaces,
+            tabSize: editorSettings.applied.tabSize,
+            insertSpaces: editorSettings.applied.insertSpaces,
           },
         },
         signal,
       );
       return mapWireToEditorFormattingResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [
+      currentDocumentUri,
+      editorSettings.applied.insertSpaces,
+      editorSettings.applied.tabSize,
+      file,
+      hasTarget,
+      languageCapabilities,
+      root,
+    ],
   );
 
   const provideDefinition = useCallback<EditorDefinitionResolver>(
@@ -2557,6 +2959,38 @@ function EditorRuntimeWidget({
     [file, hasTarget, root],
   );
 
+  const provideSemanticTokens = useCallback<EditorSemanticTokensResolver>(
+    async (query: EditorSemanticTokensQuery, signal: AbortSignal) => {
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.language !== "rust"
+      ) {
+        return null;
+      }
+      const response = await requestEditorSemanticTokens(
+        {
+          root,
+          path: file,
+          text: query.documentText,
+          version: query.request.document.version,
+        },
+        signal,
+      );
+      if (
+        !response.supported ||
+        response.legend === undefined ||
+        response.data === undefined ||
+        !semanticLegendMatches(response.legend)
+      ) {
+        return null;
+      }
+      return response.data;
+    },
+    [file, hasTarget, root],
+  );
+
   const revealCallHierarchyLocation = useCallback(
     (location: EditorLocation): void => {
       if (location.path === file) {
@@ -2656,7 +3090,14 @@ function EditorRuntimeWidget({
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
   );
-  const largeFileDegraded = largeFileMode === "degraded";
+  const automaticLargeFileDegraded = largeFileMode === "degraded";
+  const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
+  const largeFileDegraded =
+    automaticLargeFileDegraded ||
+    preferenceLargeFileMode === "degraded" ||
+    preferenceLargeFileMode === "readonly";
+  const editorReadOnlyBySettings =
+    automaticLargeFileDegraded || preferenceLargeFileMode === "readonly";
   const editorConflicts = useMemo<NonNullable<EditorSurfaceProps["editorConflicts"]>>(
     () => ({
       labels: {
@@ -2795,6 +3236,7 @@ function EditorRuntimeWidget({
   const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
   const completionEnabled =
     providerOperationEnabled(languageProvider, "completion") && !largeFileDegraded;
+  snippetInsertionSafeRef.current = completionEnabled && !editorReadOnlyBySettings;
   const diagnosticsEnabled =
     providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
@@ -2810,6 +3252,29 @@ function EditorRuntimeWidget({
     providerOperationEnabled(languageProvider, "callHierarchy") && !largeFileDegraded;
   const inlayHintsEnabled =
     providerOperationEnabled(languageProvider, "inlayHints") && !largeFileDegraded;
+  const semanticTokensEnabled =
+    completionLanguage === "rust" &&
+    providerOperationEnabled(languageProvider, "hover") &&
+    !largeFileDegraded;
+  const semanticTokens = useMemo(
+    () =>
+      semanticTokensEnabled && currentDocumentUri !== null
+        ? createEditorSemanticTokensHost({
+            legend: RUST_SEMANTIC_TOKEN_LEGEND,
+            resolve: provideSemanticTokens,
+            isCurrentDocument: (uri): boolean => uri === currentDocumentUri,
+            language: "rust",
+            streamId: "editor-semantic-tokens",
+            newRequestId: createEditorRequestId,
+            isLargeDocument: (text): boolean =>
+              deriveLargeFileMode({
+                sizeBytes: SEMANTIC_TEXT_ENCODER.encode(text).length,
+                text,
+              }) === "degraded",
+          })
+        : undefined,
+    [currentDocumentUri, provideSemanticTokens, semanticTokensEnabled],
+  );
   const referencesEnabled =
     providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
   const renameEnabled =
@@ -2829,6 +3294,15 @@ function EditorRuntimeWidget({
     (builtinFormatting === "keiko-language-service" &&
       providerOperationEnabled(languageProvider, "formatting"));
   const formattingEnabled = formattingAvailable && !largeFileDegraded;
+  formatOnSaveStateRef.current = {
+    enabled: editorSettings.applied.formatOnSave,
+    canFormat: formattingEnabled && loadState.status === "ready",
+    document: fileModelMatchesTarget ? (fileModel?.identity ?? null) : null,
+    file,
+    root,
+    tabSize: editorSettings.applied.tabSize,
+    insertSpaces: editorSettings.applied.insertSpaces,
+  };
   // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
   // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
   const formattingLanguageLabel =
@@ -2940,6 +3414,36 @@ function EditorRuntimeWidget({
   const announceToolbarNotice = useCallback((reason: string): void => {
     setToolbarNotice((current) => (current === reason ? `\u200B${reason}` : reason));
   }, []);
+  const compareExternalChange = useCallback((): void => {
+    if (root === undefined || file === undefined || !externalChangeCanCompare(externalChange)) {
+      return;
+    }
+    void fetchFilesContent(root, file)
+      .then((response) => {
+        setExternalCompareBaseline(response.content);
+        dispatchExternalChange({ type: "compareOpened" });
+      })
+      .catch((error: unknown) => {
+        announceToolbarNotice(errorMessage(error));
+      });
+  }, [announceToolbarNotice, externalChange, file, root]);
+  const keepExternalLocal = useCallback((): void => {
+    setExternalCompareBaseline(null);
+    dispatchExternalChange({ type: "keepLocal" });
+  }, []);
+  const closeExternalCompare = useCallback((): void => {
+    dispatchExternalChange({ type: "compareClosed" });
+    setExternalCompareBaseline(null);
+  }, []);
+  const reloadExternalChange = useCallback((): void => {
+    setExternalCompareBaseline(null);
+    if (dirtyRef.current) {
+      setReloadConfirm(true);
+      return;
+    }
+    dispatchExternalChange({ type: "reloadStarted" });
+    reload();
+  }, [reload]);
   const handleAskSelection = useCallback(
     (selection: EditorSelectionAskRequest): void => {
       const relativeFile =
@@ -2972,7 +3476,7 @@ function EditorRuntimeWidget({
         ? null
         : {
             language: fileModel.identity.language,
-            readOnly: largeFileDegraded,
+            readOnly: editorReadOnlyBySettings,
             content: {
               relativePath: file ?? "",
               text: content,
@@ -2980,8 +3484,12 @@ function EditorRuntimeWidget({
               truncated: false,
             },
           },
-    [content, contentSizeBytes, file, fileModel, fileModelMatchesTarget, largeFileDegraded],
+    [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
   );
+  const modelViewStateKey =
+    hasTarget && root !== undefined && file !== undefined
+      ? `${editorModelScope}:${paneId ?? "pane"}:${documentSessionKey(root, file)}`
+      : undefined;
 
   const loadRenameSources = useCallback(
     async (changeset: LanguageRenameChangeset): Promise<RenameSourcesResult> => {
@@ -3119,6 +3627,7 @@ function EditorRuntimeWidget({
         })
       : null;
   const agentReviewActive =
+    externalChange.compareOpen ||
     recoveryCompare ||
     agentPatchPending !== null ||
     agentChangesetPending !== null ||
@@ -4035,6 +4544,11 @@ function EditorRuntimeWidget({
           : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+      setActiveHostEditRequest({
+        id: createEditorRequestId(),
+        text: review.modified,
+        origin: "applied-patch",
+      });
       return true;
     },
     [largeFileDegraded, t, verifyExactPatchTarget],
@@ -4447,7 +4961,48 @@ function EditorRuntimeWidget({
   }, [agentSelectionRequest, consumeSelectionRequest]);
 
   let panel: ReactNode;
-  if (recoveryCompare && recoverySnapshot !== null) {
+  if (externalChange.compareOpen && externalCompareBaseline !== null) {
+    const externalDiffModel = buildAgentPatchDiffModel(externalCompareBaseline, content, file);
+    panel = (
+      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+        <fieldset
+          aria-label={`Compare external changes for ${file ?? "this file"}`}
+          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
+        >
+          <span className="sr-only">
+            Side-by-side comparison of the latest file on disk and the local editor buffer. Keep
+            local preserves your buffer; reload replaces it with the file on disk.
+          </span>
+          <EditorDiffSurface
+            model={externalDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </fieldset>
+        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
+          <button
+            ref={externalCompareButtonRef}
+            type="button"
+            className="ed-save"
+            onClick={keepExternalLocal}
+          >
+            Keep local
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
+            Reload
+          </button>
+          <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
+            Close compare
+          </button>
+        </div>
+      </div>
+    );
+  } else if (recoveryCompare && recoverySnapshot !== null) {
     // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
     // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
     // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
@@ -4459,8 +5014,7 @@ function EditorRuntimeWidget({
     );
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label={`Compare recovered changes for ${file ?? "this file"}`}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
         >
@@ -4473,7 +5027,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           <button
             ref={recoveryCompareButtonRef}
@@ -4495,8 +5049,7 @@ function EditorRuntimeWidget({
   } else if (agentChangesetPending !== null) {
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label="Agent changeset review"
           aria-busy={agentChangesetPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -4522,7 +5075,7 @@ function EditorRuntimeWidget({
             onReject={handleAgentChangesetReject}
             onRunVerification={runChangesetVerification}
           />
-        </div>
+        </fieldset>
       </div>
     );
   } else if (agentPatchPending !== null) {
@@ -4534,8 +5087,7 @@ function EditorRuntimeWidget({
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
         {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
-        <div
-          role="group"
+        <fieldset
           aria-label={`Agent patch review for ${agentPatchPending.action.target?.file ?? "this file"}`}
           aria-busy={agentPatchPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -4553,7 +5105,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
           <button
@@ -4642,6 +5194,12 @@ function EditorRuntimeWidget({
           modifiedAt={modifiedAt ?? undefined}
           maxSizeBytes={maxBytes ?? undefined}
           themeVariant={themeVariant}
+          editorPreferences={editorSettings.applied}
+          modelViewStateKey={modelViewStateKey}
+          modelRetentionProtection={{
+            hotExitRecovery: recoverySnapshot !== null,
+            agentReview: agentReviewActive,
+          }}
           ariaLabel={
             root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
           }
@@ -4665,6 +5223,7 @@ function EditorRuntimeWidget({
             callHierarchyEnabled ? revealCallHierarchyLocation : undefined
           }
           provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
+          semanticTokens={semanticTokens}
           uriForPath={
             definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
               ? uriForPath
@@ -4711,11 +5270,7 @@ function EditorRuntimeWidget({
       </div>
     );
   } else if (hasTarget) {
-    panel = (
-      <div className="ed-host-loading" role="status">
-        Loading file…
-      </div>
-    );
+    panel = <output className="ed-host-loading">Loading file…</output>;
   } else {
     panel = (
       <div className="ed-empty" role="note">
@@ -4723,6 +5278,17 @@ function EditorRuntimeWidget({
       </div>
     );
   }
+
+  // ADR-0133 D3: "manual" never proactively offers a reload for a clean external change — the
+  // operator discovers and reloads it deliberately (e.g. by reopening the file). Dirty/deleted/
+  // renamed/degraded statuses still surface regardless of the setting; only unmodified content is
+  // affected by this ceiling.
+  const suppressCleanBanner =
+    externalReloadPolicy === "manual" && externalChange.status === "cleanChanged";
+  const showExternalChangeBanner =
+    externalChange.status !== "idle" && !externalChange.compareOpen && !suppressCleanBanner;
+  const workspaceWatchNeedsAttention =
+    workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 
   return (
     <div className="editor">
@@ -4983,8 +5549,43 @@ function EditorRuntimeWidget({
       >
         {toolbarNotice}
       </div>
+      {workspaceWatchNeedsAttention ? (
+        <output className="ed-recovery" data-testid="editor-workspace-watch-status">
+          <span>
+            {workspaceWatch.snapshotRequired
+              ? "Workspace file events require a refresh."
+              : `Workspace file watching is ${workspaceWatch.health}.`}
+          </span>
+          <span className="spacer" />
+          <button type="button" className="ed-reload" onClick={requestReload}>
+            Refresh
+          </button>
+        </output>
+      ) : null}
+      {showExternalChangeBanner ? (
+        <output className="ed-recovery" data-testid="editor-external-change-banner">
+          <span>{externalChangeMessage(externalChange, file)}</span>
+          <span className="spacer" />
+          {externalChangeCanCompare(externalChange) ? (
+            <button type="button" className="ed-reload" onClick={compareExternalChange}>
+              Compare
+            </button>
+          ) : null}
+          <button type="button" className="ed-save" onClick={keepExternalLocal}>
+            Keep local
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            aria-label="Reload external changes"
+            onClick={reloadExternalChange}
+          >
+            Reload
+          </button>
+        </output>
+      ) : null}
       {recoverySnapshot !== null && !recoveryCompare ? (
-        <div className="ed-recovery" role="status">
+        <output className="ed-recovery">
           <span>
             {recoveryDiskChanged
               ? "Recovered editor changes are available, and the disk file changed."
@@ -5015,7 +5616,7 @@ function EditorRuntimeWidget({
               Cancel
             </button>
           ) : null}
-        </div>
+        </output>
       ) : null}
       {reloadConfirm ? (
         <div className="ed-dialog-backdrop" role="presentation">

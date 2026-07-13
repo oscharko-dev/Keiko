@@ -202,7 +202,7 @@ async function triggerSymbols(page: Page, workspace: Locator): Promise<void> {
 }
 
 async function triggerFormat(workspace: Locator, force = false): Promise<void> {
-  const button = workspace.locator('button[data-tip="Format document"]');
+  const button = workspace.getByRole("button", { name: "Format", exact: true });
   if (force) {
     await button.dispatchEvent("click");
     return;
@@ -229,7 +229,7 @@ async function assertAvailableStatus(workspace: Locator): Promise<void> {
     "aria-label",
     "Document formatting available",
   );
-  await expect(workspace.locator('button[data-tip="Format document"]')).toHaveAttribute(
+  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
     "aria-disabled",
     "false",
   );
@@ -311,7 +311,7 @@ async function assertUnavailableProvider(
     "Language provider unavailable: Host Python provider is disabled by policy.",
   );
   await expect(statusField(workspace, "formatting")).toHaveText("Format unavailable");
-  await expect(workspace.locator('button[data-tip="Format document"]')).toHaveAttribute(
+  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
     "aria-disabled",
     "true",
   );
@@ -343,7 +343,7 @@ async function assertDegradedProvider(
     "Governed completions unavailable for this file type",
   );
   await expect(statusField(workspace, "formatting")).toHaveText("Format unavailable");
-  await expect(workspace.locator('button[data-tip="Format document"]')).toHaveAttribute(
+  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
     "aria-disabled",
     "true",
   );

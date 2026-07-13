@@ -75,9 +75,11 @@ describe("I18nProvider lazy catalog transition", () => {
     expect(screen.getByTestId("label")).toHaveTextContent("Settings");
     expect(document.documentElement.lang).toBe("en");
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
-    await waitFor(() => expect(screen.getByTestId("locale")).toHaveTextContent("de"));
-    expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
-    expect(document.documentElement.lang).toBe("de");
+    await waitFor(() => {
+      expect(screen.getByTestId("locale")).toHaveTextContent("de");
+      expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+      expect(document.documentElement.lang).toBe("de");
+    });
   });
 });
 

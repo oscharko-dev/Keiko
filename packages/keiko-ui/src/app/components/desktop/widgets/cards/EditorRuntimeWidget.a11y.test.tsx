@@ -195,6 +195,14 @@ function restoreEventSource(): void {
   });
 }
 
+function latestAgentEventSource(instances: readonly FakeEventSource[]): FakeEventSource {
+  for (let index = instances.length - 1; index >= 0; index -= 1) {
+    const source = instances[index];
+    if (source?.url.includes("/api/editor/agent/events") === true) return source;
+  }
+  throw new Error("agent EventSource was not opened");
+}
+
 let agentActionSeq = 0;
 
 function agentAction(
@@ -291,11 +299,11 @@ async function renderWithPatchReview(): Promise<{
   await screen.findByTestId("editor-surface");
   await waitFor(() => {
     expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-    expect(FakeSource.instances.length).toBeGreaterThan(0);
+    expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow();
   });
   const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
   const sessionId = String(snapshot?.sessionId);
-  const source = FakeSource.instances.at(-1) as FakeEventSource;
+  const source = latestAgentEventSource(FakeSource.instances);
 
   // Emit a queued applyPatch action with textEdits to enter the patch-review state.
   act(() => {
@@ -395,10 +403,10 @@ describe("EditorRuntimeWidget agent presence — accessibility (Issue #2120)", (
       />,
     );
     await screen.findByTestId("editor-surface");
-    await waitFor(() => expect(FakeSource.instances.length).toBeGreaterThan(0));
+    await waitFor(() => expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow());
     const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
     const sessionId = String(snapshot?.sessionId);
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances);
     const action = agentAction(sessionId, "format", {
       target: { file: "src/app.ts", paneId: "pane-1" },
     });
@@ -478,12 +486,12 @@ describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => 
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow();
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0]?.sessionId,
     );
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances);
 
     // Capture whatever element currently owns focus before the agent action.
     const before = document.activeElement;

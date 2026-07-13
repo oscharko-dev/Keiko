@@ -73,6 +73,17 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
     expect(user).not.toContain(secret);
   });
 
+  it("preserves an internal replacement character while removing a partial UTF-8 suffix", () => {
+    const internalReplacement = "\uFFFD";
+    const asciiPrefix = "a".repeat(16_380);
+    const report: BugReportInput = {
+      failingOutput: `${internalReplacement}${asciiPrefix}€tail`,
+    };
+    const messages = buildBugPrompt(report, parseFailureEvidence(report), makePack([]), "vitest");
+    const user = messages.find((message) => message.role === "user")?.content ?? "";
+    expect(user).toContain(`Failing output:\n${internalReplacement}${asciiPrefix}\n[TRUNCATED]`);
+  });
+
   it("embeds redacted context excerpts when the pack is non-empty", () => {
     const pack = makePack([makeEntry({ path: "src/buggy.ts", excerpt: "n / 3" })]);
     const messages = buildBugPrompt(REPORT, parseFailureEvidence(REPORT), pack, "vitest");

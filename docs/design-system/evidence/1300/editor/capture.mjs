@@ -304,7 +304,7 @@ await browser.close();
 
 // A reference-page capture failure (e.g. a missing editor-*.html) must FAIL the gate, not record a
 // silent error field alongside a PASS verdict.
-const missingReferenceTokens = [...missing].sort();
+const missingReferenceTokens = [...missing].sort((a, b) => a.localeCompare(b));
 const captureFailed =
   refCaptures.some((c) => "error" in c) ||
   refCaptures.length !== EXPECTED_REF_CAPTURE_COUNT ||

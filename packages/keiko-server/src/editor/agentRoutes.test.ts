@@ -20,6 +20,7 @@ import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -513,6 +514,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
           languageClockReads += 1;
           return 0;
         },
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: 15_000 },
       },
     } as unknown as UiHandlerDeps;
     try {
@@ -1040,6 +1042,36 @@ describe("server-resolved git query action (#2298)", () => {
       const retry = await handleEditorAgentActions(context(requestAction), gitDeps(store, runner));
       expect(actionResult(retry.body).status).toBe("succeeded");
       expect(statusCalls).toBe(2);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("short-circuits a git read when the request was already destroyed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-pre-abort-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "export const value = true;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = vi.fn((args: readonly string[], _options: GitProcessOptions) =>
+      Promise.resolve(gitResponseFor(root, args)),
+    );
+    const requestContext = context(
+      action({
+        type: "queryGit",
+        expectedContentHash: undefined,
+        target: { file: "src/a.ts" },
+        queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+      }),
+    );
+    Object.assign(requestContext.req, { complete: false });
+    try {
+      const response = await handleEditorAgentActions(requestContext, gitDeps(store, runner));
+
+      expect(actionResult(response.body).status).toBe("failed");
+      expect(runner).toHaveBeenCalled();
+      expect(runner.mock.calls.every((call) => call[1].abortSignal?.aborted === true)).toBe(true);
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });

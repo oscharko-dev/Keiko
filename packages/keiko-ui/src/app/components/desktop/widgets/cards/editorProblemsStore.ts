@@ -11,6 +11,7 @@
 
 import {
   buildEditorProblemsSnapshot,
+  EDITOR_PROBLEM_MESSAGE_MAX_CHARS,
   type EditorProblem,
   type EditorProblemSeverity,
   type VerificationKind,
@@ -25,9 +26,26 @@ const FAILED_STATUSES: ReadonlySet<VerificationResult["status"]> = new Set([
   "resource-exceeded",
 ]);
 
+// The contract's maximum is expressed in JavaScript string characters (UTF-16 code units). Slice at
+// that boundary, then step back over a high surrogate so hostile/oversized producer text can never
+// leave an invalid half-code-point in the UI. Every producer routes through this one normalizer.
+export function truncateProblemMessage(message: string): string {
+  if (message.length <= EDITOR_PROBLEM_MESSAGE_MAX_CHARS) return message;
+  let end = EDITOR_PROBLEM_MESSAGE_MAX_CHARS;
+  const lastCodeUnit = message.slice(end - 1, end).codePointAt(0) ?? 0;
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
+  return message.slice(0, end);
+}
+
 // Language-diagnostic `hint` normalizes to `info`, keeping the panel severity set three-valued.
 function normalizeSeverity(severity: EditorDiagnostic["severity"]): EditorProblemSeverity {
   return severity === "error" || severity === "warning" ? severity : "info";
+}
+
+function compareProblemKey(left: string, right: string): number {
+  const localeOrder = left.localeCompare(right, "en", { numeric: false, sensitivity: "variant" });
+  if (localeOrder !== 0 || left === right) return localeOrder;
+  return left < right ? -1 : 1;
 }
 
 // EditorRange positions are zero-based (LSP 3.17); EditorProblem line/column are 1-based when present.
@@ -35,17 +53,18 @@ export function diagnosticToProblem(
   path: string,
   diagnostic: EditorDiagnostic,
   index: number,
+  producerId = "pane",
 ): EditorProblem {
   const line = diagnostic.range.start.line + 1;
   const column = diagnostic.range.start.column + 1;
   return {
-    id: `d:${path}:${String(line)}:${String(column)}:${String(index)}`,
+    id: `d:${producerId}:${path}:${String(line)}:${String(column)}:${String(index)}`,
     severity: normalizeSeverity(diagnostic.severity),
     source: "language-diagnostic",
     file: path,
     line,
     column,
-    message: diagnostic.message,
+    message: truncateProblemMessage(diagnostic.message),
     kind: "language-diagnostic",
   };
 }
@@ -63,7 +82,9 @@ export function verificationResultToProblems(result: VerificationResult): readon
         severity: "error",
         source: "verification",
         file: `(${kind})`,
-        message: result.outputSummary.length > 0 ? result.outputSummary : `${kind} failed`,
+        message: truncateProblemMessage(
+          result.outputSummary.length > 0 ? result.outputSummary : `${kind} failed`,
+        ),
         kind,
       },
     ];
@@ -75,25 +96,47 @@ export function verificationResultToProblems(result: VerificationResult): readon
     file: location.file,
     ...(location.line === undefined ? {} : { line: location.line }),
     ...(location.column === undefined ? {} : { column: location.column }),
-    message: location.message,
+    message: truncateProblemMessage(location.message),
     kind,
   }));
 }
 
 function buildAllProblems(
-  diagnosticsByPath: ReadonlyMap<string, readonly EditorDiagnostic[]>,
+  diagnosticsByProducer: ReadonlyMap<string, ReadonlyMap<string, readonly EditorDiagnostic[]>>,
   report: VerificationReport | null,
 ): readonly EditorProblem[] {
-  const problems: EditorProblem[] = [];
-  for (const [path, diagnostics] of diagnosticsByPath) {
-    diagnostics.forEach((diagnostic, index) => {
-      problems.push(diagnosticToProblem(path, diagnostic, index));
-    });
+  const deduped = new Map<string, EditorProblem>();
+  for (const producerId of [...diagnosticsByProducer.keys()].sort(compareProblemKey)) {
+    const byPath = diagnosticsByProducer.get(producerId);
+    if (byPath === undefined) continue;
+    for (const path of [...byPath.keys()].sort(compareProblemKey)) {
+      const diagnostics = byPath.get(path) ?? [];
+      diagnostics.forEach((diagnostic, index) => {
+        const problem = diagnosticToProblem(path, diagnostic, index, producerId);
+        deduped.set(problemDedupeKey(problem), problem);
+      });
+    }
   }
   if (report !== null) {
-    for (const result of report.results) problems.push(...verificationResultToProblems(result));
+    for (const result of report.results) {
+      for (const problem of verificationResultToProblems(result)) {
+        deduped.set(problemDedupeKey(problem), problem);
+      }
+    }
   }
-  return problems;
+  return [...deduped.values()];
+}
+
+function problemDedupeKey(problem: EditorProblem): string {
+  return JSON.stringify([
+    problem.severity,
+    problem.source,
+    problem.file,
+    problem.line ?? null,
+    problem.column ?? null,
+    problem.message,
+    problem.kind,
+  ]);
 }
 
 // ─── Module-level store, scoped per project root (Epic #2092 fix-up) ─────────────────────────────
@@ -102,19 +145,20 @@ function buildAllProblems(
 // project A diagnostic silently overwrite a same-relative-path project B diagnostic, and would make
 // one project's problems appear in another project's panel. Each root gets its own aggregation.
 interface ProjectProblemsState {
-  diagnosticsByPath: Map<string, readonly EditorDiagnostic[]>;
+  diagnosticsByProducer: Map<string, Map<string, readonly EditorDiagnostic[]>>;
   latestReport: VerificationReport | null;
   problems: readonly EditorProblem[];
   readonly listeners: Set<() => void>;
 }
 
 const projectStates = new Map<string, ProjectProblemsState>();
+const EMPTY_PROBLEMS: readonly EditorProblem[] = Object.freeze([]);
 
 function projectState(root: string): ProjectProblemsState {
   let entry = projectStates.get(root);
   if (entry === undefined) {
     entry = {
-      diagnosticsByPath: new Map(),
+      diagnosticsByProducer: new Map(),
       latestReport: null,
       problems: [],
       listeners: new Set(),
@@ -125,29 +169,37 @@ function projectState(root: string): ProjectProblemsState {
 }
 
 function rebuild(entry: ProjectProblemsState): void {
-  entry.problems = buildAllProblems(entry.diagnosticsByPath, entry.latestReport);
+  entry.problems = buildAllProblems(entry.diagnosticsByProducer, entry.latestReport);
   for (const listener of [...entry.listeners]) listener();
 }
 
 export function setPaneDiagnostics(
   root: string,
+  producerId: string,
   path: string,
   diagnostics: readonly EditorDiagnostic[],
 ): void {
   const entry = projectState(root);
-  const next = new Map(entry.diagnosticsByPath);
-  if (diagnostics.length === 0) next.delete(path);
-  else next.set(path, diagnostics);
-  entry.diagnosticsByPath = next;
+  const next = new Map(entry.diagnosticsByProducer);
+  const byPath = new Map(next.get(producerId) ?? []);
+  if (diagnostics.length === 0) byPath.delete(path);
+  else byPath.set(path, diagnostics);
+  if (byPath.size === 0) next.delete(producerId);
+  else next.set(producerId, byPath);
+  entry.diagnosticsByProducer = next;
   rebuild(entry);
 }
 
-export function removePaneDiagnostics(root: string, path: string): void {
+export function removePaneDiagnostics(root: string, producerId: string, path: string): void {
   const entry = projectStates.get(root);
-  if (entry === undefined || !entry.diagnosticsByPath.has(path)) return;
-  const next = new Map(entry.diagnosticsByPath);
-  next.delete(path);
-  entry.diagnosticsByPath = next;
+  const current = entry?.diagnosticsByProducer.get(producerId);
+  if (entry === undefined || !current?.has(path)) return;
+  const next = new Map(entry.diagnosticsByProducer);
+  const byPath = new Map(current);
+  byPath.delete(path);
+  if (byPath.size === 0) next.delete(producerId);
+  else next.set(producerId, byPath);
+  entry.diagnosticsByProducer = next;
   rebuild(entry);
 }
 
@@ -164,7 +216,7 @@ export function subscribeEditorProblems(root: string, listener: () => void): () 
     entry.listeners.delete(listener);
     if (
       entry.listeners.size === 0 &&
-      entry.diagnosticsByPath.size === 0 &&
+      entry.diagnosticsByProducer.size === 0 &&
       entry.latestReport === null
     ) {
       projectStates.delete(root);
@@ -173,7 +225,7 @@ export function subscribeEditorProblems(root: string, listener: () => void): () 
 }
 
 export function getEditorProblems(root: string): readonly EditorProblem[] {
-  return projectStates.get(root)?.problems ?? [];
+  return projectStates.get(root)?.problems ?? EMPTY_PROBLEMS;
 }
 
 export function resetEditorProblemsStoreForTests(): void {

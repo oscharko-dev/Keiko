@@ -89,7 +89,7 @@ function remediationForError(message: string, code: string | undefined): string 
     return "Ask about a specific file, folder, symbol, identifier, or exact phrase. For broad questions over large project folders, narrow the Files scope first.";
   }
   if (code === "GATEWAY_TIMEOUT") {
-    return "Retry the request. If it repeats, choose a smaller prompt or another configured model, then check the gateway base URL, proxy, and model deployment availability in Settings.";
+    return "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.";
   }
   if (code === "PAYLOAD_TOO_LARGE") {
     return "Reduce the selected scope or remove large attachments before retrying.";

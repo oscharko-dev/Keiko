@@ -27,6 +27,10 @@ import {
   type RouteResult,
 } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  WorkspaceScriptTrustError,
+  type WorkspaceScriptTrustService,
+} from "../workspace-script-trust.js";
 
 const MAX_VERIFICATION_BODY_BYTES = 16_000;
 
@@ -53,7 +57,21 @@ function requireRunner(deps: UiHandlerDeps): RouteOrManager {
   return deps.verificationRunner ?? noRunnerDeps();
 }
 
-function isRouteResult(value: RouteOrManager): value is RouteResult {
+type RouteOrTrustService = RouteResult | WorkspaceScriptTrustService;
+
+function requireTrustService(deps: UiHandlerDeps): RouteOrTrustService {
+  return (
+    deps.workspaceScriptTrust ?? {
+      status: 503,
+      body: errorBody(
+        "WORKSPACE_SCRIPT_TRUST_UNAVAILABLE",
+        "Workspace script trust is not configured for this BFF.",
+      ),
+    }
+  );
+}
+
+function isRouteResult(value: RouteOrManager | RouteOrTrustService): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
@@ -112,8 +130,51 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
       };
     }
     if (error instanceof VerificationRunnerError) return toRouteResult(error);
+    if (error instanceof WorkspaceScriptTrustError) {
+      return { status: error.status, body: errorBody(error.code, error.message) };
+    }
     throw error;
   }
+}
+
+function trustProjectId(body: Record<string, unknown>): string {
+  if (
+    Object.keys(body).length !== 1 ||
+    typeof body.projectId !== "string" ||
+    body.projectId.length === 0
+  ) {
+    throw new VerificationRunnerError(
+      "BAD_REQUEST",
+      "Workspace script trust requests require only field 'projectId'.",
+    );
+  }
+  return body.projectId;
+}
+
+// POST/DELETE /api/editor/verification/trust — explicit human grant/revoke. The client names
+// only a registered project; the server resolves its canonical roots and current manifest digest.
+export async function handleGrantWorkspaceScriptTrust(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireTrustService(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(async () => ({
+    status: 200,
+    body: guard.grant(trustProjectId(await readJsonObject(ctx.req))),
+  }));
+}
+
+export async function handleRevokeWorkspaceScriptTrust(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireTrustService(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(async () => ({
+    status: 200,
+    body: guard.revoke(trustProjectId(await readJsonObject(ctx.req))),
+  }));
 }
 
 // GET /api/editor/verification/catalog — the detected kind catalog + server-owned trust state for a
@@ -156,6 +217,7 @@ export async function handleCreateVerificationRun(
       kinds: parsed.value.kinds,
       ...(parsed.value.targetPath === undefined ? {} : { targetPath: parsed.value.targetPath }),
       ...(parsed.value.requestId === undefined ? {} : { requestId: parsed.value.requestId }),
+      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
     };
     return { status: 200, body: guard.execute(input).run };
   });

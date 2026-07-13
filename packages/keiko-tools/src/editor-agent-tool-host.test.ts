@@ -259,23 +259,44 @@ describe("EditorAgentToolHost route dispatch", () => {
     });
   });
 
-  it.each(["references", "renamePrepare", "signatureHelp"] as const)(
-    "queues the %s symbol navigation operation",
-    async (operation) => {
-      const route = recordingRoute();
-      await execute(host(route), "editor_navigate_symbol", {
-        sessionId: "session-1",
-        idempotencyKey: IDEMPOTENCY_KEY,
-        file: "src/a.ts",
-        operation,
-        position: { line: 0, character: 0 },
-      });
-      expect(JSON.parse(route.requests[0]?.body ?? "null")).toMatchObject({
-        type: "navigateSymbol",
-        navigateSymbol: { operation },
-      });
-    },
-  );
+  it.each([
+    "diagnostics",
+    "typeDefinition",
+    "implementation",
+    "references",
+    "callHierarchy",
+    "renamePrepare",
+    "signatureHelp",
+  ] as const)("queues the %s symbol navigation operation", async (operation) => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_navigate_symbol", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      file: "src/a.ts",
+      operation,
+      position: { line: 0, character: 0 },
+    });
+    expect(JSON.parse(route.requests[0]?.body ?? "null")).toMatchObject({
+      type: "navigateSymbol",
+      navigateSymbol: { operation },
+    });
+  });
+
+  it("queues inlay hints with the required bounded range", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_navigate_symbol", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      file: "src/a.ts",
+      operation: "inlayHints",
+      position: { line: 0, character: 0 },
+      range: RANGE,
+    });
+    expect(JSON.parse(route.requests[0]?.body ?? "null")).toMatchObject({
+      type: "navigateSymbol",
+      navigateSymbol: { operation: "inlayHints", range: RANGE },
+    });
+  });
 
   it("queues code actions with diagnostics and a range", async () => {
     const route = recordingRoute();
@@ -482,8 +503,9 @@ describe("EditorAgentToolHost route dispatch", () => {
   });
 
   it.each([
-    ["invalid operation", { operation: "implementation" }],
+    ["invalid operation", { operation: "completion" }],
     ["missing code-action extras", { operation: "codeActions" }],
+    ["missing inlay-hint range", { operation: "inlayHints" }],
     ["unexpected code-action extras", { operation: "definition", range: RANGE }],
   ])("rejects %s for symbol navigation", async (_label, extras) => {
     const route = recordingRoute();
@@ -739,6 +761,19 @@ describe("EditorAgentToolHost editor_request_verification", () => {
       route.requests.find((request) => request.url.endsWith("/agent-runs"))?.body ?? "{}",
     ) as Record<string, unknown>;
     expect(body.targetPath).toBe("src/a.test.ts");
+  });
+
+  it.each([
+    ["targeted-test without targetPath", { sessionId: "session-1", kind: "targeted-test" }],
+    [
+      "a non-targeted kind with targetPath",
+      { sessionId: "session-1", kind: "typecheck", targetPath: "src/a.test.ts" },
+    ],
+  ])("rejects %s before any route call", async (_label, args) => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_request_verification", args);
+    expect(route.requests).toHaveLength(0);
+    expect(parseOutput(result)).toMatchObject({ ok: false, error: { code: "INVALID_ARGUMENTS" } });
   });
 
   it("surfaces a governance not-run disposition as a typed, non-throwing output", async () => {

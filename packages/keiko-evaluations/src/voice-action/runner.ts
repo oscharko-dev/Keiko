@@ -199,7 +199,7 @@ function collectEffectClasses(
     .filter((value): value is SpokenActionEffectClass => value !== undefined);
   // Sort to a canonical order so the covered-class list is stable regardless of fixture ordering
   // (matches the codebase determinism convention).
-  return [...new Set(classes)].sort();
+  return [...new Set(classes)].sort((a, b) => a.localeCompare(b));
 }
 
 /**

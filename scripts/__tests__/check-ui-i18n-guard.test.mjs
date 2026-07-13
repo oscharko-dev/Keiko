@@ -1,8 +1,8 @@
-import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import {
   DE_CATALOG,
@@ -10,6 +10,7 @@ import {
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  hasI18nRelevantAddedLine,
   hasUserFacingTextLine,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -43,14 +44,13 @@ const matchingCatalogs = {
 };
 
 test("recognizes production UI source under the Keiko UI app tree", () => {
-  assert.equal(isUiProductionSource(UI_FILE), true);
-  assert.equal(
-    isUiProductionSource("packages/keiko-ui/src/app/components/NewFeature.test.tsx"),
+  expect(isUiProductionSource(UI_FILE)).toBe(true);
+  expect(isUiProductionSource("packages/keiko-ui/src/app/components/NewFeature.test.tsx")).toBe(
     false,
   );
-  assert.equal(isUiProductionSource("packages/keiko-ui/src/app/components/copy.ts"), false);
-  assert.equal(isUiProductionSource(EN_CATALOG), false);
-  assert.equal(isUiProductionSource("src/server.ts"), false);
+  expect(isUiProductionSource("packages/keiko-ui/src/app/components/copy.ts")).toBe(false);
+  expect(isUiProductionSource(EN_CATALOG)).toBe(false);
+  expect(isUiProductionSource("src/server.ts")).toBe(false);
 });
 
 test("passes when changed files are outside UI production source", async () => {
@@ -60,8 +60,8 @@ test("passes when changed files are outside UI production source", async () => {
       changedFiles: ["docs/architecture.md"],
     });
 
-    assert.equal(result.ok, true);
-    assert.deepEqual(result.problems, []);
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
   });
 });
 
@@ -78,19 +78,32 @@ test("passes changed UI helper files without user-facing text", async () => {
         changedFiles: [UI_FILE],
       });
 
-      assert.equal(result.ok, true);
-      assert.deepEqual(result.problems, []);
-      assert.deepEqual(result.i18nRelevantFiles, []);
+      expect(result.ok).toBe(true);
+      expect(result.problems).toEqual([]);
+      expect(result.i18nRelevantFiles).toEqual([]);
     },
   );
 });
 
 test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
-  assert.equal(hasUserFacingTextLine("<p>Hard-coded text</p>"), true);
-  assert.equal(hasUserFacingTextLine('<button aria-label="Open">'), true);
-  assert.equal(hasUserFacingTextLine('return "Enter a name.";'), true);
-  assert.equal(hasUserFacingTextLine('<g transform="translate(10 10)">'), false);
-  assert.equal(hasUserFacingTextLine("// Called when the user opens a file."), false);
+  expect(hasUserFacingTextLine("<p>Hard-coded text</p>")).toBe(true);
+  expect(hasUserFacingTextLine('<button aria-label="Open">')).toBe(true);
+  expect(hasUserFacingTextLine('return "Enter a name.";')).toBe(true);
+  expect(hasUserFacingTextLine('<g transform="translate(10 10)">')).toBe(false);
+  expect(hasUserFacingTextLine("// Called when the user opens a file.")).toBe(false);
+});
+
+test("requires catalog review only for i18n-relevant added lines", () => {
+  expect(hasI18nRelevantAddedLine('return <p>{t("feature.title")}</p>;')).toBe(true);
+  expect(hasI18nRelevantAddedLine("return <p>{t(`feature.title`)}</p>;")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const t = useTranslate();")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const i18n = useI18n();")).toBe(true);
+  expect(hasI18nRelevantAddedLine('<I18nTranslate id="feature.title" />')).toBe(true);
+  expect(hasI18nRelevantAddedLine('<button aria-label="Open">')).toBe(true);
+  expect(hasI18nRelevantAddedLine("readonly titleRef: RefObject<HTMLElement | null>;")).toBe(false);
+  expect(hasI18nRelevantAddedLine("// Improve compatibility with the current renderer.")).toBe(
+    false,
+  );
 });
 
 test("detects changed files from the push event before SHA", () => {
@@ -109,8 +122,8 @@ test("detects changed files from the push event before SHA", () => {
     },
   );
 
-  assert.deepEqual(files, [UI_FILE, EN_CATALOG, DE_CATALOG]);
-  assert.equal(calls[0], "abc1234..HEAD");
+  expect(files).toEqual([UI_FILE, EN_CATALOG, DE_CATALOG]);
+  expect(calls[0]).toBe("abc1234..HEAD");
 });
 
 test("falls back to the dev diff when the push event before SHA is unreachable", () => {
@@ -130,8 +143,8 @@ test("falls back to the dev diff when the push event before SHA is unreachable",
     },
   );
 
-  assert.deepEqual(files, [UI_FILE]);
-  assert.deepEqual(calls, ["deadbee..HEAD", "deadbee...HEAD", "origin/dev...HEAD"]);
+  expect(files).toEqual([UI_FILE]);
+  expect(calls).toEqual(["deadbee..HEAD", "deadbee...HEAD", "origin/dev...HEAD"]);
 });
 
 test("detects changed files from workflow_dispatch base ref safely", () => {
@@ -150,8 +163,8 @@ test("detects changed files from workflow_dispatch base ref safely", () => {
     },
   );
 
-  assert.deepEqual(files, [UI_FILE]);
-  assert.equal(calls[0], "origin/release-1209...HEAD");
+  expect(files).toEqual([UI_FILE]);
+  expect(calls[0]).toBe("origin/release-1209...HEAD");
 });
 
 test("uses only the parent commit fallback for event runs without a base", () => {
@@ -169,8 +182,8 @@ test("uses only the parent commit fallback for event runs without a base", () =>
     },
   );
 
-  assert.deepEqual(files, [UI_FILE]);
-  assert.deepEqual(calls, ["HEAD^1..HEAD"]);
+  expect(files).toEqual([UI_FILE]);
+  expect(calls).toEqual(["HEAD^1..HEAD"]);
 });
 
 test("prefers pull request base ref over synchronize before SHA", () => {
@@ -190,34 +203,30 @@ test("prefers pull request base ref over synchronize before SHA", () => {
     },
   );
 
-  assert.deepEqual(files, [EN_CATALOG, DE_CATALOG]);
-  assert.equal(calls[0], "origin/dev...HEAD");
+  expect(files).toEqual([EN_CATALOG, DE_CATALOG]);
+  expect(calls[0]).toBe("origin/dev...HEAD");
 });
 
 test("rejects unsafe git env values before spawning git", () => {
-  assert.throws(
-    () =>
-      changedFilesFromGit("repo", () => ({ ok: true, error: "", files: [] }), {
-        KEIKO_I18N_GUARD_BASE_REF: "--help",
-      }),
-    /unsafe base ref/,
-  );
+  expect(() =>
+    changedFilesFromGit("repo", () => ({ ok: true, error: "", files: [] }), {
+      KEIKO_I18N_GUARD_BASE_REF: "--help",
+    }),
+  ).toThrow(/unsafe base ref/);
 });
 
 test("fails closed when changed files cannot be determined from git", () => {
-  assert.throws(
-    () =>
-      changedFilesFromGit("repo", () => ({ ok: false, error: "missing range", files: [] }), {
-        GITHUB_EVENT_NAME: "push",
-      }),
-    /could not determine changed files/,
-  );
+  expect(() =>
+    changedFilesFromGit("repo", () => ({ ok: false, error: "missing range", files: [] }), {
+      GITHUB_EVENT_NAME: "push",
+    }),
+  ).toThrow(/could not determine changed files/);
 });
 
 test("reads explicit changed files from argv", () => {
   const files = changedFilesFromInput("repo", ["node", "script.mjs", "--files", UI_FILE], {});
 
-  assert.deepEqual(files, [UI_FILE]);
+  expect(files).toEqual([UI_FILE]);
 });
 
 test("reads explicit changed files from env", () => {
@@ -225,7 +234,7 @@ test("reads explicit changed files from env", () => {
     KEIKO_I18N_GUARD_CHANGED_FILES: `${UI_FILE}\ndocs/architecture.md`,
   });
 
-  assert.deepEqual(files, [UI_FILE, "docs/architecture.md"]);
+  expect(files).toEqual([UI_FILE, "docs/architecture.md"]);
 });
 
 test("fails UI source changes that do not update both catalogs", async () => {
@@ -241,9 +250,9 @@ test("fails UI source changes that do not update both catalogs", async () => {
         changedFiles: [UI_FILE],
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /i18n-messages\.en\.ts/);
-      assert.match(result.problems.join("\n"), /i18n-messages\.de\.ts/);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
+      expect(result.problems.join("\n")).toMatch(/i18n-messages\.de\.ts/);
     },
   );
 });
@@ -261,8 +270,8 @@ test("fails UI source changes that only import the i18n module", async () => {
         changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /do not use the i18n API/);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/do not use the i18n API/);
     },
   );
 });
@@ -287,8 +296,8 @@ test("fails mixed UI diffs when one file hard-codes text", async () => {
         ],
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /AnotherFeature\.tsx/);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/AnotherFeature\.tsx/);
     },
   );
 });
@@ -306,8 +315,8 @@ test("fails UI source changes that only contain raw translate syntax", async () 
         changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /do not use the i18n API/);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/do not use the i18n API/);
     },
   );
 });
@@ -325,8 +334,8 @@ test("passes UI source changes with i18n usage and both catalogs", async () => {
         changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
       });
 
-      assert.equal(result.ok, true);
-      assert.deepEqual(result.problems, []);
+      expect(result.ok).toBe(true);
+      expect(result.problems).toEqual([]);
     },
   );
 });
@@ -347,8 +356,92 @@ test("fails when English and German catalog keys drift", async () => {
         changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /feature\.subtitle/);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.subtitle/);
     },
   );
+});
+
+async function withGitFixture(callback) {
+  const repoRoot = await mkdtemp(join(tmpdir(), "keiko-i18n-guard-git-"));
+  const savedBaseSha = process.env.KEIKO_I18N_GUARD_BASE_SHA;
+  const run = (args) => spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+
+  try {
+    run(["init", "-q"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    for (const [file, contents] of Object.entries(matchingCatalogs)) {
+      await writeRepoFile(repoRoot, file, contents);
+    }
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <p>\n      {t("feature.title")}\n    </p>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "base"]);
+    const baseSha = run(["rev-parse", "HEAD"]).stdout.trim();
+    process.env.KEIKO_I18N_GUARD_BASE_SHA = baseSha;
+
+    return await callback(repoRoot, run);
+  } finally {
+    if (savedBaseSha === undefined) delete process.env.KEIKO_I18N_GUARD_BASE_SHA;
+    else process.env.KEIKO_I18N_GUARD_BASE_SHA = savedBaseSha;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+test("passes a pure refactor of an already-translated file with no new user-facing text", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    // The unchanged t("feature.title") call stays on its own line, untouched, exactly like a real
+    // diff hunk that only edits nearby structural code (e.g. adding a ref/tabIndex to a heading).
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useRef } from "react";\nimport { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  const ref = useRef(null);\n  return (\n    <p ref={ref}>\n      {t("feature.title")}\n    </p>\n  );\n}\n',
+    );
+
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "refactor"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.problems).toEqual([]);
+});
+
+test("fails a change that adds a genuinely new translation key without updating catalogs", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <>\n      <p>{t("feature.title")}</p>\n      <p>{t("feature.subtitle")}</p>\n    </>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "add subtitle"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
+});
+
+test("fails a change that adds new hard-coded user-facing text", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <>\n      <p>{t("feature.title")}</p>\n      <p>Hard-coded text</p>\n    </>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "add hard-coded text"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
 });

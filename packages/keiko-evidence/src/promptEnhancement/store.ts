@@ -16,10 +16,10 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sortedStrings, type GroundingDirective } from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
-import type { GroundingDirective } from "@oscharko-dev/keiko-contracts";
 import { replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
 import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
@@ -295,7 +295,7 @@ export function createInMemoryPromptEnhancementLocalStore(): PromptEnhancementLo
         ? undefined
         : parseAndValidateManifest(JSON.stringify(manifest));
     },
-    list: (): readonly string[] => [...data.keys()].sort(),
+    list: (): readonly string[] => sortedStrings(data.keys()),
     location: (runId: string): string => {
       assertValidRunId(runId);
       return `${runId}${PE_MANIFEST_SUFFIX}`;
@@ -426,7 +426,7 @@ function listRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
       `cannot list PE manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort();
+  return sortedStrings(runIds);
 }
 
 function atomicWriteManifest(target: string, json: string, randomSuffix: () => string): void {

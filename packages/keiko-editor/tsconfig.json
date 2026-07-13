@@ -5,6 +5,7 @@
     "declaration": true,
     "declarationMap": true,
     "jsx": "react-jsx",
+    "removeComments": true,
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"

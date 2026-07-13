@@ -40,8 +40,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Validate stable tag and immutable source commit
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -89,7 +91,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify preinstalled 7z capability for staging
         if: runner.os == 'Windows'
@@ -110,6 +112,8 @@ jobs:
           }
 
           $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
@@ -161,7 +165,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
       - name: Verify preinstalled 7z capability for staging
         shell: pwsh
@@ -181,6 +185,8 @@ jobs:
           }
 
           $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Configure MSVC environment for the native launcher
         shell: cmd
         run: |
@@ -321,8 +327,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       - name: Run executable secure-read adversarial harness
@@ -394,8 +402,10 @@ jobs:
           ref: ${{ github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       - name: Download immutable verified Windows artifact
@@ -447,8 +457,10 @@ jobs:
           ref: ${{ github.ref }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Download immutable verified macOS artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -494,8 +506,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci
       # Assemble into a NON-hidden directory: actions/upload-artifact does not descend into a

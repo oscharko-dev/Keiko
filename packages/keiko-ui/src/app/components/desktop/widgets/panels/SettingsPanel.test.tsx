@@ -16,12 +16,18 @@ import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatew
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
+const fetchManagedLspSettingsMock = vi.fn();
+const mutateManagedLspSettingsMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   fetchConfig: (): Promise<unknown> => fetchConfigMock(),
   fetchModels: (): Promise<unknown> => fetchModelsMock(),
   runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
     runGatewayReadinessMock(...args),
+  fetchManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
+    fetchManagedLspSettingsMock(...args),
+  mutateManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
+    mutateManagedLspSettingsMock(...args),
 }));
 
 // Issue #144: synthetic capability fixtures. Generic ids only — no customer
@@ -254,6 +260,31 @@ describe("SettingsPanel Updates entry point (Issue #1696)", () => {
     expect(
       screen.getByText("Check for Keiko updates and install them when available."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPanel managed language composition", () => {
+  it("mounts the reusable server-owned language section for the active workspace", async () => {
+    primeFetches([]);
+    fetchManagedLspSettingsMock.mockResolvedValue({
+      storeState: "ready",
+      revision: 0,
+      etag: '"lspcfg-0-abcdefghijklmnop"',
+      evidenceCount: 0,
+      languages: [],
+      settings: [],
+      configurations: [],
+      health: [],
+    });
+    render(<SettingsPanel root="/workspace/settings" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Languages" }));
+
+    expect(await screen.findByText("Language intelligence")).toBeInTheDocument();
+    expect(fetchManagedLspSettingsMock).toHaveBeenCalledWith(
+      "/workspace/settings",
+      expect.any(AbortSignal),
+    );
   });
 });
 

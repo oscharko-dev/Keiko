@@ -152,6 +152,17 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
     expect(result.reason).toContain("truncated");
   });
 
+  it("preserves an internal replacement character while removing a partial UTF-8 suffix", async () => {
+    const fs = memFs(ROOT, {});
+    const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-utf8" };
+    const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, 7, {
+      messages: { read: (): string => `\uFFFDaaa€tail` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("\uFFFDaaa");
+    expect(result.reason).toContain("truncated");
+  });
+
   it("reports a missing message reader without falling back to opaque deferred status", async () => {
     const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-2" };

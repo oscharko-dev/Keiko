@@ -9,7 +9,6 @@ import {
   useState,
   type DependencyList,
   type Dispatch,
-  type MutableRefObject,
   type RefObject,
   type SetStateAction,
 } from "react";
@@ -50,6 +49,8 @@ import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
 export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
+
+type CurrentRef<T> = { current: T };
 
 const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
@@ -275,6 +276,19 @@ export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow
   return zoom === current ? win : { ...win, zoom };
 }
 
+// GEN-UI-WORKSPACE-S2004 — extracted so the ctrl/cmd-wheel content-zoom updater
+// passed to setWins does not nest a `.map()` closure inside the wheel handler
+// inside the effect callback (SonarCloud S2004: nesting > 4 levels).
+function applyWheelZoomToWindows(
+  ws: AppWindow[] | null,
+  windowId: string,
+  deltaY: number,
+): AppWindow[] | null {
+  return ws === null
+    ? ws
+    : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, deltaY) : w));
+}
+
 function windowIdFromWheelTarget(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
@@ -298,7 +312,7 @@ interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
   readonly cameraSmoothness: number;
-  readonly winsRef: MutableRefObject<AppWindow[]>;
+  readonly winsRef: CurrentRef<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
@@ -309,7 +323,7 @@ interface QueueViewOptions {
 }
 
 interface PanZoomResult {
-  readonly viewRef: MutableRefObject<View>;
+  readonly viewRef: CurrentRef<View>;
   readonly worldVP: () => ViewportWorld | null;
   readonly zoomTo: (z: number) => void;
   readonly fitView: () => void;
@@ -588,11 +602,7 @@ function usePanZoom({
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
           settleCameraAnimation();
-          setWins((ws) =>
-            ws === null
-              ? ws
-              : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, e.deltaY) : w)),
-          );
+          setWins((ws) => applyWheelZoomToWindows(ws, windowId, e.deltaY));
           return;
         }
         const r = gestureRect();
@@ -675,8 +685,8 @@ interface UseHydrateArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
-  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
+  readonly zc: CurrentRef<number>;
+  readonly lastAppliedSerializedRef: CurrentRef<string | null>;
 }
 
 interface WorkspaceSnapshot {
@@ -949,7 +959,7 @@ function applyPersistedWorkspaceSnapshot(
   snapshot: { readonly wins: AppWindow[]; readonly conns: Connection[] },
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   setConns: Dispatch<SetStateAction<Connection[]>>,
-  zc: MutableRefObject<number>,
+  zc: CurrentRef<number>,
 ): void {
   zc.current = snapshot.wins.reduce((maxZ, win) => Math.max(maxZ, win.z), 1);
   setWins(snapshot.wins);
@@ -980,10 +990,10 @@ function useHydrate({
 interface UseStorageSyncArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
+  readonly zc: CurrentRef<number>;
   readonly beforeApplyRemote: () => void;
-  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
-  readonly suppressNextLocalPersistRef: MutableRefObject<boolean>;
+  readonly lastAppliedSerializedRef: CurrentRef<string | null>;
+  readonly suppressNextLocalPersistRef: CurrentRef<boolean>;
 }
 
 // Serialize a persisted snapshot to a stable equality key. Uses the sanitize path
@@ -1047,8 +1057,8 @@ interface UseServerSyncArgs {
   readonly conns: readonly Connection[];
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
-  readonly zc: MutableRefObject<number>;
-  readonly suppressNextPersistRef: MutableRefObject<boolean>;
+  readonly zc: CurrentRef<number>;
+  readonly suppressNextPersistRef: CurrentRef<boolean>;
 }
 
 function useWorkspaceServerSync({
@@ -1236,11 +1246,11 @@ interface SnapChordActions {
 interface UseKeyboardArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
-  readonly cancelConnectRef: MutableRefObject<() => void>;
+  readonly cancelConnectRef: CurrentRef<() => void>;
   // GEN-UI-KEYBOARD-009 — the snap actions the keyboard snap chords drive. Held in
   // a ref because the snap actions are assembled after this hook is called; the ref
   // is populated in the same render before any keydown can fire.
-  readonly snapRef: MutableRefObject<SnapChordActions | null>;
+  readonly snapRef: CurrentRef<SnapChordActions | null>;
 }
 
 // GEN-UI-KEYBOARD-009 — the keyboard equivalent of an edge/quadrant drag snap.
@@ -1317,6 +1327,62 @@ function handleArrowKey(
   });
 }
 
+// S3776 — the content-zoom chord's guard condition is split from its action so the
+// keydown dispatcher below stays a flat sequence of early returns; the compound
+// boolean and the nested "only act with a live target" check live here instead.
+function isContentZoomChord(e: KeyboardEvent, zoomKey: string | undefined): zoomKey is string {
+  return (e.metaKey || e.ctrlKey) && e.altKey && zoomKey !== undefined;
+}
+
+function runContentZoomChord(
+  e: KeyboardEvent,
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  zoomKey: string,
+  targetId: string | null,
+): void {
+  e.preventDefault();
+  if (targetId !== null) handleContentZoomKey(setWins, zoomKey, targetId);
+}
+
+// GEN-UI-KEYBOARD-009 sibling — the snap chord's guard and its action (zone lookup +
+// the nested "only commit with a live snap + target" check), split out for the same
+// reason as isContentZoomChord/runContentZoomChord above.
+function isSnapChord(e: KeyboardEvent): boolean {
+  return (e.metaKey || e.ctrlKey) && e.altKey;
+}
+
+function runSnapChordKey(
+  e: KeyboardEvent,
+  snapRef: CurrentRef<SnapChordActions | null>,
+  targetId: string | null,
+): void {
+  // ArrowDown maps to null (no lower snap zone); an unmapped key is undefined.
+  const zone = SNAP_ARROW_ZONES[e.key];
+  e.preventDefault();
+  const snap = snapRef.current;
+  if (zone != null && snap !== null && targetId !== null) {
+    handleSnapChord(snap, zone, targetId);
+  }
+}
+
+function isArrowChordActive(e: KeyboardEvent): boolean {
+  return e.metaKey || e.ctrlKey || e.altKey;
+}
+
+function runArrowChordKey(
+  e: KeyboardEvent,
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  rect: () => DOMRect | null,
+  targetId: string | null,
+): void {
+  const size = e.altKey;
+  e.preventDefault();
+  if (targetId === null) return;
+  const r = rect();
+  if (r === null) return;
+  handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size, targetId);
+}
+
 function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -1340,9 +1406,8 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
       // requires Alt as well (consistent with Alt = resize on the arrow chords);
       // the browser chords pass through untouched.
       const zoomKey = CONTENT_ZOOM_CODES[e.code];
-      if ((e.metaKey || e.ctrlKey) && e.altKey && zoomKey !== undefined) {
-        e.preventDefault();
-        if (targetId !== null) handleContentZoomKey(setWins, zoomKey, targetId);
+      if (isContentZoomChord(e, zoomKey)) {
+        runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
       if (!/^Arrow/.test(e.key)) return;
@@ -1350,24 +1415,12 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
       // Alt modifier with resize; it wins only when Cmd/Ctrl is also held.
-      if ((e.metaKey || e.ctrlKey) && e.altKey) {
-        // ArrowDown maps to null (no lower snap zone); an unmapped key is undefined.
-        const zone = SNAP_ARROW_ZONES[e.key];
-        e.preventDefault();
-        const snap = snapRef.current;
-        if (zone != null && snap !== null && targetId !== null) {
-          handleSnapChord(snap, zone, targetId);
-        }
+      if (isSnapChord(e)) {
+        runSnapChordKey(e, snapRef, targetId);
         return;
       }
-      const move = e.metaKey || e.ctrlKey;
-      const size = e.altKey;
-      if (!move && !size) return;
-      e.preventDefault();
-      if (targetId === null) return;
-      const r = rect();
-      if (r === null) return;
-      handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size, targetId);
+      if (!isArrowChordActive(e)) return;
+      runArrowChordKey(e, setWins, rect, targetId);
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -1378,7 +1431,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
 
 interface UseFitMaximizedArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
-  readonly viewRef: MutableRefObject<View>;
+  readonly viewRef: CurrentRef<View>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
@@ -1459,6 +1512,60 @@ export interface UseWorkspaceOptions {
     | undefined;
   readonly onConnectorUnbind?:
     ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+}
+
+// S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
+// `for` loop inside an `if`, so every ternary/`??`/guard inside it paid double nesting.
+// Extracting the per-connection work into its own function resets that nesting to zero;
+// the helpers below match the three independent derivations closeWithTeardown made
+// inline (the other endpoint, the chat window id, and the Files↔Chat unbind scope).
+function connectionOtherEndpoint(conn: Connection, closedWindowId: string): string | null {
+  if (conn.a === closedWindowId) return conn.b;
+  if (conn.b === closedWindowId) return conn.a;
+  return null;
+}
+
+// Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
+// cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
+// re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
+// for edges persisted before the snapshot fields existed.
+function connectionChatWindowId(conn: Connection, win: AppWindow, other: AppWindow): string | null {
+  if (conn.boundChatWindowId !== undefined) return conn.boundChatWindowId;
+  if (win.type === "chat") return win.id;
+  if (other.type === "chat") return other.id;
+  return null;
+}
+
+function connectionUnbindScope(
+  conn: Connection,
+  win: AppWindow,
+  other: AppWindow,
+): ChatConnectedScope | null {
+  const bound = boundScopeOf(conn);
+  if (bound !== null) return bound;
+  if (conn.boundScopeElided === true) return null;
+  return filesChatBindScope(win, other, Date.now());
+}
+
+function unbindClosedWindowConnection(
+  closedWindowId: string,
+  closedWin: AppWindow,
+  conn: Connection,
+  winsById: ReadonlyMap<string, AppWindow>,
+  unbindScope: (chatWindowId: string, scope: ChatConnectedScope) => void,
+  unbindConnectorScope: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void,
+): void {
+  const otherId = connectionOtherEndpoint(conn, closedWindowId);
+  if (otherId === null) return;
+  const other = winsById.get(otherId);
+  if (other === undefined) return;
+  const chatWindowId = connectionChatWindowId(conn, closedWin, other);
+  const scope = connectionUnbindScope(conn, closedWin, other);
+  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope);
+  const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
+  if (connectorScope !== null && chatWindowId !== null) {
+    unbindConnectorScope(chatWindowId, connectorScope);
+  }
 }
 
 export function useWorkspace(
@@ -1739,25 +1846,14 @@ export function useWorkspace(
       const win = winsByIdRef.current.get(id);
       if (win !== undefined) {
         for (const c of connsByEndpointRef.current.get(id) ?? []) {
-          const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-          if (otherId === null) continue;
-          const other = winsByIdRef.current.get(otherId);
-          if (other === undefined) continue;
-          // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
-          // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
-          // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
-          // for edges persisted before the snapshot fields existed.
-          const chatWindowId =
-            c.boundChatWindowId ??
-            (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
-          const scope =
-            boundScopeOf(c) ??
-            (c.boundScopeElided === true ? null : filesChatBindScope(win, other, Date.now()));
-          if (scope !== null && chatWindowId !== null) stableScopeUnbind(chatWindowId, scope);
-          const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
-          if (connectorScope !== null && chatWindowId !== null) {
-            stableConnectorUnbind(chatWindowId, connectorScope);
-          }
+          unbindClosedWindowConnection(
+            id,
+            win,
+            c,
+            winsByIdRef.current,
+            stableScopeUnbind,
+            stableConnectorUnbind,
+          );
         }
       }
       mutations.close(id);

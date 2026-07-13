@@ -153,6 +153,10 @@ describe("shapeSearchObservation", () => {
     expect(Object.prototype.hasOwnProperty.call(handle, "notPersistedReason")).toBe(false);
   });
 
+  it("preserves an internal replacement character while removing a partial UTF-8 suffix", () => {
+    expect(boundExcerpt("\uFFFDaaa€tail", 7)).toBe("\uFFFDaaa");
+  });
+
   it("produces an observation that passes validateContextToolObservation", () => {
     const shaped = shapeSearchObservation(searchResult([atom(0.9, "a.ts")]), {
       observationId: "s-valid",

@@ -257,6 +257,167 @@ function RunRow({
 }
 
 // ---------------------------------------------------------------------------
+// QiHubPanel helpers — extracted from the component (SonarCloud S3776), mirroring the
+// loadRunDetail / runReviewAction / computeStatusText / RunCardBody pattern in QiRunCard.tsx.
+// ---------------------------------------------------------------------------
+
+interface RunDeleteParams {
+  readonly runId: string;
+  readonly runs: readonly QualityIntelligenceUiRunSummary[];
+  readonly deleteImpl: typeof deleteQiRun;
+  readonly loadRuns: () => Promise<void>;
+  readonly t: I18nTranslate;
+  readonly openButtonRefs: { current: Map<string, HTMLButtonElement> };
+  readonly runsHeadingRef: { current: HTMLHeadingElement | null };
+  readonly setDeletingId: (value: string | null) => void;
+  readonly setError: (value: string | null) => void;
+  readonly setDeletedAnnounce: (value: string) => void;
+}
+
+// Deletes a run: calls the API, refetches the list, then parks keyboard focus on the closest
+// surviving row's Open button (or the runs heading if none survive) so a delete never strands
+// focus on <body> (GEN-UI-FOCUS-003, WCAG 2.4.3). Extracted from handleDelete (SonarCloud S3776)
+// so the callback itself stays a thin guard + dispatch.
+async function runDeleteRun(params: RunDeleteParams): Promise<void> {
+  const {
+    runId,
+    runs,
+    deleteImpl,
+    loadRuns,
+    t,
+    openButtonRefs,
+    runsHeadingRef,
+    setDeletingId,
+    setError,
+    setDeletedAnnounce,
+  } = params;
+  // Determine the surviving neighbour BEFORE the delete unmounts the focused row: prefer the
+  // next run's Open button, then the previous run's, so keyboard focus lands on the closest
+  // surviving row (GEN-UI-FOCUS-003, WCAG 2.4.3). If this is the last run, park focus on the
+  // runs heading instead (the empty-state container is not focusable).
+  const index = runs.findIndex((run) => run.id === runId);
+  const neighbour = index === -1 ? undefined : (runs[index + 1] ?? runs[index - 1]);
+  const neighbourId = neighbour?.id;
+  setDeletingId(runId);
+  setError(null);
+  try {
+    await deleteImpl(runId);
+    setDeletedAnnounce(t("qi.hub.deleted"));
+    await loadRuns();
+    // Park focus after the refetch commits the new list, so the target element exists in the
+    // DOM. requestAnimationFrame lets React flush the removal of the deleted row first.
+    requestAnimationFrame(() => {
+      const target =
+        neighbourId !== undefined ? openButtonRefs.current.get(neighbourId) : undefined;
+      if (target !== undefined) {
+        target.focus();
+      } else {
+        runsHeadingRef.current?.focus();
+      }
+    });
+  } catch (err) {
+    setError(formatError(err));
+  } finally {
+    setDeletingId(null);
+  }
+}
+
+// uiux-fix F030 C111: the run-list load-status live region text. Extracted so the
+// loading/error/loaded ternary chain isn't nested inline inside the JSX (SonarCloud S3776).
+function computeRunsStatusText(
+  loading: boolean,
+  error: string | null,
+  runs: readonly QualityIntelligenceUiRunSummary[],
+  truncated: boolean,
+  totalRunIds: number,
+  t: I18nTranslate,
+): string {
+  if (loading) return t("qi.hub.loadingRuns");
+  if (error === null) {
+    return t("qi.hub.listLoaded", {
+      shown: runs.length,
+      total: truncated ? totalRunIds : runs.length,
+    });
+  }
+  return "";
+}
+
+interface RunsListBodyProps {
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly runs: readonly QualityIntelligenceUiRunSummary[];
+  readonly visibleRuns: number;
+  readonly deletingId: string | null;
+  readonly truncated: boolean;
+  readonly totalRunIds: number;
+  readonly t: I18nTranslate;
+  readonly openRun: (
+    id: string,
+    recheckableSources?: readonly QualityIntelligenceInlineSource[],
+  ) => void;
+  readonly onDelete: (id: string) => void;
+  readonly onRetry: () => void;
+  readonly onShowMore: () => void;
+  readonly registerOpenButton: (id: string, el: HTMLButtonElement | null) => void;
+}
+
+// The loading/error/empty/list gate for the run-list column body. Extracted from QiHubPanel's
+// JSX (SonarCloud S3776) — early returns instead of a nested ternary chain.
+function RunsListBody({
+  loading,
+  error,
+  runs,
+  visibleRuns,
+  deletingId,
+  truncated,
+  totalRunIds,
+  t,
+  openRun,
+  onDelete,
+  onRetry,
+  onShowMore,
+  registerOpenButton,
+}: RunsListBodyProps): ReactNode {
+  if (loading) return <LoadingSkeleton />;
+  if (error !== null) return <ErrorState message={error} onRetry={onRetry} />;
+  if (runs.length === 0) {
+    return (
+      <div className="lk-empty">
+        <p className="lk-empty-title">{t("qi.hub.empty.title")}</p>
+        <p className="lk-empty-body">{t("qi.hub.empty.body")}</p>
+      </div>
+    );
+  }
+  return (
+    <>
+      <ul className="qi-run-list" aria-label={t("qi.hub.runList")}>
+        {runs.slice(0, visibleRuns).map((run) => (
+          <RunRow
+            key={run.id}
+            run={run}
+            onOpen={openRun}
+            onDelete={onDelete}
+            deleting={deletingId === run.id}
+            t={t}
+            openButtonRef={registerOpenButton}
+          />
+        ))}
+      </ul>
+      {visibleRuns < runs.length ? (
+        <button type="button" className="qi-btn qi-btn-secondary qi-show-more" onClick={onShowMore}>
+          {t("qi.hub.showMoreRuns", { count: runs.length - visibleRuns })}
+        </button>
+      ) : null}
+      {truncated ? (
+        <p className="qi-runs-truncated" data-testid="qi-runs-truncated">
+          {t("qi.hub.truncated", { shown: runs.length, total: totalRunIds })}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // QiHubPanel
 // ---------------------------------------------------------------------------
 
@@ -331,39 +492,23 @@ export function QiHubPanel({
   // Delete a run: call the API, refetch the list, surface failures via the existing error channel.
   // The deletingId lock prevents concurrent deletes. On error the row stays; on success the refetch
   // removes it. The panel-level error channel (ErrorState) is reused — the same retryable alert
-  // already proven in the list-load path is appropriate for a delete failure.
+  // already proven in the list-load path is appropriate for a delete failure. The body is
+  // extracted to runDeleteRun (SonarCloud S3776); this callback stays a thin guard + dispatch.
   const handleDelete = useCallback(
     async (runId: string): Promise<void> => {
       if (deletingId !== null) return; // concurrent-delete guard
-      // Determine the surviving neighbour BEFORE the delete unmounts the focused row: prefer the
-      // next run's Open button, then the previous run's, so keyboard focus lands on the closest
-      // surviving row (GEN-UI-FOCUS-003, WCAG 2.4.3). If this is the last run, park focus on the
-      // runs heading instead (the empty-state container is not focusable).
-      const index = runs.findIndex((run) => run.id === runId);
-      const neighbour = index === -1 ? undefined : (runs[index + 1] ?? runs[index - 1]);
-      const neighbourId = neighbour?.id;
-      setDeletingId(runId);
-      setError(null);
-      try {
-        await deleteImpl(runId);
-        setDeletedAnnounce(t("qi.hub.deleted"));
-        await loadRuns();
-        // Park focus after the refetch commits the new list, so the target element exists in the
-        // DOM. requestAnimationFrame lets React flush the removal of the deleted row first.
-        requestAnimationFrame(() => {
-          const target =
-            neighbourId !== undefined ? openButtonRefs.current.get(neighbourId) : undefined;
-          if (target !== undefined) {
-            target.focus();
-          } else {
-            runsHeadingRef.current?.focus();
-          }
-        });
-      } catch (err) {
-        setError(formatError(err));
-      } finally {
-        setDeletingId(null);
-      }
+      await runDeleteRun({
+        runId,
+        runs,
+        deleteImpl,
+        loadRuns,
+        t,
+        openButtonRefs,
+        runsHeadingRef,
+        setDeletingId,
+        setError,
+        setDeletedAnnounce,
+      });
     },
     [deletingId, deleteImpl, loadRuns, runs, t],
   );
@@ -397,14 +542,7 @@ export function QiHubPanel({
             the column body. aria-live on the body announced the entire interactive run list on
             every refresh. Load errors announce via ErrorState's own role="alert". */}
         <p className="sr-only" role="status" aria-live="polite">
-          {loading
-            ? t("qi.hub.loadingRuns")
-            : error === null
-              ? t("qi.hub.listLoaded", {
-                  shown: runs.length,
-                  total: truncated ? totalRunIds : runs.length,
-                })
-              : ""}
+          {computeRunsStatusText(loading, error, runs, truncated, totalRunIds, t)}
         </p>
         {/* Dedicated live region for delete completion announcements — separate from the list
             status region so a delete announcement does not clash with a concurrent list reload. */}
@@ -412,55 +550,27 @@ export function QiHubPanel({
           {deletedAnnounce}
         </p>
         <div className="qi-col-body" aria-busy={loading}>
-          {loading ? (
-            <LoadingSkeleton />
-          ) : error !== null ? (
-            <ErrorState
-              message={error}
-              onRetry={() => {
-                void loadRuns();
-              }}
-            />
-          ) : runs.length === 0 ? (
-            <div className="lk-empty">
-              <p className="lk-empty-title">{t("qi.hub.empty.title")}</p>
-              <p className="lk-empty-body">{t("qi.hub.empty.body")}</p>
-            </div>
-          ) : (
-            <>
-              <ul className="qi-run-list" aria-label={t("qi.hub.runList")}>
-                {runs.slice(0, visibleRuns).map((run) => (
-                  <RunRow
-                    key={run.id}
-                    run={run}
-                    onOpen={openRun}
-                    onDelete={(id) => {
-                      void handleDelete(id);
-                    }}
-                    deleting={deletingId === run.id}
-                    t={t}
-                    openButtonRef={registerOpenButton}
-                  />
-                ))}
-              </ul>
-              {visibleRuns < runs.length ? (
-                <button
-                  type="button"
-                  className="qi-btn qi-btn-secondary qi-show-more"
-                  onClick={() => {
-                    setVisibleRuns((v) => v + INITIAL_VISIBLE_RUNS);
-                  }}
-                >
-                  {t("qi.hub.showMoreRuns", { count: runs.length - visibleRuns })}
-                </button>
-              ) : null}
-              {truncated ? (
-                <p className="qi-runs-truncated" data-testid="qi-runs-truncated">
-                  {t("qi.hub.truncated", { shown: runs.length, total: totalRunIds })}
-                </p>
-              ) : null}
-            </>
-          )}
+          <RunsListBody
+            loading={loading}
+            error={error}
+            runs={runs}
+            visibleRuns={visibleRuns}
+            deletingId={deletingId}
+            truncated={truncated}
+            totalRunIds={totalRunIds}
+            t={t}
+            openRun={openRun}
+            onDelete={(id) => {
+              void handleDelete(id);
+            }}
+            onRetry={() => {
+              void loadRuns();
+            }}
+            onShowMore={() => {
+              setVisibleRuns((v) => v + INITIAL_VISIBLE_RUNS);
+            }}
+            registerOpenButton={registerOpenButton}
+          />
         </div>
       </section>
     </div>

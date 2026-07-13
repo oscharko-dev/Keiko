@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
 import { runStatusLabel } from "../../../../../lib/format";
 import type { ChangedFile, RunReport } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { parseUnifiedDiff } from "./shared/diffParser";
 import { DiffFileSection } from "./shared/diffView";
 
@@ -30,10 +31,10 @@ interface EvidenceControlProps {
   readonly error: ErrorState | null;
 }
 
-function errorFromUnknown(value: unknown): ErrorState {
+function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
-  return { code: "INTERNAL", message: "Unexpected error." };
+  return { code: "INTERNAL", message: t("reviewWidget.unexpectedError") };
 }
 
 function shortPath(p: string): string {
@@ -43,6 +44,34 @@ function shortPath(p: string): string {
   const parts = p.split("/");
   if (parts.length <= 2) return p;
   return `…/${parts.slice(-2).join("/")}`;
+}
+
+function applyButtonLabel({
+  applying,
+  confirmApply,
+  diffFileCount,
+  t,
+}: {
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly diffFileCount: number;
+  readonly t: I18nTranslate;
+}): string {
+  if (applying) return t("reviewWidget.applying");
+  if (!confirmApply) return t("reviewWidget.apply");
+  return diffFileCount === 1
+    ? t("reviewWidget.confirmApplySingular", { count: diffFileCount })
+    : t("reviewWidget.confirmApplyPlural", { count: diffFileCount });
+}
+
+function applyStatusLabel(
+  applying: boolean,
+  appliedAt: number | undefined,
+  t: I18nTranslate,
+): string {
+  if (applying) return t("reviewWidget.applying");
+  if (appliedAt !== undefined) return t("reviewWidget.applied");
+  return "";
 }
 
 // uiux-fix F018 C259: the RunStatus→label map moved to lib/format runStatusLabel so
@@ -64,10 +93,11 @@ function hasDiff(report: RunReport): boolean {
 }
 
 function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): ReactNode {
+  const t = useTranslate();
   if (hasManifest) {
     return (
       <a className="rv-evidence-link" href={href} target="_blank" rel="noopener noreferrer">
-        Evidence
+        {t("reviewWidget.evidence")}
       </a>
     );
   }
@@ -78,7 +108,7 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
     // role="alert" (assertive) is correct for errors per WCAG 4.1.3 (CW-02).
     return (
       <span className="rv-evidence-link rv-evidence-error" role="alert">
-        Evidence error: {error.message}
+        {t("reviewWidget.evidenceError", { message: error.message })}
       </span>
     );
   }
@@ -88,7 +118,7 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
   // Visual appearance is unchanged via the same CSS classes.
   return (
     <button type="button" className="rv-evidence-link rv-evidence-disabled" disabled>
-      Evidence
+      {t("reviewWidget.evidence")}
     </button>
   );
 }
@@ -96,6 +126,7 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
 // --- main widget ------------------------------------------------------------
 
 export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): ReactNode {
+  const t = useTranslate();
   const [report, setReport] = useState<RunReport | null>(null);
   const [hasManifest, setHasManifest] = useState(false);
   const [evidenceError, setEvidenceError] = useState<ErrorState | null>(null);
@@ -135,7 +166,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
           setHasManifest(true);
           setEvidenceError(null);
         } else {
-          const manifestError = errorFromUnknown(manifRes.reason);
+          const manifestError = errorFromUnknown(manifRes.reason, t);
           setHasManifest(false);
           setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
         }
@@ -146,7 +177,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
           return;
         }
 
-        setFetchError(errorFromUnknown(runRes.reason));
+        setFetchError(errorFromUnknown(runRes.reason, t));
         setLoading(false);
       },
     );
@@ -154,7 +185,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [runId, t]);
 
   const doApply = (): void => {
     if (runId === undefined || report === null || !canApplyReport(report) || applying) return;
@@ -166,7 +197,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
         setApplying(false);
       })
       .catch((err: unknown) => {
-        setApplyError(errorFromUnknown(err));
+        setApplyError(errorFromUnknown(err, t));
         setApplying(false);
       });
   };
@@ -209,6 +240,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
     }),
     [diff],
   );
+  const diffFileCount = diff?.files.length ?? 0;
   const selectedFileIndex =
     diff !== null && diff.files.length > 0
       ? Math.min(activeFile ?? 0, diff.files.length - 1)
@@ -221,11 +253,11 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
   // pointing at a dead end. Without the persistence callback the old copy stays.
   if (runId === undefined || runId === "") {
     return (
-      <section className="review rv-empty" aria-label="Diff review">
-        <h2 className="rv-empty-h">Review</h2>
+      <section className="review rv-empty" aria-label={t("reviewWidget.diffReviewLabel")}>
+        <h2 className="rv-empty-h">{t("reviewWidget.heading")}</h2>
         {onRunIdSubmit !== undefined ? (
           <>
-            <p className="rv-empty-p">Paste a run ID below to load a proposed diff.</p>
+            <p className="rv-empty-p">{t("reviewWidget.pasteRunId")}</p>
             <form
               className="rv-empty-form"
               onSubmit={(e) => {
@@ -236,7 +268,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
               }}
             >
               <label className="rv-empty-label" htmlFor="rv-runid-input">
-                Run ID
+                {t("reviewWidget.runIdLabel")}
               </label>
               <input
                 id="rv-runid-input"
@@ -244,31 +276,29 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                 type="text"
                 value={runIdInput}
                 onChange={(e) => setRunIdInput(e.target.value)}
-                placeholder="e.g. 7f3a9c12…"
+                placeholder={t("reviewWidget.runIdPlaceholder")}
               />
               <button type="submit" className="arun-btn">
-                Load run
+                {t("reviewWidget.loadRun")}
               </button>
             </form>
           </>
         ) : (
-          <p className="rv-empty-p">
-            Enter a run ID in the window configuration to load a proposed diff.
-          </p>
+          <p className="rv-empty-p">{t("reviewWidget.enterRunIdWindowConfig")}</p>
         )}
       </section>
     );
   }
 
   return (
-    <section className="review" aria-label="Diff review">
-      {/* State 2: loading. role="status" exposes the aria-label and announces the
-          loading state; aria-label on a bare div has no effect for AT (C256). */}
+    <section className="review" aria-label={t("reviewWidget.diffReviewLabel")}>
+      {/* State 2: loading. Native output exposes a polite status surface without
+          depending on an explicit ARIA status role. */}
       {loading && (
-        <div className="rv-loading" role="status" aria-busy="true" aria-label="Loading diff">
-          <div className="rv-skel" />
-          <div className="rv-skel rv-skel-sm" />
-        </div>
+        <output className="rv-loading" aria-busy="true" aria-label={t("reviewWidget.loadingDiff")}>
+          <span className="rv-skel" />
+          <span className="rv-skel rv-skel-sm" />
+        </output>
       )}
 
       {/* State 3: fetch error. uiux-fix F018 C124: the human message leads; the
@@ -276,7 +306,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
       {!loading && fetchError !== null && (
         <div role="alert" className="rv-error">
           {fetchError.code === "NOT_FOUND" ? (
-            "No run with that ID was found."
+            t("reviewWidget.notFound")
           ) : (
             <>
               {fetchError.message} <span className="err-code mono">({fetchError.code})</span>
@@ -305,13 +335,13 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
         }
       >
         {!loading && fetchError === null && report !== null && isRunning
-          ? "Run is still running. The proposed diff will appear when the run completes."
+          ? t("reviewWidget.stillRunning")
           : ""}
       </p>
 
       {/* State 4: no diff */}
       {!loading && fetchError === null && report !== null && !isRunning && !hasDiff(report) && (
-        <p className="rv-no-diff">This run has no proposed diff to review.</p>
+        <p className="rv-no-diff">{t("reviewWidget.noDiff")}</p>
       )}
 
       {/* State 5: loaded with diff */}
@@ -323,7 +353,10 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
               <span className="rv-model mono">{report.modelId}</span>
             )}
             <span className="rv-counts mono">
-              {diff !== null && `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`}{" "}
+              {diff !== null &&
+                (diffFileCount === 1
+                  ? t("reviewWidget.fileCountSingular", { count: diffFileCount })
+                  : t("reviewWidget.fileCountPlural", { count: diffFileCount }))}{" "}
               <span className="rv-stat add">+{totals.added}</span>{" "}
               <span className="rv-stat del">−{totals.removed}</span>
             </span>
@@ -337,7 +370,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
             selectedFile !== undefined && (
               <div className="rv-layout">
                 {/* File list */}
-                <nav className="rv-filelist" aria-label="Changed files">
+                <nav className="rv-filelist" aria-label={t("reviewWidget.changedFilesLabel")}>
                   <ul>
                     {diff.files.map((file, idx) => {
                       const cf = changedFiles.find((c) => c.path === file.path);
@@ -356,7 +389,10 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                             <span className="rv-stat add">+{file.addedLines}</span>
                             <span className="rv-stat del">−{file.removedLines}</span>
                             {cf?.elevatedReview === true && (
-                              <span className="rv-elevated" aria-label="Elevated review">
+                              <span
+                                className="rv-elevated"
+                                aria-label={t("reviewWidget.elevatedReview")}
+                              >
                                 !
                               </span>
                             )}
@@ -378,15 +414,15 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                   />
                   {diff.truncated && (
                     <p role="note" className="rv-truncated">
-                      Diff truncated at 512 KB. Open the{" "}
+                      {t("reviewWidget.truncated.prefix")}{" "}
                       {hasManifest ? (
                         <a href={evidenceHref} target="_blank" rel="noopener noreferrer">
-                          evidence manifest
+                          {t("reviewWidget.truncated.linkText")}
                         </a>
                       ) : (
-                        "evidence manifest"
+                        t("reviewWidget.truncated.linkText")
                       )}{" "}
-                      for the full record.
+                      {t("reviewWidget.truncated.suffix")}
                     </p>
                   )}
                 </div>
@@ -395,16 +431,16 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
 
           {/* Apply controls */}
           <div className="rv-controls">
-            <span role="status" aria-live="polite" className="rv-apply-status">
-              {applying ? "Applying…" : report.appliedAt !== undefined ? "Applied" : ""}
-            </span>
+            <output aria-live="polite" className="rv-apply-status">
+              {applyStatusLabel(applying, report.appliedAt, t)}
+            </output>
             {applyError !== null && (
               <span role="alert" className="rv-apply-error">
                 {applyError.message}
               </span>
             )}
             {report.appliedAt !== undefined ? (
-              <span className="rv-final mono">Applied</span>
+              <span className="rv-final mono">{t("reviewWidget.applied")}</span>
             ) : canApplyReport(report) ? (
               // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
               // applying; the confirm step names the blast radius before writing.
@@ -414,11 +450,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
                 aria-disabled={applying}
                 onClick={onApplyClick}
               >
-                {applying
-                  ? "Applying…"
-                  : confirmApply
-                    ? `Confirm apply (${(diff?.files.length ?? 0).toString()} file${diff?.files.length === 1 ? "" : "s"})`
-                    : "Apply"}
+                {applyButtonLabel({ applying, confirmApply, diffFileCount, t })}
               </button>
             ) : null}
           </div>

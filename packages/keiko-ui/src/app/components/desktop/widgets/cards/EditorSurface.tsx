@@ -60,6 +60,9 @@ export interface EditorSurfaceProps {
   readonly modifiedAt?: number | undefined;
   readonly maxSizeBytes?: number | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  readonly editorPreferences?: KeikoCodeEditorProps["editorPreferences"] | undefined;
+  readonly modelViewStateKey?: KeikoCodeEditorProps["modelViewStateKey"] | undefined;
+  readonly modelRetentionProtection?: KeikoCodeEditorProps["modelRetentionProtection"] | undefined;
   readonly ariaLabel?: string | undefined;
   readonly onContentChange: (next: EditorContentDelta, origin: EditorChangeOrigin) => void;
   readonly onSaveRequested: (request: EditorSaveRequest) => void;
@@ -102,6 +105,7 @@ export interface EditorSurfaceProps {
   readonly onRevealCallHierarchyLocation?:
     KeikoCodeEditorProps["onRevealCallHierarchyLocation"] | undefined;
   readonly provideInlayHints?: KeikoCodeEditorProps["provideInlayHints"] | undefined;
+  readonly semanticTokens?: KeikoCodeEditorProps["semanticTokens"] | undefined;
   readonly uriForPath?: KeikoCodeEditorProps["uriForPath"] | undefined;
   readonly provideReferences?: EditorReferencesResolver | undefined;
   readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
@@ -179,6 +183,9 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         modifiedAt={props.modifiedAt}
         maxSizeBytes={props.maxSizeBytes}
         themeVariant={props.themeVariant}
+        editorPreferences={props.editorPreferences}
+        modelViewStateKey={props.modelViewStateKey}
+        modelRetentionProtection={props.modelRetentionProtection}
         ariaLabel={props.ariaLabel}
         onContentChange={props.onContentChange}
         onSaveRequested={props.onSaveRequested}
@@ -202,6 +209,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         callHierarchyLabels={props.callHierarchyLabels}
         onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
         provideInlayHints={props.provideInlayHints}
+        semanticTokens={props.semanticTokens}
         uriForPath={props.uriForPath}
         provideReferences={props.provideReferences}
         provideCodeActions={props.provideCodeActions}

@@ -186,7 +186,7 @@ const detectRiskHints = (text: string, profile: PolicyProfile): readonly string[
       }
     }
   }
-  return Array.from(hits).sort();
+  return Array.from(hits).sort((a, b) => a.localeCompare(b));
 };
 
 const derivePriority = (

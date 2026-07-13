@@ -74,6 +74,20 @@ const MULTI_FILE_REPORT = {
   ],
 };
 
+function cappedDiff(fileCount: number): string {
+  return Array.from({ length: fileCount }, (_value, index) => {
+    const path = `src/generated-${String(index)}.ts`;
+    return [
+      `diff --git a/${path} b/${path}`,
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      "@@ -1 +1 @@",
+      `-old${String(index)}`,
+      `+new${String(index)}`,
+    ].join("\n");
+  }).join("\n");
+}
+
 function evidenceManifest(runId: string): EvidenceManifest {
   return {
     evidenceSchemaVersion: "1",
@@ -152,6 +166,7 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-123" />);
     // The loading div has aria-label "Loading diff" and aria-busy="true"
     const loading = await screen.findByLabelText(/loading diff/i);
+    expect(loading.tagName).toBe("OUTPUT");
     expect(loading).toHaveAttribute("aria-busy", "true");
   });
 
@@ -248,6 +263,17 @@ describe("ReviewWidget", () => {
     });
   });
 
+  it("shows the fallback message when report fetch fails with an opaque value", async () => {
+    vi.mocked(fetchRunReport).mockRejectedValue("opaque failure");
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-opaque" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Unexpected error.");
+    });
+  });
+
   it("keeps evidence navigation when the live run record has expired", async () => {
     vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Run not found.", 404));
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
@@ -335,6 +361,19 @@ describe("ReviewWidget", () => {
     });
   });
 
+  it("labels the apply confirmation with the plural file count", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: MULTI_FILE_REPORT });
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-plural-confirm" />);
+
+    await screen.findByRole("button", { name: /^apply$/i });
+    await userEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+
+    expect(screen.getByRole("button", { name: /confirm apply \(2 files\)/i })).toBeInTheDocument();
+    expect(applyRun).not.toHaveBeenCalled();
+  });
+
   it("Evidence link is present when manifest fetch succeeds", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
@@ -349,6 +388,23 @@ describe("ReviewWidget", () => {
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
+  });
+
+  it("links the evidence manifest from the truncated diff notice", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: { ...MINIMAL_REPORT, proposedDiff: cappedDiff(401) },
+    });
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({
+      manifest: evidenceManifest("r-large"),
+    });
+
+    render(<ReviewWidget runId="r-large" />);
+
+    expect(await screen.findByText(/diff truncated/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /evidence manifest/i })).toHaveAttribute(
+      "href",
+      "/api/evidence/r-large",
+    );
   });
 
   // CW-01: disabled Evidence must be a native <button disabled>, not role="link"

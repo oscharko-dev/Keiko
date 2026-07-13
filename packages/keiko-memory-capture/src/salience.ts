@@ -120,6 +120,52 @@ function stripCodeFences(raw: string): string {
   return raw.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
 }
 
+// Scan state for firstBalancedArray: bracket nesting depth plus the string/escape tracking that
+// keeps brackets inside string values from being mistaken for structural array brackets.
+interface ArrayScanState {
+  depth: number;
+  inString: boolean;
+  escaped: boolean;
+}
+
+// Applies string-literal and backslash-escape tracking for one character. Returns true when the
+// character was consumed by that tracking (i.e. the caller must not also treat it as a bracket).
+function consumeStringOrEscape(ch: string | undefined, state: ArrayScanState): boolean {
+  if (state.escaped) {
+    state.escaped = false;
+    return true;
+  }
+  if (ch === "\\") {
+    state.escaped = true;
+    return true;
+  }
+  if (ch === '"') {
+    state.inString = !state.inString;
+    return true;
+  }
+  return state.inString;
+}
+
+// Updates bracket depth for one non-string, non-escape character. Returns the index at which the
+// top-level array closes, or null if scanning should continue.
+function trackBracketDepth(
+  ch: string | undefined,
+  index: number,
+  state: ArrayScanState,
+): number | null {
+  if (ch === "[") {
+    state.depth += 1;
+    return null;
+  }
+  if (ch === "]") {
+    state.depth -= 1;
+    if (state.depth === 0) {
+      return index;
+    }
+  }
+  return null;
+}
+
 // Locate the first balanced top-level JSON array. Returns the substring or null. Scans for the
 // first "[" then walks to its matching "]" tracking string literals and escapes so a bracket
 // inside a string value does not close the array early.
@@ -128,33 +174,15 @@ function firstBalancedArray(text: string): string | null {
   if (start === -1) {
     return null;
   }
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
+  const state: ArrayScanState = { depth: 0, inString: false, escaped: false };
   for (let i = start; i < text.length; i += 1) {
     const ch = text[i];
-    if (escaped) {
-      escaped = false;
+    if (consumeStringOrEscape(ch, state)) {
       continue;
     }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, i + 1);
-      }
+    const closingIndex = trackBracketDepth(ch, i, state);
+    if (closingIndex !== null) {
+      return text.slice(start, closingIndex + 1);
     }
   }
   return null;
