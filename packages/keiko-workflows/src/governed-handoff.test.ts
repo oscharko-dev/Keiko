@@ -8,7 +8,11 @@ import {
 import { resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 
-import { createScopedWriter, governedPatchRejectionCode } from "./governed-handoff.js";
+import {
+  createScopedWriter,
+  governedPatchRejectionCode,
+  proposedPatchEntriesFromValidation,
+} from "./governed-handoff.js";
 
 const WORKSPACE_ROOT = "/repo";
 
@@ -32,6 +36,44 @@ function handoff(): WorkflowHandoffRequest {
 }
 
 describe("governed handoff enforcement helpers", () => {
+  it("assigns unobserved patch bytes only to the final file", () => {
+    const files = ["tests/first.test.ts", "tests/second.test.ts", "tests/final.test.ts"].map(
+      (path) => ({
+        path,
+        kind: "modify" as const,
+        hunks: [],
+        addedLines: 0,
+        removedLines: 0,
+      }),
+    );
+    const base = proposedPatchEntriesFromValidation({
+      ok: true,
+      files,
+      totalChangedLines: 0,
+      totalBytes: 0,
+      reasons: [],
+      conflicts: [],
+    });
+    const observed = base.reduce((sum, entry) => sum + entry.patchBytes, 0);
+    const totalBytes = observed + 100;
+
+    const adjusted = proposedPatchEntriesFromValidation({
+      ok: true,
+      files,
+      totalChangedLines: 0,
+      totalBytes,
+      reasons: [],
+      conflicts: [],
+    });
+
+    expect(adjusted).toEqual(
+      base.map((entry, index) =>
+        index === base.length - 1 ? { ...entry, patchBytes: entry.patchBytes + 100 } : entry,
+      ),
+    );
+    expect(adjusted.reduce((sum, entry) => sum + entry.patchBytes, 0)).toBe(totalBytes);
+  });
+
   it("rejects a dry-run patch that escapes editablePaths", () => {
     const rejection = governedPatchRejectionCode(handoff(), {
       ok: true,
