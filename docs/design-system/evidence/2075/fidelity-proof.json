@@ -3,19 +3,19 @@
   "assets": {
     "keiko-tokens.css": {
       "identityBytes": 20112,
-      "gzipBytes": 5096,
+      "gzipBytes": 5098,
       "brotliBytes": 4223,
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
-      "gzipBytes": 4302,
+      "gzipBytes": 4278,
       "brotliBytes": 3556,
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
     "maintainer-ui.css": {
       "identityBytes": 10975,
-      "gzipBytes": 2219,
+      "gzipBytes": 2217,
       "brotliBytes": 1861,
       "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e"
     },
@@ -27,37 +27,37 @@
     },
     "maintainer-ui.js": {
       "identityBytes": 12660,
-      "gzipBytes": 3722,
+      "gzipBytes": 3711,
       "brotliBytes": 3248,
       "sha256": "0c62374308fc6f1788558ae8054ac6d077e3d42b037944d383f30391d26a41e0"
     },
     "maintainer-ui-copy.js": {
       "identityBytes": 13711,
-      "gzipBytes": 4048,
+      "gzipBytes": 4029,
       "brotliBytes": 3532,
       "sha256": "3ef6220bfb8e006a5d79c37df360f8c9b77bbca133f3686a6eec4b0d35c843fa"
     },
     "maintainer-ui-detail.js": {
       "identityBytes": 2629,
-      "gzipBytes": 978,
+      "gzipBytes": 974,
       "brotliBytes": 809,
       "sha256": "f7f78240f0f904ee81a02076664a1470539600e6a15d9f39346b50a602b1f60c"
     },
     "maintainer-ui-dom.js": {
       "identityBytes": 4777,
-      "gzipBytes": 1673,
+      "gzipBytes": 1667,
       "brotliBytes": 1410,
       "sha256": "134cfdb092d7085c19cfb70b268d65d983c11c66a5ad5223735dd36401895eb0"
     },
     "maintainer-ui-publication.js": {
       "identityBytes": 14614,
-      "gzipBytes": 3736,
+      "gzipBytes": 3732,
       "brotliBytes": 3255,
       "sha256": "4cbdc78b8755f616c070c4145a74d0c01247e16ed14099defc0d48b2fee13641"
     },
     "maintainer-ui-queue.js": {
       "identityBytes": 1152,
-      "gzipBytes": 534,
+      "gzipBytes": 530,
       "brotliBytes": 440,
       "sha256": "fdef9f0823bc1ccd373282cd32a4f754a2b534e8d76ad16660b9a1c5f22a1b94"
     }
