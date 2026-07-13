@@ -10,6 +10,15 @@ export interface GithubAppSignerSnapshot {
   signRs256(payload: Uint8Array): Uint8Array;
 }
 
+export interface GithubAppPrivateKeyMetadata {
+  readonly asymmetricKeyType?: string;
+  readonly asymmetricKeyDetails?: { readonly modulusLength?: number };
+}
+
+export function isAcceptableGithubAppPrivateKey(key: GithubAppPrivateKeyMetadata): boolean {
+  return key.asymmetricKeyType === "rsa" && (key.asymmetricKeyDetails?.modulusLength ?? 0) >= 2048;
+}
+
 function signer(key: KeyObject, keyId: string, rotatedAt: Date): GithubAppSignerSnapshot {
   return Object.freeze({
     keyId,
@@ -24,10 +33,7 @@ function signer(key: KeyObject, keyId: string, rotatedAt: Date): GithubAppSigner
 function loadPrivateKey(path: string): KeyObject {
   try {
     const key = createPrivateKey({ key: readSecureOperatorFile(path, MAX_PEM_BYTES) });
-    const details = key.asymmetricKeyDetails;
-    if (key.asymmetricKeyType !== "rsa" || (details?.modulusLength ?? 0) < 2048) {
-      throw new Error("invalid key");
-    }
+    if (!isAcceptableGithubAppPrivateKey(key)) throw new Error("invalid key");
     return key;
   } catch {
     throw new Error(KEY_ERROR);

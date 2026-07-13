@@ -818,12 +818,13 @@ describe("maintainer HTTP boundary", () => {
     const publication = publicationMocks();
     const origin = await listen({ ...base.options, publication });
     const path = `/v1/maintainer/reviews/${ITEM}/publication/prepare`;
-    const valid = JSON.stringify({
+    const validInput = {
       action: "prepare-publication",
       expectedVersion: 1,
       targetKey: "public-feedback",
       idempotencyKey: "strict-parser-key",
-    });
+    } as const;
+    const valid = JSON.stringify(validInput);
     expect(await rawStatus(origin, path, sessionHeaders(), "POST", valid)).toBe(403);
     expect(
       await rawStatus(
@@ -831,7 +832,7 @@ describe("maintainer HTTP boundary", () => {
         path,
         publicationHeaders(),
         "POST",
-        valid.replace("}", ',"itemId":"x"}'),
+        JSON.stringify({ ...validInput, itemId: "x" }),
       ),
     ).toBe(400);
     const duplicate = valid.replace(

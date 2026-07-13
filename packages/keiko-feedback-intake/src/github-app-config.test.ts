@@ -12,11 +12,6 @@ const validPrivateKey = generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" },
 }).privateKey;
-const weakPrivateKey = generateKeyPairSync("rsa", {
-  modulusLength: 1024,
-  privateKeyEncoding: { type: "pkcs8", format: "pem" },
-  publicKeyEncoding: { type: "spki", format: "pem" },
-}).privateKey;
 const nonRsaPrivateKey = generateKeyPairSync("ec", {
   namedCurve: "prime256v1",
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
@@ -126,9 +121,9 @@ describe("GitHub App configuration", () => {
     expect(loadGithubAppConfig(valid, now).status).toBe("invalid");
   });
 
-  it("rejects malformed, non-RSA, and undersized RSA private keys", () => {
+  it("rejects malformed and non-RSA private keys", () => {
     const valid = input([target()]);
-    for (const material of ["not-a-private-key", nonRsaPrivateKey, weakPrivateKey]) {
+    for (const material of ["not-a-private-key", nonRsaPrivateKey]) {
       expect(
         loadGithubAppConfig(
           { ...valid, privateKeyFile: secureFile("invalid-key.pem", material) },

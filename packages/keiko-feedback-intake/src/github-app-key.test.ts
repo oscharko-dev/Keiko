@@ -11,17 +11,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GithubAppPrivateKeyProvider } from "./github-app-key.js";
+import { GithubAppPrivateKeyProvider, isAcceptableGithubAppPrivateKey } from "./github-app-key.js";
 import { createGithubAppJwt } from "./github-app-jwt.js";
 
 const roots: string[] = [];
 
-function keyFile(modulusLength = 2048): { readonly path: string; readonly publicKey: string } {
+function keyFile(): { readonly path: string; readonly publicKey: string } {
   const root = mkdtempSync(join(tmpdir(), "keiko-github-key-"));
   roots.push(root);
   chmodSync(root, 0o700);
   const pair = generateKeyPairSync("rsa", {
-    modulusLength,
+    modulusLength: 2048,
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
@@ -64,19 +64,33 @@ describe("GitHub App signing custody", () => {
     ).toBe(true);
   });
 
-  it("rejects undersized RSA, insecure files, stale rotation, and excessive JWT lifetime", () => {
-    const weak = keyFile(1024);
+  it("rejects undersized RSA metadata, insecure files, and stale rotation", () => {
+    expect(
+      isAcceptableGithubAppPrivateKey({
+        asymmetricKeyType: "rsa",
+        asymmetricKeyDetails: { modulusLength: 2047 },
+      }),
+    ).toBe(false);
+    expect(
+      isAcceptableGithubAppPrivateKey({
+        asymmetricKeyType: "rsa",
+        asymmetricKeyDetails: { modulusLength: 2048 },
+      }),
+    ).toBe(true);
+    expect(
+      isAcceptableGithubAppPrivateKey({
+        asymmetricKeyType: "ec",
+        asymmetricKeyDetails: {},
+      }),
+    ).toBe(false);
     const now = new Date("2026-07-12T00:00:00Z");
-    expect(() =>
-      new GithubAppPrivateKeyProvider(weak.path, new Date("2026-07-01T00:00:00Z")).snapshot(now),
-    ).toThrow("unavailable");
     const secure = keyFile();
     chmodSync(secure.path, 0o644);
     expect(() =>
       new GithubAppPrivateKeyProvider(secure.path, new Date("2026-07-01T00:00:00Z")).snapshot(now),
     ).toThrow("unavailable");
     expect(() =>
-      new GithubAppPrivateKeyProvider(weak.path, new Date("2026-01-01T00:00:00Z")).snapshot(now),
+      new GithubAppPrivateKeyProvider(secure.path, new Date("2026-01-01T00:00:00Z")).snapshot(now),
     ).toThrow("unavailable");
   });
 
