@@ -258,7 +258,7 @@ function repoItemScore(spec) {
   return spec.critical === true ? 0.99 : 0.7;
 }
 
-async function buildRepoEvidenceItem(spec, scope, fs) {
+export async function buildRepoEvidenceItem(spec, scope, fs, search = searchText) {
   const query = {
     kind: "natural-language",
     text: spec.query,
@@ -266,7 +266,7 @@ async function buildRepoEvidenceItem(spec, scope, fs) {
     maxResults: 50,
     emittedAtMs: 0,
   };
-  const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
+  const result = await search(scope, query, DEFAULT_SEARCH_LIMITS, {
     fs,
     nowMs: FIXED_NOW,
     searchHints: { retrievalIntent: spec.intent },
@@ -276,7 +276,7 @@ async function buildRepoEvidenceItem(spec, scope, fs) {
     (winner, atom) => (winner === undefined || atom.score > winner.score ? atom : winner),
     undefined,
   );
-  const found = best !== undefined;
+  const found = best?.lineRange !== undefined;
   const verified = found ? await verifyLineRef(spec, scope, fs, best) : undefined;
   const excerptText = verified?.excerptText ?? "";
   const lineRefHit = verified?.lineRefHit ?? false;
