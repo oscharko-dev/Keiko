@@ -13,6 +13,7 @@ import {
 function launchRequest(platform: "darwin" | "win32" = "win32"): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-1",
+    recoveryHandle: "d".repeat(32),
     treeBindingId: "c".repeat(64),
     executable: "/managed/runtime",
     args: ["--stdio"],
@@ -45,8 +46,8 @@ function backend(
   readonly signals: string[];
 } {
   const signals: string[] = [];
-  const spawn = vi.fn((): RuntimeProcessTree => ({
-    treeId: "tree-1",
+  const spawn = vi.fn((request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree => ({
+    treeId: request.recoveryHandle,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     onTreeExit: (): void => undefined,
@@ -84,6 +85,23 @@ describe("runtime process supervisor", () => {
       failureCode: "runtime-unqualified",
     });
     expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("passes the opaque recovery handle unchanged into the qualified backend", () => {
+    const request = launchRequest();
+    const fake = backend(true, request.qualification);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toMatchObject({
+      ok: true,
+      tree: { treeId: request.recoveryHandle },
+    });
+    expect(fake.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ recoveryHandle: request.recoveryHandle }),
+    );
   });
 
   it("rejects an incomplete launch profile at runtime", () => {
@@ -138,7 +156,7 @@ describe("runtime process supervisor", () => {
       const result = await supervisor.waitForCompleteTreeExit(launched.tree, 50);
       expect(result).toMatchObject({
         status: "reaped",
-        receipt: { runId: "run-1", treeId: "tree-1" },
+        receipt: { runId: "run-1", treeId: request.recoveryHandle },
       });
       if (result.status !== "reaped") throw new Error("expected reap proof");
       expect(verifyRuntimeReapReceipt(result.receipt, "run-1", "c".repeat(64))).toBe(true);

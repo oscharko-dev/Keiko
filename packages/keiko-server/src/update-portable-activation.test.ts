@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -23,7 +24,102 @@ import {
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
 const TARGET = "windows-x64";
+const ARTIFACT_SHA256 = "a".repeat(64);
+const SOURCE_COMMIT_SHA = "c".repeat(40);
+const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const tempRoots: string[] = [];
+
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function sidecarFixture(): {
+  readonly runtime: Record<string, unknown>;
+  readonly files: Readonly<Record<string, string>>;
+  readonly payloadSha256: string;
+} {
+  const files = {
+    "LICENSE.txt": "sidecar license",
+    "evidence/sbom.cdx.json": '{"bomFormat":"CycloneDX"}',
+    "opencode.cmd": "@echo off\r\n",
+  } as const;
+  const payloadHash = createHash("sha256");
+  for (const [path, bytes] of Object.entries(files).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    payloadHash.update(`${path}\0${sha256(bytes)}\0`);
+  }
+  const payloadSha256 = payloadHash.digest("hex");
+  const executableSha256 = sha256(files["opencode.cmd"]);
+  const runtime = {
+    approvalSchemaVersion: 2,
+    name: "opencode-compatible",
+    kind: "coding-runtime",
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      transport: "http-sse",
+    },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: { redistribution: { status: "approved" } },
+    archive: { platformTarget: TARGET, sha256: "d".repeat(64) },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256: "f".repeat(64),
+    platformTarget: TARGET,
+    payloadRootPath: SIDECAR_ROOT,
+    executablePath: `${SIDECAR_ROOT}/opencode.cmd`,
+    payloadSha256,
+    sizeBytes: Object.values(files).reduce((sum, bytes) => sum + Buffer.byteLength(bytes), 0),
+    licenseEvidence: { path: `${SIDECAR_ROOT}/LICENSE.txt`, sha256: sha256(files["LICENSE.txt"]) },
+    sbomEvidence: {
+      path: `${SIDECAR_ROOT}/evidence/sbom.cdx.json`,
+      sha256: sha256(files["evidence/sbom.cdx.json"]),
+    },
+    signing: {
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+      shippedExecutableSha256: executableSha256,
+      shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      shippedExecutableTreeSha256: sha256(`opencode.cmd\0${executableSha256}\0`),
+    },
+  };
+  return { runtime, files, payloadSha256 };
+}
+
+function portableManifest(withSidecar = false): string {
+  const sidecars = withSidecar ? [sidecarFixture().runtime] : [];
+  return JSON.stringify({
+    release: { commitSha: SOURCE_COMMIT_SHA },
+    artifact: { platformTarget: TARGET, sha256: ARTIFACT_SHA256 },
+    releaseImpact: {
+      reviewedBinding: {
+        ...(sidecars.length === 0 ? {} : { sidecarRuntimes: sidecars }),
+      },
+    },
+    ...(sidecars.length === 0 ? {} : { sidecarRuntimes: sidecars }),
+  });
+}
 
 function setupManifest(version: string): string {
   return JSON.stringify({
@@ -38,21 +134,55 @@ function setupManifest(version: string): string {
   });
 }
 
-function writeInstall(root: string, version: string): void {
+function writeInstall(root: string, version: string, withSidecar = false): void {
   mkdirSync(join(root, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
+  mkdirSync(join(root, "runtime", "native"), { recursive: true });
   writeFileSync(join(root, "Keiko.exe"), `launcher-${version}`, "utf8");
   writeFileSync(join(root, "runtime", "node", "node.exe"), "node", "utf8");
+  const helper = "signed runtime supervisor";
+  writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), helper, "utf8");
   writeFileSync(
     join(root, "app", "package.json"),
     JSON.stringify({ name: "@oscharko-dev/keiko", version }),
     "utf8",
   );
   writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(version), "utf8");
+  writeFileSync(
+    join(root, ".portable", "update-portable-manifest.json"),
+    portableManifest(withSidecar),
+    "utf8",
+  );
+  const sidecar = withSidecar ? sidecarFixture() : undefined;
+  if (sidecar !== undefined) {
+    for (const [path, bytes] of Object.entries(sidecar.files)) {
+      const destination = join(root, SIDECAR_ROOT, path);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, bytes, "utf8");
+    }
+  }
+  writeFileSync(
+    join(root, ".portable", "runtime-supervisor-qualification.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      suiteVersion: "runtime-tree-qualification-v1",
+      platformTarget: TARGET,
+      sourceCommitSha: SOURCE_COMMIT_SHA,
+      artifactSha256: ARTIFACT_SHA256,
+      helperSha256: sha256(helper),
+      sidecars:
+        sidecar === undefined
+          ? []
+          : [{ name: "opencode-compatible", sha256: sidecar.payloadSha256 }],
+      backend: "windows-job-object",
+      result: "passed",
+    }),
+    "utf8",
+  );
 }
 
-function stageSummary(): UpdatePortableStagingSummary {
+function stageSummary(withSidecar = false): UpdatePortableStagingSummary {
   return {
     stageId: "stage-1",
     status: "staged",
@@ -62,12 +192,12 @@ function stageSummary(): UpdatePortableStagingSummary {
     assetId: 1,
     releaseId: 2,
     sizeBytes: 3,
-    sha256: "a".repeat(64),
-    manifestSha256: "b".repeat(64),
+    sha256: ARTIFACT_SHA256,
+    manifestSha256: sha256(portableManifest(withSidecar)),
   };
 }
 
-async function makeInstall(): Promise<{
+async function makeInstall(withSidecar = false): Promise<{
   readonly home: string;
   readonly stateDir: string;
   readonly managedRoot: string;
@@ -80,7 +210,7 @@ async function makeInstall(): Promise<{
   const packageRoot = join(managedRoot, "app");
   const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
   writeInstall(managedRoot, OLD_VERSION);
-  writeInstall(stageRoot, TARGET_VERSION);
+  writeInstall(stageRoot, TARGET_VERSION, withSidecar);
   writeFileSync(join(managedRoot, "active.txt"), "active", "utf8");
   return {
     home,
@@ -93,6 +223,24 @@ async function makeInstall(): Promise<{
 
 function childProcess(): ChildProcess {
   return { unref: vi.fn() } as unknown as ChildProcess;
+}
+
+type QualificationMutation = "receipt-source" | "manifest" | "sidecar-bytes";
+
+function mutateQualificationCandidate(root: string, mutation: QualificationMutation): void {
+  if (mutation === "receipt-source") {
+    const path = join(root, ".portable", "runtime-supervisor-qualification.json");
+    const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    receipt.sourceCommitSha = "e".repeat(40);
+    writeFileSync(path, JSON.stringify(receipt), "utf8");
+    return;
+  }
+  if (mutation === "manifest") {
+    const path = join(root, ".portable", "update-portable-manifest.json");
+    writeFileSync(path, `${readFileSync(path, "utf8")} `, "utf8");
+    return;
+  }
+  writeFileSync(join(root, SIDECAR_ROOT, "opencode.cmd"), "mutated sidecar", "utf8");
 }
 
 afterEach(async () => {
@@ -318,6 +466,34 @@ describe("portable update activation", () => {
     expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
     expect(existsSync(join(install.stateDir, "portable-install-state.json"))).toBe(false);
   });
+
+  it.each<QualificationMutation>(["receipt-source", "manifest", "sidecar-bytes"])(
+    "fails closed before promotion when %s qualification evidence changes after staging",
+    async (mutation) => {
+      const withSidecar = mutation === "sidecar-bytes";
+      const install = await makeInstall(withSidecar);
+      mutateQualificationCandidate(install.stageRoot, mutation);
+      const activator = createPortableUpdateActivator({
+        env: { KEIKO_STATE_DIR: install.stateDir },
+        homedir: () => install.home,
+        spawnFn: () => childProcess(),
+        versionVerifier: () => Promise.resolve(true),
+      });
+
+      await expect(
+        activator.activate({
+          sessionId: `qualification-${mutation}`,
+          targetVersion: TARGET_VERSION,
+          stage: stageSummary(withSidecar),
+          runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+        }),
+      ).rejects.toMatchObject({ reason: "portable-activation-failed" });
+      expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
+        OLD_VERSION,
+      );
+      expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
+    },
+  );
 
   it("restores the active install when registration refresh fails before relaunch", async () => {
     const install = await makeInstall();

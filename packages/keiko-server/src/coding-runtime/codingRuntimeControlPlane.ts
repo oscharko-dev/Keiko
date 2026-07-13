@@ -2,6 +2,7 @@ import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts"
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
@@ -9,6 +10,8 @@ import {
   type CodingRuntimeApprovalAuthority,
   type CodingRuntimeLaunchResolver,
   type CodingRuntimeOrchestrator,
+  type CodingRuntimeRecoveryPort,
+  type CodingRuntimeTaskDispatcher,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 
@@ -18,6 +21,9 @@ export interface CodingRuntimeHost {
   ) => CodingRuntimeManager;
   readonly launchResolver: CodingRuntimeLaunchResolver;
   readonly approvalAuthority: CodingRuntimeApprovalAuthority;
+  readonly taskDispatcher: CodingRuntimeTaskDispatcher;
+  readonly recovery: CodingRuntimeRecoveryPort;
+  readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
@@ -52,9 +58,12 @@ export interface CodingRuntimeControlPlane {
   readonly eventHub: CodingRuntimeEventHub;
   /** Content-free composition fact: a qualified runtime host was explicitly supplied. */
   readonly runtimeHostQualified: boolean;
+  readonly startupRecovery: Promise<void>;
+  readonly quiescence: { readonly isQuiescent: () => boolean };
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
+  readonly questionPort?: CodingRuntimeQuestionPort | undefined;
 }
 
 interface RuntimeEventReceiver {
@@ -70,10 +79,7 @@ export function createCodingRuntimeControlPlane(
 ): CodingRuntimeControlPlane {
   const eventHub = new CodingRuntimeEventHub();
   const receiver: RuntimeEventReceiver = {};
-  const manager =
-    input.runtimeHost?.createManager((event) => {
-      receiver.ingest?.(event);
-    }) ?? unavailableManager();
+  const manager = createManager(input.runtimeHost, receiver);
   const launchResolver = input.runtimeHost?.launchResolver ?? unavailableLaunchResolver();
   const approvalAuthority = input.runtimeHost?.approvalAuthority ?? unavailableApprovalAuthority();
   const orchestrator = createCodingRuntimeOrchestrator({
@@ -84,18 +90,52 @@ export function createCodingRuntimeControlPlane(
     evidence: input.evidence,
     workspaceLifecycle: input.workspaceLifecycle,
     launchResolver,
+    taskDispatcher: input.runtimeHost?.taskDispatcher ?? unavailableTaskDispatcher(),
+    recovery: input.runtimeHost?.recovery ?? unavailableRecoveryPort(),
     serverPrincipal: input.serverPrincipal,
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
     void orchestrator.ingest(event);
   };
   orchestrator.startupReconcileNow();
+  const startupRecovery = orchestrator.reconcileStartupRecovery();
   return {
     orchestrator,
     eventHub,
     runtimeHostQualified: input.runtimeHost !== undefined,
+    startupRecovery,
+    quiescence: { isQuiescent: () => orchestrator.status().state === "idle" },
+    ...runtimeHostQuestionPort(input.runtimeHost),
     ...runtimeHostCapabilities(input.runtimeHost),
   };
+}
+
+function runtimeHostQuestionPort(
+  runtimeHost: CodingRuntimeHost | undefined,
+): Pick<CodingRuntimeControlPlane, "questionPort"> {
+  return runtimeHost?.questionPort ? { questionPort: runtimeHost.questionPort } : {};
+}
+
+function createManager(
+  runtimeHost: CodingRuntimeHost | undefined,
+  receiver: RuntimeEventReceiver,
+): CodingRuntimeManager {
+  return (
+    runtimeHost?.createManager((event) => {
+      receiver.ingest?.(event);
+    }) ?? unavailableManager()
+  );
+}
+
+function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {
+  return {
+    dispatch: () => Promise.resolve({ ok: false }),
+    abort: () => Promise.resolve(false),
+  };
+}
+
+function unavailableRecoveryPort(): CodingRuntimeRecoveryPort {
+  return { reconcile: () => Promise.resolve({ status: "unreaped" }) };
 }
 
 function runtimeHostCapabilities(

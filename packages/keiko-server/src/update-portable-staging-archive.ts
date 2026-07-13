@@ -13,11 +13,13 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { qualificationFromReceipt } from "@oscharko-dev/keiko-sandbox";
 import yauzl from "yauzl";
 import {
   MAX_ARCHIVE_ENTRIES,
@@ -464,6 +466,10 @@ export async function stageArchiveBytes(input: {
   readonly targetVersion: string;
   readonly stageId: string;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+  readonly manifestText: string;
+  readonly qualificationReceipt?: string | undefined;
+  readonly sourceCommitSha: string;
+  readonly artifactSha256: string;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
 }): Promise<void> {
   const finalRoot = stagingRoot(input.session, input.target, input.stageId);
@@ -483,10 +489,70 @@ export async function stageArchiveBytes(input: {
       resourceRoot: stagedResourceRoot(workRoot, input.target),
       sidecars: input.sidecars,
     });
+    persistPortableManifest(workRoot, input.target, input.manifestText);
+    persistRuntimeQualification(workRoot, input);
     rmSync(finalRoot, { recursive: true, force: true });
     renameSync(workRoot, finalRoot);
   } catch (error) {
     rmSync(workRoot, { recursive: true, force: true });
     throw error;
   }
+}
+
+function persistPortableManifest(
+  root: string,
+  target: UpdatePortableTarget,
+  manifestText: string,
+): void {
+  const resourceRoot = stagedResourceRoot(root, target);
+  writeFileSync(join(resourceRoot, ".portable", "update-portable-manifest.json"), manifestText, {
+    flag: "wx",
+    mode: 0o600,
+  });
+}
+
+function persistRuntimeQualification(
+  root: string,
+  input: {
+    readonly target: UpdatePortableTarget;
+    readonly qualificationReceipt?: string | undefined;
+    readonly sourceCommitSha: string;
+    readonly artifactSha256: string;
+    readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+  },
+): void {
+  if (input.target !== "windows-x64") return;
+  if (input.qualificationReceipt === undefined) qualificationFailure();
+  const resourceRoot = stagedResourceRoot(root, input.target);
+  const helper = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
+  requiredStagedFile(helper);
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(input.qualificationReceipt);
+  } catch {
+    qualificationFailure();
+  }
+  const verified = qualificationFromReceipt(candidate, {
+    platformTarget: input.target,
+    sourceCommitSha: input.sourceCommitSha,
+    artifactSha256: input.artifactSha256,
+    helperSha256: createHash("sha256").update(readFileSync(helper)).digest("hex"),
+    sidecars: input.sidecars.map((sidecar) => ({
+      name: sidecar.summary.name,
+      sha256: sidecar.summary.payloadSha256,
+    })),
+  });
+  if (!verified.ok) qualificationFailure();
+  writeFileSync(
+    join(resourceRoot, ".portable", "runtime-supervisor-qualification.json"),
+    `${JSON.stringify(candidate, null, 2)}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+}
+
+function qualificationFailure(): never {
+  throw new PortableUpdateStagingError(
+    "portable-verification-failed",
+    "runtime supervisor qualification is unavailable",
+  );
 }

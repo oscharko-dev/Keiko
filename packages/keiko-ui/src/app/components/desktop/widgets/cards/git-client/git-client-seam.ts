@@ -11,6 +11,7 @@ import { useCallback, useRef, useState } from "react";
 import type {
   GitCommitMessageViolationCode,
   GitCommitQualityWarningCode,
+  GitDeliveryApprovalClaim,
 } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
@@ -19,6 +20,7 @@ import {
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
+  fetchGitDeliveryCommitApproval,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryMergeExecute,
@@ -26,7 +28,9 @@ import {
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
   fetchGitDeliveryPrExecute,
+  fetchGitDeliveryPrApproval,
   fetchGitDeliveryPrPreview,
+  fetchGitDeliveryPushApproval,
   fetchGitDeliveryPushExecute,
   fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
@@ -39,7 +43,10 @@ import {
   fetchGitStatus,
   fetchProjects,
   type GitDeliveryCommitPreviewResponse,
+  type GitDeliveryCommitApprovalInput,
   type GitDeliveryMutationResponse,
+  type GitDeliveryPrApprovalInput,
+  type GitDeliveryPushApprovalInput,
 } from "@/lib/api";
 
 // The outcome of any Git mutation. Push execute adds the publish-rejection / recovery fields; they
@@ -70,12 +77,15 @@ export interface GitClientSeam {
   readonly stage: typeof fetchGitDeliveryStage;
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
+  readonly commitApproval: typeof fetchGitDeliveryCommitApproval;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
   readonly syncPreview: typeof fetchGitDeliverySyncPreview;
   readonly syncExecute: typeof fetchGitDeliverySyncExecute;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
+  readonly pushApproval: typeof fetchGitDeliveryPushApproval;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  readonly prApproval: typeof fetchGitDeliveryPrApproval;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
   readonly mergePreview: typeof fetchGitDeliveryMergePreview;
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
@@ -97,12 +107,15 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   stage: fetchGitDeliveryStage,
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
+  commitApproval: fetchGitDeliveryCommitApproval,
   commitExecute: fetchGitDeliveryCommitExecute,
   syncPreview: fetchGitDeliverySyncPreview,
   syncExecute: fetchGitDeliverySyncExecute,
   pushPreview: fetchGitDeliveryPushPreview,
+  pushApproval: fetchGitDeliveryPushApproval,
   pushExecute: fetchGitDeliveryPushExecute,
   prPreview: fetchGitDeliveryPrPreview,
+  prApproval: fetchGitDeliveryPrApproval,
   prExecute: fetchGitDeliveryPrExecute,
   mergePreview: fetchGitDeliveryMergePreview,
   mergeExecute: fetchGitDeliveryMergeExecute,
@@ -144,9 +157,71 @@ export function violationLabel(code: GitCommitMessageViolationCode): string {
 }
 
 export function formatGitError(err: unknown): string {
+  if (err instanceof GitDeliveryApprovalFlowError) {
+    if (!isDeliveryApprovalRequestError(err.underlying)) return formatGitError(err.underlying);
+    return err.phase === "issuance"
+      ? "Delivery approval could not be issued. Check the current Git state and retry to request a new approval."
+      : "Delivery approval could not be used. Git state may have changed, or the one-use approval may have expired or already been used. Retry to request a new approval.";
+  }
   if (err instanceof ApiError) return `${err.message} (${err.code})`;
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred.";
+}
+
+type GitDeliveryApprovalPhase = "issuance" | "consumption";
+
+export class GitDeliveryApprovalFlowError extends Error {
+  public constructor(
+    public readonly phase: GitDeliveryApprovalPhase,
+    public readonly underlying: unknown,
+  ) {
+    super("Git delivery approval flow failed.");
+  }
+}
+
+function isDeliveryApprovalRequestError(error: unknown): boolean {
+  return (
+    error instanceof ApiError && /^GIT_DELIVERY_(COMMIT|PUSH|PR)_BAD_REQUEST$/u.test(error.code)
+  );
+}
+
+async function executeWithFreshApproval<Input, Result>(
+  issue: (input: Input) => Promise<{ readonly approval: GitDeliveryApprovalClaim }>,
+  execute: (input: Input & { readonly approval: GitDeliveryApprovalClaim }) => Promise<Result>,
+  input: Input,
+): Promise<Result> {
+  try {
+    const issued = await issue(input);
+    try {
+      return await execute({ ...input, approval: issued.approval });
+    } catch (error) {
+      throw new GitDeliveryApprovalFlowError("consumption", error);
+    }
+  } catch (error) {
+    if (error instanceof GitDeliveryApprovalFlowError) throw error;
+    throw new GitDeliveryApprovalFlowError("issuance", error);
+  }
+}
+
+export async function executeApprovedCommit(
+  client: Pick<GitClientSeam, "commitApproval" | "commitExecute">,
+  input: GitDeliveryCommitApprovalInput,
+): Promise<GitMutationOutcome> {
+  return executeWithFreshApproval(client.commitApproval, client.commitExecute, input);
+}
+
+export async function executeApprovedPush(
+  client: Pick<GitClientSeam, "pushApproval" | "pushExecute">,
+  input: GitDeliveryPushApprovalInput,
+): Promise<GitMutationOutcome> {
+  return executeWithFreshApproval(client.pushApproval, client.pushExecute, input);
+}
+
+export async function executeApprovedPullRequest(
+  client: Pick<GitClientSeam, "prApproval" | "prExecute">,
+  input: GitDeliveryPrApprovalInput,
+): Promise<GitMutationOutcome> {
+  return executeWithFreshApproval(client.prApproval, client.prExecute, input);
 }
 
 // ─── Mutation-state hook (carried from useGovernedGitActions; consumed by #1575-1577) ─────────────

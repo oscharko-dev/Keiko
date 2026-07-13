@@ -28,6 +28,7 @@ function snapshot(runId = "run-1"): CodingRuntimeSnapshot {
     toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
+    recoveryHandle: "d".repeat(32),
   };
 }
 function store(): ReturnType<typeof createCodingRuntimeSnapshotStore> {
@@ -41,6 +42,7 @@ describe("CodingRuntimeSnapshotStore", () => {
     const s = store();
     s.create(snapshot());
     expect(s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z")).toEqual(["run-1"]);
+    s.clearRecoveryHandle("run-1", "d".repeat(32), "2026-07-13T10:01:30.000Z");
     expect(s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z").state).toBe(
       "recovery-required",
     );
@@ -49,7 +51,7 @@ describe("CodingRuntimeSnapshotStore", () => {
     expect(released).toMatchObject({
       state: "recovery-required",
       terminalAt: "2026-07-13T10:03:00.000Z",
-      revision: 2,
+      revision: 3,
     });
     expect(s.create(snapshot("run-2")).runId).toBe("run-2");
     expect(s.get("run-1")).toEqual(released);
@@ -61,6 +63,27 @@ describe("CodingRuntimeSnapshotStore", () => {
     s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
     expect(() => s.releaseRecoveryForRetry("run-1", "2026-07-13T10:02:00.000Z")).toThrow(
       "acknowledged recovery runtime snapshot was not found",
+    );
+  });
+
+  it("requires exact backend reconciliation before acknowledgement can release the slot", () => {
+    const s = store();
+    s.create(snapshot());
+    s.markNonterminalRecoveryRequired("2026-07-13T10:01:00.000Z");
+
+    expect(() => s.acknowledgeRecovery("run-1", "2026-07-13T10:02:00.000Z")).toThrow(
+      "runtime recovery has not been reconciled",
+    );
+    expect(() =>
+      s.clearRecoveryHandle("run-1", "e".repeat(32), "2026-07-13T10:02:00.000Z"),
+    ).toThrow("runtime recovery handle did not reconcile");
+
+    expect(
+      s.clearRecoveryHandle("run-1", "d".repeat(32), "2026-07-13T10:02:00.000Z").recoveryHandle,
+    ).toBeUndefined();
+    s.acknowledgeRecovery("run-1", "2026-07-13T10:03:00.000Z");
+    expect(s.releaseRecoveryForRetry("run-1", "2026-07-13T10:04:00.000Z").terminalAt).toBe(
+      "2026-07-13T10:04:00.000Z",
     );
   });
   it("prunes oldest settled entries in one bounded transaction", () => {

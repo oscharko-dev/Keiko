@@ -60,6 +60,7 @@ const WINDOWS_LAUNCHER_RESOURCE_SOURCE = join(
 );
 const SECURE_READ_SOURCE_ROOT = join(repoRoot, "native", "secure-workspace-read");
 const SECURE_READ_NAME = "keiko-secure-workspace-read";
+const RUNTIME_SUPERVISOR_NAME = "keiko-runtime-supervisor.exe";
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -1458,6 +1459,26 @@ function buildSecureReadHelper(target, destination) {
   ]);
 }
 
+function stageRuntimeSupervisorHelper(target, resourceRoot, hooks) {
+  if (target.platformTarget !== "windows-x64") return;
+  const destination = join(resourceRoot, "runtime", "native", RUNTIME_SUPERVISOR_NAME);
+  mkdirSync(dirname(destination), { recursive: true });
+  (hooks.buildRuntimeSupervisorHelper ?? buildRuntimeSupervisorHelper)(target, destination);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("runtime supervisor helper build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+}
+
+function buildRuntimeSupervisorHelper(target, destination) {
+  run(process.execPath, [
+    join(repoRoot, "scripts", "build-runtime-supervisor.mjs"),
+    target.platformTarget,
+    destination,
+  ]);
+}
+
 function stageMacAppMetadata(target, stageRoot, resourceRoot) {
   requireMacAppIconSource();
   mkdirSync(resourceRoot, { recursive: true });
@@ -1951,6 +1972,7 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
   const nativeHelpers = stageSecureReadHelper(target, paths.resourceRoot, options, hooks);
+  stageRuntimeSupervisorHelper(target, paths.resourceRoot, hooks);
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const manifestInput = await manifestInputFor(options, target, paths, tarball, {
     nodeArchiveSha256,

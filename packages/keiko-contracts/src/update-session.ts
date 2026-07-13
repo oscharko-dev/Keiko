@@ -272,6 +272,7 @@ export type UpdateSessionFailureReason =
   | "non-zero-exit"
   | "timed-out"
   | "cancelled"
+  | "coding-runtime-not-quiescent"
   | "portable-preflight-ineligible"
   | "portable-download-failed"
   | "portable-verification-failed"
@@ -291,6 +292,7 @@ export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason
   "non-zero-exit",
   "timed-out",
   "cancelled",
+  "coding-runtime-not-quiescent",
   "portable-preflight-ineligible",
   "portable-download-failed",
   "portable-verification-failed",

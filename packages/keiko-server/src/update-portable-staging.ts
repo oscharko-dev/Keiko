@@ -167,7 +167,7 @@ async function stagePortableUpdate(
 ): Promise<UpdatePortableStagingSummary> {
   const target = resolveTarget(input);
   const stageAssets = await resolvePortableStageAssets(options, input, target);
-  const { release, archive, manifest, sidecars } = stageAssets;
+  const { release, archive, manifest, qualification, sidecars } = stageAssets;
   const archiveBytes = await fetchPortableAssetBytes(
     options,
     archive,
@@ -191,6 +191,10 @@ async function stagePortableUpdate(
     targetVersion: release.targetVersion,
     stageId,
     sidecars,
+    manifestText: manifest.text,
+    sourceCommitSha: manifestCommitSha(manifest.text),
+    artifactSha256: sha256,
+    ...(qualification === undefined ? {} : { qualificationReceipt: qualification.text }),
     ...(options.platformVerifier === undefined
       ? {}
       : { platformVerifier: options.platformVerifier }),
@@ -206,6 +210,25 @@ async function stagePortableUpdate(
   });
   recordStage(options, summary);
   return summary;
+}
+
+function manifestCommitSha(text: string): string {
+  const record = parseJsonRecord(text);
+  const release = record === undefined ? undefined : record.release;
+  if (typeof release !== "object" || release === null || Array.isArray(release)) {
+    throw new PortableUpdateStagingError(
+      "portable-verification-failed",
+      "portable manifest is malformed",
+    );
+  }
+  const commitSha = (release as Record<string, unknown>).commitSha;
+  if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/u.test(commitSha)) {
+    throw new PortableUpdateStagingError(
+      "portable-verification-failed",
+      "portable manifest is malformed",
+    );
+  }
+  return commitSha;
 }
 
 export function createPortableUpdateStager(

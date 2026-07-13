@@ -180,7 +180,7 @@ function assertQualifiedCodexLaunch(input: {
   expect(input.attachedRequest.runId).toBe("run-1988");
   expect(input.attachedRequest.signal).toBeInstanceOf(AbortSignal);
   expect(input.attachedRequest.timeoutMs).toBe(30_000);
-  expect(input.attachedRequest.tree.treeId).toBe("test-4242");
+  expect(input.attachedRequest.tree.treeId).toBe("d".repeat(32));
   expect(isAbsolute(input.preparedStateRoot)).toBe(true);
   expect(pathWithin(realpathSync(input.localSecretRoot), input.preparedStateRoot)).toBe(true);
   expect(pathWithin(input.managedRoot, input.preparedStateRoot)).toBe(false);
@@ -293,7 +293,7 @@ class TestRuntimeProcessBackend implements RuntimeProcessBackend {
     const child = this.spawn(request.executable, request.args, { ...request.env }, request.cwd);
     const state: TestTreeState = { exited: false, exitCallbacks: [], waiters: [] };
     const tree: RuntimeProcessTree & { readonly child: CodingRuntimeSpawnHandle } = {
-      treeId: `test-${String(child.pid ?? "unknown")}`,
+      treeId: request.recoveryHandle,
       stdout: child.stdout,
       stderr: child.stderr,
       child,
@@ -429,6 +429,7 @@ function launchRequest(
 ): CodingRuntimeLaunchRequest {
   return {
     runId: "run-1988",
+    recoveryHandle: "d".repeat(32),
     treeBindingId: "c".repeat(64),
     taskRef: "issue-1988",
     adapterKind: "opencode-compatible",

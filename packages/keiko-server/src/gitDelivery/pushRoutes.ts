@@ -18,10 +18,16 @@ import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  parseGitDeliveryApprovalRequest,
+  parseRequiredGitDeliveryApprovalClaim,
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+import {
+  approvalStoreFor,
+  createDeliveryApprovalContextGuard,
+  issueDeliveryApproval,
+} from "./deliveryApproval.js";
+import { buildPushApprovalBinding } from "./deliveryApprovalContext.js";
 import { readWorktreeSnapshotFor, resolveProjectWorkspace } from "./execution.js";
 import {
   buildGitDeliveryPushPreview,
@@ -107,7 +113,7 @@ function isSafeGitRef(value: unknown): value is string {
   return true;
 }
 
-const ALLOWED_KEYS: ReadonlySet<string> = new Set([
+const COMMAND_KEYS = [
   "schemaVersion",
   "projectId",
   "remoteAlias",
@@ -115,13 +121,15 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "sourceBranchName",
   "forcePush",
   "setUpstreamTracking",
-  "approval",
-]);
+] as const;
+const PREVIEW_KEYS: ReadonlySet<string> = new Set(COMMAND_KEYS);
+const APPROVAL_KEYS: ReadonlySet<string> = new Set([...COMMAND_KEYS, "confirmed"]);
+const EXECUTE_KEYS: ReadonlySet<string> = new Set([...COMMAND_KEYS, "approval"]);
 
 interface ValidatedRequest {
   readonly projectId: string;
   readonly command: GitPushCommand;
-  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly approval?: ParsedGitDeliveryApprovalRequest;
 }
 
 type Validation =
@@ -168,16 +176,38 @@ function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | und
   };
 }
 
-function validate(parsed: unknown): Validation {
+function isValidEnvelope(
+  parsed: unknown,
+  allowedKeys: ReadonlySet<string>,
+): parsed is Record<string, unknown> & { readonly projectId: string } {
+  if (!isPlainObject(parsed)) return false;
+  if (!hasOnlyAllowedKeys(parsed, allowedKeys)) return false;
+  if (parsed.schemaVersion !== "1") return false;
+  return isNonEmptyString(parsed.projectId);
+}
+
+function validate(
+  parsed: unknown,
+  allowedKeys: ReadonlySet<string>,
+  requireApproval: boolean,
+): Validation {
   const bad: Validation = { kind: "err", result: errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST") };
-  if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
-  if (parsed.schemaVersion !== "1" || !isNonEmptyString(parsed.projectId)) return bad;
+  if (!isValidEnvelope(parsed, allowedKeys)) return bad;
   const scanErr = scanError(parsed);
   if (scanErr !== undefined) return { kind: "err", result: scanErr };
   const command = buildPushCommand(parsed);
-  const approval = parseGitDeliveryApprovalRequest(parsed.approval);
-  if (command === undefined || approval === undefined) return bad;
-  return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
+  const approval = requireApproval
+    ? parseRequiredGitDeliveryApprovalClaim(parsed.approval)
+    : undefined;
+  if (command === undefined || (requireApproval && approval === undefined)) return bad;
+  return {
+    kind: "ok",
+    value: {
+      projectId: parsed.projectId,
+      command,
+      ...(approval === undefined ? {} : { approval }),
+    },
+  };
 }
 
 // ─── Preview handler (read-only) ────────────────────────────────────────────────────────────────
@@ -190,7 +220,7 @@ export const createHandlePushPreview = (
   return async (ctx, deps): Promise<RouteResult> => {
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
-    const validation = validate(read.value);
+    const validation = validate(read.value, PREVIEW_KEYS, false);
     if (validation.kind === "err") return validation.result;
     const { projectId, command } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
@@ -208,6 +238,38 @@ export const createHandlePushPreview = (
   };
 };
 
+export const createHandlePushApproval = (
+  options: GitDeliveryPushRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    const read = await readParsed(ctx.req);
+    if (!read.ok) return read.result;
+    const validation = validate(read.value, APPROVAL_KEYS, false);
+    if (validation.kind === "err") return validation.result;
+    if (!isPlainObject(read.value) || read.value.confirmed !== true) {
+      return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+    }
+    const { projectId, command } = validation.value;
+    const workspace = resolveProjectWorkspace(deps, projectId);
+    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_PUSH_UNKNOWN_PROJECT");
+    try {
+      const binding = await buildPushApprovalBinding({ projectId, command, workspace, seams });
+      return {
+        status: 201,
+        body: issueDeliveryApproval({
+          store: approvalStoreFor(seams),
+          binding,
+          actionKind: "push",
+          nowMs: (seams.now ?? Date.now)(),
+        }),
+      };
+    } catch {
+      return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
+    }
+  };
+};
+
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
 export const createHandlePushExecute = (
@@ -217,20 +279,37 @@ export const createHandlePushExecute = (
   return async (ctx, deps): Promise<RouteResult> => {
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
-    const validation = validate(read.value);
+    const validation = validate(read.value, EXECUTE_KEYS, true);
     if (validation.kind === "err") return validation.result;
     const { projectId, command, approval } = validation.value;
+    if (approval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_PUSH_UNKNOWN_PROJECT");
+    let binding;
+    try {
+      binding = await buildPushApprovalBinding({ projectId, command, workspace, seams });
+    } catch {
+      return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
+    }
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
-      store: seams.approvalStore,
-      binding: { projectId, operation: "push", command },
+      store: approvalStoreFor(seams),
+      binding,
       nowMs: (seams.now ?? Date.now)(),
     });
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
     let result;
     try {
-      result = await executeGovernedPublish(command, verifiedApproval, workspace, deps, seams);
+      const approvalContextGuard = createDeliveryApprovalContextGuard(binding, () =>
+        buildPushApprovalBinding({ projectId, command, workspace, seams }),
+      );
+      result = await executeGovernedPublish(
+        command,
+        verifiedApproval,
+        workspace,
+        deps,
+        seams,
+        approvalContextGuard,
+      );
     } catch {
       // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
       return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");
@@ -248,6 +327,11 @@ export const createGitDeliveryPushRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/push/preview",
     handler: createHandlePushPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/push/approval",
+    handler: createHandlePushApproval(options),
   },
   {
     method: "POST",

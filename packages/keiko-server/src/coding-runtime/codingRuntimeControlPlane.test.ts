@@ -20,6 +20,7 @@ describe("coding runtime control plane", () => {
       listAll: vi.fn(() => []),
       markNonterminalRecoveryRequired: vi.fn(() => []),
       acknowledgeRecovery: vi.fn(),
+      clearRecoveryHandle: vi.fn(),
       releaseRecoveryForRetry: vi.fn(),
       delete: vi.fn(),
       listPrunableSettled: vi.fn(() => []),
@@ -81,6 +82,7 @@ describe("coding runtime control plane", () => {
       launchResolver: {
         resolve: () => ({
           taskRef: "task-1",
+          recoveryHandle: "d".repeat(32),
           treeBindingId: "tree-1",
           adapterKind: "codex-cli",
           runtimeSource: "codex-cli-adapter",
@@ -103,6 +105,11 @@ describe("coding runtime control plane", () => {
           retryable: false,
         }),
       },
+      taskDispatcher: {
+        dispatch: () => Promise.resolve({ ok: false }),
+        abort: () => Promise.resolve(false),
+      },
+      recovery: { reconcile: () => Promise.resolve({ status: "unreaped" }) },
       cancellationRegistry: { signalFor: () => undefined },
     };
     const control = createCodingRuntimeControlPlane({
@@ -114,6 +121,7 @@ describe("coding runtime control plane", () => {
         listAll: vi.fn(() => []),
         markNonterminalRecoveryRequired: vi.fn(() => []),
         acknowledgeRecovery: vi.fn(),
+        clearRecoveryHandle: vi.fn(),
         releaseRecoveryForRetry: vi.fn(),
         delete: vi.fn(),
         listPrunableSettled: vi.fn(() => []),

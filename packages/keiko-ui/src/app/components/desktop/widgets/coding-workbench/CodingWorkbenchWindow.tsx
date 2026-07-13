@@ -15,7 +15,10 @@ import {
   type CodingWorkbenchRuntimeActions,
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
-import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
+import type {
+  CodingWorkbenchRuntimeState,
+  CodingWorkbenchTerminalOutcome,
+} from "@/lib/coding-workbench-live-state";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import {
   ModeAuthority,
@@ -26,8 +29,15 @@ import {
   WorkbenchHeader,
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
-import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
-import styles from "./CodingWorkbenchWindow.module.css";
+import { CodingWorkbenchQuestions } from "./CodingWorkbenchQuestions";
+import {
+  activeRunState,
+  cx,
+  lifecycleAnnouncement,
+  runStateLabel,
+  visibleAlert,
+} from "./codingWorkbenchLabels";
+import styles from "./codingWorkbenchStyles";
 
 const EMPTY_WORKSPACE = {
   activeBinding: null,
@@ -43,11 +53,13 @@ export function CodingWorkbenchWindow(): ReactNode {
   const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
   const [taskIntent, setTaskIntent] = useState("");
   const focusRef = useRef<HTMLHeadingElement>(null);
+  const terminalOutcomeRef = useRef<HTMLButtonElement>(null);
   const approvalAction = useRef(false);
   const t = useCodingWorkbenchTranslate();
   const workbenchLabel = useTranslate()("rail.coding");
   const pendingPermission = state.run.value?.pendingPermission;
   const runState = state.run.value?.state;
+  const terminalOutcome = state.terminalOutcome;
   const locked = activeRunState(runState) || state.mutation.status === "pending";
   const alert = visibleAlert(state, t);
 
@@ -56,6 +68,10 @@ export function CodingWorkbenchWindow(): ReactNode {
     approvalAction.current = false;
     focusRef.current?.focus();
   }, [pendingPermission]);
+
+  useEffect(() => {
+    if (terminalOutcome !== null) terminalOutcomeRef.current?.focus();
+  }, [terminalOutcome]);
 
   const decideApproval = (decision: "approved" | "denied"): void => {
     approvalAction.current = true;
@@ -69,6 +85,7 @@ export function CodingWorkbenchWindow(): ReactNode {
       taskIntent={taskIntent}
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
+      terminalOutcomeRef={terminalOutcomeRef}
       locked={locked}
       alert={alert}
       t={t}
@@ -85,6 +102,7 @@ interface WorkbenchContentProps {
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement>;
+  readonly terminalOutcomeRef: RefObject<HTMLButtonElement>;
   readonly locked: boolean;
   readonly alert: string | null;
   readonly t: CodingWorkbenchTranslate;
@@ -99,6 +117,7 @@ function WorkbenchContent({
   taskIntent,
   onTaskIntentChange,
   focusRef,
+  terminalOutcomeRef,
   locked,
   alert,
   t,
@@ -129,6 +148,7 @@ function WorkbenchContent({
         taskIntent={taskIntent}
         onTaskIntentChange={onTaskIntentChange}
         locked={locked}
+        terminalOutcomeRef={terminalOutcomeRef}
         onDecision={onDecision}
       />
     </section>
@@ -142,6 +162,7 @@ function WorkbenchColumns({
   taskIntent,
   onTaskIntentChange,
   locked,
+  terminalOutcomeRef,
   onDecision,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
   return (
@@ -163,12 +184,71 @@ function WorkbenchColumns({
         />
       </div>
       <div className={styles.stack}>
+        <TerminalOutcomePanel
+          outcome={state.terminalOutcome}
+          outcomeRef={terminalOutcomeRef}
+          onDismiss={actions.dismissTerminalOutcome}
+        />
+        <CodingWorkbenchQuestions
+          runId={state.run.value?.runId}
+          runState={state.run.value?.state}
+        />
         <PermissionPrompt state={state} onDecision={onDecision} />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <RuntimeControls state={state} actions={actions} />
-        <Timeline events={state.events} />
+        <Timeline events={state.terminalOutcome?.events ?? state.events} />
       </div>
     </div>
+  );
+}
+
+function TerminalOutcomePanel({
+  outcome,
+  outcomeRef,
+  onDismiss,
+}: {
+  readonly outcome: CodingWorkbenchTerminalOutcome | null;
+  readonly outcomeRef: RefObject<HTMLButtonElement>;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (outcome === null) return null;
+  const state = runStateLabel(outcome.state, t);
+  return (
+    <section
+      className={styles.card}
+      aria-labelledby="coding-workbench-terminal-outcome-title"
+      data-testid="coding-workbench-terminal-outcome"
+      data-terminal-state={outcome.state}
+    >
+      <PanelTitle
+        eyebrow={t("codingWorkbench.terminal.eyebrow")}
+        id="coding-workbench-terminal-outcome-title"
+      >
+        {t("codingWorkbench.terminal.title")}
+      </PanelTitle>
+      <p className={styles.statePill} data-state={outcome.state}>
+        <span aria-hidden="true">○</span> {state}
+      </p>
+      <p id="coding-workbench-terminal-outcome-summary" className={styles.summary}>
+        {t("codingWorkbench.terminal.summary")}
+      </p>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {t("codingWorkbench.announcement.terminalOutcome", {
+          state,
+          revision: outcome.revision,
+        })}
+      </p>
+      <button
+        ref={outcomeRef}
+        className={styles.button}
+        type="button"
+        aria-describedby="coding-workbench-terminal-outcome-summary"
+        onClick={onDismiss}
+      >
+        {t("codingWorkbench.terminal.dismiss")}
+      </button>
+    </section>
   );
 }
 

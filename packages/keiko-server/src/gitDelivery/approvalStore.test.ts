@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInMemoryGitDeliveryApprovalStore,
   parseGitDeliveryApprovalRequest,
+  parseRequiredGitDeliveryApprovalClaim,
   resolveGitDeliveryApprovalRequirement,
   type GitDeliveryApprovalBinding,
 } from "./approvalStore.js";
@@ -99,6 +100,41 @@ describe("git delivery approval store", () => {
     expect(
       resolveGitDeliveryApprovalRequirement(parsed, { store, binding: BINDING, nowMs: NOW + 11 }),
     ).toBeUndefined();
+  });
+
+  it.each([
+    ["project", { ...BINDING, projectId: "/workspace/other" }],
+    ["action", { ...BINDING, operation: "push" as const }],
+    ["message or delivery operands", { ...BINDING, command: { changed: true } }],
+    ["live head or staged content", { ...BINDING, contextDigest: "b".repeat(64) }],
+  ])("rejects a claim with a changed %s binding", (_name, changedBinding) => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const binding = { ...BINDING, contextDigest: "a".repeat(64) };
+    const issued = store.issue({ binding, approvedByUserId: "u-1", nowMs: NOW });
+    const parsed = parseRequiredGitDeliveryApprovalClaim(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, {
+        store,
+        binding: changedBinding,
+        nowMs: NOW + 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not accept a claim through a process-global fallback store", () => {
+    const store = createInMemoryGitDeliveryApprovalStore();
+    const issued = store.issue({ binding: BINDING, approvedByUserId: "u-1", nowMs: NOW });
+    const parsed = parseRequiredGitDeliveryApprovalClaim(issued.approval);
+    if (parsed?.kind !== "claim") throw new Error("expected claim");
+    expect(
+      resolveGitDeliveryApprovalRequirement(parsed, { binding: BINDING, nowMs: NOW + 1 }),
+    ).toBeUndefined();
+  });
+
+  it("requires a server claim where separate delivery approval is mandatory", () => {
+    expect(parseRequiredGitDeliveryApprovalClaim(undefined)).toBeUndefined();
+    expect(parseRequiredGitDeliveryApprovalClaim({ required: false })).toBeUndefined();
   });
 
   it("does not parse legacy trusted approval objects as browser claims", () => {

@@ -60,6 +60,7 @@ import {
   portableVerificationSummaryForManifest,
   PORTABLE_TARGETS,
 } from "../portable-runtime.mjs";
+import { runtimeSupervisorQualificationReceiptBytes } from "../qualify-runtime-supervisor.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -530,7 +531,13 @@ function writePortableAssetsFixture(root, options = {}) {
     const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
     writeNativeHelperFixture(targetRoot, target);
     if (options.sidecarEvidenceKind !== undefined && index === 0) {
-      addPortableSidecarFixture(targetRoot, manifest, target, options.sidecarEvidenceKind);
+      addPortableSidecarFixture(
+        targetRoot,
+        manifest,
+        target,
+        options.sidecarEvidenceKind,
+        options.sidecarLicenseContent,
+      );
     }
     writePortableEvidence(targetRoot, manifest, provenanceText);
     options.mutateManifest?.(manifest, target, index, targetRoot);
@@ -541,7 +548,21 @@ function writePortableAssetsFixture(root, options = {}) {
       symlinkSync(outsideEvidence, sbomPath);
     }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-    return { archivePath, manifestPath, platformTarget: target.platformTarget };
+    const artifact = { archivePath, manifestPath, platformTarget: target.platformTarget };
+    if (target.platformTarget === "windows-x64") {
+      const resourceRoot = join(targetRoot, "payload", "Keiko");
+      const helper = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
+      const receiptPath = join(targetRoot, "evidence", "runtime-supervisor-qualification.json");
+      writeFileSync(
+        receiptPath,
+        runtimeSupervisorQualificationReceiptBytes(
+          { artifact: archivePath, helper, manifest: manifestPath, resourceRoot },
+          target.platformTarget,
+        ),
+      );
+      artifact.evidencePaths = ["evidence/runtime-supervisor-qualification.json"];
+    }
+    return artifact;
   });
   const manifestPath = join(root, "portable-assets.json");
   const bundle = { schemaVersion: 1, artifacts };
@@ -558,9 +579,15 @@ function writeNativeHelperFixture(targetRoot, target) {
   const path = join(resourceRoot, nativeHelperExecutablePath(target));
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, nativeHelperBytes(target));
+  if (target.platformTarget === "windows-x64") {
+    writeFileSync(
+      join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      "signed runtime supervisor\n",
+    );
+  }
 }
 
-function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
+function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind, licenseContent) {
   const name = "opencode-compatible";
   const payloadRootPath = `runtime/sidecars/${name}`;
   const resourceRoot = join(targetRoot, "payload", "Keiko");
@@ -572,7 +599,9 @@ function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
   const sbomPath = join(sidecarRoot, "evidence", "sbom.cdx.json");
   writeFileSync(
     licensePath,
-    unsafeKind === "license" ? "token=forbidden-secret\n" : "Sidecar license.\n",
+    unsafeKind === "license"
+      ? "token=forbidden-secret\n"
+      : (licenseContent ?? "Sidecar license.\n"),
   );
   writeFileSync(
     sbomPath,
@@ -1044,22 +1073,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           sidecarEvidenceKind: "safe",
-          mutateEvidence: (root, _manifest, _target, index) => {
-            if (index === 0) {
-              writeFileSync(
-                join(
-                  root,
-                  "payload",
-                  "Keiko",
-                  "runtime",
-                  "sidecars",
-                  "opencode-compatible",
-                  "LICENSE.txt",
-                ),
-                content,
-              );
-            }
-          },
+          sidecarLicenseContent: content,
         },
       });
 
@@ -1150,6 +1164,13 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(uploadLine).toContain("keiko-windows-x64.zip");
       expect(uploadLine).toContain("keiko-macos-arm64.zip");
       expect(uploadLine).toContain("keiko-macos-x64.zip");
+      expect(
+        lastRun.calls.some(
+          (line) =>
+            line.startsWith('gh ["release","upload"') &&
+            line.includes("windows-x64-runtime-supervisor-qualification.json"),
+        ),
+      ).toBe(true);
       expect(
         indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
       ).toBeLessThan(publishCall);

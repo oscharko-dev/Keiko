@@ -451,10 +451,10 @@ async function startBridgeFixture(
   const supervisor = createRuntimeProcessSupervisor({
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
-      spawnOwnedTree: (): RuntimeProcessTree => {
+      spawnOwnedTree: (request): RuntimeProcessTree => {
         stdout.end("opencode server listening on http://127.0.0.1:43123\n");
         return {
-          treeId: "tool-bridge-tree",
+          treeId: request.recoveryHandle,
           stdout,
           stderr,
           onTreeExit: (): void => undefined,
@@ -619,6 +619,7 @@ async function startBridgeFixture(
   const started = await Promise.resolve(
     runtime.manager.start({
       runId: FIXTURE_RUN_ID,
+      recoveryHandle: "d".repeat(32),
       treeBindingId: "b".repeat(64),
       taskRef: "issue-2254",
       workspaceRoot: join(root, "workspace"),
@@ -694,7 +695,7 @@ describe("unmounted OpenCode runtime composition", () => {
         launch = request;
         stdout.end("opencode server listening on http://127.0.0.1:43123\n");
         return {
-          treeId: "tree-1",
+          treeId: request.recoveryHandle,
           stdout,
           stderr,
           onTreeExit: (callback): void => {
@@ -871,6 +872,7 @@ describe("unmounted OpenCode runtime composition", () => {
       Promise.resolve(
         runtime.manager.start({
           runId: "run-1",
+          recoveryHandle: "d".repeat(32),
           treeBindingId: "a".repeat(64),
           taskRef: "issue-2254",
           workspaceRoot,

@@ -85,6 +85,12 @@ export interface CodingRuntimeSnapshotStore {
   readonly markNonterminalRecoveryRequired: (updatedAt: string) => readonly string[];
   /** Retains the recovery slot; acknowledgement alone never makes a run startable. */
   readonly acknowledgeRecovery: (runId: string, acknowledgedAt: string) => CodingRuntimeSnapshot;
+  /** Clears only the exact opaque handle after the qualified backend proves complete reap. */
+  readonly clearRecoveryHandle: (
+    runId: string,
+    recoveryHandle: string,
+    reconciledAt: string,
+  ) => CodingRuntimeSnapshot;
   /** Explicit fresh-retry boundary: settles an acknowledged recovery row without replaying it. */
   readonly releaseRecoveryForRetry: (runId: string, releasedAt: string) => CodingRuntimeSnapshot;
   readonly delete: (runId: string) => void;
@@ -140,10 +146,13 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=? WHERE run_id=?`,
   );
   const acknowledge = db.prepare(
-    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ? WHERE run_id = ? AND state = 'recovery-required'",
+    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ? WHERE run_id = ? AND state = 'recovery-required' AND recovery_handle IS NULL",
+  );
+  const clearRecovery = db.prepare(
+    "UPDATE coding_runtime_snapshots SET recovery_handle = NULL, revision = revision + 1, updated_at = ? WHERE run_id = ? AND state = 'recovery-required' AND recovery_handle = ?",
   );
   const releaseRecovery = db.prepare(
-    "UPDATE coding_runtime_snapshots SET terminal_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required' AND recovery_acknowledged_at IS NOT NULL AND terminal_at IS NULL",
+    "UPDATE coding_runtime_snapshots SET terminal_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required' AND recovery_acknowledged_at IS NOT NULL AND recovery_handle IS NULL AND terminal_at IS NULL",
   );
   const remove = db.prepare("DELETE FROM coding_runtime_snapshots WHERE run_id = ?");
 
@@ -207,7 +216,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       db.exec("BEGIN");
       try {
         const statement = db.prepare(
-          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', revision=?, updated_at=? WHERE run_id=?",
+          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', recovery_handle=COALESCE(recovery_handle, 'unrecoverable'), revision=?, updated_at=? WHERE run_id=?",
         );
         for (const row of active) statement.run(row.revision + 1, updatedAt, row.run_id);
         db.exec("COMMIT");
@@ -221,7 +230,15 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       assertId(runId, "runId");
       assertIso(acknowledgedAt, "acknowledgedAt");
       if (acknowledge.run(acknowledgedAt, runId).changes !== 1)
-        throw new Error("recovery-required runtime snapshot was not found");
+        throw new Error("runtime recovery has not been reconciled");
+      return requireSnapshot(one(runId));
+    },
+    clearRecoveryHandle(runId, recoveryHandle, reconciledAt): CodingRuntimeSnapshot {
+      assertId(runId, "runId");
+      assertId(recoveryHandle, "recoveryHandle");
+      assertIso(reconciledAt, "reconciledAt");
+      if (clearRecovery.run(reconciledAt, runId, recoveryHandle).changes !== 1)
+        throw new Error("runtime recovery handle did not reconcile");
       return requireSnapshot(one(runId));
     },
     releaseRecoveryForRetry(runId, releasedAt): CodingRuntimeSnapshot {

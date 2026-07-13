@@ -61,6 +61,7 @@ import {
 import {
   createUpdateSessionManager,
   type UpdateCompletionGate,
+  type UpdateRuntimeQuiescence,
   type UpdateSessionManager,
 } from "./update-session.js";
 import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
@@ -181,10 +182,17 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import type { CodingRuntimeQuestionPort } from "./coding-runtime/codingRuntimeQuestionPort.js";
 import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeResolver,
+} from "./coding-runtime/productionCodingRuntimeHost.js";
+import { createProductionOpenCodeRuntimeResolver } from "./coding-runtime/productionOpenCodeRuntimeResolver.js";
+import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import {
@@ -326,8 +334,12 @@ export interface UiHandlerDeps {
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
+  /** Transient active-run OpenCode question controls; no question content is retained. */
+  readonly codingRuntimeQuestionPort?: CodingRuntimeQuestionPort | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
   readonly codingRuntimeHostQualified?: boolean | undefined;
+  readonly codingRuntimeStartupRecovery?: Promise<void> | undefined;
+  readonly codingRuntimeQuiescence?: UpdateRuntimeQuiescence | undefined;
   // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
   // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
   readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
@@ -568,6 +580,8 @@ export interface BuildHandlerDepsOptions {
   readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
   /** Qualified runtime host injection. Production remains fail-closed until #2258 supplies it. */
   readonly codingRuntimeHost?: CodingRuntimeHost | undefined;
+  /** Production runtime activation requires an explicit release-qualified native/runtime resolver. */
+  readonly codingRuntimeResolver?: ProductionCodingRuntimeResolver | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
@@ -1141,6 +1155,7 @@ function buildUpdateSession(options: {
   readonly updateLocalState: UpdateLocalStateManager;
   readonly updateRemediation: UpdateRemediationManager;
   readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly codingRuntimeQuiescence?: UpdateRuntimeQuiescence | undefined;
 }): UpdateSessionManager {
   if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
@@ -1158,6 +1173,7 @@ function buildUpdateSession(options: {
       localState: options.updateLocalState,
     }),
     portableCompletionGate: portableCompletionGate(options.updateRemediation),
+    codingRuntimeQuiescence: options.codingRuntimeQuiescence,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1591,6 +1607,7 @@ interface BuildPeripheralsArgs {
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly runtimeStateDir: string;
+  readonly codingRuntimeQuiescence?: UpdateRuntimeQuiescence | undefined;
 }
 
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
@@ -1629,6 +1646,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       updateLocalState,
       updateRemediation,
       runtimeConfig: args.runtimeConfig,
+      codingRuntimeQuiescence: args.codingRuntimeQuiescence,
     }),
     updatePreflight: args.options.updatePreflight,
     updateLocalState,
@@ -2000,7 +2018,30 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const codingRuntimeEvidenceAggregator = createCodingRuntimeEvidenceAggregator(
     args.codingWorkbenchEvidenceStore,
   );
-  const codingRuntimeControlPlane =
+  // eslint-disable-next-line prefer-const -- the quiescence closure breaks the intentional composition cycle before the single assignment below
+  let codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined;
+  const peripherals = buildPeripherals({
+    options: args.options,
+    uiStore: args.bundle.uiStore,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
+    liveRedactor: args.liveRedactor,
+    runtimeConfig: args.runtimeConfig,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    runtimeStateDir: dirname(args.resolvedUiDbPath),
+    codingRuntimeQuiescence: {
+      isQuiescent: () => codingRuntimeControlPlane?.quiescence.isQuiescent() ?? false,
+    },
+  });
+  const defaultRuntimeResolver = productionRuntimeResolver(
+    args,
+    peripherals.verificationRunner,
+    codingRuntimeEvidenceAggregator,
+  );
+  const codingRuntimeHost =
+    args.options.codingRuntimeHost ??
+    createProductionCodingRuntimeHost(args.options.codingRuntimeResolver ?? defaultRuntimeResolver);
+  codingRuntimeControlPlane =
     args.bundle.codingRuntimeSnapshotStore && args.bundle.workspaceLifecycle
       ? createCodingRuntimeControlPlane({
           snapshots: args.bundle.codingRuntimeSnapshotStore,
@@ -2009,9 +2050,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           serverPrincipal:
             args.options.codingRuntimeServerPrincipal ??
             ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
-          ...(args.options.codingRuntimeHost
-            ? { runtimeHost: args.options.codingRuntimeHost }
-            : {}),
+          ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
   return {
@@ -2030,7 +2069,12 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       ? {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
           codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
+          ...(codingRuntimeControlPlane.questionPort
+            ? { codingRuntimeQuestionPort: codingRuntimeControlPlane.questionPort }
+            : {}),
           codingRuntimeHostQualified: codingRuntimeControlPlane.runtimeHostQualified,
+          codingRuntimeStartupRecovery: codingRuntimeControlPlane.startupRecovery,
+          codingRuntimeQuiescence: codingRuntimeControlPlane.quiescence,
           ...(codingRuntimeControlPlane.cancellationRegistry
             ? {
                 codingSidecarGatewayCancellationRegistry:
@@ -2085,20 +2129,29 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
-    ...buildPeripherals({
-      options: args.options,
-      uiStore: args.bundle.uiStore,
-      evidenceStore: args.evidenceStore,
-      redactString: args.redactString,
-      liveRedactor: args.liveRedactor,
-      runtimeConfig: args.runtimeConfig,
-      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
-      runtimeStateDir: dirname(args.resolvedUiDbPath),
-    }),
+    ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
     ...(args.bundle.dispose !== undefined ? { dispose: args.bundle.dispose } : {}),
   };
+}
+
+function productionRuntimeResolver(
+  args: UiHandlerDepsAssemblyArgs,
+  verificationRunner: PeripheralManagers["verificationRunner"],
+  runtimeEvidence: CodingRuntimeEvidenceAggregator,
+): ProductionCodingRuntimeResolver | undefined {
+  const lifecycle = args.bundle.workspaceLifecycle;
+  if (lifecycle === undefined) return undefined;
+  return createProductionOpenCodeRuntimeResolver({
+    env: args.options.env,
+    workspaceLifecycle: lifecycle,
+    managedTaskWorkspaceRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
+    verificationRunner,
+    runtimeStateRoot: dirname(args.resolvedUiDbPath),
+    runtimeEvidence,
+    readWorkspaceHead: readProductionWorkspaceHead,
+  });
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {

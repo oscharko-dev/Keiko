@@ -9,9 +9,11 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
+  GIT_DELIVERY_SCHEMA_VERSION,
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   type GitDeliveryActionKind,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryExecutionResult,
   type GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
@@ -31,8 +33,11 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
-import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import type {
+  GitDeliveryApprovalContextGuard,
+  GitDeliveryApprovalSeams,
+} from "./deliveryApproval.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 
 // Default trusted policy: PERMIT the lowest risk class (local-mutation = branch create/switch, stage,
@@ -49,14 +54,13 @@ export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   },
 };
 
-export interface GitDeliveryExecutionSeams {
+export interface GitDeliveryExecutionSeams extends GitDeliveryApprovalSeams {
   readonly adapterFactory?: ((workspace: WorkspaceInfo) => GitLocalMutationAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly stagedPathsReader?:
     ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
-  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
 }
@@ -96,6 +100,36 @@ function adapterFor(
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({ workspace, processEnv: process.env, now });
+}
+
+const APPROVAL_CONTEXT_DRIFT_RESULT: GitDeliveryExecutionResult = {
+  schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+  outcome: "failed",
+  durationMs: 0,
+  errorCode: "precondition-failed",
+};
+
+async function guardLocalEffect(
+  guard: GitDeliveryApprovalContextGuard,
+  effect: () => Promise<GitDeliveryExecutionResult>,
+): Promise<GitDeliveryExecutionResult> {
+  return (await guard()) ? effect() : APPROVAL_CONTEXT_DRIFT_RESULT;
+}
+
+function guardedLocalAdapter(
+  adapter: GitLocalMutationAdapter,
+  guard: GitDeliveryApprovalContextGuard | undefined,
+): GitLocalMutationAdapter {
+  if (guard === undefined) return adapter;
+  return {
+    createBranch: (request) => guardLocalEffect(guard, () => adapter.createBranch(request)),
+    switchBranch: (request) => guardLocalEffect(guard, () => adapter.switchBranch(request)),
+    stage: (request) => guardLocalEffect(guard, () => adapter.stage(request)),
+    unstage: (request) => guardLocalEffect(guard, () => adapter.unstage(request)),
+    commit: (request) => guardLocalEffect(guard, () => adapter.commit(request)),
+    abort: (request) => guardLocalEffect(guard, () => adapter.abort(request)),
+    recover: (request) => guardLocalEffect(guard, () => adapter.recover(request)),
+  };
 }
 
 export function defaultGitDeliveryActionId(command: unknown, nowMs: number): string {
@@ -149,10 +183,11 @@ export async function executeGovernedMutation(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryExecutionSeams,
+  approvalContextGuard?: GitDeliveryApprovalContextGuard,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = adapterFor(workspace, seams, now);
+  const adapter = guardedLocalAdapter(adapterFor(workspace, seams, now), approvalContextGuard);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));

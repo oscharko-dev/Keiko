@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
 import { createOpenCodeHttpClient, parseOpenCodeChildEndpoint } from "./opencodeHttpClient.js";
 
 interface OpenCodeEventClient {
@@ -211,6 +212,64 @@ describe("OpenCode HTTP client", () => {
       { method: "POST", path: "/question/que_1/reply", body: '{"answers":[["Approve"]]}' },
       { method: "POST", path: "/question/que_1/reject" },
     ]);
+  });
+
+  it("enforces the question UTF-8 budget before JSON materialization at and above the boundary", async () => {
+    const exact = openCodeQuestionBodyAtBytes(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES);
+    const multibyte = exact.replace("xx", "é");
+    expect(encoder.encode(multibyte)).toHaveLength(
+      CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
+    );
+
+    const accepted = questionClientForBody(multibyte);
+    await expect(accepted.listQuestions()).resolves.toHaveLength(1);
+
+    const body = unreadByteStream();
+    const oversized = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(body.stream, {
+            headers: {
+              "content-length": String(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES + 1),
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    }) as unknown as OpenCodeQuestionHttpClient;
+    await expect(oversized.listQuestions()).rejects.toThrow("question-oversized");
+    expect(body.cancellations).toBe(1);
+    expect(body.pulls).toBe(0);
+  });
+
+  it("cancels a streamed oversized nested question body without returning its valid prefix", async () => {
+    const exact = openCodeQuestionBodyAtBytes(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES);
+    const prefix = encoder.encode(exact.slice(0, -1));
+    const suffix = encoder.encode(' ,{"id":"que_leak","sessionID":"ses_1","questions":[]}]');
+    let cancelled = false;
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller): void {
+                controller.enqueue(prefix);
+                controller.enqueue(suffix);
+              },
+              cancel(): void {
+                cancelled = true;
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+    }) as unknown as OpenCodeQuestionHttpClient;
+
+    await expect(client.listQuestions()).rejects.toThrow("question-oversized");
+    expect(cancelled).toBe(true);
   });
 
   it("rejects malformed, oversized, and unbounded question requests and answers before transport", async () => {
@@ -746,4 +805,42 @@ async function settlesWithin(
       }, 40),
     ),
   ]);
+}
+
+function questionClientForBody(body: string): OpenCodeQuestionHttpClient {
+  return createOpenCodeHttpClient({
+    endpoint: "http://127.0.0.1:43123",
+    password: "p".repeat(43),
+    fetch: () =>
+      Promise.resolve(new Response(body, { headers: { "content-type": "application/json" } })),
+  });
+}
+
+function openCodeQuestionBodyAtBytes(targetBytes: number): string {
+  const pending = [
+    {
+      id: "que_1",
+      sessionID: "ses_1",
+      questions: [
+        {
+          question: "Choose one",
+          header: "Decision",
+          options: Array.from({ length: 16 }, (_, index) => ({
+            label: `Option ${String(index)}`,
+            description: "x",
+          })),
+        },
+      ],
+    },
+  ];
+  let remaining = targetBytes - encoder.encode(JSON.stringify(pending)).length;
+  const question = pending[0]?.questions[0];
+  if (question === undefined) throw new Error("missing question fixture");
+  for (const option of question.options) {
+    const added = Math.min(4_095, remaining);
+    option.description += "x".repeat(added);
+    remaining -= added;
+  }
+  expect(remaining).toBe(0);
+  return JSON.stringify(pending);
 }

@@ -383,9 +383,8 @@ function sessionUpdated(data: Record<string, unknown>, aggregateId: string): boo
     ]) &&
     info.id === aggregateId &&
     id(info.id, "ses_") &&
-    [info.slug, info.projectID, info.directory, info.path, info.title, info.version].every(
-      nonEmpty,
-    ) &&
+    [info.slug, info.projectID, info.directory, info.title, info.version].every(nonEmpty) &&
+    typeof info.path === "string" &&
     finite(info.cost) &&
     tokenCounts(info.tokens) &&
     (info.agent === undefined || nonEmpty(info.agent)) &&

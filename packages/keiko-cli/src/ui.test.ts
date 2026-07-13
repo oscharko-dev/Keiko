@@ -280,6 +280,30 @@ describe("runUiCli", () => {
     expect(out.join("")).toContain("http://127.0.0.1:4399");
   });
 
+  it("passes only an explicit production runtime resolver and remains unavailable when it declines", async () => {
+    const { io } = captureIo();
+    const resolveRuntime = vi.fn(() => undefined);
+    const captured: UiHandlerDeps[] = [];
+    const code = await runUiCli(
+      [],
+      io,
+      {},
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        codingRuntimeResolver: { resolve: resolveRuntime },
+        createServer: ({ handlerDeps }) => {
+          captured.push(handlerDeps);
+          return fakeServer({});
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(resolveRuntime).toHaveBeenCalledOnce();
+    expect(captured[0]?.codingRuntimeHostQualified).toBe(false);
+  });
+
   it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-"));

@@ -8,12 +8,20 @@ import {
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 export type GitDeliveryApprovalOperation =
-  "local-mutation" | "commit" | "push" | "pr" | "merge" | "action-sheet";
+  | "local-mutation"
+  | "commit"
+  | "push"
+  | "pr-create"
+  | "pr-update"
+  | "pr"
+  | "merge"
+  | "action-sheet";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
   readonly operation: GitDeliveryApprovalOperation;
   readonly command: unknown;
+  readonly contextDigest?: string | undefined;
 }
 
 export interface GitDeliveryApprovalIssueInput {
@@ -145,8 +153,6 @@ export function createInMemoryGitDeliveryApprovalStore(
   };
 }
 
-const DEFAULT_APPROVAL_STORE = createInMemoryGitDeliveryApprovalStore();
-
 export function parseGitDeliveryApprovalRequest(
   raw: unknown,
 ): ParsedGitDeliveryApprovalRequest | undefined {
@@ -159,6 +165,12 @@ export function parseGitDeliveryApprovalRequest(
   return undefined;
 }
 
+export function parseRequiredGitDeliveryApprovalClaim(
+  raw: unknown,
+): ParsedGitDeliveryApprovalRequest | undefined {
+  return isGitDeliveryApprovalClaim(raw) ? { kind: "claim", claim: raw } : undefined;
+}
+
 export function resolveGitDeliveryApprovalRequirement(
   approval: ParsedGitDeliveryApprovalRequest,
   input: {
@@ -168,7 +180,8 @@ export function resolveGitDeliveryApprovalRequirement(
   },
 ): GitDeliveryApprovalRequirement | undefined {
   if (approval.kind === "none") return { required: false };
-  return (input.store ?? DEFAULT_APPROVAL_STORE).consume({
+  if (input.store === undefined) return undefined;
+  return input.store.consume({
     approval: approval.claim,
     binding: input.binding,
     nowMs: input.nowMs,

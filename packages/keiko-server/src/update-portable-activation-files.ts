@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { qualificationFromReceipt } from "@oscharko-dev/keiko-sandbox";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -21,12 +22,20 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import { managedRootFromPackageRoot } from "./update-portable-staging-archive.js";
+import { verifyStagedSidecarPayloads } from "./update-portable-sidecar-staging-verification.js";
 import {
+  type PortableSidecarRuntimeVerification,
+  verifyPortableManifestSidecars,
+} from "./update-portable-sidecar-verification.js";
+import {
+  COMMIT_SHA,
   PACKAGE_NAME,
   PORTABLE_PAYLOAD_ROOT,
   PORTABLE_STAGE_DIR_PREFIX,
+  manifestArchiveSha,
   parseJsonRecord,
   primaryLauncher,
+  recordAt,
   runtimeFor,
 } from "./update-portable-staging-shared.js";
 
@@ -121,7 +130,7 @@ function activationFailed(message: string): PortableUpdateActivationError {
 }
 
 function requiredFile(path: string): void {
-  if (!existsSync(path) || !statSync(path).isFile()) {
+  if (!existsSync(path) || !statSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
     throw activationFailed("portable activation layout is incomplete");
   }
 }
@@ -184,6 +193,8 @@ function validateLayout(
   target: UpdatePortableTarget,
   root: string,
   targetVersion: string,
+  artifactSha256: string,
+  manifestSha256: string,
 ): PortableActivationLayout {
   const layout = layoutFor(target, root);
   requiredFile(layout.packageJsonPath);
@@ -191,7 +202,83 @@ function validateLayout(
   requiredFile(layout.launcherPath);
   validateSetupManifest(readJsonRecord(layout.setupManifestPath), target, targetVersion);
   validatePackageJson(readJsonRecord(layout.packageJsonPath), targetVersion);
+  validateRuntimeQualification(layout, target, artifactSha256, manifestSha256);
   return layout;
+}
+
+function validateRuntimeQualification(
+  layout: PortableActivationLayout,
+  target: UpdatePortableTarget,
+  artifactSha256: string,
+  manifestSha256: string,
+): void {
+  if (target !== "windows-x64") return;
+  const receiptPath = join(
+    layout.installRoot,
+    ".portable",
+    "runtime-supervisor-qualification.json",
+  );
+  const helperPath = join(layout.installRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
+  requiredFile(receiptPath);
+  requiredFile(helperPath);
+  const binding = activationQualificationBinding(layout, target, artifactSha256, manifestSha256);
+  const receipt = readJsonRecord(receiptPath);
+  const verified = qualificationFromReceipt(receipt, {
+    platformTarget: target,
+    sourceCommitSha: binding.sourceCommitSha,
+    artifactSha256,
+    helperSha256: sha256File(helperPath),
+    sidecars: binding.sidecars.map((sidecar) => ({
+      name: sidecar.summary.name,
+      sha256: sidecar.summary.payloadSha256,
+    })),
+  });
+  if (!verified.ok) throw activationFailed("portable runtime qualification is invalid");
+}
+
+function activationQualificationBinding(
+  layout: PortableActivationLayout,
+  target: UpdatePortableTarget,
+  artifactSha256: string,
+  manifestSha256: string,
+): {
+  readonly sourceCommitSha: string;
+  readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+} {
+  const path = join(layout.installRoot, ".portable", "update-portable-manifest.json");
+  requiredFile(path);
+  const text = readFileSync(path, "utf8");
+  const manifest = parseJsonRecord(text);
+  if (manifest === undefined) {
+    throw activationFailed("portable runtime qualification manifest is invalid");
+  }
+  const release = recordAt(manifest, "release");
+  const artifact = recordAt(manifest, "artifact");
+  const sourceCommitSha = release?.commitSha;
+  if (
+    sha256Text(text) !== manifestSha256 ||
+    manifestArchiveSha(manifest) !== artifactSha256 ||
+    artifact?.platformTarget !== target ||
+    typeof sourceCommitSha !== "string" ||
+    !COMMIT_SHA.test(sourceCommitSha)
+  ) {
+    throw activationFailed("portable runtime qualification manifest is invalid");
+  }
+  return { sourceCommitSha, sidecars: activationSidecars(layout, manifest, target) };
+}
+
+function activationSidecars(
+  layout: PortableActivationLayout,
+  manifest: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): readonly PortableSidecarRuntimeVerification[] {
+  try {
+    const sidecars = verifyPortableManifestSidecars(manifest, target).sidecars;
+    verifyStagedSidecarPayloads({ resourceRoot: layout.installRoot, sidecars });
+    return sidecars;
+  } catch {
+    throw activationFailed("portable runtime qualification sidecars are invalid");
+  }
 }
 
 function assertNoSymlinkAncestor(path: string): void {
@@ -281,17 +368,19 @@ function promote(
   paths: PortableActivationPaths,
   target: UpdatePortableTarget,
   targetVersion: string,
+  artifactSha256: string,
+  manifestSha256: string,
 ): PortableActivationLayout {
   if (existsSync(paths.backupRoot)) {
     throw activationFailed("portable activation backup path is occupied");
   }
-  validateLayout(target, paths.candidateRoot, targetVersion);
+  validateLayout(target, paths.candidateRoot, targetVersion, artifactSha256, manifestSha256);
   let moved = false;
   try {
     renameSync(paths.managedRoot, paths.backupRoot);
     moved = true;
     renameSync(paths.candidateRoot, paths.managedRoot);
-    return validateLayout(target, paths.managedRoot, targetVersion);
+    return validateLayout(target, paths.managedRoot, targetVersion, artifactSha256, manifestSha256);
   } catch (error) {
     if (moved) restoreManagedRoot(paths);
     if (error instanceof PortableUpdateActivationError) throw error;
@@ -328,7 +417,13 @@ export function promotePortableInstall(
   const paths = activationPaths(input, activationId);
   return {
     paths,
-    layout: promote(paths, input.stage.target, input.targetVersion),
+    layout: promote(
+      paths,
+      input.stage.target,
+      input.targetVersion,
+      input.stage.sha256,
+      input.stage.manifestSha256,
+    ),
   };
 }
 

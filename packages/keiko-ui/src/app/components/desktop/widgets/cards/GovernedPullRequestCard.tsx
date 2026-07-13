@@ -15,7 +15,7 @@
 import { useCallback, useId, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
-  ApiError,
+  fetchGitDeliveryPrApproval,
   fetchGitDeliveryPrExecute,
   fetchGitDeliveryPrPreview,
   type GitDeliveryPrExecuteResponse,
@@ -24,24 +24,21 @@ import {
   type GitDeliveryPrPreviewResponse,
 } from "@/lib/api";
 import { Icons } from "../../Icons";
+import { executeApprovedPullRequest, formatGitError } from "./git-client/git-client-seam";
 
 // ─── Injected client (DI seam for tests) ────────────────────────────────────────────────────────
 
 export interface GovernedPullRequestClient {
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  readonly prApproval: typeof fetchGitDeliveryPrApproval;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
 }
 
 const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prPreview: fetchGitDeliveryPrPreview,
+  prApproval: fetchGitDeliveryPrApproval,
   prExecute: fetchGitDeliveryPrExecute,
 };
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.message} (${err.code})`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 // ─── Shared inline-style tokens (CSS custom properties — globals.css untouched) ──────────────────
 
@@ -203,7 +200,7 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     setState((s) => ({
       ...s,
       busy: false,
-      error: formatError(err),
+      error: formatGitError(err),
     }));
   }, []);
 
@@ -228,8 +225,7 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     (input: GitDeliveryPrInput): void => {
       const token = (seq.current += 1);
       setState((s) => ({ ...s, busy: true, error: null, outcome: null }));
-      void client
-        .prExecute(input)
+      void executeApprovedPullRequest(client, input)
         .then((outcome) => {
           if (token !== seq.current) return;
           setState((s) => ({ ...s, busy: false, outcome }));

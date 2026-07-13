@@ -1,0 +1,80 @@
+{
+  "issue": 2258,
+  "verdict": "PASS",
+  "proofType": "live-playwright-plus-axe-core",
+  "tool": {
+    "playwright": "1.61.1",
+    "axeCore": "4.12.0"
+  },
+  "source": {
+    "command": "npm run test:e2e:coding-workbench-2258",
+    "date": "2026-07-13",
+    "selected": 18,
+    "passed": 16,
+    "externalAttestationFixme": 2,
+    "failed": 0
+  },
+  "gate": {
+    "selector": "section[aria-label=\"Coding Workbench\"][data-state]",
+    "impacts": ["serious", "critical"],
+    "requiredMaximumViolationsPerCapture": 0
+  },
+  "captures": [
+    {
+      "file": "browser/02-light-768.png",
+      "viewport": { "width": 768, "height": 900 },
+      "theme": "light",
+      "state": "idle",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "highContrast": false,
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "browser/03-dark-320.png",
+      "viewport": { "width": 320, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "highContrast": false,
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "browser/04-reduced-motion-dark-1280.png",
+      "viewport": { "width": 1280, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "forcedColors": "none",
+      "reducedMotion": "reduce",
+      "highContrast": false,
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "browser/05-light-high-contrast-1280.png",
+      "viewport": { "width": 1280, "height": 900 },
+      "theme": "light",
+      "state": "idle",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "highContrast": true,
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "file": "browser/06-forced-colors-dark-768.png",
+      "viewport": { "width": 768, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "forcedColors": "active",
+      "reducedMotion": "no-preference",
+      "highContrast": false,
+      "seriousOrCriticalAxeViolations": 0
+    }
+  ],
+  "summary": {
+    "axeCaptureCount": 5,
+    "seriousOrCriticalAxeViolations": 0,
+    "terminalCaptureAxeClaimed": false,
+    "note": "The terminal screenshot is retained as live fidelity evidence; the live terminal journey did not run axe and is not counted in this accessibility proof."
+  }
+}

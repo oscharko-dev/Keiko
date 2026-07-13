@@ -15,6 +15,7 @@ import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { GitDeliveryIssuedApproval } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitPrCreateExecRequest,
@@ -28,7 +29,15 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
-import { createHandlePrExecute, createHandlePrPreview } from "./prRoutes.js";
+import {
+  createHandlePrApproval,
+  createHandlePrExecute,
+  createHandlePrPreview,
+} from "./prRoutes.js";
+import {
+  createInMemoryGitDeliveryApprovalStore,
+  type GitDeliveryApprovalStore,
+} from "./approvalStore.js";
 import type {
   GitDeliveryPrExecuteResponseBody,
   GitDeliveryPrPreviewBody,
@@ -144,6 +153,9 @@ function seams(overrides: Partial<GitDeliveryPullRequestSeams> = {}): GitDeliver
     snapshotReader: () => Promise.resolve(SNAPSHOT),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-pr-test-1",
+    approvalStore: createInMemoryGitDeliveryApprovalStore(),
+    approvalFactsReader: () =>
+      Promise.resolve({ headRefHash: "a".repeat(40), stagedStateSha256: "b".repeat(64) }),
     ...overrides,
   };
 }
@@ -160,6 +172,31 @@ function createBody(overrides: Record<string, unknown> = {}): Record<string, unk
     body: "Implements the #477 governed pull request command center.",
     isDraft: false,
     ...overrides,
+  };
+}
+
+async function approvedPrBody(
+  body: Record<string, unknown>,
+  execution: GitDeliveryPullRequestSeams,
+  handlerDeps = deps(),
+): Promise<Record<string, unknown>> {
+  const issued = await createHandlePrApproval({ execution })(
+    ctxFor("/api/git-delivery/pr/approval", { ...body, confirmed: true }),
+    handlerDeps,
+  );
+  expect(issued.status).toBe(201);
+  return { ...body, approval: (issued.body as GitDeliveryIssuedApproval).approval };
+}
+
+function consumeThen(effect: () => void): GitDeliveryApprovalStore {
+  const store = createInMemoryGitDeliveryApprovalStore();
+  return {
+    issue: (input) => store.issue(input),
+    consume: (input): ReturnType<GitDeliveryApprovalStore["consume"]> => {
+      const consumed = store.consume(input);
+      if (consumed !== undefined) effect();
+      return consumed;
+    },
   };
 }
 
@@ -207,17 +244,15 @@ describe("pr routes — central enforcement", () => {
   it("does not require a deployment enable flag before checking the worktree", async () => {
     await closeServer();
     await startBound({ env: {} });
-    for (const path of [PREVIEW, EXECUTE]) {
-      const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(createBody()),
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        error: { code: "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE" },
-      });
-    }
+    const res = await fetch(`http://${UI_HOST}:${String(port)}${PREVIEW}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify(createBody()),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: { code: "GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE" },
+    });
   });
 
   it("403s without the central CSRF header", async () => {
@@ -293,10 +328,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
   it("opens a permitted PR, returns the provider PR number, and records content-free evidence (AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
-    const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
-    });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const execution = seams({ prAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePrExecute({ execution });
+    const request = createBody();
+    const res = await handler(
+      ctxFor(EXECUTE, await approvedPrBody(request, execution)),
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.createdPrExternalId).toBe("1499");
@@ -307,14 +345,60 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.raw()).not.toContain("Implements the #477");
   });
 
+  it.each(["pr-create", "pr-update"] as const)(
+    "revalidates the approved context after consume before %s I/O",
+    async (kind) => {
+      const adapter = recordingPrAdapter();
+      let liveSnapshot = SNAPSHOT;
+      const approvalStore = consumeThen(() => {
+        liveSnapshot = { ...SNAPSHOT, aheadCount: 3 };
+      });
+      const execution = seams({
+        approvalStore,
+        prAdapterFactory: () => adapter.adapter,
+        snapshotReader: () => Promise.resolve(liveSnapshot),
+      });
+      const handler = createHandlePrExecute({ execution });
+      const request =
+        kind === "pr-create"
+          ? createBody()
+          : createBody({
+              kind,
+              prExternalId: "1499",
+              convertFromDraft: true,
+              isDraft: undefined,
+            });
+      const approved = await approvedPrBody(request, execution);
+
+      const drifted = await handler(ctxFor(EXECUTE, approved), deps());
+      expect(drifted.body).toMatchObject({
+        status: "recovery-required",
+        executionErrorCode: "precondition-failed",
+      });
+      expect(drifted.body).not.toHaveProperty("prRejectionReason");
+      expect(adapter.creates()).toBe(0);
+      expect(adapter.updates()).toBe(0);
+
+      const replay = await handler(ctxFor(EXECUTE, approved), deps());
+      expect(replay.status).toBe(400);
+      expect(adapter.creates()).toBe(0);
+      expect(adapter.updates()).toBe(0);
+
+      const freshlyApproved = await approvedPrBody(request, execution);
+      const retried = await handler(ctxFor(EXECUTE, freshlyApproved), deps());
+      expect(retried.body).toMatchObject({ status: "succeeded" });
+      expect(kind === "pr-create" ? adapter.creates() : adapter.updates()).toBe(1);
+    },
+  );
+
   it("blocks a base outside the allow-list, executing nothing yet recording evidence (AC2/AC5)", async () => {
     const adapter = recordingPrAdapter();
     const cap = capturingEvidenceStore();
-    const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
-    });
+    const execution = seams({ prAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePrExecute({ execution });
+    const request = createBody({ baseBranchName: "random-base" });
     const res = await handler(
-      ctxFor(EXECUTE, createBody({ baseBranchName: "random-base" })),
+      ctxFor(EXECUTE, await approvedPrBody(request, execution)),
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
@@ -333,10 +417,13 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       rejectionReason: "validation-error",
     });
     const cap = capturingEvidenceStore();
-    const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
-    });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps({ evidenceStore: cap.store }));
+    const execution = seams({ prAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePrExecute({ execution });
+    const request = createBody();
+    const res = await handler(
+      ctxFor(EXECUTE, await approvedPrBody(request, execution)),
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("failed");
     expect(body.prRejectionReason).toBe("validation-error");
@@ -344,28 +431,27 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(cap.count()).toBe(1);
   });
 
-  it("holds for approval under an approval-gated override pack, executing nothing", async () => {
+  it("satisfies an approval-gated override only after separate approval", async () => {
     const adapter = recordingPrAdapter();
-    const handler = createHandlePrExecute({
-      execution: seams({
-        prAdapterFactory: () => adapter.adapter,
-        policyPacks: {
-          repoPack: {
-            schemaVersion: "1",
-            repoId: "approval-pack",
-            rules: [
-              { actionKind: "pr-create", decision: "approval-gated", requiredApprovers: ["lead"] },
-            ],
-            defaultRule: { decision: "blocked" },
-          },
+    const execution = seams({
+      prAdapterFactory: () => adapter.adapter,
+      policyPacks: {
+        repoPack: {
+          schemaVersion: "1",
+          repoId: "approval-pack",
+          rules: [
+            { actionKind: "pr-create", decision: "approval-gated", requiredApprovers: ["lead"] },
+          ],
+          defaultRule: { decision: "blocked" },
         },
-      }),
+      },
     });
-    const res = await handler(ctxFor(EXECUTE, createBody()), deps());
+    const handler = createHandlePrExecute({ execution });
+    const request = createBody();
+    const res = await handler(ctxFor(EXECUTE, await approvedPrBody(request, execution)), deps());
     const body = res.body as GitDeliveryPrExecuteResponseBody;
-    expect(body.status).toBe("approval-required");
-    expect(body.requiredApprovers).toContain("lead");
-    expect(adapter.creates()).toBe(0);
+    expect(body.status).toBe("succeeded");
+    expect(adapter.creates()).toBe(1);
   });
 
   it("rejects a forged browser-supplied approval object before creating a PR", async () => {
@@ -393,24 +479,17 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
 
   it("routes a pr-update through the update adapter method", async () => {
     const adapter = recordingPrAdapter();
-    const handler = createHandlePrExecute({
-      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+    const execution = seams({ prAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePrExecute({ execution });
+    const request = createBody({
+      kind: "pr-update",
+      prExternalId: "1499",
+      title: "feat: updated title",
+      body: "Updated body",
+      convertFromDraft: true,
+      isDraft: undefined,
     });
-    const res = await handler(
-      ctxFor(EXECUTE, {
-        schemaVersion: "1",
-        projectId,
-        kind: "pr-update",
-        ownerAndRepo: "oscharko-dev/Keiko",
-        prExternalId: "1499",
-        headBranchName: "claude/issue-477-github-pr-command-center",
-        baseBranchName: "dev",
-        title: "feat: updated title",
-        body: "Updated body",
-        convertFromDraft: true,
-      }),
-      deps(),
-    );
+    const res = await handler(ctxFor(EXECUTE, await approvedPrBody(request, execution)), deps());
     const body = res.body as GitDeliveryPrExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(adapter.updates()).toBe(1);

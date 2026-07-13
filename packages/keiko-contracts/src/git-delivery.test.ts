@@ -18,6 +18,7 @@ import {
   isGitDeliveryAbortableOperation,
   isGitDeliveryActionKind,
   isGitDeliveryApprovalRequirement,
+  isGitDeliveryIssuedApproval,
   isGitDeliveryBlockReason,
   isGitDeliveryBranchMatchKind,
   isGitDeliveryBranchPattern,
@@ -147,6 +148,29 @@ describe("git-delivery branch-pattern and constraint guards", () => {
 });
 
 describe("git-delivery approval / policy-decision / evidence / execution-result guards", () => {
+  it("validates the content-free server-issued delivery approval response", () => {
+    expect(
+      isGitDeliveryIssuedApproval({
+        schemaVersion: "1",
+        actionKind: "commit",
+        approval: {
+          schemaVersion: "1",
+          approvalId: "gda_123",
+          approvalToken: "opaque-token",
+        },
+        expiresAtMs: 60_000,
+      }),
+    ).toBe(true);
+    expect(
+      isGitDeliveryIssuedApproval({
+        schemaVersion: "1",
+        actionKind: "merge",
+        approval: { schemaVersion: "1", approvalId: "gda_123", approvalToken: "opaque-token" },
+        expiresAtMs: 60_000,
+      }),
+    ).toBe(false);
+  });
+
   it("isGitDeliveryApprovalRequirement accepts both discriminants", () => {
     expect(isGitDeliveryApprovalRequirement({ required: false })).toBe(true);
     expect(

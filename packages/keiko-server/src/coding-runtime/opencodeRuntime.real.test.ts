@@ -23,6 +23,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -39,7 +40,10 @@ import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type { CodingToolResult } from "./codingToolIpc.js";
 import { createOpenCodeRuntimeComposition } from "./opencodeRuntimeComposition.js";
-import { hasExactOpenCodeVisibleToolContract } from "./opencodeToolSchemas.js";
+import {
+  hasExactOpenCodeVisibleToolContract,
+  OPENCODE_MODEL_VISIBLE_TOOLS,
+} from "./opencodeToolSchemas.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -120,7 +124,6 @@ interface DirectTree extends RuntimeProcessTree {
  */
 class DirectChildRuntimeBackend implements RuntimeProcessBackend {
   public readonly identity: RuntimeProcessBackend["identity"];
-  private nextTreeId = 0;
   private lastEnv: Readonly<Record<string, string>> | undefined;
   private stderr = "";
 
@@ -140,7 +143,7 @@ class DirectChildRuntimeBackend implements RuntimeProcessBackend {
       },
     );
     const tree: DirectTree = {
-      treeId: `functional-opencode-${String(this.nextTreeId++)}`,
+      treeId: request.recoveryHandle,
       child,
       stdout: child.stdout,
       stderr: child.stderr,
@@ -425,7 +428,7 @@ function normalResponse(): NormalizedResponse {
 
 function toolResponse(
   id: string,
-  name: "keiko_workspace_read" | "keiko_changeset_edit" | "question",
+  name: "keiko_workspace_read" | "keiko_changeset_edit" | "keiko_verification" | "question",
   args: Record<string, unknown>,
 ): NormalizedResponse {
   return {
@@ -438,7 +441,7 @@ function toolResponse(
 function scriptedProductiveResponse(): ProductiveResponseControl {
   const changeset = {
     patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@\n-old\n+new\n",
-    files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+    files: [{ file: "src/example.ts", expectedContentHash: sha256Text("old\n") }],
   };
   let held = false;
   let releaseResponse: (() => void) | undefined;
@@ -467,7 +470,11 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
         );
       if (callIndex === 2)
         return Promise.resolve(toolResponse("call-edit", "keiko_changeset_edit", { changeset }));
-      if (callIndex === 3) return Promise.resolve({ ...normalResponse(), content: "Completed." });
+      if (callIndex === 3)
+        return Promise.resolve(
+          toolResponse("call-verification", "keiko_verification", { verifierId: "test" }),
+        );
+      if (callIndex === 4) return Promise.resolve({ ...normalResponse(), content: "Completed." });
       return new Promise<NormalizedResponse>((resolve) => {
         held = true;
         releaseResponse = (): void => {
@@ -476,6 +483,10 @@ function scriptedProductiveResponse(): ProductiveResponseControl {
       });
     },
   };
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 async function createGatewayHarness(
@@ -492,6 +503,12 @@ async function createGatewayHarness(
   const summaries: string[] = [];
   const terminalFrames: string[] = [];
   const config = gatewayConfig();
+  const scriptedResponse = (request: GatewayRequest): Promise<NormalizedResponse> => {
+    requests.push(request);
+    const callIndex = providerCalls;
+    providerCalls += 1;
+    return script(request, callIndex);
+  };
   const deps = {
     config,
     configPresent: true,
@@ -506,14 +523,13 @@ async function createGatewayHarness(
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
-    codingSidecarGatewayChatFactory:
-      (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
-      (request): Promise<NormalizedResponse> => {
-        requests.push(request);
-        const callIndex = providerCalls;
-        providerCalls += 1;
-        return script(request, callIndex);
-      },
+    codingSidecarGatewayChatFactory: (): ((
+      request: GatewayRequest,
+    ) => Promise<NormalizedResponse>) => scriptedResponse,
+    codingSidecarGatewayChatStreamFactory:
+      (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+      (request): AsyncIterable<GatewayStreamChunk> =>
+        scriptedGatewayResponse(scriptedResponse(request)),
     runtimeCapabilityAuthenticator: {
       authenticate: (capability: string, audience: "model-gateway" | "tool-facade"): unknown =>
         capability === MODEL_CAPABILITY && audience === "model-gateway"
@@ -565,6 +581,12 @@ async function createGatewayHarness(
         });
       }),
   };
+}
+
+async function* scriptedGatewayResponse(
+  response: Promise<NormalizedResponse>,
+): AsyncGenerator<GatewayStreamChunk> {
+  yield { type: "done", response: await response };
 }
 
 async function serveGatewayRequest(
@@ -672,6 +694,24 @@ function gatewayRequestSummary(body: Buffer): string {
           })
           .join("|")
       : "missing";
+    const exactToolContract = Array.isArray(record.tools)
+      ? hasExactOpenCodeVisibleToolContract(
+          record.tools.map(
+            (
+              item,
+            ): {
+              readonly name: string;
+              readonly parameters: Readonly<Record<string, unknown>>;
+            } => {
+              const tool = item as { function?: { name?: unknown; parameters?: unknown } };
+              return {
+                name: typeof tool.function?.name === "string" ? tool.function.name : "invalid",
+                parameters: isRecord(tool.function?.parameters) ? tool.function.parameters : {},
+              };
+            },
+          ),
+        )
+      : false;
     const messages = Array.isArray(record.messages) ? record.messages : [];
     const roles = messages
       .map((message) => {
@@ -688,10 +728,35 @@ function gatewayRequestSummary(body: Buffer): string {
     });
     const streamOptions = record.stream_options;
     const includeUsage = streamOptionsIncludeUsage(streamOptions);
-    return `model=${model}:tools=${tools}:messages=${String(messages.length)}:roles=${roles}:title-generation=${String(titleGeneration)}:stream-options-include-usage=${String(includeUsage)}`;
+    return `model=${model}:tools=${tools}:exact-tool-contract=${String(exactToolContract)}:tool-schema-fingerprints=${toolSchemaFingerprints(record.tools)}:expected-tool-schema-fingerprints=${toolSchemaFingerprints(OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({ function: { name, parameters } })))}:messages=${String(messages.length)}:roles=${roles}:title-generation=${String(titleGeneration)}:stream-options-include-usage=${String(includeUsage)}`;
   } catch {
     return "body=invalid";
   }
+}
+
+function toolSchemaFingerprints(value: unknown): string {
+  if (!Array.isArray(value)) return "missing";
+  return value
+    .map((item) => {
+      const tool = item as { function?: { name?: unknown; parameters?: unknown } };
+      const name = typeof tool.function?.name === "string" ? tool.function.name : "invalid";
+      return `${name}:${schemaFingerprint(tool.function?.parameters)}`;
+    })
+    .sort()
+    .join("|");
+}
+
+function schemaFingerprint(value: unknown): string {
+  return createHash("sha256").update(stableSchemaJson(value)).digest("hex").slice(0, 12);
+}
+
+function stableSchemaJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSchemaJson).join(",")}]`;
+  if (typeof value !== "object" || value === null) return JSON.stringify(value);
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableSchemaJson(item)}`)
+    .join(",")}}`;
 }
 
 function streamOptionsIncludeUsage(value: unknown): boolean {
@@ -833,7 +898,9 @@ describe("[functional-only] real staged OpenCode runtime", () => {
       const workspaceRoot = join(root, "workspace");
       const stateBaseRoot = join(root, "state");
       mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
+      mkdirSync(join(workspaceRoot, "src"), { recursive: true, mode: 0o700 });
       mkdirSync(join(workspaceRoot, ".opencode"), { recursive: true, mode: 0o700 });
+      writeFileSync(join(workspaceRoot, "src", "example.ts"), "old\n");
       writeFileSync(join(workspaceRoot, "opencode.json"), '{"tools":{"bash":true}}\n');
       writeFileSync(join(workspaceRoot, ".opencode", "hostile.ts"), "export default {};\n");
       const portable = realPortableRuntime(root);
@@ -880,6 +947,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         const started = await Promise.resolve(
           runtime.manager.start({
             runId: RUN_ID,
+            recoveryHandle: "d".repeat(32),
             treeBindingId: TREE_BINDING_ID,
             taskRef: "issue-2254",
             workspaceRoot,
@@ -918,6 +986,11 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         await expect(runtime.runPort.submitTask(RUN_ID, firstPrompt)).resolves.toBe(true);
         const questionPort = runtime.runPort as unknown as TestQuestionRunPort;
         const pendingQuestions = await waitForQuestions(questionPort, AbortSignal.timeout(5_000));
+        if (pendingQuestions.length === 0) {
+          throw new Error(
+            `functional-opencode-question-missing:gateway-requests=${String(gateway.requests.length)}:gateway-calls=${String(gateway.calls())}:gateway-responses=${gateway.responses().join(",")}:gateway-summaries=${gateway.summaries().join(",")}:session-statuses=${sessionStatuses.join(",")}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(join(runRoot, "state", "opencode.db"))}`,
+          );
+        }
         expect(pendingQuestions).toHaveLength(1);
         expect(pendingQuestions[0]?.questions).toEqual([
           {
@@ -938,8 +1011,8 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             `functional-opencode-terminal-missing:terminal=${String(terminal)}:pending-after-answer=${String(pendingAfterAnswer)}:pending-after-final=${String(pendingAfterFinal)}:actions=${productiveActions.join(",")}:tool-statuses=${toolStatuses.join(",")}:gateway-requests=${String(gateway.requests.length)}:session-statuses=${sessionStatuses.join(",")}:stderr=${backend.redactedStderr()}:${runtimeDatabaseProjection(join(runRoot, "state", "opencode.db"))}`,
           );
         }
-        expect(productiveActions).toEqual(["read", "edit"]);
-        expect(gateway.requests).toHaveLength(4);
+        expect(productiveActions).toEqual(["read", "edit", "verification"]);
+        expect(gateway.requests).toHaveLength(5);
         expect(
           gateway.requests.every((request) => hasExactOpenCodeVisibleToolContract(request.tools)),
         ).toBe(true);
@@ -971,7 +1044,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             AbortSignal.timeout(5_000),
           ),
         ).resolves.toBe(true);
-        expect(gateway.requests).toHaveLength(5);
+        expect(gateway.requests).toHaveLength(6);
         expect(hasExactOpenCodeVisibleToolContract(gateway.requests.at(-1)?.tools)).toBe(true);
         await expect(runtime.runPort.abortTask(RUN_ID)).resolves.toBe(true);
         responseControl.release();
@@ -982,8 +1055,8 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             AbortSignal.timeout(5_000),
           ),
         ).resolves.toBe(true);
-        expect(productiveActions).toEqual(["read", "edit"]);
-        expect(toolStatuses).toEqual(["observed", "completed", "completed"]);
+        expect(productiveActions).toEqual(["read", "edit", "verification"]);
+        expect(toolStatuses).toEqual(["observed", "completed", "completed", "completed"]);
         expect(gateway.calls() - gateway.requests.length).toBe(1);
         expect(duplicateGovernedEffects).toBe(0);
         expect(sessionStatuses).toContain("status=");

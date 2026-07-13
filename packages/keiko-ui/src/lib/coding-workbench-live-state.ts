@@ -80,6 +80,18 @@ export interface CodingWorkbenchMutationState {
   readonly error: CodingWorkbenchClientError | null;
 }
 
+export type CodingWorkbenchTerminalOutcomeState =
+  "succeeded" | "failed" | "cancelled" | "taken-over";
+
+/** A bounded, content-free outcome survives server reaping until the operator starts or clears it. */
+export interface CodingWorkbenchTerminalOutcome {
+  readonly runId: string;
+  readonly state: CodingWorkbenchTerminalOutcomeState;
+  readonly revision: number;
+  readonly failureCode?: string | undefined;
+  readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
+}
+
 export interface CodingWorkbenchRuntimeState {
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
@@ -92,6 +104,7 @@ export interface CodingWorkbenchRuntimeState {
   readonly stream: CodingWorkbenchResourceState<CodingWorkbenchStreamProjection>;
   readonly mutation: CodingWorkbenchMutationState;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
+  readonly terminalOutcome: CodingWorkbenchTerminalOutcome | null;
   readonly canStart: boolean;
   readonly canRetry: boolean;
 }
@@ -131,7 +144,8 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "mutation-complete" }
   | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
-  | { readonly kind: "events-reset" };
+  | { readonly kind: "events-reset" }
+  | { readonly kind: "terminal-outcome-dismissed" };
 
 const emptyResource = <T>(
   status: CodingWorkbenchResourceStatus = "idle",
@@ -160,6 +174,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     stream: emptyResource(),
     mutation: IDLE_MUTATION,
     events: [],
+    terminalOutcome: null,
     canStart: false,
     canRetry: false,
   };
@@ -259,6 +274,70 @@ function resourceFailed(
   });
 }
 
+function terminalState(
+  state: CodingWorkbenchRuntimeStateName,
+): CodingWorkbenchTerminalOutcomeState | null {
+  if (
+    state === "succeeded" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "taken-over"
+  ) {
+    return state;
+  }
+  return null;
+}
+
+function terminalOutcome(
+  runId: string | undefined,
+  state: CodingWorkbenchRuntimeStateName,
+  revision: number,
+  failureCode: string | undefined,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchTerminalOutcome | null {
+  const terminal = terminalState(state);
+  if (runId === undefined || terminal === null) return null;
+  return {
+    runId,
+    state: terminal,
+    revision,
+    ...(failureCode === undefined ? {} : { failureCode }),
+    events: events.filter((event) => event.runId === runId),
+  };
+}
+
+function outcomeForSnapshot(
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchTerminalOutcome | null {
+  return terminalOutcome(
+    snapshot.runId,
+    snapshot.state,
+    snapshot.revision,
+    snapshot.failureCode,
+    events,
+  );
+}
+
+function outcomeForEvent(
+  event: CodingWorkbenchRuntimeSseEvent,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchTerminalOutcome | null {
+  return terminalOutcome(event.runId, event.state, event.revision, event.failureCode, events);
+}
+
+function newRunClearsOutcome(
+  outcome: CodingWorkbenchTerminalOutcome | null,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): boolean {
+  return (
+    outcome !== null &&
+    snapshot.runId !== undefined &&
+    snapshot.runId !== outcome.runId &&
+    snapshot.state !== "idle"
+  );
+}
+
 function acceptSnapshot(
   state: CodingWorkbenchRuntimeState,
   snapshot: CodingWorkbenchRuntimeSnapshot,
@@ -272,11 +351,31 @@ function acceptSnapshot(
     return state;
   }
   const changedRun = current?.runId !== snapshot.runId;
+  const capturedOutcome = outcomeForSnapshot(snapshot, state.events);
   return projectReadiness({
     ...state,
     run: ready(snapshot),
+    terminalOutcome:
+      capturedOutcome ??
+      (newRunClearsOutcome(state.terminalOutcome, snapshot) ? null : state.terminalOutcome),
     ...(changedRun ? { events: [], stream: emptyResource() } : {}),
   });
+}
+
+function receiveEvents(
+  state: CodingWorkbenchRuntimeState,
+  incoming: readonly CodingWorkbenchRuntimeSseEvent[],
+): CodingWorkbenchRuntimeState {
+  const events = retainCodingWorkbenchRuntimeEvents(state.events, incoming);
+  const runId = state.run.value?.runId;
+  const terminalEvent = [...incoming]
+    .reverse()
+    .find((event) => event.runId === runId && terminalState(event.state) !== null);
+  return {
+    ...state,
+    events,
+    terminalOutcome: terminalEvent ? outcomeForEvent(terminalEvent, events) : state.terminalOutcome,
+  };
 }
 
 type RuntimeActionHandlers = {
@@ -310,6 +409,9 @@ const runtimeActionHandlers = {
   "mutation-start": (state, action) =>
     projectReadiness({
       ...state,
+      ...(action.mutation === "start" || action.mutation === "retry"
+        ? { terminalOutcome: null }
+        : {}),
       mutation: {
         status: "pending",
         kind: action.mutation,
@@ -323,11 +425,9 @@ const runtimeActionHandlers = {
       ...state,
       mutation: { ...state.mutation, status: "error", error: action.error },
     }),
-  "events-received": (state, action) => ({
-    ...state,
-    events: retainCodingWorkbenchRuntimeEvents(state.events, action.events),
-  }),
+  "events-received": (state, action) => receiveEvents(state, action.events),
   "events-reset": (state) => ({ ...state, events: [], stream: emptyResource() }),
+  "terminal-outcome-dismissed": (state) => ({ ...state, terminalOutcome: null }),
 } satisfies RuntimeActionHandlers;
 
 export function codingWorkbenchRuntimeReducer(

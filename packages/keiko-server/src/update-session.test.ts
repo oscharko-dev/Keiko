@@ -205,6 +205,29 @@ describe("UpdateSessionManager", () => {
     expect(manager.getStatus().activeSession?.logs?.stdoutPreview).toContain("[REDACTED]");
   });
 
+  it("fails retryably before package mutation when the coding runtime is active", async () => {
+    const lock = new MemoryUpdateSessionLock();
+    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const manager = createUpdateSessionManager({
+      detector: () => supportedMode(),
+      codingRuntimeQuiescence: { isQuiescent: () => false },
+      lock,
+      runCommandImpl,
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "failed");
+
+    expect(runCommandImpl).not.toHaveBeenCalled();
+    expect(lock.isLocked()).toBe(false);
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "failed",
+      failureReason: "coding-runtime-not-quiescent",
+      retryable: true,
+      restartRequired: false,
+    });
+  });
+
   it("surfaces a restart command that targets the running port and state directory", () => {
     const manager = createUpdateSessionManager({
       processEnv: {
@@ -308,6 +331,69 @@ describe("UpdateSessionManager", () => {
       portableStage: { stageId: "stage-1", status: "staged" },
       portableActivation: { activationId: "activation-1", status: "activated" },
     });
+  });
+
+  it("does not activate a portable update when the runtime becomes active during staging", async () => {
+    let quiescent = true;
+    const lock = new MemoryUpdateSessionLock();
+    const stageSummary = portableStageSummary();
+    const stage = vi.fn<PortableUpdateStager["stage"]>().mockImplementation(() => {
+      quiescent = false;
+      return Promise.resolve(stageSummary);
+    });
+    const activate = vi.fn<PortableUpdateActivator["activate"]>();
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      codingRuntimeQuiescence: { isQuiescent: () => quiescent },
+      idFactory: () => "session-1",
+      lock,
+      portableStager: { stage },
+      portableActivator: { activate },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "failed");
+
+    expect(stage).toHaveBeenCalledOnce();
+    expect(activate).not.toHaveBeenCalled();
+    expect(lock.isLocked()).toBe(false);
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "failed",
+      failureReason: "coding-runtime-not-quiescent",
+      retryable: true,
+      portableStage: { stageId: "stage-1", status: "staged" },
+    });
+  });
+
+  it("fails closed without exposing a quiescence probe error before portable staging", async () => {
+    const lock = new MemoryUpdateSessionLock();
+    const stage = vi.fn<PortableUpdateStager["stage"]>();
+    const activate = vi.fn<PortableUpdateActivator["activate"]>();
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      codingRuntimeQuiescence: {
+        isQuiescent: () => {
+          throw new Error("SECRET runtime probe detail");
+        },
+      },
+      lock,
+      portableStager: { stage },
+      portableActivator: { activate },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "failed");
+
+    expect(stage).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+    expect(lock.isLocked()).toBe(false);
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "failed",
+      failureReason: "coding-runtime-not-quiescent",
+      retryable: true,
+    });
+    expect(JSON.stringify(manager.getStatus().lastSession)).not.toContain("SECRET");
   });
 
   it("finishes verified portable activation while remediation remains pending", async () => {

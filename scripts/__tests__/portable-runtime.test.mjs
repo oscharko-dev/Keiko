@@ -40,6 +40,7 @@ import {
   assemblePortableReleaseAssets,
   validatePortableReleaseSet,
 } from "../assemble-portable-release-assets.mjs";
+import { runtimeSupervisorQualificationReceiptBytes } from "../qualify-runtime-supervisor.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -611,6 +612,7 @@ function storedZipFixture(payloadSize) {
   return Buffer.concat([local, Buffer.alloc(payloadSize), central, end]);
 }
 
+// eslint-disable-next-line complexity -- fixture assembles every supported target and optional negative sidecar state.
 function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKind) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
@@ -639,6 +641,15 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
     writeFileSync(helperPath, `signed helper ${target.platformTarget}\n`);
     helper.shippedSha256 = digestFor(readFileSync(helperPath));
     helper.sizeBytes = statSync(helperPath).size;
+    const runtimeSupervisorPath = join(
+      resourceRoot,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    );
+    if (target.platformTarget === "windows-x64") {
+      writeFileSync(runtimeSupervisorPath, "signed runtime supervisor\n");
+    }
     syncReviewedBinding(candidate);
     if (index === 0 && unsafeSidecarKind !== undefined) {
       addSidecarRuntime(candidate, target.platformTarget);
@@ -709,6 +720,20 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
       `${JSON.stringify(portableVerificationSummaryForManifest(candidate))}\n`,
     );
     writeFileSync(join(stageRoot, "evidence", "provenance.intoto.jsonl"), provenance);
+    if (target.platformTarget === "windows-x64") {
+      writeFileSync(
+        join(stageRoot, "evidence", "runtime-supervisor-qualification.json"),
+        runtimeSupervisorQualificationReceiptBytes(
+          {
+            artifact: archivePath,
+            helper: runtimeSupervisorPath,
+            manifest: join(stageRoot, "manifest", "portable-manifest.json"),
+            resourceRoot,
+          },
+          target.platformTarget,
+        ),
+      );
+    }
   }
 }
 
@@ -745,6 +770,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
+      buildRuntimeSupervisorHelper: writeRuntimeSupervisorHelperFixture,
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
     },
@@ -757,6 +783,10 @@ function writePrimaryLauncherFixture(target, destination) {
 
 function writeSecureReadHelperFixture(target, destination) {
   writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
+}
+
+function writeRuntimeSupervisorHelperFixture(target, destination) {
+  writeFileSync(destination, `fixture runtime supervisor for ${target.platformTarget}\n`);
 }
 
 describe("portable native helper manifest", () => {
@@ -1575,9 +1605,34 @@ describe("assemblePortableReleaseAssets bounds", () => {
     const bundleRoot = tempDir();
     writeAssemblerFixture(bundleRoot, true);
 
-    await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
-      schemaVersion: 1,
+    const releaseSet = await assemblePortableReleaseAssets(args(bundleRoot));
+
+    expect(releaseSet.schemaVersion).toBe(1);
+    expect(releaseSet.artifacts[0]).toMatchObject({
+      platformTarget: "windows-x64",
+      evidencePaths: ["evidence/runtime-supervisor-qualification.json"],
     });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["stale", '{"result":"passed"}\n'],
+  ])("rejects a %s Windows runtime qualification receipt", async (_kind, replacement) => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const receipt = join(
+      bundleRoot,
+      "artifacts",
+      "portable-stage-windows-x64",
+      "evidence",
+      "runtime-supervisor-qualification.json",
+    );
+    if (replacement === undefined) rmSync(receipt);
+    else writeFileSync(receipt, replacement);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      /runtime qualification receipt/u,
+    );
   });
 
   it("rejects evidence larger than 16 MiB", async () => {
@@ -2317,6 +2372,19 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
     expect(existsSync(join(sidecarRoot, "opencode.cmd"))).toBe(true);
+    expect(
+      existsSync(
+        join(
+          outDir,
+          "windows-x64",
+          "payload",
+          "Keiko",
+          "runtime",
+          "native",
+          "keiko-runtime-supervisor.exe",
+        ),
+      ),
+    ).toBe(true);
     expect(
       JSON.parse(
         readFileSync(

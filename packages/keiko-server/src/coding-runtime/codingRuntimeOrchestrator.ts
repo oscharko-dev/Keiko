@@ -1,86 +1,48 @@
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
-import { createHash, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  isLegalCodingWorkbenchRuntimeTransition,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
-  validateCodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
-  type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type {
-  CodingRuntimeApprovalIssueRequest,
   CodingRuntimeApprovalIssueResult,
-  CodingRuntimeLaunchRequest,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
-import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import { startFreshRuntime, type ExecutionContext } from "./codingRuntimeOrchestratorExecution.js";
+import {
+  createRuntimeStateOperations,
+  type RuntimeStateOperations,
+} from "./codingRuntimeOrchestratorState.js";
+import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
-  CodingRuntimeSnapshot,
-  CodingRuntimeSnapshotStore,
-} from "./codingRuntimeSnapshotStore.js";
+  ApprovalChallenge,
+  CodingRuntimeOrchestratorDeps,
+  CodingRuntimeOrchestratorResult,
+  CodingRuntimeRecoveryResult,
+} from "./codingRuntimeOrchestratorTypes.js";
 
-export interface CodingRuntimeLaunchResolver {
-  /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
-  resolve(input: {
-    readonly runId: string;
-    readonly taskIntent: string;
-    readonly requestedMode: CodingWorkbenchRuntimeStartRequest["requestedMode"];
-    readonly runtimePreference?: CodingWorkbenchRuntimeStartRequest["runtimePreference"];
-    readonly workspaceId: string;
-    readonly workspaceRoot: string;
-    readonly serverPrincipal: string;
-  }): Omit<CodingRuntimeLaunchRequest, "runId" | "taskRef" | "workspaceRoot" | "requestedMode"> & {
-    readonly taskRef: string;
-  };
+export type {
+  CodingRuntimeApprovalAuthority,
+  CodingRuntimeLaunchResolver,
+  CodingRuntimeOrchestratorDeps,
+  CodingRuntimeOrchestratorResult,
+  CodingRuntimeRecoveryPort,
+  CodingRuntimeRecoveryResult,
+  CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskDispatchResult,
+  CodingRuntimeTaskOutcome,
+} from "./codingRuntimeOrchestratorTypes.js";
+
+function newRuntimeRunId(): string {
+  return `run-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`;
 }
-
-export interface CodingRuntimeApprovalAuthority {
-  readonly issue: (request: CodingRuntimeApprovalIssueRequest) => CodingRuntimeApprovalIssueResult;
-}
-
-export interface CodingRuntimeOrchestratorDeps {
-  readonly manager: CodingRuntimeManager;
-  /** Central authority shared with runtime mediation; never a runtime-local approval registry. */
-  readonly approvalAuthority: CodingRuntimeApprovalAuthority;
-  readonly eventHub: CodingRuntimeEventHub;
-  readonly snapshots: CodingRuntimeSnapshotStore;
-  readonly evidence: CodingRuntimeEvidenceAggregator;
-  readonly workspaceLifecycle: WorkspaceLifecycleService;
-  readonly launchResolver: CodingRuntimeLaunchResolver;
-  readonly serverPrincipal: () => string | undefined;
-  readonly now?: () => Date;
-  readonly newRunId?: () => string;
-}
-
-export type CodingRuntimeOrchestratorResult =
-  | { readonly ok: true; readonly snapshot: PublicSnapshot }
-  | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode };
-
-interface ApprovalChallenge {
-  readonly revision: number;
-  readonly expiresAt: number;
-  readonly permission: CodingWorkbenchRuntimePendingPermission;
-  used: boolean;
-}
-
-const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
-const terminal = new Set<CodingWorkbenchRuntimeStateName>([
-  "succeeded",
-  "failed",
-  "cancelled",
-  "taken-over",
-]);
 
 /**
  * Keeps all lifecycle mutation behind one promise tail. This deliberately provides no replay API:
@@ -90,12 +52,25 @@ export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
   private readonly approvals = new Map<string, ApprovalChallenge>();
+  private readonly containments = new Map<string, Promise<void>>();
   private readonly now: () => Date;
   private readonly newRunId: () => string;
+  private readonly state: RuntimeStateOperations;
 
   constructor(private readonly deps: CodingRuntimeOrchestratorDeps) {
     this.now = deps.now ?? ((): Date => new Date());
-    this.newRunId = deps.newRunId ?? ((): string => randomUUID());
+    this.newRunId = deps.newRunId ?? newRuntimeRunId;
+    this.state = createRuntimeStateOperations({
+      deps,
+      now: this.now,
+      approvals: this.approvals,
+      containments: this.containments,
+      activeRunId: () => this.activeRunId,
+      setActiveRunId: (runId: string | undefined): void => {
+        this.activeRunId = runId;
+      },
+      current: () => this.current(),
+    });
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
     this.activeRunId = deps.snapshots.listRecentActive(1)[0]?.runId;
@@ -108,7 +83,11 @@ export class CodingRuntimeOrchestrator {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
-      if (prior?.state !== "recovery-required" || !prior.recoveryAcknowledgedAt)
+      if (
+        prior?.state !== "recovery-required" ||
+        !prior.recoveryAcknowledgedAt ||
+        prior.recoveryHandle !== undefined
+      )
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
@@ -129,9 +108,8 @@ export class CodingRuntimeOrchestrator {
     return snapshot ? this.public(snapshot) : undefined;
   }
 
-  // eslint-disable-next-line max-lines-per-function -- Closed approval state transition.
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    // eslint-disable-next-line complexity, max-lines-per-function -- Closed approval state transition.
+    // eslint-disable-next-line complexity -- Closed approval state transition.
     return this.serial(async () => {
       const parsed = parseCodingWorkbenchRuntimeApprovalDecisionRequest(input);
       const current = this.current();
@@ -150,7 +128,8 @@ export class CodingRuntimeOrchestrator {
       challenge.used = true;
       if (parsed.value.decision === "approved") {
         const principal = this.deps.serverPrincipal();
-        if (!principal) return this.transition(current, "failed", "authority-resolution-failed");
+        if (!principal)
+          return this.terminateAndSettle(current, "failed", "authority-resolution-failed", true);
         let issued: CodingRuntimeApprovalIssueResult;
         try {
           issued = this.deps.approvalAuthority.issue({
@@ -164,35 +143,25 @@ export class CodingRuntimeOrchestrator {
             ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
           });
         } catch {
-          this.approvals.delete(current.runId);
-          try {
-            const stopped = await this.deps.manager.stop(current.runId);
-            return stopped.ok
-              ? this.transition(current, "failed", "authority-resolution-failed")
-              : this.transition(current, "recovery-required", "recovery-required");
-          } catch {
-            return this.transition(current, "recovery-required", "recovery-required");
-          }
+          return this.terminateAndSettle(current, "failed", "authority-resolution-failed", true);
         }
-        if (!issued.ok) return this.transition(current, "failed", "runtime-failed");
+        if (!issued.ok) return this.terminateAndSettle(current, "failed", "runtime-failed", true);
       }
       this.approvals.delete(current.runId);
-      return this.transition(
-        current,
-        parsed.value.decision === "approved" ? "running" : "failed",
-        parsed.value.decision === "approved" ? undefined : "revoked",
-      );
+      return parsed.value.decision === "approved"
+        ? this.transition(current, "running")
+        : this.terminateAndSettle(current, "failed", "revoked", true);
     });
   }
 
   stop(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.end("stop", runId, input);
+    return this.serial(() => this.end("stop", runId, input));
   }
   takeover(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.end("takeover", runId, input);
+    return this.serial(() => this.end("takeover", runId, input));
   }
   acknowledgeRecovery(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => {
+    return this.serial(async () => {
       const parsed = parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest(input);
       const current = this.current();
       if (
@@ -202,6 +171,7 @@ export class CodingRuntimeOrchestrator {
         current.state !== "recovery-required"
       )
         return this.fail("invalid-intent");
+      if (!(await this.reconcileRecovery(current))) return this.fail("recovery-required");
       this.deps.snapshots.acknowledgeRecovery(current.runId, this.now().toISOString());
       return { ok: true, snapshot: this.public(this.current()) };
     });
@@ -210,7 +180,7 @@ export class CodingRuntimeOrchestrator {
   /** Accepts only manager events for the current slot and projects no event content into durable state. */
   ingest(event: CodingWorkbenchRuntimeEvent): Promise<CodingRuntimeOrchestratorResult> {
     // eslint-disable-next-line complexity -- Closed runtime event state transition.
-    return this.serialValue(() => {
+    return this.serial(async () => {
       const current = this.current();
       if (event.runId !== current?.runId) return this.fail("invalid-intent");
       if (event.kind === "permission-requested") {
@@ -228,21 +198,32 @@ export class CodingRuntimeOrchestrator {
         if (!next.ok) this.approvals.delete(current.runId);
         return next;
       }
-      if (event.kind === "task-submitted") return this.transition(current, "running");
+      if (event.kind === "task-submitted")
+        return current.state === "running"
+          ? this.published(current, event.kind)
+          : this.transition(current, "running");
       if (event.kind === "runtime-stopped") return this.transition(current, "cancelled");
       if (event.kind === "failure-redacted")
-        return this.transition(current, "failed", "runtime-failed");
+        return this.terminateAndSettle(current, "failed", "runtime-failed", true);
       return this.publish(current, event.kind)
         ? { ok: true, snapshot: this.public(current) }
-        : this.transition(current, "recovery-required", "recovery-required");
+        : this.recoverAfterPublicationFailure(current);
     });
   }
 
   /** Startup containment: persisted nonterminal executions are never replayed. */
   startupReconcile(): Promise<void> {
-    return this.serial(() => {
+    return this.serial(async () => {
       this.startupReconcileNow();
-      return Promise.resolve();
+      const current = this.current();
+      if (current?.state === "recovery-required") await this.reconcileRecovery(current);
+    });
+  }
+
+  reconcileStartupRecovery(): Promise<void> {
+    return this.serial(async () => {
+      const current = this.current();
+      if (current?.state === "recovery-required") await this.reconcileRecovery(current);
     });
   }
 
@@ -277,90 +258,87 @@ export class CodingRuntimeOrchestrator {
   shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
     return current
-      ? this.end("stop", current.runId, { requestId: current.runId })
+      ? this.stop(current.runId, { requestId: current.runId })
       : Promise.resolve({ ok: true, snapshot: this.idle() });
   }
 
-  // eslint-disable-next-line complexity, max-lines-per-function -- Closed lifecycle state transition.
+  private async reconcileRecovery(snapshot: CodingRuntimeSnapshot): Promise<boolean> {
+    if (snapshot.recoveryHandle === undefined) return true;
+    await this.containments.get(snapshot.runId);
+    let managerResult: Awaited<ReturnType<CodingRuntimeManager["reconcile"]>>;
+    try {
+      managerResult = await this.deps.manager.reconcile(snapshot.runId);
+    } catch {
+      return false;
+    }
+    if (!managerResult.ok) return false;
+    let result: CodingRuntimeRecoveryResult;
+    try {
+      result = await this.deps.recovery.reconcile(snapshot.runId, snapshot.recoveryHandle);
+    } catch {
+      return false;
+    }
+    if (result.status !== "reaped" || result.recoveryHandle !== snapshot.recoveryHandle)
+      return false;
+    this.deps.snapshots.clearRecoveryHandle(
+      snapshot.runId,
+      snapshot.recoveryHandle,
+      this.now().toISOString(),
+    );
+    this.containments.delete(snapshot.runId);
+    return true;
+  }
+
+  private executionContext(): ExecutionContext {
+    return {
+      deps: this.deps,
+      now: this.now,
+      newRunId: this.newRunId,
+      activeRunId: () => this.activeRunId,
+      setActiveRunId: (runId: string | undefined): void => {
+        this.activeRunId = runId;
+      },
+      current: () => this.current(),
+      fail: (failureCode) => this.fail(failureCode),
+      publish: (snapshot) => this.publish(snapshot),
+      transition: (current, state, failureCode) => this.transition(current, state, failureCode),
+      transitionActive: (state, failureCode) => this.transitionActive(state, failureCode),
+      terminateAndSettle: (current, state, failureCode, abortTask) =>
+        this.terminateAndSettle(current, state, failureCode, abortTask),
+      serial: <T>(work: () => Promise<T>) => this.serial(work),
+    };
+  }
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
-    const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
-    if (!parsed.ok || this.activeRunId)
-      return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
-    const active = this.deps.workspaceLifecycle.getActive();
-    const principal = this.deps.serverPrincipal();
-    if (!active || !principal) return this.fail("authority-resolution-failed");
-    const runId = this.newRunId();
-    const now = this.now().toISOString();
-    let launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>;
-    try {
-      launch = this.deps.launchResolver.resolve({
-        runId,
-        taskIntent: parsed.value.taskIntent,
-        requestedMode: parsed.value.requestedMode,
-        ...(parsed.value.runtimePreference
-          ? { runtimePreference: parsed.value.runtimePreference }
-          : {}),
-        workspaceId: active.instance.workspaceId,
-        workspaceRoot: active.binding.activeRoot,
-        serverPrincipal: principal,
-      });
-    } catch {
-      return this.fail("authority-resolution-failed");
-    }
-    const snapshot: CodingRuntimeSnapshot = {
-      schemaVersion: "1",
-      runId,
-      state: "starting",
-      revision: 1,
-      requestedMode: parsed.value.requestedMode,
-      runtimeSource: launch.runtimeSource,
-      modelSource: launch.modelSource,
-      createdAt: now,
-      updatedAt: now,
-      taskDigest: DIGEST(launch.taskRef),
-      workspaceDigest: DIGEST(active.binding.activeRoot),
-      operatorDigest: DIGEST(principal),
-      authorityDigest: DIGEST(launch.treeBindingId),
-      bindingDigest: DIGEST(active.instance.workspaceId),
-      provenanceDigest: DIGEST(`${launch.adapterKind}:${launch.executablePath}`),
-      toolCallCount: 0,
-      patchByteCount: 0,
-      modelRequestCount: 0,
-      ...(predecessorRunId ? { predecessorRunId } : {}),
-    };
-    this.deps.snapshots.create(snapshot);
-    this.activeRunId = runId;
-    this.publish(snapshot);
-    let result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
-    try {
-      result = await this.deps.manager.start({
-        ...launch,
-        runId,
-        workspaceRoot: active.binding.activeRoot,
-        requestedMode: parsed.value.requestedMode,
-      });
-    } catch {
+    return startFreshRuntime(this.executionContext(), input, predecessorRunId);
+  }
+
+  private async terminateAndSettle(
+    current: CodingRuntimeSnapshot,
+    state: Extract<CodingWorkbenchRuntimeStateName, "cancelled" | "failed" | "succeeded">,
+    failureCode: CodingWorkbenchRuntimeFailureCode | undefined,
+    abortTask: boolean,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    this.approvals.delete(current.runId);
+    if (abortTask) {
       try {
-        await this.deps.manager.reconcile(runId);
+        await this.deps.taskDispatcher.abort(current.runId);
       } catch {
-        // Recovery-required remains the only safe projection when host containment cannot be proven.
+        // The manager result below remains the authoritative full-tree reap proof.
       }
-      return this.transitionActive("recovery-required", "recovery-required");
     }
-    if (result.ok && result.runId !== runId) {
-      try {
-        await this.deps.manager.reconcile(result.runId);
-      } catch {
-        // A mismatched host success cannot be trusted; recovery remains fail-closed.
-      }
-      return this.transitionActive("recovery-required", "recovery-required");
+    let stopped: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined;
+    try {
+      stopped = await this.deps.manager.stop(current.runId);
+    } catch {
+      stopped = undefined;
     }
-    return result.ok
-      ? this.transitionActive("ready")
-      : this.transitionActive("failed", "runtime-failed");
+    return stopped?.ok
+      ? this.transition(current, state, failureCode)
+      : this.transition(current, "recovery-required", "recovery-required");
   }
 
   // eslint-disable-next-line complexity -- Closed stop/takeover state transition.
@@ -383,6 +361,11 @@ export class CodingRuntimeOrchestrator {
         ? this.transition(current, "stopping")
         : { ok: true as const, snapshot: this.public(current) };
     if (!stopping.ok) return stopping;
+    try {
+      await this.deps.taskDispatcher.abort(current.runId);
+    } catch {
+      // The manager remains authoritative for revocation and complete-tree reap.
+    }
     let result: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined;
     try {
       result =
@@ -400,120 +383,49 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): CodingRuntimeOrchestratorResult {
-    const current = this.current();
-    return current ? this.transition(current, state, failureCode) : this.fail("runtime-failed");
+    return this.state.transitionActive(state, failureCode);
   }
-  // eslint-disable-next-line complexity -- Closed runtime state transition.
   private transition(
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): CodingRuntimeOrchestratorResult {
-    if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state))
-      return this.fail("invalid-intent");
-    const next = this.deps.snapshots.transition(current.runId, {
-      state,
-      revision: current.revision + 1,
-      updatedAt: this.now().toISOString(),
-      ...(failureCode ? { failureCode } : {}),
-    });
-    const published = this.publish(next);
-    this.deps.evidence.observe(next.runId, {
-      kind: "state-transition",
-      state,
-      ...(failureCode ? { failureCode } : {}),
-    });
-    if (!published && !terminal.has(state) && state !== "recovery-required") {
-      return this.transition(next, "recovery-required", "recovery-required");
-    }
-    if (terminal.has(state) || state === "recovery-required") {
-      this.deps.evidence.settle({
-        runId: next.runId,
-        state,
-        revision: next.revision,
-        settledAt: next.updatedAt,
-        ...(failureCode ? { failureCode } : {}),
-        taskDigest: next.taskDigest,
-        workspaceDigest: next.workspaceDigest,
-        operatorDigest: next.operatorDigest,
-        authorityDigest: next.authorityDigest,
-        bindingDigest: next.bindingDigest,
-        provenanceDigest: next.provenanceDigest,
-      });
-      if (terminal.has(state)) this.activeRunId = undefined;
-      this.approvals.delete(next.runId);
-      this.pruneSettled();
-    }
-    return { ok: true, snapshot: this.public(next) };
+    return this.state.transition(current, state, failureCode);
+  }
+  private beginContainment(runId: string): void {
+    this.state.beginContainment(runId);
   }
   private publish(
     snapshot: CodingRuntimeSnapshot,
     eventKind?: CodingWorkbenchRuntimeEvent["kind"],
   ): boolean {
-    return this.deps.eventHub.publish(
-      eventKind
-        ? {
-            schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-            kind: "runtime-event",
-            runId: snapshot.runId,
-            state: snapshot.state,
-            revision: snapshot.revision,
-            eventKind,
-          }
-        : {
-            schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-            kind: "status",
-            runId: snapshot.runId,
-            state: snapshot.state,
-            revision: snapshot.revision,
-            ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-          },
-    ).ok;
+    return this.state.publish(snapshot, eventKind);
+  }
+  private published(
+    snapshot: CodingRuntimeSnapshot,
+    eventKind: CodingWorkbenchRuntimeEvent["kind"],
+  ): CodingRuntimeOrchestratorResult {
+    return this.state.published(snapshot, eventKind);
+  }
+  private recoverAfterPublicationFailure(
+    snapshot: CodingRuntimeSnapshot,
+  ): CodingRuntimeOrchestratorResult {
+    return this.state.recoverAfterPublicationFailure(snapshot);
   }
   private pruneSettled(): void {
-    const pruned = this.deps.snapshots.listPrunableSettled();
-    if (pruned.length > 0) {
-      this.deps.evidence.deletePruned(pruned);
-      this.deps.eventHub.deleteRuns(pruned);
-      this.deps.snapshots.deletePruned(pruned);
-    }
+    this.state.pruneSettled();
   }
   private current(): CodingRuntimeSnapshot | undefined {
     return this.activeRunId ? this.deps.snapshots.get(this.activeRunId) : undefined;
   }
   private public(snapshot: CodingRuntimeSnapshot | undefined): PublicSnapshot {
-    if (!snapshot) return this.idle();
-    const out: PublicSnapshot = {
-      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-      state: snapshot.state,
-      revision: snapshot.revision,
-      updatedAt: snapshot.updatedAt,
-      runId: snapshot.runId,
-      requestedMode: snapshot.requestedMode,
-      runtimeSource: snapshot.runtimeSource,
-      modelSource: snapshot.modelSource,
-      ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-      ...(snapshot.state === "recovery-required" && snapshot.recoveryAcknowledgedAt
-        ? { recoveryAcknowledged: true as const }
-        : {}),
-      ...(snapshot.state === "awaiting-approval" && this.approvals.get(snapshot.runId)
-        ? { pendingPermission: this.approvals.get(snapshot.runId)?.permission }
-        : {}),
-    };
-    if (!validateCodingWorkbenchRuntimeSnapshot(out).ok)
-      throw new Error("invalid runtime snapshot projection");
-    return out;
+    return this.state.public(snapshot);
   }
   private idle(): PublicSnapshot {
-    return {
-      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-      state: "idle",
-      revision: 0,
-      updatedAt: this.now().toISOString(),
-    };
+    return this.state.idle();
   }
   private fail(failureCode: CodingWorkbenchRuntimeFailureCode): CodingRuntimeOrchestratorResult {
-    return { ok: false, failureCode };
+    return this.state.fail(failureCode);
   }
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const result = this.tail.then(work, work);
@@ -522,9 +434,6 @@ export class CodingRuntimeOrchestrator {
       () => undefined,
     );
     return result;
-  }
-  private serialValue<T>(work: () => T): Promise<T> {
-    return this.serial(() => Promise.resolve(work()));
   }
 }
 

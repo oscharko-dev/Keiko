@@ -7,7 +7,7 @@ import {
 } from "./coding-workbench-i18n";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
-import styles from "./CodingWorkbenchWindow.module.css";
+import styles from "./codingWorkbenchStyles";
 
 const VIRTUAL_THRESHOLD = 100;
 const VISIBLE_ROWS = 96;

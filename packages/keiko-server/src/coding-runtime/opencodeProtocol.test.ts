@@ -273,6 +273,24 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     });
   });
 
+  it("accepts the pinned runtime's exact empty legacy session path without widening its shape", () => {
+    const live = sessionData();
+    const info = live.info as Record<string, unknown>;
+
+    expect(
+      parseOpenCodeHistory([
+        syncRow(1, "session.updated.1", { ...live, info: { ...info, path: "" } }),
+      ]),
+    ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+    for (const path of [undefined, null, 0, false, []]) {
+      const mutated = { ...info, path };
+      if (path === undefined) Reflect.deleteProperty(mutated, "path");
+      expect(
+        parseOpenCodeHistory([syncRow(1, "session.updated.1", { ...live, info: mutated })]),
+      ).toEqual({ ok: false, reason: "event-unknown" });
+    }
+  });
+
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
     const sentinel = "SENTINEL_PRIVATE_TOOL_INPUT_AND_OUTPUT";
     const parsed = parseOpenCodeHistory([

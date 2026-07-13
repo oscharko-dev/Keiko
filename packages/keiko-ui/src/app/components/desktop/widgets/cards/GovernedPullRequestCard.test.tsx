@@ -9,6 +9,7 @@ import { GovernedPullRequestCard, type GovernedPullRequestClient } from "./Gover
 import {
   ApiError,
   type GitDeliveryPrExecuteResponse,
+  type GitDeliveryPrInput,
   type GitDeliveryPrPreviewResponse,
 } from "@/lib/api";
 
@@ -48,9 +49,23 @@ function makeExecute(
   };
 }
 
+function makeApproval(
+  actionKind: GitDeliveryPrInput["kind"],
+): Awaited<ReturnType<GovernedPullRequestClient["prApproval"]>> {
+  return {
+    schemaVersion: "1",
+    actionKind,
+    approval: { schemaVersion: "1", approvalId: "gda_1", approvalToken: "one" },
+    expiresAtMs: 1_000,
+  };
+}
+
 function makeClient(overrides: Partial<GovernedPullRequestClient> = {}): GovernedPullRequestClient {
   return {
     prPreview: vi.fn(async () => makePreview()),
+    prApproval: vi.fn<GovernedPullRequestClient["prApproval"]>(async (input) =>
+      makeApproval(input.kind),
+    ),
     prExecute: vi.fn(async () => makeExecute({ createdPrExternalId: "1499" })),
     ...overrides,
   };

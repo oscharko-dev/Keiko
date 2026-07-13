@@ -178,6 +178,83 @@ describe("Coding Workbench live state", () => {
     expect(next.stream).toMatchObject({ status: "idle", value: null });
   });
 
+  it("retains a content-free terminal outcome when the server reaps the run to idle", () => {
+    let state = codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      kind: "run-set",
+      snapshot: snapshot({ state: "running", pendingPermission: undefined }),
+    });
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "events-received",
+      events: [
+        {
+          ...event(2),
+          state: "succeeded",
+          eventKind: "verification-summarized",
+          revision: 5,
+        },
+        {
+          ...event(3),
+          kind: "status",
+          state: "succeeded",
+          revision: 6,
+        },
+      ],
+    });
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "run-set",
+      snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+    });
+
+    expect(state.run.value).toMatchObject({ state: "idle", runId: undefined });
+    expect(state.events).toEqual([]);
+    expect(state.terminalOutcome).toMatchObject({
+      runId: "run-1",
+      state: "succeeded",
+      revision: 6,
+      events: [
+        { eventKind: "verification-summarized", state: "succeeded" },
+        { kind: "status", state: "succeeded" },
+      ],
+    });
+  });
+
+  it.each(["cancelled", "failed", "taken-over"] as const)(
+    "retains %s as a distinguishable terminal outcome",
+    (terminalState) => {
+      const state = codingWorkbenchRuntimeReducer(
+        codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+          kind: "run-set",
+          snapshot: snapshot({ state: terminalState, pendingPermission: undefined }),
+        }),
+        { kind: "run-set", snapshot: snapshot({ state: "idle", runId: undefined }) },
+      );
+
+      expect(state.terminalOutcome?.state).toBe(terminalState);
+    },
+  );
+
+  it("clears a retained terminal outcome only on a fresh start or explicit dismissal", () => {
+    const terminal = codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      kind: "run-set",
+      snapshot: snapshot({ state: "succeeded", pendingPermission: undefined }),
+    });
+    const retained = codingWorkbenchRuntimeReducer(terminal, {
+      kind: "run-set",
+      snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+    });
+    const dismissed = codingWorkbenchRuntimeReducer(retained, {
+      kind: "terminal-outcome-dismissed",
+    });
+    const restarted = codingWorkbenchRuntimeReducer(retained, {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "request-1",
+    });
+
+    expect(dismissed.terminalOutcome).toBeNull();
+    expect(restarted.terminalOutcome).toBeNull();
+  });
+
   it("enables recovery Retry only after a server-confirmed acknowledgement", () => {
     const unacknowledged = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "run-set",

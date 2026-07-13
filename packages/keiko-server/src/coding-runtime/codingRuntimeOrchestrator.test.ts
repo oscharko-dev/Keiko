@@ -5,6 +5,10 @@ import type {
   CodingRuntimeSnapshotStore,
 } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type {
+  CodingRuntimeRecoveryPort,
+  CodingRuntimeTaskDispatcher,
+} from "./codingRuntimeOrchestratorTypes.js";
 import {
   createCodingRuntimeOrchestrator,
   type CodingRuntimeOrchestratorResult,
@@ -24,7 +28,10 @@ function rowFor(
   return row;
 }
 
-function fixture() {
+function fixture(
+  serverPrincipal: () => string | undefined = () => "server",
+  useDefaultRunId = false,
+) {
   const rows = new Map<string, CodingRuntimeSnapshot>();
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -57,6 +64,15 @@ function fixture() {
     acknowledgeRecovery: (id, at) => {
       const row = rowFor(rows, id);
       const next = { ...row, recoveryAcknowledgedAt: at };
+      rows.set(id, next);
+      return next;
+    },
+    clearRecoveryHandle: (id, recoveryHandle, at) => {
+      const row = rowFor(rows, id);
+      if (row.recoveryHandle !== recoveryHandle) throw new Error("recovery handle mismatch");
+      const { recoveryHandle: _cleared, ...retained } = row;
+      void _cleared;
+      const next = { ...retained, updatedAt: at, revision: row.revision + 1 };
       rows.set(id, next);
       return next;
     },
@@ -105,6 +121,7 @@ function fixture() {
   const launchResolver = {
     resolve: vi.fn(() => ({
       taskRef: "task-1",
+      recoveryHandle: "d".repeat(32),
       treeBindingId: "tree",
       adapterKind: "codex-cli",
       runtimeSource: "codex-cli-adapter",
@@ -120,6 +137,21 @@ function fixture() {
       startTimeoutMs: 1,
     })),
   };
+  let completeTask: ((outcome: "cancelled" | "failed" | "succeeded") => void) | undefined;
+  const completion = new Promise<"cancelled" | "failed" | "succeeded">((resolve) => {
+    completeTask = resolve;
+  });
+  const taskDispatcher = {
+    dispatch: vi.fn<CodingRuntimeTaskDispatcher["dispatch"]>(() =>
+      Promise.resolve({ ok: true as const, completion }),
+    ),
+    abort: vi.fn(() => Promise.resolve(true)),
+  };
+  const recovery = {
+    reconcile: vi.fn<CodingRuntimeRecoveryPort["reconcile"]>(() =>
+      Promise.resolve({ status: "reaped" as const, recoveryHandle: "d".repeat(32) }),
+    ),
+  };
   const orchestrator = createCodingRuntimeOrchestrator({
     manager: manager,
     approvalAuthority,
@@ -133,9 +165,11 @@ function fixture() {
       }),
     } as never,
     launchResolver: launchResolver as never,
-    serverPrincipal: () => "server",
+    taskDispatcher,
+    recovery,
+    serverPrincipal,
     now: () => new Date("2026-01-01T00:00:00.000Z"),
-    newRunId: () => `run-${String(rows.size + 1)}`,
+    ...(useDefaultRunId ? {} : { newRunId: (): string => `run-${String(rows.size + 1)}` }),
   });
   return {
     orchestrator,
@@ -145,6 +179,9 @@ function fixture() {
     evidence,
     eventHub,
     launchResolver,
+    taskDispatcher,
+    recovery,
+    completeTask: (outcome: "cancelled" | "failed" | "succeeded") => completeTask?.(outcome),
     listPrunableSettled,
     deletePruned,
   };
@@ -157,6 +194,89 @@ const start = {
 } as const;
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("creates a decimal-only safe run id before authority, manager, and task dispatch", async () => {
+    const f = fixture(undefined, true);
+    const result = successfulSnapshot(await f.orchestrator.start(start));
+
+    expect(result.runId).toMatch(/^run-[0-9]+$/u);
+    expect(f.manager.start).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId }));
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(result.runId, start.taskIntent);
+  });
+
+  it("mints, waits for manager readiness, then dispatches transient task intent to terminal", async () => {
+    const f = fixture();
+    const order: string[] = [];
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      order.push("mint");
+      return {
+        taskRef: "task-1",
+        recoveryHandle: "d".repeat(32),
+        treeBindingId: "tree",
+        adapterKind: "codex-cli",
+        runtimeSource: "codex-cli-adapter",
+        modelSource: "keiko-model-gateway",
+        effectiveMode: "supervised-coding",
+        executablePath: "/bin/runtime",
+        managedRoot: "/managed",
+        gatewayUrl: "http://127.0.0.1",
+        modelProfileId: "profile",
+        args: [],
+        inheritedEnvAllowlist: [],
+        shutdownTimeoutMs: 1,
+        startTimeoutMs: 1,
+      };
+    });
+    f.manager.start.mockImplementationOnce((request) => {
+      order.push("manager-ready");
+      return { ok: true, runId: request.runId, status: "ready" };
+    });
+    f.taskDispatcher.dispatch.mockImplementationOnce((runId: string, taskIntent: string) => {
+      order.push(`dispatch:${runId}:${taskIntent}`);
+      return Promise.resolve({
+        ok: true as const,
+        completion: Promise.resolve("succeeded" as const),
+      });
+    });
+
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("running");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(order).toEqual(["mint", "manager-ready", "dispatch:run-1:fix the bounded issue"]);
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
+  });
+
+  it("blocks task dispatch and contains the manager when ready publication fails", async () => {
+    const f = fixture();
+    f.eventHub.publish.mockReturnValueOnce({ ok: true }).mockReturnValueOnce({ ok: false });
+
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("recovery-required");
+
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    });
+  });
+
+  it("aborts and reaps a dispatched task when running publication fails", async () => {
+    const f = fixture();
+    f.eventHub.publish
+      .mockReturnValueOnce({ ok: true })
+      .mockReturnValueOnce({ ok: true })
+      .mockReturnValueOnce({ ok: false });
+
+    expect(successfulSnapshot(await f.orchestrator.start(start)).state).toBe("recovery-required");
+
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith("run-1", start.taskIntent);
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    f.completeTask("succeeded");
+    await Promise.resolve();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+  });
+
   it("enforces one active slot and never persists task intent", async () => {
     const f = fixture();
     expect((await f.orchestrator.start(start)).ok).toBe(true);
@@ -265,17 +385,130 @@ describe("CodingRuntimeOrchestrator", () => {
       }),
     ).toMatchObject({ ok: true, snapshot: { state: "failed", failureCode: "runtime-failed" } });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.taskDispatcher.abort.mock.invocationCallOrder[0]).toBeLessThan(
+      f.manager.stop.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it("reaps the waiting runtime when approval identity can no longer be resolved", async () => {
+    let principal: string | undefined = "server";
+    const f = fixture(() => principal);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-principal",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-4",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    principal = undefined;
+
+    expect(
+      successfulSnapshot(
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-4",
+          decision: "approved",
+          expectedRevision: 4,
+        }),
+      ),
+    ).toMatchObject({ state: "failed", failureCode: "authority-resolution-failed" });
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+  });
+
+  it("reaps an operator denial and retains the active slot when full-tree reap is unproven", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission-denied",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+
+    expect(
+      successfulSnapshot(
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-denied",
+          decision: "denied",
+          expectedRevision: 4,
+        }),
+      ).state,
+    ).toBe("recovery-required");
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(await f.orchestrator.start({ ...start, requestId: "request-blocked" })).toEqual({
+      ok: false,
+      failureCode: "active-run-conflict",
+    });
+  });
+
+  it("requires full-tree reap before natural task completion becomes terminal", async () => {
+    const f = fixture();
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    await f.orchestrator.start(start);
+
+    f.completeTask("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
   });
 
   it("requires recovery acknowledgement before fresh retry and records a predecessor", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
+    f.recovery.reconcile
+      .mockResolvedValueOnce({ status: "unreaped" })
+      .mockResolvedValueOnce({ status: "unreaped" });
     await f.orchestrator.startupReconcile();
     expect(await f.orchestrator.retry("run-1", start)).toEqual({
       ok: false,
       failureCode: "invalid-intent",
     });
-    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+    expect(
+      await f.orchestrator.acknowledgeRecovery("run-1", {
+        requestId: "run-1",
+        acknowledged: true,
+      }),
+    ).toEqual({ ok: false, failureCode: "recovery-required" });
+    f.recovery.reconcile.mockResolvedValueOnce({
+      status: "reaped",
+      recoveryHandle: "d".repeat(32),
+    });
+    await f.orchestrator.acknowledgeRecovery("run-1", {
+      requestId: "run-1",
+      acknowledged: true,
+    });
     await f.orchestrator.retry("run-1", {
       ...start,
       requestId: "request-2",
@@ -352,6 +585,49 @@ describe("CodingRuntimeOrchestrator", () => {
       "recovery-required",
     );
     expect(mismatched.manager.reconcile).toHaveBeenCalledWith("run-foreign");
+
+    const nonOk = fixture();
+    nonOk.manager.start.mockReturnValueOnce({
+      ok: false,
+      failureCode: "spawn-failed",
+      retryable: true,
+    });
+    nonOk.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(successfulSnapshot(await nonOk.orchestrator.start(start)).state).toBe(
+      "recovery-required",
+    );
+    expect(nonOk.manager.stop).toHaveBeenCalledWith("run-1");
+  });
+
+  it("does not trust a redacted failure event as full-tree reap proof", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+
+    expect(
+      successfulSnapshot(
+        await f.orchestrator.ingest({
+          schemaVersion: "1",
+          eventId: "adapter-failed",
+          runId: "run-1",
+          occurredAt: "2026-01-01T00:00:00.000Z",
+          kind: "failure-redacted",
+          failureCode: "runtime-failed",
+          failureSummary: "runtime-failed",
+          retryable: false,
+        }),
+      ).state,
+    ).toBe("recovery-required");
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
   });
 
   it("contains a throwing central approval authority and terminates the waiting runtime", async () => {
@@ -394,6 +670,7 @@ describe("CodingRuntimeOrchestrator", () => {
       failureCode: "authority-resolution-failed",
     });
     expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
   });
 
   it("moves to recovery when event admission fails and deletes evidence for pruned runs", async () => {
@@ -411,6 +688,29 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       ).state,
     ).toBe("recovery-required");
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.abort).toHaveBeenCalledWith("run-1");
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    });
+    f.manager.reconcile.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(
+      await f.orchestrator.acknowledgeRecovery("run-1", {
+        requestId: "run-1",
+        acknowledged: true,
+      }),
+    ).toEqual({ ok: false, failureCode: "recovery-required" });
+    expect(
+      await f.orchestrator.acknowledgeRecovery("run-1", {
+        requestId: "run-1",
+        acknowledged: true,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(f.manager.reconcile).toHaveBeenCalledWith("run-1");
+    expect(f.recovery.reconcile).toHaveBeenCalledWith("run-1", "d".repeat(32));
 
     f.listPrunableSettled.mockReturnValueOnce(["run-old"]);
     f.orchestrator.startupReconcileNow();

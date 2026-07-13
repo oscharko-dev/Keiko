@@ -168,6 +168,30 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
+  it("cannot execute a commit through the agent facade without server-issued approval", async () => {
+    const result = await handleGitAgentOperation(
+      ctx(
+        request({
+          operation: "commit",
+          mode: "execute",
+          idempotencyKey: "commit-without-approval",
+          payload: { message: "feat: unapproved" },
+        }),
+      ),
+      deps(),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        status: "delegated",
+        operation: "commit",
+        routeStatus: 400,
+        response: { error: { code: "GIT_DELIVERY_COMMIT_BAD_REQUEST" } },
+      },
+    });
+  });
+
   it("requires execute idempotency and conflicts reused keys with different bodies", async () => {
     const firstBody = request({
       operation: "branch-switch",

@@ -16,6 +16,7 @@ import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import type { Server, IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { GitDeliveryIssuedApproval } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { GitPublishExecResult, GitRemotePublishAdapter } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -24,7 +25,15 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
-import { createHandlePushExecute, createHandlePushPreview } from "./pushRoutes.js";
+import {
+  createHandlePushApproval,
+  createHandlePushExecute,
+  createHandlePushPreview,
+} from "./pushRoutes.js";
+import {
+  createInMemoryGitDeliveryApprovalStore,
+  type GitDeliveryApprovalStore,
+} from "./approvalStore.js";
 import type {
   GitDeliveryPushExecuteResponseBody,
   GitDeliveryPushPreviewBody,
@@ -127,6 +136,9 @@ function seams(overrides: Partial<GitDeliveryPublishSeams> = {}): GitDeliveryPub
     snapshotReader: () => Promise.resolve(SNAPSHOT),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-test-1",
+    approvalStore: createInMemoryGitDeliveryApprovalStore(),
+    approvalFactsReader: () =>
+      Promise.resolve({ headRefHash: "a".repeat(40), stagedStateSha256: "b".repeat(64) }),
     ...overrides,
   };
 }
@@ -139,6 +151,31 @@ function pushBody(overrides: Record<string, unknown> = {}): Record<string, unkno
     remoteBranchName: "feat/x",
     sourceBranchName: "feat/x",
     ...overrides,
+  };
+}
+
+async function approvedPushBody(
+  body: Record<string, unknown>,
+  execution: GitDeliveryPublishSeams,
+  handlerDeps = deps(),
+): Promise<Record<string, unknown>> {
+  const issued = await createHandlePushApproval({ execution })(
+    ctxFor("/api/git-delivery/push/approval", { ...body, confirmed: true }),
+    handlerDeps,
+  );
+  expect(issued.status).toBe(201);
+  return { ...body, approval: (issued.body as GitDeliveryIssuedApproval).approval };
+}
+
+function consumeThen(effect: () => void): GitDeliveryApprovalStore {
+  const store = createInMemoryGitDeliveryApprovalStore();
+  return {
+    issue: (input) => store.issue(input),
+    consume: (input): ReturnType<GitDeliveryApprovalStore["consume"]> => {
+      const consumed = store.consume(input);
+      if (consumed !== undefined) effect();
+      return consumed;
+    },
   };
 }
 
@@ -186,17 +223,15 @@ describe("push routes — central enforcement", () => {
   it("does not require a deployment enable flag before checking the worktree", async () => {
     await closeServer();
     await startBound({ env: {} });
-    for (const path of [PREVIEW, EXECUTE]) {
-      const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(pushBody()),
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        error: { code: "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE" },
-      });
-    }
+    const res = await fetch(`http://${UI_HOST}:${String(port)}${PREVIEW}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify(pushBody()),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: { code: "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE" },
+    });
   });
 
   it("403s without the central CSRF header", async () => {
@@ -247,11 +282,11 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
   it("executes a permitted user-namespace push and records evidence (AC5)", async () => {
     const adapter = recordingPublishAdapter();
     const cap = capturingEvidenceStore();
-    const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
-    });
+    const execution = seams({ publishAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody({ setUpstreamTracking: true });
     const res = await handler(
-      ctxFor(EXECUTE, pushBody({ setUpstreamTracking: true })),
+      ctxFor(EXECUTE, await approvedPushBody(request, execution)),
       deps({ evidenceStore: cap.store }),
     );
     expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
@@ -259,14 +294,47 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(cap.count()).toBe(1);
   });
 
+  it("revalidates the approved context after consume before publishing", async () => {
+    const adapter = recordingPublishAdapter();
+    let liveSnapshot = SNAPSHOT;
+    const approvalStore = consumeThen(() => {
+      liveSnapshot = { ...SNAPSHOT, aheadCount: 2 };
+    });
+    const execution = seams({
+      approvalStore,
+      publishAdapterFactory: () => adapter.adapter,
+      snapshotReader: () => Promise.resolve(liveSnapshot),
+    });
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody();
+    const approved = await approvedPushBody(request, execution);
+
+    const drifted = await handler(ctxFor(EXECUTE, approved), deps());
+    expect(drifted.body).toMatchObject({
+      status: "recovery-required",
+      executionErrorCode: "precondition-failed",
+    });
+    expect(drifted.body).not.toHaveProperty("publishRejectionReason");
+    expect(adapter.calls()).toBe(0);
+
+    const replay = await handler(ctxFor(EXECUTE, approved), deps());
+    expect(replay.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+
+    const freshlyApproved = await approvedPushBody(request, execution);
+    const retried = await handler(ctxFor(EXECUTE, freshlyApproved), deps());
+    expect(retried.body).toMatchObject({ status: "succeeded" });
+    expect(adapter.calls()).toBe(1);
+  });
+
   it("blocks a protected/shared target by the default pack, executing nothing yet recording evidence (AC2/AC5)", async () => {
     const adapter = recordingPublishAdapter();
     const cap = capturingEvidenceStore();
-    const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
-    });
+    const execution = seams({ publishAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody({ remoteBranchName: "dev" });
     const res = await handler(
-      ctxFor(EXECUTE, pushBody({ remoteBranchName: "dev" })),
+      ctxFor(EXECUTE, await approvedPushBody(request, execution)),
       deps({ evidenceStore: cap.store }),
     );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
@@ -278,10 +346,10 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
 
   it("blocks a force push and never invokes the remote adapter (AC4)", async () => {
     const adapter = recordingPublishAdapter();
-    const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
-    });
-    const res = await handler(ctxFor(EXECUTE, pushBody({ forcePush: true })), deps());
+    const execution = seams({ publishAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody({ forcePush: true });
+    const res = await handler(ctxFor(EXECUTE, await approvedPushBody(request, execution)), deps());
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("blocked");
     expect(body.blockReason).toBe("risk-class-ceiling");
@@ -313,13 +381,13 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
 
   it("blocks a non-fast-forward push at preflight, executing nothing (AC5)", async () => {
     const adapter = recordingPublishAdapter();
-    const handler = createHandlePushExecute({
-      execution: seams({
-        publishAdapterFactory: () => adapter.adapter,
-        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, behindCount: 3 }),
-      }),
+    const execution = seams({
+      publishAdapterFactory: () => adapter.adapter,
+      snapshotReader: () => Promise.resolve({ ...SNAPSHOT, behindCount: 3 }),
     });
-    const res = await handler(ctxFor(EXECUTE, pushBody()), deps());
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody();
+    const res = await handler(ctxFor(EXECUTE, await approvedPushBody(request, execution)), deps());
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("blocked");
     expect(body.preflightFindingCodes).toContain("non-fast-forward");
@@ -335,10 +403,13 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
       rejectionReason: "permission-denied",
     });
     const cap = capturingEvidenceStore();
-    const handler = createHandlePushExecute({
-      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
-    });
-    const res = await handler(ctxFor(EXECUTE, pushBody()), deps({ evidenceStore: cap.store }));
+    const execution = seams({ publishAdapterFactory: () => adapter.adapter });
+    const handler = createHandlePushExecute({ execution });
+    const request = pushBody();
+    const res = await handler(
+      ctxFor(EXECUTE, await approvedPushBody(request, execution)),
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("failed");
     expect(body.publishRejectionReason).toBe("permission-denied");

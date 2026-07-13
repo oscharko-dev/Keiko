@@ -23,7 +23,7 @@ import {
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
-import styles from "./CodingWorkbenchWindow.module.css";
+import styles from "./codingWorkbenchStyles";
 
 const MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>> = {
   "governed-assist": 0,

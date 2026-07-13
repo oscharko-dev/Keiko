@@ -73,6 +73,7 @@ describe("update session portable contract", () => {
     expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-staging-failed");
     expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-sidecar-verification-failed");
     expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-activation-failed");
+    expect(UPDATE_SESSION_FAILURE_REASONS).toContain("coding-runtime-not-quiescent");
   });
 
   it("models content-free portable staging summaries", () => {

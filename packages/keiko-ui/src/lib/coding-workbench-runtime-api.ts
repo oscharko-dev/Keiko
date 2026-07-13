@@ -1,12 +1,17 @@
 "use client";
 
 import {
+  validateCodingWorkbenchRuntimeQuestionAcceptedResponse,
   validateCodingWorkbenchRuntimeReadiness,
+  validateCodingWorkbenchRuntimeQuestionsResponse,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
+  type CodingWorkbenchRuntimeQuestionAcceptedResponse,
+  type CodingWorkbenchRuntimeQuestionAnswerRequest,
   type CodingWorkbenchRuntimeReadiness,
+  type CodingWorkbenchRuntimeQuestionsResponse,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   type CodingWorkbenchRuntimeRetryRequest,
   type CodingWorkbenchRuntimeSnapshot,
@@ -81,8 +86,40 @@ function readinessValidator(path: string, value: unknown): CodingWorkbenchRuntim
   return validated(path, value, validateCodingWorkbenchRuntimeReadiness);
 }
 
+function questionsValidator(path: string, value: unknown): CodingWorkbenchRuntimeQuestionsResponse {
+  return validated(path, value, validateCodingWorkbenchRuntimeQuestionsResponse);
+}
+
+function questionAcceptedValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeQuestionAcceptedResponse {
+  return validated(path, value, validateCodingWorkbenchRuntimeQuestionAcceptedResponse);
+}
+
 function runPath(runId: string, suffix = ""): string {
   return `${RUNTIME_ROOT}/runs/${encodeURIComponent(runId)}${suffix}`;
+}
+
+function questionPath(runId: string, questionId: string, action: "answer" | "reject"): string {
+  return runPath(runId, `/questions/${encodeURIComponent(questionId)}/${action}`);
+}
+
+function postQuestion(
+  path: string,
+  body: CodingWorkbenchRuntimeQuestionAnswerRequest | Record<string, never>,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeQuestionAcceptedResponse> {
+  return bffFetchJson(
+    path,
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    { validator: questionAcceptedValidator },
+  );
 }
 
 function postSnapshot<T>(path: string, body: T): Promise<CodingWorkbenchRuntimeSnapshot> {
@@ -124,6 +161,34 @@ export function getCodingWorkbenchRuntimeSnapshot(
   runId: string,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return bffFetchJson(runPath(runId), { cache: "no-store" }, { validator: snapshotValidator });
+}
+
+export function getCodingWorkbenchRuntimeQuestions(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeQuestionsResponse> {
+  return bffFetchJson(
+    runPath(runId, "/questions"),
+    { cache: "no-store", ...(signal === undefined ? {} : { signal }) },
+    { validator: questionsValidator },
+  );
+}
+
+export function answerCodingWorkbenchRuntimeQuestion(
+  runId: string,
+  questionId: string,
+  input: CodingWorkbenchRuntimeQuestionAnswerRequest,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeQuestionAcceptedResponse> {
+  return postQuestion(questionPath(runId, questionId, "answer"), input, signal);
+}
+
+export function rejectCodingWorkbenchRuntimeQuestion(
+  runId: string,
+  questionId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeQuestionAcceptedResponse> {
+  return postQuestion(questionPath(runId, questionId, "reject"), {}, signal);
 }
 
 export function startCodingWorkbenchRuntime(

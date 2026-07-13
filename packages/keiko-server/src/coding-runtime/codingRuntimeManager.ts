@@ -98,6 +98,8 @@ export type CodingRuntimeStatus =
 
 export interface CodingRuntimeLaunchRequest {
   readonly runId: string;
+  /** Opaque backend-owned 128-bit process-tree recovery identity. */
+  readonly recoveryHandle: string;
   readonly treeBindingId: string;
   readonly taskRef: string;
   readonly adapterKind: CodingRuntimeAdapterKind;
@@ -1877,6 +1879,7 @@ function supervisorLaunchRequest(
 ): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
   return {
     runId: request.runId,
+    recoveryHandle: request.recoveryHandle,
     treeBindingId: request.treeBindingId,
     executable,
     args,

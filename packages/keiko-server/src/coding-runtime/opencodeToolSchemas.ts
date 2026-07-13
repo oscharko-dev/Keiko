@@ -65,10 +65,35 @@ const CHANGESET_EDIT_SCHEMA = {
   required: ["changeset"],
 } as const;
 
+const VERIFICATION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    verifierId: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+  },
+  required: ["verifierId"],
+} as const;
+
+/** OpenCode v1.17.17 removes this unsupported JSON Schema keyword before forwarding a tool. */
+const VERIFICATION_PROJECTED_SCHEMA = {
+  type: "object",
+  properties: {
+    verifierId: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+  },
+  required: ["verifierId"],
+} as const;
+
 export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
+  { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
 ] as const;
 
 export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.map(
@@ -87,6 +112,12 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     action: "edit",
     argument: "changeset",
     inputSchema: CHANGESET_EDIT_SCHEMA.properties.changeset,
+  },
+  {
+    name: "keiko_verification",
+    action: "verification",
+    argument: "verifierId",
+    inputSchema: VERIFICATION_SCHEMA.properties.verifierId,
   },
 ] as const;
 
@@ -132,8 +163,12 @@ function schemaDigest(schema: Readonly<Record<string, unknown>>): string {
   return createHash("sha256").update(stableJson(schema), "utf8").digest("hex");
 }
 
-const EXPECTED_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
-  OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [name, schemaDigest(parameters)]),
+/** Gateway requests contain OpenCode's v1.17.17 projection, not the generated source schema. */
+const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
+  OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
+    name,
+    schemaDigest(name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters),
+  ]),
 );
 
 export function hasExactOpenCodeVisibleToolContract(
@@ -144,7 +179,8 @@ export function hasExactOpenCodeVisibleToolContract(
   return (
     names.size === OPENCODE_MODEL_VISIBLE_TOOLS.length &&
     tools.every(
-      ({ name, parameters }) => EXPECTED_SCHEMA_DIGESTS.get(name) === schemaDigest(parameters),
+      ({ name, parameters }) =>
+        EXPECTED_GATEWAY_SCHEMA_DIGESTS.get(name) === schemaDigest(parameters),
     )
   );
 }

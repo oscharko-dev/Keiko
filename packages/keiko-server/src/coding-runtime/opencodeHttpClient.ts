@@ -1,3 +1,5 @@
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
+
 import {
   createOpenCodeSseDecoder,
   parseOpenCodeJson,
@@ -218,6 +220,8 @@ async function listQuestions(
     "/question",
     undefined,
     requestOptions,
+    CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
+    "question",
   );
   if (value.length > MAX_QUESTION_REQUESTS || !value.every(validQuestionRequest)) {
     throw new Error("opencode-question-invalid");
@@ -556,6 +560,8 @@ async function jsonArray(
   path: string,
   body: unknown,
   requestOptions: OpenCodeHttpRequestOptions,
+  maxResponseBytes = MAX_BODY,
+  responseName = "history",
 ): Promise<readonly Record<string, unknown>[]> {
   const cancellation = requestCancellation(options, requestOptions);
   try {
@@ -568,9 +574,10 @@ async function jsonArray(
       body,
       cancellation.signal,
     );
-    if (response === undefined || !isJson(response)) throw new Error("opencode-history-failed");
-    const text = await readBoundedBody(response, MAX_BODY);
-    if (text === undefined) throw new Error("opencode-history-oversized");
+    if (response === undefined || !isJson(response))
+      throw new Error(`opencode-${responseName}-failed`);
+    const text = await readBoundedBody(response, maxResponseBytes);
+    if (text === undefined) throw new Error(`opencode-${responseName}-oversized`);
     const parsedBody = parseOpenCodeJson(text);
     if (!parsedBody.ok || !Array.isArray(parsedBody.value) || !parsedBody.value.every(isRecord))
       throw new Error("opencode-json-invalid");

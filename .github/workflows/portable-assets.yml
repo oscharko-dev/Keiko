@@ -288,6 +288,8 @@ jobs:
             --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
       - name: Smoke test the verified production artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Qualify signed Job Object descendant revoke and complete reap
+        run: node scripts/qualify-runtime-supervisor.mjs --stage-root "${{ github.workspace }}/.portable-runtime/staging" --target windows-x64
       - name: Upload verified Windows target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -370,6 +372,8 @@ jobs:
         run: node scripts/macos-portable-signing.mjs finalize --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --expected-inventory "$RUNNER_TEMP/macos-code-verified.json" --verification-input "$RUNNER_TEMP/macos-verification-input.json"
       - name: Record canonical macOS finalizer success
         run: node scripts/macos-native-policy.mjs finalizer-success --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json"
+      - name: Prove managed runtime remains unavailable without an entitled Endpoint Security extension
+        run: node scripts/qualify-runtime-supervisor.mjs --stage-root "${{ github.workspace }}/.portable-runtime/staging" --target ${{ matrix.platform_target }} --expect-unavailable
       - name: Upload verified macOS target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -422,6 +426,8 @@ jobs:
         run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
       - name: Run signed secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
+      - name: Requalify signed Job Object bytes and verify the bound receipt
+        run: node scripts/qualify-runtime-supervisor.mjs --stage-root "${{ github.workspace }}/.qualified-windows-stage" --target windows-x64 --verify-existing
 
   qualify-macos-production:
     name: Fresh native qualification (${{ matrix.platform_target }})
@@ -465,6 +471,8 @@ jobs:
         run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Run signed secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read
+      - name: Confirm runtime qualification remains fail-closed on macOS
+        run: node scripts/qualify-runtime-supervisor.mjs --stage-root "${{ github.workspace }}/.isolated-macos-artifact" --target ${{ matrix.platform_target }} --expect-unavailable
       - name: Execute bundled runtimes in isolated disposable copy
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ""
@@ -478,10 +486,87 @@ jobs:
           NODE_AUTH_TOKEN: ""
         run: ./scripts/run-isolated-macos-payload-smoke.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
 
+  qualify-live-opencode:
+    # This qualifies the approved managed OpenCode protocol and live Chromium/BFF product path. It
+    # deliberately does not claim native process-tree containment: the functional resolver uses a
+    # test-only direct child backend, while native containment has its own release blocker below.
+    name: Managed OpenCode functional/browser qualification (${{ matrix.platform_target }})
+    needs: [production-signing-preflight, stage-windows-production, stage-macos-production]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_target: windows-x64
+            runner: windows-latest
+          - platform_target: macos-arm64
+            runner: macos-15
+          - platform_target: macos-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    env:
+      # Do not use a workstation/global OpenCode cache. The harness stages only the committed,
+      # hash-approved sidecar into this disposable runner path and passes that exact path to tests.
+      KEIKO_OPENCODE_CACHE_DIR: ${{ runner.temp }}/keiko-opencode-2258-cache
+      NODE_OPTIONS: --max-old-space-size=8192
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      NODE_AUTH_TOKEN: ""
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+          package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci
+      - name: Stage and functionally qualify the approved OpenCode runtime
+        run: npm run test:functional:opencode-2258
+      - name: Install required Chromium browser
+        run: npx playwright install chromium
+      - name: Qualify the live Chromium coding workbench against the staged runtime
+        run: npm run test:e2e:coding-workbench-2258
+      - name: Retain content-free live qualification failure summary
+        if: ${{ failure() }}
+        run: >-
+          node -e "require('node:fs').mkdirSync('qualification-artifacts',{recursive:true});require('node:fs').writeFileSync('qualification-artifacts/summary.txt','Live OpenCode release qualification failed; inspect restricted GitHub job logs.\\n')"
+      - name: Upload content-free live qualification failure summary
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-opencode-qualification-${{ matrix.platform_target }}
+          path: qualification-artifacts/summary.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  enforce-runtime-release-blockers:
+    # Issue #2258 requires both credentialed Codex release-host attestation and native containment
+    # on macOS arm64/x64. Neither approved receipt exists yet. Keep stable portable assembly closed
+    # until a later reviewed change replaces this explicit blocker with receipt validation; a
+    # boolean variable, synthetic proof, expected-unavailable result, or functional direct-child run is not
+    # sufficient release authority.
+    name: Enforce external runtime release attestations
+    needs: [qualify-live-opencode, qualify-macos-production]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Block portable release until receipt-validated attestations exist
+        shell: bash
+        run: |
+          echo "Portable release blocked: credentialed Codex and native macOS containment attestations are unavailable." >&2
+          exit 1
+
   assemble:
     name: Assemble reviewed portable asset bundle
-    needs: [production-signing-preflight, stage-windows-production, stage-macos-production, qualify-windows-production, qualify-macos-production]
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' }}
+    needs: [production-signing-preflight, stage-windows-production, stage-macos-production, qualify-windows-production, qualify-macos-production, qualify-live-opencode, enforce-runtime-release-blockers]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' && needs.qualify-live-opencode.result == 'success' && needs.enforce-runtime-release-blockers.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -529,6 +614,10 @@ jobs:
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: "portable-release-assets/artifacts/*/evidence/sbom.cdx.json"
+      - name: Attest Windows runtime qualification receipt
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: portable-release-assets/artifacts/windows-x64/evidence/runtime-supervisor-qualification.json
       - name: Attest SBOM for windows-x64 portable artifact
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:

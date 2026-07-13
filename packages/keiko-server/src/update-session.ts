@@ -55,6 +55,8 @@ export { UpdateSessionError } from "./update-session-support.js";
 
 const RESTART_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SIMPLE_SHELL_ARG = /^[A-Za-z0-9_./:@%+=,-]+$/u;
+const RUNTIME_NOT_QUIESCENT_MESSAGE =
+  "The coding runtime must be idle before Keiko can update. Stop the active run, then retry.";
 
 function validPort(value: string | undefined): value is string {
   if (value === undefined || !/^\d{1,5}$/u.test(value)) return false;
@@ -107,6 +109,10 @@ export interface UpdateSessionStartOutcome {
 
 export type UpdateCompletionGate = (session: UpdateSession) => boolean;
 
+export interface UpdateRuntimeQuiescence {
+  readonly isQuiescent: () => boolean;
+}
+
 export interface UpdateSessionManager {
   readonly getStatus: () => UpdateSessionStatus;
   readonly start: (input: UpdateSessionStartRequest) => UpdateSessionStartOutcome;
@@ -132,6 +138,7 @@ export interface UpdateSessionManagerOptions {
   readonly portableStager?: PortableUpdateStager | undefined;
   readonly portableActivator?: PortableUpdateActivator | undefined;
   readonly portableCompletionGate?: UpdateCompletionGate | undefined;
+  readonly codingRuntimeQuiescence?: UpdateRuntimeQuiescence | undefined;
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -151,6 +158,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly portableStager: PortableUpdateStager | undefined;
   private readonly portableActivator: PortableUpdateActivator | undefined;
   private readonly portableCompletionGate: UpdateCompletionGate | undefined;
+  private readonly codingRuntimeQuiescence: UpdateRuntimeQuiescence | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
@@ -174,6 +182,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.portableStager = options.portableStager;
     this.portableActivator = options.portableActivator;
     this.portableCompletionGate = options.portableCompletionGate;
+    this.codingRuntimeQuiescence = options.codingRuntimeQuiescence;
   }
 
   public readonly getStatus = (): UpdateSessionStatus => ({
@@ -410,6 +419,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     await this.beforeExecute?.();
     const prepared = this.active?.sessionId === sessionId ? this.active : undefined;
     if (prepared === undefined || prepared.phase === "cancelled") return;
+    if (!this.requireCodingRuntimeQuiescence(prepared)) return;
     const running = this.replace(prepared, {
       phase: "running",
       cancelable: true,
@@ -423,6 +433,16 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       return;
     }
     await this.invokeCommand(running, mode);
+  }
+
+  private requireCodingRuntimeQuiescence(session: UpdateSession): boolean {
+    try {
+      if (this.codingRuntimeQuiescence?.isQuiescent() !== false) return true;
+    } catch {
+      // A failed control-plane probe is indistinguishable from an active runtime at this boundary.
+    }
+    this.settleFailure(session, "coding-runtime-not-quiescent");
+    return false;
   }
 
   private async invokePortableStager(
@@ -444,6 +464,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         runtimeFacts,
         signal: controller.signal,
       });
+      const staged = this.replace(session, { portableStage });
+      if (!this.requireCodingRuntimeQuiescence(staged)) return;
       const portableActivation = await this.portableActivator.activate({
         sessionId: session.sessionId,
         targetVersion: session.targetVersion,
@@ -451,7 +473,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         runtimeFacts,
         signal: controller.signal,
       });
-      this.settlePortableActivation(session, portableStage, portableActivation);
+      this.settlePortableActivation(staged, portableStage, portableActivation);
     } catch (error) {
       const reason = this.portableFailureReason(error);
       this.settleFailure(session, reason);
@@ -559,8 +581,11 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const next = this.replace(session, {
       phase: reason === "cancelled" ? "cancelled" : "failed",
       failureReason: reason,
-      retryable: retryableFailure(reason),
-      message: messageForFailure(reason),
+      retryable: reason === "coding-runtime-not-quiescent" || retryableFailure(reason),
+      message:
+        reason === "coding-runtime-not-quiescent"
+          ? RUNTIME_NOT_QUIESCENT_MESSAGE
+          : messageForFailure(reason),
       ...(result === undefined ? {} : { logs: logPreview(result, this.redactor) }),
     });
     this.finish(next);

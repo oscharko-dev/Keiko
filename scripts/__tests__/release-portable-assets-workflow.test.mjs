@@ -217,6 +217,77 @@ describe("portable secure-read qualification", () => {
   });
 });
 
+describe("portable runtime-supervisor qualification", () => {
+  it("binds the signed Windows bytes before upload and requalifies them on a fresh runner", () => {
+    const stage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    const fresh = workflowJob("  qualify-windows-production:", "\n  qualify-macos-production:");
+    expect(stage.indexOf("Rebuild, bind, and verify the production archive")).toBeLessThan(
+      stage.indexOf("Qualify signed Job Object descendant revoke and complete reap"),
+    );
+    expect(
+      stage.indexOf("Qualify signed Job Object descendant revoke and complete reap"),
+    ).toBeLessThan(stage.indexOf("Upload verified Windows target artifact"));
+    expect(fresh).toContain("qualify-runtime-supervisor.mjs");
+    expect(fresh).toContain("--target windows-x64 --verify-existing");
+    expect(portableWorkflow).toContain("Attest Windows runtime qualification receipt");
+    expect(portableWorkflow).toContain(
+      "artifacts/windows-x64/evidence/runtime-supervisor-qualification.json",
+    );
+  });
+
+  it("keeps both macOS targets explicitly unavailable without producing a fake receipt", () => {
+    expect(portableWorkflow.match(/--expect-unavailable/gmu)).toHaveLength(2);
+    expect(portableWorkflow).toContain(
+      "Prove managed runtime remains unavailable without an entitled Endpoint Security extension",
+    );
+    expect(portableWorkflow).toContain(
+      "Confirm runtime qualification remains fail-closed on macOS",
+    );
+    expect(portableWorkflow).not.toContain("macos-app-sandbox --verify-existing");
+  });
+});
+
+describe("live OpenCode release qualification workflow", () => {
+  it("gates portable assembly on hermetic staged runtime and live Chromium proof for every native target", () => {
+    const qualification = workflowJob("  qualify-live-opencode:", "\n  assemble:");
+    const blocker = workflowJob("  enforce-runtime-release-blockers:", "\n  assemble:");
+    const assemble = workflowJob("  assemble:");
+
+    expect(qualification).toContain("platform_target: windows-x64");
+    expect(qualification).toContain("runner: windows-latest");
+    expect(qualification).toContain("platform_target: macos-arm64");
+    expect(qualification).toContain("runner: macos-15");
+    expect(qualification).toContain("platform_target: macos-x64");
+    expect(qualification).toContain("runner: macos-15-intel");
+    expect(qualification).toContain('node-version: "24.x"');
+    expect(qualification).toContain("NODE_OPTIONS: --max-old-space-size=8192");
+    expect(qualification).toContain("KEIKO_OPENCODE_CACHE_DIR: ${{ runner.temp }}");
+    expect(qualification).toContain('GH_TOKEN: ""');
+    expect(qualification).toContain('GITHUB_TOKEN: ""');
+    expect(qualification).toContain('NODE_AUTH_TOKEN: ""');
+    expect(qualification).not.toMatch(/secrets\.|environment: portable-release-signing/u);
+
+    const stagedRuntime = qualification.indexOf("npm run test:functional:opencode-2258");
+    const chromium = qualification.indexOf("npx playwright install chromium");
+    const browser = qualification.indexOf("npm run test:e2e:coding-workbench-2258");
+    expect(stagedRuntime).toBeGreaterThan(0);
+    expect(stagedRuntime).toBeLessThan(chromium);
+    expect(chromium).toBeLessThan(browser);
+    expect(qualification).not.toMatch(/npm\s+exec\s+vitest|vitest\s+run/u);
+    expect(qualification).toContain("if: ${{ failure() }}");
+    expect(qualification).toContain("qualification-artifacts/summary.txt");
+    expect(qualification).toContain("retention-days: 30");
+
+    expect(assemble).toContain("qualify-live-opencode");
+    expect(assemble).toContain("needs.qualify-live-opencode.result == 'success'");
+    expect(blocker).toContain("credentialed Codex and native macOS containment attestations");
+    expect(blocker).toContain("exit 1");
+    expect(blocker).not.toMatch(/vars\.|secrets\./u);
+    expect(assemble).toContain("enforce-runtime-release-blockers");
+    expect(assemble).toContain("needs.enforce-runtime-release-blockers.result == 'success'");
+  });
+});
+
 function productionStepPolicies() {
   const job = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage-windows-production:"),
@@ -670,7 +741,7 @@ describe("macOS portable production signing workflow", () => {
   );
   const smokeJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  qualify-macos-production:"),
-    portableWorkflow.indexOf("\n  assemble:"),
+    portableWorkflow.indexOf("\n  qualify-live-opencode:"),
   );
   const stagingJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage:"),

@@ -19,6 +19,9 @@ import {
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
+  fetchGitDeliveryCommitApproval,
+  fetchGitDeliveryPushApproval,
+  fetchGitDeliveryPrApproval,
   fetchGitDiff,
   fetchGitStructuredDiff,
   fetchGitBlame,
@@ -1642,6 +1645,86 @@ describe("files API helpers", () => {
           schemaVersion: "1",
           projectId: "/repo space",
           remote: "origin",
+        }),
+      }),
+    );
+  });
+
+  it("posts a fresh confirmed approval request for each delivery action", async () => {
+    const approval = {
+      schemaVersion: "1",
+      actionKind: "commit",
+      approval: { schemaVersion: "1", approvalId: "gda_1", approvalToken: "token" },
+      expiresAtMs: 1_000,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(approval, 201))
+      .mockResolvedValueOnce(jsonResponse({ ...approval, actionKind: "push" }, 201))
+      .mockResolvedValueOnce(jsonResponse({ ...approval, actionKind: "pr-create" }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryCommitApproval({ projectId: "/repo", message: "feat: approval" });
+    await fetchGitDeliveryPushApproval({
+      projectId: "/repo",
+      remoteAlias: "origin",
+      remoteBranchName: "main",
+      sourceBranchName: "main",
+      setUpstreamTracking: false,
+    });
+    await fetchGitDeliveryPrApproval({
+      projectId: "/repo",
+      kind: "pr-create",
+      ownerAndRepo: "keiko/test",
+      headBranchName: "feat/approval",
+      baseBranchName: "main",
+      title: "Approval",
+      body: "",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git-delivery/commit/approval",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo",
+          message: "feat: approval",
+          confirmed: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git-delivery/push/approval",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo",
+          remoteAlias: "origin",
+          remoteBranchName: "main",
+          sourceBranchName: "main",
+          setUpstreamTracking: false,
+          confirmed: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git-delivery/pr/approval",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo",
+          kind: "pr-create",
+          ownerAndRepo: "keiko/test",
+          headBranchName: "feat/approval",
+          baseBranchName: "main",
+          title: "Approval",
+          body: "",
+          confirmed: true,
         }),
       }),
     );

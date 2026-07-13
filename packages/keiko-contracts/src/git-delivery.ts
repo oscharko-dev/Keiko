@@ -243,6 +243,15 @@ export interface GitDeliveryApprovalClaim {
 
 export type GitDeliveryApprovalRequest = GitDeliveryApprovalNotRequired | GitDeliveryApprovalClaim;
 
+export type GitDeliverySeparatelyApprovedActionKind = "commit" | "push" | "pr-create" | "pr-update";
+
+export interface GitDeliveryIssuedApproval {
+  readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
+  readonly actionKind: GitDeliverySeparatelyApprovedActionKind;
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAtMs: number;
+}
+
 // ─── Provider capability (owned here per ADR-0019 cycle-break) ───────────────────
 // Owned by the core atom so both policy.ts (constraint) and provider.ts (descriptor) can import it
 // without a cycle.
@@ -593,6 +602,19 @@ export function isGitDeliveryApprovalClaim(value: unknown): value is GitDelivery
     value.schemaVersion === GIT_DELIVERY_SCHEMA_VERSION &&
     isOpaqueApprovalClaimPart(value.approvalId) &&
     isOpaqueApprovalClaimPart(value.approvalToken)
+  );
+}
+
+export function isGitDeliveryIssuedApproval(value: unknown): value is GitDeliveryIssuedApproval {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === GIT_DELIVERY_SCHEMA_VERSION &&
+    (value.actionKind === "commit" ||
+      value.actionKind === "push" ||
+      value.actionKind === "pr-create" ||
+      value.actionKind === "pr-update") &&
+    isGitDeliveryApprovalClaim(value.approval) &&
+    isNonNegativeInteger(value.expiresAtMs)
   );
 }
 

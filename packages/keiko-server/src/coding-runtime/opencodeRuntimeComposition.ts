@@ -10,7 +10,10 @@ import {
 import type { Socket } from "node:net";
 import { join } from "node:path";
 
-import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  UpdatePortableTarget,
+} from "@oscharko-dev/keiko-contracts";
 
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -81,6 +84,7 @@ export interface OpenCodeRuntimeCompositionInput {
   };
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
+  readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
     | "revokeRuntime"
@@ -154,6 +158,7 @@ export function createOpenCodeRuntimeComposition(
     processEnv: {},
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
+    ...(input.onRuntimeEvent ? { onRuntimeEvent: input.onRuntimeEvent } : {}),
     ...input.authorityLifecycle,
   });
   return { manager, toolBridge: bridge.publicPort, runPort: createRunPort(runs) };

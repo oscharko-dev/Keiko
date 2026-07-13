@@ -257,6 +257,30 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
+  it("retains a terminal outcome after the server has reaped the completed run to idle", async () => {
+    const running = snapshot({ state: "running", pendingPermission: undefined });
+    const reaped = snapshot({ state: "idle", runId: undefined, pendingPermission: undefined });
+    installBootstrap(running, reaped);
+    const activeWorkspace = workspace();
+    const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source?.dispatch("status", JSON.stringify({ ...event(1), state: "succeeded", revision: 5 }));
+    });
+
+    await waitFor(() => expect(view.result.current.state.run.value?.state).toBe("idle"));
+    expect(view.result.current.state.terminalOutcome).toMatchObject({
+      runId: "run-1",
+      state: "succeeded",
+      revision: 5,
+    });
+    expect(view.result.current.state.events).toEqual([]);
+    expect(source?.close).toHaveBeenCalledOnce();
+    view.unmount();
+  });
+
   it("commits observations at no more than 10Hz even when status facts are interleaved", () => {
     vi.useFakeTimers();
     const observationCommitTimes: number[] = [];

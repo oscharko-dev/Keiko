@@ -33,6 +33,17 @@ export {
   type MemoryAuthorizationContext,
 } from "./deps.js";
 export {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeResolver,
+  type QualifiedProductionCodingRuntime,
+} from "./coding-runtime/productionCodingRuntimeHost.js";
+export {
+  createProductionOpenCodeRuntimeResolver,
+  type ProductionOpenCodeFunctionalHarness,
+  type ProductionOpenCodeRuntimeResolverInput,
+} from "./coding-runtime/productionOpenCodeRuntimeResolver.js";
+export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,
   type UpdateLocalStateRepairResult,

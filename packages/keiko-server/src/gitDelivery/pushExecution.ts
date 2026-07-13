@@ -10,10 +10,12 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
+  GIT_DELIVERY_SCHEMA_VERSION,
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   evaluateGitPolicy,
   gitDeliveryRiskClassForInputs,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryExecutionResult,
   type GitDeliveryPushInputs,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryRiskClass,
@@ -22,6 +24,7 @@ import {
   evaluateGitPreflight,
   evaluateGitPublishEffectivePolicy,
   runGitPublish,
+  type GitPublishExecResult,
   type GitPublishLifecycleResult,
   type GitPushCommand,
   type GitRemotePublishAdapter,
@@ -29,8 +32,11 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import type {
+  GitDeliveryApprovalContextGuard,
+  GitDeliveryApprovalSeams,
+} from "./deliveryApproval.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -70,13 +76,12 @@ export const KEIKO_DEFAULT_PUBLISH_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   defaultRule: { decision: "blocked" },
 };
 
-export interface GitDeliveryPublishSeams {
+export interface GitDeliveryPublishSeams extends GitDeliveryApprovalSeams {
   readonly publishAdapterFactory?:
     ((workspace: WorkspaceInfo) => GitRemotePublishAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
-  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
 }
@@ -88,6 +93,24 @@ function publishAdapterFor(
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
   return createNodeGitPublishAdapter({ workspace, processEnv: process.env, now });
+}
+
+const APPROVAL_CONTEXT_DRIFT_RESULT: GitDeliveryExecutionResult = {
+  schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+  outcome: "failed",
+  durationMs: 0,
+  errorCode: "precondition-failed",
+};
+
+function guardedPublishAdapter(
+  adapter: GitRemotePublishAdapter,
+  guard: GitDeliveryApprovalContextGuard | undefined,
+): GitRemotePublishAdapter {
+  if (guard === undefined) return adapter;
+  return {
+    publish: async (request): Promise<GitPublishExecResult> =>
+      (await guard()) ? adapter.publish(request) : APPROVAL_CONTEXT_DRIFT_RESULT,
+  };
 }
 
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {
@@ -113,10 +136,21 @@ export async function executeGovernedPublish(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPublishSeams,
+  approvalContextGuard?: GitDeliveryApprovalContextGuard,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = publishAdapterFor(workspace, seams, now);
+  const approvalContext = { drifted: false };
+  const trackedGuard =
+    approvalContextGuard === undefined
+      ? undefined
+      : async (): Promise<boolean> => {
+          approvalContext.drifted = true;
+          const matches = await approvalContextGuard();
+          approvalContext.drifted = !matches;
+          return matches;
+        };
+  const adapter = guardedPublishAdapter(publishAdapterFor(workspace, seams, now), trackedGuard);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK };
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
@@ -132,7 +166,7 @@ export async function executeGovernedPublish(
     },
   );
   persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
-  return result;
+  return approvalContext.drifted ? { lifecycle: result.lifecycle } : result;
 }
 
 // ─── Read-only preview projection ────────────────────────────────────────────────────────────────

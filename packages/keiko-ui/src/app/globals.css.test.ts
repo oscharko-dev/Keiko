@@ -99,6 +99,15 @@ const mobilePanelComponent = readFileSync(
   resolve(here, "components/desktop/widgets/panels/MobilePanel.tsx"),
   "utf8",
 );
+const codingWorkbenchDir = resolve(here, "components/desktop/widgets/coding-workbench");
+const codingWorkbenchComponents = [
+  "CodingWorkbenchWindow.tsx",
+  "CodingWorkbenchSections.tsx",
+  "CodingWorkbenchModelCards.tsx",
+  "CodingWorkbenchPanelTitle.tsx",
+  "CodingWorkbenchQuestions.tsx",
+  "CodingWorkbenchTimeline.tsx",
+].map((fileName) => readFileSync(resolve(codingWorkbenchDir, fileName), "utf8"));
 const lazyWidgetCss = [
   pdfViewerModuleCss,
   browserWidgetModuleCss,
@@ -186,6 +195,127 @@ function cssBlockFrom(
 function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
   return cssBlockFrom(css, selector, opts);
 }
+
+describe("Issue #2258 — Coding Workbench single style engine", () => {
+  const evidenceDir = resolve(here, "../../../..", "docs/design-system/evidence/2258");
+  it("keeps the complete Workbench surface in governed globals.css", () => {
+    for (const component of codingWorkbenchComponents) {
+      expect(component).not.toContain("CodingWorkbenchWindow.module.css");
+    }
+    for (const legacyFile of [
+      "CodingWorkbenchWindow.module.css",
+      "CodingWorkbenchWindow.core.css",
+      "CodingWorkbenchWindow.details.css",
+    ]) {
+      expect(existsSync(resolve(codingWorkbenchDir, legacyFile))).toBe(false);
+    }
+
+    for (const selector of [
+      ".coding-workbench-shell",
+      ".coding-workbench-card",
+      '.coding-workbench-mode-option[data-selected="true"]',
+      ".coding-workbench-task-input:focus-visible",
+      ".coding-workbench-button-primary",
+      ".coding-workbench-question-option:has(input:checked)",
+      ".coding-workbench-question-input:focus-visible",
+      '.coding-workbench-question-status[data-tone="danger"]',
+      ".coding-workbench-timeline:focus-visible",
+    ]) {
+      expect(css).toContain(selector);
+    }
+    expect(css).toContain(
+      "@container coding-workbench (max-width: 320px) {\n  .coding-workbench-shell,\n  .coding-workbench-card,",
+    );
+    expect(css).toContain("container-name: coding-workbench;");
+    expect(css).toContain("inline-size: 100%;");
+    expect(css).toContain(
+      "@container coding-workbench (max-width: 820px) {\n  .coding-workbench-grid,\n  .coding-workbench-mode-grid {",
+    );
+    expect(css).toContain(
+      "@media (min-width: 561px) and (max-width: 820px) {\n  .window:has(.coding-workbench-shell) {",
+    );
+    expect(css).toContain(
+      "100dvw - var(--shell-rail-width) - var(--shell-right-rail-reserve) - var(--space-8)",
+    );
+    expect(css).toContain(
+      ".window:has(.coding-workbench-shell) .win-content-zoom {\n    max-inline-size: 100% !important;",
+    );
+    expect(css).toContain(
+      "@media (prefers-reduced-motion: reduce) {\n  .coding-workbench-timeline {",
+    );
+    expect(css).toContain("@media (forced-colors: active) {\n  .coding-workbench-card,");
+    expect(css).toContain(
+      '.coding-workbench-source-card[data-selected="true"],\n  .coding-workbench-question-option:has(input:checked) {',
+    );
+  });
+
+  it("routes Workbench structural strokes through governed width tokens", () => {
+    expect(css).toContain("--border-width-default: 1px;");
+    expect(css).toContain("--border-width-emphasis: 2px;");
+    const workbenchCss = css.slice(css.indexOf("/* Coding Workbench — governed global surface"));
+    expect(workbenchCss).toContain("border: var(--border-width-default) solid var(--card-border);");
+    expect(workbenchCss).toContain(
+      "border: var(--border-width-emphasis) solid var(--border-accent);",
+    );
+    expect(workbenchCss).not.toMatch(/\bborder(?:-[a-z-]+)?:\s*[12]px\b/u);
+  });
+
+  it("pins the reviewed live matrix and its retained artifact hashes", () => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(evidenceDir, "live-qualification-manifest.json"), "utf8"),
+    ) as {
+      readonly currentCssSha256: string;
+      readonly observedRun: {
+        readonly playwright: {
+          readonly passed: number;
+          readonly fixme: number;
+          readonly failed: number;
+        };
+      };
+      readonly retainedArtifacts: readonly {
+        readonly file: string;
+        readonly sha256?: string | undefined;
+      }[];
+    };
+    const fidelity = JSON.parse(
+      readFileSync(resolve(evidenceDir, "coding-workbench-live-fidelity-proof.json"), "utf8"),
+    ) as {
+      readonly currentCssSha256: string;
+      readonly verdict: string;
+      readonly captures: readonly { readonly file: string; readonly sha256: string }[];
+    };
+    const a11y = JSON.parse(readFileSync(resolve(evidenceDir, "a11y-proof.json"), "utf8")) as {
+      readonly verdict: string;
+      readonly summary: {
+        readonly axeCaptureCount: number;
+        readonly seriousOrCriticalAxeViolations: number;
+        readonly terminalCaptureAxeClaimed: boolean;
+      };
+    };
+
+    expect(manifest.currentCssSha256).toBe(currentCssSha256);
+    expect(fidelity.currentCssSha256).toBe(currentCssSha256);
+    expect(manifest.observedRun.playwright).toMatchObject({ passed: 16, fixme: 2, failed: 0 });
+    expect(fidelity.verdict).toBe("PASS_WITH_EXTERNAL_RELEASE_BLOCKERS");
+    expect(a11y.verdict).toBe("PASS");
+    expect(a11y.summary).toEqual({
+      axeCaptureCount: 5,
+      seriousOrCriticalAxeViolations: 0,
+      terminalCaptureAxeClaimed: false,
+      note: expect.any(String),
+    });
+    expect(fidelity.captures).toHaveLength(6);
+    const retainedByFile = new Map(
+      manifest.retainedArtifacts.map((artifact) => [artifact.file, artifact.sha256]),
+    );
+    for (const capture of fidelity.captures) {
+      const bytes = readFileSync(resolve(evidenceDir, capture.file));
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      expect(sha256, `${capture.file} must match the visually reviewed proof`).toBe(capture.sha256);
+      expect(retainedByFile.get(capture.file)).toBe(capture.sha256);
+    }
+  });
+});
 
 describe("BUNDLE-09 — lazy widget CSS split", () => {
   it("keeps PDF viewer window styles out of render-blocking globals.css", () => {

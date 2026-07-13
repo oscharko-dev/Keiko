@@ -10,6 +10,7 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
+  GIT_DELIVERY_SCHEMA_VERSION,
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_RISK_CLASS_SEVERITY,
   evaluateGitPolicy,
@@ -19,6 +20,7 @@ import {
   gitPullRequestRecommendationFor,
   synthesizePullRequestMetadata,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryExecutionResult,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryRiskClass,
   type GitPrChangeType,
@@ -30,6 +32,7 @@ import {
 import {
   evaluateGitPullRequestEffectivePolicy,
   runGitPullRequest,
+  type GitPrExecResult,
   type GitPullRequestAdapter,
   type GitPullRequestCommand,
   type GitPullRequestLifecycleResult,
@@ -37,8 +40,11 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import type {
+  GitDeliveryApprovalContextGuard,
+  GitDeliveryApprovalSeams,
+} from "./deliveryApproval.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -77,12 +83,11 @@ export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   defaultRule: { decision: "blocked" },
 };
 
-export interface GitDeliveryPullRequestSeams {
+export interface GitDeliveryPullRequestSeams extends GitDeliveryApprovalSeams {
   readonly prAdapterFactory?: ((workspace: WorkspaceInfo) => GitPullRequestAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
-  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
 }
@@ -96,6 +101,26 @@ function prAdapterFor(
   return createNodeGitPullRequestAdapter({ workspace, processEnv: process.env, now });
 }
 
+const APPROVAL_CONTEXT_DRIFT_RESULT: GitDeliveryExecutionResult = {
+  schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+  outcome: "failed",
+  durationMs: 0,
+  errorCode: "precondition-failed",
+};
+
+function guardedPullRequestAdapter(
+  adapter: GitPullRequestAdapter,
+  guard: GitDeliveryApprovalContextGuard | undefined,
+): GitPullRequestAdapter {
+  if (guard === undefined) return adapter;
+  const run = async (effect: () => Promise<GitPrExecResult>): Promise<GitPrExecResult> =>
+    (await guard()) ? effect() : APPROVAL_CONTEXT_DRIFT_RESULT;
+  return {
+    createPullRequest: (request) => run(() => adapter.createPullRequest(request)),
+    updatePullRequest: (request) => run(() => adapter.updatePullRequest(request)),
+  };
+}
+
 /**
  * Runs ONE governed PR operation end-to-end: live snapshot → PR gateway (preflight + policy + approval +
  * execute) → evidence. Returns the gateway lifecycle result; the caller projects it into a content-free
@@ -107,10 +132,21 @@ export async function executeGovernedPullRequest(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPullRequestSeams,
+  approvalContextGuard?: GitDeliveryApprovalContextGuard,
 ): Promise<GitPullRequestLifecycleResult> {
   const now = seams.now ?? Date.now;
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = prAdapterFor(workspace, seams, now);
+  const approvalContext = { drifted: false };
+  const trackedGuard =
+    approvalContextGuard === undefined
+      ? undefined
+      : async (): Promise<boolean> => {
+          approvalContext.drifted = true;
+          const matches = await approvalContextGuard();
+          approvalContext.drifted = !matches;
+          return matches;
+        };
+  const adapter = guardedPullRequestAdapter(prAdapterFor(workspace, seams, now), trackedGuard);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK };
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
@@ -126,7 +162,7 @@ export async function executeGovernedPullRequest(
     },
   );
   persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
-  return result;
+  return approvalContext.drifted ? { lifecycle: result.lifecycle } : result;
 }
 
 // ─── Deterministic change-narrative derivation (content-free) ─────────────────────────────────────

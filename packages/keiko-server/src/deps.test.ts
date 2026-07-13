@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -280,6 +281,55 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.codingRuntimeOrchestrator?.status()).toMatchObject({ state: "idle", revision: 0 });
     expect(deps.codingRuntimeEventHub).toBeDefined();
     deps.dispose?.();
+  });
+
+  it("wires the control-plane quiescence port into the production update manager", async () => {
+    const uiDir = tmp("ui-update-quiescence-");
+    const evidenceDir = tmp("ev-update-quiescence-");
+    const globalRoot = join(
+      tmp("global-update-quiescence-"),
+      "lib",
+      "node_modules",
+      "@oscharko-dev",
+      "keiko",
+    );
+    const cliPath = join(globalRoot, "dist", "cli.js");
+    mkdirSync(join(globalRoot, "dist"), { recursive: true });
+    writeFileSync(
+      join(globalRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko" }),
+      "utf8",
+    );
+    writeFileSync(cliPath, "", "utf8");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        KEIKO_CLI_BIN_PATH: cliPath,
+        KEIKO_STATE_DIR: join(uiDir, "state"),
+        PATH: "",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const quiescence = deps.codingRuntimeQuiescence;
+    if (quiescence === undefined) throw new Error("expected production quiescence port");
+    vi.spyOn(quiescence, "isQuiescent").mockReturnValue(false);
+    const updateSession = deps.updateSession;
+    if (updateSession === undefined) throw new Error("expected production update session");
+
+    try {
+      expect(updateSession.getStatus().installMode.status).toBe("supported");
+      updateSession.start({ targetVersion: "0.2.16" });
+      await vi.waitFor(() => {
+        expect(updateSession.getStatus().lastSession).toMatchObject({
+          phase: "failed",
+          failureReason: "coding-runtime-not-quiescent",
+          retryable: true,
+        });
+      });
+    } finally {
+      deps.dispose?.();
+    }
   });
 
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {

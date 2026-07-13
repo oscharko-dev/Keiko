@@ -13,6 +13,7 @@
 // the deterministic suggestion scaffold only — never the message body, diff, or raw paths.
 
 import type { IncomingMessage } from "node:http";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   analyzeGitCommitIntent,
   evaluateGitPolicy,
@@ -24,11 +25,15 @@ import {
   type GitCommitMessageValidation,
   type GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
-import { evaluateGitPreflight, summarizeStagedChangeset } from "@oscharko-dev/keiko-tools";
+import {
+  evaluateGitPreflight,
+  summarizeStagedChangeset,
+  type GitMutationLifecycleResult,
+} from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  parseGitDeliveryApprovalRequest,
+  parseRequiredGitDeliveryApprovalClaim,
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
@@ -50,6 +55,12 @@ import {
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
+import {
+  approvalStoreFor,
+  createDeliveryApprovalContextGuard,
+  issueDeliveryApproval,
+} from "./deliveryApproval.js";
+import { buildCommitApprovalBinding } from "./deliveryApprovalContext.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -238,7 +249,7 @@ interface ExecuteRequest {
 function validateExecute(obj: Record<string, unknown>): ExecuteRequest | undefined {
   if (!isNonEmptyString(obj.message)) return undefined;
   if (obj.allowEmpty !== undefined && typeof obj.allowEmpty !== "boolean") return undefined;
-  const approval = parseGitDeliveryApprovalRequest(obj.approval);
+  const approval = parseRequiredGitDeliveryApprovalClaim(obj.approval);
   if (approval === undefined) return undefined;
   return {
     projectId: obj.projectId as string,
@@ -247,6 +258,125 @@ function validateExecute(obj: Record<string, unknown>): ExecuteRequest | undefin
     approval,
   };
 }
+
+const APPROVAL_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "projectId",
+  "message",
+  "allowEmpty",
+  "confirmed",
+]);
+
+function validateApprovalRequest(
+  obj: Record<string, unknown>,
+): Omit<ExecuteRequest, "approval"> | undefined {
+  if (obj.confirmed !== true || !isNonEmptyString(obj.message)) return undefined;
+  if (obj.allowEmpty !== undefined && typeof obj.allowEmpty !== "boolean") return undefined;
+  return {
+    projectId: obj.projectId as string,
+    message: obj.message,
+    allowEmpty: obj.allowEmpty === true,
+  };
+}
+
+function messagePolicyBlock(
+  validation: Extract<GitCommitMessageValidation, { readonly ok: false }>,
+  deps: Pick<UiHandlerDeps, "redactor">,
+): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "blocked",
+      actionKind: "commit",
+      blockReason: "message-policy",
+      messageViolations: validation.violations,
+    }),
+  };
+}
+
+type CommitCommand = Readonly<{ kind: "commit"; message: string; allowEmpty: boolean }>;
+
+async function executeApprovedCommit(input: {
+  readonly request: ExecuteRequest;
+  readonly command: CommitCommand;
+  readonly workspace: WorkspaceInfo;
+  readonly deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">;
+  readonly seams: GitDeliveryExecutionSeams;
+  readonly policy: GitCommitMessagePolicy;
+}): Promise<GitMutationLifecycleResult | undefined> {
+  const binding = await buildCommitApprovalBinding({
+    projectId: input.request.projectId,
+    command: input.command,
+    workspace: input.workspace,
+    messagePolicy: input.policy,
+    seams: input.seams,
+  });
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(input.request.approval, {
+    store: approvalStoreFor(input.seams),
+    binding,
+    nowMs: (input.seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) return undefined;
+  const guard = createDeliveryApprovalContextGuard(binding, () =>
+    buildCommitApprovalBinding({
+      projectId: input.request.projectId,
+      command: input.command,
+      workspace: input.workspace,
+      messagePolicy: input.policy,
+      seams: input.seams,
+    }),
+  );
+  return executeGovernedMutation(
+    input.command,
+    verifiedApproval,
+    input.workspace,
+    input.deps,
+    input.seams,
+    guard,
+  );
+}
+
+export const createHandleCommitApproval = (
+  options: GitDeliveryCommitRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  const policy = options.messagePolicy ?? KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY;
+  return async (ctx, deps): Promise<RouteResult> => {
+    const read = await readParsed(ctx.req);
+    if (!read.ok) return read.result;
+    const pre = preValidate(read.value, APPROVAL_KEYS);
+    if (!pre.ok) return pre.result;
+    const req = validateApprovalRequest(pre.obj);
+    if (req === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
+    const workspace = resolveProjectWorkspace(deps, req.projectId);
+    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
+    if (!validateGitCommitMessage(req.message, policy).ok) {
+      return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
+    }
+    const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
+    try {
+      const binding = await buildCommitApprovalBinding({
+        projectId: req.projectId,
+        command,
+        workspace,
+        messagePolicy: policy,
+        seams,
+      });
+      return {
+        status: 201,
+        body: issueDeliveryApproval({
+          store: approvalStoreFor(seams),
+          binding,
+          actionKind: "commit",
+          nowMs: (seams.now ?? Date.now)(),
+        }),
+      };
+    } catch {
+      return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+    }
+  };
+};
 
 export const createHandleCommitExecute = (
   options: GitDeliveryCommitRouteOptions = {},
@@ -265,31 +395,22 @@ export const createHandleCommitExecute = (
 
     // Message-policy gate (AC2): a policy-violating message blocks the commit BEFORE the kernel runs.
     const validation = validateGitCommitMessage(req.message, policy);
-    if (!validation.ok) {
-      return {
-        status: 200,
-        body: deps.redactor({
-          schemaVersion: "1",
-          status: "blocked",
-          actionKind: "commit",
-          blockReason: "message-policy",
-          messageViolations: validation.violations,
-        }),
-      };
-    }
+    if (!validation.ok) return messagePolicyBlock(validation, deps);
     const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
-      store: seams.approvalStore,
-      binding: { projectId: req.projectId, operation: "commit", command },
-      nowMs: (seams.now ?? Date.now)(),
-    });
-    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
-    let result;
+    let result: GitMutationLifecycleResult | undefined;
     try {
-      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
+      result = await executeApprovedCommit({
+        request: req,
+        command,
+        workspace,
+        deps,
+        seams,
+        policy,
+      });
     } catch {
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }
+    if (result === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
   };
 };
@@ -299,6 +420,11 @@ export const createHandleCommitExecute = (
 export const createGitDeliveryCommitRouteGroup = (
   options: GitDeliveryCommitRouteOptions = {},
 ): readonly RouteDefinition[] => [
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/commit/approval",
+    handler: createHandleCommitApproval(options),
+  },
   {
     method: "POST",
     pattern: "/api/git-delivery/commit/preview",

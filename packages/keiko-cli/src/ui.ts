@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
-import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import type { ProductionCodingRuntimeResolver, UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
 // GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
@@ -86,6 +86,8 @@ export interface UiCliDeps {
   readonly currentExecArgv?: () => readonly string[];
   // Test seam for local .env discovery. Defaults to process.cwd().
   readonly cwd?: string | undefined;
+  /** Explicit native/runtime qualification seam; absence keeps productive coding unavailable. */
+  readonly codingRuntimeResolver?: ProductionCodingRuntimeResolver | undefined;
 }
 
 interface LiveCspSource {
@@ -457,16 +459,20 @@ async function buildHandlerDepsOrReport(
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
+  deps: UiCliDeps,
 ): Promise<UiHandlerDeps | number> {
   const { buildUiHandlerDeps, UiStoreError } = await loadServerModule();
   try {
-    return buildUiHandlerDeps({
+    const handlerDeps = buildUiHandlerDeps({
       configPath: resolveUiConfigPath(parsed, effectiveEnv),
       evidenceDir: parsed.evidenceDir,
       uiDbPath: parsed.uiDbPath,
       initialProjectPath: cwd,
       env: effectiveEnv,
+      ...(deps.codingRuntimeResolver ? { codingRuntimeResolver: deps.codingRuntimeResolver } : {}),
     });
+    await handlerDeps.codingRuntimeStartupRecovery;
+    return handlerDeps;
   } catch (error) {
     if (error instanceof UiStoreError) {
       io.err(`keiko ui: ${error.message}\n`);
@@ -604,6 +610,7 @@ async function launchUiFromDeps(
     cwd,
     withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
     io,
+    deps,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
   try {

@@ -26,6 +26,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly takeover: () => Promise<void>;
   readonly retry: (taskIntent: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
+  readonly dismissTerminalOutcome: () => void;
 }
 
 interface RuntimeActionInput {
@@ -70,6 +71,7 @@ function createCodingWorkbenchRuntimeActions({
     takeover,
     retry,
     acknowledgeRecovery,
+    dismissTerminalOutcome: () => dispatch({ kind: "terminal-outcome-dismissed" }),
   };
 }
 

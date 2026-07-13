@@ -18,6 +18,7 @@ import {
   type CodingWorkbenchNetworkPolicy,
   type CodingWorkbenchRuntimeAuthorityEnvelope,
   type CodingWorkbenchRuntimeAdapterKind,
+  type CodingWorkbenchRuntimeExecutionBinding,
   type CodingWorkbenchRuntimeAuthorityFacts,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeDelegationUsage,
@@ -43,6 +44,7 @@ import {
   type RuntimeCapabilityStore,
 } from "./runtimeCapabilityStore.js";
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
+import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 
 export interface CodingRuntimeTrustedContext {
   readonly operatorId: string;
@@ -80,6 +82,8 @@ export type CodingRuntimeMintResult =
       readonly modelGatewayCapability: string;
       /** Server-private audience-separated governed-tool secret. */
       readonly toolFacadeCapability: string;
+      /** Exact mode bound into the validated, registered authority envelope. */
+      readonly effectiveMode: CodingWorkbenchMode;
       /** Server-private per-launch supervisor binding; never project to browser or evidence. */
       readonly treeBindingId: string;
     }
@@ -118,7 +122,7 @@ export class CodingRuntimeAuthorityService {
 
   public constructor(
     private readonly registry: EditorAgentAuthorityRegistry,
-    private readonly newRunId: () => string = () => randomBytes(16).toString("hex"),
+    private readonly newRunId: () => string = newRuntimeRunId,
     private readonly newNonce: () => string = () => randomBytes(32).toString("hex"),
     private readonly approvals: SupervisedCodingApprovalStore = createInMemorySupervisedCodingApprovalStore(),
     private readonly capabilities: RuntimeCapabilityStore = createInMemoryRuntimeCapabilityStore(),
@@ -153,6 +157,17 @@ export class CodingRuntimeAuthorityService {
     confirmation: CodingWorkbenchRuntimeMintConfirmation,
     nowIso: string,
   ): CodingRuntimeMintResult {
+    return this.mintStartForRun(this.newRunId(), intent, context, confirmation, nowIso);
+  }
+
+  /** Server-only bridge for aligning the orchestrator aggregate with minted authority. */
+  public mintStartForRun(
+    runId: string,
+    intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
+    context: CodingRuntimeTrustedContext,
+    confirmation: CodingWorkbenchRuntimeMintConfirmation,
+    nowIso: string,
+  ): CodingRuntimeMintResult {
     if (this.runtimeState.state !== "idle") return { ok: false, reason: "active-run-conflict" };
     if (intent.modelSource !== context.modelProfile.source) {
       return { ok: false, reason: "authority-resolution-failed" };
@@ -169,7 +184,7 @@ export class CodingRuntimeAuthorityService {
       intent,
       context,
       nowIso,
-      this.newRunId(),
+      runId,
       this.newNonce(),
       approvalDigest,
     );
@@ -192,8 +207,21 @@ export class CodingRuntimeAuthorityService {
       runtimeCapability: capabilities.toolFacadeCapability,
       modelGatewayCapability: capabilities.modelGatewayCapability,
       toolFacadeCapability: capabilities.toolFacadeCapability,
+      effectiveMode: envelope.authority.effectiveMode,
       treeBindingId,
     };
+  }
+
+  public authenticateCapability(
+    capability: string,
+    audience: RuntimeCapabilityAudience,
+    nowMs = Date.now(),
+  ): ReturnType<RuntimeCapabilityStore["authenticate"]> {
+    const authenticated = this.capabilities.authenticate(capability, nowMs);
+    if (!authenticated.ok || authenticated.binding.audience !== audience) {
+      return { ok: false, reason: authenticated.ok ? "invalid" : authenticated.reason };
+    }
+    return authenticated;
   }
 
   public resolveForDelegation(
@@ -334,6 +362,30 @@ export class CodingRuntimeAuthorityService {
 
   public complete(runId: string, nowIso: string): void {
     if (this.runtimeState.runId === runId) this.transition(runId, "succeeded", nowIso);
+  }
+
+  /** Releases authority only when launch failed before any supervised process tree existed. */
+  public abandonUnlaunched(runId: string, nowIso: string): boolean {
+    if (
+      this.runtimeState.state !== "starting" ||
+      this.runtimeState.runId !== runId ||
+      this.activeAuthorityRef?.runId !== runId ||
+      this.reapPending !== undefined
+    ) {
+      return false;
+    }
+    this.registry.revoke(this.activeAuthorityRef);
+    this.capabilities.revokeRun(runId);
+    this.approvals.invalidateRun(runId);
+    this.activeAuthorityRef = undefined;
+    this.activeTreeBindingId = undefined;
+    this.runtimeState = {
+      schemaVersion: "1",
+      state: "idle",
+      revision: this.runtimeState.revision + 1,
+      updatedAt: nowIso,
+    };
+    return true;
   }
 
   public state(): CodingWorkbenchRuntimeState {
@@ -584,13 +636,19 @@ function buildRuntimeAuthority(
   approvalDigest: string,
 ): CodingWorkbenchRuntimeAuthorityEnvelope {
   const rootDigest = digest(context.workspaceRoot);
+  const identity = projectedIdentity(context, rootDigest);
+  const branch = projectedBranch(context.branch);
+  const modelProfile = {
+    ...context.modelProfile,
+    profileId: projectRuntimeAuthorityValue("profile", context.modelProfile.profileId),
+  };
   const authority: CodingWorkbenchAuthorityEnvelope = {
     schemaVersion: "1",
     runId,
-    localUser: context.operatorId,
-    taskRefs: [context.taskId],
-    workspace: { workspaceId: context.workspaceId, rootLabel: "workspace", rootDigest },
-    branch: context.branch,
+    localUser: identity.localUser,
+    taskRefs: [identity.taskId],
+    workspace: identity.workspace,
+    branch,
     requestedMode: intent.requestedMode,
     deploymentCeiling: context.deploymentCeiling,
     effectiveMode: resolveEffectiveCodingWorkbenchMode(
@@ -600,7 +658,7 @@ function buildRuntimeAuthority(
     runtimeSource: context.runtimeSource,
     actionClasses: context.actionClasses,
     connectorScopes: context.connectorScopes,
-    modelProfile: context.modelProfile,
+    modelProfile,
     commandPolicy: context.commandPolicy,
     networkPolicy: context.networkPolicy,
     gates: context.gates,
@@ -611,19 +669,54 @@ function buildRuntimeAuthority(
   return {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     authority,
-    binding: {
-      taskId: context.taskId,
-      projectId: context.projectId,
-      projectDigest: context.projectDigest,
-      workspaceId: context.workspaceId,
-      workspaceRootDigest: rootDigest,
-      branchRef: context.branchRef,
-      branchHeadDigest: context.branchHeadDigest,
-    },
+    binding: identity.binding,
     intentDigest: startIntentDigest(intent),
     nonceDigest: digest(nonce),
     issuedAt,
   };
+}
+
+function projectedIdentity(
+  context: CodingRuntimeTrustedContext,
+  rootDigest: string,
+): {
+  readonly localUser: string;
+  readonly taskId: string;
+  readonly workspace: CodingWorkbenchAuthorityEnvelope["workspace"];
+  readonly binding: CodingWorkbenchRuntimeExecutionBinding;
+} {
+  const taskId = projectRuntimeAuthorityValue("task", context.taskId);
+  const workspaceId = projectRuntimeAuthorityValue("workspace", context.workspaceId);
+  return {
+    localUser: projectRuntimeAuthorityValue("operator", context.operatorId),
+    taskId,
+    workspace: { workspaceId, rootLabel: workspaceId, rootDigest },
+    binding: {
+      taskId,
+      projectId: projectRuntimeAuthorityValue("project", context.projectId),
+      projectDigest: context.projectDigest,
+      workspaceId,
+      workspaceRootDigest: rootDigest,
+      branchRef: projectRuntimeAuthorityValue("branch", context.branchRef),
+      branchHeadDigest: context.branchHeadDigest,
+    },
+  };
+}
+
+function projectedBranch(
+  branch: CodingWorkbenchBranchConstraints,
+): CodingWorkbenchBranchConstraints {
+  const headRef = projectRuntimeAuthorityValue("branch", branch.headRef);
+  return {
+    ...branch,
+    baseRef: projectRuntimeAuthorityValue("branch", branch.baseRef),
+    headRef,
+    allowedPrefixes: [headRef],
+  };
+}
+
+function newRuntimeRunId(): string {
+  return `run-${BigInt(`0x${randomBytes(16).toString("hex")}`).toString(10)}`;
 }
 
 function digest(value: string): string {

@@ -24,6 +24,7 @@ import {
   type CodingRuntimeResolution,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
+import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   createRuntimeProcessSupervisor,
@@ -58,6 +59,7 @@ async function reapReceipt(runId: string, treeBindingId: string): Promise<Runtim
   });
   const launched = supervisor.spawnOwnedTree({
     runId,
+    recoveryHandle: "d".repeat(32),
     treeBindingId,
     executable: "/managed/runtime",
     args: [],
@@ -194,15 +196,32 @@ function context(): CodingRuntimeTrustedContext {
 function facts(
   overrides: Partial<CodingWorkbenchRuntimeAuthorityFacts> = {},
 ): CodingWorkbenchRuntimeAuthorityFacts {
-  const trusted = context();
+  return factsFor(context(), overrides);
+}
+
+function factsFor(
+  trusted: CodingRuntimeTrustedContext,
+  overrides: Partial<CodingWorkbenchRuntimeAuthorityFacts> = {},
+): CodingWorkbenchRuntimeAuthorityFacts {
+  const branchHead = projectRuntimeAuthorityValue("branch", trusted.branch.headRef);
+  const branch = {
+    ...trusted.branch,
+    baseRef: projectRuntimeAuthorityValue("branch", trusted.branch.baseRef),
+    headRef: branchHead,
+    allowedPrefixes: [branchHead],
+  };
+  const modelProfile = {
+    ...trusted.modelProfile,
+    profileId: projectRuntimeAuthorityValue("profile", trusted.modelProfile.profileId),
+  };
   return {
     binding: {
-      taskId: trusted.taskId,
-      projectId: trusted.projectId,
+      taskId: projectRuntimeAuthorityValue("task", trusted.taskId),
+      projectId: projectRuntimeAuthorityValue("project", trusted.projectId),
       projectDigest: trusted.projectDigest,
-      workspaceId: trusted.workspaceId,
+      workspaceId: projectRuntimeAuthorityValue("workspace", trusted.workspaceId),
       workspaceRootDigest: createHash("sha256").update(ROOT).digest("hex"),
-      branchRef: trusted.branchRef,
+      branchRef: projectRuntimeAuthorityValue("branch", trusted.branchRef),
       branchHeadDigest: trusted.branchHeadDigest,
     },
     actionClasses: trusted.actionClasses,
@@ -213,8 +232,8 @@ function facts(
     commandPolicyDigest: codingRuntimeFactDigest(trusted.commandPolicy),
     networkPolicyDigest: codingRuntimeFactDigest(trusted.networkPolicy),
     gatesDigest: codingRuntimeFactDigest(trusted.gates),
-    branchConstraintsDigest: codingRuntimeFactDigest(trusted.branch),
-    modelProfileDigest: codingRuntimeFactDigest(trusted.modelProfile),
+    branchConstraintsDigest: codingRuntimeFactDigest(branch),
+    modelProfileDigest: codingRuntimeFactDigest(modelProfile),
     ...overrides,
   };
 }
@@ -224,6 +243,8 @@ function service(): CodingRuntimeAuthorityService {
     new EditorAgentAuthorityRegistry(),
     () => "run-1",
     () => "nonce-1",
+    createInMemorySupervisedCodingApprovalStore(),
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) }),
   );
 }
 
@@ -290,6 +311,115 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 }
 
 describe("CodingRuntimeAuthorityService", () => {
+  it("projects authority identifiers and binds only the exact projected branch label", () => {
+    const authority = service();
+    const sentinel = "secret://tenant.example/private/2258";
+    const trusted = {
+      ...context(),
+      operatorId: `${sentinel}-operator`,
+      taskId: `${sentinel}-task`,
+      projectId: `${sentinel}-project`,
+      workspaceId: `${sentinel}-workspace`,
+      branchRef: `${sentinel}-branch`,
+      branch: {
+        ...context().branch,
+        baseRef: `${sentinel}-base`,
+        headRef: `${sentinel}-branch`,
+      },
+      modelProfile: { ...context().modelProfile, profileId: `${sentinel}-profile` },
+    };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    const minted = authority.mintStartForRun("run-2258", intent, trusted, confirmation, NOW);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+    const result = resolve(authority, minted.authorityRef, factsFor(trusted));
+    if (!result.ok) throw new Error("expected delegation resolution");
+
+    expect(result.envelope.binding).toMatchObject(factsFor(trusted).binding);
+    expect(result.envelope.authority.branch.allowedPrefixes).toEqual([
+      result.envelope.binding.branchRef,
+    ]);
+    expect(JSON.stringify(result.envelope)).not.toContain(sentinel);
+    expect(result.envelope.authority.localUser).toMatch(/^operator-[0-9]+$/u);
+    expect(result.envelope.authority.modelProfile.profileId).toMatch(/^profile-[0-9]+$/u);
+  });
+
+  it("binds a server-owned orchestrator run id into every minted capability", () => {
+    const authority = service();
+    const trusted = { ...context(), expiresAt: "2099-07-11T13:00:00.000Z" };
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+
+    const minted = authority.mintStartForRun("run-2258", intent, trusted, confirmation, NOW);
+
+    expect(minted.ok).toBe(true);
+    if (!minted.ok) return;
+    expect(minted.authorityRef.runId).toBe("run-2258");
+    expect(
+      authority.authenticateCapability(
+        minted.modelGatewayCapability,
+        "model-gateway",
+        Date.parse(NOW),
+      ),
+    ).toMatchObject({ ok: true, binding: { runId: "run-2258" } });
+    expect(
+      authority.authenticateCapability(minted.toolFacadeCapability, "tool-facade", Date.parse(NOW)),
+    ).toMatchObject({ ok: true, binding: { runId: "run-2258" } });
+  });
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "returns the exact %s effective mode registered in authority",
+    (requestedMode) => {
+      const authority = service();
+      const base = context();
+      const trusted = {
+        ...base,
+        deploymentCeiling: requestedMode,
+        actionClasses: ["workspace-read", "workspace-write", "verification"] as const,
+        commandPolicy: {
+          ...base.commandPolicy,
+          mode: "deny" as const,
+          maxCommandTimeoutMs: 1,
+          requirePerCommandApproval: requestedMode === "governed-assist",
+        },
+      };
+      const start = { ...intent, requestedMode };
+      const confirmation = authority.confirmStart(start, trusted.taskId, trusted.operatorId, NOW);
+
+      const minted = authority.mintStartForRun("run-2258", start, trusted, confirmation, NOW);
+
+      expect(minted).toMatchObject({ ok: true, effectiveMode: requestedMode });
+    },
+  );
+
+  it("revokes an unlaunched run and frees the authority slot for a fresh mint", () => {
+    const authority = service();
+    const first = mint(authority, intent, false);
+    if (!first.ok) throw new Error("expected first mint");
+
+    expect(authority.abandonUnlaunched(first.authorityRef.runId, NOW)).toBe(true);
+    expect(authority.state()).toMatchObject({ state: "idle" });
+    expect(authority.state()).not.toHaveProperty("runId");
+    expect(
+      authority.authenticateCapability(first.toolFacadeCapability, "tool-facade", Date.parse(NOW)),
+    ).toMatchObject({ ok: false });
+    const trusted = context();
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(authority.mintStartForRun("run-2", intent, trusted, confirmation, NOW)).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("refuses to abandon authority after launch reached ready", () => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+
+    expect(authority.abandonUnlaunched(minted.authorityRef.runId, NOW)).toBe(false);
+    expect(authority.state()).toMatchObject({ state: "ready", runId: minted.authorityRef.runId });
+  });
+
   it("uses a one-use confirmation to mint retained server authority", () => {
     const authority = service();
     const trusted = context();
@@ -305,7 +435,11 @@ describe("CodingRuntimeAuthorityService", () => {
     authority.transition(minted.authorityRef.runId, "running", NOW);
     expect(resolve(authority, minted.authorityRef)).toMatchObject({
       ok: true,
-      envelope: { authority: { localUser: "operator-1" } },
+      envelope: {
+        authority: {
+          localUser: projectRuntimeAuthorityValue("operator", "operator-1"),
+        },
+      },
     });
     expect(resolve(authority, minted.authorityRef, facts(), "delegation-2")).toMatchObject({
       ok: true,

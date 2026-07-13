@@ -1,0 +1,105 @@
+{
+  "issue": 2258,
+  "surface": "managed-opencode-live-qualification",
+  "status": "live-qualification-passed-with-release-blockers",
+  "command": "npm run test:e2e:coding-workbench-2258",
+  "readiness": "KEIKO_2258_READY http://127.0.0.1:32458",
+  "captureCssSha256": "a6600bf4e0eda38717f525a6ba7c64d01d119e96153d206d5d61d5392498ecee",
+  "currentCssSha256": "a6600bf4e0eda38717f525a6ba7c64d01d119e96153d206d5d61d5392498ecee",
+  "retainedArtifacts": [
+    {
+      "file": "browser/01-managed-terminal-dark-1280.png",
+      "sha256": "a50cf86563cb3bc1da2bd5d6cc7ce9eebb27244c61996ace89daae5691bb0381",
+      "viewport": { "width": 1280, "height": 900 },
+      "theme": "dark",
+      "state": "succeeded"
+    },
+    {
+      "file": "browser/02-light-768.png",
+      "sha256": "17b4a7c4ee0b077f3d8223cb7559b5fbd20b573cc5784ec35d0dca7064408e75",
+      "viewport": { "width": 768, "height": 900 },
+      "theme": "light",
+      "state": "idle"
+    },
+    {
+      "file": "browser/03-dark-320.png",
+      "sha256": "83c52efca3cb9c1345e040d2924055abdf3ac7835435c264a7c9e3e6c94c6e91",
+      "viewport": { "width": 320, "height": 900 },
+      "theme": "dark",
+      "state": "idle"
+    },
+    {
+      "file": "browser/04-reduced-motion-dark-1280.png",
+      "sha256": "93391d624630c27325a6bae1dbb503a56fe27a883b5e86122035ea172d3de103",
+      "viewport": { "width": 1280, "height": 900 },
+      "theme": "dark-reduced-motion",
+      "state": "idle"
+    },
+    {
+      "file": "browser/05-light-high-contrast-1280.png",
+      "sha256": "a0a62e68b51181e79125b73cce5a3a381cc1431b732f7dac2acd8e8f1449112b",
+      "viewport": { "width": 1280, "height": 900 },
+      "theme": "light-high-contrast",
+      "state": "idle"
+    },
+    {
+      "file": "browser/06-forced-colors-dark-768.png",
+      "sha256": "6cf3d8da56d9a83de64dc0b4e1413835160907e3ac46372cecbbb742359634f9",
+      "viewport": { "width": 768, "height": 900 },
+      "theme": "dark-forced-colors",
+      "state": "idle"
+    },
+    {
+      "file": "a11y-proof.json",
+      "kind": "accessibility-proof"
+    },
+    {
+      "file": "coding-workbench-live-fidelity-proof.json",
+      "kind": "fidelity-proof"
+    }
+  ],
+  "observedRun": {
+    "date": "2026-07-13",
+    "runtime": "node-24.18.0",
+    "heapLimit": "8GB",
+    "captureRequested": true,
+    "packagesBuild": "passed",
+    "uiBuild": "passed",
+    "playwright": {
+      "selected": 18,
+      "passed": 16,
+      "fixme": 2,
+      "failed": 0,
+      "serialProject": "chromium"
+    },
+    "verifiedLiveScenarios": {
+      "exactProductionCspHeader": true,
+      "positiveManagedOpenCodeJourney": true,
+      "questionOfflineRefreshAndSettlement": true,
+      "questionRejectionSafeTerminalSet": true,
+      "authorityModeCap": true,
+      "stopAndTakeoverOutcomes": true,
+      "recoveryAcknowledgementAndFreshRetry": true,
+      "outOfScopeContainment": true,
+      "workspaceDriftFailsClosed": true,
+      "oneUseGitCommitAndReplayDenial": true,
+      "visualAccessibilityMatrix": true
+    },
+    "knownLimitation": "Functional model-question rejection may terminate succeeded or failed; the live test permits only that current-run safe terminal set and proves stale controls are absent."
+  },
+  "contentSafety": {
+    "questionBodiesRetained": false,
+    "answerBodiesRetained": false,
+    "customerDataRetained": false,
+    "credentialsRetained": false,
+    "approvalClaimsRetained": false,
+    "screenshotsVisuallyReviewed": true,
+    "fullPathsVisible": false,
+    "endpointsVisible": false,
+    "syntheticIdentifiersOnly": true
+  },
+  "releaseBlockers": [
+    "credentialed-codex-attestation-not-provided",
+    "platform-qualified-native-containment-not-provided"
+  ]
+}

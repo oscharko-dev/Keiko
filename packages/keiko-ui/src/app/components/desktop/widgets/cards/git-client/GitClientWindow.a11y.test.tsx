@@ -207,6 +207,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "unstage",
     })),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
+    commitApproval: vi.fn<GitClientSeam["commitApproval"]>(),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -215,12 +216,14 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
     syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
+    pushApproval: vi.fn<GitClientSeam["pushApproval"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "push",
     })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+    prApproval: vi.fn<GitClientSeam["prApproval"]>(),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
     mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),

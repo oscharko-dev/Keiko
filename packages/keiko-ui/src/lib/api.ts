@@ -118,6 +118,7 @@ import type {
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
+  GitDeliveryIssuedApproval,
   EditorHotExitSnapshotV1,
   PdfCitationPreviewOpenResponse,
   PdfCitationPreviewSelection,
@@ -2592,6 +2593,25 @@ export interface GitDeliveryCommitExecuteInput {
   readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
+export type GitDeliveryCommitApprovalInput = Omit<GitDeliveryCommitExecuteInput, "approval">;
+
+export async function fetchGitDeliveryCommitApproval(
+  input: GitDeliveryCommitApprovalInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryIssuedApproval> {
+  return fetchJson("/api/git-delivery/commit/approval", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      confirmed: true,
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export async function fetchGitDeliveryCommitExecute(
   input: GitDeliveryCommitExecuteInput,
   signal?: AbortSignal,
@@ -2620,6 +2640,8 @@ export interface GitDeliveryPushInput {
   readonly setUpstreamTracking?: boolean | undefined;
   readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
+
+export type GitDeliveryPushApprovalInput = Omit<GitDeliveryPushInput, "approval">;
 
 export interface GitDeliveryPushPreviewResponse {
   readonly schemaVersion: "1";
@@ -2664,6 +2686,28 @@ export async function fetchGitDeliveryPushPreview(
   return fetchJson("/api/git-delivery/push/preview", {
     method: "POST",
     body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushApproval(
+  input: GitDeliveryPushApprovalInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryIssuedApproval> {
+  return fetchJson("/api/git-delivery/push/approval", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      remoteAlias: input.remoteAlias,
+      remoteBranchName: input.remoteBranchName,
+      sourceBranchName: input.sourceBranchName,
+      ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
+      ...(input.setUpstreamTracking === undefined
+        ? {}
+        : { setUpstreamTracking: input.setUpstreamTracking }),
+      confirmed: true,
+    }),
     ...(signal === undefined ? {} : { signal }),
   });
 }
@@ -2750,6 +2794,8 @@ export interface GitDeliveryPrInput {
   readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
+export type GitDeliveryPrApprovalInput = Omit<GitDeliveryPrInput, "approval">;
+
 export interface GitDeliveryPrReadiness {
   readonly objectExists: boolean;
   readonly reviewReady: boolean;
@@ -2809,6 +2855,31 @@ export async function fetchGitDeliveryPrPreview(
   return fetchJson("/api/git-delivery/pr/preview", {
     method: "POST",
     body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrApproval(
+  input: GitDeliveryPrApprovalInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryIssuedApproval> {
+  return fetchJson("/api/git-delivery/pr/approval", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      kind: input.kind,
+      ownerAndRepo: input.ownerAndRepo,
+      headBranchName: input.headBranchName,
+      baseBranchName: input.baseBranchName,
+      title: input.title,
+      body: input.body,
+      ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
+      ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
+      ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
+      ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
+      confirmed: true,
+    }),
     ...(signal === undefined ? {} : { signal }),
   });
 }

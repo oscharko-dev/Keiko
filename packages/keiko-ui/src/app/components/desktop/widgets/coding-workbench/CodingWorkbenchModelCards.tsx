@@ -17,7 +17,7 @@ import {
   resourceTone,
 } from "./codingWorkbenchLabels";
 import { PanelTitle } from "./CodingWorkbenchSections";
-import styles from "./CodingWorkbenchWindow.module.css";
+import styles from "./codingWorkbenchStyles";
 
 interface ModelRuntimeStatusProps {
   readonly state: CodingWorkbenchRuntimeState;

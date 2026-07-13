@@ -33,6 +33,7 @@ import {
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
+import { runtimeSupervisorQualificationReceiptBytes } from "./qualify-runtime-supervisor.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -991,6 +992,14 @@ function portableAssetRecord(
   const stageRoot = dirname(dirname(manifestPath));
   const requiredEvidence = requiredPortableEvidence(target, stageRoot, manifest, failures);
   const extraEvidence = extraPortableEvidenceFiles(entry, stageRoot, target, failures);
+  validateRuntimeQualificationEvidence(
+    entry,
+    target,
+    stageRoot,
+    archivePath,
+    manifestPath,
+    failures,
+  );
   for (const evidence of extraEvidence) {
     validateEvidenceContent(evidence.sourcePath, evidence.assetName, failures);
   }
@@ -1003,6 +1012,44 @@ function portableAssetRecord(
     platformTarget: target.platformTarget,
     stageRoot,
   };
+}
+
+function validateRuntimeQualificationEvidence(
+  entry,
+  target,
+  stageRoot,
+  archivePath,
+  manifestPath,
+  failures,
+) {
+  const receiptPath = "evidence/runtime-supervisor-qualification.json";
+  const paths = Array.isArray(entry.evidencePaths) ? entry.evidencePaths : [];
+  if (target.platformTarget !== "windows-x64") {
+    if (paths.includes(receiptPath))
+      failures.push(`${target.platformTarget} cannot claim runtime qualification.`);
+    return;
+  }
+  if (paths.length !== 1 || paths[0] !== receiptPath) {
+    failures.push("windows-x64.evidencePaths must contain the runtime qualification receipt.");
+    return;
+  }
+  try {
+    const resourceRoot = join(stageRoot, "payload", "Keiko");
+    const expected = runtimeSupervisorQualificationReceiptBytes(
+      {
+        artifact: archivePath,
+        helper: join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+        manifest: manifestPath,
+        resourceRoot,
+      },
+      target.platformTarget,
+    );
+    if (readFileSync(join(stageRoot, receiptPath), "utf8") !== expected) {
+      failures.push("windows-x64 runtime qualification receipt does not match signed bytes.");
+    }
+  } catch {
+    failures.push("windows-x64 runtime qualification receipt is missing or invalid.");
+  }
 }
 
 function extraPortableEvidenceFiles(entry, stageRoot, target, failures) {

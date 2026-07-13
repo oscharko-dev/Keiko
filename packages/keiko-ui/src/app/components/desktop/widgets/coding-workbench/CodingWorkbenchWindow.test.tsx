@@ -35,6 +35,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     takeover: vi.fn(() => Promise.resolve()),
     retry: vi.fn(() => Promise.resolve()),
     acknowledgeRecovery: vi.fn(() => Promise.resolve()),
+    dismissTerminalOutcome: vi.fn(),
   };
 }
 
@@ -208,6 +209,36 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Authentication setup plan unavailable.");
+  });
+
+  it("keeps the last content-free terminal outcome visible after server readiness returns idle", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        run: { status: "ready", value: snapshot({ state: "idle" }), error: null },
+        terminalOutcome: {
+          runId: "run-1",
+          state: "succeeded",
+          revision: 6,
+          events: [
+            {
+              ...event(6),
+              kind: "runtime-event",
+              state: "succeeded",
+              eventKind: "verification-summarized",
+            },
+          ],
+        },
+      }),
+    );
+
+    const outcome = screen.getByTestId("coding-workbench-terminal-outcome");
+    expect(outcome).toHaveAttribute("data-terminal-state", "succeeded");
+    expect(outcome).toHaveTextContent("Succeeded");
+    expect(screen.getByText("Verification summarized")).toBeInTheDocument();
+    expect(screen.queryByText(/Synthetic managed-runtime qualification/u)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dismiss run outcome" }));
+    expect(liveActions.dismissTerminalOutcome).toHaveBeenCalledOnce();
   });
 
   it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", () => {

@@ -26,7 +26,13 @@ import type {
 } from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
-import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
+import {
+  DEFAULT_GIT_CLIENT,
+  executeApprovedCommit,
+  executeApprovedPush,
+  formatGitError,
+  useGitActions,
+} from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
@@ -583,7 +589,7 @@ export function GitClientWindow({
   const commitChanges = useCallback(
     (message: string): void => {
       if (selectedPath === null) return;
-      commit.runMutation(() => client.commitExecute({ projectId: selectedPath, message }));
+      commit.runMutation(() => executeApprovedCommit(client, { projectId: selectedPath, message }));
     },
     [client, commit, selectedPath],
   );
@@ -707,7 +713,7 @@ export function GitClientWindow({
             );
             return undefined;
           }
-          return client.pushExecute(input);
+          return executeApprovedPush(client, input);
         })
         .then((res) => {
           if (res === undefined) return;

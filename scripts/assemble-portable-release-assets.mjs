@@ -19,6 +19,7 @@ import {
   sha256File,
   validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
+import { runtimeSupervisorQualificationReceiptBytes } from "./qualify-runtime-supervisor.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -450,7 +451,54 @@ async function loadTarget(options, target) {
   )
     fail(`${target.platformTarget} archive bytes do not match the manifest`);
   assertEvidence(downloaded, manifest, target);
-  return { downloaded, manifest };
+  const evidencePaths = runtimeQualificationEvidencePaths(
+    downloaded,
+    manifestPath,
+    archivePath,
+    manifest,
+    target,
+  );
+  return { downloaded, evidencePaths, manifest };
+}
+
+function runtimeQualificationEvidencePaths(stageRoot, manifestPath, archivePath, manifest, target) {
+  const relativePath = "evidence/runtime-supervisor-qualification.json";
+  const candidate = join(stageRoot, relativePath);
+  if (target.platformTarget !== "windows-x64") {
+    if (existsRegular(candidate))
+      fail(`${target.platformTarget} must not carry a qualification receipt`);
+    return [];
+  }
+  const receiptPath = regularContainedFile(
+    stageRoot,
+    relativePath,
+    "runtime qualification receipt",
+  );
+  const resourceRoot = sidecarPayloadRoot(stageRoot, target);
+  const expected = runtimeSupervisorQualificationReceiptBytes(
+    {
+      artifact: archivePath,
+      helper: join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+      manifest: manifestPath,
+      resourceRoot,
+    },
+    target.platformTarget,
+  );
+  if (assertEvidenceText(receiptPath, "runtime qualification receipt") !== expected) {
+    fail("windows-x64 runtime qualification receipt does not match current signed bytes");
+  }
+  if (manifest.artifact?.sha256 !== JSON.parse(expected).artifactSha256) {
+    fail("windows-x64 runtime qualification receipt is stale");
+  }
+  return [relativePath];
+}
+
+function existsRegular(path) {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export async function assemblePortableReleaseAssets(argv) {
@@ -483,6 +531,9 @@ export async function assemblePortableReleaseAssets(argv) {
       platformTarget: target.platformTarget,
       archivePath: `artifacts/${target.platformTarget}/${target.assetName}`,
       manifestPath: `artifacts/${target.platformTarget}/manifest/portable-manifest.json`,
+      ...(loaded[index].evidencePaths.length === 0
+        ? {}
+        : { evidencePaths: loaded[index].evidencePaths }),
     };
   });
   const manifest = { schemaVersion: 1, artifacts };

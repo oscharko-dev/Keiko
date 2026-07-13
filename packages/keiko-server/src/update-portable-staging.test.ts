@@ -27,6 +27,8 @@ const ASSET_NAME = "keiko-windows-x64.zip";
 const MACOS_ARM64_ASSET_NAME = "keiko-macos-arm64.zip";
 const MACOS_X64_ASSET_NAME = "keiko-macos-x64.zip";
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
+const RUNTIME_SUPERVISOR_BYTES = ENC.encode("signed runtime supervisor");
+const QUALIFICATION_ASSET_NAME = "windows-x64-runtime-supervisor-qualification.json";
 const tempRoots: string[] = [];
 
 const CRC32_TABLE: Uint32Array = ((): Uint32Array => {
@@ -276,6 +278,10 @@ function portableArchive(
       bytes: ENC.encode(JSON.stringify({ name: "@oscharko-dev/keiko", version: TARGET_VERSION })),
     },
     { name: "Keiko/runtime/node/node.exe", bytes: ENC.encode("node") },
+    {
+      name: "Keiko/runtime/native/keiko-runtime-supervisor.exe",
+      bytes: RUNTIME_SUPERVISOR_BYTES,
+    },
     ...extraEntries,
   ]);
 }
@@ -341,6 +347,12 @@ function release(sizeBytes: number): Record<string, unknown> {
         name: `${TARGET}-SHA256SUMS.txt`,
         size: 128,
         browser_download_url: assetUrl(`${TARGET}-SHA256SUMS.txt`),
+      },
+      {
+        id: 103,
+        name: QUALIFICATION_ASSET_NAME,
+        size: 2048,
+        browser_download_url: assetUrl(QUALIFICATION_ASSET_NAME),
       },
     ],
   };
@@ -418,7 +430,9 @@ function responseFor(
   archiveBytes: Uint8Array,
   manifestText = portableManifest(archiveBytes),
   releaseRecord: Record<string, unknown> = release(archiveBytes.length),
+  qualificationText?: string,
 ): typeof fetch {
+  // eslint-disable-next-line complexity -- fixture transport intentionally routes the complete release asset set.
   return vi.fn<typeof fetch>((input) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -438,8 +452,35 @@ function responseFor(
     if (url.endsWith(`${TARGET}-SHA256SUMS.txt`)) {
       return Promise.resolve(new Response(`${sha256(archiveBytes)}  ${ASSET_NAME}\n`));
     }
+    if (url.endsWith(QUALIFICATION_ASSET_NAME)) {
+      return Promise.resolve(
+        new Response(qualificationText ?? qualificationReceipt(archiveBytes, manifestText)),
+      );
+    }
     if (url.endsWith(ASSET_NAME)) return Promise.resolve(new Response(Buffer.from(archiveBytes)));
     return Promise.resolve(new Response("not found", { status: 404 }));
+  });
+}
+
+function qualificationReceipt(archiveBytes: Uint8Array, manifestText: string): string {
+  const manifest = JSON.parse(manifestText) as Record<string, unknown>;
+  const releaseRecord = manifest.release as Record<string, unknown>;
+  const sidecars = Array.isArray(manifest.sidecarRuntimes)
+    ? manifest.sidecarRuntimes.map((entry) => {
+        const sidecar = entry as Record<string, unknown>;
+        return { name: sidecar.name, sha256: sidecar.payloadSha256 };
+      })
+    : [];
+  return JSON.stringify({
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    platformTarget: TARGET,
+    sourceCommitSha: releaseRecord.commitSha,
+    artifactSha256: sha256(archiveBytes),
+    helperSha256: sha256(RUNTIME_SUPERVISOR_BYTES),
+    sidecars,
+    backend: "windows-job-object",
+    result: "passed",
   });
 }
 
@@ -508,12 +549,13 @@ describe("portable archive limit guards", () => {
 describe("portable update staging", () => {
   it("downloads, verifies, stages, and records content-free state", async () => {
     const archive = portableArchive();
+    const manifestText = portableManifest(archive);
     const install = makeManagedInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const stager = createPortableUpdateStager({
       env: {},
       localState,
-      fetchImpl: responseFor(archive),
+      fetchImpl: responseFor(archive, manifestText),
       platformVerifier: verifyPlatform,
     });
 
@@ -527,6 +569,12 @@ describe("portable update staging", () => {
     const stageRoot = join(dirname(install.root), ".keiko-portable-updates", summary.stageId);
     expect(existsSync(join(stageRoot, "Keiko", "Keiko.exe"))).toBe(true);
     expect(existsSync(join(stageRoot, "Keiko", "runtime", "node", "node.exe"))).toBe(true);
+    expect(
+      existsSync(join(stageRoot, "Keiko", ".portable", "runtime-supervisor-qualification.json")),
+    ).toBe(true);
+    expect(
+      readFileSync(join(stageRoot, "Keiko", ".portable", "update-portable-manifest.json"), "utf8"),
+    ).toBe(manifestText);
     expect(localState.readRuntimeState().portableStage).toEqual(summary);
     const persisted = JSON.stringify(localState.readRuntimeState());
     expect(persisted).not.toContain(install.root);
@@ -536,6 +584,43 @@ describe("portable update staging", () => {
     expect(audit).toContain("portable-staging-result");
     expect(audit).not.toContain(install.root);
     expect(audit).not.toContain("https://github.com");
+  });
+
+  it("fails closed when the Windows qualification asset is missing or stale", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const input = {
+      sessionId: "session-qualification",
+      targetVersion: TARGET_VERSION,
+      installMode: portableMode(),
+      runtimeFacts: { packageRoot: install.packageRoot },
+    };
+    const missing = createPortableUpdateStager({
+      env: {},
+      fetchImpl: responseFor(
+        archive,
+        portableManifest(archive),
+        releaseWithout(QUALIFICATION_ASSET_NAME, archive),
+      ),
+      platformVerifier: verifyPlatform,
+    });
+    await expect(missing.stage(input)).rejects.toMatchObject({
+      reason: "portable-verification-failed",
+    });
+
+    const stale = createPortableUpdateStager({
+      env: {},
+      fetchImpl: responseFor(
+        archive,
+        portableManifest(archive),
+        release(archive.length),
+        qualificationReceipt(ENC.encode("different artifact"), portableManifest(archive)),
+      ),
+      platformVerifier: verifyPlatform,
+    });
+    await expect(stale.stage(input)).rejects.toMatchObject({
+      reason: "portable-verification-failed",
+    });
   });
 
   it("fails closed when the release is missing a required first-class portable archive", async () => {

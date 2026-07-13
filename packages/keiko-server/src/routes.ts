@@ -96,6 +96,7 @@ import {
 } from "./coding-codex-subscription.js";
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
+import { CODING_RUNTIME_QUESTION_ROUTE_GROUP } from "./coding-runtime/codingRuntimeQuestionRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -1265,6 +1266,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #2256: browser-owned Authority Envelope confirmation/execution is intentionally not mounted.
   // Productive coding-runtime actions flow only through the singleton server aggregate below.
   ...CODING_RUNTIME_ROUTE_GROUP,
+  ...CODING_RUNTIME_QUESTION_ROUTE_GROUP,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.

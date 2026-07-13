@@ -40,6 +40,7 @@ export interface PortableStageAssets {
   readonly release: PortableRelease;
   readonly archive: GitHubAsset;
   readonly manifest: TextAsset;
+  readonly qualification?: TextAsset | undefined;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
 }
 
@@ -121,6 +122,10 @@ function manifestName(target: UpdatePortableTarget): string {
 
 function checksumName(target: UpdatePortableTarget): string {
   return `${target}-SHA256SUMS.txt`;
+}
+
+function qualificationName(target: UpdatePortableTarget): string | undefined {
+  return target === "windows-x64" ? "windows-x64-runtime-supervisor-qualification.json" : undefined;
 }
 
 const MAX_ASSET_REDIRECTS = 3;
@@ -394,6 +399,11 @@ export async function resolvePortableStageAssets(
     assetByName(release, checksumName(target)),
     input.signal,
   );
+  const qualificationAssetName = qualificationName(target);
+  const qualification =
+    qualificationAssetName === undefined
+      ? undefined
+      : await fetchTextAsset(options, assetByName(release, qualificationAssetName), input.signal);
   const manifestRecord = parseJsonRecord(manifest.text);
   const archiveSha256 =
     manifestRecord === undefined ? undefined : manifestArchiveSha(manifestRecord);
@@ -412,6 +422,7 @@ export async function resolvePortableStageAssets(
     release,
     archive,
     manifest,
+    ...(qualification === undefined ? {} : { qualification }),
     sidecars: verifyPortableManifestSidecars(manifestRecord, target).sidecars,
   };
 }

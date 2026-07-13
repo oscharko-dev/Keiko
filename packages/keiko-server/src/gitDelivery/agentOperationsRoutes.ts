@@ -311,7 +311,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
   "branch-switch": new Set(["branchName"]),
   stage: new Set(["pathspecs", "includeUntracked"]),
   unstage: new Set(["pathspecs"]),
-  commit: new Set(["messageDraft", "message", "allowEmpty"]),
+  commit: new Set(["messageDraft", "message", "allowEmpty", "approval"]),
   fetch: new Set(["remote"]),
   pull: new Set(["remote"]),
   push: new Set([
@@ -320,6 +320,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "sourceBranchName",
     "forcePush",
     "setUpstreamTracking",
+    "approval",
   ]),
   "pull-request": new Set([
     "kind",
@@ -332,6 +333,7 @@ const WRITE_KEYS: Readonly<Record<GitRepositoryAgentOperationKind, ReadonlySet<s
     "prExternalId",
     "convertToDraft",
     "convertFromDraft",
+    "approval",
   ]),
   merge: new Set([
     "kind",

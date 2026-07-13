@@ -16,11 +16,14 @@ import {
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
+  fetchGitDeliveryCommitApproval,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
   fetchGitDeliveryPushExecute,
+  fetchGitDeliveryPushApproval,
   fetchGitDeliveryPushPreview,
+  fetchGitDeliveryPrApproval,
   fetchGitDeliveryStage,
   fetchGitDeliveryUnstage,
   fetchGitDiff,
@@ -34,6 +37,9 @@ import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import {
   DEFAULT_GIT_CLIENT,
   STATUS_LABEL,
+  executeApprovedCommit,
+  executeApprovedPullRequest,
+  executeApprovedPush,
   formatGitError,
   useGitActions,
   violationLabel,
@@ -104,6 +110,10 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.commitExecute).toBe(fetchGitDeliveryCommitExecute);
   });
 
+  it("commitApproval is fetchGitDeliveryCommitApproval", () => {
+    expect(DEFAULT_GIT_CLIENT.commitApproval).toBe(fetchGitDeliveryCommitApproval);
+  });
+
   it("syncPreview is fetchGitDeliverySyncPreview", () => {
     expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
   });
@@ -118,6 +128,14 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("pushExecute is fetchGitDeliveryPushExecute", () => {
     expect(DEFAULT_GIT_CLIENT.pushExecute).toBe(fetchGitDeliveryPushExecute);
+  });
+
+  it("pushApproval is fetchGitDeliveryPushApproval", () => {
+    expect(DEFAULT_GIT_CLIENT.pushApproval).toBe(fetchGitDeliveryPushApproval);
+  });
+
+  it("prApproval is fetchGitDeliveryPrApproval", () => {
+    expect(DEFAULT_GIT_CLIENT.prApproval).toBe(fetchGitDeliveryPrApproval);
   });
 });
 
@@ -342,6 +360,7 @@ describe("useGitActions", () => {
       // commitPreview/pushPreview are not driven by these tests (runPreview is never called);
       // a bare typed mock satisfies the seam type without fabricating a full preview envelope.
       commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+      commitApproval: vi.fn<GitClientSeam["commitApproval"]>(),
       commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
         schemaVersion: "1",
         status: "succeeded",
@@ -350,12 +369,14 @@ describe("useGitActions", () => {
       syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
       syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
       pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
+      pushApproval: vi.fn<GitClientSeam["pushApproval"]>(),
       pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
         schemaVersion: "1",
         status: "succeeded",
         actionKind: "push",
       })),
       prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+      prApproval: vi.fn<GitClientSeam["prApproval"]>(),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(),
       mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
       mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
@@ -530,5 +551,65 @@ describe("useGitActions", () => {
     });
 
     await waitFor(() => expect(result.current.flow.error).toBe("Access denied (FORBIDDEN)"));
+  });
+
+  it("requests a fresh commit approval for every explicit retry", async () => {
+    const first = {
+      schemaVersion: "1" as const,
+      actionKind: "commit" as const,
+      approval: { schemaVersion: "1" as const, approvalId: "gda_1", approvalToken: "one" },
+      expiresAtMs: 1_000,
+    };
+    const second = {
+      ...first,
+      approval: { ...first.approval, approvalId: "gda_2", approvalToken: "two" },
+    };
+    const client = makeSeamClient({
+      commitApproval: vi
+        .fn<GitClientSeam["commitApproval"]>()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second),
+    });
+    const input = { projectId: "/repo", message: "feat: approval" };
+
+    await executeApprovedCommit(client, input);
+    await executeApprovedCommit(client, input);
+
+    expect(client.commitApproval).toHaveBeenCalledTimes(2);
+    expect(client.commitExecute).toHaveBeenNthCalledWith(1, { ...input, approval: first.approval });
+    expect(client.commitExecute).toHaveBeenNthCalledWith(2, {
+      ...input,
+      approval: second.approval,
+    });
+  });
+
+  it("distinguishes an approval issuance failure from a consumed-claim failure", async () => {
+    const rejected = new ApiError(
+      "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+      "The request body is not a valid governed commit request.",
+      400,
+    );
+    const issueFailure = makeSeamClient({
+      commitApproval: vi.fn<GitClientSeam["commitApproval"]>().mockRejectedValue(rejected),
+    });
+    const consumeFailure = makeSeamClient({
+      commitApproval: vi.fn<GitClientSeam["commitApproval"]>().mockResolvedValue({
+        schemaVersion: "1",
+        actionKind: "commit",
+        approval: { schemaVersion: "1", approvalId: "gda_1", approvalToken: "one" },
+        expiresAtMs: 1_000,
+      }),
+      commitExecute: vi.fn<GitClientSeam["commitExecute"]>().mockRejectedValue(rejected),
+    });
+    const input = { projectId: "/repo", message: "feat: approval" };
+
+    const issuanceError = await executeApprovedCommit(issueFailure, input).catch(formatGitError);
+    const consumptionError = await executeApprovedCommit(consumeFailure, input).catch(
+      formatGitError,
+    );
+
+    expect(issuanceError).toContain("could not be issued");
+    expect(consumptionError).toContain("could not be used");
+    expect(consumeFailure.commitExecute).toHaveBeenCalledTimes(1);
   });
 });

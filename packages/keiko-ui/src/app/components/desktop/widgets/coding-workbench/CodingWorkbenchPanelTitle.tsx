@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import styles from "./CodingWorkbenchWindow.module.css";
+import styles from "./codingWorkbenchStyles";
 
 export function PanelTitle({
   eyebrow,

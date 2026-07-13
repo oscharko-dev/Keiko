@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  answerCodingWorkbenchRuntimeQuestion,
   decideCodingWorkbenchRuntimeApproval,
+  getCodingWorkbenchRuntimeQuestions,
   getCodingWorkbenchRuntimeReadiness,
   parseCodingWorkbenchRuntimeEvent,
+  rejectCodingWorkbenchRuntimeQuestion,
 } from "./coding-workbench-runtime-api";
 
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
@@ -72,6 +75,40 @@ describe("Coding Workbench runtime API", () => {
     });
   });
 
+  it("reads contract-validated pending questions from the encoded active-run route", async () => {
+    const questions = {
+      questions: [
+        {
+          id: "que_1",
+          questions: [
+            {
+              header: "Decision",
+              question: "Continue with <untrusted> text?",
+              options: [{ label: "Continue", description: "Proceed once" }],
+            },
+          ],
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(questions));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCodingWorkbenchRuntimeQuestions("run 1/alpha")).resolves.toEqual(questions);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/coding-workbench/runtime/runs/run%201%2Falpha/questions",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ questions: [{ id: "forged", questions: [] }] }));
+    await expect(getCodingWorkbenchRuntimeQuestions("run-1")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
   it("posts a revision-bound approval to an encoded run route with CSRF protection", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot()));
     vi.stubGlobal("fetch", fetchMock);
@@ -99,6 +136,43 @@ describe("Coding Workbench runtime API", () => {
         }),
       }),
     );
+  });
+
+  it("answers or rejects one encoded pending question with exact contract bodies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ accepted: true })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      answerCodingWorkbenchRuntimeQuestion("run/1", "que_1", {
+        answers: [["Proceed"], ["Custom answer"]],
+      }),
+    ).resolves.toEqual({ accepted: true });
+    await expect(rejectCodingWorkbenchRuntimeQuestion("run/1", "que_1")).resolves.toEqual({
+      accepted: true,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/coding-workbench/runtime/runs/run%2F1/questions/que_1/answer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ answers: [["Proceed"], ["Custom answer"]] }),
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/coding-workbench/runtime/runs/run%2F1/questions/que_1/reject",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ accepted: false }));
+    await expect(rejectCodingWorkbenchRuntimeQuestion("run-1", "que_1")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
   });
 
   it("rejects malformed stream payloads without including stream content in the client error", () => {

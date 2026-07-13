@@ -1,0 +1,95 @@
+{
+  "issue": 2258,
+  "surface": "managed-opencode-coding-workbench",
+  "verdict": "PASS_WITH_EXTERNAL_RELEASE_BLOCKERS",
+  "proofType": "live-managed-runtime-browser-matrix",
+  "captureCssSha256": "a6600bf4e0eda38717f525a6ba7c64d01d119e96153d206d5d61d5392498ecee",
+  "currentCssSha256": "a6600bf4e0eda38717f525a6ba7c64d01d119e96153d206d5d61d5392498ecee",
+  "source": {
+    "command": "npm run test:e2e:coding-workbench-2258",
+    "date": "2026-07-13",
+    "node": "24.18.0",
+    "playwrightProject": "chromium",
+    "selected": 18,
+    "passed": 16,
+    "externalAttestationFixme": 2,
+    "failed": 0
+  },
+  "captures": [
+    {
+      "file": "browser/01-managed-terminal-dark-1280.png",
+      "sha256": "a50cf86563cb3bc1da2bd5d6cc7ce9eebb27244c61996ace89daae5691bb0381",
+      "viewport": { "width": 1280, "height": 900 },
+      "imagePixels": { "width": 1309, "height": 900 },
+      "theme": "dark",
+      "state": "succeeded",
+      "mode": "managed-opencode-terminal"
+    },
+    {
+      "file": "browser/02-light-768.png",
+      "sha256": "17b4a7c4ee0b077f3d8223cb7559b5fbd20b573cc5784ec35d0dca7064408e75",
+      "viewport": { "width": 768, "height": 900 },
+      "imagePixels": { "width": 797, "height": 900 },
+      "theme": "light",
+      "state": "idle",
+      "mode": "responsive"
+    },
+    {
+      "file": "browser/03-dark-320.png",
+      "sha256": "83c52efca3cb9c1345e040d2924055abdf3ac7835435c264a7c9e3e6c94c6e91",
+      "viewport": { "width": 320, "height": 900 },
+      "imagePixels": { "width": 343, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "mode": "minimum-reflow"
+    },
+    {
+      "file": "browser/04-reduced-motion-dark-1280.png",
+      "sha256": "93391d624630c27325a6bae1dbb503a56fe27a883b5e86122035ea172d3de103",
+      "viewport": { "width": 1280, "height": 900 },
+      "imagePixels": { "width": 1309, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "mode": "reduced-motion"
+    },
+    {
+      "file": "browser/05-light-high-contrast-1280.png",
+      "sha256": "a0a62e68b51181e79125b73cce5a3a381cc1431b732f7dac2acd8e8f1449112b",
+      "viewport": { "width": 1280, "height": 900 },
+      "imagePixels": { "width": 1309, "height": 900 },
+      "theme": "light",
+      "state": "idle",
+      "mode": "in-app-high-contrast"
+    },
+    {
+      "file": "browser/06-forced-colors-dark-768.png",
+      "sha256": "6cf3d8da56d9a83de64dc0b4e1413835160907e3ac46372cecbbb742359634f9",
+      "viewport": { "width": 768, "height": 900 },
+      "imagePixels": { "width": 797, "height": 900 },
+      "theme": "dark",
+      "state": "idle",
+      "mode": "forced-colors"
+    }
+  ],
+  "visualReview": {
+    "reviewed": true,
+    "date": "2026-07-13",
+    "reviewedCaptureCount": 6,
+    "fullPathVisible": false,
+    "endpointVisible": false,
+    "credentialVisible": false,
+    "approvalClaimVisible": false,
+    "customerDataVisible": false,
+    "runtimeQuestionOrAnswerBodyVisible": false,
+    "syntheticIdentifiersOnly": true,
+    "finding": "No contained clipping or document-level horizontal overflow is visible. At 768px, the Workbench frame clamps to the visible workspace and its grids reflow to one column; every focusable Workbench control remains at least partially within the visible frame and viewport. The 320px Workbench preserves its one-column reflow; Light, Dark, High Contrast, forced-colors, and reduced-motion remain legible with visible non-colour state cues."
+  },
+  "pixelInvariantCssChange": {
+    "browserRerunRequired": false,
+    "reason": "The final capture reran the live matrix after naming the Workbench container and clamping its 561–820px window frame to the visible workspace; the reviewed Light and forced-colors 768px artifacts prove the responsive reflow."
+  },
+  "releaseBlockers": [
+    "credentialed-codex-attestation-not-provided",
+    "platform-qualified-native-containment-not-provided"
+  ]
+}

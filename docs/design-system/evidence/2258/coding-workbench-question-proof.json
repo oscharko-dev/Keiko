@@ -1,0 +1,82 @@
+{
+  "issue": 2258,
+  "surface": "coding-workbench-runtime-questions",
+  "contractSource": "packages/keiko-contracts/src/coding-workbench-runtime-questions.ts",
+  "cssSha256": "a6600bf4e0eda38717f525a6ba7c64d01d119e96153d206d5d61d5392498ecee",
+  "captureCssSha256": "15822fd9fcb58863e01fe788b9ccec127f997db2cfb29b8f56675a4ab1123921",
+  "status": "automated-functional-and-live-browser-proof-complete-with-external-release-blockers",
+  "states": [
+    "loading",
+    "empty",
+    "ready",
+    "error",
+    "offline",
+    "submitting",
+    "stale",
+    "terminal"
+  ],
+  "answerModes": ["single", "multiple", "custom", "reject"],
+  "selectors": [
+    "[data-testid=\"coding-workbench-questions\"]",
+    "[data-question-state]",
+    "[data-question-request-id]",
+    "[data-question-index]",
+    "[data-question-option]"
+  ],
+  "automatedChecks": {
+    "status": "passed",
+    "testFiles": 7,
+    "tests": 310,
+    "typecheck": "passed",
+    "lint": "passed",
+    "formatCheck": "passed",
+    "diffCheck": "passed",
+    "commands": [
+      "npm test --workspace @oscharko-dev/keiko-ui -- --run src/app/globals.css.test.ts src/lib/coding-workbench-live-state.test.ts src/lib/useCodingWorkbenchRuntime.test.tsx src/lib/useCodingWorkbenchQuestions.test.tsx src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchQuestions.test.tsx src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx src/app/components/desktop/widgets/coding-workbench/coding-workbench-i18n.test.ts",
+      "npm run typecheck --workspace @oscharko-dev/keiko-ui",
+      "npm run lint --workspace @oscharko-dev/keiko-ui"
+    ]
+  },
+  "browserCapture": {
+    "status": "passed",
+    "selected": 18,
+    "passed": 16,
+    "externalAttestationFixme": 2,
+    "failed": 0,
+    "viewports": [
+      { "width": 1280, "label": "desktop" },
+      { "width": 768, "label": "responsive-frame" },
+      { "width": 320, "label": "minimum-reflow" }
+    ],
+    "modes": ["dark", "light", "high-contrast", "forced-colors", "reduced-motion"],
+    "screenshots": [
+      "browser/01-managed-terminal-dark-1280.png",
+      "browser/02-light-768.png",
+      "browser/03-dark-320.png",
+      "browser/04-reduced-motion-dark-1280.png",
+      "browser/05-light-high-contrast-1280.png",
+      "browser/06-forced-colors-dark-768.png"
+    ]
+  },
+  "contentSafety": {
+    "questionBodiesRetained": false,
+    "answerBodiesRetained": false,
+    "evidenceSelectorsContentFree": true,
+    "screenshotsVisuallyReviewed": true,
+    "fullPathsVisible": false,
+    "endpointsVisible": false,
+    "credentialsVisible": false
+  },
+  "variance": [
+    {
+      "kind": "pixel-invariant-token-substitution",
+      "disposition": "accepted-no-rerun",
+      "detail": "Workbench structural strokes now consume tokens resolving exactly to their captured 1px and 2px values."
+    },
+    {
+      "kind": "responsive-frame-correction",
+      "disposition": "recaptured-and-passed",
+      "detail": "The final 768px Light and forced-colors captures were regenerated after the visible-frame containment fix; focus and scroll-bound assertions passed."
+    }
+  ]
+}

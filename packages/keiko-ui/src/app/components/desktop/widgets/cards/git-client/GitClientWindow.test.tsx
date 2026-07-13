@@ -396,6 +396,12 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "unstage",
     })),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
+    commitApproval: vi.fn<GitClientSeam["commitApproval"]>(async () => ({
+      schemaVersion: "1",
+      actionKind: "commit",
+      approval: { schemaVersion: "1", approvalId: "gda_commit", approvalToken: "one" },
+      expiresAtMs: 1_000,
+    })),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -417,12 +423,24 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       truncated: false,
     })),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(async () => makePushPreview()),
+    pushApproval: vi.fn<GitClientSeam["pushApproval"]>(async () => ({
+      schemaVersion: "1",
+      actionKind: "push",
+      approval: { schemaVersion: "1", approvalId: "gda_push", approvalToken: "one" },
+      expiresAtMs: 1_000,
+    })),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "push",
     })),
     prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
+    prApproval: vi.fn<GitClientSeam["prApproval"]>(async (input) => ({
+      schemaVersion: "1",
+      actionKind: input.kind,
+      approval: { schemaVersion: "1", approvalId: "gda_pr", approvalToken: "one" },
+      expiresAtMs: 1_000,
+    })),
     prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -1149,7 +1167,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         setUpstreamTracking: true,
       }),
     );
-    expect(client.pushExecute).toHaveBeenCalledWith({
+    expect(client.pushApproval).toHaveBeenCalledWith({
       projectId: REPO_A.path,
       remoteAlias: "origin",
       remoteBranchName: "feature/local",
@@ -1157,6 +1175,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       forcePush: false,
       setUpstreamTracking: true,
     });
+    expect(client.pushExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ approval: expect.objectContaining({ approvalId: "gda_push" }) }),
+    );
   });
 
   it("shows diverged branches as an explicit safe fetch state with merge guidance", async () => {
@@ -1784,10 +1805,13 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitApproval).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: wire commit composer",
       }),
+    );
+    expect(client.commitExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ approval: expect.objectContaining({ approvalId: "gda_commit" }) }),
     );
   });
 
@@ -1804,7 +1828,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(button);
 
     await waitFor(() =>
-      expect(client.commitExecute).toHaveBeenCalledWith({
+      expect(client.commitApproval).toHaveBeenCalledWith({
         projectId: REPO_A.path,
         message: "feat: subject\n\nBody line.",
       }),
