@@ -285,5 +285,8 @@ export function publicationCopy(key) {
 
 export function publicationCopyKeys() {
   const { english, deutsch } = publicationDictionaries();
-  return { english: Object.keys(english).sort(), deutsch: Object.keys(deutsch).sort() };
+  return {
+    english: Object.keys(english).sort((left, right) => left.localeCompare(right)),
+    deutsch: Object.keys(deutsch).sort((left, right) => left.localeCompare(right)),
+  };
 }

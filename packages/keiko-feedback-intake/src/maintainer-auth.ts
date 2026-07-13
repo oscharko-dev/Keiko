@@ -46,7 +46,7 @@ function resolvePermissions(
   const permissions = config.permissionRules.flatMap((rule) =>
     values.has(rule.claimValue) ? rule.permissions : [],
   );
-  return [...new Set(permissions)].sort();
+  return [...new Set(permissions)].sort((left, right) => left.localeCompare(right));
 }
 
 export function createMaintainerAuthService(

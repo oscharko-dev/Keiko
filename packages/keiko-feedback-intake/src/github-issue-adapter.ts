@@ -215,7 +215,9 @@ function successful(
 function exactPermissions(value: unknown): boolean {
   const permissions = record(value);
   return (
-    Object.keys(permissions).sort().join(",") === "issues,metadata" &&
+    Object.keys(permissions)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",") === "issues,metadata" &&
     permissions.issues === "write" &&
     permissions.metadata === "read"
   );
@@ -223,7 +225,11 @@ function exactPermissions(value: unknown): boolean {
 
 function exactTokenPermissions(value: unknown): boolean {
   const permissions = record(value);
-  return Object.keys(permissions).sort().join(",") === "issues" && permissions.issues === "write";
+  return (
+    Object.keys(permissions)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",") === "issues" && permissions.issues === "write"
+  );
 }
 
 function assertTarget(

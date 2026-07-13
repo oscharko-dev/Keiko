@@ -244,12 +244,18 @@ function preparationErrors(value: unknown): readonly FeedbackReportPreparationEr
   return errors;
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   const record = value as Readonly<Record<string, unknown>>;
   return `{${Object.keys(record)
-    .sort()
+    .sort(compareCodeUnits)
     .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
     .join(",")}}`;
 }

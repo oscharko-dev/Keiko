@@ -51,7 +51,11 @@ export interface GithubAppConfig {
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+  return (
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",") === [...keys].sort((left, right) => left.localeCompare(right)).join(",")
+  );
 }
 
 function parseRfc3339Timestamp(value: string): Date | undefined {

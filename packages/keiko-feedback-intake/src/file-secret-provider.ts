@@ -114,7 +114,11 @@ function parseKey(root: string, name: string, kind: KeyKind): KeyFile {
     throw new Error("Feedback secret custody is unavailable");
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== "activatedAt,id,key") {
+  if (
+    Object.keys(record)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",") !== "activatedAt,id,key"
+  ) {
     throw new Error("Feedback secret custody is unavailable");
   }
   const activatedAt = new Date(String(record.activatedAt));

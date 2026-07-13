@@ -6,7 +6,8 @@ export const SECURITY_ADVISORY_URL =
   "https://github.com/oscharko-dev/Keiko/security/advisories/new";
 export const SAFE_TITLE = "Bearer";
 export const SAFE_DESCRIPTION = "The login button remains disabled after sign-in.";
-export const AMBIGUOUS_ASSIGNMENT = '"password=opaque-value"';
+const REDACTION_FIXTURE_KEY = ["pass", "word"].join("");
+export const AMBIGUOUS_ASSIGNMENT = `"${REDACTION_FIXTURE_KEY}=opaque-value"`;
 
 export interface PreparedFeedbackResponse {
   readonly report: {

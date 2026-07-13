@@ -368,7 +368,9 @@ export async function receiptIsContentFree(
   if (!response.ok) return false;
   const body = JSON.parse(text) as Record<string, unknown>;
   return (
-    Object.keys(body).sort().join(",") === "expiresAt,receiptId,status" &&
+    Object.keys(body)
+      .sort((left, right) => left.localeCompare(right))
+      .join(",") === "expiresAt,receiptId,status" &&
     body.receiptId === submitted.receipt.receiptId &&
     body.status === "received" &&
     !text.includes(submitted.canonicalJson) &&

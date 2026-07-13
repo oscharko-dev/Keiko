@@ -32,10 +32,10 @@
       "sha256": "0c62374308fc6f1788558ae8054ac6d077e3d42b037944d383f30391d26a41e0"
     },
     "maintainer-ui-copy.js": {
-      "identityBytes": 13711,
-      "gzipBytes": 4029,
-      "brotliBytes": 3532,
-      "sha256": "3ef6220bfb8e006a5d79c37df360f8c9b77bbca133f3686a6eec4b0d35c843fa"
+      "identityBytes": 13806,
+      "gzipBytes": 4059,
+      "brotliBytes": 3561,
+      "sha256": "4099bd1c9d270cdafac77d88ed305aadbc65546522494af6618cfbe04d3c4327"
     },
     "maintainer-ui-detail.js": {
       "identityBytes": 2629,
