@@ -184,7 +184,7 @@ describe("mutation quality", () => {
     expect(execute).toHaveBeenCalledWith(
       "/usr/bin/git",
       ["diff", "--unified=0", "--diff-filter=ACMR", "base...head"],
-      { encoding: "utf8" },
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
     expect(log).toHaveBeenCalledWith(expect.stringContaining("100.00%"));
   });

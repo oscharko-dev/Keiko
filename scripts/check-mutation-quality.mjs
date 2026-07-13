@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 
 const defaultReport = "reports/mutation/security/mutation-report.json";
 const defaultBaseline = "docs/qa/security-mutation-baseline.json";
+const gitDiffOptions = Object.freeze({ encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
 export function mutationFingerprint(file, mutant) {
   const value = JSON.stringify({
@@ -81,9 +82,11 @@ export function parseChangedLineRanges(diff) {
 
 export function changedLineRanges(base, head, execute = execFileSync) {
   return parseChangedLineRanges(
-    execute("/usr/bin/git", ["diff", "--unified=0", "--diff-filter=ACMR", `${base}...${head}`], {
-      encoding: "utf8",
-    }),
+    execute(
+      "/usr/bin/git",
+      ["diff", "--unified=0", "--diff-filter=ACMR", `${base}...${head}`],
+      gitDiffOptions,
+    ),
   );
 }
 

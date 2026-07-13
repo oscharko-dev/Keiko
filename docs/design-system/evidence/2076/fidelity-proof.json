@@ -50,10 +50,10 @@
       "brotliBytes": 1410
     },
     "maintainer-ui-publication.js": {
-      "sha256": "4cbdc78b8755f616c070c4145a74d0c01247e16ed14099defc0d48b2fee13641",
-      "identityBytes": 14614,
-      "gzipBytes": 3732,
-      "brotliBytes": 3255
+      "sha256": "41ec170c1cc9e6392f6de29cc86103e4ffe05b3fb9d9c217ec086d3a22478d4b",
+      "identityBytes": 14698,
+      "gzipBytes": 3745,
+      "brotliBytes": 3268
     },
     "maintainer-ui-queue.js": {
       "sha256": "fdef9f0823bc1ccd373282cd32a4f754a2b534e8d76ad16660b9a1c5f22a1b94",

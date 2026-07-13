@@ -29,7 +29,6 @@ export function publicationEnabled(session) {
     Array.isArray(session.publicationTargets)
   );
 }
-
 function requestBody(action, detail, publication) {
   const idempotencyKey = crypto.randomUUID().replaceAll("-", "");
   if (action === "prepare-publication") {
@@ -48,7 +47,6 @@ function requestBody(action, detail, publication) {
     idempotencyKey,
   };
 }
-
 function currentPreview(prepared) {
   return {
     status: prepared.status,
@@ -60,7 +58,6 @@ function currentPreview(prepared) {
     targetDisplay: prepared.targetDisplay,
   };
 }
-
 function safePreparation(status) {
   return (
     (status.status === "prepared" || status.status === "approved") &&
@@ -68,7 +65,6 @@ function safePreparation(status) {
     PREPARATION_ID.test(status.preparationId)
   );
 }
-
 function safeLink(linkage) {
   try {
     const url = new globalThis.URL(linkage.issueUrl);
@@ -85,7 +81,6 @@ function safeLink(linkage) {
     return null;
   }
 }
-
 function publicationError(error) {
   if (!(error instanceof Error)) return "failed";
   if (error.message === "forbidden") return "permissionDenied";
@@ -94,12 +89,10 @@ function publicationError(error) {
   if (error.message === "unavailable") return "unavailable";
   return "failed";
 }
-
 function targetLabel(target) {
   const labels = target.labels.length ? ` · ${target.labels.join(", ")}` : "";
   return `${target.owner}/${target.repository}${labels}`;
 }
-
 function statusMessage(status) {
   const messages = {
     prepared: "prepared",
@@ -128,9 +121,21 @@ function previewNode(preview) {
     [
       element("h4", { id: "mq-preview", textContent: copy("preview") }),
       element("h5", { id: "mq-preview-title-heading", textContent: copy("issueTitle") }),
-      element("pre", { className: "mq-payload", role: "region", tabIndex: "0", "aria-labelledby": "mq-preview-title-heading", textContent: preview.title }),
+      element("pre", {
+        className: "mq-payload",
+        role: "region",
+        tabIndex: "0",
+        "aria-labelledby": "mq-preview-title-heading",
+        textContent: preview.title,
+      }),
       element("h5", { id: "mq-preview-body-heading", textContent: copy("issueBody") }),
-      element("pre", { className: "mq-payload", role: "region", tabIndex: "0", "aria-labelledby": "mq-preview-body-heading", textContent: preview.body }),
+      element("pre", {
+        className: "mq-payload",
+        role: "region",
+        tabIndex: "0",
+        "aria-labelledby": "mq-preview-body-heading",
+        textContent: preview.body,
+      }),
       element("h5", { textContent: copy("targetDetails") }),
       element(
         "dl",
@@ -146,12 +151,10 @@ function previewNode(preview) {
     ],
   );
 }
-
 function publicationPath(action) {
   if (action === "prepare-publication") return "prepare";
   return action === "approve-publication" ? "approve" : "cancel-route-private";
 }
-
 function createPublicationContext(options) {
   return {
     ...options,
@@ -161,7 +164,6 @@ function createPublicationContext(options) {
     },
   };
 }
-
 async function publicationSnapshot(context, detail, generation, signal) {
   const status = await context.request(`reviews/${detail.itemId}/publication/status`, { signal });
   if (!context.isCurrent(detail.itemId, generation)) return null;

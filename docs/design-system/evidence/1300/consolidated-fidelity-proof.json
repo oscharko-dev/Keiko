@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "0cf1be9d6a7419236ad719386d6d590c2c8875fb4ea96c69ba1eb5446cc5a2b5",
+  "postCssSha256": "e499ef56bec6dc2619bd7fe7ce9c2ab5b855d2b9e9004f36144255e867163ec6",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -21,18 +21,21 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-07-08T09:56:16.038Z",
-    "generatedAt": "2026-07-08T09:56:18.894Z",
-    "repoHeadSha": "2d0bccb957acd6a4b87a182ae115888b7e00284b"
+    "startedAt": "2026-07-13T07:09:46.657Z",
+    "generatedAt": "2026-07-13T07:09:55.370Z",
+    "repoHeadSha": "666e59fee0b93bdb1bf4c7a4c2054c1dcf42aaa2"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
     "description": "Reference fidelity: every migrated NEUTRAL surface (AI, data grid, dataviz, inputs, navigation) resolves identically under the product globals.css and the concatenated DS 0.4.0 reference. Gated to 0-diff in dark + light; HC/forced-colors/reduced-motion recorded.",
     "totalProbes": 427,
     "gatedDiffCount": 0,
-    "recordedDiffCount": 0,
+    "recordedDiffCount": 2,
     "gatedDiffs": [],
-    "recordedDiffs": []
+    "recordedDiffs": [
+      "[R 06-forced-colors] .ai-permit { backgroundColor: ref=\"0,0,0,31\" product=\"0,0,0,255\" }",
+      "[R 07-reduced-motion] .ai-permit { backgroundColor: ref=\"0,0,0,31\" product=\"0,0,0,255\" }"
+    ]
   },
   "accentDerived": {
     "description": "Recorded (not gated), rendered as sRGB (r,g,b,a). Accent/feedback/color-mix surfaces resolve through the brand --accent (product hex #4eba87 vs reference oklch(0.72 0.124 160) — ~1.5% pre-existing primitive delta outside the 0.4.0 migration). Token chain identical.",
@@ -276,7 +279,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000014305114746,
+    "durationMs": 6.599999904632568,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,
@@ -306,11 +309,11 @@
       "groupR_gated": false
     },
     "06-forced-colors": {
-      "groupR_diffs": 0,
+      "groupR_diffs": 1,
       "groupR_gated": false
     },
     "07-reduced-motion": {
-      "groupR_diffs": 0,
+      "groupR_diffs": 1,
       "groupR_gated": false
     }
   },
