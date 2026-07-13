@@ -276,7 +276,7 @@ async function buildRepoEvidenceItem(spec, scope, fs) {
     (winner, atom) => (winner === undefined || atom.score > winner.score ? atom : winner),
     undefined,
   );
-  const found = best !== undefined && best.lineRange !== undefined;
+  const found = best !== undefined;
   const verified = found ? await verifyLineRef(spec, scope, fs, best) : undefined;
   const excerptText = verified?.excerptText ?? "";
   const lineRefHit = verified?.lineRefHit ?? false;

@@ -17,7 +17,7 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type FormEvent,
+  type SubmitEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
@@ -496,7 +496,7 @@ function CreateCapsuleDialog({
     }
   }, [busy]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(event: SubmitEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmed = name.trim();
     if (trimmed.length === 0) {

@@ -6,7 +6,7 @@
 // moved or copied). Incompatible embedding identities across members are rejected
 // server-side and surfaced here as a 400 — the UI cannot pre-validate identity.
 
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { createPortal } from "react-dom";
 import { CAPSULE_SET_MAX_MEMBERS, type KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
@@ -183,7 +183,7 @@ export function CapsuleSetComposeDialog({
     if (error !== null) setError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(event: SubmitEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const validation = validateSelection(name, selected.size, t);
     if (validation !== null) {

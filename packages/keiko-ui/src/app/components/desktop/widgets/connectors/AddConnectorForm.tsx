@@ -9,7 +9,7 @@
 
 "use client";
 
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type ReactNode, type SubmitEvent } from "react";
 import {
   isSafeAtlassianConnectorBaseUrl,
   type AtlassianConnectorProvider,
@@ -115,7 +115,7 @@ interface EntryController {
   readonly busy: boolean;
   readonly setText: (name: TextFieldName, value: string) => void;
   readonly setProvider: (provider: AtlassianConnectorProvider) => void;
-  readonly submit: (event: FormEvent) => void;
+  readonly submit: (event: SubmitEvent) => void;
 }
 
 function useAddConnectorEntry(
@@ -155,7 +155,7 @@ function useAddConnectorEntry(
       setBusy(false);
     }
   };
-  const submit = (event: FormEvent): void => {
+  const submit = (event: SubmitEvent): void => {
     event.preventDefault();
     const nextErrors = validateEntry(fields);
     setErrors(nextErrors);

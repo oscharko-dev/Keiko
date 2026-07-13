@@ -1323,9 +1323,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             ? previous.activeChat
             : { ...previous.activeChat, selectedModel: id },
         chats: previous.chats.map((chat) =>
-          previous.activeChat !== undefined && chat.id === previous.activeChat.id
-            ? { ...chat, selectedModel: id }
-            : chat,
+          previous.activeChat?.id === chat.id ? { ...chat, selectedModel: id } : chat,
         ),
       };
     });
@@ -1587,9 +1585,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             flush();
             return;
           }
-          if (rafHandle === null) {
-            rafHandle = requestAnimationFrame(flush);
-          }
+          rafHandle ??= requestAnimationFrame(flush);
         },
         onDone: (payload: SseDonePayload): void => {
           cancelFlush();

@@ -69,7 +69,7 @@ export function useUndoStack(options: UseUndoStackOptions): WorkspaceUndoStackAp
     // intent. Callbacks like undo() are NOT double-invoked by StrictMode.
     const current = stateRef.current;
     if (current.undoStack.length === 0) return;
-    const last = current.undoStack[current.undoStack.length - 1] as WorkspaceUiAction;
+    const last = current.undoStack.at(-1) as WorkspaceUiAction;
     const inverse = workspaceInverseAction(last);
     setState({
       undoStack: current.undoStack.slice(0, -1),
@@ -83,7 +83,7 @@ export function useUndoStack(options: UseUndoStackOptions): WorkspaceUndoStackAp
     // updater), then call apply exactly once in the callback body.
     const current = stateRef.current;
     if (current.redoStack.length === 0) return;
-    const last = current.redoStack[current.redoStack.length - 1] as WorkspaceUiAction;
+    const last = current.redoStack.at(-1) as WorkspaceUiAction;
     setState({
       undoStack: [...current.undoStack, last],
       redoStack: current.redoStack.slice(0, -1),
@@ -96,8 +96,8 @@ export function useUndoStack(options: UseUndoStackOptions): WorkspaceUndoStackAp
   }, []);
 
   return useMemo<WorkspaceUndoStackApi>(() => {
-    const top = state.undoStack[state.undoStack.length - 1];
-    const redoTop = state.redoStack[state.redoStack.length - 1];
+    const top = state.undoStack.at(-1);
+    const redoTop = state.redoStack.at(-1);
     return {
       canUndo: state.undoStack.length > 0,
       canRedo: state.redoStack.length > 0,

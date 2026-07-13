@@ -94,7 +94,7 @@ export function AddRepositoryDialog({
     triggerRef.current = document.activeElement as HTMLElement | null;
     return () => {
       const trigger = triggerRef.current;
-      if (trigger !== null && trigger.isConnected) trigger.focus();
+      if (trigger?.isConnected === true) trigger.focus();
     };
   }, []);
 

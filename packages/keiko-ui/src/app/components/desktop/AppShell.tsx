@@ -210,7 +210,7 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
 }
 
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
-  if (scope === null || scope.root === undefined) return null;
+  if (scope?.root === undefined) return null;
   return [
     scope.root.replace(/\\/gu, "/").replace(/\/+$/u, ""),
     scope.kind,

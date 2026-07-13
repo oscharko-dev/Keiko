@@ -262,7 +262,7 @@ export function CandidateEditForm({
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || saving) return;
       const form = formRef.current;
-      if (form !== null && form.contains(document.activeElement)) requestCancel();
+      if (form?.contains(document.activeElement) === true) requestCancel();
     };
     document.addEventListener("keydown", onKey);
     return () => {

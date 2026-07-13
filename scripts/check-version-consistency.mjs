@@ -137,7 +137,7 @@ const contractsIndex = readFileSync(
   join(repoRoot, "packages", "keiko-contracts", "src", "index.ts"),
   "utf8",
 );
-const constMatch = contractsIndex.match(/KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/);
+const constMatch = /KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/.exec(contractsIndex);
 if (constMatch === null) {
   fail("keiko-contracts: KEIKO_PRODUCT_VERSION constant not found in src/index.ts");
 } else if (constMatch[1] !== expected) {

@@ -58,7 +58,7 @@ export function proposedPatchEntriesFromValidation(
   const observed = entries.reduce((sum, entry) => sum + entry.patchBytes, 0);
   const delta = Math.max(0, validation.totalBytes - observed);
   if (delta > 0) {
-    const last = entries[entries.length - 1];
+    const last = entries.at(-1);
     if (last !== undefined) {
       last.patchBytes += delta;
     }

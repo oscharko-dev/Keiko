@@ -324,8 +324,7 @@ export function usePdfCitationPreviewController({
           const latestAnswer = latest.answer;
           if (
             latest.chatId !== chatId ||
-            latestAnswer === undefined ||
-            latestAnswer.assistantMessageId !== answer.assistantMessageId ||
+            latestAnswer?.assistantMessageId !== answer.assistantMessageId ||
             latest.windows === undefined
           ) {
             return null;

@@ -124,9 +124,9 @@ jobs:
       - name: Ensure npm supports OIDC trusted publishing
         # The product runtime stays on its governed npm baseline above. Publishing uses the
         # separately reviewed exact npm version required by ADR-0130, never an unpinned tag.
-        run: npm install --global npm@11.18.0
+        run: npm install --global --ignore-scripts npm@11.18.0
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
       - name: Verify required checks for release SHA

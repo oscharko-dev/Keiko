@@ -478,7 +478,7 @@ function hasMatchingActionEffect(
     !isEditorAgentActionEffectClass(effectClass) ||
     typeof mutating !== "boolean" ||
     typeof actionType !== "string" ||
-    !Object.prototype.hasOwnProperty.call(EDITOR_AGENT_ACTION_EFFECT_CLASS, actionType)
+    !Object.hasOwn(EDITOR_AGENT_ACTION_EFFECT_CLASS, actionType)
   ) {
     return false;
   }
