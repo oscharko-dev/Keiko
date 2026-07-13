@@ -157,7 +157,9 @@ describe("assembleContextPack", () => {
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
     expect(result.pack.files.length).toBe(0);
-    expect(result.pack.omitted.some((o) => o.reason === "budget-exhausted")).toBe(true);
+    // Exactly one budget-exhausted omission: the clip must BREAK the candidate loop, so the
+    // second candidate is never processed (and never recorded) at all.
+    expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(1);
   });
 
   it("starts from caller-supplied usage and skips reranking when that budget is already spent", async () => {

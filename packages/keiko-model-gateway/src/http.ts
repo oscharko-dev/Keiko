@@ -626,6 +626,23 @@ function openProxySocket(
   });
 }
 
+// A CONNECT response header is one status line plus a handful of headers; anything larger is a
+// protocol violation from a broken or hostile proxy. The bound doubles as a second, independent
+// exit for the accumulation loop in readConnectHeader: even if the terminator search is defective,
+// the buffer cannot grow without limit (fail closed, bounded memory).
+const MAX_CONNECT_RESPONSE_HEADER_BYTES = 16_384;
+
+export function connectResponseHeaderExceedsLimit(bufferLength: number): boolean {
+  return bufferLength > MAX_CONNECT_RESPONSE_HEADER_BYTES;
+}
+
+function connectHeaderLimitError(): OutboundHttpEgressError {
+  return new OutboundHttpEgressError(
+    "PROXY_EGRESS_FAILED",
+    "Proxy CONNECT response header exceeded the size limit.",
+  );
+}
+
 function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -642,6 +659,15 @@ function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Pro
     const onData = (chunk: Buffer): void => {
       chunks.push(chunk);
       const buffer = Buffer.concat(chunks);
+      // Independent of the terminator search below: even if that path is defective, the
+      // accumulated header cannot grow past the bound (fail closed, bounded memory).
+      if (connectResponseHeaderExceedsLimit(buffer.length)) {
+        socket.destroy();
+        settle(() => {
+          reject(connectHeaderLimitError());
+        });
+        return;
+      }
       const headerEnd = buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) return;
       const rest = buffer.subarray(headerEnd + 4);
@@ -1056,9 +1082,14 @@ export async function readJsonCapped(
   const decoder = new TextDecoder();
   const parts: string[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // The stream's own `done` flag terminates the loop directly, so no single defect in the body
+  // can detach the loop from the source and spin it hot on an already-settled reader.
+  let done = false;
+  while (!done) {
+    const result = await reader.read();
+    done = result.done;
+    const value = result.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
@@ -1091,9 +1122,13 @@ export async function readBytesCapped(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
+  let done = false;
+  while (!done) {
+    const result = await reader.read();
+    done = result.done;
+    const value = result.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
@@ -1199,9 +1234,13 @@ export async function* readSseStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let total = 0;
-  for (;;) {
-    const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs);
-    if (done) break;
+  // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
+  let done = false;
+  while (!done) {
+    const read = await readWithIdleTimeout(reader, idleTimeoutMs);
+    done = read.done;
+    const value = read.value;
+    if (value === undefined) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
