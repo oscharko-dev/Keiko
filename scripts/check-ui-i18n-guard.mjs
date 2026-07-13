@@ -9,9 +9,6 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
-const USER_FACING_JSX_TEXT_PATTERN =
-  /<([A-Za-z][A-Za-z0-9_.:-]*)[^>]*>([^<>{}]*)<\/([A-Za-z][A-Za-z0-9_.:-]*)\s*>/gu;
-const ASCII_LETTER_PATTERN = /[A-Za-z]/u;
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
@@ -67,10 +64,75 @@ function isCommentLine(line) {
   return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
 }
 
+function isAsciiLetter(character) {
+  if (character === undefined) return false;
+  const code = character.codePointAt(0);
+  return code !== undefined && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122));
+}
+
+function isTagNameCharacter(character) {
+  if (isAsciiLetter(character)) return true;
+  return (
+    character !== undefined &&
+    ((character >= "0" && character <= "9") || "_.:-".includes(character))
+  );
+}
+
+function readTagName(line, start) {
+  if (!isAsciiLetter(line[start])) return null;
+  let end = start + 1;
+  while (isTagNameCharacter(line[end])) end += 1;
+  return { end, name: line.slice(start, end) };
+}
+
+function findTagEnd(line, start) {
+  let quote = null;
+  for (let index = start; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote !== null) {
+      if (character === quote && line[index - 1] !== "\\") quote = null;
+    } else if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function readJsxTag(line, start) {
+  if (line[start] !== "<") return null;
+  const closing = line[start + 1] === "/";
+  const nameStart = start + (closing ? 2 : 1);
+  const tagName = readTagName(line, nameStart);
+  if (tagName === null) return null;
+  const end = findTagEnd(line, tagName.end);
+  return end < 0 ? null : { closing, end, name: tagName.name };
+}
+
+function isDirectUserFacingText(text) {
+  if (text.includes("<") || text.includes("{") || text.includes("}")) return false;
+  return Array.from(text).some(isAsciiLetter);
+}
+
 function hasUserFacingJsxText(line) {
-  for (const match of line.matchAll(USER_FACING_JSX_TEXT_PATTERN)) {
-    const [, openingTag, text, closingTag] = match;
-    if (openingTag === closingTag && text !== undefined && ASCII_LETTER_PATTERN.test(text)) {
+  let cursor = 0;
+  while (cursor < line.length) {
+    const openingStart = line.indexOf("<", cursor);
+    if (openingStart < 0) return false;
+    const openingTag = readJsxTag(line, openingStart);
+    cursor = openingStart + 1;
+    if (openingTag === null || openingTag.closing) continue;
+
+    const closingStart = line.indexOf("</", openingTag.end + 1);
+    if (closingStart < 0) continue;
+    const closingTag = readJsxTag(line, closingStart);
+    const text = line.slice(openingTag.end + 1, closingStart);
+    if (
+      closingTag?.closing &&
+      closingTag.name === openingTag.name &&
+      isDirectUserFacingText(text)
+    ) {
       return true;
     }
   }
