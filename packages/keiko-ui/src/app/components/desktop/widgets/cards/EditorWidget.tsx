@@ -35,6 +35,7 @@ import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
@@ -194,6 +195,7 @@ function DirtyCloseDialog(props: {
       }
     };
   }, []);
+  useDialogTabTrap(dialogRef);
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !props.pending.saving) props.onCancel();
