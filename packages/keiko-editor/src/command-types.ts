@@ -28,7 +28,9 @@ export type EditorHostCapability =
   // from the patch-review-scoped `runVerification` so neither wrongly gates the other. Maps 1:1 to the
   // `runWorkspaceVerification` host method.
   | "runWorkspaceVerification"
-  | "fetchGitBlame";
+  | "fetchGitBlame"
+  /** Human-controlled debug controls; absent until the host resolves the debug capability. */
+  | "debug";
 
 export type EditorCommandId =
   | "editor.save"
@@ -65,7 +67,17 @@ export type EditorCommandId =
   | "editor.previousConflict"
   | "editor.acceptConflictOurs"
   | "editor.acceptConflictTheirs"
-  | "editor.acceptConflictBoth";
+  | "editor.acceptConflictBoth"
+  | "editor.debugContinue"
+  | "editor.debugPause"
+  | "editor.debugStepOver"
+  | "editor.debugStepInto"
+  | "editor.debugStepOut"
+  | "editor.debugStop"
+  | "editor.debugToggleBreakpoint"
+  | "editor.debugToggleConditionalBreakpoint"
+  | "editor.debugEditLogpoint"
+  | "editor.debugToggleBreakpointEnabled";
 
 export interface EditorCommand {
   readonly id: EditorCommandId;

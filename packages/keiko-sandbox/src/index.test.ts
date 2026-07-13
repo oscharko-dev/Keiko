@@ -4,6 +4,8 @@ import * as sandbox from "./index.js";
 describe("keiko-sandbox barrel", () => {
   it("exposes the planning, selection, builder, and probe surface", () => {
     expect(typeof sandbox.planIsolatedRun).toBe("function");
+    expect(typeof sandbox.planStrictDebugCapsule).toBe("function");
+    expect(typeof sandbox.StrictDebugCapsulePlanError).toBe("function");
     expect(typeof sandbox.selectEnforcingBackend).toBe("function");
     expect(typeof sandbox.buildWrappedCommand).toBe("function");
     expect(typeof sandbox.probeBackends).toBe("function");

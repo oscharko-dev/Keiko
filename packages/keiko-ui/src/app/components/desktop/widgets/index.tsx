@@ -8,7 +8,7 @@ import type {
 import { useTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
-import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { WindowCfgRecord, WindowRenderContext } from "../windows/WindowsRegistry";
 import type { WindowCfgValue } from "../windows/types";
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";
@@ -45,6 +45,13 @@ const SearchPanel = dynamic(() => import("./panels/SearchPanel").then((mod) => m
 const ProblemsPanel = dynamic(
   () => import("./panels/ProblemsPanel").then((mod) => mod.ProblemsPanel),
   { ssr: false, loading: windowChunkFallback },
+);
+const DebugPanelSessionHost = dynamic(
+  () => import("./DebugPanelSessionHost").then((mod) => mod.DebugPanelSessionHost),
+  {
+    ssr: false,
+    loading: windowChunkFallback,
+  },
 );
 const PromptEnhancerPanel = dynamic(
   () => import("./panels/PromptEnhancerPanel").then((mod) => mod.PromptEnhancerPanel),
@@ -327,6 +334,7 @@ registerWindowRender("problems", (cfg, ctx) => {
   const root = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   return <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />;
 });
+registerWindowRender("debug", (cfg, ctx) => <DebugPanelSessionHost cfg={cfg} ctx={ctx} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow
     cfg={cfg}

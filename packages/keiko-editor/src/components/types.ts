@@ -37,6 +37,9 @@ import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
 import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
 import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
+import type { EditorDebugBreakpointHost } from "./breakpoint-gutter-bridge.js";
+import type { EditorDebugCommandHandlers } from "./debug-command-actions.js";
+import type { EditorDebugValueSnapshot } from "./debug-value-inlay-resolver.js";
 import type { EditorBlameHost } from "./blame-bridge.js";
 import type { ConflictLabels } from "./conflict-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
@@ -90,6 +93,16 @@ export interface EditorSelectionCapture {
 }
 
 export type AskKeikoAboutSelectionHandler = (selection: EditorSelectionCapture) => void;
+
+/**
+ * Explicit host-owned debug surface. Its absence is the default-off capability state: no gutter,
+ * command, or paused-value rendering is registered until the caller supplies this complete port.
+ */
+export interface EditorDebugHost {
+  readonly gutter: EditorDebugBreakpointHost;
+  readonly commands: EditorDebugCommandHandlers;
+  readonly resolvePausedValues?: ((documentUri: string) => EditorDebugValueSnapshot) | undefined;
+}
 
 /**
  * Controlled, host-agnostic props for {@link import("./KeikoCodeEditor.js").KeikoCodeEditor}.
@@ -258,6 +271,8 @@ export interface KeikoCodeEditorProps {
   readonly editorGitGutter?: EditorGitGutterHost | undefined;
   /** On-demand, read-only blame source; registration performs no read until toggled. */
   readonly editorBlame?: EditorBlameHost | undefined;
+  /** Default-off human-debug capability and its bounded editor projections (Issue #2346). */
+  readonly debug?: EditorDebugHost | undefined;
   /** Monotonic save/explicit-refresh trigger; content edits intentionally do not change it. */
   readonly gitGutterRefreshNonce?: number | undefined;
   readonly editorConflicts?:

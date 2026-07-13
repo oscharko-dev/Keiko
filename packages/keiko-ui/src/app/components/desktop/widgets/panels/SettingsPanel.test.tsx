@@ -546,8 +546,10 @@ describe("SettingsPanel workspace wallpaper controls", () => {
 
     expect(window.localStorage.getItem("keiko.locale")).toBe("de");
     expect(await screen.findByText("Sprache")).toBeInTheDocument();
-    expect(document.documentElement.lang).toBe("de");
-    expect(document.documentElement.dataset.locale).toBe("de");
+    await waitFor(() => {
+      expect(document.documentElement.lang).toBe("de");
+      expect(document.documentElement.dataset.locale).toBe("de");
+    });
     expect(await screen.findByRole("button", { name: "Allgemein" })).toHaveAttribute(
       "aria-pressed",
       "true",

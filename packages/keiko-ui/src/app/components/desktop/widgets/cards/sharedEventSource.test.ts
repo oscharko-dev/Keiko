@@ -3,6 +3,7 @@ import { resetSharedEventSourcesForTests, subscribeSharedEventSource } from "./s
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
+  static immediateEventType: string | undefined;
   readonly url: string;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -12,8 +13,9 @@ class FakeEventSource {
     FakeEventSource.instances.push(this);
   }
 
-  addEventListener(): void {
-    // test double
+  addEventListener(type: string, listener: EventListener): void {
+    if (type !== FakeEventSource.immediateEventType) return;
+    listener(new MessageEvent(type, { data: "immediate" }));
   }
 
   removeEventListener(): void {
@@ -28,6 +30,7 @@ class FakeEventSource {
 afterEach(() => {
   resetSharedEventSourcesForTests();
   FakeEventSource.instances = [];
+  FakeEventSource.immediateEventType = undefined;
   vi.unstubAllGlobals();
 });
 
@@ -55,6 +58,21 @@ describe("subscribeSharedEventSource", () => {
     );
 
     expect(FakeEventSource.instances).toHaveLength(0);
+    unsubscribe();
+  });
+
+  it("delivers an event emitted while the first typed listener is registered", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    FakeEventSource.immediateEventType = "editor-debug:stopped";
+    const received: string[] = [];
+
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/debug/events?workspaceId=workspace-1",
+      ["editor-debug:stopped"],
+      (event) => received.push(event.data),
+    );
+
+    expect(received).toEqual(["immediate"]);
     unsubscribe();
   });
 });

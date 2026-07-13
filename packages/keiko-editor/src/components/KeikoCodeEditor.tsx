@@ -278,6 +278,12 @@ function useGitGutterRefresh(props: KeikoCodeEditorProps, handlers: EditorHandle
   }, [handlers, props.gitGutterRefreshNonce]);
 }
 
+function useDebugRefresh(props: KeikoCodeEditorProps, handlers: EditorHandlers): void {
+  useEffect(() => {
+    handlers.refreshDebug();
+  }, [handlers, props.debug]);
+}
+
 function useFormatRequest(props: KeikoCodeEditorProps, handlers: EditorHandlers): void {
   const lastNonce = useRef(props.formatRequestNonce ?? 0);
   useEffect(() => {
@@ -379,6 +385,7 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   );
   useFormatRequest(props, handlers);
   useGitGutterRefresh(props, handlers);
+  useDebugRefresh(props, handlers);
   useEffect(() => {
     setCallHierarchy(null);
   }, [props.fileModel.identity.uri]);

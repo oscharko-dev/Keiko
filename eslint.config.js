@@ -75,6 +75,9 @@ export default tseslint.config(
       // (it is executed, not imported), so it is excluded from the strict typed lint like the
       // evidence harnesses above — not product code.
       "packages/keiko-server/src/editor/lsp/testing/*.mjs",
+      // Hermetic DAP subprocess fixture (Issue #2343), executed as an external child rather than
+      // imported into the TypeScript project. Keep the exclusion as narrow as the existing LSP one.
+      "packages/keiko-server/src/editor/dap/testing/*.mjs",
     ],
   },
   js.configs.recommended,

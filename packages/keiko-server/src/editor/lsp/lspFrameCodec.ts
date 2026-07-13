@@ -53,13 +53,18 @@ interface ParsedHeader {
 // Locates the `\r\n\r\n` header terminator in the accumulated buffer and parses the Content-Length.
 // Returns null when the terminator is not yet present (more chunks needed). Throws LspFrameRejectError
 // when a header is present but malformed, so the caller surfaces MALFORMED_HEADER deterministically.
-function parseHeader(buffer: LspBytes): ParsedHeader | null {
+export interface LspFrameReaderOptions {
+  readonly rejectDuplicateContentLength?: boolean | undefined;
+  readonly rejectTruncatedEof?: boolean | undefined;
+}
+
+function parseHeader(buffer: LspBytes, options: LspFrameReaderOptions): ParsedHeader {
   const delimiterIndex = buffer.indexOf(HEADER_DELIMITER);
-  if (delimiterIndex === -1) {
-    return null;
-  }
   const headerBlock = buffer.subarray(0, delimiterIndex).toString("ascii");
-  const contentLength = readContentLength(headerBlock);
+  const contentLength = readContentLength(
+    headerBlock,
+    options.rejectDuplicateContentLength === true,
+  );
   if (contentLength === null) {
     throw new LspFrameRejectError("MALFORMED_HEADER");
   }
@@ -68,15 +73,17 @@ function parseHeader(buffer: LspBytes): ParsedHeader | null {
 
 // Scans the header block lines for a parseable Content-Length. Other header lines (LSP allows an
 // optional Content-Type) are ignored; absence of a valid Content-Length is malformed.
-function readContentLength(headerBlock: string): number | null {
+function readContentLength(headerBlock: string, rejectDuplicate: boolean): number | null {
   const lines = headerBlock.split(HEADER_LINE_DELIMITER);
+  const values: number[] = [];
   for (const line of lines) {
     const parsed = parseLspFrameHeader(line);
     if (parsed !== null) {
-      return parsed.contentLength;
+      values.push(parsed.contentLength);
     }
   }
-  return null;
+  if (rejectDuplicate && values.length !== 1) return null;
+  return values[0] ?? null;
 }
 
 // Reads framed bodies from a byte source, yielding one Buffer per frame. Async-generator semantics
@@ -91,11 +98,15 @@ function readContentLength(headerBlock: string): number | null {
 export async function* createLspFrameReader(
   source: LspByteSource,
   maxFrameBytes: number,
+  options: LspFrameReaderOptions = {},
 ): AsyncGenerator<LspBytes, void, void> {
   const pending = createPendingBuffer();
   for await (const chunk of source) {
     pending.push(chunk);
-    yield* drainFrames(pending, maxFrameBytes);
+    yield* drainFrames(pending, maxFrameBytes, options);
+  }
+  if (options.rejectTruncatedEof === true && pending.byteLength() > 0) {
+    throw new LspFrameRejectError("MALFORMED_HEADER");
   }
 }
 
@@ -130,7 +141,7 @@ function createPendingBuffer(): PendingBuffer {
   let tail: LspBytes = EMPTY;
 
   const scanIncoming = (chunk: LspBytes): void => {
-    const window = tail.length === 0 ? chunk : Buffer.concat([tail, chunk]);
+    const window = Buffer.concat([tail, chunk]);
     if (window.includes(HEADER_DELIMITER)) {
       delimiterFound = true;
       return;
@@ -140,18 +151,15 @@ function createPendingBuffer(): PendingBuffer {
 
   return {
     push: (chunk): void => {
-      if (chunk.length === 0) return;
       chunks.push(chunk);
       totalBytes += chunk.length;
-      if (!delimiterFound) {
-        scanIncoming(chunk);
-      }
+      scanIncoming(chunk);
     },
     byteLength: (): number => totalBytes,
     hasHeaderDelimiter: (): boolean => delimiterFound,
-    coalesce: (): LspBytes => (chunks.length === 1 ? (chunks[0] ?? EMPTY) : Buffer.concat(chunks)),
+    coalesce: (): LspBytes => Buffer.concat(chunks, totalBytes),
     reset: (rest): void => {
-      chunks = rest.length === 0 ? [] : [rest];
+      chunks = [rest];
       totalBytes = rest.length;
       tail = EMPTY;
       delimiterFound = rest.includes(HEADER_DELIMITER);
@@ -176,11 +184,12 @@ interface TakenFrame {
 // declared body is not yet present. Enforces the oversized cap at the header boundary, before any
 // body byte is required (ADR-0069 I3). The caller only invokes this once a terminator is present, so
 // `parseHeader` never returns null here.
-function takeFrame(buffer: LspBytes, maxFrameBytes: number): TakenFrame | null {
-  const header = parseHeader(buffer);
-  if (header === null) {
-    return null;
-  }
+function takeFrame(
+  buffer: LspBytes,
+  maxFrameBytes: number,
+  options: LspFrameReaderOptions,
+): TakenFrame | null {
+  const header = parseHeader(buffer, options);
   if (header.contentLength > maxFrameBytes) {
     throw new LspFrameRejectError("RESPONSE_TOO_LARGE");
   }
@@ -200,19 +209,29 @@ function takeFrame(buffer: LspBytes, maxFrameBytes: number): TakenFrame | null {
 function* drainFrames(
   pending: PendingBuffer,
   maxFrameBytes: number,
+  options: LspFrameReaderOptions,
 ): Generator<LspBytes, void, void> {
-  for (;;) {
+  const frameBudget = coalesceFramedBytes(pending);
+  if (frameBudget === undefined) return;
+  // Iterate an immutable view of bytes already required for frame parsing. Each frame consumes at
+  // least one header byte, so this bounds malformed reset behavior without an input-sized control
+  // array or a mutable loop counter that can be mutation-corrupted into an infinite loop.
+  for (const _byte of frameBudget) {
+    void _byte;
     if (!pending.hasHeaderDelimiter()) {
       guardHeaderBound(pending);
       return;
     }
-    const frame = takeFrame(pending.coalesce(), maxFrameBytes);
-    if (frame === null) {
-      return;
-    }
+    const frame = takeFrame(pending.coalesce(), maxFrameBytes, options);
+    if (frame === null) return;
     pending.reset(frame.rest);
     yield frame.body;
   }
+}
+
+function coalesceFramedBytes(pending: PendingBuffer): LspBytes | undefined {
+  guardHeaderBound(pending);
+  return pending.hasHeaderDelimiter() ? pending.coalesce() : undefined;
 }
 
 // Minimal writable sink: the codec only needs to push a fully-assembled frame buffer. Kept structural
@@ -224,7 +243,7 @@ export interface LspByteSink {
 // Serializes a JSON-RPC body string as one LSP base-protocol frame: an ASCII Content-Length header
 // (byte length of the UTF-8 body, not the string length) followed by `\r\n\r\n` and the body bytes.
 export function writeLspFrame(sink: LspByteSink, body: string): void {
-  const bodyBytes = Buffer.from(body, "utf8");
-  const header = Buffer.from(`Content-Length: ${String(bodyBytes.length)}\r\n\r\n`, "ascii");
+  const bodyBytes = Buffer.from(body);
+  const header = Buffer.from(`Content-Length: ${String(bodyBytes.length)}\r\n\r\n`);
   sink.write(Buffer.concat([header, bodyBytes]));
 }

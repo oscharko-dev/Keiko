@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
+import type {
+  DebugActivationControlService,
+  DebugActivationSynchronization,
+} from "../dap/debugActivationControl.js";
+import { breakpointStoreWorkspaceFingerprint } from "../dap/breakpointStore.js";
 import {
   createEditorSettingsControlService,
   type EditorSettingsControlService,
@@ -64,6 +69,16 @@ describe("editor settings control service", () => {
       value: false,
       source: "builtInDefault",
     });
+  });
+
+  it("projects an opaque DAP-compatible workspace identity from the server-resolved root", async () => {
+    const root = temporaryDirectory("editor-settings-debug-workspace-id");
+    const snapshot = await service().read(root);
+
+    expect(snapshot.debugWorkspaceId).toBe(breakpointStoreWorkspaceFingerprint(root));
+    expect(snapshot.debugWorkspaceId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(snapshot.debugWorkspaceId).not.toContain(root);
+    expect((await service().read()).debugWorkspaceId).toBeUndefined();
   });
 
   it("applies user and permitted workspace precedence with revisioned ETags", async () => {
@@ -270,6 +285,112 @@ describe("editor settings control service", () => {
       settingsCount: 1,
     });
     expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
+      source: "builtInDefault",
+    });
+  });
+
+  it("projects debugging from the derived D7 gate and synchronizes the canonical workspace mutation", async () => {
+    const root = temporaryDirectory("editor-settings-debug-root");
+    const synchronizations: DebugActivationSynchronization[] = [];
+    const synchronize: DebugActivationControlService["synchronize"] = (input) => {
+      synchronizations.push(input);
+      return Promise.resolve({
+        ok: true as const,
+        schemaVersion: "1" as const,
+        adapterId: "node-typescript" as const,
+        revision: input.context.revision,
+        state:
+          input.context.workspaceActivation === "enabled"
+            ? ("available" as const)
+            : ("disabled" as const),
+        reasonCode:
+          input.context.workspaceActivation === "enabled"
+            ? ("AVAILABLE" as const)
+            : ("WORKSPACE_DISABLED" as const),
+        policyResult: "allowed" as const,
+      });
+    };
+    const debugActivation: DebugActivationControlService = {
+      resolve: (context) => ({
+        ok: true,
+        schemaVersion: "1",
+        adapterId: "node-typescript",
+        revision: context.revision,
+        state: context.workspaceActivation === "enabled" ? "available" : "disabled",
+        reasonCode:
+          context.workspaceActivation === "enabled" ? "AVAILABLE" : "WORKSPACE_ACTIVATION_UNSET",
+        policyResult: "allowed",
+      }),
+      synchronize,
+      dispose: () => undefined,
+    };
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({
+        stateDir: temporaryDirectory("editor-settings-debug-control"),
+      }),
+      mutex: createWorkspaceMutexRegistry(),
+      debugActivation,
+    });
+
+    expect((await control.read(root)).debugging).toMatchObject({
+      reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+    });
+    const result = await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "enable-debugging",
+      realRoot: root,
+      scope: "workspace",
+      values: { debuggingEnabled: true },
+    });
+
+    expect(result).toMatchObject({ kind: "ok", snapshot: { debugging: { state: "available" } } });
+    expect(synchronizations).toHaveLength(1);
+    expect(synchronizations[0]).toMatchObject({
+      action: "activate",
+      changed: true,
+      context: { realRoot: root, workspaceActivation: "enabled" },
+    });
+  });
+
+  it("rolls back a debugging mutation when the mandatory synchronous revocation fails", async () => {
+    const root = temporaryDirectory("editor-settings-debug-revocation-failure-root");
+    const debugActivation: DebugActivationControlService = {
+      resolve: (context) => ({
+        ok: true,
+        schemaVersion: "1",
+        adapterId: "node-typescript",
+        revision: context.revision,
+        state: "disabled",
+        reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+        policyResult: "allowed",
+      }),
+      synchronize: () => Promise.reject(new Error("DEBUG_REVOCATION_FAILED")),
+      dispose: () => undefined,
+    };
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({
+        stateDir: temporaryDirectory("editor-settings-debug-revocation-failure-control"),
+      }),
+      mutex: createWorkspaceMutexRegistry(),
+      debugActivation,
+    });
+
+    await expect(
+      control.mutate({
+        action: "set",
+        expectedRevision: 0,
+        idempotencyKey: "debugging-revocation-failure",
+        realRoot: root,
+        scope: "workspace",
+        values: { debuggingEnabled: true },
+      }),
+    ).rejects.toThrow("DEBUG_REVOCATION_FAILED");
+
+    expect(
+      (await control.read(root)).settings.find((entry) => entry.id === "debuggingEnabled"),
+    ).toMatchObject({
+      value: false,
       source: "builtInDefault",
     });
   });

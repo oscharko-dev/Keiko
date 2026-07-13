@@ -55,6 +55,9 @@ jobs:
           else
             npm run test:mutation:security
           fi
+      - name: Prove governed debug launch static controls
+        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.required == 'true' }}
+        run: npm run test:mutation:debug-launch-security
       - name: Confirm mutation testing is not applicable
         if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.required != 'true' }}
         run: echo "No security-critical production files changed; mutation gate is not applicable."

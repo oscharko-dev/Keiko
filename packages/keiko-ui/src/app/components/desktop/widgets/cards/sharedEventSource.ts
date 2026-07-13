@@ -150,7 +150,6 @@ function entryForUrl(url: string): SharedEventSourceEntry {
   };
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();
-  openEntrySource(entry);
   return entry;
 }
 
@@ -162,10 +161,10 @@ export function subscribeSharedEventSource(
   const entry = entryForUrl(url);
   entry.refCount += 1;
   for (const type of eventTypes) {
-    dispatcherFor(entry, type);
     const subscribers = entry.subscribersByType.get(type) ?? new Set<SharedEventListener>();
     subscribers.add(listener);
     entry.subscribersByType.set(type, subscribers);
+    dispatcherFor(entry, type);
   }
   openEntrySource(entry);
   return (): void => {

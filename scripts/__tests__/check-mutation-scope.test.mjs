@@ -17,8 +17,30 @@ describe("mutation scope", () => {
       ]),
     ).toBe(true);
     expect(requiresSecurityMutation(["packages/keiko-workflows/src/authority.ts"])).toBe(true);
+    expect(
+      requiresSecurityMutation(["packages/keiko-server/src/editor/dap/debugLaunchPlan.ts"]),
+    ).toBe(true);
+    expect(requiresSecurityMutation(["packages/keiko-server/src/editor/processHardening.ts"])).toBe(
+      true,
+    );
     expect(requiresSecurityMutation(["scripts/banking-quality-gate-core.mjs"])).toBe(true);
     expect(requiresSecurityMutation(["scripts/banking-quality-gate-worker.mjs"])).toBe(true);
+  });
+
+  it("requires mutation testing for every production DAP module", () => {
+    expect(
+      requiresSecurityMutation(["packages/keiko-server/src/editor/dap/futureSecurityBoundary.ts"]),
+    ).toBe(true);
+    expect(
+      requiresSecurityMutation([
+        "packages/keiko-server/src/editor/dap/providers/futureProvider.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresSecurityMutation([
+        "packages/keiko-server/src/editor/dap/futureSecurityBoundary.test.ts",
+      ]),
+    ).toBe(false);
   });
 
   it("does not spend mutation time on documentation or tests only", () => {

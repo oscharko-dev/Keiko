@@ -23,6 +23,7 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "runWorkspaceVerification",
   "renameSymbol",
   "fetchGitBlame",
+  "debug",
 ];
 
 const EXPECTED_IDS: readonly EditorCommandId[] = [
@@ -53,6 +54,16 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.acceptConflictOurs",
   "editor.acceptConflictTheirs",
   "editor.acceptConflictBoth",
+  "editor.debugContinue",
+  "editor.debugPause",
+  "editor.debugStepOver",
+  "editor.debugStepInto",
+  "editor.debugStepOut",
+  "editor.debugStop",
+  "editor.debugToggleBreakpoint",
+  "editor.debugToggleConditionalBreakpoint",
+  "editor.debugEditLogpoint",
+  "editor.debugToggleBreakpointEnabled",
 ];
 
 const baseContext = (overrides: Partial<EditorCommandContext> = {}): EditorCommandContext => ({
@@ -122,6 +133,18 @@ describe("isCommandAvailable capability gate", () => {
   it("allows acceptInlineCompletion without any capability", () => {
     const ctx = baseContext({ inlineCompletionVisible: true, availableCapabilities: [] });
     expect(isCommandAvailable(command("editor.acceptInlineCompletion"), ctx)).toBe(true);
+  });
+
+  it("keeps every debug command absent until the explicit debug capability is injected", () => {
+    const debugCommands = EXPECTED_IDS.filter((id) => id.startsWith("editor.debug"));
+    for (const id of debugCommands) {
+      expect(isCommandAvailable(command(id), baseContext({ availableCapabilities: [] }))).toBe(
+        false,
+      );
+      expect(
+        isCommandAvailable(command(id), baseContext({ availableCapabilities: ["debug"] })),
+      ).toBe(true);
+    }
   });
 });
 

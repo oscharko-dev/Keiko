@@ -186,6 +186,11 @@ import {
   handleEditorLanguageSemanticTokens,
 } from "./editor/languageRoutes.js";
 import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
+import { DAP_DEBUG_ROUTE_GROUP } from "./editor/dap/dapDebugRoutes.js";
+import {
+  handleActivateDebugActivation,
+  handleDeactivateDebugActivation,
+} from "./editor/dap/debugActivationRoutes.js";
 import {
   handleGetManagedLspControl,
   handlePutManagedLspControl,
@@ -364,7 +369,7 @@ export interface ApiError {
 export interface RouteResult {
   readonly status: number;
   readonly body: unknown;
-  readonly headers?: Readonly<Record<string, string>> | undefined;
+  readonly headers?: Readonly<Record<string, string | readonly string[]>> | undefined;
 }
 
 export const STREAMING = Symbol("streaming");
@@ -404,6 +409,7 @@ function health(): RouteResult {
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
+  ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
@@ -898,6 +904,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "PATCH",
     pattern: "/api/editor/settings",
     handler: handlePatchEditorSettings,
+  },
+  // ADR-0134 D7 — the only dedicated activation routes. They mutate the canonical M7
+  // debuggingEnabled setting and synchronously revoke a live session when it narrows.
+  {
+    method: "POST",
+    pattern: "/api/editor/settings/debug/activate",
+    handler: handleActivateDebugActivation,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/settings/debug/deactivate",
+    handler: handleDeactivateDebugActivation,
   },
   {
     method: "GET",

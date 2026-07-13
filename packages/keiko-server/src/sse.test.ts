@@ -44,4 +44,26 @@ describe("startSseHeartbeat process-liveness", () => {
       clearIntervalSpy.mockRestore();
     }
   });
+
+  it("destroys a slow client when heartbeat backpressure is reported", async () => {
+    vi.useFakeTimers();
+    try {
+      const destroy = vi.fn();
+      const write = vi.fn(() => false);
+      const res = {
+        destroyed: false,
+        writableEnded: false,
+        write,
+        destroy,
+        on: vi.fn(),
+      } as unknown as import("node:http").ServerResponse;
+      const stop = startSseHeartbeat(res, 10);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(write).toHaveBeenCalledWith(": keep-alive\n\n");
+      expect(destroy).toHaveBeenCalledOnce();
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

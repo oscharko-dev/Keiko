@@ -10,9 +10,11 @@ const criticalPrefixes = [
   "packages/keiko-sandbox/src/",
   "packages/keiko-security/src/",
   "packages/keiko-workflows/src/",
+  "packages/keiko-server/src/editor/dap/",
 ];
 const criticalServerTerms = /\/(coding-runtime|qualityIntelligence)\//u;
 const criticalGateScripts = new Set([
+  "packages/keiko-server/src/editor/processHardening.ts",
   "scripts/banking-quality-gate-core.mjs",
   "scripts/banking-quality-gate-worker.mjs",
 ]);

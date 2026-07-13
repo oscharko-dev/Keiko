@@ -69,6 +69,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user",
     persistence: "fs-reference",
   },
+  // Epic #2096, Issue #2346 — a bounded, same-origin projection of an already governed debug
+  // session. It can issue explicit local-human controls and instrumentation changes, but never
+  // persists output, variable values, source, or a browser capability token.
+  debug: {
+    lifecycle: ["idle", "running", "blocked", "error"],
+    trustBoundary: ["ui", "fs", "tool"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   browser: {
     lifecycle: ["idle", "live", "error"],
     trustBoundary: ["ui", "network"],

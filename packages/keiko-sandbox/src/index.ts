@@ -13,6 +13,14 @@ export {
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend } from "./select.js";
 export { planIsolatedRun } from "./plan.js";
+export {
+  DEBUG_CAPSULE_RUNTIME_MOUNT,
+  planStrictDebugCapsule,
+  StrictDebugCapsulePlanError,
+  type StrictDebugCapsuleInput,
+  type StrictDebugCapsulePlan,
+  type DebugCapsuleImmutableMount,
+} from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
 export type {
   BackendAvailability,

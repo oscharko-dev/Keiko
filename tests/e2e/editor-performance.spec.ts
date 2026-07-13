@@ -65,6 +65,7 @@ const EVIDENCE_PATH = join(
   "1209-perf-evidence.json",
 );
 const tempProjects: string[] = [];
+const IDLE_DEBUG_INTERVAL_MS = 1_100;
 
 interface TypingMetrics {
   readonly longTasks: number[];
@@ -75,6 +76,66 @@ interface TypingMetrics {
   landed?: boolean;
   activeElement?: string;
 }
+
+interface JsonResponse {
+  readonly body: unknown;
+  readonly etag: string | null;
+  readonly status: number;
+}
+
+interface IdleDebugSession {
+  readonly activationRevision: number;
+  readonly sessionId: string;
+  readonly workspaceId: string;
+}
+
+interface IdleDebugSessionSnapshot {
+  readonly outputAcceptedBytes: number;
+  readonly status: "paused" | "running";
+}
+
+interface IdleDebugMetrics {
+  readonly longTasks: readonly number[];
+  readonly longTaskObserverInstalled: boolean;
+  readonly processingSamples: readonly number[];
+  readonly session: IdleDebugSessionSnapshot;
+  readonly traceCaptured: boolean;
+}
+
+interface TraceEvent {
+  readonly args: unknown;
+  readonly dur: number;
+  readonly name: string;
+  readonly phase: string;
+}
+
+interface IdleDebugEvidence {
+  readonly attempted: boolean;
+  readonly budgetMax: number;
+  readonly captured: boolean;
+  readonly idleIntervalMs: number;
+  readonly longTaskCount: number;
+  readonly maxLongTaskMs: number;
+  readonly outputAcceptedBytes: number | null;
+  readonly p95: number;
+  readonly processingSamples: readonly number[];
+  readonly sessionStatus: "paused" | "running" | null;
+  readonly traceCaptured: boolean;
+}
+
+const UNMEASURED_IDLE_DEBUG_EVIDENCE: IdleDebugEvidence = {
+  attempted: false,
+  budgetMax: 50,
+  captured: false,
+  idleIntervalMs: IDLE_DEBUG_INTERVAL_MS,
+  longTaskCount: 0,
+  maxLongTaskMs: 0,
+  outputAcceptedBytes: null,
+  p95: 0,
+  processingSamples: [],
+  sessionStatus: null,
+  traceCaptured: false,
+};
 
 interface MemoryMetrics {
   supported: boolean;
@@ -168,6 +229,13 @@ function createProjectFixture(): string {
   tempProjects.push(root);
   mkdirSync(join(root, "packages", "keiko-cli", "src"), { recursive: true });
   writeFileSync(join(root, "README.md"), "# Keiko perf fixture\n", "utf8");
+  // Debug activation is deliberately guarded by a human script-trust grant. The performance
+  // fixture is a real workspace, so provide the minimal regular manifest that this grant binds.
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ name: "keiko-editor-performance-fixture", private: true }),
+    "utf8",
+  );
   writeFileSync(
     join(root, "tsconfig.json"),
     JSON.stringify({
@@ -634,6 +702,333 @@ async function measureTyping(
   return completeTypingMetrics({ metrics, observerInstalled, landed, activeElement });
 }
 
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function nonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+async function requestJson(
+  page: Page,
+  url: string,
+  request?: {
+    readonly body?: unknown;
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly method?: "DELETE" | "GET" | "POST";
+  },
+): Promise<JsonResponse> {
+  return page.evaluate(
+    async (input) => {
+      const response = await fetch(input.url, {
+        credentials: "same-origin",
+        ...(input.request?.method === undefined ? {} : { method: input.request.method }),
+        ...(input.request?.headers === undefined ? {} : { headers: input.request.headers }),
+        ...(input.request?.body === undefined ? {} : { body: JSON.stringify(input.request.body) }),
+      });
+      const rawBody = await response.text();
+      let body: unknown = null;
+      try {
+        body = JSON.parse(rawBody) as unknown;
+      } catch {
+        /* Route errors are body-free for this performance harness. */
+      }
+      return {
+        body,
+        etag: response.headers.get("etag"),
+        status: response.status,
+      };
+    },
+    { url, request },
+  );
+}
+
+function debugSettings(response: JsonResponse): {
+  readonly activationRevision: number;
+  readonly state: string;
+  readonly workspaceId: string;
+} {
+  expect(response.status, "debug settings response").toBe(200);
+  expect(response.etag, "debug settings revision ETag").not.toBeNull();
+  const snapshot = isRecord(response.body) ? response.body : undefined;
+  const debugging =
+    snapshot !== undefined && isRecord(snapshot.debugging) ? snapshot.debugging : undefined;
+  const workspaceId = snapshot === undefined ? undefined : stringValue(snapshot.debugWorkspaceId);
+  const activationRevision =
+    debugging === undefined ? undefined : nonnegativeInteger(debugging.revision);
+  const state = debugging === undefined ? undefined : stringValue(debugging.state);
+  expect(workspaceId, "server-projected debug workspace identity").toBeDefined();
+  expect(activationRevision, "debug activation revision").toBeDefined();
+  expect(state, "debug activation state").toBeDefined();
+  return {
+    activationRevision: activationRevision ?? -1,
+    state: state ?? "unknown",
+    workspaceId: workspaceId ?? "",
+  };
+}
+
+async function enableDebugging(page: Page, root: string): Promise<void> {
+  const before = await requestJson(page, `/api/editor/settings?root=${encodeURIComponent(root)}`);
+  expect(before.etag, "debug activation ETag").not.toBeNull();
+  const snapshot = isRecord(before.body) ? before.body : undefined;
+  const revision =
+    snapshot === undefined ? undefined : nonnegativeInteger(snapshot.workspaceRevision);
+  expect(before.status, "settings before debug activation").toBe(200);
+  expect(revision, "workspace settings revision").toBeDefined();
+  const activated = await requestJson(page, "/api/editor/settings/debug/activate", {
+    body: { root, expectedRevision: revision ?? -1 },
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": "editor-performance-idle-debug",
+      "if-match": before.etag ?? "",
+      "x-keiko-csrf": "1",
+    },
+    method: "POST",
+  });
+  expect(activated.status, "debug activation").toBe(200);
+}
+
+async function registerDebugPerformanceProject(page: Page, root: string): Promise<void> {
+  const project = await page.request.post("/api/projects", {
+    data: { name: "Editor performance debug evidence", path: root },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(project.ok(), await project.text()).toBe(true);
+  const trust = await page.request.post("/api/editor/verification/trust", {
+    data: { projectId: root },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(trust.status(), await trust.text()).toBe(200);
+}
+
+async function openDebugEnabledEditor(page: Page): Promise<ReturnType<Page["getByRole"]>> {
+  // The idle-performance path starts its canonical debug session directly through the server route
+  // below. It does not open the Debug panel, so waiting for that panel's bootstrap/SSE bridge would
+  // be an unbounded wait for requests that this path deliberately does not create.
+  return await openEditorCard(page);
+}
+
+function requiredSessionRecord(value: unknown): Readonly<Record<string, unknown>> {
+  expect(isRecord(value), "debug session projection record").toBe(true);
+  return isRecord(value) ? value : {};
+}
+
+function activeIdleStatus(record: Readonly<Record<string, unknown>>): "paused" | "running" {
+  const status = stringValue(record.status);
+  expect(status === "paused" || status === "running", "idle debug session state").toBe(true);
+  return status === "paused" ? "paused" : "running";
+}
+
+function sessionOutputBytes(record: Readonly<Record<string, unknown>>): number {
+  const output = isRecord(record.output) ? record.output : undefined;
+  const outputAcceptedBytes =
+    output === undefined ? undefined : nonnegativeInteger(output.acceptedBytes);
+  expect(outputAcceptedBytes, "debug output byte count").toBeDefined();
+  return outputAcceptedBytes ?? -1;
+}
+
+function sessionFrom(value: unknown): IdleDebugSessionSnapshot & { readonly sessionId: string } {
+  const record = requiredSessionRecord(value);
+  const sessionId = stringValue(record.sessionId);
+  expect(sessionId, "started debug session identity").toBeDefined();
+  return {
+    outputAcceptedBytes: sessionOutputBytes(record),
+    sessionId: sessionId ?? "",
+    status: activeIdleStatus(record),
+  };
+}
+
+async function startIdleDebugSession(page: Page, root: string): Promise<IdleDebugSession> {
+  await registerDebugPerformanceProject(page, root);
+  await enableDebugging(page, root);
+  await page.goto("/");
+  await openDebugEnabledEditor(page);
+  const settings = debugSettings(
+    await requestJson(page, `/api/editor/settings?root=${encodeURIComponent(root)}`),
+  );
+  expect(settings.state, "enabled debug capability").toBe("available");
+  const started = await requestJson(page, "/api/editor/debug/sessions", {
+    body: {
+      activationRevision: settings.activationRevision,
+      schemaVersion: "1",
+      target: { fileId: RELATIVE_PATH, kind: "file" },
+      workspaceId: settings.workspaceId,
+    },
+    headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+    method: "POST",
+  });
+  expect(started.status, "idle debug session start").toBe(201);
+  const session = sessionFrom(started.body);
+  return {
+    activationRevision: settings.activationRevision,
+    sessionId: session.sessionId,
+    workspaceId: settings.workspaceId,
+  };
+}
+
+async function readIdleDebugSession(
+  page: Page,
+  session: IdleDebugSession,
+): Promise<IdleDebugSessionSnapshot> {
+  const response = await requestJson(
+    page,
+    `/api/editor/debug/sessions/${encodeURIComponent(session.sessionId)}`,
+  );
+  expect(response.status, "idle debug session projection").toBe(200);
+  const projection = sessionFrom(response.body);
+  return { outputAcceptedBytes: projection.outputAcceptedBytes, status: projection.status };
+}
+
+async function stopIdleDebugSession(page: Page, session: IdleDebugSession): Promise<void> {
+  const response = await requestJson(
+    page,
+    `/api/editor/debug/sessions/${encodeURIComponent(session.sessionId)}`,
+    {
+      body: {},
+      headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+      method: "DELETE",
+    },
+  );
+  expect(response.status, "idle debug session stop").toBe(200);
+}
+
+async function installIdleDebugLongTaskObserver(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const state = { longTasks: [] as number[], observerInstalled: false };
+    (window as unknown as { __keikoIdleDebugPerf: typeof state }).__keikoIdleDebugPerf = state;
+    try {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) state.longTasks.push(entry.duration);
+      }).observe({ type: "longtask", buffered: false });
+      state.observerInstalled = true;
+    } catch {
+      /* Chromium release evidence requires Long Task observation; report the missing capability. */
+    }
+    return state.observerInstalled;
+  });
+}
+
+function traceEvent(value: unknown): TraceEvent | undefined {
+  if (!isRecord(value)) return undefined;
+  const name = stringValue(value.name);
+  const phase = stringValue(value.ph);
+  const dur = typeof value.dur === "number" && Number.isFinite(value.dur) ? value.dur : undefined;
+  return name === undefined || phase === undefined || dur === undefined
+    ? undefined
+    : { args: value.args, dur, name, phase };
+}
+
+function traceEventsFrom(value: unknown): readonly TraceEvent[] {
+  if (!isRecord(value) || !Array.isArray(value.value)) return [];
+  return value.value.map(traceEvent).filter((event): event is TraceEvent => event !== undefined);
+}
+
+function traceDispatchType(event: TraceEvent): string | undefined {
+  if (!isRecord(event.args)) return undefined;
+  const data = event.args.data;
+  return isRecord(data) ? stringValue(data.type) : undefined;
+}
+
+function inputDispatchDurationMs(events: readonly TraceEvent[]): number {
+  const microseconds = events
+    .filter(
+      (event) =>
+        event.name === "EventDispatch" &&
+        event.phase === "X" &&
+        (traceDispatchType(event) === "beforeinput" || traceDispatchType(event) === "input"),
+    )
+    .reduce((total, event) => total + event.dur, 0);
+  return Math.round((microseconds / 1_000) * 1_000) / 1_000;
+}
+
+interface InputProcessingMeasurement {
+  readonly durationMs: number;
+}
+
+async function captureInputProcessingMs(
+  page: Page,
+  text: string,
+): Promise<InputProcessingMeasurement> {
+  const client = await page.context().newCDPSession(page);
+  const events: TraceEvent[] = [];
+  const complete = new Promise<void>((resolve) => {
+    client.once("Tracing.tracingComplete", () => {
+      resolve();
+    });
+  });
+  client.on("Tracing.dataCollected", (value: unknown) => events.push(...traceEventsFrom(value)));
+  await client.send("Tracing.start", {
+    categories: "devtools.timeline",
+    transferMode: "ReportEvents",
+  });
+  try {
+    await page.keyboard.insertText(text);
+    await awaitNextPaint(page);
+    await client.send("Tracing.end");
+    await Promise.race([
+      complete,
+      new Promise<never>((_, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("EDITOR_PERF_TRACE_COMPLETION_TIMEOUT"));
+        }, 15_000);
+        timeout.unref();
+      }),
+    ]);
+    return {
+      durationMs: inputDispatchDurationMs(events),
+    };
+  } finally {
+    await client.detach();
+  }
+}
+
+async function idleDebugLongTasks(page: Page): Promise<readonly number[]> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __keikoIdleDebugPerf?: { readonly longTasks: readonly number[] } })
+        .__keikoIdleDebugPerf?.longTasks ?? [],
+  );
+}
+
+async function measureIdleDebugTyping(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+  session: IdleDebugSession,
+): Promise<IdleDebugMetrics> {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+KeyA`);
+  const observerInstalled = await installIdleDebugLongTaskObserver(page);
+  await page.waitForTimeout(IDLE_DEBUG_INTERVAL_MS);
+  const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
+  const processingSamples: number[] = [];
+  for (const chunk of TYPING_CHUNKS) {
+    const measurement = await captureInputProcessingMs(page, chunk);
+    processingSamples.push(measurement.durationMs);
+  }
+  await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000)]);
+  const [longTasks, liveSession] = await Promise.all([
+    idleDebugLongTasks(page),
+    readIdleDebugSession(page, session),
+  ]);
+  return {
+    longTasks,
+    longTaskObserverInstalled: observerInstalled,
+    processingSamples,
+    session: liveSession,
+    // Each sample returns only after CDP emits Tracing.tracingComplete; the bounded capture helper
+    // throws on a missing completion instead of reporting a partial measurement as evidence.
+    traceCaptured: true,
+  };
+}
+
 /** B11: per-cycle baseline (no editor) -> peak (editor open) -> residual (editor closed) heap. */
 async function measureMemory(page: Page, cycles: number): Promise<MemoryMetrics> {
   const supported = await page.evaluate(
@@ -782,7 +1177,16 @@ function installWorkerCapture(page: Page): WorkerCapture {
   return {
     workerRequests,
     settleWorkerCaptures: async (): Promise<void> => {
-      await Promise.allSettled(pendingWorkerCaptures.splice(0));
+      const pending = Promise.allSettled(pendingWorkerCaptures.splice(0));
+      await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("EDITOR_PERF_WORKER_CAPTURE_TIMEOUT"));
+          }, 15_000);
+          timeout.unref();
+        }),
+      ]);
     },
   };
 }
@@ -830,6 +1234,26 @@ function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
   };
 }
 
+function buildIdleDebugB5Evidence(metrics: IdleDebugMetrics): IdleDebugEvidence {
+  return {
+    attempted: true,
+    budgetMax: 50,
+    captured:
+      metrics.traceCaptured &&
+      metrics.longTaskObserverInstalled &&
+      metrics.processingSamples.length === TYPING_CHUNKS.length &&
+      metrics.session.outputAcceptedBytes === 0,
+    idleIntervalMs: IDLE_DEBUG_INTERVAL_MS,
+    longTaskCount: metrics.longTasks.length,
+    maxLongTaskMs: Math.round(Math.max(0, ...metrics.longTasks)),
+    outputAcceptedBytes: metrics.session.outputAcceptedBytes,
+    p95: percentile(metrics.processingSamples, 95),
+    processingSamples: metrics.processingSamples,
+    sessionStatus: metrics.session.status,
+    traceCaptured: metrics.traceCaptured,
+  };
+}
+
 function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
   const interactionDurations =
     typing.events.length > 0 ? typing.events : typing.interactionDurations;
@@ -862,6 +1286,7 @@ function buildEvidence(
   navigation: NavigationMetrics,
   workerRequests: readonly WorkerRequest[],
   workspaceCapDegradation: WorkspaceCapDegradationEvidence,
+  idleDebug: IdleDebugEvidence,
 ): Record<string, unknown> {
   return {
     measuredAtIso: new Date().toISOString(),
@@ -876,6 +1301,7 @@ function buildEvidence(
       p95: percentile(coldStartsMs, 95),
     },
     b5KeystrokeMs: buildB5Evidence(typing),
+    b5IdleDebugSession: idleDebug,
     b6InteractionMs: buildB6Evidence(typing),
     navigationRoundTripMs: {
       definition: buildNavigationOperationEvidence(navigation.definition),
@@ -900,6 +1326,7 @@ async function writeEvidence(
   navigation: NavigationMetrics,
   capture: WorkerCapture,
   workspaceCapDegradation: WorkspaceCapDegradationEvidence,
+  idleDebug: IdleDebugEvidence,
 ): Promise<void> {
   await capture.settleWorkerCaptures();
   writeFileSync(
@@ -912,6 +1339,7 @@ async function writeEvidence(
         navigation,
         capture.workerRequests,
         workspaceCapDegradation,
+        idleDebug,
       ),
       null,
       2,
@@ -965,6 +1393,7 @@ async function collectEvidenceMeasurements(
     navigation,
     capture,
     UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+    UNMEASURED_IDLE_DEBUG_EVIDENCE,
   );
 
   await page.goto("/");
@@ -977,6 +1406,7 @@ async function collectEvidenceMeasurements(
     navigation,
     capture,
     UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+    UNMEASURED_IDLE_DEBUG_EVIDENCE,
   );
 
   memory = await measureMemoryBestEffort(page);
@@ -987,6 +1417,7 @@ async function collectEvidenceMeasurements(
     navigation,
     capture,
     UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+    UNMEASURED_IDLE_DEBUG_EVIDENCE,
   );
   return { coldStartsMs, typing, memory, navigation };
 }
@@ -1001,6 +1432,7 @@ function assertEvidenceBudgets(
   evidence: {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
     b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
+    b5IdleDebugSession: IdleDebugEvidence;
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
     navigationRoundTripMs: {
       definition: { p50: number; p95: number; resultCounts: readonly number[] };
@@ -1029,6 +1461,18 @@ function assertEvidenceBudgets(
   expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(
     evidence.b5KeystrokeMs.budgetMax,
   );
+  expect(evidence.b5IdleDebugSession.attempted).toBe(true);
+  expect(evidence.b5IdleDebugSession.captured).toBe(true);
+  expect(evidence.b5IdleDebugSession.traceCaptured).toBe(true);
+  expect(evidence.b5IdleDebugSession.processingSamples.length).toBe(TYPING_CHUNKS.length);
+  expect(evidence.b5IdleDebugSession.p95).toBeLessThan(evidence.b5IdleDebugSession.budgetMax);
+  expect(evidence.b5IdleDebugSession.longTaskCount).toBe(0);
+  expect(evidence.b5IdleDebugSession.maxLongTaskMs).toBe(0);
+  expect(evidence.b5IdleDebugSession.outputAcceptedBytes).toBe(0);
+  expect(
+    evidence.b5IdleDebugSession.sessionStatus === "paused" ||
+      evidence.b5IdleDebugSession.sessionStatus === "running",
+  ).toBe(true);
   expect(evidence.b6InteractionMs.captured).toBe(true);
   expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
   expect(evidence.navigationRoundTripMs.definition.p50).toBeGreaterThanOrEqual(0);
@@ -1085,6 +1529,7 @@ function assertEvidenceBudgets(
 interface ReleaseEvidence {
   b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
   b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
+  b5IdleDebugSession: IdleDebugEvidence;
   b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
   navigationRoundTripMs: {
     definition: { p50: number; p95: number; resultCounts: readonly number[] };
@@ -1115,13 +1560,30 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   const capture = installWorkerCapture(page);
   const measurements = await collectEvidenceMeasurements(page, capture, projectPath);
   const { coldStartsMs, typing, memory, navigation } = measurements;
+  const idleSession = await startIdleDebugSession(page, projectPath);
+  let idleDebug: IdleDebugEvidence;
+  try {
+    const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
+    const idleMetrics = await measureIdleDebugTyping(page, editorWindow, idleSession);
+    idleDebug = buildIdleDebugB5Evidence(idleMetrics);
+  } finally {
+    await stopIdleDebugSession(page, idleSession);
+  }
 
   // Adversarial near-cap workspace probe (audit defect #2): a single, cheap measurement (no repeated
   // warmups/runs) against a workspace whose total source bytes exceed maxWorkspaceReadBytes, proving
   // graceful degradation without materially extending this release-evidence smoke's runtime.
   const adversarialRoot = createAdversarialWorkspaceFixture();
   const workspaceCapDegradation = await measureWorkspaceCapDegradation(page, adversarialRoot);
-  await writeEvidence(coldStartsMs, typing, memory, navigation, capture, workspaceCapDegradation);
+  await writeEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture,
+    workspaceCapDegradation,
+    idleDebug,
+  );
 
   const evidence = buildEvidence(
     coldStartsMs,
@@ -1130,6 +1592,7 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
     navigation,
     capture.workerRequests,
     workspaceCapDegradation,
+    idleDebug,
   ) as unknown as ReleaseEvidence;
 
   await testInfo.attach("editor-perf-evidence", {

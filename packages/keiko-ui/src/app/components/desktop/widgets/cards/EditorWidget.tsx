@@ -381,6 +381,7 @@ export function EditorWidget({
   layoutJson,
   onWorkspaceChange,
   onOpenProblems,
+  onOpenDebugPanel,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
@@ -1382,6 +1383,7 @@ export function EditorWidget({
       trustWorkspaceScripts: verification.trustWorkspaceScripts,
       revokeWorkspaceScriptTrust: verification.revokeWorkspaceScriptTrust,
       openProblems: () => onOpenProblems?.(workspaceRoot),
+      openDebugPanel: () => onOpenDebugPanel?.(),
     }),
     [
       activeFile,
@@ -1391,6 +1393,7 @@ export function EditorWidget({
       layout,
       nextTab,
       onOpenProblems,
+      onOpenDebugPanel,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
@@ -1557,6 +1560,7 @@ export function EditorWidget({
           ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }
           : undefined,
       renderTabHandle: binding.renderTabHandle,
+      onOpenDebugPanel,
       onOutlineStateChange: handleOutlineStateChange,
       outlineRevealRequest: outlineRevealByPane[pane.id],
       // GEN-PERF-EDITOR-003 — a per-pane scalar that changes only for the pane whose tab is

@@ -35,10 +35,14 @@ import type {
   WireEditorGitGutter,
   WireEditorBlame,
   WireEditorConflicts,
+  WireEditorDebug,
+  EditorDebugBridge,
 } from "./on-mount.js";
 import type { EditorGitGutterBridge, EditorGitGutterChanges } from "./git-gutter-bridge.js";
+import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResponse } from "./inlay-hints-bridge.js";
+import type { EditorDebugValueSnapshot } from "./debug-value-inlay-resolver.js";
 import type {
   EditorCodeActionsResponse,
   EditorCompletionResponse,
@@ -89,6 +93,7 @@ export interface EditorHandlers {
   readonly formatDocument: () => void;
   readonly revealDiagnosticMarker: (marker: DiagnosticOverviewMarker) => void;
   readonly refreshGitGutter: () => void;
+  readonly refreshDebug: () => void;
 }
 
 // A single module-scope UTF-8 encoder shared across every change event. `TextEncoder` is stateless
@@ -129,6 +134,7 @@ interface EditorRefs {
   readonly revealDecorationIdsRef: RefObject<string[]>;
   readonly revealTimeoutRef: RefObject<number | null>;
   readonly gitGutterBridgeRef: RefObject<EditorGitGutterBridge | null>;
+  readonly debugBridgeRef: RefObject<EditorDebugBridge | null>;
 }
 
 function useEditorRefs(): EditorRefs {
@@ -141,6 +147,7 @@ function useEditorRefs(): EditorRefs {
   const revealDecorationIdsRef = useRef<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
   const gitGutterBridgeRef = useRef<EditorGitGutterBridge | null>(null);
+  const debugBridgeRef = useRef<EditorDebugBridge | null>(null);
   return useMemo(
     () => ({
       editorRef,
@@ -152,6 +159,7 @@ function useEditorRefs(): EditorRefs {
       revealDecorationIdsRef,
       revealTimeoutRef,
       gitGutterBridgeRef,
+      debugBridgeRef,
     }),
     [
       editorRef,
@@ -163,6 +171,7 @@ function useEditorRefs(): EditorRefs {
       revealDecorationIdsRef,
       revealTimeoutRef,
       gitGutterBridgeRef,
+      debugBridgeRef,
     ],
   );
 }
@@ -810,9 +819,54 @@ function buildConflictWiring(
   };
 }
 
+function buildDebugWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+): WireEditorDebug | undefined {
+  const debug = latestProps.current.debug;
+  if (debug === undefined) return undefined;
+  return {
+    gutter: {
+      ...debug.gutter,
+      resolveBreakpoints: (): readonly SourceBreakpoint[] =>
+        latestProps.current.debug?.gutter.resolveBreakpoints() ?? [],
+      resolvePausedLine: (): number | undefined => latestProps.current.debug?.gutter.pausedLine,
+      onToggleBreakpoint: (line): void =>
+        latestProps.current.debug?.gutter.onToggleBreakpoint(line),
+      onToggleConditionalBreakpoint: (line): void =>
+        latestProps.current.debug?.gutter.onToggleConditionalBreakpoint(line),
+      onEditLogpoint: (line): void => latestProps.current.debug?.gutter.onEditLogpoint(line),
+      onToggleBreakpointEnabled: (breakpoint): void =>
+        latestProps.current.debug?.gutter.onToggleBreakpointEnabled(breakpoint),
+      onOpenContextMenu: (context): void =>
+        latestProps.current.debug?.gutter.onOpenContextMenu(context),
+    },
+    commands: {
+      continue: (): void => latestProps.current.debug?.commands.continue(),
+      pause: (): void => latestProps.current.debug?.commands.pause(),
+      stepOver: (): void => latestProps.current.debug?.commands.stepOver(),
+      stepInto: (): void => latestProps.current.debug?.commands.stepInto(),
+      stepOut: (): void => latestProps.current.debug?.commands.stepOut(),
+      stop: (): void => latestProps.current.debug?.commands.stop(),
+    },
+    resolvePausedValues: (documentUri: string): EditorDebugValueSnapshot =>
+      latestProps.current.debug?.resolvePausedValues?.(documentUri) ?? {
+        paused: false,
+        pauseGeneration: 0,
+        documentUri,
+        values: [],
+      },
+  };
+}
+
 function captureGitGutterBridge(refs: EditorRefs): (bridge: EditorGitGutterBridge | null) => void {
   return (bridge): void => {
     refs.gitGutterBridgeRef.current = bridge;
+  };
+}
+
+function captureDebugBridge(refs: EditorRefs): (bridge: EditorDebugBridge | null) => void {
+  return (bridge): void => {
+    refs.debugBridgeRef.current = bridge;
   };
 }
 
@@ -843,6 +897,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.editorGitGutter,
     props.editorBlame,
     props.editorConflicts,
+    props.debug,
     deriveLargeFileMode({
       sizeBytes: props.buffer.content.sizeBytes,
       text: props.buffer.content.text,
@@ -1050,7 +1105,9 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     gitGutter: buildGitGutterWiring(args.latestProps),
     blame: buildBlameWiring(args.latestProps),
     conflicts: buildConflictWiring(args.latestProps),
+    debug: buildDebugWiring(args.latestProps),
     onGitGutterBridge: captureGitGutterBridge(args.refs),
+    onDebugBridge: captureDebugBridge(args.refs),
   });
   applyRevealRequest(args.refs, args.latestProps.current.revealRequest);
 }
@@ -1109,6 +1166,7 @@ function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBas
       args.onRuntimeError,
       args.themeVariant,
       args.refs.gitGutterBridgeRef,
+      args.refs.debugBridgeRef,
     ],
   );
 }
@@ -1241,6 +1299,9 @@ export function useEditorHandlers(
   const refreshGitGutter = useCallback((): void => {
     refs.gitGutterBridgeRef.current?.refresh();
   }, [refs.gitGutterBridgeRef]);
+  const refreshDebug = useCallback((): void => {
+    refs.debugBridgeRef.current?.refresh();
+  }, [refs.debugBridgeRef]);
   useUnmountDisposal(refs);
   useHostEditRequest(props, refs, programmaticChangeRef);
   useControlledModelValueSync(props, refs, programmaticChangeRef);
@@ -1253,5 +1314,6 @@ export function useEditorHandlers(
     formatDocument,
     revealDiagnosticMarker: revealDiagnostic,
     refreshGitGutter,
+    refreshDebug,
   };
 }

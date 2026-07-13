@@ -1,17 +1,17 @@
 {
-  "measuredAtIso": "2026-07-11T23:32:55.378Z",
-  "commit": "10cd5d4e782b525945ab6ccdb94141dfdfa1efba",
+  "measuredAtIso": "2026-07-13T19:46:36.859Z",
+  "commit": "a5c7157e5a59e55bb6c9acd98b549f48271a3783",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      891,
-      872,
-      901
+      893,
+      894,
+      890
     ],
-    "p50": 891,
-    "p95": 901
+    "p50": 893,
+    "p95": 894
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
@@ -84,6 +84,80 @@
     "longTaskCount": 0,
     "maxLongTaskMs": 0
   },
+  "b5IdleDebugSession": {
+    "attempted": true,
+    "budgetMax": 50,
+    "captured": true,
+    "idleIntervalMs": 1100,
+    "longTaskCount": 0,
+    "maxLongTaskMs": 0,
+    "outputAcceptedBytes": 0,
+    "p95": 0,
+    "processingSamples": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "sessionStatus": "paused",
+    "traceCaptured": true
+  },
   "b6InteractionMs": {
     "budgetP75": 200,
     "captured": true,
@@ -91,36 +165,36 @@
     "eventCount": 30,
     "interactionCount": 30,
     "p75": 24,
-    "max": 24
+    "max": 32
   },
   "navigationRoundTripMs": {
     "definition": {
       "samples": [
-        263,
-        19,
-        17
+        177,
+        10,
+        9
       ],
       "resultCounts": [
         1,
         1,
         1
       ],
-      "p50": 19,
-      "p95": 263
+      "p50": 10,
+      "p95": 177
     },
     "references": {
       "samples": [
-        33,
-        17,
-        18
+        40,
+        11,
+        10
       ],
       "resultCounts": [
         5,
         5,
         5
       ],
-      "p50": 18,
-      "p95": 33
+      "p50": 11,
+      "p95": 40
     }
   },
   "b11Memory": {
@@ -160,7 +234,7 @@
     "attempted": true,
     "ok": true,
     "truncated": true,
-    "durationMs": 187,
+    "durationMs": 152,
     "statusCode": 413,
     "errorCode": "DOCUMENT_TOO_LARGE",
     "paddingFileCount": 5,

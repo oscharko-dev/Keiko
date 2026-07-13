@@ -31,11 +31,15 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
+  type DebugDeploymentPolicy,
+  type DebugProductSupport,
+  type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
+import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -150,6 +154,24 @@ import {
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
+import type { DapDebugRouteService } from "./editor/dap/dapDebugRoutes.js";
+import { createDapDebugRouteService } from "./editor/dap/dapDebugRoutes.js";
+import { createDapOperatorProvisioning } from "./editor/dap/dapOperatorProvisioningFactory.js";
+import {
+  parseDapOperatorProvisioningDocument,
+  type DapOperatorProvisioningDocument,
+} from "./editor/dap/dapOperatorProvisioning.js";
+import {
+  createDapProductionService,
+  type DapProductionProvisioning,
+  type DapProductionService,
+} from "./editor/dap/dapProductionService.js";
+import { inspectDebugWorkspaceIdentity } from "./editor/dap/debugLaunchContext.js";
+import {
+  createDebugActivationControlService,
+  type DebugActivationControlService,
+} from "./editor/dap/debugActivationControl.js";
+import type { DebugActivationEvidence } from "./editor/dap/debugActivationEvidence.js";
 import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.js";
 import type { GitRouteOptions } from "./gitRoutes.js";
 import type { NativeFileDialogRouteOptions } from "./native-file-dialog/route.js";
@@ -396,6 +418,12 @@ export interface UiHandlerDeps {
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
+  // Epic #2096 / Issue #2345 — route-facing composition over the canonical DAP manager,
+  // instrumentation store, browser capability registry, pause references, and SSE bridge. Optional
+  // until #2347 replaces the temporary default-off route flag with the production activation gate.
+  readonly dapDebug?: DapDebugRouteService | undefined;
+  // ADR-0134 D7's derived debug capability gate. The M7 setting remains the durable opt-in.
+  readonly debugActivationControl?: DebugActivationControlService | undefined;
   // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
   // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
   readonly managedLspControl?: ManagedLspControlService | undefined;
@@ -561,8 +589,21 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Optional published DAP service. Activation only uses this bounded revocation seam; it never
+  // reaches into adapter transport or launch internals.
+  readonly dapDebug?: DapDebugRouteService | undefined;
+  /**
+   * Operator-owned, workspace-external DAP provisioning. The normal BFF composes this only when
+   * all four activation factors below are supplied; absent configuration remains unavailable.
+   */
+  readonly dapProductionProvisioning?: DapProductionProvisioning | undefined;
+  readonly dapProductSupport?: (realRoot: string | undefined) => DebugProductSupport;
+  readonly dapDeploymentPolicy?: (realRoot: string | undefined) => DebugDeploymentPolicy;
+  readonly dapProvisioning?: (realRoot: string) => DebugProvisioning;
   // Deterministic activation-control seam for route/bootstrap tests.
   readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Deterministic debug-activation control seam for route/bootstrap tests.
+  readonly debugActivationControl?: DebugActivationControlService | undefined;
   // Deterministic editor-settings control seam for route/bootstrap tests.
   readonly editorSettingsControl?: EditorSettingsControlService | undefined;
   readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
@@ -1522,11 +1563,17 @@ interface PeripheralManagers {
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly managedLspControl: ManagedLspControlService;
+  readonly debugActivationControl: DebugActivationControlService;
   readonly editorSettingsControl: EditorSettingsControlService;
   readonly editorSettingsEvents: EditorSettingsEventBus;
   readonly workspaceWatchService: WorkspaceWatchService;
   readonly workspaceSnippets: WorkspaceSnippetsService;
   readonly memoryAuthorization: MemoryAuthorizationContext;
+}
+
+interface DapRuntimeReference {
+  current: DapDebugRouteService | undefined;
+  readonly workspaceRoots: Map<string, string>;
 }
 
 function buildLocalKnowledgeRemediation(options: {
@@ -1569,6 +1616,66 @@ interface BuildPeripheralsArgs {
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly runtimeStateDir: string;
+  readonly dapRuntime: DapRuntimeReference;
+}
+
+function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
+  return "unavailable";
+}
+
+function missingDebugProvisioning(): DebugProvisioning {
+  return "notProvisioned";
+}
+
+function operatorDapDocument(env: NodeJS.ProcessEnv): DapOperatorProvisioningDocument | undefined {
+  const raw = env.KEIKO_DAP_OPERATOR_PROVISIONING_JSON;
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = parseDapOperatorProvisioningDocument(JSON.parse(raw) as unknown);
+    return parsed.ok ? parsed.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildDebugActivationControl(args: BuildPeripheralsArgs): DebugActivationControlService {
+  const operatorConfigured = operatorDapDocument(args.options.env) !== undefined;
+  return (
+    args.options.debugActivationControl ??
+    createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport:
+        args.options.dapProductSupport ??
+        ((): DebugProductSupport => (process.platform === "linux" ? "supported" : "unsupported")),
+      deploymentPolicy:
+        args.options.dapDeploymentPolicy ??
+        ((): DebugDeploymentPolicy =>
+          operatorConfigured ? "allowed" : unavailableDebugDeploymentPolicy()),
+      provisioning:
+        args.options.dapProvisioning ??
+        ((): DebugProvisioning =>
+          operatorConfigured ? "provisioned" : missingDebugProvisioning()),
+      projectEvidence: (fingerprint, evidence): void => {
+        args.evidenceStore.put(
+          `debug-activation-${fingerprint}-${String(evidence.revision)}-${evidence.action}`,
+          JSON.stringify(debugActivationEvidenceProjection(evidence)),
+        );
+      },
+      disposeActiveSession: (realRoot): Promise<void> => disposeActiveDebugSession(args, realRoot),
+    })
+  );
+}
+
+async function disposeActiveDebugSession(
+  args: BuildPeripheralsArgs,
+  realRoot: string,
+): Promise<void> {
+  const service = args.dapRuntime.current;
+  if (service === undefined) return;
+  const sessionId = service.manager.workspaceSessionId(
+    inspectDebugWorkspaceIdentity(realRoot).identityDigest,
+  );
+  if (sessionId !== undefined) await service.manager.revoke(sessionId);
 }
 
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
@@ -1592,6 +1699,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       redact: args.liveRedactor,
       evidenceStore: args.evidenceStore,
     });
+  const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({
       store: args.uiStore,
@@ -1643,11 +1751,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
         env: args.options.env,
       }),
     managedLspControl,
+    debugActivationControl,
     editorSettingsControl:
       args.options.editorSettingsControl ??
       createNodeEditorSettingsControl({
         stateDir: args.runtimeStateDir,
         managedLspControl,
+        debugActivation: debugActivationControl,
         processEnv: args.options.env,
       }),
     editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
@@ -1660,6 +1770,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
+}
+
+function debugActivationEvidenceProjection(
+  evidence: DebugActivationEvidence,
+): Readonly<Record<string, DebugActivationEvidence>> {
+  return { evidence };
 }
 
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
@@ -1991,7 +2107,10 @@ function atlassianConnectorCredentialFields(
   };
 }
 
-function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralManagers {
+function buildAssemblyPeripherals(
+  args: UiHandlerDepsAssemblyArgs,
+  dapRuntime: DapRuntimeReference,
+): PeripheralManagers {
   return buildPeripherals({
     options: args.options,
     uiStore: args.bundle.uiStore,
@@ -2001,11 +2120,139 @@ function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralMa
     runtimeConfig: args.runtimeConfig,
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
+    dapRuntime,
   });
 }
 
+interface DapActivationRevisionTracker {
+  readonly current: () => number;
+  readonly synchronize: (revision: number) => void;
+}
+
+function createDapActivationRevisionTracker(): DapActivationRevisionTracker {
+  let revision = 0;
+  return {
+    current: (): number => revision,
+    synchronize: (next): void => {
+      revision = next;
+    },
+  };
+}
+
+function createComposedDapRouteService(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+  production: DapProductionService,
+  activationRevision: DapActivationRevisionTracker,
+): DapDebugRouteService {
+  return createDapDebugRouteService({
+    production,
+    stateDir: dirname(args.resolvedUiDbPath),
+    now: Date.now,
+    activation: async (realRoot) => {
+      runtime.workspaceRoots.set(inspectDebugWorkspaceIdentity(realRoot).identityDigest, realRoot);
+      const snapshot = await peripherals.editorSettingsControl.read(realRoot);
+      return snapshot.debugging ?? unavailableDebugActivation(snapshot.revision);
+    },
+    synchronizeActivationRevision: activationRevision.synchronize,
+  });
+}
+
+function unavailableDebugActivation(
+  revision: number,
+): Awaited<ReturnType<DapDebugRouteService["activation"]>> {
+  return {
+    ok: true,
+    schemaVersion: "1",
+    adapterId: "node-typescript",
+    revision,
+    state: "disabled",
+    reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+    policyResult: "denied",
+  };
+}
+
+function dapWorkspaceContext(
+  peripherals: PeripheralManagers,
+  root: string,
+): { readonly root: string; readonly projectId: string; readonly trusted: boolean } | undefined {
+  try {
+    const workspace = detectWorkspaceAt(root, nodeWorkspaceFs);
+    const canonicalRoot = nodeWorkspaceFs.realPath(root);
+    return {
+      root: canonicalRoot,
+      projectId: canonicalRoot,
+      trusted: peripherals.workspaceScriptTrust.isTrusted(canonicalRoot, workspace),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+// eslint-disable-next-line max-lines-per-function -- governed DAP composition is one auditable boundary.
+function composeDapRuntime(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+): DapProductionService | undefined {
+  const document = operatorDapDocument(args.options.env);
+  const provisioning =
+    args.options.dapProductionProvisioning ??
+    (document === undefined
+      ? undefined
+      : createDapOperatorProvisioning({
+          document,
+          processEnv: args.options.env,
+          fs: nodeWorkspaceFs,
+          discover: peripherals.commandRunner.discover,
+          workspaceForPartition: (partition) => {
+            const root = runtime.workspaceRoots.get(partition);
+            return root === undefined ? undefined : dapWorkspaceContext(peripherals, root);
+          },
+          workspaceForRoot: (root) => dapWorkspaceContext(peripherals, root),
+        }));
+  if (provisioning === undefined) return undefined;
+  const activationRevision = createDapActivationRevisionTracker();
+  const production = createDapProductionService({
+    provisioning,
+    evidenceStore: args.evidenceStore,
+    appendJournal: (partition, evidence): Promise<void> => {
+      args.evidenceStore.put(
+        `debug-session-${partition}-${randomUUID()}`,
+        JSON.stringify(evidence),
+      );
+      return Promise.resolve();
+    },
+    now: Date.now,
+    epoch: () => 0,
+    activationRevision: activationRevision.current,
+    emitOutputLimit: (): void => undefined,
+    onRuntimeFailure: (): void => {
+      args.evidenceStore.put(
+        `debug-runtime-failure-${randomUUID()}`,
+        JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeFailure" }),
+      );
+    },
+  });
+  runtime.current = createComposedDapRouteService(
+    args,
+    peripherals,
+    runtime,
+    production,
+    activationRevision,
+  );
+  return production;
+}
+
+// eslint-disable-next-line max-lines-per-function -- root dependency composition is intentionally reviewable together.
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
-  const peripherals = buildAssemblyPeripherals(args);
+  const dapRuntime: DapRuntimeReference = {
+    current: args.options.dapDebug,
+    workspaceRoots: new Map(),
+  };
+  const peripherals = buildAssemblyPeripherals(args, dapRuntime);
+  const dapProduction = composeDapRuntime(args, peripherals, dapRuntime);
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2037,11 +2284,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
+    ...(dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current }),
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
     dispose: async (): Promise<void> => {
       await shutdownHostLspPool();
+      await dapProduction?.dispose();
+      peripherals.debugActivationControl.dispose();
       peripherals.workspaceWatchService.disposeAll();
       args.bundle.dispose?.();
     },

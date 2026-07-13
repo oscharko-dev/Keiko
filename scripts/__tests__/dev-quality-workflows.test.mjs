@@ -18,6 +18,8 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"');
     expect(mutation).not.toContain('"${mutation_files[@]}"');
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
     expect(mutation).not.toContain("continue-on-error: true");
 
     const install = mutation.indexOf("npm ci --ignore-scripts");

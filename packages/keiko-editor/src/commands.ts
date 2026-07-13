@@ -87,6 +87,32 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
   { id: "editor.acceptConflictOurs", title: "Accept Ours", requiredCapabilities: [] },
   { id: "editor.acceptConflictTheirs", title: "Accept Theirs", requiredCapabilities: [] },
   { id: "editor.acceptConflictBoth", title: "Accept Both", requiredCapabilities: [] },
+  { id: "editor.debugContinue", title: "Debug: Continue", requiredCapabilities: ["debug"] },
+  { id: "editor.debugPause", title: "Debug: Pause", requiredCapabilities: ["debug"] },
+  { id: "editor.debugStepOver", title: "Debug: Step Over", requiredCapabilities: ["debug"] },
+  { id: "editor.debugStepInto", title: "Debug: Step Into", requiredCapabilities: ["debug"] },
+  { id: "editor.debugStepOut", title: "Debug: Step Out", requiredCapabilities: ["debug"] },
+  { id: "editor.debugStop", title: "Debug: Stop", requiredCapabilities: ["debug"] },
+  {
+    id: "editor.debugToggleBreakpoint",
+    title: "Debug: Toggle Breakpoint",
+    requiredCapabilities: ["debug"],
+  },
+  {
+    id: "editor.debugToggleConditionalBreakpoint",
+    title: "Debug: Toggle Conditional Breakpoint",
+    requiredCapabilities: ["debug"],
+  },
+  {
+    id: "editor.debugEditLogpoint",
+    title: "Debug: Edit Logpoint",
+    requiredCapabilities: ["debug"],
+  },
+  {
+    id: "editor.debugToggleBreakpointEnabled",
+    title: "Debug: Toggle Breakpoint Enabled",
+    requiredCapabilities: ["debug"],
+  },
 ] as const;
 
 /**
@@ -126,6 +152,16 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.acceptConflictOurs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
   "editor.acceptConflictTheirs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
   "editor.acceptConflictBoth": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.debugContinue": () => true,
+  "editor.debugPause": () => true,
+  "editor.debugStepOver": () => true,
+  "editor.debugStepInto": () => true,
+  "editor.debugStepOut": () => true,
+  "editor.debugStop": () => true,
+  "editor.debugToggleBreakpoint": () => true,
+  "editor.debugToggleConditionalBreakpoint": () => true,
+  "editor.debugEditLogpoint": () => true,
+  "editor.debugToggleBreakpointEnabled": () => true,
 };
 
 function hasRequiredCapabilities(command: EditorCommand, ctx: EditorCommandContext): boolean {
