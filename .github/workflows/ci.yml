@@ -440,7 +440,7 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.0.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0.x"
@@ -455,7 +455,10 @@ jobs:
           $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $installation) { throw "Visual Studio C++ tools were not found" }
           $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
-          $environment = & cmd.exe /s /c "`"call `"$vcvars`" >nul && set`""
+          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
+          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
+          $environment = & cmd.exe /d /c $vcvarsWrapper
+          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
           foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
             $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
             if (-not $line) { throw "MSVC environment did not define $name" }

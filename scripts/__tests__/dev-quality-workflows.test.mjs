@@ -85,6 +85,9 @@ describe("dev quality workflows", () => {
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");
     expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
+    expect(crossPlatform).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
+    expect(crossPlatform).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
+    expect(crossPlatform).toContain("MSVC environment initialization failed");
     expect(crossPlatform).not.toContain(
       "github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor'",
     );
