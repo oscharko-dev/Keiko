@@ -20,14 +20,18 @@ product.
 
 > A local human selects or accepts the task, autonomy mode, Authority Envelope, and deployment
 > ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
-> when policy says `allowed`. Commit, push, pull-request creation, merge, and authority widening
-> remain separately human-approved delivery actions. Manifest-producing surfaces emit **redacted**
-> evidence for human review.
+> when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
+> their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
+> after the app-bound `Keiko for Quality` check validates the exact current head. Direct pushes to
+> `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
+> Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
 The product has exactly three user-facing modes — the product-wide authority model for every
 autonomy-capable surface, anchored by
-[ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md) and governed in detail
-by [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
+[ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md), amended for repository
+delivery by [ADR-0135](docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md), and
+governed in detail by
+[ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
 [ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md):
 
 - **Ask for approval** (`governed-assist`) allows workspace-contained work and asks before external
@@ -35,7 +39,8 @@ by [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-author
 - **Approve for me** (`supervised-coding`) allows low/medium-risk file and internet work and asks
   before high/critical-risk work or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
-  Authority Envelope without per-action approval; delivery is still separately human-approved.
+  Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
+  integrated automatically only after `Keiko for Quality` succeeds.
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -43,9 +48,11 @@ restrictions fail closed.
 
 This shapes the product _and_ how you work on it:
 
-- **Do not** `git commit`, `git push`, open/merge PRs, enable auto-merge, close issues, or
-  bypass human review **unless the human maintainer explicitly asks in this session.** Prepare
-  the change and stop at the diff.
+- For an accepted Keiko task or epic, agents may commit, push the assigned non-`dev` branch, open or
+  update its PR, repair deterministic findings, arm native auto-merge, and close the issue after
+  verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
+  required check, use `gitar unblock`, dismiss a finding to obtain green status, or merge outside
+  the ADR-0135 `Keiko for Quality` path.
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
@@ -305,7 +312,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history, signed squash merges, zero self-merge by autonomous agents.
+  history, signed squash merges, no direct agent merge, and platform-native auto-merge only after
+  `Keiko for Quality` validates the exact current head.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -317,11 +325,13 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
   `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
   `Mutation quality gate` · `SonarCloud Code Analysis` ·
-  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts` · `Gitar`
+  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts` · `Gitar` ·
+  `Keiko for Quality`
 
-  The maintainer/contributor approval bypass is disabled during the Banking Quality Gate recovery.
-  Do not restore or bypass it until the independent app-bound aggregate gate has passed its live
-  negative probes; see [`docs/qa/banking-quality-gate.md`](docs/qa/banking-quality-gate.md).
+  No human approving review is required for `dev`. Do not enable native auto-merge until the
+  independent app-bound `Keiko for Quality` check has passed its live negative and positive probes
+  and is required with administrator enforcement; see
+  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md).
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

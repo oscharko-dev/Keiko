@@ -107,6 +107,7 @@
     "check:context-quality": "node scripts/check-context-quality.mjs",
     "check:error-observability": "node scripts/check-error-observability.mjs",
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
+    "check:gitar-config": "node scripts/check-gitar-config.mjs",
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",

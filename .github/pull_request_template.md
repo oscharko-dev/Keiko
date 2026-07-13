@@ -23,12 +23,13 @@ Refs #<issue_number>
 - [ ] Linked issue has a valid `Parent Epic: #<epic_number>` unless this PR updates an epic container directly.
 - [ ] Linked issue is attached as a GitHub sub-issue of its parent epic so it appears in the correct board swimlane.
 - [ ] Parent epic is on the board with `Classification: Epic`, `Status: Open Epics`, and priority/order set for top-to-bottom implementation sequencing.
-- [ ] Linked task/card issue is on the board with `Classification: Task`, `Status: In Progress` while active, inherited or explicit `Priority`, and `Human Review Required: Yes`.
+- [ ] Linked task/card issue is on the board with `Classification: Task`, `Status: In Progress` while active, inherited or explicit `Priority`, and `Human Review Required: No`.
 - [ ] Project `Status` is `In Progress` while work is active, or `Done` only after merge and closure evidence.
-- [ ] Project `Workflow State` is `PR Open` or `Ready for Human Review`.
+- [ ] Project `Workflow State` is `PR Open` while deterministic gates or repairs are active.
 - [ ] `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required` are filled.
-- [ ] Issue label reflects the current state: `status: in progress`, `status: ready for human review`, or `status: done` after merge.
-- [ ] Autonomous agents did not merge into `dev`, enable auto-merge, close the issue, or bypass human review unless explicitly authorized by the human maintainer.
+- [ ] Issue label remains `status: in progress` until verified auto-merge, then becomes `status: done`.
+- [ ] Autonomous repair stayed on the PR branch; no direct `dev` push, force-push, `gitar unblock`, finding dismissal, or required-gate bypass occurred.
+- [ ] Native auto-merge was armed only through the ADR-0135 `Keiko for Quality` path.
 
 ## Product Impact
 
@@ -100,7 +101,7 @@ Not applicable rationale:
 - [ ] Checks are repeated after the latest pushed fix.
 - [ ] Issue acceptance criteria and closure evidence are updated only where evidence exists.
 - [ ] The linked issue records reuse, extension, generalization, or new-gap rationale before closure.
-- [ ] Delivery board status is updated before requesting final maintainer review.
+- [ ] Delivery board status is updated while deterministic gates run and after verified auto-merge.
 - [ ] Use `Resolves #<issue_number>` only when this PR should close the issue.
 
 ## Risk Notes

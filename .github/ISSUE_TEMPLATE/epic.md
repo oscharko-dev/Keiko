@@ -57,7 +57,7 @@ Summarize expected release-impact metadata for the epic. Child issues and PRs ow
 - [ ] Every executable child issue starts with `Parent Epic: #<epic_number>`.
 - [ ] Every executable child issue is added as a GitHub sub-issue of this epic so the Product Delivery board can render the epic as a swimlane.
 - [ ] Child issues are ordered under this epic in the required implementation sequence.
-- [ ] Child issues use `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, and `Human Review Required: Yes`.
+- [ ] Child issues use `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, and `Human Review Required: No`.
 
 ## Required Implementation Order
 
@@ -76,16 +76,16 @@ Summarize expected release-impact metadata for the epic. Child issues and PRs ow
 ## Delivery Board Workflow
 
 - [ ] Add this epic and all executable child issues to the public `Keiko Product Delivery` project.
-- [ ] Set this epic's project fields before handoff: `Classification: Epic`, `Status: Open Epics`, `Workflow State: Triaged`, `Priority: P0 Now | P1 Next | P2 Later | P3 Backlog`, and `Human Review Required: Yes`.
+- [ ] Set this epic's project fields before autonomous delivery: `Classification: Epic`, `Status: Open Epics`, `Workflow State: Triaged`, `Priority: P0 Now | P1 Next | P2 Later | P3 Backlog`, and `Human Review Required: No`.
 - [ ] Position this epic item in the Product Delivery board according to its implementation priority so open epic swimlanes read top-to-bottom in delivery order.
-- [ ] Set executable child issue project fields before handoff: `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, inherited or explicit `Priority`, and `Human Review Required: Yes`.
+- [ ] Set executable child issue project fields before autonomous delivery: `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, inherited or explicit `Priority`, and `Human Review Required: No`.
 - [ ] Link every child issue as a GitHub sub-issue of this epic; do not rely only on a body link or checklist reference.
 - [ ] Keep the child issue order under this epic aligned with `Required Implementation Order`.
-- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Ready for Human Review`, `Blocked`, `Waiting for User`, or `Done`.
+- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Blocked`, `Waiting for User`, or `Done`.
 - [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
 - [ ] When implementation starts, fill the `Branch` field with the active branch name.
-- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `Yes`.
-- [ ] When the PR is ready for maintainer review, set `Workflow State` to `Ready for Human Review` and replace the issue label with `status: ready for human review`.
+- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `No`.
+- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while Gitar repairs or deterministic gates settle.
 - [ ] Only after merge and closure evidence, set the issue label to `status: done`, project `Status` to `Done`, and project `Workflow State` to `Done`.
 
 ## Agent Execution Mode
@@ -106,7 +106,7 @@ This epic is a planning and coordination container. Do not implement the full ep
 - Required planning agents: `architect | explorer | security-reviewer | performance-engineer | docs-editor`.
 - Delivery agents per child issue: selected from `implementor | developer | test-engineer | ui-engineer | a11y-auditor | verifier | pr-reviewer | pr-shepherd`.
 - Write ownership: assigned per child issue only; no parallel write agents may own overlapping files.
-- PR lifecycle owner: `pr-shepherd` waits for GitHub checks, resolves findings, and confirms formal issue completion before merge.
+- PR lifecycle owner: `pr-shepherd` waits for GitHub checks, coordinates autonomous finding repair, and confirms the exact-head `Keiko for Quality` decision before native auto-merge.
 
 ## Expected Verification
 

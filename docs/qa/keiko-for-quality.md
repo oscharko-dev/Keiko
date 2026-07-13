@@ -1,4 +1,4 @@
-# Keiko Banking Quality Gate
+# Keiko for Quality
 
 ## Current enforcement
 
@@ -13,23 +13,24 @@ source and two productive C sources; ADR-0134 excludes them from Linux Sonar ana
 build-aware compiler, analyzer, and behavior evidence on Windows/macOS. The required, SHA-pinned
 CodeQL workflow remains authoritative for `actions` and `javascript-typescript`.
 
-During the quality-gate recovery, the maintainer/contributor approval bypass is disabled. A current
-`CHANGES_REQUESTED` review therefore remains blocking even when a bot's processing check is green.
-This temporary safe mode stays active until the independent aggregate gate below has passed the
-negative and positive live probes.
+No human approving review is required. Native auto-merge remains disabled during activation so a
+current `CHANGES_REQUESTED` review and unresolved conversation stay blocking even when a bot's
+processing check is green. Autonomous repair is allowed, but automatic merge is enabled only after
+the independent aggregate below passes its negative and positive live probes.
 
 ## Independent aggregate gate
 
-The final `Banking Quality Gate` must be produced by the dedicated open-source GitHub App
-`Keiko Banking Quality Gate`, not by repository Actions and not by code from a pull request. Until
-that app is deployed and validated, no check with this name is added to branch protection and no
-approval bypass is re-enabled.
+The final `Keiko for Quality` check must be produced by the dedicated open-source GitHub App
+`Keiko for Quality`, not by repository Actions and not by code from a pull request. The App uses
+the existing Keiko logo. Until it is deployed and validated, no check with this name is added to
+branch protection and native auto-merge remains disabled.
 
 The app is installed only on `oscharko-dev/Keiko` and receives the minimum permissions:
 
 - Checks: read/write;
-- Pull requests: read;
-- Issues and comments: read;
+- Pull requests: read and write, because GitHub requires pull-request write access for the
+  app-authored status comment on a pull request even when Issues write access is present;
+- Issues and comments: read/write, limited to one redacted status comment per pull request;
 - Metadata: read.
 
 It receives no Contents write, Actions write, Administration, or repository-secret access. The
@@ -37,8 +38,22 @@ external runtime validates webhook HMAC signatures and rejects replayed events, 
 repositories/installations, and stale head SHAs. It stores metadata only: repository, PR number,
 head SHA, check name, producer App ID, status, timestamps, and finding counts.
 
+## PR dashboard comment
+
+The App creates one top-level `Keiko for Quality` comment per pull request and updates it in place.
+An invisible version marker binds ownership and prevents duplicate comments. Events produced by
+the App's own check or comment are ignored to prevent self-triggered loops.
+
+The comment presents a compact `Waiting`, `Blocked`, or `Ready for auto-merge` decision, the
+12-character current-head prefix, successful/required check counts, an explicit SonarQube Cloud
+native-gate result, Gitar and Socket evidence, Gitar Auto-Apply state, native auto-merge state, and
+an expandable list of blocking or waiting evidence. The full repository-specific Sonar contract
+remains enforced through the direct `ci` aggregate. The comment contains only allowlisted check
+names, counts, states, and timestamps. It never includes logs, payload bodies, secrets, customer
+data, private endpoints, or PII.
+
 The open-source Worker implementation, least-privilege GitHub App manifest, and Cloudflare
-deployment template live in [`../../infrastructure/banking-quality-gate/`](../../infrastructure/banking-quality-gate/).
+deployment template live in [`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/).
 Runtime credentials exist only in the external runtime's secret store.
 
 ## Fail-closed evidence rules
@@ -71,11 +86,17 @@ prevents a successful processing check on a new commit from reusing a clean comm
 head. Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
 evidence is still mandatory.
 
+The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction
+commands, and Core/Pro plan boundaries are defined in
+[`gitar-review-policy.md`](gitar-review-policy.md).
+
 ## Activation protocol
 
 The dedicated app is made required only after its trusted implementation has been deployed from a
 protected revision, emitted the expected check name and App ID, and completed all negative probes:
 missing/red checks, wrong App ID, stale evidence, Sonar 84.9 percent/open issue, Gitar finding,
 Socket warning, mutation score below 80 percent, and a new commit after previous success. The
-positive probe must then permit `oscharko` and `Niko4417` to merge without a second approval while
-every deliberately red or absent technical gate remains unbypassable, including by administrators.
+positive probe must then allow GitHub native auto-merge without a human review or merge click,
+while every deliberately red or absent technical gate remains unbypassable, including by
+administrators. After activation, `Keiko for Quality` is added as an app-bound required check and
+Gitar Auto-Approve/Auto-Merge may be enabled.

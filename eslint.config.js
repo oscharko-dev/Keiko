@@ -163,7 +163,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/banking-quality-gate-worker.mjs"],
+    files: ["scripts/keiko-for-quality-worker.mjs"],
     languageOptions: {
       globals: {
         Response: "readonly",
@@ -176,7 +176,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/__tests__/banking-quality-gate-worker.test.mjs"],
+    files: ["scripts/__tests__/keiko-for-quality-worker.test.mjs"],
     languageOptions: {
       globals: {
         Buffer: "readonly",
@@ -192,8 +192,8 @@ export default tseslint.config(
       "scripts/check-mutation-quality.mjs",
       "scripts/check-mutation-scope.mjs",
       "scripts/check-sonar-pr-quality-gate.mjs",
-      "scripts/banking-quality-gate-core.mjs",
-      "scripts/banking-quality-gate-worker.mjs",
+      "scripts/keiko-for-quality-core.mjs",
+      "scripts/keiko-for-quality-worker.mjs",
     ],
     plugins: { "keiko-sonar": sonarCompatibilityPlugin },
     rules: {

@@ -19,8 +19,8 @@
     "packages/keiko-workflows/src/**/*.test.ts",
     "packages/keiko-server/src/coding-runtime/**/*.test.ts",
     "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
-    "scripts/__tests__/banking-quality-gate-core.test.mjs",
-    "scripts/__tests__/banking-quality-gate-worker.test.mjs"
+    "scripts/__tests__/keiko-for-quality-core.test.mjs",
+    "scripts/__tests__/keiko-for-quality-worker.test.mjs"
   ],
   "mutate": [
     "packages/keiko-security/src/redaction.ts",
@@ -35,8 +35,8 @@
     "packages/keiko-evidence/src/qualityIntelligence/store.ts",
     "packages/keiko-memory-vault/src/cipher.ts",
     "packages/keiko-memory-vault/src/migrate-encrypt.ts",
-    "scripts/banking-quality-gate-core.mjs",
-    "scripts/banking-quality-gate-worker.mjs"
+    "scripts/keiko-for-quality-core.mjs",
+    "scripts/keiko-for-quality-worker.mjs"
   ],
   "reporters": ["html", "json", "clear-text", "progress"],
   "htmlReporter": {

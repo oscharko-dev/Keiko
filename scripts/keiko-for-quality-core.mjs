@@ -176,7 +176,7 @@ export function validatedRiskAllowlist(value) {
   return validatedSet(value, npmRiskPattern);
 }
 
-export function evaluateBankingQualityGate(input) {
+export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
   const failures = [

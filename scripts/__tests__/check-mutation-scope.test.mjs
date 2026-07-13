@@ -17,8 +17,8 @@ describe("mutation scope", () => {
       ]),
     ).toBe(true);
     expect(requiresSecurityMutation(["packages/keiko-workflows/src/authority.ts"])).toBe(true);
-    expect(requiresSecurityMutation(["scripts/banking-quality-gate-core.mjs"])).toBe(true);
-    expect(requiresSecurityMutation(["scripts/banking-quality-gate-worker.mjs"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/keiko-for-quality-core.mjs"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/keiko-for-quality-worker.mjs"])).toBe(true);
   });
 
   it("does not spend mutation time on documentation or tests only", () => {

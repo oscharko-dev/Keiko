@@ -13,8 +13,8 @@ const criticalPrefixes = [
 ];
 const criticalServerTerms = /\/(coding-runtime|qualityIntelligence)\//u;
 const criticalGateScripts = new Set([
-  "scripts/banking-quality-gate-core.mjs",
-  "scripts/banking-quality-gate-worker.mjs",
+  "scripts/keiko-for-quality-core.mjs",
+  "scripts/keiko-for-quality-worker.mjs",
 ]);
 
 function isProductionTypeScript(path) {

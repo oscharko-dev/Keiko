@@ -5,7 +5,7 @@ import {
   checkFailures,
   commentIsCurrent,
   currentCheckStart,
-  evaluateBankingQualityGate,
+  evaluateKeikoForQuality,
   isBotEvidence,
   packageAlerts,
   parseGitarFindings,
@@ -13,7 +13,7 @@ import {
   stabilityFailures,
   validatedSet,
   validatedRiskAllowlist,
-} from "../banking-quality-gate-core.mjs";
+} from "../keiko-for-quality-core.mjs";
 
 const headSha = "a".repeat(40);
 const completedAt = "2026-07-11T10:00:00.000Z";
@@ -66,10 +66,10 @@ function passingInput() {
 }
 
 function evaluate(update = {}) {
-  return evaluateBankingQualityGate({ ...passingInput(), ...update });
+  return evaluateKeikoForQuality({ ...passingInput(), ...update });
 }
 
-describe("Banking Quality Gate core", () => {
+describe("Keiko for Quality core", () => {
   it("pins the complete required-check policy to exact producer app IDs", () => {
     expect(requiredChecks).toEqual([
       { appId: 15368, name: "ci" },
@@ -401,7 +401,7 @@ describe("Banking Quality Gate core", () => {
     delete input.socketRiskAllowlist;
     delete input.stabilityMs;
     input.checks = input.checks.map((check) => ({ ...check, completedAt: undefined }));
-    expect(evaluateBankingQualityGate(input).failures).toEqual(
+    expect(evaluateKeikoForQuality(input).failures).toEqual(
       expect.arrayContaining([
         "1 Socket warning(s) remain.",
         "Review-product stability evidence is incomplete.",
