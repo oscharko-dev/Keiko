@@ -893,6 +893,90 @@ describe("coding-sidecar gateway", () => {
     expect(response.body()).toContain("data: [DONE]");
   });
 
+  it("counts only each new UTF-8 stream delta instead of re-encoding accumulated output", async () => {
+    const firstToken = "gateway-delta-one-α";
+    const secondToken = "gateway-delta-two-β";
+    const byteLength = vi.spyOn(Buffer, "byteLength");
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: firstToken };
+      yield { type: "delta", token: secondToken };
+      yield { type: "done", response: assistantResponse("azure-coding-model") };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stream incrementally" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-stream" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    );
+
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain(firstToken);
+      expect(response.body()).toContain(secondToken);
+      expect(byteLength.mock.calls.some(([value]) => value === firstToken + secondToken)).toBe(
+        false,
+      );
+    } finally {
+      byteLength.mockRestore();
+    }
+  });
+
+  it("counts a UTF-8 surrogate pair split across stream deltas as one scalar", async () => {
+    const record = vi.fn();
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "\ud83d" };
+      yield { type: "delta", token: "\ude00" };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stream one emoji" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      config: configValue(provider(), capability({ maxOutputTokens: 1 })),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    expect(response.body()).not.toContain('"finish_reason":"length"');
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(record).toHaveBeenCalledWith({
+      runId: "run-stream",
+      outcome: "failed",
+      completionTokens: 1,
+      outputBytes: 4,
+    });
+  });
+
   it("returns the injected stream and aborts its provider signal when the client disconnects", async () => {
     let returned = false;
     let seenSignal: AbortSignal | undefined;
@@ -1538,6 +1622,65 @@ describe("coding-sidecar gateway", () => {
       outputBytes: expect.any(Number) as number,
     });
   });
+
+  it.each([
+    [
+      "synchronous",
+      (): void => {
+        throw new Error("customer/path/secret-sync");
+      },
+    ],
+    ["asynchronous", (): Promise<void> => Promise.reject(new Error("customer/path/secret-async"))],
+  ])(
+    "emits a content-free diagnostic for %s evidence aggregation failure",
+    async (_kind, record) => {
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const deps = depsValue(
+        configValue(provider(), capability()),
+        (
+          _config: GatewayConfig,
+          modelId: string,
+        ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+          return (request: GatewayRequest): Promise<NormalizedResponse> => {
+            void request;
+            return Promise.resolve(assistantResponse(modelId));
+          };
+        },
+        {},
+        {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        { diagnostics, evidenceAggregator: { record } },
+      );
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        routeContext({
+          model: "azure-coding-model",
+          messages: [{ role: "user", content: "continue" }],
+        }),
+        deps,
+      );
+
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(diagnostics.record).toHaveBeenCalledTimes(1);
+      });
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-gateway-test",
+          operation: "POST /api/coding-sidecar/gateway/chat/completions",
+          source: "coding-sidecar-gateway.evidence-aggregation",
+          errorClass: "CodingSidecarGatewayEvidenceAggregationFailure",
+          message: "sidecar-gateway-evidence-aggregation-failed",
+        }),
+      );
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("customer/path/secret");
+    },
+  );
 
   it("does not substitute diagnostics or root evidence for the optional aggregator", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");

@@ -435,6 +435,17 @@ function evidenceAggregator(
   return deps.codingSidecarGatewayEvidenceAggregator;
 }
 
+function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: string): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.evidence-aggregation",
+    errorClass: "CodingSidecarGatewayEvidenceAggregationFailure",
+    message: "sidecar-gateway-evidence-aggregation-failed",
+  });
+}
+
 function recordGatewayOutcome(
   deps: UiHandlerDeps,
   runId: string,
@@ -445,14 +456,36 @@ function recordGatewayOutcome(
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
-    ).catch(() => undefined);
+    ).catch(() => {
+      emitGatewayEvidenceAggregationDiagnostic(deps, runId);
+    });
   } catch {
-    // Evidence aggregation is intentionally best-effort and content-free.
+    emitGatewayEvidenceAggregationDiagnostic(deps, runId);
   }
 }
 
 function outputByteBudget(maxOutputTokens: number): number {
   return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_LIMIT;
+}
+
+function incrementalUtf8ByteCount(
+  token: string,
+  previousEndedWithHighSurrogate: boolean,
+): { readonly bytes: number; readonly endsWithHighSurrogate: boolean } {
+  if (token.length === 0) {
+    return { bytes: 0, endsWithHighSurrogate: previousEndedWithHighSurrogate };
+  }
+  const firstCodeUnit = token.charCodeAt(0);
+  const lastCodeUnit = token.charCodeAt(token.length - 1);
+  const joinsSplitSurrogatePair =
+    previousEndedWithHighSurrogate && firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff;
+  return {
+    // Buffer encodes each isolated surrogate as a three-byte replacement. When
+    // provider chunks split a valid pair, the accumulated string encodes it as
+    // one four-byte scalar, so remove the two-byte replacement overcount.
+    bytes: Buffer.byteLength(token, "utf8") - (joinsSplitSurrogatePair ? 2 : 0),
+    endsWithHighSurrogate: lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff,
+  };
 }
 
 function outputMetrics(response: NormalizedResponse): {
@@ -795,10 +828,10 @@ async function streamGatewayChat(
     void iterator.return?.();
   };
   cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
-  let content = "";
   let completionTokens = 0;
   let promptTokens = 0;
   let outputBytes = 0;
+  let previousDeltaEndedWithHighSurrogate = false;
   try {
     for (;;) {
       if (isGatewayRequestCancelled(cancellationSignal)) {
@@ -814,8 +847,12 @@ async function streamGatewayChat(
       if (next.done) break;
       const chunk = next.value;
       if (chunk.type === "delta") {
-        content += chunk.token;
-        outputBytes = Buffer.byteLength(content, "utf8");
+        const deltaMetrics = incrementalUtf8ByteCount(
+          chunk.token,
+          previousDeltaEndedWithHighSurrogate,
+        );
+        outputBytes += deltaMetrics.bytes;
+        previousDeltaEndedWithHighSurrogate = deltaMetrics.endsWithHighSurrogate;
         completionTokens = Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
         if (exceedsOutputBudget({ completionTokens, outputBytes }, request.maxOutputTokens ?? 1)) {
           await iterator.return?.();
