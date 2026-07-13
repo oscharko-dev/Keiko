@@ -43,6 +43,7 @@ let staticRoot = "";
 let workspaceRoot = "";
 let port = 0;
 let adapter: FakeAdapter;
+let workspaceWatchService: ReturnType<typeof createWorkspaceWatchService>;
 
 async function listen(srv: Server): Promise<number> {
   await new Promise<void>((resolve) => srv.listen(0, UI_HOST, resolve));
@@ -79,6 +80,12 @@ function baseDeps(): UiHandlerDeps {
   const store = createInMemoryUiStore();
   store.createProject(workspaceRoot);
   adapter = new FakeAdapter();
+  workspaceWatchService = createWorkspaceWatchService({
+    adapter,
+    coalesceMs: 0,
+    idleTearDownMs: 0,
+    replayCapacity: 1,
+  });
   return {
     config: undefined,
     configPresent: false,
@@ -93,12 +100,7 @@ function baseDeps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    workspaceWatchService: createWorkspaceWatchService({
-      adapter,
-      coalesceMs: 0,
-      idleTearDownMs: 0,
-      replayCapacity: 1,
-    }),
+    workspaceWatchService,
   };
 }
 
@@ -150,6 +152,18 @@ async function readUntil(response: Response, needle: string): Promise<string> {
   }
 }
 
+async function drainInitialBaseline(): Promise<void> {
+  adapter.emit({ eventType: "change", filename: "__baseline_probe__.missing" });
+  expect(workspaceWatchService.snapshot(workspaceRoot).queueDepth).toBe(1);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (workspaceWatchService.snapshot(workspaceRoot).queueDepth === 0) return;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
+  throw new Error("initial workspace-watch baseline did not drain");
+}
+
 describe("workspace watch routes", () => {
   it("returns content-free health snapshots without absolute workspace roots", async () => {
     const response = await fetch(
@@ -172,6 +186,7 @@ describe("workspace watch routes", () => {
     try {
       const initial = await readUntil(stream, "editor-watch:snapshot");
       expect(initial).not.toContain(workspaceRoot);
+      await drainInitialBaseline();
 
       await writeFile(join(workspaceRoot, "route-created.txt"), "RAW_BODY_SHOULD_NOT_LEAK", "utf8");
       adapter.emit({ eventType: "rename", filename: "route-created.txt" });
