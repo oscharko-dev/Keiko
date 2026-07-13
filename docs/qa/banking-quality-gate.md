@@ -8,8 +8,10 @@ review, UI quality, OSV, mutation testing, SonarCloud, Socket, and Gitar. Each n
 the previous head's evidence because GitHub evaluates required checks on the current PR head.
 
 GitHub's separate preview Code Quality setup is disabled. It duplicated the repository CodeQL
-workflow and incorrectly analyzed C#, while Keiko contains no C# product code. The required,
-SHA-pinned CodeQL workflow remains authoritative for `actions` and `javascript-typescript`.
+workflow and attempted a context-free C# analysis. Keiko does contain one productive C# signing
+source and two productive C sources; ADR-0134 excludes them from Linux Sonar analysis and requires
+build-aware compiler, analyzer, and behavior evidence on Windows/macOS. The required, SHA-pinned
+CodeQL workflow remains authoritative for `actions` and `javascript-typescript`.
 
 During the quality-gate recovery, the maintainer/contributor approval bypass is disabled. A current
 `CHANGES_REQUESTED` review therefore remains blocking even when a bot's processing check is green.
@@ -53,8 +55,9 @@ Processing success alone is insufficient for review products:
   lockfile integrity policy in
   [`supply-chain-risk-acceptances.json`](supply-chain-risk-acceptances.json);
 - SonarCloud requires native gate `OK`, exact current head, zero unresolved issues and new
-  violations, at least 85 percent new-code coverage, at most 3 percent new duplication, and all
-  security hotspots reviewed;
+  violations, at least 85 percent new-code coverage, at most 3 percent new duplication, and all new
+  and overall security hotspots reviewed. Missing rates require an explicit zero applicability
+  count; the dormant custom-gate definition must match the repository contract;
 - mutation testing requires at least 80 percent with no survivor/no-coverage mutant for changed
   critical code; complete scheduled scans additionally fail on any regression or new fingerprint
   against the documented 61.66-percent historical baseline until that debt reaches 80 percent.

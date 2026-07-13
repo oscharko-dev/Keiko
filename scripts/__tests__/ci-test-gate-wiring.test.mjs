@@ -81,6 +81,10 @@ const REQUIRED_CI_COMMANDS = [
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.
   "npm run format:check",
   "npm run check:adr-index",
+  // Sonar scope and native compensation must remain required CI evidence.
+  "npm run check:sonar-scope",
+  "npm run check:native:macos",
+  "npm run check:native:windows",
 ];
 
 const REQUIRED_HTML_MANUAL_RELEASE_GATES = [
@@ -127,6 +131,8 @@ describe("CI test/gate wiring guard", () => {
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
+    expect(crossPlatform).toContain("Verify productive native sources on macOS");
+    expect(crossPlatform).toContain("Verify productive native sources on Windows");
     expect(crossPlatform).not.toContain("npm test");
   });
 

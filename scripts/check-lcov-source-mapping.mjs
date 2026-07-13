@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
+import { isCoverableProductSource, runAnalysisScopeCheck } from "./sonar-analysis-scope.mjs";
 
 const defaultReports = [
   "coverage/packages/lcov.info",
@@ -14,23 +15,25 @@ const defaultReports = [
   // write to or clean).
   "coverage/scripts/lcov.info",
 ];
-const coveredScriptSources = new Set([
-  "scripts/banking-quality-gate-core.mjs",
-  "scripts/banking-quality-gate-worker.mjs",
-  "scripts/check-lcov-source-mapping.mjs",
-  "scripts/check-mutation-quality.mjs",
-  "scripts/check-mutation-scope.mjs",
-  "scripts/check-sonar-pr-quality-gate.mjs",
-]);
-
 export function parseLcovSources(contents, root) {
   return new Set(
     contents
       .flatMap((content) => content.split(/\r?\n/u))
       .filter((line) => line.startsWith("SF:"))
       .map((line) => line.slice(3))
-      .map((path) => normalizeRepoPath(path, root)),
+      .map((path) => normalizedLcovPath(path, root)),
   );
+}
+
+function normalizedLcovPath(path, root) {
+  const normalized = normalizeRepoPath(path, root);
+  if (path.startsWith("/") || path.includes("\\") || path !== normalized) {
+    throw new Error(`LCOV source path is not normalized repository-relative: ${path}`);
+  }
+  if (normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`LCOV source path escapes the repository: ${path}`);
+  }
+  return normalized;
 }
 
 function normalizeRepoPath(path, root) {
@@ -39,16 +42,7 @@ function normalizeRepoPath(path, root) {
 }
 
 export function isExecutableSource(path) {
-  return (
-    /\.(?:[cm]?js|jsx|mjs|ts|tsx)$/u.test(path) &&
-    (path.startsWith("packages/") || coveredScriptSources.has(path)) &&
-    (coveredScriptSources.has(path) || path.includes("/src/")) &&
-    !/\.(?:test|spec)\.[^.]+$/u.test(path) &&
-    !path.endsWith(".d.ts") &&
-    !path.includes("/__tests__/") &&
-    !path.includes("/fixtures/") &&
-    !/\.(?:config|generated)\.[^.]+$/u.test(path)
-  );
+  return isCoverableProductSource(path);
 }
 
 export function missingCoverageMappings(changedPaths, mappedSources) {
@@ -59,9 +53,10 @@ export function runLcovSourceMapping(input) {
   const execute = input.execute ?? execFileSync;
   const read = input.read ?? readFileSync;
   const root = input.root ?? process.cwd();
+  const scope = (input.verifyScope ?? runAnalysisScopeCheck)({ root });
   const changed = parseChangedFiles(
     execute(
-      "/usr/bin/git",
+      "git",
       ["diff", "--name-status", "--diff-filter=ACMR", `${input.base}...${input.head}`],
       { encoding: "utf8", cwd: root },
     ),
@@ -69,8 +64,14 @@ export function runLcovSourceMapping(input) {
   const reports = (input.reports ?? defaultReports).map((path) =>
     read(resolve(root, path), "utf8"),
   );
-  const missing = missingCoverageMappings(changed, parseLcovSources(reports, root));
+  const mapped = parseLcovSources(reports, root);
+  const trackedProduction = scope.files.filter(isExecutableSource);
+  const missing = missingCoverageMappings(trackedProduction, mapped);
   if (missing.length > 0) throw new Error(`LCOV mapping missing for: ${missing.join(", ")}`);
+  const changedMissing = missingCoverageMappings(changed, mapped);
+  if (changedMissing.length > 0) {
+    throw new Error(`Changed LCOV mapping missing for: ${changedMissing.join(", ")}`);
+  }
   (input.log ?? console.log)(
     `lcov-source-mapping: PASS - ${String(changed.length)} changed files.`,
   );

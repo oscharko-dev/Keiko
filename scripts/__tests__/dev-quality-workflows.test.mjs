@@ -27,14 +27,38 @@ describe("dev quality workflows", () => {
     expect(buildPackages).toBeLessThan(scope);
   });
 
-  it("runs Sonar and LCOV mapping only for dev pull requests", () => {
+  it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {
     const scanner = ci.indexOf("SonarCloud CI-based analysis");
     const verifier = ci.indexOf("Verify SonarCloud Banking Grade PR evidence");
+    const mainVerifier = ci.indexOf("Verify SonarCloud Banking Grade dev evidence");
     expect(scanner).toBeGreaterThan(-1);
     expect(verifier).toBeGreaterThan(scanner);
+    expect(mainVerifier).toBeGreaterThan(verifier);
     expect(ci).toContain("github.base_ref == 'dev'");
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
+    expect(ci).toContain(
+      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}",
+    );
+    expect(ci).toContain("Verify manual analysis is bound to remote dev");
+    expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
+    expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
+    expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
+  });
+
+  it("keeps scanner files, logs, and working data outside the repository", () => {
+    expect(ci).toContain('scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"');
+    expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");
+    expect(ci).toContain('-Dsonar.projectBaseDir="$GITHUB_WORKSPACE"');
+    expect(ci).toContain('-Dsonar.working.directory="$RUNNER_TEMP/sonar-work"');
+    expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
+    expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
+    expect(ci).toContain(
+      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"',
+    );
+    expect(ci).toContain('exit "$scanner_status"');
+    expect(ci).toContain('if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]');
+    expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 
   it("runs coverage and Sonar in parallel and aggregates required CI fail closed", () => {
@@ -47,7 +71,23 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
     expect(aggregateJob).toContain("- coverage-sonar");
+    expect(aggregateJob).toContain("- cross-platform-smoke");
+    expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+  });
+
+  it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
+    const crossPlatform = ci.match(/ {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}ui:\n)/u)?.[0];
+    expect(crossPlatform).toBeDefined();
+    expect(crossPlatform).toContain(
+      "actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1",
+    );
+    expect(crossPlatform).toContain("npm run check:native:macos");
+    expect(crossPlatform).toContain("npm run check:native:windows");
+    expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
+    expect(crossPlatform).not.toContain(
+      "github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor'",
+    );
   });
 
   it("contains no privileged pull-request trigger", () => {

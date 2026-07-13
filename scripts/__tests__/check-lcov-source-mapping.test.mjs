@@ -9,15 +9,22 @@ import {
 } from "../check-lcov-source-mapping.mjs";
 
 describe("LCOV source mapping", () => {
-  it("normalizes absolute and relative LCOV source entries", () => {
+  it("accepts only normalized repository-relative LCOV source entries", () => {
     expect([
-      ...parseLcovSources(["SF:/repo/scripts/gate.mjs\n", "SF:packages/a/src/a.ts\n"], "/repo"),
+      ...parseLcovSources(["SF:scripts/gate.mjs\n", "SF:packages/a/src/a.ts\n"], "/repo"),
     ]).toEqual(["scripts/gate.mjs", "packages/a/src/a.ts"]);
+    expect(() => parseLcovSources(["SF:/repo/scripts/gate.mjs\n"], "/repo")).toThrow(
+      "not normalized repository-relative",
+    );
+    expect(() => parseLcovSources(["SF:../outside.mjs\n"], "/repo")).toThrow(
+      "escapes the repository",
+    );
   });
 
   it("classifies executable source without counting tests, fixtures, declarations, or configs", () => {
-    expect(isExecutableSource("scripts/gate.mjs")).toBe(false);
+    expect(isExecutableSource("scripts/gate.mjs")).toBe(true);
     expect(isExecutableSource("scripts/check-lcov-source-mapping.mjs")).toBe(true);
+    expect(isExecutableSource("src/cli/index.ts")).toBe(true);
     expect(isExecutableSource("packages/a/src/a.tsx")).toBe(true);
     expect(isExecutableSource("packages/a/public/sw.js")).toBe(false);
     expect(isExecutableSource("packages/a/src/a.test.ts")).toBe(false);
@@ -35,7 +42,7 @@ describe("LCOV source mapping", () => {
         ["scripts/check-lcov-source-mapping.mjs", "scripts/gate.mjs", "scripts/gate.test.mjs"],
         new Set(["scripts/other.mjs"]),
       ),
-    ).toEqual(["scripts/check-lcov-source-mapping.mjs"]);
+    ).toEqual(["scripts/check-lcov-source-mapping.mjs", "scripts/gate.mjs"]);
   });
 
   it("validates renamed and added sources against both coverage reports", () => {
@@ -54,6 +61,9 @@ describe("LCOV source mapping", () => {
           ? "SF:packages/ui/src/view.tsx\n"
           : "SF:scripts/check-lcov-source-mapping.mjs\n",
       root: "/repo",
+      verifyScope: () => ({
+        files: ["scripts/check-lcov-source-mapping.mjs", "packages/ui/src/view.tsx"],
+      }),
     });
     expect(result).toEqual({
       changed: ["scripts/check-lcov-source-mapping.mjs", "packages/ui/src/view.tsx"],
@@ -61,7 +71,7 @@ describe("LCOV source mapping", () => {
     });
     expect(calls).toEqual([
       [
-        "/usr/bin/git",
+        "git",
         ["diff", "--name-status", "--diff-filter=ACMR", "base...head"],
         { cwd: "/repo", encoding: "utf8" },
       ],
@@ -78,6 +88,9 @@ describe("LCOV source mapping", () => {
         head: "head",
         read: () => "",
         root: "/repo",
+        verifyScope: () => ({
+          files: ["scripts/check-lcov-source-mapping.mjs", "packages/keiko-server/src/routes.ts"],
+        }),
       }),
     ).toThrow(
       "LCOV mapping missing for: scripts/check-lcov-source-mapping.mjs, packages/keiko-server/src/routes.ts",
@@ -111,6 +124,7 @@ describe("LCOV source mapping", () => {
           base: "HEAD",
           head: "HEAD",
           reports: ["package-lock.json"],
+          verifyScope: () => ({ files: [] }),
         }),
       ).toEqual({ changed: [], missing: [] });
       expect(log).toHaveBeenCalledWith("lcov-source-mapping: PASS - 0 changed files.");
