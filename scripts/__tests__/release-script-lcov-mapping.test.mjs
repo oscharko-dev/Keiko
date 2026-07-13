@@ -24,6 +24,8 @@ describe("release script LCOV mapping seams", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("version-consistency: PASS"));
   });
 
+  // The guarded module imports the built server surface, which can take longer than Vitest's
+  // default timeout to instrument on a cold V8 coverage run.
   it("covers the package-surface TypeScript runtime tarball requirement without running npm pack", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(process, "exit").mockImplementation((code) => {
@@ -54,7 +56,7 @@ describe("release script LCOV mapping seams", () => {
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("productive TypeScript API runtime"),
     );
-  });
+  }, 60_000);
 
   it("covers the installable-smoke timeout contract without running the install smoke", () => {
     expect(DEFAULT_NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
