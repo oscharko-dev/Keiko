@@ -1,0 +1,12 @@
+# Socket scans every pull request and ingests every supported manifest in this monorepo.
+# Keep triggerPaths and projectIgnorePaths omitted: Socket's default trigger matches any changed
+# file, and no repository-owned path exclusions should hide workspace manifests from reports.
+version: 2
+
+githubApp:
+  enabled: true
+  pullRequestAlertsEnabled: true
+  dependencyOverviewEnabled: true
+  projectReportsEnabled: true
+  ignoreUsers: []
+  disableCommentsAndCheckRuns: false

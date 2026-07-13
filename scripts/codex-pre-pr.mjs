@@ -92,6 +92,9 @@ export function createPrePrSteps(options = {}) {
     npmStep("prune-package-build-artifacts", ["run", "prune:package-build-artifacts"], {
       platform,
     }),
+    npmStep("prune-package-native-optionals", ["run", "prune:package-native-optionals"], {
+      platform,
+    }),
     npmStep("package-surface", ["run", "check:package-surface"], { platform }),
     npmStep(
       "editor-bundle-size",
