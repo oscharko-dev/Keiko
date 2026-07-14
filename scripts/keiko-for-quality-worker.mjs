@@ -578,13 +578,17 @@ function trackedPullFromRow(row) {
 export async function trackedPullRequests(database) {
   const trackedPulls = new Map();
   for (let page = 0; page < persistedPullPageLimit; page += 1) {
+    const queryLimit =
+      page === persistedPullPageLimit - 1 ? persistedPullPageSize + 1 : persistedPullPageSize;
     const result = await database
       .prepare(
         "SELECT installation_id, owner, repository, pull_number FROM tracked_pulls ORDER BY owner, repository, pull_number LIMIT ?1 OFFSET ?2",
       )
-      .bind(persistedPullPageSize, page * persistedPullPageSize)
+      .bind(queryLimit, page * persistedPullPageSize)
       .all();
     if (!Array.isArray(result?.results)) throw new Error("D1 omitted tracked pull rows.");
+    if (result.results.length > persistedPullPageSize)
+      throw new Error("Tracked pull pagination limit exceeded.");
     for (const row of result.results) {
       const parsed = trackedPullFromRow(row);
       if (parsed.kind !== "valid") throw new Error("D1 returned an invalid tracked pull row.");
@@ -593,7 +597,7 @@ export async function trackedPullRequests(database) {
     }
     if (result.results.length < persistedPullPageSize) return trackedPulls;
   }
-  throw new Error("Tracked pull pagination limit exceeded.");
+  return trackedPulls;
 }
 
 async function storeTrackedPull(database, tracked) {

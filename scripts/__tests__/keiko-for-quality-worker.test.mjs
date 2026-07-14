@@ -1752,14 +1752,19 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("continues bounded D1 pagination for persisted pull state", async () => {
+    const partial = stateBinding();
+    for (let pullNumber = 1; pullNumber <= 101; pullNumber += 1) trackPull(partial, pullNumber);
+    expect((await trackedPullRequests(partial)).size).toBe(101);
+    expect(partial.prepare).toHaveBeenCalledTimes(2);
+
     const state = stateBinding();
-    for (let pullNumber = 1; pullNumber <= 101; pullNumber += 1) trackPull(state, pullNumber);
+    for (let pullNumber = 1; pullNumber <= 1_000; pullNumber += 1) trackPull(state, pullNumber);
     const pulls = await trackedPullRequests(state);
-    expect(pulls.size).toBe(101);
-    expect(state.prepare).toHaveBeenCalledTimes(2);
+    expect(pulls.size).toBe(1_000);
+    expect(state.prepare).toHaveBeenCalledTimes(10);
 
     const overLimit = stateBinding();
-    for (let pullNumber = 1; pullNumber <= 1_000; pullNumber += 1) trackPull(overLimit, pullNumber);
+    for (let pullNumber = 1; pullNumber <= 1_001; pullNumber += 1) trackPull(overLimit, pullNumber);
     await expect(trackedPullRequests(overLimit)).rejects.toThrow(
       "Tracked pull pagination limit exceeded.",
     );
