@@ -82,7 +82,13 @@ if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
   exit 0
 fi
 [ -z "\${KEIKO_HOSTILE_CONTEXT+x}" ] || exit 61
-[ "$#" -eq 30 ] || exit 41
+if [ -d /lib64 ]; then
+  [ "$#" -eq 35 ] || exit 41
+  [ "\${24}" = "--dir" ] && [ "\${25}" = "/lib64" ] || exit 53
+  [ "\${26}" = "--ro-bind" ] && [ "\${27}" = "/lib64" ] && [ "\${28}" = "/lib64" ] || exit 54
+else
+  [ "$#" -eq 30 ] || exit 41
+fi
 [ "$1" = "--unshare-net" ] || exit 42
 [ "$2" = "--unshare-pid" ] || exit 43
 [ "$3" = "--die-with-parent" ] || exit 44
