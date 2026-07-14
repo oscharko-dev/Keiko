@@ -30,6 +30,7 @@ import worker, {
   publishCheck,
   publishDashboardComment,
   pullRequestNumbers,
+  reconciliationErrorKind,
   socketNoAlertEvidence,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
@@ -1602,9 +1603,14 @@ describe("Keiko for Quality worker trust boundary", () => {
     const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const waits = [];
     await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
-    expect(errorMock).toHaveBeenCalledWith("pull reconciliation failed");
+    expect(errorMock).toHaveBeenCalledWith("pull reconciliation failed errorKind=Error");
     expect(waits).toHaveLength(1);
     await Promise.all(waits);
+  });
+
+  it("reduces reconciliation failures to a redacted error kind", () => {
+    expect(reconciliationErrorKind(new TypeError("sensitive detail"))).toBe("TypeError");
+    expect(reconciliationErrorKind("sensitive detail")).toBe("UnknownError");
   });
 
   it("continues scheduled pagination with the exact pull-state prefix", async () => {

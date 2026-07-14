@@ -562,14 +562,17 @@ async function trackedPullRequests(state) {
   return trackedPulls;
 }
 
+export function reconciliationErrorKind(error) {
+  return error instanceof Error ? error.name : "UnknownError";
+}
+
 async function reconciledPullRequests(env) {
   const pulls = await trackedPullRequests(env.KEIKO_FOR_QUALITY_STATE);
   try {
     for (const discovered of await discoverOpenPullRequests(env))
       pulls.set(trackedPullKey(discovered), discovered);
   } catch (error) {
-    const errorKind = error instanceof Error ? error.name : "UnknownError";
-    console.error(`pull reconciliation failed errorKind=${errorKind}`);
+    console.error(`pull reconciliation failed errorKind=${reconciliationErrorKind(error)}`);
   }
   return pulls.values();
 }
