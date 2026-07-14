@@ -40,6 +40,8 @@ import {
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 
+const GitIcon = Icons.git;
+
 // ─── Display label maps (typed codes → human text; never colour-alone) ─────────────────
 
 function stateLabel(state: GitDeliveryActionSheetState, t: OptionalWidgetTranslate): string {
@@ -290,6 +292,9 @@ function ApprovalSection({
   readonly policyExplanation: GitDeliveryPolicyExplanation;
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
+  const necessitySuffix = approval.satisfied
+    ? t("gitDelivery.approval.satisfiedSuffix")
+    : t("gitDelivery.approval.unsatisfiedSuffix");
   return (
     <section className="gdas-section" aria-label={t("gitDelivery.approval.ariaLabel")}>
       <h4 className="gdas-section-title">{t("gitDelivery.approval.title")}</h4>
@@ -298,11 +303,7 @@ function ApprovalSection({
           <dt>{t("gitDelivery.approval.title")}</dt>
           <dd data-testid="gdas-necessity">
             {necessityLabel(approval.necessity, t)}
-            {approval.necessity === "required"
-              ? approval.satisfied
-                ? t("gitDelivery.approval.satisfiedSuffix")
-                : t("gitDelivery.approval.unsatisfiedSuffix")
-              : ""}
+            {approval.necessity === "required" ? necessitySuffix : ""}
           </dd>
         </div>
         <div className="gdas-kv">
@@ -529,7 +530,7 @@ function GitDeliveryActionSheetView({
       onKeyDown={handleKeyDown}
     >
       <div className="arun-gate-h">
-        <Icons.git size={13} /> {t("gitDelivery.title")}
+        <GitIcon size={13} /> {t("gitDelivery.title")}
       </div>
       <div className="arun-gate-t" id={titleId}>
         {actionSheet.actionKind} · {actionSheet.actionId}

@@ -1010,6 +1010,19 @@ export function PdfCitationPreviewWindow({
       pageFailure?.action === "reopen"
         ? t("pdfCitationPreviewWindow.action.reopenPreview")
         : t("pdfCitationPreviewWindow.action.retryPage");
+    const renderedPage = shouldRender ? (
+      <PdfCanvasPage
+        active
+        onError={handlePageRenderError}
+        onMeasured={handlePageMeasured}
+        pageNumber={pageNumber}
+        pdf={pdf}
+        rotation={rotation}
+        scale={effectiveScale}
+      />
+    ) : (
+      <div className="pdfv-page-skeleton" aria-hidden="true" />
+    );
     return (
       <section
         key={pageNumber}
@@ -1055,18 +1068,8 @@ export function PdfCitationPreviewWindow({
                   : pageFailureActionLabel}
               </button>
             </div>
-          ) : shouldRender ? (
-            <PdfCanvasPage
-              active
-              onError={handlePageRenderError}
-              onMeasured={handlePageMeasured}
-              pageNumber={pageNumber}
-              pdf={pdf}
-              rotation={rotation}
-              scale={effectiveScale}
-            />
           ) : (
-            <div className="pdfv-page-skeleton" aria-hidden="true" />
+            renderedPage
           )}
         </div>
       </section>

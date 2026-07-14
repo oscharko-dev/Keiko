@@ -8,7 +8,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
   recordQualityIntelligenceRun,
@@ -542,6 +542,19 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
     expect(exported?.findingRefs).toEqual(["qi-finding-export-001"]);
     expect(envelope.diagnostics ?? []).not.toContain("export:coverage-map-refs-unavailable");
     expect(envelope.diagnostics ?? []).not.toContain("export:finding-refs-missing");
+  });
+
+  it("keeps integrity digests independent of runtime locale collation", async () => {
+    recordRunWithTraceability();
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("locale collation must not participate in integrity digests");
+    });
+    try {
+      const { envelope } = await exportJson();
+      expect(envelope.integrityHashSha256Hex).toMatch(/^[0-9a-f]{64}$/u);
+    } finally {
+      localeCompare.mockRestore();
+    }
   });
 
   it("links finding refs through evidence atom ids derived by a candidate", async () => {

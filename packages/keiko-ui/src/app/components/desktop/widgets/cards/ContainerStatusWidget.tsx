@@ -10,7 +10,10 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
-import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
 import {
   cancelContainerRun,
   containerEventsUrl,
@@ -49,7 +52,7 @@ const CONTAINER_EVENT_SOURCE_TYPES = [
 
 // Localized, human-readable label per ContainerEngineState. Exhaustive over the (aliased)
 // RuntimeCapabilityState union so adding a member is a compile error, not a silent fallthrough.
-function engineStateLabel(state: ContainerEngineState, t: I18nTranslate): string {
+function engineStateLabel(state: ContainerEngineState, t: OptionalWidgetTranslate): string {
   switch (state) {
     case "available":
       return t("containerStatusWidget.engine.available");
@@ -82,7 +85,7 @@ function engineStateTone(state: ContainerEngineState): "ok" | "warn" | "danger" 
   }
 }
 
-function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
+function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
   return { code: "INTERNAL", message: t("containerStatusWidget.error.unexpected") };
@@ -97,7 +100,7 @@ function taskLabel(task: ContainerTask): string {
   return `${task.kind} · ${task.label}`;
 }
 
-function eventLabel(kind: ContainerRunnerEvent["kind"], t: I18nTranslate): string {
+function eventLabel(kind: ContainerRunnerEvent["kind"], t: OptionalWidgetTranslate): string {
   switch (kind) {
     case "run-started":
       return t("containerStatusWidget.event.started");
@@ -128,7 +131,7 @@ function isOwnEvent(event: ContainerRunnerEvent, requestId: string | null): bool
   );
 }
 
-function resultSummary(result: ContainerRunResult, t: I18nTranslate): string {
+function resultSummary(result: ContainerRunResult, t: OptionalWidgetTranslate): string {
   const parts = [
     result.engine,
     t("containerStatusWidget.result.exit", {
@@ -141,8 +144,8 @@ function resultSummary(result: ContainerRunResult, t: I18nTranslate): string {
   ];
   if (result.truncated) parts.push(t("containerStatusWidget.result.outputTruncated"));
   if (result.timedOut) parts.push(t("containerStatusWidget.result.timedOut"));
-  parts.push(result.failureReason);
   parts.push(
+    result.failureReason,
     t("containerStatusWidget.result.run", { id: result.runId }),
     t("containerStatusWidget.result.task", { id: result.taskId }),
   );
@@ -157,7 +160,7 @@ function EngineStatusList({
   t,
 }: {
   readonly engines: readonly ContainerEngineStatus[];
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <ul className="tm-events" aria-label={t("containerStatusWidget.engines.ariaLabel")}>
@@ -204,7 +207,7 @@ function ContainerCapabilityStatus({
   t,
 }: {
   readonly capability: ContainerCapabilityResponse | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (capability === null) {
     return (
@@ -228,7 +231,7 @@ function ContainerResult({
   t,
 }: {
   readonly result: ContainerRunResult | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (result === null) return null;
   return (
@@ -269,7 +272,7 @@ function ContainerResult({
 }
 
 export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const projectInput = props.projectPath ?? "";
   const [capability, setCapability] = useState<ContainerCapabilityResponse | null>(null);
   const [tasks, setTasks] = useState<readonly ContainerTask[]>([]);

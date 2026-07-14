@@ -137,6 +137,12 @@ function parseExistingEvents(json: string | undefined): PersistedMemoryAuditEven
   }
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(",")}]`;
@@ -144,7 +150,7 @@ function stableStringify(value: unknown): string {
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
     return `{${Object.keys(record)
-      .sort((left, right) => left.localeCompare(right))
+      .sort(compareCodeUnits)
       .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
       .join(",")}}`;
   }

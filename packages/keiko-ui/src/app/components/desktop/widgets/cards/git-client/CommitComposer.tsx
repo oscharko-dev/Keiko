@@ -14,7 +14,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import { Icons } from "../../../Icons";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { CodeList, MutationOutcome, StatusPill } from "./git-client-ui";
@@ -32,6 +35,8 @@ import {
 } from "./git-client-styles";
 
 const PREVIEW_DEBOUNCE_MS = 400;
+const InfoIcon = Icons.info;
+const CheckIcon = Icons.check;
 
 interface CommitComposerProps {
   /** Non-empty when a repository is selected; the composer is inert otherwise. */
@@ -63,7 +68,7 @@ function commitHint(
   subjectEmpty: boolean,
   missingFreshPreview: boolean,
   policyBlocked: boolean,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (!hasRepository) return t("commitComposer.hint.selectRepository");
   if (!hasStaged) return t("commitComposer.hint.stageChanges");
@@ -77,7 +82,7 @@ interface CommitFlowActionsProps {
   readonly hasRepository: boolean;
   readonly onCreatePullRequest: (() => void) | undefined;
   readonly onMerge: (() => void) | undefined;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }
 
 function CommitFlowActions({
@@ -134,7 +139,7 @@ export function CommitComposer({
   onCreatePullRequest,
   onMerge,
 }: CommitComposerProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [summary, setSummary] = useState("");
   const [body, setBody] = useState("");
   const baseId = useId();
@@ -231,7 +236,7 @@ export function CommitComposer({
           }}
         >
           <StatusPill tone="danger">
-            <Icons.info size={11} /> {t("commitComposer.preview.unavailable")}
+            <InfoIcon size={11} /> {t("commitComposer.preview.unavailable")}
           </StatusPill>
           <p style={SUBTLE_TEXT_STYLE}>{previewError}</p>
         </div>
@@ -254,7 +259,7 @@ function CommitPolicyPreview({
 }: {
   readonly id: string;
   readonly preview: GitDeliveryCommitPreviewResponse;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const violations = preview.messageValidation.ok ? [] : preview.messageValidation.violations;
   const blocked = !preview.messageValidation.ok;
@@ -269,7 +274,7 @@ function CommitPolicyPreview({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <StatusPill tone={blocked ? "danger" : "success"}>
-          <Icons.check size={11} />{" "}
+          <CheckIcon size={11} />{" "}
           {blocked
             ? t("commitComposer.preview.policyActionNeeded")
             : t("commitComposer.preview.meetsPolicy")}

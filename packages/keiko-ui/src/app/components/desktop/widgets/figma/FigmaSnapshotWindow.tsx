@@ -2290,8 +2290,7 @@ export function FigmaSnapshotWindow({
   if (isViewSourceMode) return renderViewSourceMode();
 
   const renderAssertiveBuildError = (): ReactNode => {
-    if (buildState !== "error" || errorNotice === null || errorNotice.assertive !== true)
-      return null;
+    if (buildState !== "error" || errorNotice?.assertive !== true) return null;
     return (
       <div
         className="figma-snapshot-error-card"

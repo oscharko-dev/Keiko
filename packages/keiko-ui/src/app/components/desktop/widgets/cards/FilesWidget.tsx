@@ -1769,7 +1769,7 @@ export function FilesWidget({
     const state =
       gitStatusState.status?.state ?? (gitStatusState.error === null ? "loading" : "error");
     return (
-      <div className="files-git-status" role="status" data-state={state}>
+      <output className="files-git-status" data-state={state}>
         <Icons.git size={13} />
         <span>{gitSummary}</span>
         {canOpenGitDelivery ? (
@@ -1784,7 +1784,7 @@ export function FilesWidget({
             <Icons.branch size={13} />
           </button>
         ) : null}
-      </div>
+      </output>
     );
   };
 

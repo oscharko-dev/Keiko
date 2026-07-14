@@ -193,6 +193,26 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
+  it("keeps idempotency fingerprints independent of runtime locale collation", async () => {
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("locale collation must not participate in idempotency fingerprints");
+    });
+    try {
+      const body = request({
+        operation: "branch-switch",
+        mode: "execute",
+        idempotencyKey: "locale-independent",
+        payload: { branchName: "main" },
+      });
+
+      await expect(handleGitAgentOperation(ctx(body), deps())).resolves.toMatchObject({
+        body: { status: "delegated" },
+      });
+    } finally {
+      localeCompare.mockRestore();
+    }
+  });
+
   it("reserves execute idempotency before the delegated mutation settles", async () => {
     let releaseDelegate!: () => void;
     const delegateGate = new Promise<void>((resolve) => {

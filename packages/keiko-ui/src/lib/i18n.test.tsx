@@ -101,8 +101,8 @@ describe("translate", () => {
   it("translates the remediated widget surfaces from the German catalog", async () => {
     await loadLocaleMessages("de");
 
-    expect(translate("de", "quickAccess.title")).toBe("Schnellzugriff");
-    expect(translate("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
+    expect(translateOptionalWidget("de", "quickAccess.title")).toBe("Schnellzugriff");
+    expect(translateOptionalWidget("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
     expect(translateOptionalWidget("de", "documentationBrowser.action.prepareIndexing")).toBe(
       "Indizierung vorbereiten",
     );
@@ -113,7 +113,7 @@ describe("translate", () => {
       "Prompt verbessern",
     );
     expect(
-      translate("de", "terminalWidget.result.finished", {
+      translateOptionalWidget("de", "terminalWidget.result.finished", {
         code: 0,
         duration: 12,
         truncated: "",

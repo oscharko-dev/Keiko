@@ -607,6 +607,19 @@ function AgentRunLog({
   readonly busy: boolean;
   readonly t: I18nTranslate;
 }): ReactNode {
+  const emptyLogRow =
+    sse.status === "error" ? null : (
+      <div className="arun-log-row">
+        <span className="arun-log-ico">
+          <Icons.reset size={12} />
+        </span>
+        <span className="arun-log-text">
+          {sse.status === "connecting"
+            ? t("agentRunWidget.log.connecting")
+            : t("agentRunWidget.log.waiting")}
+        </span>
+      </div>
+    );
   return (
     <div
       className="arun-log"
@@ -623,30 +636,17 @@ function AgentRunLog({
           <span className="arun-log-text">{sse.error}</span>
         </div>
       ) : null}
-      {sse.events.length === 0 ? (
-        sse.status === "error" ? null : (
-          <div className="arun-log-row">
-            <span className="arun-log-ico">
-              <Icons.reset size={12} />
-            </span>
-            <span className="arun-log-text">
-              {sse.status === "connecting"
-                ? t("agentRunWidget.log.connecting")
-                : t("agentRunWidget.log.waiting")}
-            </span>
-          </div>
-        )
-      ) : (
-        events.map((event) => (
-          <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
-            <span className="arun-log-ico">
-              <Icons.spark size={12} />
-            </span>
-            <span className="arun-log-text">{eventLabel(event, t)}</span>
-            <span className="arun-log-t mono">{eventTime(event)}</span>
-          </div>
-        ))
-      )}
+      {sse.events.length === 0
+        ? emptyLogRow
+        : events.map((event) => (
+            <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+              <span className="arun-log-ico">
+                <Icons.spark size={12} />
+              </span>
+              <span className="arun-log-text">{eventLabel(event, t)}</span>
+              <span className="arun-log-t mono">{eventTime(event)}</span>
+            </div>
+          ))}
     </div>
   );
 }
@@ -665,6 +665,30 @@ interface AgentRunControlsProps {
   readonly t: I18nTranslate;
 }
 
+function ApplyControl(props: AgentRunControlsProps): ReactNode {
+  if (props.showApply) {
+    return (
+      <button
+        type="button"
+        className="arun-btn"
+        aria-disabled={props.applying}
+        onClick={props.onApply}
+      >
+        {applyButtonLabel({
+          applying: props.applying,
+          confirmApply: props.confirmApply,
+          fileCount: props.applyFileCount,
+          t: props.t,
+        })}
+      </button>
+    );
+  }
+  if (props.appliedAt !== undefined) {
+    return <span className="arun-final mono">{props.t("agentRunWidget.result.applied")}</span>;
+  }
+  return null;
+}
+
 function AgentRunControls(props: AgentRunControlsProps): ReactNode {
   return (
     <div className="arun-controls">
@@ -677,23 +701,7 @@ function AgentRunControls(props: AgentRunControlsProps): ReactNode {
       >
         {props.t("agentRunWidget.evidence.title")}
       </a>
-      {props.showApply ? (
-        <button
-          type="button"
-          className="arun-btn"
-          aria-disabled={props.applying}
-          onClick={props.onApply}
-        >
-          {applyButtonLabel({
-            applying: props.applying,
-            confirmApply: props.confirmApply,
-            fileCount: props.applyFileCount,
-            t: props.t,
-          })}
-        </button>
-      ) : props.appliedAt !== undefined ? (
-        <span className="arun-final mono">{props.t("agentRunWidget.result.applied")}</span>
-      ) : null}
+      <ApplyControl {...props} />
       {props.showCancel ? (
         <button type="button" className="arun-btn danger" onClick={props.onCancel}>
           {props.t("agentRunWidget.controls.cancel")}

@@ -17,7 +17,10 @@ import {
 import styles from "./TerminalWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import { formatBytes, formatMs } from "../../../../../lib/format";
-import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
 import {
   abortTerminalExecution,
   createTerminalExecution,
@@ -52,7 +55,7 @@ const TERMINAL_EVENT_SOURCE_TYPES = [
   "terminal:execution-cancelled",
 ] as const;
 
-function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
+function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
   return { code: "INTERNAL", message: t("terminalWidget.error.unexpected") };
@@ -72,7 +75,7 @@ function createRequestId(): string {
   return `terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function eventLabel(kind: TerminalEventEnvelope["kind"], t: I18nTranslate): string {
+function eventLabel(kind: TerminalEventEnvelope["kind"], t: OptionalWidgetTranslate): string {
   switch (kind) {
     case "execution-started":
       return t("terminalWidget.event.started");
@@ -104,7 +107,7 @@ function eventDetail(event: TerminalEventEnvelope): string {
 
 function terminalResultAnnouncement(
   result: TerminalExecutionResult | null,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (result === null) return "";
   const truncated = result.truncated ? t("terminalWidget.result.truncatedSuffix") : "";
@@ -122,7 +125,7 @@ function TerminalResult({
   t,
 }: {
   readonly result: TerminalExecutionResult | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (result === null) return null;
   return (
@@ -166,7 +169,7 @@ function TerminalResult({
 }
 
 export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [policy, setPolicy] = useState<TerminalPolicySummary | null>(null);
   const [command, setCommand] = useState<string>("");
   const [argsInput, setArgsInput] = useState<string>("");

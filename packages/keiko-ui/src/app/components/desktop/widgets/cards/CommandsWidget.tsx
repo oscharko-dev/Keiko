@@ -8,7 +8,10 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
-import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
 import {
   cancelCommandRun,
   commandEventsUrl,
@@ -41,7 +44,7 @@ const COMMAND_EVENT_SOURCE_TYPES = [
   "command:run-cancelled",
 ] as const;
 
-function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
+function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
   return { code: "INTERNAL", message: t("commandsWidget.error.unexpected") };
@@ -52,13 +55,13 @@ function createRequestId(): string {
   return `command-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function taskLabel(task: CommandTask, t: I18nTranslate): string {
+function taskLabel(task: CommandTask, t: OptionalWidgetTranslate): string {
   const trust =
     task.trustState === "trusted" ? "" : t("commandsWidget.task.approvalRequiredSuffix");
   return `${task.kind} · ${task.label}${trust}`;
 }
 
-function eventLabel(kind: CommandRunnerEvent["kind"], t: I18nTranslate): string {
+function eventLabel(kind: CommandRunnerEvent["kind"], t: OptionalWidgetTranslate): string {
   switch (kind) {
     case "run-started":
       return t("commandsWidget.event.started");
@@ -89,15 +92,15 @@ function isOwnEvent(event: CommandRunnerEvent, requestId: string | null): boolea
   );
 }
 
-function resultSummary(result: CommandTaskRunResult, t: I18nTranslate): string {
+function resultSummary(result: CommandTaskRunResult, t: OptionalWidgetTranslate): string {
   const parts = [
     t("commandsWidget.result.exit", { code: String(result.exitCode) }),
     t("commandsWidget.result.duration", { duration: result.durationMs }),
   ];
   if (result.truncated) parts.push(t("commandsWidget.result.outputTruncated"));
   if (result.timedOut) parts.push(t("commandsWidget.result.timedOut"));
-  parts.push(result.failureReason);
   parts.push(
+    result.failureReason,
     t("commandsWidget.result.run", { id: result.runId }),
     t("commandsWidget.result.task", { id: result.taskId }),
   );
@@ -109,7 +112,7 @@ function CommandResult({
   t,
 }: {
   readonly result: CommandTaskRunResult | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <>
@@ -166,7 +169,7 @@ function CommandResult({
 }
 
 export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   useEffect(() => {
     setProjectInput(props.projectPath ?? "");

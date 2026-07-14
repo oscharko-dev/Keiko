@@ -23,7 +23,7 @@ export function translateOptionalWidget(
   key: OptionalWidgetMessageKey,
   values: MessageValues = {},
 ): string {
-  return catalogFor(locale)[key].replace(/\{([a-zA-Z0-9_]+)\}/gu, (match, name: string) => {
+  return catalogFor(locale)[key].replace(/\{(\w+)\}/gu, (match, name: string) => {
     const value = values[name];
     return value === undefined ? match : String(value);
   });

@@ -15,7 +15,10 @@ import {
   type ReactNode,
 } from "react";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
 import type { QuickAccessCommand } from "../quickAccessRegistry";
@@ -98,7 +101,7 @@ function symbolResults(response: WorkspaceSymbolSearchResponse): readonly Symbol
 }
 
 function quickAccessEmptyText(
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
   mode: QuickAccessMode,
   root: string | undefined,
   query: string,
@@ -117,7 +120,7 @@ export function UnifiedQuickAccessPalette({
   openEditorFile,
   onClose,
 }: UnifiedQuickAccessPaletteProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
   const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
   const [selected, setSelected] = useState(0);
@@ -240,6 +243,7 @@ export function UnifiedQuickAccessPalette({
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
+  const resultKey = itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural";
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
@@ -283,11 +287,7 @@ export function UnifiedQuickAccessPalette({
           <span className="kbd">esc</span>
         </div>
         <div className="sr-only" role="status">
-          {itemCount === 0
-            ? emptyText
-            : t(itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural", {
-                count: itemCount,
-              })}
+          {itemCount === 0 ? emptyText : t(resultKey, { count: itemCount })}
         </div>
         <div id={listId} role="listbox" className="cmdk-list">
           {itemCount === 0 ? (

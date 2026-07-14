@@ -51,6 +51,7 @@ import {
 } from "./git-client-styles";
 
 const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
+const ChevronRightIcon = Icons.chevronR;
 
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
@@ -514,15 +515,15 @@ function GitRightPaneContent(props: GitRightPaneContentProps): ReactNode {
       : props.t("gitClientWindow.panel.merge");
   const content = props.mode === "pull-request" ? props.pullRequestPane : props.mergePane;
   return (
-    <div ref={props.rightPaneRef} style={PANE_STYLE} role="region" aria-label={label}>
+    <section ref={props.rightPaneRef} style={PANE_STYLE} aria-label={label}>
       <div style={DIFF_HEADER_STYLE}>
         <button type="button" style={SECONDARY_BTN} onClick={props.returnToDiff}>
-          <Icons.chevronR size={12} style={{ transform: "rotate(180deg)" }} />{" "}
+          <ChevronRightIcon size={12} style={{ transform: "rotate(180deg)" }} />{" "}
           {props.t("gitClientWindow.action.backToDiff")}
         </button>
       </div>
       {content}
-    </div>
+    </section>
   );
 }
 

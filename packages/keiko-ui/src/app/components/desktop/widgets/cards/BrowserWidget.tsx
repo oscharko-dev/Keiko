@@ -8,7 +8,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import styles from "./BrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
-import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
 import {
   browserApplyScreenshot,
   browserContent,
@@ -48,13 +51,13 @@ const DEFAULT_CDP_PORT = 9222;
 const DEFAULT_URL = "http://localhost:5173";
 const MAX_EVENT_LOG = 50;
 
-function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
+function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
   return { code: "INTERNAL", message: t("browserWidget.error.unexpected") };
 }
 
-function eventLabel(kind: BrowserEventEnvelope["kind"], t: I18nTranslate): string {
+function eventLabel(kind: BrowserEventEnvelope["kind"], t: OptionalWidgetTranslate): string {
   switch (kind) {
     case "session-opened":
       return t("browserWidget.event.sessionOpened");
@@ -84,7 +87,7 @@ function errorEventDetail(payload: BrowserEventEnvelope["payload"]): string {
   return typeof payload.warning === "string" ? payload.warning : "";
 }
 
-function eventDetail(event: BrowserEventEnvelope, t: I18nTranslate): string {
+function eventDetail(event: BrowserEventEnvelope, t: OptionalWidgetTranslate): string {
   switch (event.kind) {
     case "navigated":
       return navigatedEventDetail(event.payload);
@@ -116,7 +119,7 @@ interface BrowserStatusAnnouncementInput {
 
 function browserStatusAnnouncement(
   input: BrowserStatusAnnouncementInput,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (input.working && input.busyLabel !== null) return input.busyLabel;
   if (input.pendingShot !== null) return t("browserWidget.status.screenshotReady");
@@ -201,7 +204,7 @@ function attachBrowserEventListeners(
 function attachBrowserStreamErrorHandler(
   source: EventSource,
   setError: (error: ErrorState) => void,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): void {
   source.onerror = (): void => {
     if (source.readyState !== EventSource.CLOSED) return;
@@ -217,7 +220,7 @@ function useBrowserEventStream(
   pushEvent: (event: BrowserEventEnvelope) => void,
   setError: (error: ErrorState) => void,
   eventSourceRef: RefObject<EventSource | null>,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): void {
   useEffect(() => {
     if (session === null) {
@@ -275,7 +278,7 @@ interface BrowserStatusLinesProps {
   readonly pendingShot: PendingShot | null;
   readonly persistedPath: string | null;
   readonly error: ErrorState | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }
 
 function BrowserStatusLines(props: BrowserStatusLinesProps): ReactNode {
@@ -324,7 +327,7 @@ interface BrowserPreviewProps {
   readonly pendingShot: PendingShot | null;
   readonly pendingShotSrc: string | null;
   readonly session: BrowserSessionMeta | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }
 
 function BrowserPreview({
@@ -358,7 +361,7 @@ function BrowserPreview({
 }
 
 export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const initialPort = props.cdpPort ?? DEFAULT_CDP_PORT;
   const initialUrl = props.url ?? DEFAULT_URL;
   const [portInput, setPortInput] = useState<string>(String(initialPort));
@@ -544,11 +547,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         </label>
       </div>
 
-      {/* role="group" (not "toolbar"): the toolbar pattern promises arrow-key roving
-          tabindex which these independent buttons do not implement (C254).
+      {/* A fieldset groups the independent controls without promising the toolbar pattern's roving
+          tabindex, which these buttons do not implement (C254).
           uiux-fix F018 C124: aria-disabled + click guards instead of HTML disabled —
           disabling the just-clicked (focused) button throws keyboard focus to <body>. */}
-      <div className="bw-actions" role="group" aria-label={t("browserWidget.actions.group")}>
+      <fieldset className="bw-actions" aria-label={t("browserWidget.actions.group")}>
         <button
           type="button"
           className="bw-btn"
@@ -647,7 +650,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         >
           {t("browserWidget.action.close")}
         </button>
-      </div>
+      </fieldset>
 
       {/* uiux-fix F018 C124: persistent live region (announcement mirror); the visible
           status lines below stay conditional but no longer carry role=status, which

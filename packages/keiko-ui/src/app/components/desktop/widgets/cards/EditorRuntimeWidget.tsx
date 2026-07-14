@@ -53,7 +53,6 @@ import {
   describeTestGenerationStatus,
   disposeAllUnattachedEditorModels,
   editorFileModelReducer,
-  editorLanguageLabel,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
@@ -1409,11 +1408,11 @@ function nonEmptyEditorFile(file: string | undefined): string | null {
 }
 
 function definedOr<T>(value: T | undefined, fallback: T): T {
-  return value === undefined ? fallback : value;
+  return value ?? fallback;
 }
 
 function nullishOr<T>(value: T | null | undefined, fallback: T): T {
-  return value === null || value === undefined ? fallback : value;
+  return value ?? fallback;
 }
 
 function initialEditorLoadState(hasTarget: boolean): KeikoEditorLoadState {
@@ -1438,14 +1437,12 @@ function editorSessionKeyOrNull(root: string | undefined, file: string | undefin
 }
 
 function editorDocumentUriOrNull(
-  enabled: boolean,
   root: string | undefined,
   file: string | undefined,
   scope: string,
 ): string | null {
-  return enabled && root !== undefined && file !== undefined
-    ? documentUri(root, file, scope)
-    : null;
+  if (!hasEditorTarget(root, file) || root === undefined || file === undefined) return null;
+  return documentUri(root, file, scope);
 }
 
 function modelMatchesDocument(
@@ -1455,8 +1452,8 @@ function modelMatchesDocument(
   return model !== null && uri !== null && model.identity.uri === uri;
 }
 
-function matchingModelDirty(model: EditorFileModel | null, matches: boolean): boolean {
-  return matches && model !== null ? isDocumentDirty(model) : false;
+function modelDirty(model: EditorFileModel | null): boolean {
+  return model !== null && isDocumentDirty(model);
 }
 
 interface LargeFileSettings {
@@ -1524,10 +1521,6 @@ function matchingDocumentIdentity(
   matches: boolean,
 ): EditorDocumentIdentity | null {
   return matches && model !== null ? model.identity : null;
-}
-
-function editorLanguageOrFileLabel(language: EditorLanguageId | undefined): string {
-  return language === undefined ? "this file" : editorLanguageLabel(language);
 }
 
 function editorProviderId(provider: EditorLanguageProvider): string {
@@ -1611,7 +1604,7 @@ function whenEnabled<T>(enabled: boolean, value: T): T | undefined {
 }
 
 function nullToUndefined<T>(value: T | null): T | undefined {
-  return value === null ? undefined : value;
+  return value ?? undefined;
 }
 
 function activeEditorAriaLabel(
@@ -2124,9 +2117,9 @@ function EditorRuntimeWidget({
     [],
   );
 
-  const currentDocumentUri = editorDocumentUriOrNull(hasTarget, root, file, editorModelScope);
+  const currentDocumentUri = editorDocumentUriOrNull(root, file, editorModelScope);
   const fileModelMatchesTarget = modelMatchesDocument(fileModel, currentDocumentUri);
-  const dirty = matchingModelDirty(fileModel, fileModelMatchesTarget);
+  const dirty = fileModelMatchesTarget && modelDirty(fileModel);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
   const lastDirtyNotificationRef = useRef<{
@@ -3588,9 +3581,6 @@ function EditorRuntimeWidget({
     tabSize: editorSettings.applied.tabSize,
     insertSpaces: editorSettings.applied.insertSpaces,
   };
-  // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
-  // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
-  const formattingLanguageLabel = editorLanguageOrFileLabel(completionLanguage);
   // Issue 2.2: only the language-provider id keys the surface (a change there genuinely needs a
   // remount to re-register providers, and it happens once on load before editing). The theme variant
   // and large-file mode are NO LONGER part of the key — a theme toggle re-themes the live editor via

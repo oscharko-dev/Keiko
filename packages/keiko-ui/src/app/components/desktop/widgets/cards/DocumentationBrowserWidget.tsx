@@ -57,6 +57,29 @@ interface ReasonCopy {
   readonly action: string | null;
 }
 
+function reasonAction(
+  reason:
+    | "authentication-required"
+    | "proxy-or-firewall-blocked"
+    | "host-unreachable"
+    | "request-timed-out"
+    | "navigation-failed",
+  t: OptionalWidgetTranslate,
+): string {
+  switch (reason) {
+    case "authentication-required":
+      return t("documentationBrowser.reason.authentication-required.action");
+    case "proxy-or-firewall-blocked":
+      return t("documentationBrowser.reason.proxy-or-firewall-blocked.action");
+    case "host-unreachable":
+      return t("documentationBrowser.reason.host-unreachable.action");
+    case "request-timed-out":
+      return t("documentationBrowser.reason.request-timed-out.action");
+    case "navigation-failed":
+      return t("documentationBrowser.reason.navigation-failed.action");
+  }
+}
+
 // UI-owned copy for every governed reason. The contract owns the machine reason + severity; the
 // human wording lives here. Copy is precise and short, never exposes a raw URL/exception, and never
 // suggests bypassing an embedding, proxy, or firewall policy (child issue #1863).
@@ -85,16 +108,7 @@ function reasonCopy(reason: DocumentationNavigationReason, t: OptionalWidgetTran
       return {
         title: t(`${prefix}.title`),
         detail: t(`${prefix}.detail`),
-        action:
-          reason === "authentication-required"
-            ? t("documentationBrowser.reason.authentication-required.action")
-            : reason === "proxy-or-firewall-blocked"
-              ? t("documentationBrowser.reason.proxy-or-firewall-blocked.action")
-              : reason === "host-unreachable"
-                ? t("documentationBrowser.reason.host-unreachable.action")
-                : reason === "request-timed-out"
-                  ? t("documentationBrowser.reason.request-timed-out.action")
-                  : t("documentationBrowser.reason.navigation-failed.action"),
+        action: reasonAction(reason, t),
       };
   }
 }
@@ -229,9 +243,8 @@ function ProposalPanel(props: {
           <span className="mono">{proposal.alreadyIndexedPodId}</span>
         </p>
       ) : null}
-      <div
+      <fieldset
         className="db-consent-actions"
-        role="group"
         aria-label={props.t("documentationBrowser.consent.ariaLabel")}
       >
         {approvable ? (
@@ -261,7 +274,7 @@ function ProposalPanel(props: {
             ? props.t("documentationBrowser.action.cancel")
             : props.t("documentationBrowser.action.dismiss")}
         </button>
-      </div>
+      </fieldset>
     </div>
   );
 }
@@ -411,9 +424,8 @@ function DocumentationIndexingState(props: DocumentationIndexingStateProps): Rea
       );
     case "proposed":
       return (
-        <div
+        <section
           className="db-indexing"
-          role="region"
           aria-label={props.t("documentationBrowser.indexing.proposalAriaLabel")}
         >
           <ProposalPanel
@@ -424,17 +436,16 @@ function DocumentationIndexingState(props: DocumentationIndexingStateProps): Rea
             onOpenKnowledgePods={props.onOpenKnowledgePods}
             t={props.t}
           />
-        </div>
+        </section>
       );
     case "approved":
       return (
-        <div
+        <section
           className="db-indexing"
-          role="region"
           aria-label={props.t("documentationBrowser.indexing.proposalAriaLabel")}
         >
           <ApprovedPanel approval={props.indexing.approval} t={props.t} />
-        </div>
+        </section>
       );
     case "error":
       return (
@@ -562,9 +573,8 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
             disabled={nav.working}
           />
         </label>
-        <div
+        <fieldset
           className="db-actions"
-          role="group"
           aria-label={t("documentationBrowser.navigation.ariaLabel")}
         >
           <button
@@ -583,7 +593,7 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
           >
             {t("documentationBrowser.action.reload")}
           </button>
-        </div>
+        </fieldset>
       </div>
 
       {/* Persistent live region mirror; the visible panels below stay conditional. */}

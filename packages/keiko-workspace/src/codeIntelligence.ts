@@ -903,9 +903,10 @@ function resolveLocalImport(
   pathSet: ReadonlySet<string>,
 ): ImportResolution {
   const importerDir = dirname(edge.importerPath);
+  const relativeBase = importerDir === "." ? "" : importerDir;
   const joined = edge.specifier.startsWith("/")
     ? edge.specifier.slice(1)
-    : posix.join(importerDir === "." ? "" : importerDir, edge.specifier);
+    : posix.join(relativeBase, edge.specifier);
   return importResolution(
     resolveCandidate(pathSet, joined, edge.language === "python" ? PY_EXTENSIONS : JS_EXTENSIONS),
   );
@@ -922,26 +923,32 @@ function resolveTypescriptImportTarget(
   );
 }
 
+function jvmSourceExtension(language: CodeImportEdge["language"]): string {
+  switch (language) {
+    case "kotlin":
+      return "kt";
+    case "scala":
+      return "scala";
+    case "groovy":
+      return "groovy";
+    default:
+      return "java";
+  }
+}
+
 function resolveJvmImport(
   language: CodeImportEdge["language"],
   specifier: string,
   pathSet: ReadonlySet<string>,
 ): ImportResolution {
-  const sourceExtension =
-    language === "kotlin"
-      ? "kt"
-      : language === "scala"
-        ? "scala"
-        : language === "groovy"
-          ? "groovy"
-          : "java";
+  const sourceExtension = jvmSourceExtension(language);
   return importResolution(
-    suffixCandidate(pathSet, `${specifier.replace(/\./gu, "/")}.${sourceExtension}`),
+    suffixCandidate(pathSet, `${specifier.replaceAll(".", "/")}.${sourceExtension}`),
   );
 }
 
 function resolvePythonImport(specifier: string, pathSet: ReadonlySet<string>): ImportResolution {
-  const modulePath = specifier.replace(/\./gu, "/");
+  const modulePath = specifier.replaceAll(".", "/");
   return importResolution(
     resolveCandidate(pathSet, modulePath, PY_EXTENSIONS) ??
       suffixCandidate(pathSet, `${modulePath}.py`) ??
@@ -965,7 +972,15 @@ function resolveFallbackImport(
   edge: Omit<CodeImportEdge, "targetPath" | "confidence">,
   pathSet: ReadonlySet<string>,
 ): ImportResolution {
-  const last = edge.specifier.split(/[/.]/u).filter(Boolean).at(-1);
+  const parts = edge.specifier.split(/[/.]/u);
+  let last: string | undefined;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part !== undefined && part.length > 0) {
+      last = part;
+      break;
+    }
+  }
   return importResolution(
     last === undefined
       ? undefined
@@ -1857,17 +1872,47 @@ function fieldNameFromGoStructTag(tagText: string | undefined): string | undefin
   return tagName;
 }
 
+function stripBracketSegments(line: string): string {
+  let depth = 0;
+  let output = "";
+  for (const character of line) {
+    if (character === "[") {
+      depth += 1;
+      if (depth === 1) output += " ";
+    } else if (character === "]" && depth > 0) {
+      depth -= 1;
+    } else if (depth === 0) {
+      output += character;
+    }
+  }
+  return output;
+}
+
+function javaLikeFieldName(line: string): string | undefined {
+  const assignment = line.indexOf("=");
+  const terminator = line.indexOf(";");
+  let end = Math.min(assignment, terminator);
+  if (assignment < 0) end = terminator;
+  if (terminator < 0) end = assignment;
+  if (end < 0) return undefined;
+  const prefix = line.slice(0, end).trim();
+  if (prefix.includes(":")) return undefined;
+  const tokens = prefix.split(/\s+/u);
+  if (tokens.length < 2) return undefined;
+  const candidate = tokens.at(-1);
+  return candidate !== undefined && /^[A-Za-z_$][\w$]*$/u.test(candidate) ? candidate : undefined;
+}
+
 function declarationFieldNames(
   line: string,
   language: CodeLanguage,
   insideBlock: boolean,
 ): readonly string[] {
-  const declarationLine = line.replace(/@\w+(?:\([^)]*\))?/gu, " ").replace(/\[[^\]]+\]\s*/gu, " ");
+  const withoutAnnotations = line.replace(/@\w+(?:\([^()\r\n]*\))?/gu, " ");
+  const declarationLine = stripBracketSegments(withoutAnnotations);
   const names = [
     /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*[:;]/u.exec(declarationLine)?.[1],
-    /^\s*(?:private|protected|public)?\s*(?:final\s+)?[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*(?:[=;])/u.exec(
-      declarationLine,
-    )?.[1],
+    javaLikeFieldName(declarationLine),
     /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
       declarationLine,
     )?.[1],
@@ -2980,7 +3025,10 @@ function collectDeclaredPythonPrefixes(
   argumentName: "prefix" | "url_prefix",
 ): ReadonlyMap<string, string> {
   const prefixes = new Map<string, string>();
-  const pattern = new RegExp(`\\b([A-Za-z_][\\w]*)\\s*=\\s*${constructor}\\s*\\(([^)]*)\\)`, "gu");
+  const pattern = new RegExp(
+    String.raw`\b([A-Za-z_][\w]*)\s*=\s*${constructor}\s*\(([^)]*)\)`,
+    "gu",
+  );
   for (const match of scan.text.matchAll(pattern)) {
     if (!matchStartsInCode(scan, match)) continue;
     const variableName = match[1];
@@ -2994,15 +3042,18 @@ function applyIncludedPythonRouterPrefixes(
   scan: EndpointScanText,
   prefixes: Map<string, string>,
 ): void {
-  for (const match of scan.text.matchAll(
-    /\b[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*\.include_router\s*\(\s*([A-Za-z_][\w]*)\s*(?:,\s*([^)]*))?\)/gu,
-  )) {
+  for (const match of scan.text.matchAll(/\.include_router\b/gu)) {
     if (!matchStartsInCode(scan, match)) continue;
-    const routerName = match[1];
-    const prefix = namedStringArg(match[2], "prefix");
-    if (routerName !== undefined && prefix !== undefined) {
-      prefixes.set(routerName, combineRoutePath(prefix, prefixes.get(routerName) ?? ""));
-    }
+    const matchEnd = match.index + match[0].length;
+    const call = /^\s*\(\s*([A-Za-z_][\w]*)/u.exec(scan.text.slice(matchEnd));
+    const routerName = call?.[1];
+    if (routerName === undefined || call === null) continue;
+    const argumentsStart = matchEnd + call[0].length;
+    const argumentsEnd = scan.text.indexOf(")", argumentsStart);
+    if (argumentsEnd < 0) continue;
+    const prefix = namedStringArg(scan.text.slice(argumentsStart, argumentsEnd), "prefix");
+    if (prefix === undefined) continue;
+    prefixes.set(routerName, combineRoutePath(prefix, prefixes.get(routerName) ?? ""));
   }
 }
 
@@ -3022,6 +3073,16 @@ interface OpenApiYamlEndpointState {
   currentPathLine: number;
 }
 
+function openApiPathFromLine(trimmed: string): string | undefined {
+  if (!trimmed.endsWith(":")) return undefined;
+  const rawCandidate = trimmed.slice(0, -1).trim();
+  const quoted =
+    (rawCandidate.startsWith('"') && rawCandidate.endsWith('"')) ||
+    (rawCandidate.startsWith("'") && rawCandidate.endsWith("'"));
+  const candidate = quoted ? rawCandidate.slice(1, -1) : rawCandidate;
+  return candidate.startsWith("/") && !candidate.includes(":") ? candidate : undefined;
+}
+
 function openApiYamlEndpointForLine(
   file: SourceFile,
   state: OpenApiYamlEndpointState,
@@ -3039,7 +3100,7 @@ function openApiYamlEndpointForLine(
     return undefined;
   }
   if (indent <= state.pathsIndent && !trimmed.startsWith("/")) return "done";
-  const path = /^["']?(\/[^:"']*)["']?\s*:\s*$/u.exec(trimmed)?.[1];
+  const path = openApiPathFromLine(trimmed);
   if (path !== undefined) {
     state.currentPath = path;
     state.currentPathLine = lineNumber;
@@ -3509,19 +3570,29 @@ function collectSpringLineEndpoints(context: EndpointLineContext): void {
   }
 }
 
+function quotedCallArgument(text: string): string | undefined {
+  let cursor = 0;
+  while (text[cursor] === " " || text[cursor] === "\t") cursor += 1;
+  if (text[cursor] !== "(") return undefined;
+  cursor += 1;
+  while (text[cursor] === " " || text[cursor] === "\t") cursor += 1;
+  const quote = text[cursor];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return undefined;
+  const end = text.indexOf(quote, cursor + 1);
+  return end < 0 ? undefined : text.slice(cursor + 1, end);
+}
+
 function collectNestLineEndpoints(context: EndpointLineContext): void {
   const { file, line, lineOffset, scan, state } = context;
   if (file.language !== "typescript" && file.language !== "javascript") return;
-  const controller = firstCodeMatch(
-    line,
-    /@Controller\s*\(\s*(?:(["'`])([^"'`]+)\1)?\s*\)/u,
-    scan,
-    lineOffset,
-  );
-  if (controller !== undefined) state.pendingNestClassPrefix = controller[2] ?? "";
+  const controller = firstCodeMatch(line, /@Controller\b/u, scan, lineOffset);
+  if (controller !== undefined) {
+    const afterMarker = line.slice(controller.index + controller[0].length);
+    state.pendingNestClassPrefix = quotedCallArgument(afterMarker) ?? "";
+  }
   const route = firstCodeMatch(
     line,
-    /@(Get|Post|Put|Patch|Delete|Head|Options|All)\s*\(\s*(?:(["'`])([^"'`]+)\2)?/u,
+    /@(Get|Post|Put|Patch|Delete|Head|Options|All)\s*\(\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)?/u,
     scan,
     lineOffset,
   );
@@ -3530,7 +3601,7 @@ function collectNestLineEndpoints(context: EndpointLineContext): void {
       context,
       "server",
       nestHttpMethod(route[1]),
-      combineRoutePath(state.nestClassPrefix, route[3] ?? ""),
+      combineRoutePath(state.nestClassPrefix, route[2] ?? route[3] ?? route[4] ?? ""),
     );
   }
 }
