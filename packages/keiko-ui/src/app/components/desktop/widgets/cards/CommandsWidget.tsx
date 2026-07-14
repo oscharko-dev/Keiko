@@ -6,7 +6,7 @@
 // SSE delivers live run status across tabs so an in-flight run can be cancelled. No free-form argv,
 // no shell, no WebSocket — the browser only ever names a discovered task id.
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
 import {
   cancelCommandRun,
@@ -114,7 +114,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const runBtnRef = useRef<HTMLButtonElement | null>(null);
   const prevRunningRef = useRef(false);
   const selectedTask = tasks.find((task) => task.id === taskId);
-  const runnableTaskSelected = selectedTask !== undefined && selectedTask.trustState === "trusted";
+  const runnableTaskSelected = selectedTask?.trustState === "trusted";
   const selectedTaskRequiresApproval = selectedTask?.trustState === "approval-required";
   const runDisabled = running || !runnableTaskSelected;
 
@@ -178,7 +178,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   }, [running]);
 
   const onSubmit = useCallback(
-    async (e: FormEvent<HTMLFormElement>): Promise<void> => {
+    async (e: SubmitEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
       if (running || runningRef.current || !runnableTaskSelected) return;
       setError(null);

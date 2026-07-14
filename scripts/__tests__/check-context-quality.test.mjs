@@ -44,7 +44,10 @@ import {
 } from "../check-context-quality.mjs";
 import {
   buildChatHistoryFixtures,
+  buildFixtureFs,
+  buildRepoEvidenceItem,
   buildScenarioCorpus,
+  buildScope,
   buildToolObservationFixtures,
 } from "../lib/context-quality-corpus.mjs";
 
@@ -548,6 +551,32 @@ describe("evaluateToolObservationShapingFidelity", () => {
 });
 
 describe("buildScenarioCorpus determinism + coverage", () => {
+  it("treats a matched atom without a line range as unverified", async () => {
+    const searchWithoutLineRange = async () => ({
+      atoms: [{ scopePath: "target.ts", score: 1 }],
+    });
+
+    const built = await buildRepoEvidenceItem(
+      {
+        queryId: "missing-line-range",
+        query: "Find the target",
+        expectPath: "target.ts",
+        anchor: /target/u,
+        intent: "targeted-code-search",
+      },
+      buildScope(),
+      buildFixtureFs({ "target.ts": "export const target = true;\n" }),
+      searchWithoutLineRange,
+    );
+
+    expect(built.meta).toMatchObject({
+      id: "missing-line-range",
+      lineRange: undefined,
+      lineRefHit: false,
+      excerptText: "",
+    });
+  });
+
   it("is deterministic across two calls (deep-equal)", async () => {
     const a = await buildScenarioCorpus();
     const b = await buildScenarioCorpus();

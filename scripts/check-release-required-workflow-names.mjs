@@ -14,7 +14,7 @@ function fail(message) {
 }
 
 export function releaseRequiredChecks(source = readFileSync(releaseWorkflowPath, "utf8")) {
-  const match = source.match(/^\s*RELEASE_REQUIRED_CHECKS:\s*'([^']+)'/m);
+  const match = /^\s*RELEASE_REQUIRED_CHECKS:\s*'([^']+)'/m.exec(source);
   if (match === null) {
     fail("release.yml does not declare env.RELEASE_REQUIRED_CHECKS as a single-quoted JSON list.");
   }

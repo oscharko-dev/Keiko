@@ -266,6 +266,32 @@ function mockRect(patch: Partial<DOMRect> = {}): DOMRect {
   };
 }
 
+function exercisePointerSessionGuards(element: HTMLElement): void {
+  const setPointerCapture = vi.fn();
+  const releasePointerCapture = vi.fn();
+  Object.defineProperties(element, {
+    setPointerCapture: { configurable: true, value: setPointerCapture },
+    releasePointerCapture: { configurable: true, value: releasePointerCapture },
+  });
+
+  fireEvent.pointerMove(element, { pointerId: 7, clientX: 10, clientY: 10 });
+  fireEvent.pointerUp(element, { pointerId: 7, clientX: 10, clientY: 10 });
+  fireEvent.pointerCancel(element, { pointerId: 7 });
+
+  fireEvent.pointerDown(element, { pointerId: 7, button: 0, clientX: 10, clientY: 10 });
+  fireEvent.pointerMove(element, { pointerId: 8, clientX: 12, clientY: 12 });
+  fireEvent.pointerMove(element, { pointerId: 7, clientX: 12, clientY: 12 });
+  fireEvent.pointerUp(element, { pointerId: 8, clientX: 12, clientY: 12 });
+  fireEvent.pointerUp(element, { pointerId: 7, clientX: 12, clientY: 12 });
+
+  fireEvent.pointerDown(element, { pointerId: 9, button: 0, clientX: 20, clientY: 20 });
+  fireEvent.pointerCancel(element, { pointerId: 8 });
+  fireEvent.pointerCancel(element, { pointerId: 9 });
+
+  expect(setPointerCapture).toHaveBeenCalledTimes(2);
+  expect(releasePointerCapture).toHaveBeenCalledTimes(2);
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe("FigmaSnapshotWindow", () => {
@@ -623,6 +649,16 @@ describe("FigmaSnapshotWindow", () => {
         document.elementFromPoint = originalElementFromPoint;
         workspace.remove();
       }
+    });
+
+    it("isolates rendered screen pointer sessions by pointer id", async () => {
+      renderWindow({ triggerImpl: resolvingTrigger(), openScreenSource: vi.fn() });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const card = await screen.findByRole("article", { name: /screen 2: screen 2/iu });
+      const previewButton = within(card).getByRole("button", { name: /drag screen screen 2/iu });
+      exercisePointerSessionGuards(previewButton);
     });
 
     it("shows only the selected screen when the window is scoped to a single screen source", async () => {
@@ -1128,6 +1164,22 @@ describe("FigmaSnapshotWindow", () => {
       }
     });
 
+    it("isolates scoped image pointer sessions by pointer id", async () => {
+      renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn,
+      });
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      const imageSurface = screen.getByRole("button", {
+        name: /create a standalone image source for screen 2/iu,
+      });
+      exercisePointerSessionGuards(imageSurface);
+    });
+
     it("dispatches a standalone JSON drop from the scoped inspector via keyboard", async () => {
       const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
       const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
@@ -1218,6 +1270,25 @@ describe("FigmaSnapshotWindow", () => {
         document.elementFromPoint = originalElementFromPoint;
         workspace.remove();
       }
+    });
+
+    it("isolates scoped JSON pointer sessions by pointer id", async () => {
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn,
+        loadScreenJsonImpl: vi.fn(async () => MOCK_SCREEN_JSON) as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+      await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+      const dragSurface = container.querySelector<HTMLElement>(".figma-view-json-drag-surface");
+      expect(dragSurface).not.toBeNull();
+      exercisePointerSessionGuards(dragSurface as HTMLElement);
     });
 
     it("copies scoped JSON from the inspector when clipboard access is available", async () => {

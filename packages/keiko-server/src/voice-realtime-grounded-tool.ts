@@ -290,7 +290,9 @@ function summarizeCitations(answer: GroundedAnswer): RealtimeGroundedToolOutput[
   if (answer.groundingKind === "local-knowledge") {
     return answer.citations.slice(0, 8).map(summarizeKnowledgeCitation);
   }
-  const folder = answer.citations.slice(0, 8).map(summarizeFolderCitation);
+  const folder = answer.citations
+    .slice(0, 8)
+    .map((citation, index) => summarizeFolderCitation(citation, index));
   if (answer.groundingKind === "hybrid") {
     return [...folder, ...answer.knowledgeCitations.slice(0, 8).map(summarizeKnowledgeCitation)];
   }

@@ -282,8 +282,7 @@ function parseInput(inputJson: string | undefined): Record<string, unknown> | nu
 }
 
 function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): boolean {
-  if (report === null || report.proposedDiff === undefined || report.appliedAt !== undefined)
-    return false;
+  if (report?.proposedDiff === undefined || report.appliedAt !== undefined) return false;
   return (
     (workflow === "unit-test-generation" && report.status === "dry-run") ||
     (workflow === "bug-investigation" && report.status === "fix-proposed")

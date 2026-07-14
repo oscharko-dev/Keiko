@@ -97,9 +97,7 @@ export function ManagedLanguageSettings({
       </output>
       {root === undefined ? <p className={styles.empty}>{t("noWorkspace")}</p> : null}
       {root !== undefined && view.loading && view.data === undefined ? (
-        <p className={styles.empty} role="status">
-          {t("loading")}
-        </p>
+        <output className={styles.empty}>{t("loading")}</output>
       ) : null}
       {view.issue !== undefined ? (
         <div className={styles.alert} role="alert">

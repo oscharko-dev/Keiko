@@ -89,7 +89,7 @@ function inspectFile(root, path, name, entry, state) {
 
 function walk(root, current, depth, state) {
   if (depth > MAX_DEPTH) boundedMacSigningFail("payload exceeds the bounded directory depth");
-  for (const name of readdirSync(current).sort()) {
+  for (const name of readdirSync(current).sort((left, right) => left.localeCompare(right))) {
     const path = join(current, name);
     const entry = lstatSync(path);
     if (entry.isSymbolicLink()) boundedMacSigningFail("payload contains a link");

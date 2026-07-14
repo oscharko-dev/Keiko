@@ -988,10 +988,7 @@ export function PdfCitationPreviewWindow({
       ...(nextCitation.display.sourceLabel === undefined
         ? { sourceLabel: undefined }
         : { sourceLabel: nextCitation.display.sourceLabel }),
-      currentPage:
-        nextCitation.display.pageNumber === undefined
-          ? currentPageRef.current
-          : nextCitation.display.pageNumber,
+      currentPage: nextCitation.display.pageNumber ?? currentPageRef.current,
       documentLabel: nextCitation.display.documentLabel,
     });
     if (nextCitation.display.pageNumber !== undefined) {

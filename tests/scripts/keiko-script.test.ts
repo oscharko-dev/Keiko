@@ -111,6 +111,15 @@ describe("scripts/keiko.sh", () => {
       expect(r.status).toBe(2);
       expect(r.stderr).toContain("KEIKO_STOP_TIMEOUT_SECS must be a positive integer");
     });
+
+    it("rejects a non-loopback host before starting the control plane", () => {
+      const r = run(["start"], {
+        KEIKO_STATE_DIR: stateDir,
+        KEIKO_UI_HOST: "0.0.0.0",
+      });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("KEIKO_UI_HOST must be 127.0.0.1 or localhost");
+    });
   });
 
   describe("pid-file hygiene", () => {

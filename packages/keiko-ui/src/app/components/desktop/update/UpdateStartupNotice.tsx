@@ -37,7 +37,7 @@ function dismissalFingerprint(report: UpdatePreflightReport): string {
     report.blockers
       .map((blocker) => blocker.code)
       .slice()
-      .sort()
+      .sort((left, right) => left.localeCompare(right))
       .join(","),
   ].join("|");
 }

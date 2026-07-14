@@ -94,7 +94,7 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
     () => findContainingOutlinePath(tree, snapshot?.cursor ?? null),
     [snapshot?.cursor, tree],
   );
-  const selectedId = containingPath[containingPath.length - 1]?.id ?? null;
+  const selectedId = containingPath.at(-1)?.id ?? null;
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() =>
     collectExpandableIds(tree),
   );

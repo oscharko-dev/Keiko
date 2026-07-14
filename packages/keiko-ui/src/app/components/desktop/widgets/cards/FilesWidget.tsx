@@ -1839,7 +1839,7 @@ export function FilesWidget({
           }}
         >
           {(() => {
-            const target = menu.entry !== null && menu.entry.readable ? menu.entry : null;
+            const target = menu.entry?.readable === true ? menu.entry : null;
             const parent =
               menu.entry === null
                 ? currentDirectoryPath

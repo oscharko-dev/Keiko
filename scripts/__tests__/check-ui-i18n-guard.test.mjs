@@ -87,8 +87,18 @@ test("passes changed UI helper files without user-facing text", async () => {
 
 test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
   expect(hasUserFacingTextLine("<p>Hard-coded text</p>")).toBe(true);
+  expect(hasUserFacingTextLine("<section><p>Nested text</p></section>")).toBe(true);
+  expect(hasUserFacingTextLine("<p>Wrong closing tag</span>")).toBe(false);
+  expect(hasUserFacingTextLine('<p data-note="a > b">Visible text</p>')).toBe(true);
+  expect(hasUserFacingTextLine("<><p>Fragment text</p></>")).toBe(true);
+  expect(hasUserFacingTextLine('<p>{t("feature.title")}</p>')).toBe(false);
   expect(hasUserFacingTextLine('<button aria-label="Open">')).toBe(true);
   expect(hasUserFacingTextLine('return "Enter a name.";')).toBe(true);
+  expect(
+    hasUserFacingTextLine(
+      "async (event: SubmitEvent<HTMLFormElement>): Promise<void> => undefined;",
+    ),
+  ).toBe(false);
   expect(hasUserFacingTextLine('<g transform="translate(10 10)">')).toBe(false);
   expect(hasUserFacingTextLine("// Called when the user opens a file.")).toBe(false);
 });
@@ -404,6 +414,23 @@ test("passes a pure refactor of an already-translated file with no new user-faci
 
     run(["add", "-A"]);
     run(["commit", "-q", "-m", "refactor"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.problems).toEqual([]);
+});
+
+test("passes when an existing translation key moves into a different JSX element", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <output>\n      {t("feature.title")}\n    </output>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "use semantic output"]);
 
     return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
   });

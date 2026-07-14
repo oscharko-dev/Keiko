@@ -940,7 +940,7 @@ function targetPreconditionConflict(
   change: LanguageRenameChangesetFile,
   target: RenameApplyTarget | null,
 ): RenameApplyConflict | null {
-  if (target === null || target.version === null || target.fileModel === null) {
+  if (target?.version === undefined || target.version === null || target.fileModel === null) {
     return {
       code: "VERSION_MISMATCH",
       message: `Rename target ${change.path} is not loaded in the editor.`,
@@ -4820,8 +4820,7 @@ function EditorRuntimeWidget({
   }, [submitAgentChangesetDecision]);
 
   const recoveryDiskChanged =
-    recoverySnapshot !== null &&
-    recoverySnapshot.savedContentHash !== null &&
+    typeof recoverySnapshot?.savedContentHash === "string" &&
     version !== null &&
     recoverySnapshot.savedContentHash !== version.contentHash;
 

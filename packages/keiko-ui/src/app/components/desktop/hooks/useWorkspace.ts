@@ -185,8 +185,7 @@ function createTrailingDebounce(delayMs: number): TrailingDebounce {
 // localStorage write is never dropped (issue #1580 No-Data-Loss invariant).
 function useDebouncedPersist(write: () => void, deps: DependencyList): void {
   const debounceRef = useRef<TrailingDebounce | null>(null);
-  if (debounceRef.current === null)
-    debounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  debounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
   const writeRef = useRef(write);
   writeRef.current = write;
 
@@ -409,8 +408,7 @@ function usePanZoom({
   const animationTargetRef = useRef<View>(view);
   const animationStartedAtRef = useRef<number>(0);
   const viewPersistDebounceRef = useRef<TrailingDebounce | null>(null);
-  if (viewPersistDebounceRef.current === null)
-    viewPersistDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  viewPersistDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
 
   const scheduleViewPersist = useCallback((): void => {
     viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
@@ -1075,8 +1073,7 @@ function useWorkspaceServerSync({
   const connsRef = useRef<readonly Connection[]>(conns);
   connsRef.current = conns;
   const putDebounceRef = useRef<TrailingDebounce | null>(null);
-  if (putDebounceRef.current === null)
-    putDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  putDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);

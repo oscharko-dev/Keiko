@@ -211,8 +211,7 @@ function patchNotesReportFor(
   if (hasReleaseNotes(report)) return report;
   if (
     session?.phase === "succeeded" &&
-    cachedReport !== undefined &&
-    cachedReport.targetVersion === session.targetVersion &&
+    cachedReport?.targetVersion === session.targetVersion &&
     hasReleaseNotes(cachedReport)
   ) {
     return cachedReport;

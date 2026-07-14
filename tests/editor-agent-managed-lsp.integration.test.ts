@@ -189,16 +189,16 @@ function managedSpawn(
 // Spawns a process that crashes immediately, over and over, driving the manager's own restart
 // throttle to exhaustion (RESTART_THROTTLED) -- the docked-agent-visible shape of a crash-looping,
 // unhealthy provider (docs/qa: "Unhealthy ... including crash-loop exhaustion"). The crash is
-// deferred to a macrotask so the manager's `onExit` listener is registered first; there is no real
-// backoff delay anywhere in the throttle, so the whole loop resolves in milliseconds, never the real
-// restart window.
+// deferred to a microtask so the manager's `onExit` listener is registered first while the fake can
+// never briefly negotiate capabilities before the crash. There is no real backoff delay anywhere in
+// the throttle, so the whole loop resolves in milliseconds, never the real restart window.
 function crashLoopSpawn(methods: (readonly string[])[]): LspSpawnFn {
   return () => {
     const controller = createFakeLspProcess();
     methods.push(controller.receivedMethods());
-    setTimeout(() => {
+    queueMicrotask(() => {
       controller.crash(1);
-    }, 0);
+    });
     return controller.handle;
   };
 }

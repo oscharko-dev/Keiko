@@ -591,7 +591,7 @@ if (invokedDirectly) {
   // port between check and bind — surface that as a clear one-liner instead of
   // an uncaught EADDRINUSE stack.
   server.once("error", (error) => {
-    if (error !== null && typeof error === "object" && error.code === "EADDRINUSE") {
+    if (typeof error === "object" && error.code === "EADDRINUSE") {
       console.error(
         `[dev] public port ${String(publicPort)} was taken between preflight and bind; ` +
           "run `npm run dev:stop` (or free the port) and retry.",

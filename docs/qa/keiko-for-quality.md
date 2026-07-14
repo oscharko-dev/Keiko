@@ -81,9 +81,12 @@ Unknown or changed Gitar/Socket evidence formats are parser failures, never succ
 bounded stability window follows the final Gitar and Socket events before the aggregate check may
 turn green.
 
-Gitar and Socket comments must have been updated after their current-head checks started. This
-prevents a successful processing check on a new commit from reusing a clean comment from an older
-head. Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
+Gitar and Socket comments must have been updated after their current-head checks started. When
+Socket intentionally creates no pull-request comment because there are no dependency changes or
+alerts, the current-head Pull Request Alerts check must instead contain explicit clean output and
+zero annotations. A successful check without that exact evidence remains blocking. This prevents a
+successful processing check on a new commit from reusing a clean comment from an older head.
+Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
 evidence is still mandatory.
 
 The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction

@@ -251,7 +251,7 @@ export function createVoiceTranscriptSegmentStore(
     text: string | undefined,
   ): SegmentMutation | undefined {
     const existing = find(id);
-    if (existing === undefined || existing.state !== "partial") {
+    if (existing?.state !== "partial") {
       return undefined;
     }
     const nextSeq = seq ?? existing.seq;

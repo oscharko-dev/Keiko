@@ -107,8 +107,8 @@ function reviewsResponse(url, headSha, options) {
   ]);
 }
 
-function commentsResponse() {
-  return response([
+function commentsResponse(options = {}) {
+  const comments = [
     {
       author_association: "NONE",
       body: "0 resolved / 0 findings\n✅ Auto-apply",
@@ -132,7 +132,12 @@ function commentsResponse() {
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 1, login: "oscharko", type: "User" },
     },
-  ]);
+  ];
+  return response(
+    options.omitSocketComment
+      ? comments.filter((comment) => comment.user.id !== 95510084)
+      : comments,
+  );
 }
 
 function checksResponse(headSha, options) {
@@ -772,6 +777,37 @@ describe("Keiko for Quality worker trust boundary", () => {
       "https://api.github.com/app/installations/42/access_tokens",
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("publishes success with explicit clean Socket evidence and no Socket comment", async () => {
+    const headSha = "6".repeat(40);
+    const fetchMock = githubMock(headSha, {
+      omitSocketComment: true,
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "source-only",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    expect(JSON.parse(publish[1].body)).toMatchObject({
+      conclusion: "success",
+      head_sha: headSha,
+      status: "completed",
+    });
   });
 
   it("publishes exact success, failure, and pending check contracts", async () => {
