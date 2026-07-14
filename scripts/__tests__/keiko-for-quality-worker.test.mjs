@@ -1255,6 +1255,14 @@ describe("Keiko for Quality worker trust boundary", () => {
       );
     }
     expect(errorLog).toHaveBeenCalledTimes(4);
+    expect(errorLog).toHaveBeenNthCalledWith(
+      1,
+      "reserveDelivery failed errorKind=UnexpectedChangeCount",
+    );
+    expect(errorLog).toHaveBeenNthCalledWith(
+      2,
+      "reserveDelivery failed errorKind=UnexpectedChangeCount",
+    );
   });
 
   it("fails closed and redacts D1 delivery reservation failures", async () => {
