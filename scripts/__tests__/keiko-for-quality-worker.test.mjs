@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker, {
+  allCheckRuns,
   allPages,
   appId,
   appJwt,
@@ -13,6 +14,7 @@ import worker, {
   bytesFromHex,
   constantTimeEqual,
   dashboardComment,
+  discoverOpenPullRequests,
   evidence,
   github,
   hardFailure,
@@ -142,7 +144,8 @@ function commentsResponse(options = {}) {
 
 function checksResponse(headSha, options) {
   if (options.omitCheckRuns) return response({});
-  return response({ check_runs: options.checkRuns ?? checkRuns(headSha) });
+  const runs = options.checkRuns ?? checkRuns(headSha);
+  return response({ check_runs: runs, total_count: runs.length });
 }
 
 function pullResponse(headSha, options) {
@@ -168,9 +171,17 @@ function commentWriteResponse(path, method) {
   return undefined;
 }
 
+function discoveryReadResponse(path, options) {
+  if (path.endsWith("/installation")) return response({ id: 42 });
+  if (path.endsWith("/pulls")) return response(options.openPulls ?? [{ number: 2329 }]);
+  return undefined;
+}
+
 function githubReadResponse(url, path, method, headSha, options) {
   if (path.includes("/access_tokens")) return response({ token: "installation-token" });
-  if (path.endsWith("/pulls/2329")) return pullResponse(headSha, options);
+  const discoveryResponse = discoveryReadResponse(path, options);
+  if (discoveryResponse !== undefined) return discoveryResponse;
+  if (/\/pulls\/\d+$/u.test(path)) return pullResponse(headSha, options);
   if (path.endsWith("/reviews")) return reviewsResponse(url, headSha, options);
   if (path.endsWith("/comments") && (method === undefined || method === "GET")) {
     return commentsResponse();
@@ -364,6 +375,54 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(tenPageFetch).toHaveBeenCalledTimes(10);
   });
 
+  it("paginates every current-head check run and fails closed on incomplete metadata", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, id) => ({ id }));
+    const secondPage = [{ id: 100 }];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+      const page = Number(new URL(url).searchParams.get("page"));
+      return Promise.resolve(
+        response({ check_runs: page === 1 ? firstPage : secondPage, total_count: 101 }),
+      );
+    });
+    await expect(allCheckRuns("/checks?filter=latest", "token")).resolves.toHaveLength(101);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://api.github.com/checks?filter=latest&per_page=100&page=1",
+      "https://api.github.com/checks?filter=latest&per_page=100&page=2",
+    ]);
+
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ check_runs: [] }));
+    await expect(allCheckRuns("/checks", "token")).rejects.toThrow(
+      "GitHub omitted check run count",
+    );
+
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      response({ check_runs: [{ id: 1 }], total_count: 2 }),
+    );
+    await expect(allCheckRuns("/checks", "token")).rejects.toThrow(
+      "Incomplete paginated check runs",
+    );
+
+    vi.restoreAllMocks();
+    const tenPageFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(response({ check_runs: Array.from({ length: 100 }), total_count: 1_000 })),
+      );
+    await expect(allCheckRuns("/checks", "token")).resolves.toHaveLength(1_000);
+    expect(tenPageFetch).toHaveBeenCalledTimes(10);
+    expect(tenPageFetch.mock.calls[0][0]).toBe("https://api.github.com/checks?per_page=100&page=1");
+
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(response({ check_runs: Array.from({ length: 100 }), total_count: 1_001 })),
+    );
+    await expect(allCheckRuns("/checks", "token")).rejects.toThrow(
+      "Pagination limit exceeded for /checks.",
+    );
+  });
+
   it("classifies only exact hard failures", () => {
     for (const failure of [
       "Wrong producer for ci.",
@@ -483,7 +542,7 @@ describe("Keiko for Quality worker trust boundary", () => {
         "",
         "✅ **Ready for auto-merge**",
         "",
-        "`head aaaaaaaaaaaa` · `updated 2026-07-13T18:00:00.000Z`",
+        "`head aaaaaaaaaaaa`",
         "",
         "| Gate group | Evidence |",
         "| --- | --- |",
@@ -626,6 +685,29 @@ describe("Keiko for Quality worker trust boundary", () => {
       "https://api.github.com/repos/owner/repo/issues/comments/77",
     );
     expect(updateFetch.mock.calls[0][1].method).toBe("PATCH");
+
+    vi.restoreAllMocks();
+    const stableBody = dashboardComment({
+      ...baseEvidence,
+      headSha,
+      pull,
+      result,
+    });
+    const unchangedFetch = vi.spyOn(globalThis, "fetch");
+    await publishDashboardComment({
+      owner: "owner",
+      repository: "repo",
+      pullNumber: 42,
+      currentEvidence: {
+        ...baseEvidence,
+        comments: [{ appId: 999, body: stableBody, id: 77 }],
+      },
+      pull,
+      result,
+      token: "token",
+      env: { GITHUB_APP_ID: "999" },
+    });
+    expect(unchangedFetch).not.toHaveBeenCalled();
   });
 
   it("extracts app identity only when present", () => {
@@ -855,6 +937,7 @@ describe("Keiko for Quality worker trust boundary", () => {
               { app: { id: 1 }, id: 1, name: "Keiko for Quality" },
               { app: { id: 999 }, id: 2, name: "Other" },
             ],
+            total_count: 2,
           }),
         )
         .mockResolvedValueOnce(response({ id: 3 }));
@@ -874,7 +957,10 @@ describe("Keiko for Quality worker trust boundary", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ check_runs: [{ app: { id: 999 }, id: 7, name: "Keiko for Quality" }] }),
+        response({
+          check_runs: [{ app: { id: 999 }, id: 7, name: "Keiko for Quality" }],
+          total_count: 1,
+        }),
       )
       .mockResolvedValueOnce(response({ id: 7 }));
     await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
@@ -890,7 +976,10 @@ describe("Keiko for Quality worker trust boundary", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ check_runs: [{ app: "999", id: 7, name: "Keiko for Quality" }] }),
+        response({
+          check_runs: [{ app: "999", id: 7, name: "Keiko for Quality" }],
+          total_count: 1,
+        }),
       )
       .mockResolvedValueOnce(response({ id: 8 }));
     await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
@@ -909,6 +998,7 @@ describe("Keiko for Quality worker trust boundary", () => {
             { app: null, id: 6, name: "Keiko for Quality" },
             { id: 7, name: "Keiko for Quality" },
           ],
+          total_count: 2,
         }),
       )
       .mockResolvedValueOnce(response({ id: 8 }));
@@ -1141,6 +1231,7 @@ describe("Keiko for Quality worker trust boundary", () => {
               status: "queued",
             },
           ],
+          total_count: 1,
         }),
       )
       .mockResolvedValueOnce(response([{ commit_id: headSha, state: "COMMENTED", user: null }]))
@@ -1414,7 +1505,7 @@ describe("Keiko for Quality worker trust boundary", () => {
 
   it("re-evaluates tracked pull requests from the scheduled stability sweep", async () => {
     const headSha = "d".repeat(40);
-    githubMock(headSha);
+    githubMock(headSha, { openPulls: [] });
     const state = stateBinding();
     state.get.mockResolvedValueOnce(
       JSON.stringify({
@@ -1432,7 +1523,92 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(state.list).toHaveBeenCalledWith({ cursor: undefined, prefix: "pull:" });
   });
 
+  it("discovers open dev pull requests without relying on webhook delivery", async () => {
+    githubMock("f".repeat(40), { openPulls: [{ number: 2397 }, { number: "invalid" }] });
+    await expect(discoverOpenPullRequests(environment(stateBinding()))).resolves.toEqual([
+      {
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 2397,
+        repository: "Keiko",
+      },
+    ]);
+  });
+
+  it("rejects malformed reconciliation targets and missing installation identity", async () => {
+    for (const target of ["", "owner", "/repo", "owner/", "owner/repo/extra"]) {
+      await expect(
+        discoverOpenPullRequests({
+          ...environment(stateBinding()),
+          TARGET_REPOSITORY: target,
+        }),
+      ).rejects.toThrow("TARGET_REPOSITORY must be owner/repository.");
+    }
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response(null));
+    await expect(discoverOpenPullRequests(environment(stateBinding()))).rejects.toThrow(
+      "GitHub omitted installation ID.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules every discovered PR and deduplicates tracked discovery", async () => {
+    const headSha = "9".repeat(40);
+    githubMock(headSha, { openPulls: [{ number: 2329 }] });
+    const state = stateBinding();
+    state.list.mockResolvedValueOnce({ keys: [], list_complete: true });
+    const waits = [];
+    await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
+    expect(waits).toHaveLength(1);
+    await Promise.all(waits);
+
+    vi.restoreAllMocks();
+    githubMock(headSha, { openPulls: [{ number: 2329 }, { number: 2330 }] });
+    state.get.mockResolvedValueOnce(
+      JSON.stringify({
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 2329,
+        repository: "Keiko",
+      }),
+    );
+    state.list.mockResolvedValueOnce({ keys: [{ name: "pull:tracked" }], list_complete: true });
+    const deduplicatedWaits = [];
+    await worker.scheduled({}, environment(state), {
+      waitUntil: (promise) => deduplicatedWaits.push(promise),
+    });
+    expect(deduplicatedWaits).toHaveLength(2);
+    await Promise.all(deduplicatedWaits);
+  });
+
+  it("continues tracked reconciliation and emits redacted diagnostics when discovery fails", async () => {
+    const headSha = "7".repeat(40);
+    const options = { openPulls: [] };
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/installation")) return Promise.reject(new Error("network-failure"));
+      return Promise.resolve(githubResponse(url, init, headSha, options));
+    });
+    const state = stateBinding();
+    state.get.mockResolvedValueOnce(
+      JSON.stringify({
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 2329,
+        repository: "Keiko",
+      }),
+    );
+    state.list.mockResolvedValueOnce({ keys: [{ name: "pull:tracked" }], list_complete: true });
+    const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const waits = [];
+    await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
+    expect(errorMock).toHaveBeenCalledWith("pull reconciliation failed");
+    expect(waits).toHaveLength(1);
+    await Promise.all(waits);
+  });
+
   it("continues scheduled pagination with the exact pull-state prefix", async () => {
+    githubMock("e".repeat(40), { openPulls: [] });
     const state = stateBinding();
     state.list
       .mockResolvedValueOnce({ cursor: "next", keys: [], list_complete: false })
@@ -1445,6 +1621,7 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("continues a scheduled sweep past missing, malformed, and invalid state", async () => {
+    githubMock("e".repeat(40), { openPulls: [] });
     const state = stateBinding();
     state.list.mockResolvedValueOnce({
       keys: [{ name: "pull:missing" }, { name: "pull:malformed" }, { name: "pull:invalid" }],

@@ -23,6 +23,8 @@ deliberately outside GitHub Actions so pull-request code cannot mint the require
    `wrangler secret put`. They must never be committed or stored in repository Actions secrets.
 6. Deploy `scripts/keiko-for-quality-worker.mjs` with Wrangler and set the GitHub App webhook
    URL to the resulting HTTPS endpoint.
+7. Enable Workers Observability with redacted application logs. Verify a fresh webhook delivery,
+   one scheduled reconciliation, and one app-authored check before making the check required.
 
 `TARGET_REPOSITORY`, `STABILITY_WINDOW_MS`, `SOCKET_RISK_ALLOWLIST_JSON`, and
 `SOCKET_RISK_ACTORS_JSON` are non-secret Worker variables. Socket entries are exact
@@ -31,6 +33,11 @@ command. They are valid only while
 the matching version and integrity digest in
 [`../../docs/qa/supply-chain-risk-acceptances.json`](../../docs/qa/supply-chain-risk-acceptances.json)
 still match `package-lock.json`; the required repository test enforces that binding.
+
+The one-minute schedule is a liveness backstop, not merely a stability timer. It discovers every
+open pull request targeting `dev` through the exact GitHub App installation, so webhook loss or
+replay rejection cannot strand a new pull request. Keep the schedule enabled even when webhook
+delivery is healthy. Unchanged dashboard comments are not rewritten.
 
 ## Activation boundary
 
