@@ -71,8 +71,8 @@ platform restrictions fail closed in every mode, on every surface.
 
 Product delivery and authority widening remain separately governed delivery actions. For Keiko
 repository work targeting `dev`, ADR-0135 supersedes the former per-action human approval rule:
-accepted task authority permits branch commits, pushes, and pull-request updates, while the
-app-bound `Keiko for Quality` check exclusively authorizes GitHub native auto-merge. Direct pushes
+accepted task authority permits branch commits, pushes, and pull-request updates, while the direct
+app-bound required checks authorize GitHub native auto-merge. Direct pushes
 to `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 
 ### D5 — Vocabulary home and naming
@@ -108,5 +108,5 @@ with the existing supersession convention before the new surface ships.
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md) — corrected mode semantics,
   policy matrix, editor docking, supersession of stale per-action-approval records.
 - [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) — deterministic,
-  human-free repository delivery to `dev` through the `Keiko for Quality` aggregate.
+  human-free repository delivery to `dev` through bounded direct required checks.
 - `AGENTS.md` — human-control invariant and the three user-facing modes.

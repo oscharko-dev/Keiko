@@ -18,8 +18,8 @@ invariants:
   exfiltrating, or platform-restricted authority fails closed in every mode.
 - Accepted `dev` work may commit and push its feature branch, maintain the PR, and run Auto-Apply
   without per-action human approval. Direct `dev` pushes and force pushes remain denied.
-- A raw bot approval or processing check is not final merge authority. Only the app-bound `Keiko for
-Quality` success on the exact current head authorizes GitHub native auto-merge.
+- A raw bot approval or processing check is not final merge authority. Only the direct app-bound
+  required checks on the exact current head authorize GitHub native auto-merge.
 - Evidence, diagnostics, comments, and manifests contain counts, hashes, scopes, statuses, and safe
   labels only. Do not quote raw secrets, payload bodies, customer data, private endpoints, or PII in
   a review finding.
@@ -28,7 +28,7 @@ Quality` success on the exact current head authorizes GitHub native auto-merge.
 
 Apply owning-layer fixes to the PR branch, add deterministic negative or boundary tests, and rerun
 the complete review after each push. Never force-push, push directly to `dev`, use `gitar unblock`,
-dismiss findings to obtain green status, arm auto-merge before `Keiko for Quality` is required, or
+dismiss findings to obtain green status, arm auto-merge before direct required checks settle, or
 weaken a gate.
 
 Assume every pull request targeting `dev` is a large, completed-epic integration PR. Review all

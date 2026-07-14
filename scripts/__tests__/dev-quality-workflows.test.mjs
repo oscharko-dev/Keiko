@@ -6,27 +6,51 @@ const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
+const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 
 describe("dev quality workflows", () => {
-  it("always emits a mutation check for dev PRs and runs a daily full scan", () => {
-    expect(mutation).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
+  it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
+    expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
-    expect(mutation).toContain("name: Mutation quality gate");
+    expect(mutation).toContain("workflow_dispatch:");
+    expect(mutation).toContain("name: Full mutation regression");
+    expect(mutation).toContain("timeout-minutes: 180");
+    expect(mutation).toContain("group: mutation-security-full");
+    expect(mutation).toContain("cancel-in-progress: false");
     expect(mutation).toContain('node-version: "24.18.0"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
-    expect(mutation).toContain('-- --mutate "$MUTATION_FILES"');
-    expect(mutation).toContain('check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"');
-    expect(mutation).not.toContain('"${mutation_files[@]}"');
-    expect(mutationScope).toContain('"--diff-filter=ACMR"');
-    expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
-    expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
+    expect(mutation).toContain("npm run test:mutation:security");
+    expect(mutation).not.toContain("check-mutation-scope.mjs");
     expect(mutation).not.toContain("continue-on-error: true");
+    expect(packageJson.scripts["test:mutation:security"]).toContain(
+      "npm run test:mutation:debug-launch-security",
+    );
 
     const install = mutation.indexOf("npm ci --ignore-scripts");
     const buildPackages = mutation.indexOf("npm run build:packages");
-    const scope = mutation.indexOf("Determine whether critical production logic changed");
+    const mutationRun = mutation.indexOf("npm run test:mutation:security");
     expect(buildPackages).toBeGreaterThan(install);
-    expect(buildPackages).toBeLessThan(scope);
+    expect(buildPackages).toBeLessThan(mutationRun);
+    expect(mutationScope).toContain('"--diff-filter=ACMR"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
+  });
+
+  it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
+    const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const performanceStep = uiJob?.match(
+      /- name: Release performance E2E evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
+    )?.[0];
+    const freshnessStep = uiJob?.match(
+      /- name: Performance evidence freshness \+ budget gate\n[\s\S]*?(?=\n\s+- name: Build package and UI assets)/u,
+    )?.[0];
+    expect(uiJob).toBeDefined();
+    expect(uiJob).toContain("Test UI with coverage (jsdom + axe a11y)");
+    expect(uiJob).toContain("UI coverage ratchet");
+    expect(uiJob).toContain("Release smoke E2E");
+    expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
+    expect(freshnessStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
 
   it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {

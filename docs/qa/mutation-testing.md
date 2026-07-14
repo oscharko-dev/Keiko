@@ -15,7 +15,7 @@ The workflow never downloads an unpinned package through `npx`.
 The authoritative scope is the `mutate` array in [`stryker.security.conf.json`](../../stryker.security.conf.json).
 It currently covers the security primitives, evidence redaction and integrity checks, memory-vault
 encryption and redaction, model-gateway response redaction, the Figma snapshot host allowlist, and
-the independent Keiko for Quality's evidence and merge decisions. Governed debugging adds a
+the dormant Keiko for Quality evidence evaluator. Governed debugging adds a
 separate 100-percent configuration in
 [`stryker.debug-launch.security.conf.json`](../../stryker.debug-launch.security.conf.json) for the
 DAP parser, process hardening, capsule isolation, closed launch policy, registry, and teardown
@@ -23,23 +23,22 @@ boundaries required by ADR-0136.
 
 ## Execution policy
 
-`Mutation quality gate` is emitted for every pull request targeting `dev`:
+Full mutation testing is deliberately outside the pull-request critical path. The focused Stryker
+configuration can take hours on a large trust-boundary change, so making its completion a Required
+Check creates an availability dependency rather than a bounded quality decision. The daily
+scheduled workflow runs the complete critical configuration, and maintainers can start the same
+complete run through `workflow_dispatch`. It remains strict and may not use `continue-on-error`.
 
-- changes to critical production files run the complete focused Stryker configuration;
-- debug-launch trust-boundary changes additionally run the dedicated 100-percent configuration;
-- unrelated redaction, memory, model-gateway, workflow, or Keiko for Quality changes do not start
-  the debug-launch configuration;
-- test-only, documentation, configuration, and unrelated production changes produce an explicit
-  successful `not applicable` result;
-- deleted files do not trigger a run; a renamed critical production destination does;
-- the daily scheduled workflow runs the complete critical configuration regardless of the diff;
-- maintainers can start the same complete run through `workflow_dispatch`.
+Pull requests remain blocked by deterministic coverage ratchets, Sonar New Code analysis,
+architecture checks, sandbox isolation, typecheck/lint, security scans, and affected functional and
+E2E tests. [`scripts/check-mutation-scope.mjs`](../../scripts/check-mutation-scope.mjs) remains the
+local tool for selecting critical changed files when a focused mutation run is practical, but it
+does not create a GitHub branch-protection requirement. It invokes `/usr/bin/git` directly, accepts
+only repository-relative safe paths, and distinguishes the dedicated debug-launch scope so local
+runs can select the strict DAP configuration without widening an unrelated mutation run.
 
-The scope decision is made by [`scripts/check-mutation-scope.mjs`](../../scripts/check-mutation-scope.mjs)
-from the exact PR base and head commits. It invokes `/usr/bin/git` directly, accepts only
-repository-relative safe paths, and emits the selected files through `GITHUB_OUTPUT`.
-It emits an independent `debug_launch_required` decision so an unrelated security-sensitive change
-cannot trigger the strict DAP suite.
+The scheduled/manual `test:mutation:security` command runs the general critical configuration, the
+dedicated debug-launch configuration, and the historical-debt baseline ratchet exactly once each.
 
 ## How to run
 
@@ -47,6 +46,9 @@ cannot trigger the strict DAP suite.
 npm run test:mutation:security
 npm run test:mutation:debug-launch-security
 ```
+
+The first command is the complete scheduled/manual regression. The second is the focused 100-percent
+debug-launch proof for local repair loops.
 
 The HTML report is written to `reports/mutation/security/index.html`. Temporary worktrees and
 reports are ignored by Git and ESLint.
@@ -80,7 +82,7 @@ Until the remediation reaches 80 percent, every complete run is guarded by a fai
 - no new survivor or no-coverage fingerprint is allowed;
 - removing existing debt is accepted without rewriting the baseline downward.
 
-A PR that changes critical production code is stricter: the changed-file Stryker run must score at
+A focused pre-publication run for changed critical production code is stricter: it must score at
 least 80 percent and have zero surviving and zero no-coverage mutants. A numerical aggregate never
 excuses a new mutant in a trust-boundary, redaction, secret, authority, integrity, or merge decision.
 

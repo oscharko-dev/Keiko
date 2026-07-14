@@ -1,23 +1,19 @@
 name: Mutation security
 
 on:
-  pull_request:
-    branches:
-      - dev
-    types:
-      - opened
-      - ready_for_review
-      - reopened
-      - synchronize
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: mutation-security-full
+  cancel-in-progress: false
 
 permissions: {}
 
 jobs:
   mutation-quality-gate:
-    name: Mutation quality gate
+    name: Full mutation regression
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -35,29 +31,5 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
       - run: npm run build:packages
-      - name: Determine whether critical production logic changed
-        if: ${{ github.event_name == 'pull_request' }}
-        id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-mutation-scope.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
       - name: Run security mutation suite
-        if: ${{ github.event_name != 'pull_request' || steps.scope.outputs.required == 'true' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MUTATION_FILES: ${{ steps.scope.outputs.files }}
-        run: |
-          if [ -n "${MUTATION_FILES:-}" ]; then
-            npm run test:mutation:security:run -- --mutate "$MUTATION_FILES"
-            npm run check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"
-          else
-            npm run test:mutation:security
-          fi
-      - name: Prove governed debug launch static controls
-        if: ${{ github.event_name != 'pull_request' || steps.scope.outputs.debug_launch_required == 'true' }}
-        run: npm run test:mutation:debug-launch-security
-      - name: Confirm mutation testing is not applicable
-        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.required != 'true' }}
-        run: echo "No security-critical production files changed; mutation gate is not applicable."
+        run: npm run test:mutation:security

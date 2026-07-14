@@ -96,7 +96,7 @@ which is stricter than `allowed`. Missing, invalid, or expired authority; unsupp
 secret exfiltration; and platform restrictions are denied regardless of mode. Invalid, expired, or
 consumed one-use approvals are denied. Delivery actions follow the governing deployment contract.
 For accepted Keiko repository work targeting `dev`, ADR-0135 allows branch commits, pushes, and PR
-updates and delegates final merge authority to the app-bound `Keiko for Quality` check. Unknown or
+updates and delegates final merge authority to the direct app-bound required checks. Unknown or
 missing mode values still fall back to `governed-assist`, and the effective mode remains capped by
 the deployment ceiling.
 
@@ -278,7 +278,7 @@ Keiko then acts only inside that validated authority. Invalid or expired authori
 Commit, push, pull-request creation, merge, and authority-envelope widening are not ordinary file or
 network operations. They require the governing delivery contract. ADR-0135 provides a narrow
 repository exception after a maintainer accepts a task: an agent may update its PR branch and the
-platform may auto-merge only after `Keiko for Quality` validates the exact current head. Direct
+platform may auto-merge only after the direct required checks validate the exact current head. Direct
 `dev` pushes, force pushes, gate bypasses, and authority-envelope widening remain denied or require
 separate explicit authority. No contract in this issue performs a write, bypasses required
 authority, launches a process, or grants network access by itself.

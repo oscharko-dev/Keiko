@@ -168,7 +168,8 @@ Rejected because it would hide the 102 findings rather than resolve or dispositi
 
 - [ADR-0131](ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md) — superseded in the
   limited areas named above.
-- [Keiko for Quality](../qa/keiko-for-quality.md) — required-check composition and evidence
+- [Keiko quality gates](../qa/keiko-for-quality.md) — direct required-check composition and dormant
+  aggregate evidence
   rules.
 - [SonarQube Cloud subscription plans](https://docs.sonarsource.com/sonarqube-cloud/administering-sonarcloud/managing-subscription/subscription-plans)
 - [SonarQube Cloud quality gates for AI code](https://docs.sonarsource.com/sonarqube-cloud/standards/ai-code-assurance/quality-gates-for-ai-code)
