@@ -2,7 +2,7 @@ const actionsAppId = 15368;
 const gitarIdentity = { appId: 827041, userId: 159877585 };
 const socketIdentity = { appId: 156372, userId: 95510084 };
 const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
-const runningCheckStatuses = new Set(["in_progress", "queued"]);
+const runningCheckStatuses = new Set(["in_progress", "pending", "queued", "requested", "waiting"]);
 const terminalConclusions = new Set([
   "action_required",
   "cancelled",
