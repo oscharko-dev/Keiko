@@ -665,7 +665,17 @@ interface AgentRunControlsProps {
   readonly t: I18nTranslate;
 }
 
-function ApplyControl(props: AgentRunControlsProps): ReactNode {
+interface ApplyControlProps {
+  readonly showApply: boolean;
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly applyFileCount: number;
+  readonly appliedAt: number | undefined;
+  readonly onApply: () => void;
+  readonly t: I18nTranslate;
+}
+
+function ApplyControl(props: ApplyControlProps): ReactNode {
   if (props.showApply) {
     return (
       <button

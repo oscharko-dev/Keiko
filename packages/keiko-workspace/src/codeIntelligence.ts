@@ -3045,7 +3045,7 @@ function applyIncludedPythonRouterPrefixes(
   for (const match of scan.text.matchAll(/\.include_router\b/gu)) {
     if (!matchStartsInCode(scan, match)) continue;
     const matchEnd = match.index + match[0].length;
-    const call = /^\s*\(\s*([A-Za-z_][\w]*)/u.exec(scan.text.slice(matchEnd));
+    const call = /^\s*\(\s*([A-Za-z_]\w*)/u.exec(scan.text.slice(matchEnd));
     const routerName = call?.[1];
     if (routerName === undefined || call === null) continue;
     const argumentsStart = matchEnd + call[0].length;
@@ -3592,16 +3592,18 @@ function collectNestLineEndpoints(context: EndpointLineContext): void {
   }
   const route = firstCodeMatch(
     line,
-    /@(Get|Post|Put|Patch|Delete|Head|Options|All)\s*\(\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)?/u,
+    /@(Get|Post|Put|Patch|Delete|Head|Options|All)\b/u,
     scan,
     lineOffset,
   );
   if (route?.[1] !== undefined) {
+    const afterMarker = line.slice(route.index + route[0].length);
+    if (!/^\s*\(/u.test(afterMarker)) return;
     emitEndpoint(
       context,
       "server",
       nestHttpMethod(route[1]),
-      combineRoutePath(state.nestClassPrefix, route[2] ?? route[3] ?? route[4] ?? ""),
+      combineRoutePath(state.nestClassPrefix, quotedCallArgument(afterMarker) ?? ""),
     );
   }
 }
