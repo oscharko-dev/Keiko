@@ -234,7 +234,7 @@ describe("debugSessionStore", () => {
     resetDebugSessionStoreForTests();
   });
 
-  it("does not let a late session refresh erase an exception description", () => {
+  it("rejects a same-generation running refresh after an exception pause", () => {
     const workspaceId = "canonical-workspace-id";
     setDebugSession(workspaceId, session("running", 0));
     applyDebugEvent(workspaceId, 1, {
@@ -253,11 +253,16 @@ describe("debugSessionStore", () => {
     });
     setDebugSession(workspaceId, session("paused", 1));
     setDebugSession(workspaceId, session("running", 1));
-    setDebugSession(workspaceId, session("paused", 1));
 
     expect(debugSessionSnapshot(workspaceId)).toMatchObject({
       session: { status: "paused", pauseGeneration: 1 },
       stopDescription: { value: "Fixture uncaught exception" },
+    });
+
+    setDebugSession(workspaceId, session("running", 2));
+    expect(debugSessionSnapshot(workspaceId)).toMatchObject({
+      session: { status: "running", pauseGeneration: 2 },
+      stopDescription: null,
     });
     resetDebugSessionStoreForTests();
   });

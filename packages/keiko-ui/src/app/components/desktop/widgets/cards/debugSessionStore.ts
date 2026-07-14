@@ -194,19 +194,51 @@ export function setDebugInstrumentation(
   return true;
 }
 
-function stalePauseProjection(current: DebugSession | null, next: DebugSession | null): boolean {
+interface DebugSessionUpdateOptions {
+  readonly allowSameGenerationResume?: boolean | undefined;
+}
+
+function stalePauseProjection(
+  current: DebugSession | null,
+  next: DebugSession | null,
+  allowSameGenerationResume: boolean,
+): boolean {
   return (
     current !== null &&
     next !== null &&
     current.sessionId === next.sessionId &&
-    next.pauseGeneration < current.pauseGeneration
+    (next.pauseGeneration < current.pauseGeneration ||
+      (current.status === "paused" &&
+        next.status !== "paused" &&
+        next.pauseGeneration === current.pauseGeneration &&
+        !allowSameGenerationResume))
   );
 }
 
-export function setDebugSession(workspaceId: string, session: DebugSession | null): void {
+function progressedBeyondPause(
+  current: DebugSession | null,
+  next: DebugSession | null,
+  allowSameGenerationResume: boolean,
+): boolean {
+  return (
+    current?.status === "paused" &&
+    next !== null &&
+    next.sessionId === current.sessionId &&
+    next.status !== "paused" &&
+    (next.pauseGeneration > current.pauseGeneration ||
+      (allowSameGenerationResume && next.pauseGeneration === current.pauseGeneration))
+  );
+}
+
+export function setDebugSession(
+  workspaceId: string,
+  session: DebugSession | null,
+  options: DebugSessionUpdateOptions = {},
+): void {
   const state = stateFor(workspaceId);
+  const allowSameGenerationResume = options.allowSameGenerationResume ?? false;
   if (session !== null && session.workspaceId !== workspaceId) return;
-  if (stalePauseProjection(state.snapshot.session, session)) return;
+  if (stalePauseProjection(state.snapshot.session, session, allowSameGenerationResume)) return;
   const changedPause =
     session === null ||
     state.snapshot.session?.sessionId !== session.sessionId ||
@@ -216,7 +248,10 @@ export function setDebugSession(workspaceId: string, session: DebugSession | nul
   publish(state, {
     ...next,
     session,
-    ...(session === null ? { stopDescription: null } : {}),
+    ...(session === null ||
+    progressedBeyondPause(state.snapshot.session, session, allowSameGenerationResume)
+      ? { stopDescription: null }
+      : {}),
   });
 }
 

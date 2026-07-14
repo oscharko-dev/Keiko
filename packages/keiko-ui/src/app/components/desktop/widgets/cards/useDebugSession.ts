@@ -1031,6 +1031,7 @@ export function useDebugSession(
         setDebugSession(
           stableWorkspaceId,
           action === "stop" ? null : { ...session, status: "running" },
+          { allowSameGenerationResume: true },
         );
       }
     },
