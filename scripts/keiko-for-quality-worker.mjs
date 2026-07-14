@@ -5,6 +5,9 @@ const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
 const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
+const deliveryRetentionMs = 86_400_000;
+const persistedPullPageSize = 100;
+const persistedPullPageLimit = 10;
 
 export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
@@ -383,9 +386,8 @@ export async function publishDashboardComment({
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
   const token = await installationToken(installationId, env);
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
-  const stateKey = `pull:${owner}/${repository}/${String(pullNumber)}`;
   if (pull.state !== "open" || pull.base?.ref !== "dev") {
-    await env.KEIKO_FOR_QUALITY_STATE.delete(stateKey);
+    await deleteTrackedPull(env.KEIKO_FOR_QUALITY_DB, { owner, pullNumber, repository });
     return;
   }
   const headSha = pull.head?.sha;
@@ -414,11 +416,12 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     token,
     env,
   });
-  await env.KEIKO_FOR_QUALITY_STATE.put(
-    stateKey,
-    JSON.stringify({ installationId, owner, pullNumber, repository }),
-    { expirationTtl: 2_592_000 },
-  );
+  await storeTrackedPull(env.KEIKO_FOR_QUALITY_DB, {
+    installationId,
+    owner,
+    pullNumber,
+    repository,
+  });
 }
 
 async function authenticateWebhook(request, env, body) {
@@ -431,53 +434,72 @@ async function authenticateWebhook(request, env, body) {
   ) {
     return new Response("invalid signature", { status: 401 });
   }
+  return undefined;
+}
+
+async function reserveWebhookDelivery(request, database) {
   const delivery = request.headers.get("X-GitHub-Delivery");
   if (delivery === null) return new Response("missing delivery", { status: 409 });
-  if (!(await reserveDelivery(env.KEIKO_FOR_QUALITY_STATE, `delivery:${delivery}`)))
+  if (!/^[A-Za-z0-9-]{1,128}$/u.test(delivery))
+    return new Response("invalid delivery", { status: 409 });
+  if (!(await reserveDelivery(database, delivery)))
     return new Response("replayed delivery", { status: 409 });
   return undefined;
 }
 
-async function reserveDelivery(state, key) {
-  if ((await state.get(key)) !== null) return false;
+export async function reserveDelivery(database, delivery, now = Date.now()) {
   try {
-    await state.put(key, "1", { expirationTtl: 86_400 });
-    return true;
+    const result = await database
+      .prepare("INSERT OR IGNORE INTO webhook_deliveries (delivery_id, expires_at) VALUES (?1, ?2)")
+      .bind(delivery, now + deliveryRetentionMs)
+      .run();
+    const { changes } = result.meta;
+    if (changes === 0) return false;
+    if (changes === 1) return true;
+    throw new Error();
   } catch (error) {
     const errorKind = error instanceof Error ? error.name : "UnknownError";
-    console.error(`reserveDelivery failed for correlationId=${key} errorKind=${errorKind}`);
+    console.error(`reserveDelivery failed errorKind=${errorKind}`);
     return false;
   }
 }
 
-function dispatchWebhookEvent(event, payload, env, context) {
+function preflightWebhookResponse(event, payload, env) {
   if (event === "ping") return new Response("pong", { status: 202 });
-  if (payload.repository?.full_name !== env.TARGET_REPOSITORY) {
+  if (payload.repository?.full_name !== env.TARGET_REPOSITORY)
     return new Response("unexpected repository", { status: 403 });
-  }
-  if (isOwnCheckEvent(event, payload, env) || isOwnCommentEvent(event, payload, env)) {
+  if (isOwnCheckEvent(event, payload, env) || isOwnCommentEvent(event, payload, env))
     return new Response("ignored", { status: 202 });
-  }
+  return undefined;
+}
+
+async function dispatchWebhookEvent(event, payload, request, env, context) {
+  const preflightResponse = preflightWebhookResponse(event, payload, env);
+  if (preflightResponse !== undefined) return preflightResponse;
   const installationId = payload.installation?.id;
   if (!Number.isInteger(installationId))
     return new Response("missing installation", { status: 400 });
   const [owner, repository] = env.TARGET_REPOSITORY.split("/");
-  for (const pullNumber of new Set(pullRequestNumbers(event, payload))) {
+  const pullNumbers = new Set(pullRequestNumbers(event, payload));
+  if (pullNumbers.size === 0) return new Response("accepted", { status: 202 });
+  const reservationFailure = await reserveWebhookDelivery(request, env.KEIKO_FOR_QUALITY_DB);
+  if (reservationFailure !== undefined) return reservationFailure;
+  for (const pullNumber of pullNumbers) {
     context.waitUntil(evaluatePullRequest(owner, repository, pullNumber, installationId, env));
   }
   return new Response("accepted", { status: 202 });
 }
 
 async function handleWebhook(request, env, context) {
-  if (env.KEIKO_FOR_QUALITY_STATE === undefined)
-    throw new Error("KEIKO_FOR_QUALITY_STATE binding is required.");
+  if (env.KEIKO_FOR_QUALITY_DB === undefined)
+    throw new Error("KEIKO_FOR_QUALITY_DB binding is required.");
   const body = await request.text();
   const authenticationFailure = await authenticateWebhook(request, env, body);
   if (authenticationFailure !== undefined) return authenticationFailure;
   const event = request.headers.get("X-GitHub-Event");
   if (event === null) return new Response("missing event", { status: 400 });
   const payload = JSON.parse(body);
-  return dispatchWebhookEvent(event, payload, env, context);
+  return dispatchWebhookEvent(event, payload, request, env, context);
 }
 
 export function parseTrackedPull(value) {
@@ -543,23 +565,55 @@ function trackedPullKey(tracked) {
   return `${tracked.owner}/${tracked.repository}#${String(tracked.pullNumber)}`;
 }
 
-async function trackedPullRequests(state) {
+function trackedPullFromRow(row) {
+  const tracked = {
+    installationId: row?.installation_id,
+    owner: row?.owner,
+    pullNumber: row?.pull_number,
+    repository: row?.repository,
+  };
+  return parseTrackedPull(JSON.stringify(tracked));
+}
+
+export async function trackedPullRequests(database) {
   const trackedPulls = new Map();
-  let cursor;
-  do {
-    const page = await state.list({ cursor, prefix: "pull:" });
-    for (const key of page.keys) {
-      const result = parseTrackedPull(await state.get(key.name));
-      if (result.kind === "missing") continue;
-      if (result.kind === "invalid") {
-        await state.delete(key.name);
-        continue;
-      }
-      trackedPulls.set(trackedPullKey(result.tracked), result.tracked);
+  for (let page = 0; page < persistedPullPageLimit; page += 1) {
+    const result = await database
+      .prepare(
+        "SELECT installation_id, owner, repository, pull_number FROM tracked_pulls ORDER BY owner, repository, pull_number LIMIT ?1 OFFSET ?2",
+      )
+      .bind(persistedPullPageSize, page * persistedPullPageSize)
+      .all();
+    if (!Array.isArray(result?.results)) throw new Error("D1 omitted tracked pull rows.");
+    for (const row of result.results) {
+      const parsed = trackedPullFromRow(row);
+      if (parsed.kind !== "valid") throw new Error("D1 returned an invalid tracked pull row.");
+      const { tracked } = parsed;
+      trackedPulls.set(trackedPullKey(tracked), tracked);
     }
-    cursor = page.list_complete ? undefined : page.cursor;
-  } while (cursor !== undefined);
-  return trackedPulls;
+    if (result.results.length < persistedPullPageSize) return trackedPulls;
+  }
+  throw new Error("Tracked pull pagination limit exceeded.");
+}
+
+async function storeTrackedPull(database, tracked) {
+  await database
+    .prepare(
+      "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id WHERE installation_id != excluded.installation_id",
+    )
+    .bind(tracked.owner, tracked.repository, tracked.pullNumber, tracked.installationId)
+    .run();
+}
+
+async function deleteTrackedPull(database, tracked) {
+  await database
+    .prepare("DELETE FROM tracked_pulls WHERE owner = ?1 AND repository = ?2 AND pull_number = ?3")
+    .bind(tracked.owner, tracked.repository, tracked.pullNumber)
+    .run();
+}
+
+async function cleanupExpiredDeliveries(database, now) {
+  await database.prepare("DELETE FROM webhook_deliveries WHERE expires_at <= ?1").bind(now).run();
 }
 
 export function reconciliationErrorKind(error) {
@@ -567,7 +621,13 @@ export function reconciliationErrorKind(error) {
 }
 
 async function reconciledPullRequests(env) {
-  const pulls = await trackedPullRequests(env.KEIKO_FOR_QUALITY_STATE);
+  const pulls = new Map();
+  try {
+    for (const tracked of (await trackedPullRequests(env.KEIKO_FOR_QUALITY_DB)).values())
+      pulls.set(trackedPullKey(tracked), tracked);
+  } catch (error) {
+    console.error(`tracked pull read failed errorKind=${reconciliationErrorKind(error)}`);
+  }
   try {
     for (const discovered of await discoverOpenPullRequests(env))
       pulls.set(trackedPullKey(discovered), discovered);
@@ -577,7 +637,14 @@ async function reconciledPullRequests(env) {
   return pulls.values();
 }
 
-async function handleSchedule(env, context) {
+async function handleSchedule(controller, env, context) {
+  if (env.KEIKO_FOR_QUALITY_DB === undefined)
+    throw new Error("KEIKO_FOR_QUALITY_DB binding is required.");
+  if (
+    Number.isFinite(controller.scheduledTime) &&
+    new Date(controller.scheduledTime).getUTCMinutes() === 0
+  )
+    context.waitUntil(cleanupExpiredDeliveries(env.KEIKO_FOR_QUALITY_DB, Date.now()));
   for (const tracked of await reconciledPullRequests(env))
     context.waitUntil(
       evaluatePullRequest(
@@ -592,7 +659,7 @@ async function handleSchedule(env, context) {
 
 export default {
   fetch: handleWebhook,
-  scheduled(_controller, env, context) {
-    return handleSchedule(env, context);
+  scheduled(controller, env, context) {
+    return handleSchedule(controller, env, context);
   },
 };

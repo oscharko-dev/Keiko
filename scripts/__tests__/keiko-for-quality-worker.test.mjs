@@ -31,7 +31,9 @@ import worker, {
   publishDashboardComment,
   pullRequestNumbers,
   reconciliationErrorKind,
+  reserveDelivery,
   socketNoAlertEvidence,
+  trackedPullRequests,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
 import { requiredChecks } from "../keiko-for-quality-core.mjs";
@@ -208,19 +210,93 @@ function githubMock(headSha, options = {}) {
     .mockImplementation((url, init) => githubResponse(url, init, headSha, options));
 }
 
-function stateBinding() {
-  const values = new Map();
-  return {
-    get: vi.fn(async (key) => values.get(key) ?? null),
-    delete: vi.fn(async (key) => values.delete(key)),
-    list: vi.fn(async () => ({ keys: [], list_complete: true })),
-    put: vi.fn(async (key, value) => values.set(key, value)),
+function insertDeliveryD1(state, values) {
+  if (state.deliveries.has(values[0])) return { meta: { changes: 0 } };
+  state.deliveries.set(values[0], values[1]);
+  return { meta: { changes: 1 } };
+}
+
+function insertTrackedD1(state, values) {
+  const key = `${values[0]}/${values[1]}#${String(values[2])}`;
+  const existing = state.tracked.get(key);
+  if (existing?.installation_id === values[3]) return { meta: { changes: 0 } };
+  state.tracked.set(key, {
+    installation_id: values[3],
+    owner: values[0],
+    pull_number: values[2],
+    repository: values[1],
+  });
+  return { meta: { changes: 1 } };
+}
+
+function runD1(query, state, values) {
+  if (query.startsWith("INSERT OR IGNORE INTO webhook_deliveries"))
+    return insertDeliveryD1(state, values);
+  if (query.startsWith("INSERT INTO tracked_pulls")) return insertTrackedD1(state, values);
+  if (query.startsWith("DELETE FROM tracked_pulls")) {
+    const key = `${values[0]}/${values[1]}#${String(values[2])}`;
+    return { meta: { changes: state.tracked.delete(key) ? 1 : 0 } };
+  }
+  if (query.startsWith("DELETE FROM webhook_deliveries")) {
+    let changes = 0;
+    for (const [delivery, expiry] of state.deliveries) {
+      if (expiry > values[0]) continue;
+      state.deliveries.delete(delivery);
+      changes += 1;
+    }
+    return { meta: { changes } };
+  }
+  throw new Error(`Unexpected D1 run: ${query}`);
+}
+
+function allD1(query, state, values) {
+  if (!query.startsWith("SELECT installation_id")) throw new Error(`Unexpected D1 read: ${query}`);
+  const rows = [...state.tracked.values()].sort((left, right) =>
+    `${left.owner}/${left.repository}#${String(left.pull_number)}`.localeCompare(
+      `${right.owner}/${right.repository}#${String(right.pull_number)}`,
+    ),
+  );
+  return { results: rows.slice(values[1], values[1] + values[0]) };
+}
+
+function d1Statement(query, state) {
+  let values = [];
+  const statement = {
+    all: vi.fn(async () => allD1(query, state, values)),
+    bind: vi.fn((...bound) => {
+      values = bound;
+      return statement;
+    }),
+    run: vi.fn(async () => runD1(query, state, values)),
   };
+  return statement;
+}
+
+function stateBinding() {
+  const state = { deliveries: new Map(), tracked: new Map() };
+  return { ...state, prepare: vi.fn((query) => d1Statement(query, state)) };
+}
+
+function databaseWithResult(result) {
+  const statement = {
+    bind: vi.fn(() => statement),
+    run: vi.fn().mockResolvedValue(result),
+  };
+  return { prepare: vi.fn(() => statement) };
+}
+
+function trackPull(state, pullNumber, installationId = 42) {
+  state.tracked.set(`oscharko-dev/Keiko#${String(pullNumber)}`, {
+    installation_id: installationId,
+    owner: "oscharko-dev",
+    pull_number: pullNumber,
+    repository: "Keiko",
+  });
 }
 
 function environment(state, secret = "test-secret") {
   return {
-    KEIKO_FOR_QUALITY_STATE: state,
+    KEIKO_FOR_QUALITY_DB: state,
     GITHUB_APP_ID: "999",
     GITHUB_PRIVATE_KEY_PKCS8: signingKey,
     GITHUB_WEBHOOK_SECRET: secret,
@@ -283,6 +359,23 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(logo.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(logo.readUInt32BE(16)).toBe(512);
     expect(logo.readUInt32BE(20)).toBe(512);
+  });
+
+  it("pins the atomic D1 replay schema and excludes the exhausted KV binding", () => {
+    const root = resolve(import.meta.dirname, "../..");
+    const schema = readFileSync(
+      resolve(root, "infrastructure/keiko-for-quality/schema.sql"),
+      "utf8",
+    );
+    const wrangler = readFileSync(
+      resolve(root, "infrastructure/keiko-for-quality/wrangler.toml.example"),
+      "utf8",
+    );
+    expect(schema).toContain("delivery_id TEXT PRIMARY KEY NOT NULL");
+    expect(schema).toContain("PRIMARY KEY (owner, repository, pull_number)");
+    expect(wrangler).toContain('binding = "KEIKO_FOR_QUALITY_DB"');
+    expect(wrangler).not.toContain("kv_namespaces");
+    expect(wrangler).not.toContain("KEIKO_FOR_QUALITY_STATE");
   });
 
   it("encodes JWT material and compares signature bytes exactly", async () => {
@@ -846,15 +939,13 @@ describe("Keiko for Quality worker trust boundary", () => {
       },
       status: "completed",
     });
-    expect(state.put).toHaveBeenCalledWith(
-      "pull:oscharko-dev/Keiko/2329",
-      JSON.stringify({
-        installationId: 42,
+    expect([...state.tracked.values()]).toContainEqual(
+      expect.objectContaining({
+        installation_id: 42,
         owner: "oscharko-dev",
-        pullNumber: 2329,
+        pull_number: 2329,
         repository: "Keiko",
       }),
-      { expirationTtl: 2_592_000 },
     );
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://api.github.com/app/installations/42/access_tokens",
@@ -1079,16 +1170,13 @@ describe("Keiko for Quality worker trust boundary", () => {
     const ignored = await worker.fetch(own, environment(state), {});
     expect(ignored.status).toBe(202);
     expect(await ignored.text()).toBe("ignored");
+    expect(state.deliveries.has("delivery-own")).toBe(false);
   });
 
-  it("rejects replayed and unexpected-repository webhook deliveries", async () => {
+  it("reserves only actionable deliveries and rejects their replays", async () => {
     const state = stateBinding();
     const secret = "test-secret";
-    const env = {
-      KEIKO_FOR_QUALITY_STATE: state,
-      GITHUB_WEBHOOK_SECRET: secret,
-      TARGET_REPOSITORY: "oscharko-dev/Keiko",
-    };
+    const env = environment(state, secret);
     const payload = {
       installation: { id: 42 },
       number: 2329,
@@ -1098,12 +1186,9 @@ describe("Keiko for Quality worker trust boundary", () => {
     const unexpected = await worker.fetch(await signedRequest(payload, secret), env, {});
     expect(unexpected.status).toBe(403);
     expect(await unexpected.text()).toBe("unexpected repository");
-    const replayed = await worker.fetch(await signedRequest(payload, secret), env, {});
-    expect(replayed.status).toBe(409);
-    expect(await replayed.text()).toBe("replayed delivery");
-    expect(state.put).toHaveBeenCalledWith("delivery:delivery-1", "1", {
-      expirationTtl: 86_400,
-    });
+    const repeatedUnexpected = await worker.fetch(await signedRequest(payload, secret), env, {});
+    expect(repeatedUnexpected.status).toBe(403);
+    expect(state.deliveries.size).toBe(0);
 
     const missingRepository = await signedRequest(
       { installation: { id: 42 } },
@@ -1113,41 +1198,96 @@ describe("Keiko for Quality worker trust boundary", () => {
     const absent = await worker.fetch(missingRepository, env, {});
     expect(absent.status).toBe(403);
     expect(await absent.text()).toBe("unexpected repository");
-  });
 
-  it("fails closed when an immediate replay misses the eventual KV read", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const state = stateBinding();
-    state.get.mockResolvedValue(null);
-    state.put
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("sensitive endpoint write conflict"))
-      .mockRejectedValueOnce("opaque sensitive failure");
-    const secret = "test-secret";
-    const env = {
-      KEIKO_FOR_QUALITY_STATE: state,
-      GITHUB_WEBHOOK_SECRET: secret,
-      TARGET_REPOSITORY: "oscharko-dev/Keiko",
-    };
-    const payload = {
-      installation: { id: 42 },
-      repository: { full_name: "attacker/repository" },
-    };
+    const noPull = await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        secret,
+        "delivery-no-pull",
+      ),
+      env,
+      {},
+    );
+    expect(noPull.status).toBe(202);
+    expect(await noPull.text()).toBe("accepted");
+    expect(state.deliveries.has("delivery-no-pull")).toBe(false);
 
-    const unexpected = await worker.fetch(await signedRequest(payload, secret), env, {});
-    const replayed = await worker.fetch(await signedRequest(payload, secret), env, {});
-    const opaqueFailure = await worker.fetch(await signedRequest(payload, secret), env, {});
-
-    expect(unexpected.status).toBe(403);
+    githubMock("e".repeat(40), {
+      pull: { base: { ref: "dev" }, head: { sha: "e".repeat(40) }, state: "closed" },
+    });
+    const actionable = { ...payload, repository: { full_name: "oscharko-dev/Keiko" } };
+    const waits = [];
+    const accepted = await worker.fetch(await signedRequest(actionable, secret), env, {
+      waitUntil: (promise) => waits.push(promise),
+    });
+    expect(accepted.status).toBe(202);
+    await Promise.all(waits);
+    const replayed = await worker.fetch(await signedRequest(actionable, secret), env, {});
     expect(replayed.status).toBe(409);
     expect(await replayed.text()).toBe("replayed delivery");
-    expect(opaqueFailure.status).toBe(409);
-    expect(errorLog).toHaveBeenCalledWith(
-      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=Error",
+    expect(state.deliveries.get("delivery-1")).toEqual(expect.any(Number));
+  });
+
+  it("atomically reserves one concurrent delivery and rejects every duplicate", async () => {
+    const database = stateBinding();
+    const outcomes = await Promise.all(
+      Array.from({ length: 25 }, () => reserveDelivery(database, "same-delivery", 1_000)),
     );
-    expect(errorLog).toHaveBeenCalledWith(
-      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=UnknownError",
-    );
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+    expect(database.deliveries.get("same-delivery")).toBe(86_401_000);
+  });
+
+  it("accepts only exact D1 reservation change counts", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    for (const [result, expected] of [
+      [{ meta: { changes: 0 } }, false],
+      [{ meta: { changes: 1 } }, true],
+      [{ meta: { changes: -1 } }, false],
+      [{ meta: { changes: 2 } }, false],
+      [{}, false],
+      [undefined, false],
+    ]) {
+      await expect(reserveDelivery(databaseWithResult(result), "delivery-result")).resolves.toBe(
+        expected,
+      );
+    }
+    expect(errorLog).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails closed and redacts D1 delivery reservation failures", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const database = stateBinding();
+    database.prepare.mockImplementationOnce(() => {
+      const statement = {
+        bind: vi.fn(() => statement),
+        run: vi.fn().mockRejectedValue(new Error("sensitive endpoint write conflict")),
+      };
+      return statement;
+    });
+    database.prepare.mockImplementationOnce(() => {
+      const statement = {
+        bind: vi.fn(() => statement),
+        run: vi.fn().mockRejectedValue("opaque sensitive failure"),
+      };
+      return statement;
+    });
+    database.prepare.mockImplementationOnce(() => {
+      const statement = {
+        bind: vi.fn(() => statement),
+        run: vi.fn().mockResolvedValue({ meta: {} }),
+      };
+      return statement;
+    });
+
+    await expect(reserveDelivery(database, "failed-1")).resolves.toBe(false);
+    await expect(reserveDelivery(database, "failed-2")).resolves.toBe(false);
+    await expect(reserveDelivery(database, "failed-3")).resolves.toBe(false);
+    expect(errorLog).toHaveBeenCalledTimes(3);
+    expect(errorLog).toHaveBeenCalledWith("reserveDelivery failed errorKind=Error");
+    expect(errorLog).toHaveBeenCalledWith("reserveDelivery failed errorKind=UnknownError");
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("sensitive endpoint");
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("opaque sensitive");
   });
@@ -1162,6 +1302,7 @@ describe("Keiko for Quality worker trust boundary", () => {
 
     expect(response.status).toBe(202);
     expect(await response.text()).toBe("pong");
+    expect(state.deliveries.size).toBe(0);
   });
 
   it("rejects malformed trust-boundary inputs before evaluation", async () => {
@@ -1172,8 +1313,22 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(invalidSignature.status).toBe(401);
     expect(await invalidSignature.text()).toBe("invalid signature");
     await expect(
-      worker.fetch(unsigned, { ...env, KEIKO_FOR_QUALITY_STATE: undefined }, {}),
-    ).rejects.toThrow("KEIKO_FOR_QUALITY_STATE");
+      worker.fetch(unsigned, { ...env, KEIKO_FOR_QUALITY_DB: undefined }, {}),
+    ).rejects.toThrow("KEIKO_FOR_QUALITY_DB");
+
+    const invalidDelivery = await signedRequest(
+      {
+        installation: { id: 42 },
+        pull_request: { number: 2329 },
+        repository: { full_name: "oscharko-dev/Keiko" },
+      },
+      "test-secret",
+      "invalid/delivery",
+    );
+    const invalidDeliveryResponse = await worker.fetch(invalidDelivery, env, {});
+    expect(invalidDeliveryResponse.status).toBe(409);
+    expect(await invalidDeliveryResponse.text()).toBe("invalid delivery");
+    expect(state.deliveries.size).toBe(0);
 
     const missingInstallation = await signedRequest(
       { pull_request: { number: 2329 }, repository: { full_name: "oscharko-dev/Keiko" } },
@@ -1185,7 +1340,11 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(await missingInstallationResponse.text()).toBe("missing installation");
 
     const missingDelivery = await signedRequest(
-      { repository: { full_name: "oscharko-dev/Keiko" } },
+      {
+        installation: { id: 42 },
+        pull_request: { number: 2329 },
+        repository: { full_name: "oscharko-dev/Keiko" },
+      },
       "test-secret",
       "delivery-to-remove",
     );
@@ -1427,6 +1586,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       const fetchMock = githubMock(headSha, { pull });
       const waits = [];
       const state = stateBinding();
+      trackPull(state, 2329);
       await worker.fetch(
         await signedRequest(payload, "test-secret", delivery),
         environment(state),
@@ -1434,7 +1594,10 @@ describe("Keiko for Quality worker trust boundary", () => {
       );
       await Promise.all(waits);
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/commits/"))).toBe(false);
-      expect(state.delete).toHaveBeenCalledWith(expect.stringContaining("pull:"));
+      expect(
+        state.prepare.mock.calls.some(([query]) => query.startsWith("DELETE FROM tracked_pulls")),
+      ).toBe(true);
+      expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(false);
     }
   });
 
@@ -1508,20 +1671,12 @@ describe("Keiko for Quality worker trust boundary", () => {
     const headSha = "d".repeat(40);
     githubMock(headSha, { openPulls: [] });
     const state = stateBinding();
-    state.get.mockResolvedValueOnce(
-      JSON.stringify({
-        installationId: 42,
-        owner: "oscharko-dev",
-        pullNumber: 2329,
-        repository: "Keiko",
-      }),
-    );
-    state.list.mockResolvedValueOnce({ keys: [{ name: "pull:tracked" }], list_complete: true });
+    trackPull(state, 2329);
     const waits = [];
     await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
     await Promise.all(waits);
     expect(waits).toHaveLength(1);
-    expect(state.list).toHaveBeenCalledWith({ cursor: undefined, prefix: "pull:" });
+    expect(state.prepare).toHaveBeenCalledWith(expect.stringContaining("FROM tracked_pulls"));
   });
 
   it("discovers open dev pull requests without relying on webhook delivery", async () => {
@@ -1557,7 +1712,6 @@ describe("Keiko for Quality worker trust boundary", () => {
     const headSha = "9".repeat(40);
     githubMock(headSha, { openPulls: [{ number: 2329 }] });
     const state = stateBinding();
-    state.list.mockResolvedValueOnce({ keys: [], list_complete: true });
     const waits = [];
     await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
     expect(waits).toHaveLength(1);
@@ -1565,15 +1719,7 @@ describe("Keiko for Quality worker trust boundary", () => {
 
     vi.restoreAllMocks();
     githubMock(headSha, { openPulls: [{ number: 2329 }, { number: 2330 }] });
-    state.get.mockResolvedValueOnce(
-      JSON.stringify({
-        installationId: 42,
-        owner: "oscharko-dev",
-        pullNumber: 2329,
-        repository: "Keiko",
-      }),
-    );
-    state.list.mockResolvedValueOnce({ keys: [{ name: "pull:tracked" }], list_complete: true });
+    trackPull(state, 2329);
     const deduplicatedWaits = [];
     await worker.scheduled({}, environment(state), {
       waitUntil: (promise) => deduplicatedWaits.push(promise),
@@ -1591,15 +1737,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       return Promise.resolve(githubResponse(url, init, headSha, options));
     });
     const state = stateBinding();
-    state.get.mockResolvedValueOnce(
-      JSON.stringify({
-        installationId: 42,
-        owner: "oscharko-dev",
-        pullNumber: 2329,
-        repository: "Keiko",
-      }),
-    );
-    state.list.mockResolvedValueOnce({ keys: [{ name: "pull:tracked" }], list_complete: true });
+    trackPull(state, 2329);
     const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const waits = [];
     await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
@@ -1613,33 +1751,101 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(reconciliationErrorKind("sensitive detail")).toBe("UnknownError");
   });
 
-  it("continues scheduled pagination with the exact pull-state prefix", async () => {
-    githubMock("e".repeat(40), { openPulls: [] });
+  it("continues bounded D1 pagination for persisted pull state", async () => {
     const state = stateBinding();
-    state.list
-      .mockResolvedValueOnce({ cursor: "next", keys: [], list_complete: false })
-      .mockResolvedValueOnce({ keys: [], list_complete: true });
-    await worker.scheduled({}, environment(state), { waitUntil: vi.fn() });
-    expect(state.list.mock.calls).toEqual([
-      [{ cursor: undefined, prefix: "pull:" }],
-      [{ cursor: "next", prefix: "pull:" }],
-    ]);
+    for (let pullNumber = 1; pullNumber <= 101; pullNumber += 1) trackPull(state, pullNumber);
+    const pulls = await trackedPullRequests(state);
+    expect(pulls.size).toBe(101);
+    expect(state.prepare).toHaveBeenCalledTimes(2);
+
+    const overLimit = stateBinding();
+    for (let pullNumber = 1; pullNumber <= 1_000; pullNumber += 1) trackPull(overLimit, pullNumber);
+    await expect(trackedPullRequests(overLimit)).rejects.toThrow(
+      "Tracked pull pagination limit exceeded.",
+    );
   });
 
-  it("continues a scheduled sweep past missing, malformed, and invalid state", async () => {
+  it("cleans expired replay rows only on the bounded hourly sweep", async () => {
     githubMock("e".repeat(40), { openPulls: [] });
     const state = stateBinding();
-    state.list.mockResolvedValueOnce({
-      keys: [{ name: "pull:missing" }, { name: "pull:malformed" }, { name: "pull:invalid" }],
-      list_complete: true,
+    state.deliveries.set("expired", 10);
+    state.deliveries.set("current", 20_000);
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const waits = [];
+    await worker.scheduled({ scheduledTime: Date.UTC(2026, 6, 14, 6, 0) }, environment(state), {
+      waitUntil: (promise) => waits.push(promise),
     });
-    state.get
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce("{")
-      .mockResolvedValueOnce(JSON.stringify({ owner: "oscharko-dev" }));
+    await Promise.all(waits);
+    expect(state.deliveries.has("expired")).toBe(false);
+    expect(state.deliveries.has("current")).toBe(true);
+
+    state.deliveries.set("not-hourly", 10);
+    await worker.scheduled({ scheduledTime: Date.UTC(2026, 6, 14, 6, 1) }, environment(state), {
+      waitUntil: vi.fn(),
+    });
+    expect(state.deliveries.has("not-hourly")).toBe(true);
+
+    await expect(
+      worker.scheduled(
+        {},
+        { ...environment(state), KEIKO_FOR_QUALITY_DB: undefined },
+        {
+          waitUntil: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("KEIKO_FOR_QUALITY_DB binding is required.");
+  });
+
+  it("fails closed on absent and invalid D1 tracked-pull rows", async () => {
+    const absent = stateBinding();
+    absent.prepare.mockImplementationOnce(() => {
+      const statement = {
+        all: vi.fn().mockResolvedValue(undefined),
+        bind: vi.fn(() => statement),
+      };
+      return statement;
+    });
+    await expect(trackedPullRequests(absent)).rejects.toThrow("D1 omitted tracked pull rows.");
+
+    const invalid = stateBinding();
+    invalid.prepare.mockImplementationOnce(() => {
+      const statement = {
+        all: vi.fn().mockResolvedValue({ results: [null] }),
+        bind: vi.fn(() => statement),
+      };
+      return statement;
+    });
+    await expect(trackedPullRequests(invalid)).rejects.toThrow(
+      "D1 returned an invalid tracked pull row.",
+    );
+
+    const malformed = stateBinding();
+    malformed.prepare.mockImplementationOnce(() => {
+      const statement = {
+        all: vi.fn().mockResolvedValue({ results: [{ owner: "oscharko-dev" }] }),
+        bind: vi.fn(() => statement),
+      };
+      return statement;
+    });
+    await expect(trackedPullRequests(malformed)).rejects.toThrow(
+      "D1 returned an invalid tracked pull row.",
+    );
+  });
+
+  it("continues discovery when persisted D1 pull state is malformed", async () => {
+    githubMock("e".repeat(40), { openPulls: [] });
+    const state = stateBinding();
+    state.prepare.mockImplementationOnce(() => {
+      const statement = {
+        all: vi.fn().mockResolvedValue({ results: [{ owner: "oscharko-dev" }] }),
+        bind: vi.fn(() => statement),
+      };
+      return statement;
+    });
+    const errorMock = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const waits = [];
     await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
     expect(waits).toEqual([]);
-    expect(state.delete).toHaveBeenCalledTimes(2);
+    expect(errorMock).toHaveBeenCalledWith("tracked pull read failed errorKind=Error");
   });
 });

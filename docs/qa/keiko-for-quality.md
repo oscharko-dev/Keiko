@@ -98,11 +98,14 @@ evidence is still mandatory.
 
 Webhook delivery is the low-latency trigger, not the only liveness mechanism. Every scheduled
 reconciliation independently resolves the App installation for `TARGET_REPOSITORY`, enumerates
-all open pull requests targeting `dev`, merges them with the bounded KV tracking set, and
+all open pull requests targeting `dev`, merges them with the bounded D1 tracking set, and
 re-evaluates each pull request. A lost, duplicated, replay-rejected, or delayed webhook therefore
 cannot leave a new `dev` pull request permanently without the aggregate check. Check runs,
 reviews, and comments are read with bounded pagination; incomplete or over-limit collections fail
-closed. The dashboard comment is updated only when its redacted decision body changes, preventing
+closed. Atomic D1 uniqueness rejects replayed actionable GitHub delivery identifiers after
+signature and target validation; ignored event classes do not consume a write. Hourly expiry keeps
+the metadata-only replay set bounded without the Workers KV write ceiling. The dashboard comment
+is updated only when its redacted decision body changes, preventing
 the reconciliation loop from generating a new webhook every minute.
 
 The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction
