@@ -638,6 +638,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(socketNoAlertEvidence({ ...clean, app: { id: 1 } })).toBe(false);
     expect(socketNoAlertEvidence({ ...clean, conclusion: "neutral" })).toBe(false);
     expect(socketNoAlertEvidence({ ...clean, name: "Project Report" })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, output: undefined })).toBe(false);
     expect(socketNoAlertEvidence({ ...clean, output: {} })).toBe(false);
     expect(
       socketNoAlertEvidence({

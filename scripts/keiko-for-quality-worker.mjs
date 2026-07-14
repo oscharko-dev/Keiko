@@ -152,7 +152,7 @@ export function socketNoAlertEvidence(check) {
     check.output?.annotations_count !== 0
   )
     return false;
-  const output = [check.output?.title, check.output?.summary, check.output?.text]
+  const output = [check.output.title, check.output.summary, check.output.text]
     .filter((value) => typeof value === "string")
     .join("\n");
   return /\b(?:contains no net changes to dependencies|no dependency changes detected|no new alerts?)\b/iu.test(
