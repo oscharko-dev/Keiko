@@ -70,11 +70,6 @@ const config = [
     rules: next15HooksRules,
   },
   {
-    rules: {
-      "jsx-a11y/prefer-tag-over-role": "error",
-    },
-  },
-  {
     plugins: {
       "@typescript-eslint": tseslint.plugin,
     },
