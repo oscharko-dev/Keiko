@@ -5,9 +5,10 @@ compatibility_date = "2026-07-11"
 [triggers]
 crons = ["* * * * *"]
 
-[[kv_namespaces]]
-binding = "KEIKO_FOR_QUALITY_STATE"
-id = "replace-with-production-kv-id"
+[[d1_databases]]
+binding = "KEIKO_FOR_QUALITY_DB"
+database_name = "keiko-for-quality"
+database_id = "replace-with-production-d1-id"
 
 [vars]
 TARGET_REPOSITORY = "oscharko-dev/Keiko"
