@@ -946,7 +946,6 @@ export function useDebugSession(
         return;
       }
       if (message.type === "editor-debug:snapshot") {
-        if (parseReplaySnapshot(parseJson(message.data)) === null) return;
         return;
       }
       if (message.type === "editor-debug:snapshot-required") {

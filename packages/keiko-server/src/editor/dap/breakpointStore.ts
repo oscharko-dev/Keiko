@@ -608,21 +608,7 @@ function parseRequestedWatches(value: unknown): readonly RequestedWatchExpressio
 function parseRequestedExceptionFilter(
   value: unknown,
 ): RequestedExceptionBreakpointFilter | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["filterId", "enabled", "condition"])) {
-    return undefined;
-  }
-  if (
-    !validOpaqueId(value.filterId) ||
-    typeof value.enabled !== "boolean" ||
-    !validOptionalText(value.condition)
-  ) {
-    return undefined;
-  }
-  return {
-    filterId: value.filterId,
-    enabled: value.enabled,
-    ...(value.condition === undefined ? {} : { condition: value.condition }),
-  };
+  return parseExceptionFilter(value);
 }
 
 function parseRequestedExceptionFilters(

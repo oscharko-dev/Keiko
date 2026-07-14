@@ -135,7 +135,7 @@ function issueProfile(
 
 function existingProfile(
   runtime: BrowserRegistryRuntime,
-  header: string | readonly string[] | undefined,
+  header: DebugBrowserCookieHeader,
   now: number,
 ): string | undefined {
   const token = cookieValue(header, DEBUG_BROWSER_PROFILE_COOKIE_NAME);
@@ -148,7 +148,7 @@ function existingProfile(
 function issueBrowserSession(
   runtime: BrowserRegistryRuntime,
   workspacePartitionKey: string,
-  header: string | readonly string[] | undefined,
+  header: DebugBrowserCookieHeader,
 ): BrowserSessionIssueInternalResult {
   const now = runtime.now();
   removeExpired(runtime.records, now);
@@ -179,7 +179,7 @@ function issueBrowserSession(
 function ensureBrowserSession(
   runtime: BrowserRegistryRuntime,
   workspacePartitionKey: string,
-  header: string | readonly string[] | undefined,
+  header: DebugBrowserCookieHeader,
 ): DebugBrowserSessionEnsureResult {
   const authorized = authorizeBrowserSession(runtime, header, workspacePartitionKey);
   if (authorized.ok) return { ...authorized, setCookies: [] };
@@ -196,7 +196,7 @@ function authorizationExpired(
 
 function authorizeBrowserSession(
   runtime: BrowserRegistryRuntime,
-  header: string | readonly string[] | undefined,
+  header: DebugBrowserCookieHeader,
   workspacePartitionKey: string,
 ): DebugBrowserAuthorization {
   const token = cookieValue(header, DEBUG_BROWSER_COOKIE_NAME);

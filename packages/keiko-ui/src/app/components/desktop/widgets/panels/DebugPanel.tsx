@@ -73,6 +73,7 @@ const SECTION_STYLE: CSSProperties = {
 };
 const TREE_ROW_STYLE: CSSProperties = { display: "block", width: "100%", textAlign: "left" };
 const GROUP_STYLE: CSSProperties = { border: 0, margin: 0, padding: 0 };
+const CALL_STACK_STYLE: CSSProperties = { listStyle: "none", margin: 0, padding: 0 };
 const OUTPUT_STYLE: CSSProperties = {
   background: "var(--surface-raised, var(--surface))",
   fontFamily: "var(--font-mono, monospace)",
@@ -375,9 +376,9 @@ function CallStack(props: {
     if (frame !== undefined) props.onSelect(frame);
   };
   return (
-    <div role="list" aria-label={props.label}>
+    <ul aria-label={props.label} style={CALL_STACK_STYLE}>
       {props.frames.map((frame, index) => (
-        <div key={frame.frameRef} role="listitem">
+        <li key={frame.frameRef}>
           <button
             ref={(element) => {
               refs.current[index] = element;
@@ -394,9 +395,9 @@ function CallStack(props: {
               ? ""
               : ` — ${frame.sourceFileId}:${String(frame.line)}`}
           </button>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 

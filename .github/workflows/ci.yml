@@ -567,6 +567,8 @@ jobs:
         run: npm run test:e2e:editor-debugging-2348
       - name: Release performance E2E evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        env:
+          KEIKO_PERF_RUNS: "10"
         run: |
           npm run test:e2e:editor-perf
           npm run test:e2e:workspace-perf
