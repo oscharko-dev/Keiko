@@ -81,6 +81,13 @@ Unknown or changed Gitar/Socket evidence formats are parser failures, never succ
 bounded stability window follows the final Gitar and Socket events before the aggregate check may
 turn green.
 
+Gitar zero-finding evidence is accepted in either of its two observed app-authored formats: an
+exact numeric `resolved / findings` total, or the compact `✅ Approved` code-review summary paired
+with the exact `No issues found.` statement. `Approved with suggestions`, `No blocking issues`,
+free-form approval text, and contradictory numeric totals remain blocking. Producer App ID, bot
+identity, current-head check success, comment freshness, and the stability window are still
+required in both cases.
+
 Gitar and Socket comments must have been updated after their current-head checks started. When
 Socket intentionally creates no pull-request comment because there are no dependency changes or
 alerts, the current-head Pull Request Alerts check must instead contain explicit clean output and
@@ -88,6 +95,15 @@ zero annotations. A successful check without that exact evidence remains blockin
 successful processing check on a new commit from reusing a clean comment from an older head.
 Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
 evidence is still mandatory.
+
+Webhook delivery is the low-latency trigger, not the only liveness mechanism. Every scheduled
+reconciliation independently resolves the App installation for `TARGET_REPOSITORY`, enumerates
+all open pull requests targeting `dev`, merges them with the bounded KV tracking set, and
+re-evaluates each pull request. A lost, duplicated, replay-rejected, or delayed webhook therefore
+cannot leave a new `dev` pull request permanently without the aggregate check. Check runs,
+reviews, and comments are read with bounded pagination; incomplete or over-limit collections fail
+closed. The dashboard comment is updated only when its redacted decision body changes, preventing
+the reconciliation loop from generating a new webhook every minute.
 
 The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction
 commands, and Core/Pro plan boundaries are defined in

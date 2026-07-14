@@ -5,7 +5,6 @@ const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
 const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
-const emptyCheckRuns = Object.freeze([]);
 
 export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
@@ -107,6 +106,21 @@ export async function allPages(path, token) {
   throw new Error(`Pagination limit exceeded for ${path}.`);
 }
 
+export async function allCheckRuns(path, token) {
+  const checks = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const separator = path.includes("?") ? "&" : "?";
+    const result = await github(`${path}${separator}per_page=100&page=${String(page)}`, token);
+    if (!Array.isArray(result?.check_runs)) throw new Error("GitHub omitted check runs.");
+    if (!Number.isInteger(result.total_count)) throw new Error("GitHub omitted check run count.");
+    checks.push(...result.check_runs);
+    if (checks.length >= result.total_count) return checks;
+    if (result.check_runs.length < 100)
+      throw new Error(`Incomplete paginated check runs for ${path}.`);
+  }
+  throw new Error(`Pagination limit exceeded for ${path}.`);
+}
+
 const pullNumberExtractors = {
   check_run: (payload) =>
     (payload.check_run?.pull_requests ?? emptyPullNumbers).map(({ number }) => number),
@@ -161,14 +175,13 @@ export function socketNoAlertEvidence(check) {
 }
 
 export async function evidence(owner, repository, pullNumber, headSha, token) {
-  const [checkPayload, reviews, comments] = await Promise.all([
-    github(`/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`, token),
+  const [checkRuns, reviews, comments] = await Promise.all([
+    allCheckRuns(`/repos/${owner}/${repository}/commits/${headSha}/check-runs`, token),
     allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/reviews`, token),
     allPages(`/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`, token),
   ]);
-  if (!Array.isArray(checkPayload?.check_runs)) throw new Error("GitHub omitted check runs.");
   return {
-    checks: checkPayload.check_runs.map((check) => ({
+    checks: checkRuns.map((check) => ({
       appId: check.app?.id,
       completedAt: check.completed_at,
       conclusion: check.conclusion,
@@ -210,11 +223,11 @@ export function hardFailure(failures) {
 }
 
 export async function publishCheck(owner, repository, headSha, result, token, env) {
-  const checkPayload = await github(
-    `/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`,
+  const checkRuns = await allCheckRuns(
+    `/repos/${owner}/${repository}/commits/${headSha}/check-runs`,
     token,
   );
-  const existing = (checkPayload.check_runs ?? emptyCheckRuns).find(
+  const existing = checkRuns.find(
     (check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID),
   );
   const body = checkBody(result);
@@ -299,7 +312,6 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
   const successfulChecks = currentCheckCount(checks, headSha);
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
-  const evaluatedAt = new Date(result.evaluatedAt ?? 0).toISOString();
   const detailsSummary = result.passed
     ? "Validated evidence"
     : `Blocking or waiting evidence (${String(result.failures.length)})`;
@@ -309,7 +321,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     "",
     `${state.icon} **${state.label}**`,
     "",
-    `\`head ${headSha.slice(0, 12)}\` · \`updated ${evaluatedAt}\``,
+    `\`head ${headSha.slice(0, 12)}\``,
     "",
     "| Gate group | Evidence |",
     "| --- | --- |",
@@ -357,6 +369,7 @@ export async function publishDashboardComment({
       Number.isInteger(comment.id) &&
       comment.body.includes(dashboardMarker),
   );
+  if (existing?.body === body) return;
   const path =
     existing === undefined
       ? `/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`
@@ -500,30 +513,81 @@ export function isValidHeadSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 
-async function handleSchedule(env, context) {
+function targetRepository(env) {
+  const parts = env.TARGET_REPOSITORY.split("/");
+  if (parts.length !== 2 || parts.some((part) => part.length === 0))
+    throw new Error("TARGET_REPOSITORY must be owner/repository.");
+  return { owner: parts[0], repository: parts[1] };
+}
+
+async function repositoryInstallation(owner, repository, env) {
+  const jwt = await appJwt(env);
+  const installation = await github(`/repos/${owner}/${repository}/installation`, jwt);
+  if (!Number.isInteger(installation?.id)) throw new Error("GitHub omitted installation ID.");
+  return installation.id;
+}
+
+export async function discoverOpenPullRequests(env) {
+  const { owner, repository } = targetRepository(env);
+  const installationId = await repositoryInstallation(owner, repository, env);
+  const token = await installationToken(installationId, env);
+  const pulls = await allPages(`/repos/${owner}/${repository}/pulls?state=open&base=dev`, token);
+  return pulls.flatMap((pull) =>
+    Number.isInteger(pull.number)
+      ? [{ installationId, owner, pullNumber: pull.number, repository }]
+      : [],
+  );
+}
+
+function trackedPullKey(tracked) {
+  return `${tracked.owner}/${tracked.repository}#${String(tracked.pullNumber)}`;
+}
+
+async function trackedPullRequests(state) {
+  const trackedPulls = new Map();
   let cursor;
   do {
-    const page = await env.KEIKO_FOR_QUALITY_STATE.list({ cursor, prefix: "pull:" });
+    const page = await state.list({ cursor, prefix: "pull:" });
     for (const key of page.keys) {
-      const result = parseTrackedPull(await env.KEIKO_FOR_QUALITY_STATE.get(key.name));
+      const result = parseTrackedPull(await state.get(key.name));
       if (result.kind === "missing") continue;
       if (result.kind === "invalid") {
-        await env.KEIKO_FOR_QUALITY_STATE.delete(key.name);
+        await state.delete(key.name);
         continue;
       }
-      const { tracked } = result;
-      context.waitUntil(
-        evaluatePullRequest(
-          tracked.owner,
-          tracked.repository,
-          tracked.pullNumber,
-          tracked.installationId,
-          env,
-        ),
-      );
+      trackedPulls.set(trackedPullKey(result.tracked), result.tracked);
     }
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor !== undefined);
+  return trackedPulls;
+}
+
+export function reconciliationErrorKind(error) {
+  return error instanceof Error ? error.name : "UnknownError";
+}
+
+async function reconciledPullRequests(env) {
+  const pulls = await trackedPullRequests(env.KEIKO_FOR_QUALITY_STATE);
+  try {
+    for (const discovered of await discoverOpenPullRequests(env))
+      pulls.set(trackedPullKey(discovered), discovered);
+  } catch (error) {
+    console.error(`pull reconciliation failed errorKind=${reconciliationErrorKind(error)}`);
+  }
+  return pulls.values();
+}
+
+async function handleSchedule(env, context) {
+  for (const tracked of await reconciledPullRequests(env))
+    context.waitUntil(
+      evaluatePullRequest(
+        tracked.owner,
+        tracked.repository,
+        tracked.pullNumber,
+        tracked.installationId,
+        env,
+      ),
+    );
 }
 
 export default {

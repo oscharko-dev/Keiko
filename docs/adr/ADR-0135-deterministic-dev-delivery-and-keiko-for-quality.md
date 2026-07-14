@@ -108,6 +108,19 @@ Auto-merge must not be enabled until the `Keiko for Quality` App has:
 Until those conditions are satisfied, autonomous repair may run but automatic merge remains
 disabled. This is a credential and deployment prerequisite, not a human review gate.
 
+### D7 — Webhooks accelerate evaluation; scheduled reconciliation guarantees liveness
+
+GitHub webhooks provide immediate evaluation but are not a single point of liveness. The external
+runtime must also reconcile all open pull requests targeting `dev` on a bounded schedule by
+resolving the exact repository installation with App authentication. It combines discovered pull
+requests with its metadata-only tracked set and evaluates each pull request once per sweep.
+
+Duplicate and replayed webhook deliveries remain rejected. Missing or delayed delivery cannot
+leave a new pull request permanently without `Keiko for Quality`; the next reconciliation creates
+or updates the app-bound check. Reconciliation must retain the same exact-head, producer-ID,
+pagination, redaction, and fail-closed rules as event-driven evaluation. It must not continuously
+rewrite an unchanged dashboard comment or create a webhook feedback loop.
+
 ## Consequences
 
 - Maintainers authorize the task boundary once instead of reviewing or merging each completed PR.
@@ -116,6 +129,8 @@ disabled. This is a credential and deployment prerequisite, not a human review g
   Quality` validates its current evidence and producer identity.
 - The external App deployment and credentials become critical infrastructure and require redacted,
   least-privilege operational handling.
+- Webhook failures degrade evaluation latency to the bounded reconciliation interval rather than
+  blocking every new `dev` pull request indefinitely.
 - A blocked or exhausted repair loop leaves the PR open and red; it never broadens authority or
   bypasses evidence.
 
