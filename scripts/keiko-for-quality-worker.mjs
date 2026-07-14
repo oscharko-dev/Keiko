@@ -148,7 +148,8 @@ export function socketNoAlertEvidence(check) {
   if (
     appId(check.app) !== 156372 ||
     check.conclusion !== "success" ||
-    check.name !== "Socket Security: Pull Request Alerts"
+    check.name !== "Socket Security: Pull Request Alerts" ||
+    check.output?.annotations_count !== 0
   )
     return false;
   const output = [check.output?.title, check.output?.summary, check.output?.text]

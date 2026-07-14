@@ -628,6 +628,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       conclusion: "success",
       name: "Socket Security: Pull Request Alerts",
       output: {
+        annotations_count: 0,
         summary: "Pull request contains no net changes to dependencies",
         text: "No dependency changes detected in pull request",
         title: "Pull Request Alerts: Skipped",
@@ -638,14 +639,30 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(socketNoAlertEvidence({ ...clean, conclusion: "neutral" })).toBe(false);
     expect(socketNoAlertEvidence({ ...clean, name: "Project Report" })).toBe(false);
     expect(socketNoAlertEvidence({ ...clean, output: {} })).toBe(false);
-    expect(socketNoAlertEvidence({ ...clean, output: { text: ["no new alerts"] } })).toBe(false);
     expect(
       socketNoAlertEvidence({
         ...clean,
-        output: { title: "Success: NO NEW ALERTS" },
+        output: { ...clean.output, annotations_count: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, text: ["no new alerts"] },
+      }),
+    ).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, title: "Success: NO NEW ALERTS" },
       }),
     ).toBe(true);
-    expect(socketNoAlertEvidence({ ...clean, output: { text: "No new alert" } })).toBe(true);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, text: "No new alert" },
+      }),
+    ).toBe(true);
   });
 
   it("does not trust absent event collection shapes", () => {
