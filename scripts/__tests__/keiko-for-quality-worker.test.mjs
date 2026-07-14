@@ -28,6 +28,7 @@ import worker, {
   publishCheck,
   publishDashboardComment,
   pullRequestNumbers,
+  socketNoAlertEvidence,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
 import { requiredChecks } from "../keiko-for-quality-core.mjs";
@@ -621,6 +622,32 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(appId(undefined)).toBeUndefined();
   });
 
+  it("derives only an explicit clean Socket PR-alert result without retaining output text", () => {
+    const clean = {
+      app: { id: 156372 },
+      conclusion: "success",
+      name: "Socket Security: Pull Request Alerts",
+      output: {
+        summary: "Pull request contains no net changes to dependencies",
+        text: "No dependency changes detected in pull request",
+        title: "Pull Request Alerts: Skipped",
+      },
+    };
+    expect(socketNoAlertEvidence(clean)).toBe(true);
+    expect(socketNoAlertEvidence({ ...clean, app: { id: 1 } })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, conclusion: "neutral" })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, name: "Project Report" })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, output: {} })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, output: { text: ["no new alerts"] } })).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { title: "Success: NO NEW ALERTS" },
+      }),
+    ).toBe(true);
+    expect(socketNoAlertEvidence({ ...clean, output: { text: "No new alert" } })).toBe(true);
+  });
+
   it("does not trust absent event collection shapes", () => {
     expect(pullRequestNumbers("check_run", { check_run: { pull_requests: null } })).toEqual([]);
     expect(pullRequestNumbers("check_suite", { check_suite: { pull_requests: null } })).toEqual([]);
@@ -1075,6 +1102,7 @@ describe("Keiko for Quality worker trust boundary", () => {
           conclusion: null,
           headSha,
           name: "ci",
+          socketNoAlerts: false,
           startedAt: null,
           status: "queued",
         },

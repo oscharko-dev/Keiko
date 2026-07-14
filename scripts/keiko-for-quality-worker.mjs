@@ -144,6 +144,21 @@ export function appId(app) {
   return app?.id;
 }
 
+export function socketNoAlertEvidence(check) {
+  if (
+    appId(check.app) !== 156372 ||
+    check.conclusion !== "success" ||
+    check.name !== "Socket Security: Pull Request Alerts"
+  )
+    return false;
+  const output = [check.output?.title, check.output?.summary, check.output?.text]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+  return /\b(?:contains no net changes to dependencies|no dependency changes detected|no new alerts?)\b/iu.test(
+    output,
+  );
+}
+
 export async function evidence(owner, repository, pullNumber, headSha, token) {
   const [checkPayload, reviews, comments] = await Promise.all([
     github(`/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`, token),
@@ -158,6 +173,7 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
       conclusion: check.conclusion,
       headSha: check.head_sha,
       name: check.name,
+      socketNoAlerts: socketNoAlertEvidence(check),
       startedAt: check.started_at,
       status: check.status,
     })),

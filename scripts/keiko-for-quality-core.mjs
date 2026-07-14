@@ -107,6 +107,18 @@ export function commentIsCurrent(comment, checkStart) {
   return Number.isFinite(checkStart) && updatedAt >= checkStart;
 }
 
+export function hasCurrentSocketNoAlertEvidence(checks, headSha) {
+  return checks.some(
+    (check) =>
+      check.appId === socketIdentity.appId &&
+      check.conclusion === "success" &&
+      check.headSha === headSha &&
+      check.name === "Socket Security: Pull Request Alerts" &&
+      check.socketNoAlerts === true &&
+      check.status === "completed",
+  );
+}
+
 function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist, socketRiskActors) {
   const failures = [];
   if (
@@ -131,9 +143,7 @@ function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist,
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
   ]);
-  if (!commentIsCurrent(socket, socketStart))
-    failures.push("Current Socket alert evidence is missing.");
-  else {
+  if (commentIsCurrent(socket, socketStart)) {
     const alerts = packageAlerts(socket.body);
     const accepted = acceptedSocketRisks(
       comments,
@@ -145,21 +155,31 @@ function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist,
     if (unresolved.length > 0)
       failures.push(`${String(unresolved.length)} Socket warning(s) remain.`);
     if (/\bError\b/u.test(socket.body)) failures.push("Socket reports an error alert.");
-  }
+  } else if (!hasCurrentSocketNoAlertEvidence(checks, headSha))
+    failures.push("Current Socket alert evidence is missing.");
   return failures;
 }
 
-export function stabilityFailures(checks, comments, now, stabilityMs) {
+export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
+  const socketStart = currentCheckStart(checks, headSha, [
+    "Socket Security: Project Report",
+    "Socket Security: Pull Request Alerts",
+  ]);
+  const socket = latestComment(comments, socketIdentity);
+  const currentSocket = commentIsCurrent(socket, socketStart) ? socket : undefined;
+  const cleanWithoutComment =
+    currentSocket === undefined && hasCurrentSocketNoAlertEvidence(checks, headSha);
   const evidenceTimes = [
     ...checks
       .filter((check) => check.name === "Gitar" || check.name.startsWith("Socket Security:"))
       .map(completedAt),
     latestComment(comments, gitarIdentity)?.updatedAt,
-    latestComment(comments, socketIdentity)?.updatedAt,
+    currentSocket?.updatedAt,
   ]
     .map((value) => (typeof value === "number" ? value : Date.parse(value)))
     .filter(Number.isFinite);
-  if (evidenceTimes.length < 5) return ["Review-product stability evidence is incomplete."];
+  if (evidenceTimes.length < (cleanWithoutComment ? 4 : 5))
+    return ["Review-product stability evidence is incomplete."];
   return Math.max(...evidenceTimes) + stabilityMs > now
     ? ["Review-product evidence is inside the stability window."]
     : [];
@@ -189,7 +209,13 @@ export function evaluateKeikoForQuality(input) {
       riskAllowlist,
       riskActors,
     ),
-    ...stabilityFailures(input.checks, input.comments, input.now, input.stabilityMs ?? 60_000),
+    ...stabilityFailures(
+      input.checks,
+      input.comments,
+      input.now,
+      input.stabilityMs ?? 60_000,
+      input.headSha,
+    ),
   ];
   return { failures, passed: failures.length === 0 };
 }
