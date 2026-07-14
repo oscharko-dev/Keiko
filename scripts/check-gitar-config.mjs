@@ -85,7 +85,7 @@ function actionFailures(rule, action) {
   if (!action.startsWith(prefix)) {
     failures.push(`${rule.name} must start its action with ${prefix}`);
   }
-  const guards = ["never unblock", "force-push", "push to dev", "bypass Keiko for Quality"];
+  const guards = ["never unblock", "force-push", "push to dev", "bypass direct required checks"];
   if (
     rule.name === "governance-and-delivery.md" &&
     !guards.every((guard) => action.includes(guard))
@@ -133,7 +133,7 @@ export function validateGitarSources(sources) {
   for (const criterion of [
     "exact current head",
     "every finding at every severity",
-    "Keiko for Quality",
+    "direct app-bound required checks",
   ]) {
     if (!sources.approval.includes(criterion)) {
       failures.push(`Gitar auto-approve criteria must require ${criterion}`);

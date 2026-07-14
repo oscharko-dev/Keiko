@@ -106,7 +106,7 @@ This epic is a planning and coordination container. Do not implement the full ep
 - Required planning agents: `architect | explorer | security-reviewer | performance-engineer | docs-editor`.
 - Delivery agents per child issue: selected from `implementor | developer | test-engineer | ui-engineer | a11y-auditor | verifier | pr-reviewer | pr-shepherd`.
 - Write ownership: assigned per child issue only; no parallel write agents may own overlapping files.
-- PR lifecycle owner: `pr-shepherd` waits for GitHub checks, coordinates autonomous finding repair, and confirms the exact-head `Keiko for Quality` decision before native auto-merge.
+- PR lifecycle owner: `pr-shepherd` waits for direct required GitHub checks, coordinates autonomous finding repair, and confirms exact-head settlement before native auto-merge.
 
 ## Expected Verification
 
