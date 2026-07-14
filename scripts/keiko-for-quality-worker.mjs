@@ -577,7 +577,7 @@ function trackedPullFromRow(row) {
 
 export async function trackedPullRequests(database) {
   const trackedPulls = new Map();
-  for (let page = 0; page <= persistedPullPageLimit; page += 1) {
+  for (let page = 0; page < persistedPullPageLimit; page += 1) {
     const result = await database
       .prepare(
         "SELECT installation_id, owner, repository, pull_number FROM tracked_pulls ORDER BY owner, repository, pull_number LIMIT ?1 OFFSET ?2",
