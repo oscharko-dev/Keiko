@@ -15,8 +15,15 @@ const criticalPrefixes = [
 const criticalServerTerms = /\/(coding-runtime|qualityIntelligence)\//u;
 const criticalGateScripts = new Set([
   "packages/keiko-server/src/editor/processHardening.ts",
-  "scripts/banking-quality-gate-core.mjs",
-  "scripts/banking-quality-gate-worker.mjs",
+  "scripts/keiko-for-quality-core.mjs",
+  "scripts/keiko-for-quality-worker.mjs",
+]);
+const debugLaunchPrefixes = ["packages/keiko-server/src/editor/dap/"];
+const debugLaunchFiles = new Set([
+  "packages/keiko-sandbox/src/debug-capsule.ts",
+  "packages/keiko-sandbox/src/debug-capsule-security-predicates.ts",
+  "packages/keiko-tools/src/debug-launch-policy.ts",
+  "packages/keiko-server/src/editor/processHardening.ts",
 ]);
 
 function isProductionTypeScript(path) {
@@ -42,13 +49,28 @@ export function securityMutationFiles(files) {
   );
 }
 
-export function mutationScope(base, head, execute = execFileSync) {
-  const files = parseChangedFiles(
+export function requiresDebugLaunchMutation(files) {
+  return debugLaunchMutationFiles(files).length > 0;
+}
+
+export function debugLaunchMutationFiles(files) {
+  return files.filter(
+    (path) =>
+      isProductionTypeScript(path) &&
+      (debugLaunchFiles.has(path) || debugLaunchPrefixes.some((prefix) => path.startsWith(prefix))),
+  );
+}
+
+function changedFiles(base, head, execute) {
+  return parseChangedFiles(
     execute("/usr/bin/git", ["diff", "--name-status", "--diff-filter=ACMR", `${base}...${head}`], {
       encoding: "utf8",
     }),
   );
-  return securityMutationFiles(files);
+}
+
+export function mutationScope(base, head, execute = execFileSync) {
+  return securityMutationFiles(changedFiles(base, head, execute));
 }
 
 export function parseChangedFiles(output) {
@@ -68,21 +90,31 @@ function option(argv, name) {
   return index < 0 ? undefined : argv[index + 1];
 }
 
+function publishMutationOutputs(outputPath, values, append = appendFileSync) {
+  if (outputPath === undefined) return;
+  append(outputPath, `required=${String(values.required)}\n`);
+  append(outputPath, `files=${values.mutationFiles.join(",")}\n`);
+  append(outputPath, `debug_launch_required=${String(values.debugLaunchRequired)}\n`);
+}
+
 export function runMutationScope(input = {}) {
   const argv = input.argv ?? process.argv;
   const base = option(argv, "--base");
   const head = option(argv, "--head");
   if (base === undefined || head === undefined) throw new Error("--base and --head are required.");
-  const mutationFiles = mutationScope(base, head, input.execute);
+  const files = changedFiles(base, head, input.execute ?? execFileSync);
+  const mutationFiles = securityMutationFiles(files);
+  const debugLaunchFiles = debugLaunchMutationFiles(files);
   const required = mutationFiles.length > 0;
+  const debugLaunchRequired = debugLaunchFiles.length > 0;
   const outputPath = input.outputPath ?? process.env.GITHUB_OUTPUT;
-  if (outputPath !== undefined) {
-    const append = input.append ?? appendFileSync;
-    append(outputPath, `required=${String(required)}\n`);
-    append(outputPath, `files=${mutationFiles.join(",")}\n`);
-  }
+  publishMutationOutputs(
+    outputPath,
+    { debugLaunchRequired, mutationFiles, required },
+    input.append,
+  );
   (input.log ?? console.log)(`mutation-scope: ${required ? "required" : "not applicable"}.`);
-  return { mutationFiles, required };
+  return { debugLaunchFiles, debugLaunchRequired, mutationFiles, required };
 }
 
 export function runMutationScopeCli(input = {}) {

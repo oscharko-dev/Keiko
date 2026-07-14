@@ -905,7 +905,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/editor/settings",
     handler: handlePatchEditorSettings,
   },
-  // ADR-0134 D7 — the only dedicated activation routes. They mutate the canonical M7
+  // ADR-0136 D7 — the only dedicated activation routes. They mutate the canonical M7
   // debuggingEnabled setting and synchronously revoke a live session when it narrows.
   {
     method: "POST",

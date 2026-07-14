@@ -1,4 +1,4 @@
-// Governed debug activation contracts (Issue #2347, Epic #2096, ADR-0134 D7).
+// Governed debug activation contracts (Issue #2347, Epic #2096, ADR-0136 D7).
 // This leaf owns the closed static activation summary only. Session lifecycle is owned by the DAP
 // manager, and the resolver deliberately has no restart state or runtime-health vocabulary.
 

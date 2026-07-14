@@ -34,6 +34,17 @@ export interface DebugVariableSnapshot {
   readonly omittedCount: number;
 }
 
+export interface DebugPauseIdentity {
+  readonly sessionId: string;
+  readonly pauseGeneration: number;
+}
+
+export interface DebugPausedProjection {
+  readonly stack: DebugStackSnapshot;
+  readonly scopes: readonly DebugScopeSnapshot[];
+  readonly variables: readonly DebugVariableSnapshot[];
+}
+
 export interface DebugConsoleEntry {
   readonly id: number;
   readonly category: "stdout" | "stderr" | "console";
@@ -43,6 +54,7 @@ export interface DebugConsoleEntry {
 
 export interface DebugConsoleSnapshot {
   readonly entries: readonly DebugConsoleEntry[];
+  readonly retainedBytes: number;
   readonly evictedEntries: number;
   readonly evictedBytes: number;
 }
@@ -68,6 +80,7 @@ interface DebugProjectState {
 const EMPTY_MAP = new Map<string, never>();
 const EMPTY_CONSOLE: DebugConsoleSnapshot = Object.freeze({
   entries: Object.freeze([]),
+  retainedBytes: 0,
   evictedEntries: 0,
   evictedBytes: 0,
 });
@@ -84,6 +97,7 @@ const EMPTY_SNAPSHOT: DebugSessionSnapshot = Object.freeze({
   streamReady: false,
 });
 const TEXT_ENCODER = new TextEncoder();
+const ENTRY_BYTES = new WeakMap<DebugConsoleEntry, number>();
 const MAX_CONSOLE_BYTES = 512 * 1024;
 const MAX_CONSOLE_ENTRIES = 2_000;
 const states = new Map<string, DebugProjectState>();
@@ -102,7 +116,11 @@ function publish(state: DebugProjectState, snapshot: DebugSessionSnapshot): void
 }
 
 function entryBytes(entry: DebugConsoleEntry): number {
-  return TEXT_ENCODER.encode(entry.text).length;
+  const retained = ENTRY_BYTES.get(entry);
+  if (retained !== undefined) return retained;
+  const encoded = TEXT_ENCODER.encode(entry.text).length;
+  ENTRY_BYTES.set(entry, encoded);
+  return encoded;
 }
 
 function boundedConsole(
@@ -110,7 +128,7 @@ function boundedConsole(
   entry: DebugConsoleEntry,
 ): DebugConsoleSnapshot {
   const entries = [...current.entries, entry];
-  let retainedBytes = entries.reduce((total, candidate) => total + entryBytes(candidate), 0);
+  let retainedBytes = current.retainedBytes + entryBytes(entry);
   let evictedEntries = current.evictedEntries;
   let evictedBytes = current.evictedBytes;
   while (entries.length > MAX_CONSOLE_ENTRIES || retainedBytes > MAX_CONSOLE_BYTES) {
@@ -121,7 +139,7 @@ function boundedConsole(
     evictedEntries += 1;
     evictedBytes += removedBytes;
   }
-  return { entries, evictedEntries, evictedBytes };
+  return { entries, retainedBytes, evictedEntries, evictedBytes };
 }
 
 function eventConsoleEntry(
@@ -163,9 +181,17 @@ export function subscribeDebugSession(workspaceId: string, listener: () => void)
 export function setDebugInstrumentation(
   workspaceId: string,
   instrumentation: InstrumentationSnapshot,
-): void {
+): boolean {
   const state = stateFor(workspaceId);
+  const current = state.snapshot.instrumentation;
+  if (
+    instrumentation.workspaceId !== workspaceId ||
+    (current !== null && instrumentation.revision < current.revision)
+  ) {
+    return false;
+  }
   publish(state, { ...state.snapshot, instrumentation });
+  return true;
 }
 
 function stalePauseProjection(current: DebugSession | null, next: DebugSession | null): boolean {
@@ -179,6 +205,7 @@ function stalePauseProjection(current: DebugSession | null, next: DebugSession |
 
 export function setDebugSession(workspaceId: string, session: DebugSession | null): void {
   const state = stateFor(workspaceId);
+  if (session !== null && session.workspaceId !== workspaceId) return;
   if (stalePauseProjection(state.snapshot.session, session)) return;
   const changedPause =
     session === null ||
@@ -195,35 +222,121 @@ export function setDebugSession(workspaceId: string, session: DebugSession | nul
 
 export function setDebugStack(
   workspaceId: string,
+  identity: DebugPauseIdentity,
   input: {
     readonly frames: readonly StackFrame[];
     readonly truncated: boolean;
     readonly omittedCount: number;
   },
-): void {
+): boolean {
   const state = stateFor(workspaceId);
+  if (!currentPauseMatches(state.snapshot, identity)) return false;
   publish(state, { ...state.snapshot, stack: { ...input } });
+  return true;
 }
 
-export function setDebugScopes(workspaceId: string, snapshot: DebugScopeSnapshot): void {
+export function setDebugScopes(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+  snapshot: DebugScopeSnapshot,
+): boolean {
   const state = stateFor(workspaceId);
+  if (!currentPauseMatches(state.snapshot, identity)) return false;
   const scopesByFrame = new Map(state.snapshot.scopesByFrame);
   scopesByFrame.set(snapshot.frameRef, snapshot);
   publish(state, { ...state.snapshot, scopesByFrame });
+  return true;
 }
 
-export function setDebugVariables(workspaceId: string, snapshot: DebugVariableSnapshot): void {
+export function setDebugVariables(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+  snapshot: DebugVariableSnapshot,
+): boolean {
   const state = stateFor(workspaceId);
+  if (!currentPauseMatches(state.snapshot, identity)) return false;
   const variablesByParent = new Map(state.snapshot.variablesByParent);
   variablesByParent.set(snapshot.parentRef, snapshot);
   publish(state, { ...state.snapshot, variablesByParent });
+  return true;
 }
 
-export function setDebugWatchResult(workspaceId: string, result: WatchEvaluationResult): void {
+export function setDebugWatchResult(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+  result: WatchEvaluationResult,
+): boolean {
   const state = stateFor(workspaceId);
+  if (
+    result.pauseGeneration !== identity.pauseGeneration ||
+    !currentPauseMatches(state.snapshot, identity)
+  ) {
+    return false;
+  }
   const watchResults = new Map(state.snapshot.watchResults);
   watchResults.set(result.watchId, result);
   publish(state, { ...state.snapshot, watchResults });
+  return true;
+}
+
+function currentPauseMatches(
+  snapshot: DebugSessionSnapshot,
+  identity: DebugPauseIdentity,
+): boolean {
+  return (
+    snapshot.session?.status === "paused" &&
+    snapshot.session.sessionId === identity.sessionId &&
+    snapshot.session.pauseGeneration === identity.pauseGeneration
+  );
+}
+
+export function invalidateDebugPausedProjections(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+): boolean {
+  const state = stateFor(workspaceId);
+  if (!currentPauseMatches(state.snapshot, identity)) return false;
+  publish(state, resetPausedProjections(state.snapshot));
+  return true;
+}
+
+export function replaceDebugPausedProjections(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+  projection: DebugPausedProjection,
+): boolean {
+  const state = stateFor(workspaceId);
+  if (!currentPauseMatches(state.snapshot, identity)) return false;
+  const scopesByFrame = new Map(
+    projection.scopes.map((snapshot) => [snapshot.frameRef, snapshot] as const),
+  );
+  const variablesByParent = new Map(
+    projection.variables.map((snapshot) => [snapshot.parentRef, snapshot] as const),
+  );
+  publish(state, {
+    ...state.snapshot,
+    stack: projection.stack,
+    scopesByFrame,
+    variablesByParent,
+    watchResults: new Map(),
+  });
+  return true;
+}
+
+export function beginDebugStreamResync(workspaceId: string): void {
+  const state = stateFor(workspaceId);
+  publish(state, {
+    ...resetPausedProjections(state.snapshot),
+    console: EMPTY_CONSOLE,
+    stopDescription: null,
+    streamReady: false,
+  });
+}
+
+export function synchronizeDebugSequence(workspaceId: string, sequence: number): void {
+  const state = stateFor(workspaceId);
+  if (sequence === state.snapshot.sequence) return;
+  publish(state, { ...state.snapshot, sequence });
 }
 
 export function applyDebugEvent(workspaceId: string, sequence: number, event: DebugEvent): void {
@@ -237,13 +350,39 @@ export function applyDebugEvent(workspaceId: string, sequence: number, event: De
     };
   } else if (event.kind === "session-started" || event.kind === "continued") {
     next = { ...resetPausedProjections(next), stopDescription: null };
+    if (next.session?.sessionId === event.sessionId) {
+      next = {
+        ...next,
+        session: {
+          ...next.session,
+          status: event.kind === "continued" ? "running" : event.status,
+          ...(event.kind === "continued" ? { pauseGeneration: event.pauseGeneration } : {}),
+        },
+      };
+    } else if (event.kind === "session-started") {
+      next = { ...next, session: null };
+    }
   } else if (event.kind === "stopped") {
     next = {
       ...resetPausedProjections(next),
       stopDescription: event.reason === "exception" ? (event.description ?? null) : null,
     };
+    if (next.session?.sessionId === event.sessionId) {
+      next = {
+        ...next,
+        session: {
+          ...next.session,
+          status: "paused",
+          pauseGeneration: event.pauseGeneration,
+        },
+      };
+    }
   } else if (event.kind === "session-stopped" || event.kind === "exited") {
-    next = { ...resetPausedProjections(next), stopDescription: null };
+    next = {
+      ...resetPausedProjections(next),
+      session: next.session?.sessionId === event.sessionId ? null : next.session,
+      stopDescription: null,
+    };
   }
   publish(state, next);
 }

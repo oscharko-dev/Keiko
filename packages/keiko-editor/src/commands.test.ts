@@ -74,6 +74,7 @@ const baseContext = (overrides: Partial<EditorCommandContext> = {}): EditorComma
   pendingPatchId: null,
   verificationRunning: false,
   activeFileVerifiable: false,
+  debugSessionState: null,
   availableCapabilities: ALL_CAPABILITIES,
   ...overrides,
 });
@@ -141,14 +142,45 @@ describe("isCommandAvailable capability gate", () => {
       expect(isCommandAvailable(command(id), baseContext({ availableCapabilities: [] }))).toBe(
         false,
       );
-      expect(
-        isCommandAvailable(command(id), baseContext({ availableCapabilities: ["debug"] })),
-      ).toBe(true);
     }
+    expect(
+      isCommandAvailable(
+        command("editor.debugContinue"),
+        baseContext({ availableCapabilities: ["debug"] }),
+      ),
+    ).toBe(true);
   });
 });
 
 describe("isCommandAvailable state gates", () => {
+  it("gates every debug lifecycle command on the exact projected session state", () => {
+    const available = (
+      id: EditorCommandId,
+      debugSessionState: EditorCommandContext["debugSessionState"],
+    ): boolean => isCommandAvailable(command(id), baseContext({ debugSessionState }));
+
+    expect(available("editor.debugContinue", null)).toBe(true);
+    expect(available("editor.debugContinue", "paused")).toBe(true);
+    expect(available("editor.debugContinue", "running")).toBe(false);
+    expect(available("editor.debugPause", "running")).toBe(true);
+    expect(available("editor.debugPause", "paused")).toBe(false);
+    for (const id of [
+      "editor.debugStepOver",
+      "editor.debugStepInto",
+      "editor.debugStepOut",
+    ] as const) {
+      expect(available(id, "paused")).toBe(true);
+      expect(available(id, "running")).toBe(false);
+    }
+    for (const state of ["reserved", "starting", "running", "paused"] as const) {
+      expect(available("editor.debugStop", state)).toBe(true);
+    }
+    for (const state of ["stopping", "stopped", "failed", "revoked"] as const) {
+      expect(available("editor.debugContinue", state)).toBe(false);
+      expect(available("editor.debugStop", state)).toBe(false);
+    }
+  });
+
   it("save needs dirty and writable", () => {
     expect(isCommandAvailable(command("editor.save"), baseContext({ dirty: false }))).toBe(false);
     expect(isCommandAvailable(command("editor.save"), baseContext({ dirty: true }))).toBe(true);
@@ -281,12 +313,15 @@ describe("availableCommands", () => {
         pendingPatchId: "p1",
         activeFileVerifiable: true,
         mergeConflictCount: 1,
+        debugSessionState: "paused",
       }),
     ).map((entry) => entry.id);
     // editor.cancelVerification is available only while a run IS active (verificationRunning), the
     // inverse of the idle state that makes the four run commands available, so no single context can
     // offer both — it is excluded from this idle-state maximal set.
-    const expected = EXPECTED_IDS.filter((id) => id !== "editor.cancelVerification");
+    const expected = EXPECTED_IDS.filter(
+      (id) => id !== "editor.cancelVerification" && id !== "editor.debugPause",
+    );
     expect([...ids].sort()).toEqual([...expected].sort());
   });
 

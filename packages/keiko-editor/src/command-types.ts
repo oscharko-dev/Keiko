@@ -85,6 +85,9 @@ export interface EditorCommand {
   readonly requiredCapabilities: readonly EditorHostCapability[];
 }
 
+export type EditorDebugSessionState =
+  "reserved" | "starting" | "running" | "paused" | "stopping" | "stopped" | "failed" | "revoked";
+
 export interface EditorCommandContext {
   readonly readOnly: boolean;
   readonly dirty: boolean;
@@ -101,6 +104,8 @@ export interface EditorCommandContext {
   // Issue #2212: host-resolved — true when the active file, or its resolved test counterpart, can be
   // targeted by `editor.runFileTests` (so the editor needs no test-file-naming knowledge itself).
   readonly activeFileVerifiable: boolean;
+  /** Host-projected debugger state. `null` means no active session; missing state fails closed. */
+  readonly debugSessionState: EditorDebugSessionState | null;
   readonly mergeConflictCount?: number | undefined;
   readonly availableCapabilities: readonly EditorHostCapability[];
 }

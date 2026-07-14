@@ -60,6 +60,11 @@ describe("createDapOperatorProvisioning", () => {
     });
 
     expect(provisioning.adapter).toMatchObject({ executableName: "node" });
+    expect(provisioning.backendQualification).toStrictEqual({
+      backend: parsedDocument().launch.backend,
+      platform: process.platform,
+    });
+    expect(Object.isFrozen(provisioning.backendQualification)).toBe(true);
     expect(
       provisioning.adapterPreflight({ workspacePartitionKey: "partition" } as never),
     ).toMatchObject({

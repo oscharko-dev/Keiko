@@ -12,6 +12,8 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run typecheck",
   "npm run lint",
   "npm run format:check",
+  "npm run check:gitar-config",
+  "npm run check:ui-i18n",
   "npm run check:sonar-scope",
   "npm run check:native:macos",
   "npm run typecheck --workspace @oscharko-dev/keiko-ui",
@@ -32,6 +34,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run prune:package-native-optionals",
   "npm run check:package-surface",
   "npm run check:editor-bundle-size -- --require-static-export",
+  "npm run test:e2e:editor-debugging-2348",
   "npm run test:e2e:smoke",
 ];
 
@@ -91,6 +94,15 @@ describe("codex pre-PR gate", () => {
     expect(evidence?.skipReason).toContain("Linux-authoritative");
   });
 
+  it("documents the governed editor debugging E2E skip on non-Linux hosts", () => {
+    const debugging = createPrePrSteps({ env: {}, platform: "darwin" }).find(
+      (step) => step.id === "editor-debugging-e2e",
+    );
+
+    expect(debugging?.required).toBe(false);
+    expect(debugging?.skipReason).toContain("Linux Bubblewrap qualification boundary");
+  });
+
   it("does not duplicate the lint heap flag when NODE_OPTIONS already contains it", () => {
     const lint = createPrePrSteps({
       env: { NODE_OPTIONS: "--max-old-space-size=8192" },
@@ -115,7 +127,7 @@ describe("codex pre-PR gate", () => {
 
       expect(report.summary.failed).toBe(0);
       expect(report.summary.planned).toBeGreaterThan(0);
-      expect(report.summary.skipped).toBe(1);
+      expect(report.summary.skipped).toBe(2);
       expect(persisted.results.map((result) => result.id)).toEqual(
         createPrePrSteps({ env: {}, platform: "darwin" }).map((step) => step.id),
       );
@@ -141,7 +153,7 @@ describe("codex pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ failed: 0, passed: 23, planned: 0, skipped: 1 });
+      expect(report.summary).toEqual({ failed: 0, passed: 25, planned: 0, skipped: 2 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);

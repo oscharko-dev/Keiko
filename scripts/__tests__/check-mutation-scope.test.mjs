@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  debugLaunchMutationFiles,
   mutationScope,
   parseChangedFiles,
+  requiresDebugLaunchMutation,
   requiresSecurityMutation,
   runMutationScope,
   runMutationScopeCli,
@@ -23,8 +25,8 @@ describe("mutation scope", () => {
     expect(requiresSecurityMutation(["packages/keiko-server/src/editor/processHardening.ts"])).toBe(
       true,
     );
-    expect(requiresSecurityMutation(["scripts/banking-quality-gate-core.mjs"])).toBe(true);
-    expect(requiresSecurityMutation(["scripts/banking-quality-gate-worker.mjs"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/keiko-for-quality-core.mjs"])).toBe(true);
+    expect(requiresSecurityMutation(["scripts/keiko-for-quality-worker.mjs"])).toBe(true);
   });
 
   it("requires mutation testing for every production DAP module", () => {
@@ -41,6 +43,23 @@ describe("mutation scope", () => {
         "packages/keiko-server/src/editor/dap/futureSecurityBoundary.test.ts",
       ]),
     ).toBe(false);
+  });
+
+  it("limits the 100-percent debug launch suite to its own trust boundaries", () => {
+    expect(
+      requiresDebugLaunchMutation(["packages/keiko-server/src/editor/dap/debugLaunchPlan.ts"]),
+    ).toBe(true);
+    expect(requiresDebugLaunchMutation(["packages/keiko-sandbox/src/debug-capsule.ts"])).toBe(true);
+    expect(
+      requiresDebugLaunchMutation(["packages/keiko-server/src/editor/processHardening.ts"]),
+    ).toBe(true);
+    expect(requiresDebugLaunchMutation(["packages/keiko-security/src/redaction.ts"])).toBe(false);
+    expect(
+      debugLaunchMutationFiles([
+        "packages/keiko-server/src/editor/dap/futureBoundary.ts",
+        "packages/keiko-server/src/editor/dap/futureBoundary.test.ts",
+      ]),
+    ).toEqual(["packages/keiko-server/src/editor/dap/futureBoundary.ts"]);
   });
 
   it("does not spend mutation time on documentation or tests only", () => {
@@ -94,6 +113,8 @@ describe("mutation scope", () => {
       outputPath: "output",
     });
     expect(result).toEqual({
+      debugLaunchFiles: [],
+      debugLaunchRequired: false,
       mutationFiles: [
         "packages/keiko-security/src/redaction.ts",
         "packages/keiko-workflows/src/authority.ts",
@@ -106,8 +127,26 @@ describe("mutation scope", () => {
         "output",
         "files=packages/keiko-security/src/redaction.ts,packages/keiko-workflows/src/authority.ts\n",
       ],
+      ["output", "debug_launch_required=false\n"],
     ]);
     expect(logs).toEqual(["mutation-scope: required."]);
+  });
+
+  it("publishes the dedicated debug-launch decision independently", () => {
+    const writes = [];
+    const result = runMutationScope({
+      append: (_path, value) => writes.push(value),
+      argv: ["node", "script", "--base", "base", "--head", "head"],
+      execute: () => "M\tpackages/keiko-server/src/editor/dap/debugLaunchPlan.ts\n",
+      log: () => undefined,
+      outputPath: "output",
+    });
+
+    expect(result.debugLaunchRequired).toBe(true);
+    expect(result.debugLaunchFiles).toEqual([
+      "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts",
+    ]);
+    expect(writes).toContain("debug_launch_required=true\n");
   });
 
   it("rejects missing merge-base arguments", () => {
@@ -139,7 +178,12 @@ describe("mutation scope", () => {
     process.argv = ["node", "script", "--base", "HEAD", "--head", "HEAD"];
     delete process.env.GITHUB_OUTPUT;
     try {
-      expect(runMutationScope()).toEqual({ mutationFiles: [], required: false });
+      expect(runMutationScope()).toEqual({
+        debugLaunchFiles: [],
+        debugLaunchRequired: false,
+        mutationFiles: [],
+        required: false,
+      });
       expect(log).toHaveBeenCalledWith("mutation-scope: not applicable.");
     } finally {
       process.argv = argv;

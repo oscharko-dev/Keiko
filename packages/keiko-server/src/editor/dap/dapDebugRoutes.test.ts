@@ -56,6 +56,7 @@ class FakeDebugManager implements DapProcessManager {
   public largeVariableResponse = false;
   public largeStackResponse = false;
   public stackTotalFrames = 1;
+  public scopeCount = 1;
   public rejectedCommand: string | undefined;
   public malformedCommand: string | undefined;
   public delayedCommand: string | undefined;
@@ -113,10 +114,13 @@ class FakeDebugManager implements DapProcessManager {
   }
 
   public revoke(sessionId: string): Promise<void> {
+    this.revocations.push(sessionId);
     const current = this.projections.get(sessionId);
     if (current !== undefined) this.projections.set(sessionId, { ...current, state: "revoked" });
     return Promise.resolve();
   }
+
+  public readonly revocations: string[] = [];
 
   public failMalformed(sessionId: string): Promise<void> {
     const current = this.projections.get(sessionId);
@@ -185,7 +189,12 @@ class FakeDebugManager implements DapProcessManager {
     if (command === "stackTrace") return this.stackResponse();
     if (command === "scopes") {
       return {
-        scopes: [{ name: "Local", variablesReference: 303, expensive: false, namedVariables: 1 }],
+        scopes: Array.from({ length: this.scopeCount }, (_, index) => ({
+          name: `Scope ${String(index)}`,
+          variablesReference: 303 + index,
+          expensive: false,
+          namedVariables: 1,
+        })),
       };
     }
     if (command === "variables") {
@@ -283,6 +292,9 @@ let tokenSequence = 0;
 let referenceCapacity: number | undefined;
 let browserSessions: DebugBrowserSessionRegistry;
 let rejectEventPublication = false;
+let activationRevision = ACTIVATION_REVISION;
+let activationState: "available" | "notProvisioned" = "available";
+let activationFailure = false;
 const env: Record<string, string | undefined> = {};
 
 function newBrowserSessions(): DebugBrowserSessionRegistry {
@@ -311,17 +323,18 @@ function debugService(): DapDebugRouteService {
     },
     references,
     events,
-    activation: () =>
-      Promise.resolve({
+    activation: (): ReturnType<DapDebugRouteService["activation"]> => {
+      if (activationFailure) return Promise.reject(new Error("activation unavailable"));
+      return Promise.resolve({
         ok: true,
         schemaVersion: "1",
         adapterId: "node-typescript",
-        revision: ACTIVATION_REVISION,
-        state: "available",
-        reasonCode: "AVAILABLE",
+        revision: activationRevision,
+        state: activationState,
+        reasonCode: activationState === "available" ? "AVAILABLE" : "NOT_PROVISIONED",
         policyResult: "allowed",
-      }),
-    synchronizeActivationRevision: (): void => undefined,
+      });
+    },
   };
 }
 
@@ -562,6 +575,9 @@ beforeEach(async () => {
   tokenSequence = 0;
   referenceCapacity = undefined;
   rejectEventPublication = false;
+  activationRevision = ACTIVATION_REVISION;
+  activationState = "available";
+  activationFailure = false;
   browserSessions = newBrowserSessions();
   delete env.KEIKO_EDITOR_DEBUG;
   await startServer();
@@ -593,7 +609,6 @@ describe("governed DAP debug routes", () => {
           reasonCode: "AVAILABLE",
           policyResult: "allowed",
         }),
-      synchronizeActivationRevision: (): void => undefined,
     });
 
     expect(Object.isFrozen(service)).toBe(true);
@@ -606,7 +621,6 @@ describe("governed DAP debug routes", () => {
       "references",
       "events",
       "activation",
-      "synchronizeActivationRevision",
     ]);
     expect("registry" in service).toBe(false);
     expect("lifecycleLedger" in service).toBe(false);
@@ -1107,6 +1121,86 @@ describe("governed DAP debug routes", () => {
     expect(body.snapshot.breakpointOmittedCount).toBeGreaterThan(0);
   });
 
+  it("revokes before dispatch when the workspace activation revision changes", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    manager.setPaused(session.sessionId);
+    const before = manager.requests.length;
+    activationRevision += 1;
+
+    const response = await debugJson("/api/editor/debug/stack", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      startFrame: 0,
+      levels: 1,
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain("STALE_ACTIVATION");
+    expect(manager.revocations).toStrictEqual([session.sessionId]);
+    expect(manager.requests).toHaveLength(before);
+    expect(manager.health(session.sessionId)?.state).toBe("revoked");
+  });
+
+  it("treats activation resolver failure as synchronous revocation before dispatch", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    manager.setPaused(session.sessionId);
+    const before = manager.requests.length;
+    activationFailure = true;
+
+    const response = await debugJson("/api/editor/debug/stack", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      startFrame: 0,
+      levels: 1,
+    });
+
+    expect(response.status).toBe(403);
+    expect(manager.revocations).toStrictEqual([session.sessionId]);
+    expect(manager.requests).toHaveLength(before);
+  });
+
+  it("revalidates activation before active instrumentation dispatch", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    const initial = (await (await instrumentation(cookie)).json()) as {
+      readonly etag: string;
+    };
+    const before = manager.requests.length;
+    activationState = "notProvisioned";
+
+    const response = await putBreakpoints(cookie, breakpointMutationBody(), initial.etag);
+
+    expect(response.status).toBe(202);
+    expect(manager.revocations).toStrictEqual([session.sessionId]);
+    expect(manager.requests).toHaveLength(before);
+    expect(manager.health(session.sessionId)?.state).toBe("revoked");
+  });
+
   it("projects stack, scopes, variables, setVariable, controls, and registered watches opaquely", async () => {
     enableDebug();
     const cookie = cookieFrom(await bootstrap());
@@ -1248,6 +1342,87 @@ describe("governed DAP debug routes", () => {
     expect(staleScope.status).toBe(409);
     expect(status.status).toBe(200);
     expect(stopped.status).toBe(200);
+  });
+
+  it("caps and validates hostile scope arrays before minting pause references", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    manager.setPaused(session.sessionId);
+    const stack = await debugJson("/api/editor/debug/stack", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      startFrame: 0,
+      levels: 1,
+    });
+    const frameRef = requiredFirst(
+      ((await stack.json()) as { readonly frames: readonly { readonly frameRef: string }[] })
+        .frames,
+    ).frameRef;
+    manager.scopeCount = 1_001;
+
+    const response = await debugJson("/api/editor/debug/scopes", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      frameRef,
+    });
+    const body = (await response.json()) as {
+      readonly scopes: readonly unknown[];
+      readonly retainedCount: number;
+      readonly omittedCount: number;
+      readonly truncated: boolean;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.scopes).toHaveLength(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame);
+    expect(body.retainedCount).toBe(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame);
+    expect(body.omittedCount).toBe(1_001 - DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame);
+    expect(body.truncated).toBe(true);
+  });
+
+  it("fails the session closed when retained scopes exceed reference capacity", async () => {
+    await closeServer();
+    referenceCapacity = 1;
+    await startServer();
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    manager.setPaused(session.sessionId);
+    const stack = await debugJson("/api/editor/debug/stack", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      startFrame: 0,
+      levels: 1,
+    });
+    const frameRef = requiredFirst(
+      ((await stack.json()) as { readonly frames: readonly { readonly frameRef: string }[] })
+        .frames,
+    ).frameRef;
+
+    const response = await debugJson("/api/editor/debug/scopes", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      frameRef,
+    });
+
+    expect(response.status).toBe(500);
+    expect(manager.health(session.sessionId)?.state).toBe("failed");
   });
 
   it("drops only complete variable records to keep a 200-variable response below 256 KiB", async () => {

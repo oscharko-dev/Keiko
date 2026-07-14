@@ -6,7 +6,12 @@
  * injected and the command-specific editor state, so the UI can derive an enabled command set
  * deterministically without invoking the host.
  */
-import type { EditorCommand, EditorCommandContext, EditorCommandId } from "./command-types.js";
+import type {
+  EditorCommand,
+  EditorCommandContext,
+  EditorCommandId,
+  EditorDebugSessionState,
+} from "./command-types.js";
 
 // The identity types live in `command-types.ts` so `host-port.ts` can `import type` them without
 // pulling in this runtime catalogue; they are re-exported here so consumers (and the package barrel)
@@ -15,6 +20,7 @@ export type {
   EditorCommand,
   EditorCommandContext,
   EditorCommandId,
+  EditorDebugSessionState,
   EditorHostCapability,
 } from "./command-types.js";
 
@@ -152,17 +158,29 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.acceptConflictOurs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
   "editor.acceptConflictTheirs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
   "editor.acceptConflictBoth": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
-  "editor.debugContinue": () => true,
-  "editor.debugPause": () => true,
-  "editor.debugStepOver": () => true,
-  "editor.debugStepInto": () => true,
-  "editor.debugStepOut": () => true,
-  "editor.debugStop": () => true,
+  "editor.debugContinue": (ctx) => canStart(ctx.debugSessionState) || isPaused(ctx),
+  "editor.debugPause": (ctx) => ctx.debugSessionState === "running",
+  "editor.debugStepOver": isPaused,
+  "editor.debugStepInto": isPaused,
+  "editor.debugStepOut": isPaused,
+  "editor.debugStop": (ctx) => isActive(ctx.debugSessionState),
   "editor.debugToggleBreakpoint": () => true,
   "editor.debugToggleConditionalBreakpoint": () => true,
   "editor.debugEditLogpoint": () => true,
   "editor.debugToggleBreakpointEnabled": () => true,
 };
+
+function canStart(state: EditorDebugSessionState | null): boolean {
+  return state === null;
+}
+
+function isPaused(ctx: EditorCommandContext): boolean {
+  return ctx.debugSessionState === "paused";
+}
+
+function isActive(state: EditorDebugSessionState | null): boolean {
+  return state === "reserved" || state === "starting" || state === "running" || state === "paused";
+}
 
 function hasRequiredCapabilities(command: EditorCommand, ctx: EditorCommandContext): boolean {
   return command.requiredCapabilities.every((capability) =>

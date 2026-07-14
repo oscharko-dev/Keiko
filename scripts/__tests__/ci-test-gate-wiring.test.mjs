@@ -72,6 +72,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:editor-perf",
   "npm run test:e2e:workspace-perf",
@@ -92,6 +93,7 @@ const REQUIRED_CI_COMMANDS = [
   // the dependency verifier the general audit never completed — no @types/* in runtime deps, engines
   // floors present, build-tool script imports declared at root.
   "npm run check:dependency-hygiene",
+  "npm run check:gitar-config",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.

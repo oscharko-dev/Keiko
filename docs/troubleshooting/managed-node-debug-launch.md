@@ -37,7 +37,7 @@ Provision the approved Bubblewrap backend on Linux. OCI argv planning remains fa
 current production launcher until container-id and cgroup inspection and teardown are qualified; a
 digest-pinned image alone does not enable debugging. Do not enable host networking, publish a port,
 or run the adapter on the host as a workaround. See
-[ADR-0134](../adr/ADR-0134-governed-debug-adapter-session-management.md).
+[ADR-0136](../adr/ADR-0136-governed-debug-adapter-session-management.md).
 
 ## Restore a rejected launch target
 

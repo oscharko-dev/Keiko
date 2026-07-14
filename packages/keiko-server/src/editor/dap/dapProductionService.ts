@@ -21,6 +21,8 @@ import type { DebugCapsulePlanBinding, DebugSpawnEnvelope } from "./debugCapsule
 import {
   createProductionDebugLaunchContextResolver,
   createProductionDebugTargetRevalidator,
+  qualifyProductionDebugBackend,
+  type DebugBackendQualificationInput,
   type DebugLaunchContextResolverDeps,
 } from "./debugLaunchContext.js";
 import type { DebugLaunchCatalogDeps } from "./debugLaunchCatalog.js";
@@ -48,10 +50,13 @@ export interface NodeDebugAdapterProvisioning {
 
 export interface DapProductionProvisioning {
   readonly adapter: NodeDebugAdapterProvisioning;
+  readonly backendQualification: DebugBackendQualificationInput;
   readonly adapterPreflight: (
     identity: DapProcessStartInput["identity"],
   ) => DapAdapterPreflightDeps;
-  readonly launchContext: (binding: DebugCapsulePlanBinding) => DebugLaunchContextResolverDeps;
+  readonly launchContext: (
+    binding: DebugCapsulePlanBinding,
+  ) => Omit<DebugLaunchContextResolverDeps, "backendQualification">;
   readonly targetCatalog: (workspaceRealPath: string) => DebugLaunchCatalogDeps;
 }
 
@@ -64,7 +69,7 @@ export interface DapProductionServiceDeps {
   ) => Promise<void>;
   readonly now: () => number;
   readonly epoch: () => number;
-  readonly activationRevision: () => number;
+  readonly activationCurrent: (workspacePartitionKey: string, expectedRevision: number) => boolean;
   readonly emitOutputLimit: (event: DebugOutputLimitEvent) => Promise<void> | void;
   readonly endpoint?: DapPrivateEndpointDeps | undefined;
   readonly platform?: NodeJS.Platform | undefined;
@@ -90,6 +95,7 @@ export interface DapProductionServiceFactories {
   readonly createLayer2Validator: typeof createDebugLaunchLayer2Validator;
   readonly createEndpointDeps: typeof createNodeDapPrivateEndpointDeps;
   readonly createTargetRevalidator: typeof createProductionDebugTargetRevalidator;
+  readonly qualifyBackend: typeof qualifyProductionDebugBackend;
   readonly createLaunchContextResolver: typeof createProductionDebugLaunchContextResolver;
   readonly createLauncher: typeof createProductionDebugCapsuleLauncher;
   readonly connectEndpoint: typeof connectPrivateDapEndpoint;
@@ -106,6 +112,7 @@ const PRODUCTION_FACTORIES: DapProductionServiceFactories = Object.freeze({
   createLayer2Validator: createDebugLaunchLayer2Validator,
   createEndpointDeps: createNodeDapPrivateEndpointDeps,
   createTargetRevalidator: createProductionDebugTargetRevalidator,
+  qualifyBackend: qualifyProductionDebugBackend,
   createLaunchContextResolver: createProductionDebugLaunchContextResolver,
   createLauncher: createProductionDebugCapsuleLauncher,
   connectEndpoint: connectPrivateDapEndpoint,
@@ -147,7 +154,7 @@ function launcherDeps(
   return {
     now: deps.now,
     epoch: deps.epoch,
-    activationRevision: deps.activationRevision,
+    activationCurrent: deps.activationCurrent,
     platform: deps.platform,
     revalidateTarget,
   };
@@ -157,6 +164,7 @@ function composeDapProductionService(
   deps: DapProductionServiceDeps,
   factories: DapProductionServiceFactories,
 ): DapProductionService {
+  const backendQualification = factories.qualifyBackend(deps.provisioning.backendQualification);
   const projector = factories.createEvidenceProjector(deps.evidenceStore);
   const eventBridge = factories.createEventBridge();
   const lifecycleLedger = factories.createLifecycleLedger({
@@ -174,7 +182,10 @@ function composeDapProductionService(
     now: deps.now,
     epoch: deps.epoch,
     resolveContext: (input) =>
-      factories.createLaunchContextResolver(deps.provisioning.launchContext(input.binding))(input),
+      factories.createLaunchContextResolver({
+        ...deps.provisioning.launchContext(input.binding),
+        backendQualification,
+      })(input),
   });
   const endpoint = deps.endpoint ?? factories.createEndpointDeps();
   const revalidateTarget = productionTargetRevalidator(deps.provisioning, factories);

@@ -609,6 +609,9 @@ function handleContinuedEvent(
 ): void {
   deps.registry.resume(sessionId);
   const session = deps.registry.session(sessionId);
+  // Stryker disable next-line ConditionalExpression: resume and session are synchronous operations
+  // on the same registry; if resume accepts the id, the session cannot disappear in between. The
+  // defensive return remains for future registry implementations.
   if (session === undefined) return;
   const pauseGeneration = session.pauseGeneration;
   publishEvent(deps, binding, { kind: "continued", sessionId, pauseGeneration });

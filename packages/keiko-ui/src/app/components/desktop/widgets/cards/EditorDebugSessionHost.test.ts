@@ -1,6 +1,37 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DebugSessionSnapshot } from "./debugSessionStore";
-import { derivePausedDebugValues } from "./EditorDebugSessionHost";
+import {
+  BreakpointContextMenu,
+  EditorDebugSessionHost,
+  debugEditorLabels,
+  derivePausedDebugValues,
+} from "./EditorDebugSessionHost";
+import type { EditorSurfaceProps } from "./EditorSurface";
+import { useDebugSession, type DebugSessionActions } from "./useDebugSession";
+import { debuggingTranslate } from "../panels/debugging-i18n";
+
+const actions = {
+  refreshInstrumentation: vi.fn(async () => {}),
+  refreshSession: vi.fn(async () => {}),
+  start: vi.fn(async () => {}),
+  control: vi.fn<DebugSessionActions["control"]>(async () => {}),
+  saveBreakpoints: vi.fn(async () => {}),
+  loadStack: vi.fn(async () => {}),
+  loadScopes: vi.fn(async () => {}),
+  loadVariables: vi.fn(async () => {}),
+  saveWatches: vi.fn(async () => {}),
+  saveExceptionFilters: vi.fn(async () => {}),
+  evaluateWatch: vi.fn(async () => null),
+  setVariable: vi.fn(async () => {}),
+};
+
+vi.mock("./useDebugSession", () => ({
+  useDebugSession: vi.fn(),
+}));
 
 function snapshot(sourceFileId = "src/program.ts"): DebugSessionSnapshot {
   const frameRef = "frame-1";
@@ -56,6 +87,17 @@ function snapshot(sourceFileId = "src/program.ts"): DebugSessionSnapshot {
               },
               expensive: false,
             },
+            {
+              scopeRef: "scope-2",
+              name: {
+                value: "Arguments",
+                truncated: false,
+                originalBytes: 9,
+                retainedBytes: 9,
+                omittedBytes: 0,
+              },
+              expensive: false,
+            },
           ],
           truncated: false,
           omittedCount: 0,
@@ -95,12 +137,74 @@ function snapshot(sourceFileId = "src/program.ts"): DebugSessionSnapshot {
           omittedCount: 0,
         },
       ],
+      [
+        "scope-2",
+        {
+          parentRef: "scope-2",
+          nodes: [
+            {
+              kind: "variable",
+              name: {
+                value: "input",
+                truncated: false,
+                originalBytes: 5,
+                retainedBytes: 5,
+                omittedBytes: 0,
+              },
+              value: {
+                value: "x",
+                truncated: false,
+                originalBytes: 1,
+                retainedBytes: 1,
+                omittedBytes: 0,
+              },
+              presentation: "data",
+              children: [],
+              retainedCount: 0,
+              omittedCount: 0,
+              truncated: false,
+            },
+          ],
+          truncated: false,
+          omittedCount: 0,
+        },
+      ],
     ]),
     watchResults: new Map(),
-    console: { entries: [], evictedEntries: 0, evictedBytes: 0 },
+    console: { entries: [], retainedBytes: 0, evictedEntries: 0, evictedBytes: 0 },
     stopDescription: null,
     sequence: 1,
     streamReady: true,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(useDebugSession).mockReturnValue({ snapshot: snapshot(), actions });
+});
+
+function renderHost(): {
+  readonly host: () => NonNullable<EditorSurfaceProps["debug"]>;
+} {
+  let current: EditorSurfaceProps["debug"];
+  render(
+    createElement(EditorDebugSessionHost, {
+      workspaceId: "workspace-1",
+      activationRevision: 1,
+      enabled: true,
+      fileId: "src/program.ts",
+      onOpenDebugPanel: vi.fn(),
+      onHostChange: (next) => {
+        current = next;
+      },
+      onSessionStateChange: vi.fn(),
+    }),
+  );
+  return {
+    host: () => {
+      if (current === undefined) throw new Error("Expected debug host");
+      return current;
+    },
   };
 }
 
@@ -110,13 +214,216 @@ describe("derivePausedDebugValues", () => {
       paused: true,
       pauseGeneration: 3,
       documentUri: "keiko://program",
-      values: [{ line: 7, column: 2, value: "count: 2" }],
+      values: [
+        {
+          line: 7,
+          column: 2,
+          value: "Local: count: 2 · Arguments: input: x",
+        },
+      ],
     });
+  });
+
+  it("emits exactly one bounded summary instead of overlapping per-variable decorations", () => {
+    const values = derivePausedDebugValues(snapshot(), "src/program.ts", "keiko://program").values;
+
+    expect(values).toHaveLength(1);
+    expect(values[0]?.value.length).toBeLessThanOrEqual(320);
   });
 
   it("fails closed when the paused frame belongs to another file", () => {
     expect(
       derivePausedDebugValues(snapshot("src/other.ts"), "src/program.ts", "keiko://program"),
     ).toMatchObject({ paused: false, values: [] });
+  });
+});
+
+describe("debug editor localization", () => {
+  it("injects complete English and German gutter and command labels", () => {
+    const english = debugEditorLabels(debuggingTranslate("en"));
+    const german = debugEditorLabels(debuggingTranslate("de"));
+
+    expect(english.gutter.conditional).toBe("Set conditional breakpoint");
+    expect(english.commands.stepOver).toBe("Debug: Step Over");
+    expect(german.gutter.conditional).toBe("Bedingten Haltepunkt setzen");
+    expect(german.commands.stepOver).toBe("Debuggen: Überspringen");
+  });
+});
+
+describe("EditorDebugSessionHost", () => {
+  it("sends only paused-state controls and blocks Pause while already paused", async () => {
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => {
+      rendered.host().commands.continue();
+      rendered.host().commands.pause();
+      rendered.host().commands.stepOver();
+      rendered.host().commands.stepInto();
+      rendered.host().commands.stepOut();
+      rendered.host().commands.stop();
+    });
+
+    expect(actions.control.mock.calls.map((call) => call[1])).toEqual([
+      "continue",
+      "next",
+      "stepIn",
+      "stepOut",
+      "stop",
+    ]);
+    expect(rendered.host().commands.isAvailable?.("pause")).toBe(false);
+    expect(rendered.host().commands.isAvailable?.("continue")).toBe(true);
+  });
+
+  it("allows only Pause and Stop while running and sends no paused-only requests", async () => {
+    const running = snapshot();
+    if (running.session === null) throw new Error("Expected fixture session");
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...running, session: { ...running.session, status: "running" } },
+      actions,
+    });
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => {
+      rendered.host().commands.continue();
+      rendered.host().commands.pause();
+      rendered.host().commands.stepOver();
+      rendered.host().commands.stepInto();
+      rendered.host().commands.stepOut();
+      rendered.host().commands.stop();
+    });
+
+    expect(actions.start).not.toHaveBeenCalled();
+    expect(actions.control.mock.calls.map((call) => call[1])).toEqual(["pause", "stop"]);
+    expect(rendered.host().commands.isAvailable?.("continue")).toBe(false);
+    expect(rendered.host().commands.isAvailable?.("pause")).toBe(true);
+  });
+
+  it("starts only without a session and rejects terminal-session restart attempts", async () => {
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot(), session: null },
+      actions,
+    });
+    const withoutSession = renderHost();
+    await waitFor(() => expect(withoutSession.host()).toBeDefined());
+    act(() => withoutSession.host().commands.continue());
+    expect(actions.start).toHaveBeenCalledOnce();
+
+    vi.clearAllMocks();
+    const failed = snapshot();
+    if (failed.session === null) throw new Error("Expected fixture session");
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...failed, session: { ...failed.session, status: "failed" } },
+      actions,
+    });
+    const terminalSession = renderHost();
+    await waitFor(() => expect(terminalSession.host()).toBeDefined());
+    act(() => terminalSession.host().commands.continue());
+
+    expect(actions.start).not.toHaveBeenCalled();
+    expect(actions.control).not.toHaveBeenCalled();
+    expect(terminalSession.host().commands.isAvailable?.("continue")).toBe(false);
+  });
+
+  it("surfaces a redacted visible error when an editor command fails", async () => {
+    actions.control.mockRejectedValueOnce(new Error("private adapter details"));
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => rendered.host().commands.continue());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The debug action failed. The server state remains authoritative.",
+    );
+    expect(screen.queryByText(/private adapter details/u)).toBeNull();
+  });
+
+  it("executes the localized gutter menu action and returns focus", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "prompt").mockReturnValue("count > 1");
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => {
+      rendered.host().gutter.onOpenContextMenu({
+        line: 7,
+        breakpoint: undefined,
+        actions: ["toggle", "toggleConditional", "editLogpoint", "toggleEnabled"],
+      });
+    });
+    await user.click(screen.getByRole("menuitem", { name: "Set conditional breakpoint" }));
+
+    expect(actions.saveBreakpoints).toHaveBeenCalledWith(
+      "src/program.ts",
+      expect.arrayContaining([
+        expect.objectContaining({ line: 7, kind: "conditional", condition: "count > 1" }),
+      ]),
+    );
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+});
+
+describe("BreakpointContextMenu", () => {
+  it("supports arrow navigation, action dispatch, Escape close, and focus return", async () => {
+    const user = userEvent.setup();
+    const returnFocus = document.createElement("button");
+    document.body.append(returnFocus);
+    returnFocus.focus();
+    const onAction = vi.fn();
+    const onClose = vi.fn();
+    const labels = debugEditorLabels(debuggingTranslate("en")).gutter;
+    const { container, rerender } = render(
+      createElement(BreakpointContextMenu, {
+        context: {
+          line: 7,
+          breakpoint: {
+            id: "line-7",
+            fileId: "src/program.ts",
+            line: 7,
+            enabled: true,
+            kind: "line",
+            verification: "verified",
+          },
+          actions: ["toggle", "toggleConditional", "editLogpoint", "toggleEnabled"],
+        },
+        labels,
+        ariaLabel: "Breakpoint actions for line 7",
+        returnFocus,
+        onAction,
+        onClose,
+      }),
+    );
+
+    expect(screen.getByRole("menuitem", { name: "Toggle breakpoint" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Disable breakpoint" })).toBeEnabled();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onAction).toHaveBeenCalledWith(
+      "toggleConditional",
+      expect.objectContaining({ line: 7 }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(returnFocus).toHaveFocus();
+    expect(await axe(container)).toHaveNoViolations();
+
+    rerender(
+      createElement(BreakpointContextMenu, {
+        context: { line: 7, breakpoint: undefined, actions: ["toggle", "toggleEnabled"] },
+        labels,
+        ariaLabel: "Breakpoint actions for line 7",
+        returnFocus,
+        onAction,
+        onClose,
+      }),
+    );
+    screen.getByRole("menuitem", { name: "Toggle breakpoint" }).focus();
+    await user.keyboard("{Escape}");
+    expect(returnFocus).toHaveFocus();
+    expect(screen.queryByRole("menuitem", { name: "Disable breakpoint" })).toBeNull();
+    returnFocus.remove();
   });
 });

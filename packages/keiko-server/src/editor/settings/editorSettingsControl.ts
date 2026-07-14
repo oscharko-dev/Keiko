@@ -69,7 +69,7 @@ export interface EditorSettingsControlOptions {
         readonly settings: readonly EditorM7ResolvedSetting[];
       }) => EditorM7AiActivationSummary)
     | undefined;
-  /** ADR-0134 D7 derived gate; `debuggingEnabled` remains the only durable opt-in. */
+  /** ADR-0136 D7 derived gate; `debuggingEnabled` remains the only durable opt-in. */
   readonly debugActivation?: DebugActivationControlService | undefined;
 }
 

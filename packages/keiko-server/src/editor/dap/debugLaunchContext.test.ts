@@ -26,6 +26,7 @@ import type { ApprovedDebugArtifact } from "./debugLaunchPlan.js";
 import {
   createProductionDebugLaunchContextResolver,
   createProductionDebugTargetRevalidator,
+  qualifyProductionDebugBackend,
   type DebugLaunchContextResolverDeps,
   type DebugProvisionedArtifact,
 } from "./debugLaunchContext.js";
@@ -87,11 +88,11 @@ fi
 [ "$4" = "--new-session" ] || exit 45
 [ "$5" = "--dir" ] && [ "$6" = "/run" ] || exit 46
 [ "$7" = "--dir" ] && [ "$8" = "/run/keiko-debug" ] || exit 47
-[ "\${24}" = "--bind" ] && [ "\${25}" = "${realpathSync(runtime)}" ] || exit 48
+[ "\${24}" = "--bind" ] && [ -d "\${25}" ] || exit 48
 [ "\${26}" = "/run/keiko-debug" ] && [ "\${27}" = "--" ] || exit 49
 [ "\${28}" = "/bin/sh" ] && [ "\${29}" = "-c" ] || exit 50
 [ "\${30}" = "printf qualified > /run/keiko-debug/.qualification-probe" ] || exit 51
-printf qualified > "${runtime}/.qualification-probe"
+printf qualified > "\${25}/.qualification-probe"
 `,
   );
   const closure = join(approved, "closure");
@@ -108,6 +109,11 @@ printf qualified > "${runtime}/.qualification-probe"
     TEMP: "/run/keiko-debug/tmp",
     TMP: "/run/keiko-debug/tmp",
   });
+  const backendArtifact = provisioned(backend, "/opt/keiko-backend/bwrap");
+  const backendQualification = qualifyProductionDebugBackend({
+    backend: backendArtifact,
+    platform: "linux",
+  });
   return {
     workspace,
     runtimeRoot,
@@ -123,7 +129,8 @@ printf qualified > "${runtime}/.qualification-probe"
       shell: provisioned(executable(approved, "shell"), "/opt/keiko-runtime/shell"),
       npmUserConfig: provisioned(npmUserConfig, "/opt/keiko-debug/npm-user-config"),
       npmGlobalConfig: provisioned(npmGlobalConfig, "/opt/keiko-debug/npm-global-config"),
-      backend: provisioned(backend, "/opt/keiko-backend/bwrap"),
+      backend: backendArtifact,
+      backendQualification,
       runtimeClosure: [provisioned(closure, "/opt/keiko-runtime/lib")],
       platform: "linux",
       layer1Allowed: () => true,
@@ -163,6 +170,20 @@ function expectedArtifact(artifact: DebugProvisionedArtifact): ApprovedDebugArti
     mode: stat.mode,
     ownerUid: stat.uid,
   };
+}
+
+function backendIdentityDrifts(artifact: ApprovedDebugArtifact): readonly ApprovedDebugArtifact[] {
+  return [
+    { ...artifact, realPath: `${artifact.realPath}.drift` },
+    { ...artifact, approvedRoot: `${artifact.approvedRoot}.drift` },
+    { ...artifact, capsulePath: `${artifact.capsulePath}.drift` },
+    { ...artifact, identityDigest: "b".repeat(64) },
+    { ...artifact, device: artifact.device + 1 },
+    { ...artifact, inode: artifact.inode + 1 },
+    { ...artifact, size: artifact.size + 1 },
+    { ...artifact, mode: artifact.mode + 1 },
+    { ...artifact, ownerUid: artifact.ownerUid + 1 },
+  ];
 }
 
 function catalogTask(name: string): CommandTask {
@@ -635,24 +656,21 @@ describe("production debug launch context resolution", () => {
     ).rejects.toThrow("INVALID_DEBUG_ARTIFACT");
   });
 
-  it("rejects a fake bwrap that merely exits zero", async () => {
-    const current = fixture();
+  it("rejects a fake bwrap that merely exits zero", () => {
     const fake = executable(temporary("kdc-f-"), "bwrap", "#!/bin/sh\nexit 0\n");
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...current.deps,
+    expect(() =>
+      qualifyProductionDebugBackend({
         backend: provisioned(fake, "/opt/keiko-backend/bwrap"),
-      })(current.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
   });
 
-  it("rejects bwrap on a non-Linux platform and malformed version evidence", async () => {
+  it("rejects bwrap on a non-Linux platform and malformed version evidence", () => {
     const nonLinux = fixture();
-    await expect(
-      createProductionDebugLaunchContextResolver({ ...nonLinux.deps, platform: "darwin" })(
-        nonLinux.input,
-      ),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+    expect(() =>
+      qualifyProductionDebugBackend({ backend: nonLinux.deps.backend, platform: "darwin" }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
 
     for (const version of [
       "bubblewrap 1",
@@ -667,72 +685,67 @@ describe("production debug launch context resolution", () => {
         version,
       );
       const fake = executable(temporary("kdc-version-"), "bwrap", source);
-      await expect(
-        createProductionDebugLaunchContextResolver({
-          ...current.deps,
+      expect(() =>
+        qualifyProductionDebugBackend({
           backend: provisioned(fake, "/opt/keiko-backend/bwrap"),
-        })(current.input),
-      ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+          platform: "linux",
+        }),
+      ).toThrow("INVALID_DEBUG_BACKEND");
     }
   });
 
-  it("rejects backend execution errors, non-zero probes, and stale probe markers", async () => {
-    const executionError = fixture();
+  it("rejects backend execution errors, non-zero probes, and missing probe markers", () => {
     const missingInterpreter = executable(
       temporary("kdc-error-"),
-      "custom-sandbox",
+      "bwrap",
       "#!/missing/interpreter\n",
     );
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...executionError.deps,
-        backend: provisioned(missingInterpreter, "/opt/keiko-backend/custom-sandbox"),
-      })(executionError.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+    expect(() =>
+      qualifyProductionDebugBackend({
+        backend: provisioned(missingInterpreter, "/opt/keiko-backend/bwrap"),
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
 
-    const nonZeroVersion = fixture();
     const rejectedVersion = executable(
       temporary("kdc-version-status-"),
-      "custom-sandbox",
+      "bwrap",
       "#!/bin/sh\nprintf 'bubblewrap 12.34\\n'\nexit 1\n",
     );
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...nonZeroVersion.deps,
-        backend: provisioned(rejectedVersion, "/opt/keiko-backend/custom-sandbox"),
-      })(nonZeroVersion.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+    expect(() =>
+      qualifyProductionDebugBackend({
+        backend: provisioned(rejectedVersion, "/opt/keiko-backend/bwrap"),
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
 
-    const deletedBeforeProbe = fixture();
     const selfDeleting = executable(
       temporary("kdc-self-delete-"),
       "bwrap",
       "#!/bin/sh\nprintf 'bubblewrap 12.34\\n'\nrm \"$0\"\n",
     );
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...deletedBeforeProbe.deps,
+    expect(() =>
+      qualifyProductionDebugBackend({
         backend: provisioned(selfDeleting, "/opt/keiko-backend/bwrap"),
-      })(deletedBeforeProbe.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
 
-    const nonZero = fixture();
-    const runtime = nonZero.input.adapter.temp;
     const failingProbe = executable(
       temporary("kdc-nonzero-"),
       "bwrap",
       `#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'bubblewrap 12.34\\n'; exit 0; fi
-printf qualified > "${runtime}/.qualification-probe"
+printf qualified > "\${25}/.qualification-probe"
 exit 1
 `,
     );
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...nonZero.deps,
+    expect(() =>
+      qualifyProductionDebugBackend({
         backend: provisioned(failingProbe, "/opt/keiko-backend/bwrap"),
-      })(nonZero.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
 
     const stale = fixture();
     writeFileSync(join(stale.input.adapter.temp, ".qualification-probe"), "stale", "utf8");
@@ -741,73 +754,122 @@ exit 1
       "bwrap",
       '#!/bin/sh\nif [ "$1" = "--version" ]; then printf \'bubblewrap 12.34\\n\'; fi\nexit 0\n',
     );
-    await expect(
-      createProductionDebugLaunchContextResolver({
-        ...stale.deps,
+    expect(() =>
+      qualifyProductionDebugBackend({
         backend: provisioned(markerless, "/opt/keiko-backend/bwrap"),
-      })(stale.input),
-    ).rejects.toThrow("INVALID_DEBUG_BACKEND");
-    expect(existsSync(join(stale.input.adapter.temp, ".qualification-probe"))).toBe(false);
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
+    expect(readFileSync(join(stale.input.adapter.temp, ".qualification-probe"), "utf8")).toBe(
+      "stale",
+    );
   });
 
-  it("preserves default platform, container identity, and unsupported backend evidence", async () => {
+  it("rejects an unsupported backend instead of caching unavailable evidence", () => {
     const current = fixture();
     const backend = executable(
       temporary("kdc-custom-backend-"),
       "custom-sandbox",
       "#!/bin/sh\nprintf 'custom sandbox 1.0\\n'\n",
     );
-    const context = await createProductionDebugLaunchContextResolver({
-      ...current.deps,
-      backend: provisioned(backend, "/opt/keiko-backend/custom-sandbox"),
-      platform: undefined,
-      containerImage: "keiko/debug@sha256:fixed",
-    })(current.input);
-    expect(context.platform).toBe(process.platform);
-    expect(context.containerImage).toBe("keiko/debug@sha256:fixed");
-    expect(context.availability).toStrictEqual({
-      bubblewrap: false,
-      unshare: false,
-      seatbelt: false,
-      docker: false,
-      podman: false,
-    });
-
-    const masquerade = fixture();
-    const custom = executable(
-      temporary("kdc-custom-bwrap-"),
-      "custom-sandbox",
-      readFileSync(masquerade.deps.backend.hostPath, "utf8"),
-    );
-    const customContext = await createProductionDebugLaunchContextResolver({
-      ...masquerade.deps,
-      backend: provisioned(custom, "/opt/keiko-backend/custom-sandbox"),
-    })(masquerade.input);
-    expect(customContext.availability.bubblewrap).toBe(false);
+    expect(() =>
+      qualifyProductionDebugBackend({
+        backend: provisioned(backend, "/opt/keiko-backend/custom-sandbox"),
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
+    expect(current.deps.backendQualification.availability.bubblewrap).toBe(true);
   });
 
-  it("rejects runtime type and mode drift caused during backend qualification", async () => {
-    for (const mutation of ["file", "mode"] as const) {
-      const current = fixture();
-      const runtime = realpathSync(current.input.adapter.temp);
-      const command =
-        mutation === "file"
-          ? `rm -rf "${runtime}"; printf changed > "${runtime}"; chmod 700 "${runtime}"`
-          : `chmod 755 "${runtime}"`;
-      const backend = executable(
-        temporary("kdc-mutating-backend-"),
-        "custom-sandbox",
-        `#!/bin/sh
-${command}
-printf 'custom sandbox 1.0\\n'
+  it("preserves the qualified platform and fixed container identity", async () => {
+    const current = fixture();
+    const context = await createProductionDebugLaunchContextResolver({
+      ...current.deps,
+      containerImage: "keiko/debug@sha256:fixed",
+    })(current.input);
+
+    expect(context.platform).toBe("linux");
+    expect(context.containerImage).toBe("keiko/debug@sha256:fixed");
+    expect(context.availability).toBe(current.deps.backendQualification.availability);
+  });
+
+  it("qualifies with empty env in a private disposable runtime", () => {
+    const current = fixture();
+    const trace = join(temporary("kdc-qualification-trace-"), "trace");
+    const backend = executable(
+      temporary("kdc-private-qualification-"),
+      "bwrap",
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  [ -z "\${KEIKO_HOSTILE_CONTEXT+x}" ] || exit 60
+  printf 'version:clean\\n' >> "${trace}"
+  printf 'bubblewrap 12.34\\n'
+  exit 0
+fi
+[ -z "\${KEIKO_HOSTILE_CONTEXT+x}" ] || exit 61
+mode="$(/usr/bin/stat -c %a "\${25}" 2>/dev/null || /usr/bin/stat -f %Lp "\${25}")"
+printf 'probe:clean:%s:%s\\n' "$mode" "\${25}" >> "${trace}"
+printf qualified > "\${25}/.qualification-probe"
 `,
-      );
+    );
+    const previous = process.env.KEIKO_HOSTILE_CONTEXT;
+    process.env.KEIKO_HOSTILE_CONTEXT = "must-not-cross";
+    let qualification: ReturnType<typeof qualifyProductionDebugBackend>;
+    try {
+      qualification = qualifyProductionDebugBackend({
+        backend: provisioned(backend, "/opt/keiko-backend/bwrap"),
+        platform: "linux",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.KEIKO_HOSTILE_CONTEXT;
+      else process.env.KEIKO_HOSTILE_CONTEXT = previous;
+    }
+    const [version, probe] = readFileSync(trace, "utf8").trim().split("\n");
+    expect(version).toBe("version:clean");
+    expect(probe).toMatch(/^probe:clean:700:/u);
+    expect(qualification.availability.bubblewrap).toBe(true);
+    expect(Object.isFrozen(qualification)).toBe(true);
+    expect(Object.isFrozen(qualification.availability)).toBe(true);
+    expect(Object.isFrozen(qualification.backendExecutable)).toBe(true);
+    const qualificationRuntime = probe?.replace(/^probe:clean:700:/u, "");
+    expect(qualificationRuntime).not.toBe(realpathSync(current.input.adapter.temp));
+    expect(existsSync(qualificationRuntime ?? "")).toBe(false);
+  });
+
+  it("fails closed and cleans the private qualification runtime on owner drift", () => {
+    const current = fixture();
+    const actualUid = process.getuid?.();
+    if (actualUid === undefined) throw new Error("POSIX test requires getuid");
+    vi.spyOn(process, "getuid").mockReturnValue(actualUid + 1);
+
+    expect(() =>
+      qualifyProductionDebugBackend({
+        backend: current.deps.backend,
+        platform: "linux",
+      }),
+    ).toThrow("INVALID_DEBUG_RUNTIME");
+  });
+
+  it("rejects every qualified backend identity, platform, and availability drift", async () => {
+    const current = fixture();
+    const qualification = current.deps.backendQualification;
+    for (const backendExecutable of backendIdentityDrifts(qualification.backendExecutable)) {
       await expect(
         createProductionDebugLaunchContextResolver({
           ...current.deps,
-          backend: provisioned(backend, "/opt/keiko-backend/custom-sandbox"),
+          backendQualification: { ...qualification, backendExecutable },
         })(current.input),
-      ).rejects.toThrow("INVALID_DEBUG_RUNTIME");
+      ).rejects.toThrow("INVALID_DEBUG_BACKEND");
+    }
+    for (const backendQualification of [
+      { ...qualification, platform: "darwin" as const },
+      { ...qualification, availability: { ...qualification.availability, bubblewrap: false } },
+    ]) {
+      await expect(
+        createProductionDebugLaunchContextResolver({ ...current.deps, backendQualification })(
+          current.input,
+        ),
+      ).rejects.toThrow("INVALID_DEBUG_BACKEND");
     }
   });
 

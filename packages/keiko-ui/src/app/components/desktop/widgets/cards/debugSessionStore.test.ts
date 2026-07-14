@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DebugSession } from "@oscharko-dev/keiko-contracts";
 import {
   applyDebugEvent,
   DEBUG_CONSOLE_LIMITS,
   debugSessionSnapshot,
   resetDebugSessionStoreForTests,
+  setDebugInstrumentation,
+  setDebugScopes,
   setDebugSession,
+  setDebugStack,
+  setDebugVariables,
 } from "./debugSessionStore";
 
 function session(status: "paused" | "running", pauseGeneration: number): DebugSession {
@@ -46,6 +50,85 @@ describe("debugSessionStore", () => {
     resetDebugSessionStoreForTests();
   });
 
+  it("encodes each retained output entry only once while appending below the limits", () => {
+    const workspaceId = "canonical-workspace-id";
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      for (let sequence = 1; sequence <= 4; sequence += 1) {
+        applyDebugEvent(workspaceId, sequence, {
+          kind: "output",
+          sessionId: "session-1",
+          category: "stdout",
+          text: `entry-${String(sequence)}`,
+          truncated: false,
+          originalBytes: 7,
+          omittedBytes: 0,
+        });
+      }
+
+      expect(encode).toHaveBeenCalledTimes(4);
+    } finally {
+      encode.mockRestore();
+      resetDebugSessionStoreForTests();
+    }
+  });
+
+  it("does not re-encode an existing entry when the entry bound evicts it", () => {
+    const workspaceId = "canonical-workspace-id";
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    try {
+      for (let sequence = 1; sequence <= DEBUG_CONSOLE_LIMITS.maxEntries + 1; sequence += 1) {
+        applyDebugEvent(workspaceId, sequence, {
+          kind: "output",
+          sessionId: "session-1",
+          category: "stdout",
+          text: `entry-${String(sequence)}`,
+          truncated: false,
+          originalBytes: 7,
+          omittedBytes: 0,
+        });
+      }
+
+      expect(encode).toHaveBeenCalledTimes(DEBUG_CONSOLE_LIMITS.maxEntries + 1);
+    } finally {
+      encode.mockRestore();
+      resetDebugSessionStoreForTests();
+    }
+  });
+
+  it("tracks the UTF-8 byte boundary incrementally across eviction", () => {
+    const workspaceId = "canonical-workspace-id";
+    const text = "x".repeat(DEBUG_CONSOLE_LIMITS.upstreamMaxOutputBytes);
+    const chunkCount = DEBUG_CONSOLE_LIMITS.maxBytes / DEBUG_CONSOLE_LIMITS.upstreamMaxOutputBytes;
+    for (let sequence = 1; sequence <= chunkCount; sequence += 1) {
+      applyDebugEvent(workspaceId, sequence, {
+        kind: "output",
+        sessionId: "session-1",
+        category: "stdout",
+        text,
+        truncated: false,
+        originalBytes: text.length,
+        omittedBytes: 0,
+      });
+    }
+    applyDebugEvent(workspaceId, chunkCount + 1, {
+      kind: "output",
+      sessionId: "session-1",
+      category: "stdout",
+      text: "é",
+      truncated: false,
+      originalBytes: 2,
+      omittedBytes: 0,
+    });
+
+    expect(debugSessionSnapshot(workspaceId).console).toMatchObject({
+      retainedBytes: DEBUG_CONSOLE_LIMITS.maxBytes - text.length + 2,
+      evictedEntries: 1,
+      evictedBytes: text.length,
+    });
+    resetDebugSessionStoreForTests();
+  });
+
   it("ignores duplicate or stale SSE sequence numbers", () => {
     const event = {
       kind: "output" as const,
@@ -60,6 +143,66 @@ describe("debugSessionStore", () => {
     applyDebugEvent("canonical-workspace-id", 2, event);
 
     expect(debugSessionSnapshot("canonical-workspace-id").console.entries).toHaveLength(1);
+    resetDebugSessionStoreForTests();
+  });
+
+  it("does not let an older instrumentation response replace a newer revision", () => {
+    const workspaceId = "canonical-workspace-id";
+    const snapshot = {
+      schemaVersion: "1" as const,
+      workspaceId,
+      revision: 3,
+      etag: "revision-3",
+      breakpoints: [],
+      exceptionFilters: [],
+      watches: [],
+    };
+    expect(setDebugInstrumentation(workspaceId, snapshot)).toBe(true);
+    expect(
+      setDebugInstrumentation(workspaceId, {
+        ...snapshot,
+        revision: 2,
+        etag: "revision-2",
+      }),
+    ).toBe(false);
+    expect(debugSessionSnapshot(workspaceId).instrumentation).toMatchObject({ revision: 3 });
+    resetDebugSessionStoreForTests();
+  });
+
+  it("rejects pause projections after continue and after a newer pause generation", () => {
+    const workspaceId = "canonical-workspace-id";
+    const pause = { sessionId: "session-1", pauseGeneration: 2 };
+    setDebugSession(workspaceId, session("paused", 2));
+    applyDebugEvent(workspaceId, 1, {
+      kind: "continued",
+      sessionId: "session-1",
+      pauseGeneration: 2,
+    });
+
+    expect(
+      setDebugStack(workspaceId, pause, { frames: [], truncated: false, omittedCount: 0 }),
+    ).toBe(false);
+    expect(debugSessionSnapshot(workspaceId).session?.status).toBe("running");
+
+    setDebugSession(workspaceId, session("paused", 3));
+    expect(
+      setDebugScopes(workspaceId, pause, {
+        frameRef: "frame-1",
+        scopes: [],
+        truncated: false,
+        omittedCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      setDebugVariables(workspaceId, pause, {
+        parentRef: "scope-1",
+        nodes: [],
+        truncated: false,
+        omittedCount: 0,
+      }),
+    ).toBe(false);
+    expect(debugSessionSnapshot(workspaceId).scopesByFrame).toHaveLength(0);
+    expect(debugSessionSnapshot(workspaceId).variablesByParent).toHaveLength(0);
     resetDebugSessionStoreForTests();
   });
 

@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 interface RuntimeLibrary {
@@ -62,7 +70,7 @@ function runtimeLibraryPaths(node: string): readonly RuntimeLibrary[] {
   return [...unique.entries()].map(([capsulePath, source]) => ({ capsulePath, source }));
 }
 
-function runtimeClosure(node: string, closureRoot: string): readonly Record<string, string>[] {
+function nodeRuntimeClosure(node: string, closureRoot: string): readonly Record<string, string>[] {
   const values = runtimeLibraryPaths(node);
   const artifacts: Record<string, string>[] = [];
   for (const [index, library] of values.entries()) {
@@ -75,6 +83,32 @@ function runtimeClosure(node: string, closureRoot: string): readonly Record<stri
     throw new Error("Issue #2348 DAP E2E requires a closed Node runtime library closure.");
   }
   return artifacts;
+}
+
+function npmCliSource(): string {
+  const configured = process.env.npm_execpath;
+  const candidate = configured ?? execFileSync("/usr/bin/which", ["npm"], { encoding: "utf8" });
+  return requiredExecutable(candidate.trim());
+}
+
+function copyNpmRuntime(runtimeRoot: string): {
+  readonly npm: string;
+  readonly closure: readonly Record<string, string>[];
+} {
+  const sourceCli = npmCliSource();
+  const sourceRoot = realpathSync(join(dirname(sourceCli), ".."));
+  const targetRoot = join(runtimeRoot, "npm-package");
+  cpSync(sourceRoot, targetRoot, { dereference: true, recursive: true });
+  const npm = join(targetRoot, "bin", "npm-cli.js");
+  chmodSync(npm, 0o755);
+  return {
+    npm,
+    closure: [
+      artifact(join(targetRoot, "lib"), targetRoot, "/opt/keiko-runtime/npm/lib"),
+      artifact(join(targetRoot, "node_modules"), targetRoot, "/opt/keiko-runtime/npm/node_modules"),
+      artifact(join(targetRoot, "package.json"), targetRoot, "/opt/keiko-runtime/npm/package.json"),
+    ],
+  };
 }
 
 /** Builds the explicit, Linux-only operator document used by real DAP E2E paths. */
@@ -90,7 +124,7 @@ export function createE2eDapOperatorProvisioning(
   const closureRoot = join(operatorDir, "closure");
   copyExecutable(options.adapterFixturePath, join(binRoot, "keiko-dap"));
   const node = copyExecutable(realpathSync(process.execPath), join(runtimeRoot, "node"));
-  const npm = copyExecutable(realpathSync(process.execPath), join(runtimeRoot, "npm"));
+  const npmRuntime = copyNpmRuntime(runtimeRoot);
   const shell = copyExecutable(realpathSync("/bin/sh"), join(runtimeRoot, "shell"));
   const userConfig = copyEmpty(join(configRoot, "npm-user-config"));
   const globalConfig = copyEmpty(join(configRoot, "npm-global-config"));
@@ -112,12 +146,12 @@ export function createE2eDapOperatorProvisioning(
     launch: {
       adapterApprovedRoot: binRoot,
       node: artifact(node, runtimeRoot, "/opt/keiko-runtime/node"),
-      npm: artifact(npm, runtimeRoot, "/opt/keiko-runtime/npm"),
+      npm: artifact(npmRuntime.npm, runtimeRoot, "/opt/keiko-runtime/npm/bin/npm-cli.js"),
       shell: artifact(shell, runtimeRoot, "/opt/keiko-runtime/shell"),
       npmUserConfig: artifact(userConfig, configRoot, "/opt/keiko-debug/npm-user-config"),
       npmGlobalConfig: artifact(globalConfig, configRoot, "/opt/keiko-debug/npm-global-config"),
       backend: artifact(bwrap, dirname(bwrap), "/opt/keiko-backend/bwrap"),
-      runtimeClosure: runtimeClosure(node, closureRoot),
+      runtimeClosure: [...nodeRuntimeClosure(node, closureRoot), ...npmRuntime.closure],
     },
   });
 }

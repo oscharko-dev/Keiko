@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
@@ -21,9 +21,12 @@ import {
 import { subscribeSharedEventSource } from "./sharedEventSource";
 import {
   applyDebugEvent,
+  beginDebugStreamResync,
   debugSessionSnapshot,
+  invalidateDebugPausedProjections,
   markDebugStreamReady,
   replaceDebugExceptionFilters,
+  replaceDebugPausedProjections,
   replaceDebugWatches,
   setDebugInstrumentation,
   setDebugScopes,
@@ -32,8 +35,12 @@ import {
   setDebugVariables,
   setDebugWatchResult,
   subscribeDebugSession,
+  synchronizeDebugSequence,
+  type DebugPauseIdentity,
+  type DebugPausedProjection,
   type DebugScopeSnapshot,
   type DebugSessionSnapshot,
+  type DebugStackSnapshot,
   type DebugVariableSnapshot,
 } from "./debugSessionStore";
 
@@ -48,6 +55,25 @@ interface JsonRecord {
 
 interface MutationProjection {
   readonly snapshot: InstrumentationSnapshot;
+}
+
+interface DebugReplaySnapshot {
+  readonly sequence: number;
+  readonly retainedCount: number;
+  readonly retainedBytes: number;
+  readonly evictedCount: number;
+  readonly evictedBytes: number;
+}
+
+interface SetVariableProjection {
+  readonly sessionId: string;
+  readonly pauseGeneration: number;
+  readonly result: DebugVariableNode;
+}
+
+interface ExpandedFramePlan {
+  readonly frameIndex: number;
+  readonly expandedScopeIndexes: readonly number[];
 }
 
 const DEBUG_EVENTS = Object.freeze([
@@ -65,6 +91,7 @@ const DEBUG_EVENTS = Object.freeze([
 ] as const);
 
 const bootstrapRequests = new Map<string, Promise<void>>();
+const instrumentationRequests = new Map<string, Promise<InstrumentationSnapshot | null>>();
 
 function debugUrl(workspaceId: string, suffix: string): string {
   return `/api/editor/debug/${suffix}?workspaceId=${encodeURIComponent(workspaceId)}`;
@@ -91,10 +118,15 @@ function sharedBootstrap(workspaceId: string): Promise<void> {
 
 export function resetDebugBootstrapRequestsForTests(): void {
   bootstrapRequests.clear();
+  instrumentationRequests.clear();
 }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: JsonRecord, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
 }
 
 function parseJson(data: string): unknown {
@@ -390,6 +422,32 @@ function parseEnvelope(value: unknown): DebugEventEnvelope | null {
   return sequence === null || event === null ? null : { sequence, event };
 }
 
+function parseReplaySnapshot(value: unknown): DebugReplaySnapshot | null {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "sequence",
+      "retainedCount",
+      "retainedBytes",
+      "evictedCount",
+      "evictedBytes",
+    ])
+  )
+    return null;
+  const sequence = numberValue(value.sequence);
+  const retainedCount = numberValue(value.retainedCount);
+  const retainedBytes = numberValue(value.retainedBytes);
+  const evictedCount = numberValue(value.evictedCount);
+  const evictedBytes = numberValue(value.evictedBytes);
+  return sequence === null ||
+    retainedCount === null ||
+    retainedBytes === null ||
+    evictedCount === null ||
+    evictedBytes === null
+    ? null
+    : { sequence, retainedCount, retainedBytes, evictedCount, evictedBytes };
+}
+
 function instrument(value: unknown): InstrumentationSnapshot | null {
   if (
     !isRecord(value) ||
@@ -417,6 +475,20 @@ function instrument(value: unknown): InstrumentationSnapshot | null {
     exceptionFilters: value.exceptionFilters,
     watches: value.watches,
   };
+}
+
+function sharedInstrumentation(workspaceId: string): Promise<InstrumentationSnapshot | null> {
+  const pending = instrumentationRequests.get(workspaceId);
+  if (pending !== undefined) return pending;
+  const request = requestJson(debugUrl(workspaceId, "instrumentation"))
+    .then(instrument)
+    .finally(() => {
+      if (instrumentationRequests.get(workspaceId) === request) {
+        instrumentationRequests.delete(workspaceId);
+      }
+    });
+  instrumentationRequests.set(workspaceId, request);
+  return request;
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
@@ -523,6 +595,144 @@ function parseWatchResult(value: unknown): WatchEvaluationResult | null {
   };
 }
 
+function parseSetVariableProjection(value: unknown): SetVariableProjection | null {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["schemaVersion", "sessionId", "pauseGeneration", "result"]) ||
+    value.schemaVersion !== DAP_DEBUG_CONTRACT_SCHEMA_VERSION
+  )
+    return null;
+  const sessionId = stringValue(value.sessionId);
+  const pauseGeneration = numberValue(value.pauseGeneration);
+  if (sessionId === null || pauseGeneration === null || !debugVariableNode(value.result))
+    return null;
+  return { sessionId, pauseGeneration, result: value.result };
+}
+
+function pauseIdentity(session: DebugSession): DebugPauseIdentity {
+  return { sessionId: session.sessionId, pauseGeneration: session.pauseGeneration };
+}
+
+function currentPauseMatches(workspaceId: string, identity: DebugPauseIdentity): boolean {
+  const current = debugSessionSnapshot(workspaceId).session;
+  return (
+    current?.status === "paused" &&
+    current.sessionId === identity.sessionId &&
+    current.pauseGeneration === identity.pauseGeneration
+  );
+}
+
+function expandedFramePlan(snapshot: DebugSessionSnapshot): readonly ExpandedFramePlan[] {
+  if (snapshot.stack === null) return [];
+  return snapshot.stack.frames.flatMap((frame, frameIndex) => {
+    const scopes = snapshot.scopesByFrame.get(frame.frameRef)?.scopes;
+    if (scopes === undefined) return [];
+    const expandedScopeIndexes = scopes.flatMap((scope, scopeIndex) =>
+      snapshot.variablesByParent.has(scope.scopeRef) ? [scopeIndex] : [],
+    );
+    return [{ frameIndex, expandedScopeIndexes }];
+  });
+}
+
+async function runAbortable<T>(
+  requests: Set<AbortController>,
+  task: (signal: AbortSignal) => Promise<T>,
+): Promise<T | undefined> {
+  const controller = new AbortController();
+  requests.add(controller);
+  try {
+    const result = await task(controller.signal);
+    return controller.signal.aborted ? undefined : result;
+  } catch (error: unknown) {
+    if (controller.signal.aborted) return undefined;
+    throw error;
+  } finally {
+    requests.delete(controller);
+  }
+}
+
+function abortRequests(requests: Set<AbortController>): void {
+  for (const controller of requests) controller.abort();
+  requests.clear();
+}
+
+function inspectionMutation(identity: DebugPauseIdentity, extra: object): RequestInit {
+  return debugMutation({
+    schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+    sessionId: identity.sessionId,
+    pauseGeneration: identity.pauseGeneration,
+    ...extra,
+  });
+}
+
+async function requestStackProjection(
+  identity: DebugPauseIdentity,
+  signal: AbortSignal,
+): Promise<DebugPausedProjection["stack"] | null> {
+  const response = await requestJson("/api/editor/debug/stack", {
+    ...inspectionMutation(identity, {
+      startFrame: 0,
+      levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+    }),
+    signal,
+  });
+  return parseStack(response);
+}
+
+async function requestScopeProjection(
+  identity: DebugPauseIdentity,
+  frameRef: string,
+  signal: AbortSignal,
+): Promise<DebugScopeSnapshot | null> {
+  const response = await requestJson("/api/editor/debug/scopes", {
+    ...inspectionMutation(identity, { frameRef }),
+    signal,
+  });
+  return parseScopes(response, frameRef);
+}
+
+async function requestVariableProjection(
+  identity: DebugPauseIdentity,
+  variableRef: string,
+  signal: AbortSignal,
+): Promise<DebugVariableSnapshot | null> {
+  const response = await requestJson("/api/editor/debug/variables", {
+    ...inspectionMutation(identity, { variableRef }),
+    signal,
+  });
+  return parseVariables(response, variableRef);
+}
+
+async function rebuildPausedProjection(
+  identity: DebugPauseIdentity,
+  plan: readonly ExpandedFramePlan[],
+  signal: AbortSignal,
+): Promise<DebugPausedProjection> {
+  const stack = await requestStackProjection(identity, signal);
+  if (stack === null) throw new Error("Debug stack projection was invalid.");
+  const scopes: DebugScopeSnapshot[] = [];
+  const variables: DebugVariableSnapshot[] = [];
+  for (const framePlan of plan) {
+    const frame = stack.frames[framePlan.frameIndex];
+    if (frame === undefined) continue;
+    const scopeProjection = await requestScopeProjection(identity, frame.frameRef, signal);
+    if (scopeProjection === null) throw new Error("Debug scope projection was invalid.");
+    scopes.push(scopeProjection);
+    for (const scopeIndex of framePlan.expandedScopeIndexes) {
+      const scopeEntry = scopeProjection.scopes[scopeIndex];
+      if (scopeEntry === undefined) continue;
+      const variableProjection = await requestVariableProjection(
+        identity,
+        scopeEntry.scopeRef,
+        signal,
+      );
+      if (variableProjection === null) throw new Error("Debug variable projection was invalid.");
+      variables.push(variableProjection);
+    }
+  }
+  return { stack, scopes, variables };
+}
+
 export interface DebugSessionActions {
   readonly refreshInstrumentation: () => Promise<void>;
   readonly refreshSession: (sessionId: string) => Promise<void>;
@@ -568,36 +778,145 @@ export function useDebugSession(
     [stableWorkspaceId],
   );
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const requestControllers = useRef<Set<AbortController>>(new Set());
+  const streamResyncRequired = useRef(false);
+
+  const abortPendingRequests = useCallback((): void => {
+    abortRequests(requestControllers.current);
+  }, []);
+
+  const trackedRequest = useCallback(
+    async (url: string, init?: RequestInit): Promise<unknown | null> => {
+      const response = await runAbortable(requestControllers.current, (signal) =>
+        requestJson(url, { ...init, signal }),
+      );
+      return response ?? null;
+    },
+    [],
+  );
 
   const bootstrap = useCallback(async (): Promise<void> => {
     if (!enabled || stableWorkspaceId.length === 0) return;
     await sharedBootstrap(stableWorkspaceId);
   }, [enabled, stableWorkspaceId]);
 
+  const refreshInstrumentationAtLeast = useCallback(
+    async (minimumRevision = 0): Promise<boolean> => {
+      if (!enabled || stableWorkspaceId.length === 0) return false;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const parsed = await sharedInstrumentation(stableWorkspaceId);
+        if (parsed === null) return false;
+        if (parsed.revision >= minimumRevision) {
+          return setDebugInstrumentation(stableWorkspaceId, parsed);
+        }
+      }
+      return false;
+    },
+    [enabled, stableWorkspaceId],
+  );
+
   const refreshInstrumentation = useCallback(async (): Promise<void> => {
-    if (!enabled || stableWorkspaceId.length === 0) return;
-    const response = await requestJson(debugUrl(stableWorkspaceId, "instrumentation"));
-    const parsed = instrument(response);
-    if (parsed !== null) setDebugInstrumentation(stableWorkspaceId, parsed);
-  }, [enabled, stableWorkspaceId]);
+    await refreshInstrumentationAtLeast();
+  }, [refreshInstrumentationAtLeast]);
 
   const refreshSession = useCallback(
     async (sessionId: string): Promise<void> => {
       if (!enabled) return;
-      const response = await requestJson(
+      const response = await trackedRequest(
         `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
         { headers: { "x-keiko-csrf": "1" } },
       );
       const session = parseSession(response);
-      if (session !== null) setDebugSession(stableWorkspaceId, session);
+      const current = debugSessionSnapshot(stableWorkspaceId).session;
+      if (
+        session !== null &&
+        session.workspaceId === stableWorkspaceId &&
+        session.sessionId === sessionId &&
+        (current === null || current.sessionId === sessionId)
+      ) {
+        setDebugSession(stableWorkspaceId, session);
+      }
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
+  );
+
+  useEffect(() => (): void => abortPendingRequests(), [abortPendingRequests, stableWorkspaceId]);
+
+  const canonicalResync = useCallback(
+    async (sequence: number): Promise<void> => {
+      const current = debugSessionSnapshot(stableWorkspaceId).session;
+      abortPendingRequests();
+      beginDebugStreamResync(stableWorkspaceId);
+      const refreshed = await refreshInstrumentationAtLeast();
+      if (!refreshed) throw new Error("Debug instrumentation resync was rejected.");
+      if (current !== null) await refreshSession(current.sessionId);
+      synchronizeDebugSequence(stableWorkspaceId, sequence);
+    },
+    [abortPendingRequests, refreshInstrumentationAtLeast, refreshSession, stableWorkspaceId],
+  );
+
+  const handleStreamMessage = useCallback(
+    async (message: MessageEvent<string>): Promise<void> => {
+      if (message.type === "ready") {
+        if (!streamResyncRequired.current) markDebugStreamReady(stableWorkspaceId);
+        return;
+      }
+      if (message.type === "editor-debug:snapshot") {
+        if (parseReplaySnapshot(parseJson(message.data)) === null) return;
+        return;
+      }
+      if (message.type === "editor-debug:snapshot-required") {
+        const replay = parseReplaySnapshot(parseJson(message.data));
+        if (replay !== null) {
+          streamResyncRequired.current = true;
+          await canonicalResync(replay.sequence);
+          streamResyncRequired.current = false;
+        }
+        return;
+      }
+      if (streamResyncRequired.current) return;
+      const parsed = parseEnvelope(parseJson(message.data));
+      if (parsed === null) return;
+      const event = parsed.event;
+      if (
+        event.kind === "session-started" ||
+        event.kind === "session-stopped" ||
+        event.kind === "stopped" ||
+        event.kind === "continued" ||
+        event.kind === "exited"
+      ) {
+        abortPendingRequests();
+      }
+      applyDebugEvent(stableWorkspaceId, parsed.sequence, event);
+      if (event.kind === "session-stopped" || event.kind === "exited") return;
+      if (event.kind === "breakpoints-changed") {
+        if (event.workspaceId === stableWorkspaceId) {
+          await refreshInstrumentationAtLeast(event.revision);
+        }
+        return;
+      }
+      if (
+        event.kind === "session-started" ||
+        event.kind === "stopped" ||
+        event.kind === "continued"
+      ) {
+        await refreshSession(event.sessionId);
+      }
+    },
+    [
+      abortPendingRequests,
+      canonicalResync,
+      refreshInstrumentationAtLeast,
+      refreshSession,
+      stableWorkspaceId,
+    ],
   );
 
   useEffect(() => {
     if (!enabled || stableWorkspaceId.length === 0) return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
+    let eventQueue = Promise.resolve();
     const start = async (): Promise<void> => {
       try {
         await bootstrap();
@@ -608,27 +927,13 @@ export function useDebugSession(
           debugUrl(stableWorkspaceId, "events"),
           DEBUG_EVENTS,
           (message) => {
-            if (message.type === "ready") {
-              markDebugStreamReady(stableWorkspaceId);
-              return;
-            }
-            const parsed = parseEnvelope(parseJson(message.data));
-            if (parsed === null) return;
-            applyDebugEvent(stableWorkspaceId, parsed.sequence, parsed.event);
-            if (parsed.event.kind === "session-stopped" || parsed.event.kind === "exited") {
-              const current = debugSessionSnapshot(stableWorkspaceId).session;
-              if (current?.sessionId === parsed.event.sessionId) {
-                setDebugSession(stableWorkspaceId, null);
-              }
-              return;
-            }
-            if (
-              parsed.event.kind === "session-started" ||
-              parsed.event.kind === "stopped" ||
-              parsed.event.kind === "continued"
-            ) {
-              void refreshSession(parsed.event.sessionId);
-            }
+            eventQueue = eventQueue
+              .then(async (): Promise<void> => {
+                if (!cancelled) await handleStreamMessage(message);
+              })
+              .catch((): void => {
+                // The server returns redacted envelopes; keep the stream alive without logging.
+              });
           },
         );
       } catch {
@@ -638,14 +943,23 @@ export function useDebugSession(
     void start();
     return (): void => {
       cancelled = true;
+      streamResyncRequired.current = false;
+      abortPendingRequests();
       unsubscribe?.();
     };
-  }, [bootstrap, enabled, refreshInstrumentation, refreshSession, stableWorkspaceId]);
+  }, [
+    abortPendingRequests,
+    bootstrap,
+    enabled,
+    handleStreamMessage,
+    refreshInstrumentation,
+    stableWorkspaceId,
+  ]);
 
   const start = useCallback(
     async (target: DebugLaunchTarget, activationRevision: number): Promise<void> => {
       if (!enabled || stableWorkspaceId.length === 0) return;
-      const response = await requestJson(
+      const response = await trackedRequest(
         "/api/editor/debug/sessions",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -660,14 +974,14 @@ export function useDebugSession(
         await refreshSession(session.sessionId);
       }
     },
-    [enabled, refreshSession, stableWorkspaceId],
+    [enabled, refreshSession, stableWorkspaceId, trackedRequest],
   );
 
   const saveBreakpoints = useCallback(
     async (fileId: string, breakpoints: readonly SourceBreakpoint[]): Promise<void> => {
       const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
       if (!enabled || instrumentation === null) return;
-      const response = await requestJson(
+      const response = await trackedRequest(
         "/api/editor/debug/breakpoints",
         debugMutation(
           {
@@ -684,13 +998,13 @@ export function useDebugSession(
       const result = mutationProjection(response);
       if (result !== null) setDebugInstrumentation(stableWorkspaceId, result.snapshot);
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
   const control = useCallback(
     async (session: DebugSession, action: DebugSessionControlAction): Promise<void> => {
       if (!enabled) return;
-      await requestJson(
+      const response = await trackedRequest(
         "/api/editor/debug/control",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -699,14 +1013,28 @@ export function useDebugSession(
           pauseGeneration: session.pauseGeneration,
         }),
       );
+      if (response !== null && action !== "pause") {
+        abortPendingRequests();
+        setDebugSession(stableWorkspaceId, {
+          ...session,
+          status: action === "stop" ? "stopping" : "running",
+        });
+      }
     },
-    [enabled],
+    [abortPendingRequests, enabled, stableWorkspaceId, trackedRequest],
   );
 
-  const loadStack = useCallback(
-    async (session: DebugSession): Promise<void> => {
-      if (!enabled || session.status !== "paused") return;
-      const response = await requestJson(
+  const loadStackProjection = useCallback(
+    async (session: DebugSession): Promise<DebugStackSnapshot | null> => {
+      const identity = pauseIdentity(session);
+      if (
+        !enabled ||
+        session.status !== "paused" ||
+        !currentPauseMatches(stableWorkspaceId, identity)
+      ) {
+        return null;
+      }
+      const response = await trackedRequest(
         "/api/editor/debug/stack",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -717,15 +1045,29 @@ export function useDebugSession(
         }),
       );
       const parsed = parseStack(response);
-      if (parsed !== null) setDebugStack(stableWorkspaceId, parsed);
+      return parsed !== null && setDebugStack(stableWorkspaceId, identity, parsed) ? parsed : null;
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
-  const loadScopes = useCallback(
-    async (session: DebugSession, frameRef: string): Promise<void> => {
-      if (!enabled || session.status !== "paused") return;
-      const response = await requestJson(
+  const loadStack = useCallback(
+    async (session: DebugSession): Promise<void> => {
+      await loadStackProjection(session);
+    },
+    [loadStackProjection],
+  );
+
+  const loadScopesProjection = useCallback(
+    async (session: DebugSession, frameRef: string): Promise<DebugScopeSnapshot | null> => {
+      const identity = pauseIdentity(session);
+      if (
+        !enabled ||
+        session.status !== "paused" ||
+        !currentPauseMatches(stableWorkspaceId, identity)
+      ) {
+        return null;
+      }
+      const response = await trackedRequest(
         "/api/editor/debug/scopes",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -735,15 +1077,29 @@ export function useDebugSession(
         }),
       );
       const parsed = parseScopes(response, frameRef);
-      if (parsed !== null) setDebugScopes(stableWorkspaceId, parsed);
+      return parsed !== null && setDebugScopes(stableWorkspaceId, identity, parsed) ? parsed : null;
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
-  const loadVariables = useCallback(
-    async (session: DebugSession, variableRef: string): Promise<void> => {
-      if (!enabled || session.status !== "paused") return;
-      const response = await requestJson(
+  const loadScopes = useCallback(
+    async (session: DebugSession, frameRef: string): Promise<void> => {
+      await loadScopesProjection(session, frameRef);
+    },
+    [loadScopesProjection],
+  );
+
+  const loadVariablesProjection = useCallback(
+    async (session: DebugSession, variableRef: string): Promise<DebugVariableSnapshot | null> => {
+      const identity = pauseIdentity(session);
+      if (
+        !enabled ||
+        session.status !== "paused" ||
+        !currentPauseMatches(stableWorkspaceId, identity)
+      ) {
+        return null;
+      }
+      const response = await trackedRequest(
         "/api/editor/debug/variables",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -753,16 +1109,25 @@ export function useDebugSession(
         }),
       );
       const parsed = parseVariables(response, variableRef);
-      if (parsed !== null) setDebugVariables(stableWorkspaceId, parsed);
+      return parsed !== null && setDebugVariables(stableWorkspaceId, identity, parsed)
+        ? parsed
+        : null;
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
+  );
+
+  const loadVariables = useCallback(
+    async (session: DebugSession, variableRef: string): Promise<void> => {
+      await loadVariablesProjection(session, variableRef);
+    },
+    [loadVariablesProjection],
   );
 
   const saveWatches = useCallback(
     async (watches: readonly WatchExpression[]): Promise<void> => {
       const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
       if (!enabled || instrumentation === null) return;
-      const response = await requestJson(
+      const response = await trackedRequest(
         "/api/editor/debug/watches",
         debugMutation(
           {
@@ -784,14 +1149,14 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
   const saveExceptionFilters = useCallback(
     async (filters: readonly ExceptionBreakpointFilter[]): Promise<void> => {
       const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
       if (!enabled || instrumentation === null) return;
-      const response = await requestJson(
+      const response = await trackedRequest(
         "/api/editor/debug/exception-breakpoints",
         debugMutation(
           {
@@ -813,7 +1178,7 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
   const evaluateWatch = useCallback(
@@ -822,8 +1187,15 @@ export function useDebugSession(
       watchId: string,
       frameRef?: string,
     ): Promise<WatchEvaluationResult | null> => {
-      if (!enabled || session.status !== "paused") return null;
-      const response = await requestJson(
+      const identity = pauseIdentity(session);
+      if (
+        !enabled ||
+        session.status !== "paused" ||
+        !currentPauseMatches(stableWorkspaceId, identity)
+      ) {
+        return null;
+      }
+      const response = await trackedRequest(
         "/api/editor/debug/watches/evaluate",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -834,16 +1206,25 @@ export function useDebugSession(
         }),
       );
       const parsed = parseWatchResult(response);
-      if (parsed !== null) setDebugWatchResult(stableWorkspaceId, parsed);
-      return parsed;
+      return parsed !== null && setDebugWatchResult(stableWorkspaceId, identity, parsed)
+        ? parsed
+        : null;
     },
-    [enabled, stableWorkspaceId],
+    [enabled, stableWorkspaceId, trackedRequest],
   );
 
   const setVariable = useCallback(
     async (session: DebugSession, variableRef: string, value: string): Promise<void> => {
-      if (!enabled || session.status !== "paused") return;
-      await requestJson(
+      const identity = pauseIdentity(session);
+      if (
+        !enabled ||
+        session.status !== "paused" ||
+        !currentPauseMatches(stableWorkspaceId, identity)
+      ) {
+        return;
+      }
+      const plan = expandedFramePlan(debugSessionSnapshot(stableWorkspaceId));
+      const response = await trackedRequest(
         "/api/editor/debug/variables/set",
         debugMutation({
           schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -853,8 +1234,25 @@ export function useDebugSession(
           value,
         }),
       );
+      if (response === null) return;
+      const projection = parseSetVariableProjection(response);
+      if (
+        projection === null ||
+        projection.sessionId !== identity.sessionId ||
+        projection.pauseGeneration !== identity.pauseGeneration
+      ) {
+        throw new Error("Debug variable projection was invalid.");
+      }
+      abortPendingRequests();
+      if (!invalidateDebugPausedProjections(stableWorkspaceId, identity)) return;
+      const rebuilt = await runAbortable(requestControllers.current, (signal) =>
+        rebuildPausedProjection(identity, plan, signal),
+      );
+      if (rebuilt !== undefined) {
+        replaceDebugPausedProjections(stableWorkspaceId, identity, rebuilt);
+      }
     },
-    [enabled],
+    [abortPendingRequests, enabled, stableWorkspaceId, trackedRequest],
   );
 
   return useMemo(

@@ -186,14 +186,15 @@ in `docs/release/1209-perf-evidence.json` at `b5IdleDebugSession`. The scenario 
 server-projected debugging capability, waits for the real browser bootstrap and debug SSE stream,
 starts a file-target DAP session, and leaves it idle for at least 1,100 ms before typing in the open
 editor. It records one Chrome DevTools Timeline `EventDispatch` input-processing slice per inserted
-character, its p95, the Long Task observer count and maximum, the active-session state, and accepted
-debug-output bytes. The gate requires a captured trace sample for every character, p95 < 50 ms,
-exactly zero long tasks, and zero accepted output bytes; it always stops the session after capture.
+character, each slice's matched input-event count, its p95, the Long Task observer count and maximum,
+the active-session state, and accepted debug-output bytes. The gate requires a positive-duration
+trace sample with at least one matched input event for every character, p95 < 50 ms, exactly zero
+long tasks, and zero accepted output bytes; it always stops the session after capture.
 Consequently, a zero Long Task count is only the independent no-long-task assertion, never a claim of
 zero milliseconds of per-keystroke work.
 
 The final evidence must compare clean `origin/dev` and the candidate in Linux under identical
-toolchain, lockfile, browser, warm-up, and repetition conditions described by ADR-0134 D12. It must
+toolchain, lockfile, browser, warm-up, and repetition conditions described by ADR-0136 D12. It must
 record the candidate provenance, measured-work percentile, long-task count, and any B4/B6/B11 or
 bundle deltas. No measurement result is recorded by this documentation addendum.
 

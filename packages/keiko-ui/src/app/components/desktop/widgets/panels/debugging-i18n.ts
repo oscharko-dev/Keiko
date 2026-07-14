@@ -1,4 +1,5 @@
-import type { Locale } from "@/lib/i18n";
+import { useMemo } from "react";
+import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 
 const EN_MESSAGES = {
   title: "Governed debugging",
@@ -39,6 +40,70 @@ const EN_MESSAGES = {
     "Disabling debugging revokes any active governed debugging session in this workspace.",
   confirmDisable: "Disable debugging",
   cancel: "Cancel",
+  panelLabel: "Debug",
+  unavailableByPolicy: "Debugging is unavailable until enabled by policy.",
+  unavailableWithoutWorkspace:
+    "Debugging is unavailable until the host supplies a canonical workspace identity.",
+  noActiveSession: "No active debug session.",
+  sessionStatus: "Session is {status}.",
+  statusReserved: "reserved",
+  statusStarting: "starting",
+  statusRunning: "running",
+  statusPaused: "paused",
+  statusStopping: "stopping",
+  statusStopped: "stopped",
+  statusFailed: "failed",
+  statusRevoked: "revoked",
+  exceptionDescription: "Exception: {description}",
+  startCurrentFile: "Start debugging current file",
+  controlsLabel: "Debug controls",
+  continue: "Continue",
+  pause: "Pause",
+  stepOver: "Step over",
+  stepInto: "Step into",
+  stepOut: "Step out",
+  stop: "Stop debugging",
+  actionFailed: "The debug action failed. The server state remains authoritative.",
+  exceptionBreakpoints: "Exception breakpoints",
+  noExceptionFilters: "No exception filters are available.",
+  filterCaught: "Caught exceptions",
+  filterUncaught: "Uncaught exceptions",
+  callStack: "Call stack",
+  pauseForStack: "Pause a session to inspect its stack.",
+  variables: "Variables",
+  omittedVariables: "More values omitted ({count})",
+  noPausedFrame: "No paused frame is selected.",
+  pausedVariableEditor: "Paused variable editor",
+  newVariableValue: "New variable value",
+  save: "Save",
+  watch: "Watch",
+  watchHelp: "Watches are explicit local-human expressions and may have debuggee side effects.",
+  evaluateWatch: "Evaluate {expression}",
+  edit: "Edit",
+  addWatch: "Add watch",
+  watchEditor: "Watch expression editor",
+  watchExpression: "Watch expression",
+  consoleHeading: "Debug console output",
+  consoleHelp:
+    "Output and registered-watch results only. This console never evaluates typed input.",
+  debugOutput: "Debug output",
+  watchResults: "Registered watch results",
+  notEvaluated: "Not evaluated",
+  gutterToggle: "Toggle breakpoint",
+  gutterConditional: "Set conditional breakpoint",
+  gutterLogpoint: "Set logpoint",
+  gutterEnable: "Enable breakpoint",
+  gutterDisable: "Disable breakpoint",
+  breakpointConditionPrompt: "Breakpoint condition",
+  logpointMessagePrompt: "Logpoint message",
+  breakpointMenu: "Breakpoint actions for line {line}",
+  commandStartContinue: "Debug: Start or Continue",
+  commandPause: "Debug: Pause",
+  commandStepOver: "Debug: Step Over",
+  commandStepInto: "Debug: Step Into",
+  commandStepOut: "Debug: Step Out",
+  commandStop: "Debug: Stop",
+  pausedValues: "Paused debug values",
 } as const;
 
 const DE_MESSAGES: Record<keyof typeof EN_MESSAGES, string> = {
@@ -86,6 +151,71 @@ const DE_MESSAGES: Record<keyof typeof EN_MESSAGES, string> = {
     "Das Deaktivieren von Debugging widerruft jede aktive gesteuerte Debugging-Sitzung in diesem Workspace.",
   confirmDisable: "Debugging deaktivieren",
   cancel: "Abbrechen",
+  panelLabel: "Debuggen",
+  unavailableByPolicy: "Debugging ist nicht verfügbar, bis es per Richtlinie aktiviert wurde.",
+  unavailableWithoutWorkspace:
+    "Debugging ist nicht verfügbar, bis der Host eine kanonische Workspace-Identität bereitstellt.",
+  noActiveSession: "Keine aktive Debugging-Sitzung.",
+  sessionStatus: "Sitzungsstatus: {status}.",
+  statusReserved: "reserviert",
+  statusStarting: "wird gestartet",
+  statusRunning: "läuft",
+  statusPaused: "pausiert",
+  statusStopping: "wird beendet",
+  statusStopped: "beendet",
+  statusFailed: "fehlgeschlagen",
+  statusRevoked: "widerrufen",
+  exceptionDescription: "Ausnahme: {description}",
+  startCurrentFile: "Aktuelle Datei debuggen",
+  controlsLabel: "Debugging-Steuerung",
+  continue: "Fortsetzen",
+  pause: "Anhalten",
+  stepOver: "Überspringen",
+  stepInto: "Hineinspringen",
+  stepOut: "Herausspringen",
+  stop: "Debugging beenden",
+  actionFailed: "Die Debugging-Aktion ist fehlgeschlagen. Der Serverzustand bleibt maßgeblich.",
+  exceptionBreakpoints: "Ausnahme-Haltepunkte",
+  noExceptionFilters: "Es sind keine Ausnahmefilter verfügbar.",
+  filterCaught: "Abgefangene Ausnahmen",
+  filterUncaught: "Nicht abgefangene Ausnahmen",
+  callStack: "Aufrufliste",
+  pauseForStack: "Halte eine Sitzung an, um ihre Aufrufliste zu untersuchen.",
+  variables: "Variablen",
+  omittedVariables: "Weitere Werte ausgelassen ({count})",
+  noPausedFrame: "Es ist kein angehaltener Frame ausgewählt.",
+  pausedVariableEditor: "Editor für angehaltene Variable",
+  newVariableValue: "Neuer Variablenwert",
+  save: "Speichern",
+  watch: "Überwachen",
+  watchHelp:
+    "Überwachungen sind explizite Ausdrücke eines lokalen Menschen und können Seiteneffekte im Debuggee haben.",
+  evaluateWatch: "{expression} auswerten",
+  edit: "Bearbeiten",
+  addWatch: "Überwachung hinzufügen",
+  watchEditor: "Editor für Überwachungsausdruck",
+  watchExpression: "Überwachungsausdruck",
+  consoleHeading: "Ausgabe der Debug-Konsole",
+  consoleHelp:
+    "Nur Ausgabe und Ergebnisse registrierter Überwachungen. Diese Konsole wertet niemals eingegebenen Text aus.",
+  debugOutput: "Debug-Ausgabe",
+  watchResults: "Ergebnisse registrierter Überwachungen",
+  notEvaluated: "Nicht ausgewertet",
+  gutterToggle: "Haltepunkt umschalten",
+  gutterConditional: "Bedingten Haltepunkt setzen",
+  gutterLogpoint: "Protokollpunkt setzen",
+  gutterEnable: "Haltepunkt aktivieren",
+  gutterDisable: "Haltepunkt deaktivieren",
+  breakpointConditionPrompt: "Haltepunktbedingung",
+  logpointMessagePrompt: "Nachricht des Protokollpunkts",
+  breakpointMenu: "Haltepunktaktionen für Zeile {line}",
+  commandStartContinue: "Debuggen: Starten oder fortsetzen",
+  commandPause: "Debuggen: Anhalten",
+  commandStepOver: "Debuggen: Überspringen",
+  commandStepInto: "Debuggen: Hineinspringen",
+  commandStepOut: "Debuggen: Herausspringen",
+  commandStop: "Debuggen: Beenden",
+  pausedValues: "Pausierte Debug-Werte",
 };
 
 type DebuggingMessages = Readonly<Record<keyof typeof EN_MESSAGES, string>>;
@@ -95,8 +225,38 @@ const MESSAGES: Readonly<Record<Locale, DebuggingMessages>> = {
   de: DE_MESSAGES,
 };
 
-export type DebuggingTranslate = (key: keyof typeof EN_MESSAGES) => string;
+export type DebuggingTranslate = (key: keyof typeof EN_MESSAGES, values?: MessageValues) => string;
+
+function interpolate(template: string, values: MessageValues = {}): string {
+  return template.replace(/\{([a-zA-Z0-9_]+)\}/gu, (match, name: string) => {
+    const value = values[name];
+    return value === undefined ? match : String(value);
+  });
+}
 
 export function debuggingTranslate(locale: Locale): DebuggingTranslate {
-  return (key) => MESSAGES[locale][key];
+  return (key, values) => interpolate(MESSAGES[locale][key], values);
+}
+
+export function useDebuggingTranslate(): DebuggingTranslate {
+  const locale = useLocale();
+  return useMemo(() => debuggingTranslate(locale), [locale]);
+}
+
+export function debugSessionStatus(
+  t: DebuggingTranslate,
+  status:
+    "reserved" | "starting" | "running" | "paused" | "stopping" | "stopped" | "failed" | "revoked",
+): string {
+  const key = {
+    reserved: "statusReserved",
+    starting: "statusStarting",
+    running: "statusRunning",
+    paused: "statusPaused",
+    stopping: "statusStopping",
+    stopped: "statusStopped",
+    failed: "statusFailed",
+    revoked: "statusRevoked",
+  } as const;
+  return t(key[status]);
 }

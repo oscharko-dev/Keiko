@@ -28,6 +28,7 @@ const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 interface DebugSessionProjection {
   readonly pauseGeneration: number;
   readonly sessionId: string;
+  readonly targetKind: "catalog" | "file";
 }
 
 interface CapturedDebugEvent {
@@ -116,12 +117,18 @@ function workspace(): { readonly root: string } {
 
 function debugSession(value: unknown): DebugSessionProjection {
   expect(typeof value).toBe("object");
-  const record = value as { readonly pauseGeneration?: unknown; readonly sessionId?: unknown };
+  const record = value as {
+    readonly pauseGeneration?: unknown;
+    readonly sessionId?: unknown;
+    readonly targetKind?: unknown;
+  };
   expect(Number.isSafeInteger(record.pauseGeneration)).toBe(true);
   expect(typeof record.sessionId).toBe("string");
+  expect(["catalog", "file"]).toContain(record.targetKind);
   return {
     pauseGeneration: typeof record.pauseGeneration === "number" ? record.pauseGeneration : -1,
     sessionId: typeof record.sessionId === "string" ? record.sessionId : "",
+    targetKind: record.targetKind === "catalog" ? "catalog" : "file",
   };
 }
 
@@ -177,6 +184,35 @@ async function activateDebugging(page: Page, root: string): Promise<void> {
     },
   });
   expect(response.status(), await response.text()).toBe(200);
+}
+
+async function startCatalogDebugging(page: Page, root: string): Promise<DebugSessionProjection> {
+  const bootstrap = await page.request.post("/api/editor/debug/bootstrap", {
+    data: { schemaVersion: "1", workspaceId: root },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(bootstrap.status(), await bootstrap.text()).toBe(200);
+  const projection = (await bootstrap.json()) as {
+    readonly workspaceId?: unknown;
+    readonly activationRevision?: unknown;
+  };
+  if (
+    typeof projection.workspaceId !== "string" ||
+    !Number.isSafeInteger(projection.activationRevision)
+  ) {
+    throw new Error("DEBUG_BOOTSTRAP_RESPONSE_INVALID");
+  }
+  const response = await page.request.post("/api/editor/debug/sessions", {
+    data: {
+      schemaVersion: "1",
+      workspaceId: projection.workspaceId,
+      target: { kind: "catalog", targetId: "npm-script:debug:catalog" },
+      activationRevision: projection.activationRevision,
+    },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(response.status(), await response.text()).toBe(201);
+  return debugSession(await response.json());
 }
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
@@ -476,4 +512,17 @@ test("#2348 drives a separate uncaught exception breakpoint through the real DAP
     });
   await expect(panel.getByRole("status")).toHaveText("Exception: Fixture uncaught exception");
   await stopFromDebugPanel(page, panel);
+});
+
+test("#2348 launches a governed catalog target through the real npm CLI artifact", async ({
+  page,
+}) => {
+  const project = workspace();
+  await createProject(page, project.root);
+  await grantWorkspaceScriptTrust(page, project.root);
+  await activateDebugging(page, project.root);
+
+  const session = await startCatalogDebugging(page, project.root);
+
+  expect(session.targetKind).toBe("catalog");
 });

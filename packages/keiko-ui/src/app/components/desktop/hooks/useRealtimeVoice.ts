@@ -814,14 +814,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const latencySinkRef = useRef(options.latencySink);
   latencySinkRef.current = options.latencySink;
   const latencyRef = useRef<VoiceLatencyObserver | undefined>(undefined);
-  if (latencyRef.current === undefined) {
-    latencyRef.current = createVoiceLatencyObserver({
-      sink: {
-        onMark: (sample) => latencySinkRef.current?.onMark?.(sample),
-        onLeg: (leg) => latencySinkRef.current?.onLeg?.(leg),
-      },
-    });
-  }
+  latencyRef.current ??= createVoiceLatencyObserver({
+    sink: {
+      onMark: (sample) => latencySinkRef.current?.onMark?.(sample),
+      onLeg: (leg) => latencySinkRef.current?.onLeg?.(leg),
+    },
+  });
   onVoiceTurnCommittedRef.current = options.onVoiceTurnCommitted;
   onUserTranscriptCommittedRef.current = options.onUserTranscriptCommitted;
   onAssistantTranscriptCommittedRef.current = options.onAssistantTranscriptCommitted;
@@ -1789,21 +1787,19 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
             dispatch({ type: "reset" });
           } else if (rtcState === "disconnected") {
             applyTurnSignal({ kind: "provider-failure", recoverable: true });
-            if (graceTimerRef.current === undefined) {
-              graceTimerRef.current = setTimeout(
-                createIceDisconnectGraceTimeoutHandler({
-                  graceTimerRef,
-                  mountedRef,
-                  reconnectAttemptsRef,
-                  reconnectTimerRef,
-                  startRef,
-                  cleanupRefs,
-                  dispatch,
-                  applyTurnSignal,
-                }),
-                ICE_DISCONNECT_GRACE_MS,
-              );
-            }
+            graceTimerRef.current ??= setTimeout(
+              createIceDisconnectGraceTimeoutHandler({
+                graceTimerRef,
+                mountedRef,
+                reconnectAttemptsRef,
+                reconnectTimerRef,
+                startRef,
+                cleanupRefs,
+                dispatch,
+                applyTurnSignal,
+              }),
+              ICE_DISCONNECT_GRACE_MS,
+            );
           }
         });
 

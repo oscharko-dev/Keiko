@@ -28,6 +28,12 @@ async function loadTestTimeout(relativePath) {
   return config?.test?.testTimeout;
 }
 
+async function loadMaxWorkers(relativePath) {
+  const mod = await import(resolve(repoRoot, relativePath));
+  const config = typeof mod.default === "function" ? await mod.default({}) : mod.default;
+  return config?.test?.maxWorkers;
+}
+
 describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   for (const { name, path } of CONFIGS) {
     it(`${name} (${path}) declares the hardened 15s testTimeout`, async () => {
@@ -41,5 +47,14 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   it("keeps every CI-gated config on the SAME timeout (no per-config drift)", async () => {
     const timeouts = await Promise.all(CONFIGS.map(({ path }) => loadTestTimeout(path)));
     expect(new Set(timeouts)).toEqual(new Set([EXPECTED_TIMEOUT_MS]));
+  });
+
+  it("keeps package coverage worker concurrency aligned with the root suite", async () => {
+    const [rootWorkers, coverageWorkers] = await Promise.all([
+      loadMaxWorkers("vitest.config.ts"),
+      loadMaxWorkers("vitest.coverage.packages.config.ts"),
+    ]);
+    expect(coverageWorkers).toBe(rootWorkers);
+    expect(coverageWorkers).toBe(2);
   });
 });

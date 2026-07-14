@@ -841,6 +841,9 @@ function buildDebugWiring(
         latestProps.current.debug?.gutter.onOpenContextMenu(context),
     },
     commands: {
+      labels: debug.commands.labels,
+      isAvailable: (action): boolean =>
+        latestProps.current.debug?.commands.isAvailable?.(action) ?? true,
       continue: (): void => latestProps.current.debug?.commands.continue(),
       pause: (): void => latestProps.current.debug?.commands.pause(),
       stepOver: (): void => latestProps.current.debug?.commands.stepOver(),

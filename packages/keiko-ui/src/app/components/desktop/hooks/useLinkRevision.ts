@@ -38,8 +38,7 @@ export function useLinkRevision(
   );
   const prev = prevRef.current;
   const changed =
-    prev === null ||
-    prev.conns !== conns ||
+    prev?.conns !== conns ||
     prev.keys !== keys ||
     prev.cfgs.length !== cfgs.length ||
     cfgs.some((cfg, i) => cfg !== prev.cfgs[i]);

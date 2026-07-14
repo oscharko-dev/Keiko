@@ -9,7 +9,7 @@ No delivery action, issue state change, or release closure is implied by this do
 
 ## Governing boundaries
 
-- [ADR-0134](../adr/ADR-0134-governed-debug-adapter-session-management.md) is the primary
+- [ADR-0136](../adr/ADR-0136-governed-debug-adapter-session-management.md) is the primary
   architecture decision: server-owned DAP transport, closed operator provisioning, attested capsule
   execution, numerical bounds, canonical lifecycle ownership, and exactly-once teardown.
 - ADR-0069 and ADR-0043 retain the process-hardening/isolation floor. Missing qualified execution

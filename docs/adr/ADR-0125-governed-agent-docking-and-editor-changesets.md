@@ -94,9 +94,11 @@ needs approval. The editor-agent route adopts that evaluator through the composi
 Independent gates combine with **stricter wins**: `denied` is stricter than `approval-required`,
 which is stricter than `allowed`. Missing, invalid, or expired authority; unsupported actions;
 secret exfiltration; and platform restrictions are denied regardless of mode. Invalid, expired, or
-consumed one-use approvals are denied. Commit, push, pull-request, and merge actions remain denied
-or separately human-approved delivery actions. Unknown or missing mode values still fall back to
-`governed-assist`, and the effective mode remains capped by the deployment ceiling.
+consumed one-use approvals are denied. Delivery actions follow the governing deployment contract.
+For accepted Keiko repository work targeting `dev`, ADR-0135 allows branch commits, pushes, and PR
+updates and delegates final merge authority to the app-bound `Keiko for Quality` check. Unknown or
+missing mode values still fall back to `governed-assist`, and the effective mode remains capped by
+the deployment ceiling.
 
 ### D2 - Dock onto the existing editor-agent control plane
 
@@ -274,9 +276,12 @@ human explicitly selects or accepts the task, mode, Authority Envelope, and depl
 Keiko then acts only inside that validated authority. Invalid or expired authority fails closed.
 
 Commit, push, pull-request creation, merge, and authority-envelope widening are not ordinary file or
-network operations. They remain hard-denied or require a separate explicit local human approval.
-No contract in this issue performs a write, bypasses required approval, launches a process, or
-grants network access by itself.
+network operations. They require the governing delivery contract. ADR-0135 provides a narrow
+repository exception after a maintainer accepts a task: an agent may update its PR branch and the
+platform may auto-merge only after `Keiko for Quality` validates the exact current head. Direct
+`dev` pushes, force pushes, gate bypasses, and authority-envelope widening remain denied or require
+separate explicit authority. No contract in this issue performs a write, bypasses required
+authority, launches a process, or grants network access by itself.
 
 ## Consequences
 

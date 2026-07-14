@@ -227,7 +227,7 @@ function moduleSpecifierEntry(node) {
   if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
     if (!isStringLiteralLike(node.moduleSpecifier)) return undefined;
     const typeOnly = ts.isImportDeclaration(node)
-      ? node.importClause?.isTypeOnly === true
+      ? node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
       : node.isTypeOnly;
     return {
       node: node.moduleSpecifier,

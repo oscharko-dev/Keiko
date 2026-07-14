@@ -12,6 +12,7 @@ export interface EditorDebugValueSnapshot {
   readonly paused: boolean;
   readonly pauseGeneration: number;
   readonly documentUri: string;
+  readonly description?: string | undefined;
   readonly values: readonly EditorDebugPausedValue[];
 }
 
@@ -62,7 +63,7 @@ function projection(
         endColumn: value.column + 1,
       },
       options: {
-        description: "Paused debug value",
+        description: snapshot.description ?? "",
         after: { content: ` = ${value.value}`, inlineClassName: "keiko-debug-inline-value" },
         isWholeLine: true,
       },

@@ -59,7 +59,7 @@ function targetCatalog(
 function launchContext(
   options: DapOperatorProvisioningFactoryOptions,
   binding: DebugCapsulePlanBinding,
-): DebugLaunchContextResolverDeps {
+): Omit<DebugLaunchContextResolverDeps, "backendQualification"> {
   const workspace = workspaceForBinding(options, binding);
   const launch = options.document.launch;
   return {
@@ -112,6 +112,10 @@ export function createDapOperatorProvisioning(
       envAllowlist: adapter.envAllowlist,
       fixedEnv: adapter.fixedEnv,
     },
+    backendQualification: Object.freeze({
+      backend: artifact(options.document.launch.backend),
+      platform: process.platform,
+    }),
     adapterPreflight: (identity: DapProcessStartInput["identity"]) =>
       adapterPreflight(options, identity.workspacePartitionKey),
     launchContext: (binding: DebugCapsulePlanBinding) => launchContext(options, binding),

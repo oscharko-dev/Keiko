@@ -79,6 +79,23 @@ function pausedSession(): ReturnType<typeof session> {
   return session("paused");
 }
 
+function deferredResponse(): {
+  readonly promise: Promise<Response>;
+  readonly resolve: (body: object) => void;
+} {
+  let resolveResponse: ((response: Response) => void) | undefined;
+  const promise = new Promise<Response>((resolve) => {
+    resolveResponse = resolve;
+  });
+  return {
+    promise,
+    resolve: (body) => {
+      if (resolveResponse === undefined) throw new Error("Expected response resolver.");
+      resolveResponse(response(body));
+    },
+  };
+}
+
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -299,21 +316,37 @@ describe("useDebugSession", () => {
           value: bounded("2"),
         });
       }
+      if (url === "/api/editor/debug/variables/set") {
+        return response({
+          schemaVersion: "1",
+          sessionId: "session-1",
+          pauseGeneration: 2,
+          result: {
+            kind: "variable",
+            name: bounded("total"),
+            value: bounded("3"),
+            presentation: "data",
+            children: [],
+            retainedCount: 0,
+            omittedCount: 0,
+            truncated: false,
+          },
+        });
+      }
       return response({});
     });
     const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
     await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
 
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected session projection.");
     await act(async () => {
-      await result.current.actions.refreshSession("session-1");
-      const current = result.current.snapshot.session;
-      if (current === null) throw new Error("Expected session projection.");
       await result.current.actions.loadStack(current);
       await result.current.actions.loadScopes(current, "frame-1");
       await result.current.actions.loadVariables(current, "scope-1");
       await result.current.actions.evaluateWatch(current, "watch-1", "frame-1");
       await result.current.actions.setVariable(current, "variable-1", "3");
-      await result.current.actions.control(current, "next");
     });
 
     expect(result.current.snapshot.stack?.frames[0]).toMatchObject({ frameRef: "frame-1" });
@@ -323,7 +356,7 @@ describe("useDebugSession", () => {
     expect(result.current.snapshot.variablesByParent.get("scope-1")?.nodes[0]).toMatchObject({
       kind: "variable",
     });
-    expect(result.current.snapshot.watchResults.get("watch-1")).toMatchObject({ state: "value" });
+    expect(result.current.snapshot.watchResults).toHaveLength(0);
     expect(vi.mocked(fetch).mock.calls).toContainEqual([
       "/api/editor/debug/variables/set",
       expect.objectContaining({
@@ -331,6 +364,518 @@ describe("useDebugSession", () => {
         headers: expect.objectContaining({ "x-keiko-csrf": "1" }),
       }),
     ]);
+    await act(async () => result.current.actions.control(current, "next"));
+    expect(result.current.snapshot.stack).toBeNull();
+  });
+
+  it("discards and aborts a stack response after the pause continues", async () => {
+    const stack = deferredResponse();
+    let stackSignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/stack") {
+        stackSignal = init?.signal ?? undefined;
+        return stack.promise;
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    const pending = result.current.actions.loadStack(current);
+    await waitFor(() => expect(stackSignal).toBeDefined());
+    const continued = FakeEventSource.instances[0]?.listeners.get("editor-debug:continued");
+    if (continued === undefined) throw new Error("Expected continued listener.");
+
+    act(() => {
+      for (const listener of continued) {
+        listener({
+          data: JSON.stringify({
+            sequence: 1,
+            event: { kind: "continued", sessionId: "session-1", pauseGeneration: 2 },
+          }),
+          lastEventId: "1",
+        } as MessageEvent);
+      }
+    });
+    await waitFor(() => expect(stackSignal?.aborted).toBe(true));
+    stack.resolve({ frames: [], truncated: false, omittedCount: 0 });
+    await act(async () => pending);
+
+    expect(stackSignal?.aborted).toBe(true);
+    expect(result.current.snapshot.stack).toBeNull();
+  });
+
+  it("aborts every old pause projection when a newer pause generation arrives", async () => {
+    const stack = deferredResponse();
+    const scopes = deferredResponse();
+    const variables = deferredResponse();
+    const signals = new Map<string, AbortSignal>();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      const pending = new Map([
+        ["/api/editor/debug/stack", stack.promise],
+        ["/api/editor/debug/scopes", scopes.promise],
+        ["/api/editor/debug/variables", variables.promise],
+      ]).get(url);
+      if (pending !== undefined) {
+        if (init?.signal != null) signals.set(url, init.signal);
+        return pending;
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    const pending = [
+      result.current.actions.loadStack(current),
+      result.current.actions.loadScopes(current, "old-frame"),
+      result.current.actions.loadVariables(current, "old-scope"),
+    ];
+    await waitFor(() => expect(signals.size).toBe(3));
+    const stopped = FakeEventSource.instances[0]?.listeners.get("editor-debug:stopped");
+    if (stopped === undefined) throw new Error("Expected stopped listener.");
+
+    act(() => {
+      for (const listener of stopped) {
+        listener(
+          new MessageEvent("editor-debug:stopped", {
+            data: JSON.stringify({
+              sequence: 1,
+              event: {
+                kind: "stopped",
+                sessionId: "session-1",
+                pauseGeneration: 3,
+                reason: "step",
+                allThreadsStopped: true,
+              },
+            }),
+          }),
+        );
+      }
+    });
+    await waitFor(() => {
+      expect([...signals.values()].every((signal) => signal.aborted)).toBe(true);
+    });
+    stack.resolve({ frames: [], truncated: false, omittedCount: 0 });
+    scopes.resolve({ scopes: [], truncated: false, omittedCount: 0 });
+    variables.resolve({ nodes: [], truncated: false, omittedCount: 0 });
+    await act(async () => Promise.all(pending));
+
+    expect(result.current.snapshot).toMatchObject({ stack: null });
+    expect(result.current.snapshot.scopesByFrame).toHaveLength(0);
+    expect(result.current.snapshot.variablesByParent).toHaveLength(0);
+  });
+
+  it("does not let a late session refresh replace a newly started session", async () => {
+    const oldSession = deferredResponse();
+    let oldSignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") {
+        oldSignal = init?.signal ?? undefined;
+        return oldSession.promise;
+      }
+      if (url === "/api/editor/debug/sessions/session-2") {
+        return response({ ...session("running"), sessionId: "session-2" });
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const staleRefresh = result.current.actions.refreshSession("session-1");
+    await waitFor(() => expect(oldSignal).toBeDefined());
+    const started = FakeEventSource.instances[0]?.listeners.get("editor-debug:session-started");
+    if (started === undefined) throw new Error("Expected session-started listener.");
+
+    act(() => {
+      for (const listener of started) {
+        listener(
+          new MessageEvent("editor-debug:session-started", {
+            data: JSON.stringify({
+              sequence: 1,
+              event: { kind: "session-started", sessionId: "session-2", status: "running" },
+            }),
+          }),
+        );
+      }
+    });
+    await waitFor(() => expect(result.current.snapshot.session?.sessionId).toBe("session-2"));
+    expect(oldSignal?.aborted).toBe(true);
+    oldSession.resolve(pausedSession());
+    await act(async () => staleRefresh);
+
+    expect(result.current.snapshot.session?.sessionId).toBe("session-2");
+  });
+
+  it("aborts an inspection request when its hook unmounts", async () => {
+    const stack = deferredResponse();
+    let stackSignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/stack") {
+        stackSignal = init?.signal ?? undefined;
+        return stack.promise;
+      }
+      return response({});
+    });
+    const { result, unmount } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    const pending = result.current.actions.loadStack(current);
+    await waitFor(() => expect(stackSignal).toBeDefined());
+
+    unmount();
+    expect(stackSignal?.aborted).toBe(true);
+    stack.resolve({ frames: [], truncated: false, omittedCount: 0 });
+    await pending;
+  });
+
+  it("rejects late scope and variable responses after a newer pause generation", async () => {
+    const scopes = deferredResponse();
+    const variables = deferredResponse();
+    const signals: AbortSignal[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/scopes") {
+        if (init?.signal != null) signals.push(init.signal);
+        return scopes.promise;
+      }
+      if (url === "/api/editor/debug/variables") {
+        if (init?.signal != null) signals.push(init.signal);
+        return variables.promise;
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    const pendingScopes = result.current.actions.loadScopes(current, "frame-1");
+    const pendingVariables = result.current.actions.loadVariables(current, "scope-1");
+    await waitFor(() => expect(signals).toHaveLength(2));
+    const stopped = FakeEventSource.instances[0]?.listeners.get("editor-debug:stopped");
+    if (stopped === undefined) throw new Error("Expected stopped listener.");
+
+    act(() => {
+      for (const listener of stopped) {
+        listener(
+          new MessageEvent("editor-debug:stopped", {
+            data: JSON.stringify({
+              sequence: 1,
+              event: {
+                kind: "stopped",
+                sessionId: "session-1",
+                pauseGeneration: 3,
+                reason: "step",
+                allThreadsStopped: true,
+              },
+            }),
+            lastEventId: "1",
+          }),
+        );
+      }
+    });
+    await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+    scopes.resolve({ scopes: [], truncated: false, omittedCount: 0 });
+    variables.resolve({ nodes: [], truncated: false, omittedCount: 0 });
+    await act(async () => Promise.all([pendingScopes, pendingVariables]));
+
+    expect(result.current.snapshot.session?.pauseGeneration).toBe(3);
+    expect(result.current.snapshot.scopesByFrame).toHaveLength(0);
+    expect(result.current.snapshot.variablesByParent).toHaveLength(0);
+  });
+
+  it("aborts an in-flight pause request when the hook unmounts", async () => {
+    const stack = deferredResponse();
+    let stackSignal: AbortSignal | undefined;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/stack") {
+        stackSignal = init?.signal ?? undefined;
+        return stack.promise;
+      }
+      return response({});
+    });
+    const { result, unmount } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    const pending = result.current.actions.loadStack(current);
+    await waitFor(() => expect(stackSignal).toBeDefined());
+
+    unmount();
+    expect(stackSignal?.aborted).toBe(true);
+    stack.resolve({ frames: [], truncated: false, omittedCount: 0 });
+    await pending;
+  });
+
+  it("strictly parses setVariable and atomically rebuilds fresh pause references", async () => {
+    let stackCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/variables/set") {
+        return response({
+          schemaVersion: "1",
+          sessionId: "session-1",
+          pauseGeneration: 2,
+          result: {
+            kind: "variable",
+            name: bounded("total"),
+            value: bounded("3"),
+            presentation: "data",
+            children: [],
+            retainedCount: 0,
+            omittedCount: 0,
+            truncated: false,
+          },
+        });
+      }
+      if (url === "/api/editor/debug/stack") {
+        stackCalls += 1;
+        return response({
+          frames: [
+            {
+              frameRef: stackCalls === 1 ? "old-frame" : "fresh-frame",
+              name: bounded("main"),
+              line: 1,
+              column: 1,
+            },
+          ],
+          truncated: false,
+          omittedCount: 0,
+        });
+      }
+      if (url === "/api/editor/debug/scopes") {
+        return response({
+          scopes: [
+            {
+              scopeRef: stackCalls === 1 ? "old-scope" : "fresh-scope",
+              name: bounded("Local"),
+              expensive: false,
+            },
+          ],
+          truncated: false,
+          omittedCount: 0,
+        });
+      }
+      if (url === "/api/editor/debug/variables") {
+        return response({
+          nodes: [
+            {
+              kind: "variable",
+              variableRef: stackCalls === 1 ? "old-variable" : "fresh-variable",
+              name: bounded("total"),
+              value: bounded(stackCalls === 1 ? "2" : "3"),
+              presentation: "data",
+              children: [],
+              retainedCount: 0,
+              omittedCount: 0,
+              truncated: false,
+            },
+          ],
+          truncated: false,
+          omittedCount: 0,
+        });
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+    await act(async () => {
+      await result.current.actions.loadStack(current);
+      await result.current.actions.loadScopes(current, "old-frame");
+      await result.current.actions.loadVariables(current, "old-scope");
+      await result.current.actions.setVariable(current, "old-variable", "3");
+    });
+
+    expect(result.current.snapshot.stack?.frames[0]?.frameRef).toBe("fresh-frame");
+    expect(result.current.snapshot.scopesByFrame.has("old-frame")).toBe(false);
+    expect(result.current.snapshot.variablesByParent.has("old-scope")).toBe(false);
+    expect(result.current.snapshot.variablesByParent.get("fresh-scope")?.nodes[0]).toMatchObject({
+      kind: "variable",
+      variableRef: "fresh-variable",
+      value: { value: "3" },
+    });
+  });
+
+  it("rejects a setVariable response containing unknown fields", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/variables/set") {
+        return response({
+          schemaVersion: "1",
+          sessionId: "session-1",
+          pauseGeneration: 2,
+          result: {
+            kind: "variable",
+            name: bounded("total"),
+            value: bounded("3"),
+            presentation: "data",
+            children: [],
+            retainedCount: 0,
+            omittedCount: 0,
+            truncated: false,
+          },
+          unexpected: "must fail closed",
+        });
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+
+    await expect(result.current.actions.setVariable(current, "variable-1", "3")).rejects.toThrow(
+      "Debug variable projection was invalid.",
+    );
+  });
+
+  it("resyncs a replay gap before applying queued live events", async () => {
+    const resyncInstrumentation = deferredResponse();
+    let instrumentationCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        instrumentationCalls += 1;
+        return instrumentationCalls === 1
+          ? response(instrumentation())
+          : resyncInstrumentation.promise;
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+    const required = source?.listeners.get("editor-debug:snapshot-required");
+    const output = source?.listeners.get("editor-debug:output");
+    if (required === undefined || output === undefined)
+      throw new Error("Expected stream listeners.");
+
+    act(() => {
+      for (const listener of required) {
+        listener(
+          new MessageEvent("editor-debug:snapshot-required", {
+            data: JSON.stringify({
+              sequence: 20,
+              retainedCount: 0,
+              retainedBytes: 0,
+              evictedCount: 20,
+              evictedBytes: 2_000,
+            }),
+            lastEventId: "20",
+          }),
+        );
+      }
+      for (const listener of output) {
+        listener({
+          data: JSON.stringify({
+            sequence: 21,
+            event: {
+              kind: "output",
+              sessionId: "session-1",
+              category: "stdout",
+              text: "after-resync",
+              truncated: false,
+              originalBytes: 12,
+              omittedBytes: 0,
+            },
+          }),
+          lastEventId: "21",
+        } as MessageEvent);
+      }
+    });
+    expect(result.current.snapshot.console.entries).toHaveLength(0);
+    await waitFor(() => expect(instrumentationCalls).toBe(2));
+    resyncInstrumentation.resolve({ ...instrumentation(), revision: 4, etag: "resynced" });
+
+    await waitFor(() => expect(result.current.snapshot.instrumentation?.revision).toBe(4));
+    await waitFor(() => expect(result.current.snapshot.sequence).toBe(21));
+    expect(result.current.snapshot.console.entries[0]?.text).toBe("after-resync");
+  });
+
+  it("refreshes breakpoints to at least the event revision", async () => {
+    let instrumentationCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        instrumentationCalls += 1;
+        return response({
+          ...instrumentation(),
+          revision: instrumentationCalls === 1 ? 0 : 3,
+          etag: instrumentationCalls === 1 ? "debug-etag" : "revision-3",
+        });
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const changed = FakeEventSource.instances[0]?.listeners.get("editor-debug:breakpoints-changed");
+    if (changed === undefined) throw new Error("Expected breakpoint listener.");
+
+    act(() => {
+      for (const listener of changed) {
+        listener({
+          data: JSON.stringify({
+            sequence: 1,
+            event: {
+              kind: "breakpoints-changed",
+              workspaceId: "canonical-workspace-id",
+              revision: 3,
+              breakpointCount: 1,
+              verifiedCount: 1,
+            },
+          }),
+          lastEventId: "1",
+        } as MessageEvent);
+      }
+    });
+
+    await waitFor(() => expect(result.current.snapshot.instrumentation?.revision).toBe(3));
   });
 
   it("updates both persisted instrumentation projections through the opaque revision and ETag", async () => {
@@ -407,10 +952,12 @@ describe("useDebugSession", () => {
       }
     });
 
-    expect(debugSessionSnapshot("canonical-workspace-id")).toMatchObject({
-      streamReady: true,
-      console: { entries: [{ text: "safe" }] },
-    });
+    await waitFor(() =>
+      expect(debugSessionSnapshot("canonical-workspace-id")).toMatchObject({
+        streamReady: true,
+        console: { entries: [{ text: "safe" }] },
+      }),
+    );
   });
 
   it("retains a bounded exception description while refreshing the canonical session projection", async () => {
@@ -509,7 +1056,7 @@ describe("useDebugSession", () => {
       }
     });
 
-    expect(result.current.snapshot.session).toBeNull();
+    await waitFor(() => expect(result.current.snapshot.session).toBeNull());
     expect(vi.mocked(fetch).mock.calls).toHaveLength(callsBeforeTerminalEvent);
   });
 });

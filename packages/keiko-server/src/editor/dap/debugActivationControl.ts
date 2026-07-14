@@ -31,8 +31,15 @@ export interface DebugActivationSynchronization {
 
 export interface DebugActivationControlService {
   readonly resolve: (context: DebugActivationContext) => DebugActivationSummary;
+  readonly isCurrent: (realRoot: string, expectedRevision: number) => boolean;
   readonly synchronize: (input: DebugActivationSynchronization) => Promise<DebugActivationSummary>;
   readonly dispose: () => void;
+}
+
+export interface DebugActivationSweepFailure {
+  readonly schemaVersion: "1";
+  readonly code: "ACTIVATION_SWEEP_FAILED";
+  readonly source: "watchdog" | "subscription";
 }
 
 export interface DebugActivationControlOptions {
@@ -46,6 +53,7 @@ export interface DebugActivationControlOptions {
   readonly gate?: DebugCapabilityGate | undefined;
   readonly now?: (() => number) | undefined;
   readonly watchdogIntervalMs?: number | undefined;
+  readonly onSweepFailure?: ((failure: DebugActivationSweepFailure) => void) | undefined;
 }
 
 interface TrackedActivation {
@@ -102,10 +110,14 @@ function summaryFor(
   gate: DebugCapabilityGate,
 ): DebugActivationSummary {
   if (context.realRoot === undefined) return withoutWorkspaceSummary(context.revision);
-  const resolution = gate.resolve(
-    contextInput({ ...context, realRoot: context.realRoot }, options),
-  );
-  if (resolution.ok) return resolution;
+  try {
+    const resolution = gate.resolve(
+      contextInput({ ...context, realRoot: context.realRoot }, options),
+    );
+    if (resolution.ok) return resolution;
+  } catch {
+    // Provider failures are an unavailable decision, never stale allow.
+  }
   return unavailableSummary(context.revision);
 }
 
@@ -116,7 +128,22 @@ function revocationRequired(
   next: DebugActivationSummary,
 ): boolean {
   if (action === "deactivate" && changed) return true;
-  return prior?.state === "available" && next.state !== "available";
+  return (
+    prior?.state === "available" && (next.state !== "available" || prior.revision !== next.revision)
+  );
+}
+
+function trackResolution(
+  context: DebugActivationContext & { readonly realRoot: string },
+  next: DebugActivationSummary,
+  tracked: Map<string, TrackedActivation>,
+): void {
+  const prior = tracked.get(context.realRoot);
+  const preservePrior = revocationRequired("settingsChange", false, prior?.summary, next);
+  tracked.set(context.realRoot, {
+    context,
+    summary: preservePrior && prior !== undefined ? prior.summary : next,
+  });
 }
 
 function evidenceAction(
@@ -178,23 +205,51 @@ async function synchronizeTracked(
   return next;
 }
 
-function watchdog(
+function sweepWorkspace(
+  source: DebugActivationSweepFailure["source"],
   tracked: Map<string, TrackedActivation>,
+  pending: Set<string>,
   options: DebugActivationControlOptions,
   gate: DebugCapabilityGate,
-): Promise<void> {
-  return Promise.all(
-    [...tracked.values()].map(async ({ context }): Promise<void> => {
-      await options.mutex.runExclusive([workspaceFingerprintKey(context.realRoot)], () =>
-        synchronizeTracked(
-          { action: "settingsChange", changed: false, context },
-          tracked,
-          options,
-          gate,
-        ),
-      );
-    }),
-  ).then(() => undefined);
+  context: DebugActivationContext & { readonly realRoot: string },
+): void {
+  if (pending.has(context.realRoot)) return;
+  pending.add(context.realRoot);
+  void options.mutex
+    .runExclusive([workspaceFingerprintKey(context.realRoot)], () =>
+      synchronizeTracked(
+        { action: "settingsChange", changed: false, context },
+        tracked,
+        options,
+        gate,
+      ),
+    )
+    .catch(() => {
+      try {
+        options.onSweepFailure?.({
+          schemaVersion: "1",
+          code: "ACTIVATION_SWEEP_FAILED",
+          source,
+        });
+      } catch {
+        // Diagnostics must not turn an isolated sweep failure into another rejection.
+      }
+    })
+    .finally(() => {
+      pending.delete(context.realRoot);
+    });
+}
+
+function scheduleSweep(
+  source: DebugActivationSweepFailure["source"],
+  tracked: Map<string, TrackedActivation>,
+  pending: Set<string>,
+  options: DebugActivationControlOptions,
+  gate: DebugCapabilityGate,
+): void {
+  for (const { context } of tracked.values()) {
+    sweepWorkspace(source, tracked, pending, options, gate, context);
+  }
 }
 
 /**
@@ -208,30 +263,27 @@ export function createDebugActivationControlService(
 ): DebugActivationControlService {
   const gate = options.gate ?? createDebugCapabilityGate();
   const tracked = new Map<string, TrackedActivation>();
-  let sweep: Promise<void> | undefined;
+  const pending = new Set<string>();
   const timer = setInterval(() => {
-    if (sweep !== undefined) return;
-    sweep = watchdog(tracked, options, gate).finally(() => {
-      sweep = undefined;
-    });
+    scheduleSweep("watchdog", tracked, pending, options, gate);
   }, options.watchdogIntervalMs ?? WATCHDOG_INTERVAL_MS);
   timer.unref();
   const unsubscribe = gate.subscribe(() => {
-    if (sweep !== undefined) return;
-    sweep = watchdog(tracked, options, gate).finally(() => {
-      sweep = undefined;
-    });
+    scheduleSweep("subscription", tracked, pending, options, gate);
   });
   return {
     resolve: (context): DebugActivationSummary => {
       const summary = summaryFor(context, options, gate);
       if (context.realRoot !== undefined) {
-        tracked.set(context.realRoot, {
-          context: { ...context, realRoot: context.realRoot },
-          summary,
-        });
+        trackResolution({ ...context, realRoot: context.realRoot }, summary, tracked);
       }
       return summary;
+    },
+    isCurrent: (realRoot, expectedRevision): boolean => {
+      const current = tracked.get(realRoot)?.context;
+      if (current?.revision !== expectedRevision) return false;
+      const summary = summaryFor(current, options, gate);
+      return summary.state === "available" && summary.revision === expectedRevision;
     },
     synchronize: (input): Promise<DebugActivationSummary> => {
       const realRoot = input.context.realRoot;

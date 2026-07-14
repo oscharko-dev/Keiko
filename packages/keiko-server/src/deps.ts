@@ -39,11 +39,12 @@ import {
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
@@ -148,7 +149,7 @@ import type {
   WorkspaceReconciliationService,
   WorkspaceRepairService,
 } from "./task-workspace/types.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   resolveGroundingLimits,
   type GroundingLimits,
@@ -159,6 +160,7 @@ import { createDapDebugRouteService } from "./editor/dap/dapDebugRoutes.js";
 import { createDapOperatorProvisioning } from "./editor/dap/dapOperatorProvisioningFactory.js";
 import {
   parseDapOperatorProvisioningDocument,
+  type DapOperatorProvisionedArtifact,
   type DapOperatorProvisioningDocument,
 } from "./editor/dap/dapOperatorProvisioning.js";
 import {
@@ -422,7 +424,7 @@ export interface UiHandlerDeps {
   // instrumentation store, browser capability registry, pause references, and SSE bridge. Optional
   // until #2347 replaces the temporary default-off route flag with the production activation gate.
   readonly dapDebug?: DapDebugRouteService | undefined;
-  // ADR-0134 D7's derived debug capability gate. The M7 setting remains the durable opt-in.
+  // ADR-0136 D7's derived debug capability gate. The M7 setting remains the durable opt-in.
   readonly debugActivationControl?: DebugActivationControlService | undefined;
   // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
   // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
@@ -1573,6 +1575,7 @@ interface PeripheralManagers {
 
 interface DapRuntimeReference {
   current: DapDebugRouteService | undefined;
+  productionQualified: boolean;
   readonly workspaceRoots: Map<string, string>;
 }
 
@@ -1638,8 +1641,137 @@ function operatorDapDocument(env: NodeJS.ProcessEnv): DapOperatorProvisioningDoc
   }
 }
 
+interface DapArtifactQualification {
+  readonly executable: boolean;
+  readonly empty: boolean;
+  readonly allowDirectory: boolean;
+}
+
+function qualifiedArtifactFile(
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+): readonly unknown[] {
+  const supplied = lstatSync(artifact.hostPath);
+  const realPath = realpathSync(artifact.hostPath);
+  const approvedRoot = realpathSync(artifact.approvedRoot);
+  const stat = lstatSync(realPath);
+  if (
+    supplied.isSymbolicLink() ||
+    realPath === approvedRoot ||
+    !isWithinWorkspace(approvedRoot, realPath) ||
+    !stat.isFile() ||
+    (qualification.executable && (stat.mode & 0o111) === 0) ||
+    (qualification.empty && stat.size !== 0)
+  ) {
+    throw new Error("INVALID_DAP_PROVISIONING");
+  }
+  return [
+    artifact.hostPath,
+    realPath,
+    approvedRoot,
+    artifact.capsulePath,
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mode,
+    stat.uid,
+    createHash("sha256").update(readFileSync(realPath)).digest("hex"),
+  ];
+}
+
+function qualifiedArtifact(
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+): readonly (readonly unknown[])[] {
+  const supplied = lstatSync(artifact.hostPath);
+  if (supplied.isSymbolicLink()) throw new Error("INVALID_DAP_PROVISIONING");
+  const realPath = realpathSync(artifact.hostPath);
+  const stat = lstatSync(realPath);
+  if (stat.isFile()) return [qualifiedArtifactFile(artifact, qualification)];
+  if (!qualification.allowDirectory || !stat.isDirectory()) {
+    throw new Error("INVALID_DAP_PROVISIONING");
+  }
+  return readdirSync(realPath, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) =>
+      qualifiedArtifact(
+        {
+          hostPath: join(realPath, entry.name),
+          approvedRoot: artifact.approvedRoot,
+          capsulePath: join(artifact.capsulePath, entry.name),
+        },
+        qualification,
+      ),
+    );
+}
+
+function qualifiedAdapterIdentity(document: DapOperatorProvisioningDocument): readonly unknown[] {
+  const adapter = document.adapter;
+  for (const directory of adapter.approvedPath.split(delimiter)) {
+    const hostPath = join(directory, adapter.executableName);
+    try {
+      const identity = qualifiedArtifactFile(
+        {
+          hostPath,
+          approvedRoot: document.launch.adapterApprovedRoot,
+          capsulePath: "/opt/keiko-debug/adapter",
+        },
+        { executable: true, empty: false, allowDirectory: false },
+      );
+      const realPath = String(identity[1]);
+      if (adapter.trustedRoots.some((root) => isWithinWorkspace(realpathSync(root), realPath))) {
+        return identity;
+      }
+    } catch {
+      // Continue through the closed operator-approved PATH only.
+    }
+  }
+  throw new Error("INVALID_DAP_PROVISIONING");
+}
+
+function operatorProvisioningIdentity(
+  document: DapOperatorProvisioningDocument,
+): string | undefined {
+  try {
+    const launch = document.launch;
+    const executable = { executable: true, empty: false, allowDirectory: false } as const;
+    const data = { executable: false, empty: false, allowDirectory: true } as const;
+    const empty = { executable: false, empty: true, allowDirectory: false } as const;
+    const identities = [
+      qualifiedAdapterIdentity(document),
+      ...qualifiedArtifact(launch.node, executable),
+      ...qualifiedArtifact(launch.npm, executable),
+      ...qualifiedArtifact(launch.shell, executable),
+      ...qualifiedArtifact(launch.backend, executable),
+      ...qualifiedArtifact(launch.npmUserConfig, empty),
+      ...qualifiedArtifact(launch.npmGlobalConfig, empty),
+      ...launch.runtimeClosure.flatMap((artifact) => qualifiedArtifact(artifact, data)),
+    ];
+    return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+/** @internal Non-spawning activation preflight; exported only for deterministic server tests. */
+export function createOperatorProvisioningQualification(
+  env: NodeJS.ProcessEnv,
+): () => DebugProvisioning {
+  const initial = operatorDapDocument(env);
+  const approvedIdentity =
+    initial === undefined ? undefined : operatorProvisioningIdentity(initial);
+  return (): DebugProvisioning => {
+    const current = operatorDapDocument(env);
+    if (approvedIdentity === undefined || current === undefined) return "notProvisioned";
+    return operatorProvisioningIdentity(current) === approvedIdentity
+      ? "provisioned"
+      : "notProvisioned";
+  };
+}
+
 function buildDebugActivationControl(args: BuildPeripheralsArgs): DebugActivationControlService {
   const operatorConfigured = operatorDapDocument(args.options.env) !== undefined;
+  const operatorProvisioning = createOperatorProvisioningQualification(args.options.env);
   return (
     args.options.debugActivationControl ??
     createDebugActivationControlService({
@@ -1654,7 +1786,9 @@ function buildDebugActivationControl(args: BuildPeripheralsArgs): DebugActivatio
       provisioning:
         args.options.dapProvisioning ??
         ((): DebugProvisioning =>
-          operatorConfigured ? "provisioned" : missingDebugProvisioning()),
+          operatorConfigured && args.dapRuntime.productionQualified
+            ? operatorProvisioning()
+            : missingDebugProvisioning()),
       projectEvidence: (fingerprint, evidence): void => {
         args.evidenceStore.put(
           `debug-activation-${fingerprint}-${String(evidence.revision)}-${evidence.action}`,
@@ -1662,6 +1796,12 @@ function buildDebugActivationControl(args: BuildPeripheralsArgs): DebugActivatio
         );
       },
       disposeActiveSession: (realRoot): Promise<void> => disposeActiveDebugSession(args, realRoot),
+      onSweepFailure: (failure): void => {
+        args.evidenceStore.put(
+          `debug-activation-sweep-failure-${randomUUID()}`,
+          JSON.stringify(failure),
+        );
+      },
     })
   );
 }
@@ -2124,27 +2264,11 @@ function buildAssemblyPeripherals(
   });
 }
 
-interface DapActivationRevisionTracker {
-  readonly current: () => number;
-  readonly synchronize: (revision: number) => void;
-}
-
-function createDapActivationRevisionTracker(): DapActivationRevisionTracker {
-  let revision = 0;
-  return {
-    current: (): number => revision,
-    synchronize: (next): void => {
-      revision = next;
-    },
-  };
-}
-
 function createComposedDapRouteService(
   args: UiHandlerDepsAssemblyArgs,
   peripherals: PeripheralManagers,
   runtime: DapRuntimeReference,
   production: DapProductionService,
-  activationRevision: DapActivationRevisionTracker,
 ): DapDebugRouteService {
   return createDapDebugRouteService({
     production,
@@ -2155,8 +2279,23 @@ function createComposedDapRouteService(
       const snapshot = await peripherals.editorSettingsControl.read(realRoot);
       return snapshot.debugging ?? unavailableDebugActivation(snapshot.revision);
     },
-    synchronizeActivationRevision: activationRevision.synchronize,
   });
+}
+
+function dapActivationCurrent(
+  runtime: DapRuntimeReference,
+  control: DebugActivationControlService,
+  workspacePartitionKey: string,
+  expectedRevision: number,
+): boolean {
+  const root = runtime.workspaceRoots.get(workspacePartitionKey);
+  if (root === undefined) return false;
+  try {
+    const currentPartition = inspectDebugWorkspaceIdentity(root).identityDigest;
+    return currentPartition === workspacePartitionKey && control.isCurrent(root, expectedRevision);
+  } catch {
+    return false;
+  }
 }
 
 function unavailableDebugActivation(
@@ -2190,7 +2329,52 @@ function dapWorkspaceContext(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function -- governed DAP composition is one auditable boundary.
+function recordDapCompositionFailure(evidenceStore: EvidenceStore): void {
+  try {
+    evidenceStore.put(
+      `debug-runtime-composition-failure-${randomUUID()}`,
+      JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeCompositionFailure" }),
+    );
+  } catch {
+    // Production DAP remains unavailable even when its content-free diagnostic cannot persist.
+  }
+}
+
+function createQualifiedDapProductionService(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+  provisioning: DapProductionProvisioning,
+): DapProductionService | undefined {
+  try {
+    return createDapProductionService({
+      provisioning,
+      evidenceStore: args.evidenceStore,
+      appendJournal: (partition, evidence): Promise<void> => {
+        args.evidenceStore.put(
+          `debug-session-${partition}-${randomUUID()}`,
+          JSON.stringify(evidence),
+        );
+        return Promise.resolve();
+      },
+      now: Date.now,
+      epoch: () => 0,
+      activationCurrent: (partition, revision): boolean =>
+        dapActivationCurrent(runtime, peripherals.debugActivationControl, partition, revision),
+      emitOutputLimit: (): void => undefined,
+      onRuntimeFailure: (): void => {
+        args.evidenceStore.put(
+          `debug-runtime-failure-${randomUUID()}`,
+          JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeFailure" }),
+        );
+      },
+    });
+  } catch {
+    recordDapCompositionFailure(args.evidenceStore);
+    return undefined;
+  }
+}
+
 function composeDapRuntime(
   args: UiHandlerDepsAssemblyArgs,
   peripherals: PeripheralManagers,
@@ -2213,35 +2397,10 @@ function composeDapRuntime(
           workspaceForRoot: (root) => dapWorkspaceContext(peripherals, root),
         }));
   if (provisioning === undefined) return undefined;
-  const activationRevision = createDapActivationRevisionTracker();
-  const production = createDapProductionService({
-    provisioning,
-    evidenceStore: args.evidenceStore,
-    appendJournal: (partition, evidence): Promise<void> => {
-      args.evidenceStore.put(
-        `debug-session-${partition}-${randomUUID()}`,
-        JSON.stringify(evidence),
-      );
-      return Promise.resolve();
-    },
-    now: Date.now,
-    epoch: () => 0,
-    activationRevision: activationRevision.current,
-    emitOutputLimit: (): void => undefined,
-    onRuntimeFailure: (): void => {
-      args.evidenceStore.put(
-        `debug-runtime-failure-${randomUUID()}`,
-        JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeFailure" }),
-      );
-    },
-  });
-  runtime.current = createComposedDapRouteService(
-    args,
-    peripherals,
-    runtime,
-    production,
-    activationRevision,
-  );
+  const production = createQualifiedDapProductionService(args, peripherals, runtime, provisioning);
+  if (production === undefined) return undefined;
+  runtime.productionQualified = true;
+  runtime.current = createComposedDapRouteService(args, peripherals, runtime, production);
   return production;
 }
 
@@ -2249,6 +2408,7 @@ function composeDapRuntime(
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
     current: args.options.dapDebug,
+    productionQualified: args.options.dapDebug !== undefined,
     workspaceRoots: new Map(),
   };
   const peripherals = buildAssemblyPeripherals(args, dapRuntime);

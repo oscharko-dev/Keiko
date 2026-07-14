@@ -28,6 +28,18 @@ function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isPositiveInteger(value) {
+  return Number.isInteger(value) && value > 0;
+}
+
+function percentile(values, percentileValue) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const rank = Math.ceil((percentileValue / 100) * sorted.length);
+  const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
+  return Math.round(sorted[index] ?? 0);
+}
+
 // ---- Workspace evidence ----------------------------------------------------
 //
 // Each per-gesture budget is checked by its own small predicate below; evaluateWorkspaceEvidence
@@ -193,6 +205,133 @@ function evaluateB5Keystroke(b5) {
   return [];
 }
 
+function evaluateIdleDebugCapture(b5) {
+  const failures = [];
+  if (b5.attempted !== true) failures.push("b5 idle-debug measurement was not attempted");
+  if (b5.captured !== true) failures.push("b5 idle-debug evidence not captured");
+  if (b5.traceCaptured !== true) failures.push("b5 idle-debug trace was not captured");
+  return failures;
+}
+
+function evaluateExpectedSampleCount(expectedSampleCount) {
+  return isPositiveInteger(expectedSampleCount)
+    ? []
+    : ["b5 idle-debug expectedSampleCount is not a positive integer"];
+}
+
+function evaluateProcessingSamples(samples, expectedSampleCount) {
+  const failures = [];
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return ["b5 idle-debug processing samples are missing"];
+  }
+  if (isPositiveInteger(expectedSampleCount) && samples.length !== expectedSampleCount) {
+    failures.push(
+      `b5 idle-debug recorded ${samples.length} processing samples; expected ${expectedSampleCount}`,
+    );
+  }
+  if (samples.some((sample) => !isFiniteNumber(sample) || sample <= 0)) {
+    failures.push("b5 idle-debug processing samples contain a non-positive measurement");
+  }
+  return failures;
+}
+
+function evaluateMatchedInputEvents(b5) {
+  const failures = [];
+  const eventCounts = b5.matchedInputEventCounts;
+  if (!Array.isArray(eventCounts) || eventCounts.length === 0) {
+    return ["b5 idle-debug matched input-event counts are missing"];
+  }
+  if (isPositiveInteger(b5.expectedSampleCount) && eventCounts.length !== b5.expectedSampleCount) {
+    failures.push(
+      `b5 idle-debug recorded ${eventCounts.length} input-event counts; expected ${b5.expectedSampleCount}`,
+    );
+  }
+  if (eventCounts.some((count) => !isPositiveInteger(count))) {
+    failures.push("b5 idle-debug input-event counts contain a zero or invalid match count");
+    return failures;
+  }
+  const total = eventCounts.reduce((sum, count) => sum + count, 0);
+  if (b5.totalMatchedInputEvents !== total) {
+    failures.push(
+      `b5 idle-debug totalMatchedInputEvents ${String(b5.totalMatchedInputEvents)} != ${total}`,
+    );
+  }
+  return failures;
+}
+
+function evaluateIdleDebugSamples(b5) {
+  return [
+    ...evaluateExpectedSampleCount(b5.expectedSampleCount),
+    ...evaluateProcessingSamples(b5.processingSamples, b5.expectedSampleCount),
+    ...evaluateMatchedInputEvents(b5),
+  ];
+}
+
+function evaluateIdleDebugP95(b5) {
+  if (!isFiniteNumber(b5.p95)) return ["b5 idle-debug p95 is not a finite measurement"];
+  const failures = [];
+  const samples = b5.processingSamples;
+  if (Array.isArray(samples) && samples.every(isFiniteNumber)) {
+    const measuredP95 = percentile(samples, 95);
+    if (b5.p95 !== measuredP95) {
+      failures.push(`b5 idle-debug p95 ${b5.p95}ms != measured ${measuredP95}ms`);
+    }
+  }
+  if (isFiniteNumber(b5.budgetMax) && b5.p95 >= b5.budgetMax) {
+    failures.push(`b5 idle-debug p95 ${b5.p95}ms >= budget ${b5.budgetMax}ms`);
+  }
+  return failures;
+}
+
+function evaluateIdleDebugSampleCeiling(b5) {
+  const samples = b5.processingSamples;
+  if (
+    Array.isArray(samples) &&
+    isFiniteNumber(b5.budgetMax) &&
+    samples.some((sample) => isFiniteNumber(sample) && sample >= b5.budgetMax)
+  ) {
+    return [`b5 idle-debug processing sample reached budget ${b5.budgetMax}ms`];
+  }
+  return [];
+}
+
+function evaluateIdleDebugBudget(b5) {
+  const failures = [];
+  if (!(isFiniteNumber(b5.budgetMax) && b5.budgetMax > 0)) {
+    failures.push("b5 idle-debug budgetMax is not a positive number");
+  }
+  failures.push(...evaluateIdleDebugP95(b5), ...evaluateIdleDebugSampleCeiling(b5));
+  return failures;
+}
+
+function evaluateIdleDebugRuntime(b5) {
+  const failures = [];
+  if (b5.longTaskCount !== 0) failures.push("b5 idle-debug recorded one or more long tasks");
+  if (b5.maxLongTaskMs !== 0) failures.push("b5 idle-debug maxLongTaskMs must be zero");
+  if (b5.outputAcceptedBytes !== 0) {
+    failures.push("b5 idle-debug accepted visible output during the idle interval");
+  }
+  if (b5.sessionStatus !== "paused" && b5.sessionStatus !== "running") {
+    failures.push("b5 idle-debug session was neither paused nor running");
+  }
+  if (!(isFiniteNumber(b5.idleIntervalMs) && b5.idleIntervalMs > 0)) {
+    failures.push("b5 idle-debug idleIntervalMs is not a positive measurement");
+  }
+  return failures;
+}
+
+function evaluateB5IdleDebugSession(b5) {
+  if (typeof b5 !== "object" || b5 === null) {
+    return ["editor evidence missing b5IdleDebugSession"];
+  }
+  return [
+    ...evaluateIdleDebugCapture(b5),
+    ...evaluateIdleDebugSamples(b5),
+    ...evaluateIdleDebugBudget(b5),
+    ...evaluateIdleDebugRuntime(b5),
+  ];
+}
+
 function evaluateB6Interaction(b6) {
   if (typeof b6 !== "object" || b6 === null || b6.captured !== true) {
     return ["b6 interaction evidence not captured"];
@@ -232,6 +371,7 @@ export function evaluateEditorEvidence(evidence) {
   const failures = [
     ...evaluateB4ColdStart(evidence.b4ColdStartMs),
     ...evaluateB5Keystroke(evidence.b5KeystrokeMs),
+    ...evaluateB5IdleDebugSession(evidence.b5IdleDebugSession),
     ...evaluateB6Interaction(evidence.b6InteractionMs),
     ...evaluateB11Memory(evidence.b11Memory),
     ...evaluateWorkerLoadCapture(evidence.workerLoadCapture),

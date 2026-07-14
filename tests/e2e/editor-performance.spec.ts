@@ -97,6 +97,7 @@ interface IdleDebugSessionSnapshot {
 interface IdleDebugMetrics {
   readonly longTasks: readonly number[];
   readonly longTaskObserverInstalled: boolean;
+  readonly matchedInputEventCounts: readonly number[];
   readonly processingSamples: readonly number[];
   readonly session: IdleDebugSessionSnapshot;
   readonly traceCaptured: boolean;
@@ -113,27 +114,35 @@ interface IdleDebugEvidence {
   readonly attempted: boolean;
   readonly budgetMax: number;
   readonly captured: boolean;
+  readonly expectedSampleCount: number;
   readonly idleIntervalMs: number;
   readonly longTaskCount: number;
+  readonly matchedInputEventCounts: readonly number[];
   readonly maxLongTaskMs: number;
   readonly outputAcceptedBytes: number | null;
   readonly p95: number;
   readonly processingSamples: readonly number[];
   readonly sessionStatus: "paused" | "running" | null;
+  readonly totalMatchedInputEvents: number;
   readonly traceCaptured: boolean;
 }
+
+const TYPING_CHUNKS = Array.from("export const greeting = 'keiko editor performance evidence';");
 
 const UNMEASURED_IDLE_DEBUG_EVIDENCE: IdleDebugEvidence = {
   attempted: false,
   budgetMax: 50,
   captured: false,
+  expectedSampleCount: TYPING_CHUNKS.length,
   idleIntervalMs: IDLE_DEBUG_INTERVAL_MS,
   longTaskCount: 0,
+  matchedInputEventCounts: [],
   maxLongTaskMs: 0,
   outputAcceptedBytes: null,
   p95: 0,
   processingSamples: [],
   sessionStatus: null,
+  totalMatchedInputEvents: 0,
   traceCaptured: false,
 };
 
@@ -496,7 +505,6 @@ async function awaitNextPaint(page: Page): Promise<void> {
   );
 }
 
-const TYPING_CHUNKS = Array.from("export const greeting = 'keiko editor performance evidence';");
 const FINAL_TYPING_TEXT = TYPING_CHUNKS.join("");
 
 /**
@@ -934,20 +942,23 @@ function traceDispatchType(event: TraceEvent): string | undefined {
   return isRecord(data) ? stringValue(data.type) : undefined;
 }
 
-function inputDispatchDurationMs(events: readonly TraceEvent[]): number {
-  const microseconds = events
-    .filter(
-      (event) =>
-        event.name === "EventDispatch" &&
-        event.phase === "X" &&
-        (traceDispatchType(event) === "beforeinput" || traceDispatchType(event) === "input"),
-    )
-    .reduce((total, event) => total + event.dur, 0);
-  return Math.round((microseconds / 1_000) * 1_000) / 1_000;
-}
-
 interface InputProcessingMeasurement {
   readonly durationMs: number;
+  readonly matchedEventCount: number;
+}
+
+function inputDispatchMeasurement(events: readonly TraceEvent[]): InputProcessingMeasurement {
+  const matchedEvents = events.filter(
+    (event) =>
+      event.name === "EventDispatch" &&
+      event.phase === "X" &&
+      (traceDispatchType(event) === "beforeinput" || traceDispatchType(event) === "input"),
+  );
+  const microseconds = matchedEvents.reduce((total, event) => total + event.dur, 0);
+  return {
+    durationMs: Math.round((microseconds / 1_000) * 1_000) / 1_000,
+    matchedEventCount: matchedEvents.length,
+  };
 }
 
 async function captureInputProcessingMs(
@@ -979,9 +990,14 @@ async function captureInputProcessingMs(
         timeout.unref();
       }),
     ]);
-    return {
-      durationMs: inputDispatchDurationMs(events),
-    };
+    const measurement = inputDispatchMeasurement(events);
+    if (measurement.matchedEventCount === 0) {
+      throw new Error("EDITOR_PERF_INPUT_DISPATCH_NOT_CAPTURED");
+    }
+    if (measurement.durationMs <= 0) {
+      throw new Error("EDITOR_PERF_INPUT_DISPATCH_DURATION_NOT_POSITIVE");
+    }
+    return measurement;
   } finally {
     await client.detach();
   }
@@ -1008,9 +1024,11 @@ async function measureIdleDebugTyping(
   const observerInstalled = await installIdleDebugLongTaskObserver(page);
   await page.waitForTimeout(IDLE_DEBUG_INTERVAL_MS);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
+  const matchedInputEventCounts: number[] = [];
   const processingSamples: number[] = [];
   for (const chunk of TYPING_CHUNKS) {
     const measurement = await captureInputProcessingMs(page, chunk);
+    matchedInputEventCounts.push(measurement.matchedEventCount);
     processingSamples.push(measurement.durationMs);
   }
   await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000)]);
@@ -1021,6 +1039,7 @@ async function measureIdleDebugTyping(
   return {
     longTasks,
     longTaskObserverInstalled: observerInstalled,
+    matchedInputEventCounts,
     processingSamples,
     session: liveSession,
     // Each sample returns only after CDP emits Tracing.tracingComplete; the bounded capture helper
@@ -1235,21 +1254,33 @@ function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
 }
 
 function buildIdleDebugB5Evidence(metrics: IdleDebugMetrics): IdleDebugEvidence {
+  const expectedSampleCount = TYPING_CHUNKS.length;
+  const hasNonVacuousSamples =
+    metrics.processingSamples.length === expectedSampleCount &&
+    metrics.processingSamples.every((sample) => sample > 0) &&
+    metrics.matchedInputEventCounts.length === expectedSampleCount &&
+    metrics.matchedInputEventCounts.every((count) => count > 0);
   return {
     attempted: true,
     budgetMax: 50,
     captured:
       metrics.traceCaptured &&
       metrics.longTaskObserverInstalled &&
-      metrics.processingSamples.length === TYPING_CHUNKS.length &&
+      hasNonVacuousSamples &&
       metrics.session.outputAcceptedBytes === 0,
+    expectedSampleCount,
     idleIntervalMs: IDLE_DEBUG_INTERVAL_MS,
     longTaskCount: metrics.longTasks.length,
+    matchedInputEventCounts: metrics.matchedInputEventCounts,
     maxLongTaskMs: Math.round(Math.max(0, ...metrics.longTasks)),
     outputAcceptedBytes: metrics.session.outputAcceptedBytes,
     p95: percentile(metrics.processingSamples, 95),
     processingSamples: metrics.processingSamples,
     sessionStatus: metrics.session.status,
+    totalMatchedInputEvents: metrics.matchedInputEventCounts.reduce(
+      (total, count) => total + count,
+      0,
+    ),
     traceCaptured: metrics.traceCaptured,
   };
 }
@@ -1464,7 +1495,21 @@ function assertEvidenceBudgets(
   expect(evidence.b5IdleDebugSession.attempted).toBe(true);
   expect(evidence.b5IdleDebugSession.captured).toBe(true);
   expect(evidence.b5IdleDebugSession.traceCaptured).toBe(true);
-  expect(evidence.b5IdleDebugSession.processingSamples.length).toBe(TYPING_CHUNKS.length);
+  expect(evidence.b5IdleDebugSession.expectedSampleCount).toBe(TYPING_CHUNKS.length);
+  expect(evidence.b5IdleDebugSession.processingSamples).toHaveLength(TYPING_CHUNKS.length);
+  expect(evidence.b5IdleDebugSession.processingSamples.every((sample) => sample > 0)).toBe(true);
+  expect(evidence.b5IdleDebugSession.matchedInputEventCounts).toHaveLength(TYPING_CHUNKS.length);
+  expect(evidence.b5IdleDebugSession.matchedInputEventCounts.every((count) => count > 0)).toBe(
+    true,
+  );
+  expect(evidence.b5IdleDebugSession.totalMatchedInputEvents).toBeGreaterThanOrEqual(
+    TYPING_CHUNKS.length,
+  );
+  expect(
+    evidence.b5IdleDebugSession.processingSamples.every(
+      (sample) => sample < evidence.b5IdleDebugSession.budgetMax,
+    ),
+  ).toBe(true);
   expect(evidence.b5IdleDebugSession.p95).toBeLessThan(evidence.b5IdleDebugSession.budgetMax);
   expect(evidence.b5IdleDebugSession.longTaskCount).toBe(0);
   expect(evidence.b5IdleDebugSession.maxLongTaskMs).toBe(0);

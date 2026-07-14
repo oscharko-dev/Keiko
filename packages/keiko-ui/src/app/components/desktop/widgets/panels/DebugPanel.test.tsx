@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WatchEvaluationResult } from "@oscharko-dev/keiko-contracts";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type { DebugSessionSnapshot } from "../cards/debugSessionStore";
 import { useDebugSession } from "../cards/useDebugSession";
 import { DebugPanel, draftWatchId } from "./DebugPanel";
@@ -162,6 +163,7 @@ const snapshot: DebugSessionSnapshot = {
   watchResults: new Map(),
   console: {
     entries: [{ id: 1, category: "stdout", text: "started", truncated: false }],
+    retainedBytes: 7,
     evictedEntries: 0,
     evictedBytes: 0,
   },
@@ -176,6 +178,7 @@ vi.mock("../cards/useDebugSession", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
   vi.mocked(useDebugSession).mockReturnValue({ snapshot, actions });
 });
 
@@ -241,6 +244,7 @@ describe("DebugPanel", () => {
     const user = userEvent.setup();
     render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
 
+    await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Step over" }));
     await user.click(screen.getByRole("button", { name: "Step into" }));
     await user.click(screen.getByRole("button", { name: "Step out" }));
@@ -249,22 +253,47 @@ describe("DebugPanel", () => {
     expect(actions.control).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ sessionId: "session-1" }),
-      "next",
+      "continue",
     );
     expect(actions.control).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ sessionId: "session-1" }),
-      "stepIn",
+      "next",
     );
     expect(actions.control).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({ sessionId: "session-1" }),
-      "stepOut",
+      "stepIn",
     );
     expect(actions.control).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({ sessionId: "session-1" }),
+      "stepOut",
+    );
+    expect(actions.control).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({ sessionId: "session-1" }),
       "stop",
+    );
+  });
+
+  it("offers pause only while running and never sends an invalid paused-only action", async () => {
+    const user = userEvent.setup();
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: { ...snapshot.session!, status: "running" } },
+      actions,
+    });
+    render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Step over" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(actions.control).toHaveBeenCalledOnce();
+    expect(actions.control).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "running" }),
+      "pause",
     );
   });
 
@@ -284,7 +313,8 @@ describe("DebugPanel", () => {
     });
     render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Exception: Fixture uncaught exception");
+    expect(screen.getByText("Exception: Fixture uncaught exception")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("keeps the start action disabled without both an active file and a server activation revision", () => {
@@ -332,6 +362,34 @@ describe("DebugPanel", () => {
     expect(child).toHaveFocus();
     await user.keyboard("{ArrowLeft}");
     expect(scope).toHaveFocus();
+  });
+
+  it("supports pointer-free call-stack focus and selection", async () => {
+    const user = userEvent.setup();
+    render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
+    const first = screen.getByRole("option", { name: /first/i });
+    const second = screen.getByRole("option", { name: /second/i });
+    first.focus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(second).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(second).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renders visible controls and accessibility labels from the German catalog", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("group", { name: "Debugging-Steuerung" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fortsetzen" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "Aufrufliste" })).toBeInTheDocument();
+    expect(screen.getByRole("tree", { name: "Variablen" })).toBeInTheDocument();
   });
 
   it("is axe-clean and keeps the bounded console free of arbitrary evaluation input", async () => {

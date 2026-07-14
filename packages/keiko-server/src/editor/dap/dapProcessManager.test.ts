@@ -424,6 +424,17 @@ function setup(options?: SetupOptions): SetupResult {
 }
 
 describe("dapProcessManager canonical orchestration", () => {
+  it("fails closed when a requested session binding does not exist", async () => {
+    const current = setup();
+
+    await expect(current.manager.stop("missing_session")).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+    await expect(current.manager.failMalformed("missing_session")).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+  });
+
   it("sends initialize then the exact server-built launch request before RUNNING", async () => {
     const { manager, transport, launch, validatePlan, revalidateTarget } = setup();
     await manager.start(startInput);

@@ -24,12 +24,13 @@ afterEach(() => {
 function context(
   realRoot: string,
   workspaceActivation: "enabled" | "disabled",
+  revision = 7,
 ): Readonly<{
   readonly realRoot: string;
-  readonly revision: 7;
+  readonly revision: number;
   readonly workspaceActivation: "enabled" | "disabled";
 }> {
-  return { realRoot, revision: 7, workspaceActivation } as const;
+  return { realRoot, revision, workspaceActivation };
 }
 
 describe("debug activation control", () => {
@@ -108,6 +109,97 @@ describe("debug activation control", () => {
       action: "revoke",
       effectiveState: "notProvisioned",
     });
+    control.dispose();
+  });
+
+  it("does not let an activation read swallow a pending available-to-denied revocation", async () => {
+    vi.useFakeTimers();
+    const root = temporaryDirectory("debug-read-before-watchdog");
+    let provisioning: "provisioned" | "notProvisioned" = "provisioned";
+    const disposeActiveSession = vi.fn(() => Promise.resolve());
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => provisioning,
+      disposeActiveSession,
+      watchdogIntervalMs: 1_000,
+    });
+    expect(control.resolve(context(root, "enabled"))).toMatchObject({ state: "available" });
+    provisioning = "notProvisioned";
+
+    expect(control.resolve(context(root, "enabled"))).toMatchObject({ state: "notProvisioned" });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(disposeActiveSession).toHaveBeenCalledExactlyOnceWith(root);
+    control.dispose();
+  });
+
+  it("validates activation freshness against the exact workspace and revision", () => {
+    const first = temporaryDirectory("debug-freshness-first");
+    const second = temporaryDirectory("debug-freshness-second");
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => "provisioned",
+      disposeActiveSession: () => Promise.resolve(),
+    });
+    control.resolve(context(first, "enabled", 7));
+    control.resolve(context(second, "enabled", 9));
+
+    expect(control.isCurrent(first, 7)).toBe(true);
+    expect(control.isCurrent(first, 9)).toBe(false);
+    expect(control.isCurrent(second, 9)).toBe(true);
+    expect(control.isCurrent(second, 7)).toBe(false);
+
+    control.resolve(context(second, "enabled", 7));
+    expect(control.isCurrent(first, 7)).toBe(true);
+    expect(control.isCurrent(second, 7)).toBe(true);
+    control.dispose();
+  });
+
+  it("catches redacted sweep failures per workspace and keeps sweeping healthy workspaces", async () => {
+    vi.useFakeTimers();
+    const failing = temporaryDirectory("debug-sweep-failing");
+    const healthy = temporaryDirectory("debug-sweep-healthy");
+    let provisioning: "provisioned" | "notProvisioned" = "provisioned";
+    const failures: unknown[] = [];
+    const disposals: string[] = [];
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => provisioning,
+      disposeActiveSession: (root) => {
+        disposals.push(root);
+        return root === failing
+          ? Promise.reject(new Error(`sensitive:${root}`))
+          : Promise.resolve();
+      },
+      onSweepFailure: (failure): void => {
+        failures.push(failure);
+      },
+      watchdogIntervalMs: 1_000,
+    });
+    control.resolve(context(failing, "enabled"));
+    control.resolve(context(healthy, "enabled"));
+    provisioning = "notProvisioned";
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    expect(disposals).toEqual(expect.arrayContaining([failing, healthy]));
+    expect(failures).toEqual([
+      { schemaVersion: "1", code: "ACTIVATION_SWEEP_FAILED", source: "watchdog" },
+    ]);
+    expect(JSON.stringify(failures)).not.toContain(failing);
+    expect(JSON.stringify(failures)).not.toContain("sensitive");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    expect(disposals.filter((root) => root === failing)).toHaveLength(2);
+    expect(disposals.filter((root) => root === healthy)).toHaveLength(1);
     control.dispose();
   });
 });

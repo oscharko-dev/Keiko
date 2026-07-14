@@ -31,6 +31,7 @@ function debugActivation(): DebugActivationControlService {
     policyResult: "denied" as const,
   });
   return {
+    isCurrent: () => true,
     resolve: (context) => summary(context.revision),
     synchronize: (input) => Promise.resolve(summary(input.context.revision)),
     dispose: () => undefined,

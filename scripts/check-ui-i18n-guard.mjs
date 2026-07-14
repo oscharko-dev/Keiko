@@ -9,7 +9,6 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
-const USER_FACING_JSX_TEXT_PATTERN = />\s*[^<>{}]*[A-Za-z][^<>{}]*</;
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
@@ -65,10 +64,85 @@ function isCommentLine(line) {
   return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
 }
 
+function isAsciiLetter(character) {
+  if (character === undefined) return false;
+  const code = character.codePointAt(0);
+  return code !== undefined && ((code >= 65 && code <= 90) || (code >= 97 && code <= 122));
+}
+
+function isTagNameCharacter(character) {
+  if (isAsciiLetter(character)) return true;
+  return (
+    character !== undefined &&
+    ((character >= "0" && character <= "9") || "_.:-".includes(character))
+  );
+}
+
+function readTagName(line, start) {
+  if (!isAsciiLetter(line[start])) return null;
+  let end = start + 1;
+  while (isTagNameCharacter(line[end])) end += 1;
+  return { end, name: line.slice(start, end) };
+}
+
+function findTagEnd(line, start) {
+  let quote = null;
+  for (let index = start; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote !== null) {
+      if (character === quote && line[index - 1] !== "\\") quote = null;
+    } else if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function readJsxTag(line, start) {
+  if (line[start] !== "<") return null;
+  const closing = line[start + 1] === "/";
+  const nameStart = start + (closing ? 2 : 1);
+  const tagName = readTagName(line, nameStart);
+  if (tagName === null) return null;
+  const end = findTagEnd(line, tagName.end);
+  return end < 0 ? null : { closing, end, name: tagName.name };
+}
+
+function isDirectUserFacingText(text) {
+  if (text.includes("<") || text.includes("{") || text.includes("}")) return false;
+  return Array.from(text).some(isAsciiLetter);
+}
+
+function hasUserFacingJsxText(line) {
+  let cursor = 0;
+  while (cursor < line.length) {
+    const openingStart = line.indexOf("<", cursor);
+    if (openingStart < 0) return false;
+    const openingTag = readJsxTag(line, openingStart);
+    cursor = openingStart + 1;
+    if (openingTag === null || openingTag.closing) continue;
+
+    const closingStart = line.indexOf("</", openingTag.end + 1);
+    if (closingStart < 0) continue;
+    const closingTag = readJsxTag(line, closingStart);
+    const text = line.slice(openingTag.end + 1, closingStart);
+    if (
+      closingTag?.closing &&
+      closingTag.name === openingTag.name &&
+      isDirectUserFacingText(text)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function hasUserFacingTextLine(line) {
   if (isCommentLine(line)) return false;
   return (
-    USER_FACING_JSX_TEXT_PATTERN.test(line) ||
+    hasUserFacingJsxText(line) ||
     USER_FACING_ATTRIBUTE_PATTERN.test(line) ||
     USER_FACING_STRING_RETURN_PATTERN.test(line)
   );
@@ -82,14 +156,19 @@ export function hasI18nRelevantAddedLine(line) {
   );
 }
 
-function addedLinesFromPatch(patch) {
-  return patch
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
-    .map((line) => line.slice(1));
+function changedLinesFromPatch(patch) {
+  const lines = patch.split(/\r?\n/);
+  return {
+    added: lines
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => line.slice(1)),
+    removed: lines
+      .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+      .map((line) => line.slice(1)),
+  };
 }
 
-function gitAddedLinesForFile(repoRoot, file, env = process.env) {
+function gitChangedLinesForFile(repoRoot, file, env = process.env) {
   for (const range of diffRangesFromEnv(env)) {
     const result = spawnSync(
       "git",
@@ -100,23 +179,45 @@ function gitAddedLinesForFile(repoRoot, file, env = process.env) {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    if (result.status === 0) return addedLinesFromPatch(result.stdout);
+    if (result.status === 0) return changedLinesFromPatch(result.stdout);
   }
   return null;
+}
+
+function collectI18nChangeSignatures(lines) {
+  const signatures = new Set();
+  for (const line of lines) {
+    const keyMatches = line.matchAll(/\bt\s*\(\s*(["'`])([^"'`]+)\1/gu);
+    for (const match of keyMatches) signatures.add(`key:${match[2]}`);
+    if (/\buseTranslate\s*\(/u.test(line)) signatures.add("api:useTranslate");
+    if (/\buseI18n\s*\(/u.test(line)) signatures.add("api:useI18n");
+    if (/<\s*I18nTranslate\b/u.test(line)) signatures.add("api:I18nTranslate");
+  }
+  return signatures;
+}
+
+function hasNewI18nSignature(addedLines, removedLines) {
+  const added = collectI18nChangeSignatures(addedLines);
+  const removed = collectI18nChangeSignatures(removedLines);
+  return Array.from(added).some((signature) => !removed.has(signature));
 }
 
 function sourceHasUserFacingText(source) {
   return source.split(/\r?\n/).some(hasUserFacingTextLine);
 }
 
-// When a real diff is available, only the ADDED lines decide relevance: a change is i18n-relevant
-// only if it introduces new user-facing text or a new i18n API call, not merely because the file
-// already used i18n elsewhere (e.g. a pure focus-management or logic refactor of an already
-// translated component must not force an unrelated catalog touch). Fixture-driven callers with no
-// git history (addedLines === null) fall back to whole-file detection, matching prior behavior.
+// When a real diff is available, only newly introduced signals decide relevance: a change is
+// i18n-relevant only if it adds user-facing text or an i18n key/API signature that the same patch
+// did not remove. A pure refactor or JSX element replacement around an existing translated value
+// must not force an unrelated catalog touch. Fixture-driven callers with no git history fall back
+// to whole-file detection, matching prior behavior.
 function hasI18nRelevantChange(repoRoot, file) {
-  const addedLines = gitAddedLinesForFile(repoRoot, file);
-  if (addedLines !== null) return addedLines.some(hasI18nRelevantAddedLine);
+  const changedLines = gitChangedLinesForFile(repoRoot, file);
+  if (changedLines !== null) {
+    if (!changedLines.added.some(hasI18nRelevantAddedLine)) return false;
+    if (changedLines.added.some(hasUserFacingTextLine)) return true;
+    return hasNewI18nSignature(changedLines.added, changedLines.removed);
+  }
   const source = readText(repoRoot, file);
   return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(source);
 }

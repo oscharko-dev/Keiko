@@ -115,7 +115,6 @@ export interface DapDebugRouteService {
   readonly references: DebugReferenceStore;
   readonly events: DapEventBridge;
   readonly activation: (realRoot: string) => Promise<DebugActivationSummary>;
-  readonly synchronizeActivationRevision: (revision: number) => void;
 }
 
 export interface DapDebugRouteServiceOptions {
@@ -123,7 +122,6 @@ export interface DapDebugRouteServiceOptions {
   readonly stateDir: string;
   readonly now: () => number;
   readonly activation: (realRoot: string) => Promise<DebugActivationSummary>;
-  readonly synchronizeActivationRevision: (revision: number) => void;
 }
 
 export function createDapDebugRouteService(
@@ -136,7 +134,6 @@ export function createDapDebugRouteService(
     references: createDebugReferenceStore(),
     events: options.production.eventBridge,
     activation: options.activation,
-    synchronizeActivationRevision: options.synchronizeActivationRevision,
   });
 }
 
@@ -244,10 +241,34 @@ async function activeActivationRevision(
   service: DapDebugRouteService,
   realRoot: string,
 ): Promise<number | undefined> {
-  const activation = await service.activation(realRoot);
-  if (activation.state !== "available") return undefined;
-  service.synchronizeActivationRevision(activation.revision);
-  return activation.revision;
+  try {
+    const activation = await service.activation(realRoot);
+    return activation.state === "available" ? activation.revision : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function staleActivation(): RouteResult {
+  return { status: 409, body: errorBody("STALE_ACTIVATION", "Debug activation has changed.") };
+}
+
+async function revalidateSessionActivation(
+  service: DapDebugRouteService,
+  realRoot: string,
+  sessionId: string,
+  expectedRevision: number,
+): Promise<RouteResult | undefined> {
+  let current: DebugActivationSummary | undefined;
+  try {
+    current = await service.activation(realRoot);
+  } catch {
+    current = undefined;
+  }
+  if (current?.state === "available" && current.revision === expectedRevision) return undefined;
+  await service.manager.revoke(sessionId);
+  service.references.clearSession(sessionId);
+  return current?.state === "available" ? staleActivation() : deniedActivation();
 }
 
 async function authorizeWorkspace(
@@ -314,6 +335,29 @@ function sessionNotFound(): RouteResult {
   return { status: 404, body: errorBody("SESSION_NOT_FOUND", "The debug session was not found.") };
 }
 
+function authorizedSession(
+  service: DapDebugRouteService,
+  sessionId: string,
+  binding: NonNullable<ReturnType<DapProcessManager["binding"]>>,
+  projection: DebugSessionProjection,
+  workspace: DebugWorkspace,
+): Parsed<AuthorizedSession> {
+  return {
+    ok: true,
+    value: {
+      service,
+      projection,
+      scope: {
+        sessionId,
+        workspacePartitionKey: binding.workspacePartitionKey,
+        browserSessionBinding: binding.browserSessionBinding,
+        pauseGeneration: projection.pauseGeneration,
+      },
+      workspace,
+    },
+  };
+}
+
 async function authorizeSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -348,20 +392,14 @@ async function authorizeSession(
       },
     };
   }
-  return {
-    ok: true,
-    value: {
-      service,
-      projection,
-      scope: {
-        sessionId,
-        workspacePartitionKey: binding.workspacePartitionKey,
-        browserSessionBinding: binding.browserSessionBinding,
-        pauseGeneration: projection.pauseGeneration,
-      },
-      workspace: resolved.workspace,
-    },
-  };
+  const activation = await revalidateSessionActivation(
+    service,
+    resolved.workspace.realRoot,
+    sessionId,
+    projection.activationRevision,
+  );
+  if (activation !== undefined) return { ok: false, result: activation };
+  return authorizedSession(service, sessionId, binding, projection, resolved.workspace);
 }
 
 function mintedSessionId(): string {
@@ -716,6 +754,30 @@ function expectedAdapterAvailabilityError(error: unknown): boolean {
   );
 }
 
+async function activeSessionDispatchAllowed(
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  sessionId: string,
+): Promise<boolean> {
+  const projection = service.manager.health(sessionId);
+  if (
+    projection === undefined ||
+    projection.state === "stopped" ||
+    projection.state === "revoked" ||
+    projection.state === "failed" ||
+    projection.state === "terminationPending"
+  ) {
+    return false;
+  }
+  const denied = await revalidateSessionActivation(
+    service,
+    workspace.realRoot,
+    sessionId,
+    projection.activationRevision,
+  );
+  return denied === undefined;
+}
+
 async function updateActiveBreakpoints(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -727,6 +789,9 @@ async function updateActiveBreakpoints(
     workspace.browserSessionBinding,
   );
   if (sessionId === undefined) return { kind: "inactive" };
+  if (!(await activeSessionDispatchAllowed(service, workspace, sessionId))) {
+    return { kind: "unavailable" };
+  }
   const breakpoints = snapshot.breakpoints.filter((breakpoint) => breakpoint.fileId === fileId);
   try {
     const response = await service.manager.request(
@@ -831,6 +896,7 @@ async function updateActiveExceptionBreakpoints(
     workspace.browserSessionBinding,
   );
   if (sessionId === undefined) return "inactive";
+  if (!(await activeSessionDispatchAllowed(service, workspace, sessionId))) return "unavailable";
   const enabled = snapshot.exceptionFilters.filter((filter) => filter.enabled);
   try {
     const response = await service.manager.request(
@@ -1387,16 +1453,14 @@ function resolveReference(
       };
 }
 
-function scopeInput(
-  value: unknown,
-  service: DapDebugRouteService,
-  scope: DebugReferenceScope,
-): {
-  readonly scopeRef: string;
+interface ValidatedScopeInput {
+  readonly variablesReference: number;
   readonly name: string;
   readonly expensive: boolean;
   readonly variableCount?: number | undefined;
-} {
+}
+
+function validatedScopeInput(value: unknown): ValidatedScopeInput {
   const record = adapterShape(value, [
     "name",
     "presentationHint",
@@ -1417,10 +1481,29 @@ function scopeInput(
     Number.isSafeInteger(namedVariables) &&
     namedVariables >= 0;
   return {
-    scopeRef: mintReference(service, scope, { kind: "scope", variablesReference, depth: 0 }),
+    variablesReference,
     name: adapterString(record.name),
     expensive: record.expensive === true,
     ...(validCount ? { variableCount: namedVariables } : {}),
+  };
+}
+
+function mintScopeInput(
+  input: ValidatedScopeInput,
+  service: DapDebugRouteService,
+  scope: DebugReferenceScope,
+): Parameters<typeof buildScopeProjection>[0][number] {
+  const minted = service.references.mint(scope, {
+    kind: "scope",
+    variablesReference: input.variablesReference,
+    depth: 0,
+  });
+  if (!minted.ok) throw new Error("DAP_RESPONSE_INVALID");
+  return {
+    scopeRef: minted.reference,
+    name: input.name,
+    expensive: input.expensive,
+    ...(input.variableCount === undefined ? {} : { variableCount: input.variableCount }),
   };
 }
 
@@ -1431,14 +1514,21 @@ function scopesResult(
   scope: DebugReferenceScope,
 ): RouteResult {
   const response = adapterShape(raw, ["scopes"]);
-  const scopes = adapterArray(response.scopes).map((value) => scopeInput(value, service, scope));
+  const validated = adapterArray(response.scopes).map(validatedScopeInput);
+  const scopes = validated
+    .slice(0, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxScopesPerFrame)
+    .map((input) => mintScopeInput(input, service, scope));
+  const projection = buildScopeProjection(scopes);
+  const omittedCount = validated.length - projection.retainedCount;
   return {
     status: 200,
     body: {
       schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
       sessionId: request.sessionId,
       pauseGeneration: request.pauseGeneration,
-      ...buildScopeProjection(scopes),
+      ...projection,
+      omittedCount,
+      truncated: omittedCount > 0,
     },
   };
 }

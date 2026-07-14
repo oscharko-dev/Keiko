@@ -1,7 +1,7 @@
 // Cross-stack adversarial regression suite for governed debugging (Issue #2348).
 //
 // The assertions below deliberately exercise the public DAP hardening seams rather than merely
-// checking that helpers do not throw. They cover the containment floor in ADR-0134 D1/D3/D7/D8:
+// checking that helpers do not throw. They cover the containment floor in ADR-0136 D1/D3/D7/D8:
 // rejected execution inputs have typed failures, bounded state reports an explicit truncation, and
 // both wall expiry and activation revocation reach process-scope termination.
 import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -173,7 +173,6 @@ function routeService(stateDir: string): DapDebugRouteService {
         reasonCode: "AVAILABLE",
         policyResult: "allowed",
       }),
-    synchronizeActivationRevision: (): void => undefined,
   };
 }
 

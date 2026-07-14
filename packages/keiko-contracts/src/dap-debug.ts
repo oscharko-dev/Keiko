@@ -1,4 +1,4 @@
-// Browser-facing governed DAP contracts (Issue #2345, Epic #2096, ADR-0134 D8-D11).
+// Browser-facing governed DAP contracts (Issue #2345, Epic #2096, ADR-0136 D8-D11).
 // This leaf owns strict wire vocabulary, hostile-input parsing, and bounded live projections.
 // It owns no process lifecycle, launch resolution, route authority, persistence, or evidence.
 

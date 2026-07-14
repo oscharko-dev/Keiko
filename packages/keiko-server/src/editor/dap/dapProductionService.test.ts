@@ -20,7 +20,7 @@ import {
   type DapProductionServiceDeps,
   type DapProductionServiceFactories,
 } from "./dapProductionService.js";
-import type { DebugProvisionedArtifact } from "./debugLaunchContext.js";
+import type { DebugProvisionedArtifact, QualifiedDebugBackend } from "./debugLaunchContext.js";
 import type { DebugLaunchCatalogDeps } from "./debugLaunchCatalog.js";
 import type { DebugLaunchRuntimeContext } from "./debugLaunchPlan.js";
 import {
@@ -54,6 +54,22 @@ function executable(root: string, name: string, source: string): string {
 
 function provisioned(path: string, capsulePath: string): DebugProvisionedArtifact {
   return { hostPath: path, approvedRoot: dirname(path), capsulePath };
+}
+
+function qualifiedBackend(): QualifiedDebugBackend {
+  return {
+    platform: "linux",
+    availability: {
+      bubblewrap: true,
+      unshare: false,
+      seatbelt: false,
+      docker: false,
+      podman: false,
+    },
+    backendExecutable: {
+      realPath: "/approved/bwrap",
+    } as QualifiedDebugBackend["backendExecutable"],
+  };
 }
 
 function shortRuntime(): { readonly path: string; cleanup(): void } {
@@ -115,7 +131,7 @@ function portableDeps(endpoint?: DapPrivateEndpointDeps): DapProductionServiceDe
     appendJournal: vi.fn(() => Promise.resolve()),
     now: vi.fn(() => 100),
     epoch: vi.fn(() => 7),
-    activationRevision: vi.fn(() => 4),
+    activationCurrent: vi.fn((_partition, revision) => revision === 4),
     platform: "linux",
     emitOutputLimit: vi.fn(),
     onRuntimeFailure: vi.fn(),
@@ -129,6 +145,10 @@ function portableDeps(endpoint?: DapPrivateEndpointDeps): DapProductionServiceDe
         provisioningDigest: "b".repeat(64),
         envAllowlist: ["LANG"],
         fixedEnv: { LANG: "C" },
+      },
+      backendQualification: {
+        backend: provisioned("/approved/bwrap", "/opt/keiko-backend/bwrap"),
+        platform: "linux",
       },
       adapterPreflight: vi.fn(),
       launchContext: vi.fn(),
@@ -146,6 +166,7 @@ interface ObservedFactories {
   readonly createLayer2Validator: Mock<DapProductionServiceFactories["createLayer2Validator"]>;
   readonly createEndpointDeps: Mock<DapProductionServiceFactories["createEndpointDeps"]>;
   readonly createTargetRevalidator: Mock<DapProductionServiceFactories["createTargetRevalidator"]>;
+  readonly qualifyBackend: Mock<DapProductionServiceFactories["qualifyBackend"]>;
   readonly createLaunchContextResolver: Mock<
     DapProductionServiceFactories["createLaunchContextResolver"]
   >;
@@ -166,6 +187,7 @@ function observedFactories(): ObservedFactories {
     createLayer2Validator: vi.fn(production.createLayer2Validator),
     createEndpointDeps: vi.fn(production.createEndpointDeps),
     createTargetRevalidator: vi.fn(production.createTargetRevalidator),
+    qualifyBackend: vi.fn(() => qualifiedBackend()),
     createLaunchContextResolver: vi.fn(production.createLaunchContextResolver),
     createLauncher: vi.fn(production.createLauncher),
     connectEndpoint: vi.fn(production.connectEndpoint),
@@ -345,6 +367,7 @@ interface Fixture {
   readonly deps: DapProductionServiceDeps;
   readonly trace: string;
   readonly put: EvidenceStorePutMock;
+  readonly node: string;
 }
 
 function fixture(replaceWorkspaceOnInitialize = false): Fixture {
@@ -381,6 +404,7 @@ function fixture(replaceWorkspaceOnInitialize = false): Fixture {
   return {
     trace,
     put,
+    node,
     deps: {
       evidenceStore: evidenceStore(put),
       appendJournal: (_partition, evidence): Promise<void> => {
@@ -389,7 +413,7 @@ function fixture(replaceWorkspaceOnInitialize = false): Fixture {
       },
       now: () => 100,
       epoch: () => 7,
-      activationRevision: () => 4,
+      activationCurrent: (_partition, revision) => revision === 4,
       platform: "linux",
       emitOutputLimit: vi.fn(),
       onRuntimeFailure: vi.fn(),
@@ -404,6 +428,10 @@ function fixture(replaceWorkspaceOnInitialize = false): Fixture {
           executableArgs: ["--server", "/run/keiko-debug/dap.sock"],
           trustedRoots: [approved],
           provisioningDigest: "a".repeat(64),
+        },
+        backendQualification: {
+          backend: provisioned(backend, "/opt/keiko-backend/bwrap"),
+          platform: "linux",
         },
         adapterPreflight: () => ({
           workspaceRoot: workspace,
@@ -473,9 +501,28 @@ describe("DAP production composition", () => {
     expect(current.createLifecycleLedger).toHaveBeenCalledTimes(1);
     expect(current.createRegistry).toHaveBeenCalledTimes(1);
     expect(current.createLayer2Validator).toHaveBeenCalledTimes(1);
+    expect(current.qualifyBackend).toHaveBeenCalledExactlyOnceWith(
+      deps.provisioning.backendQualification,
+    );
     expect(current.createLauncher).toHaveBeenCalledTimes(1);
     expect(current.createManager).toHaveBeenCalledTimes(1);
     expect(current.createEndpointDeps).not.toHaveBeenCalled();
+  });
+
+  it("fails construction before creating runtime state when backend qualification fails", () => {
+    const deps = portableDeps(inertEndpoint());
+    const current = observedFactories();
+    current.qualifyBackend.mockImplementation(() => {
+      throw new Error("INVALID_DEBUG_BACKEND");
+    });
+
+    expect(() => dapProductionServiceTestBoundary.compose(deps, current.factories)).toThrow(
+      "INVALID_DEBUG_BACKEND",
+    );
+    expect(current.qualifyBackend).toHaveBeenCalledOnce();
+    expect(current.createEvidenceProjector).not.toHaveBeenCalled();
+    expect(current.createRegistry).not.toHaveBeenCalled();
+    expect(current.createManager).not.toHaveBeenCalled();
   });
 
   it("sweeps expiry on an unrefed bounded cadence and disposes idempotently in order", async () => {
@@ -696,7 +743,7 @@ describe("DAP production composition", () => {
     expect(launcherInput).toStrictEqual({
       now: deps.now,
       epoch: deps.epoch,
-      activationRevision: deps.activationRevision,
+      activationCurrent: deps.activationCurrent,
       platform: "linux",
       revalidateTarget: managerInput.revalidateTarget,
     });
@@ -750,9 +797,15 @@ describe("DAP production composition", () => {
     );
     const input = capsuleInput();
     await expect(validatorDeps.resolveContext(input)).resolves.toBe(context);
-    expect(deps.provisioning.launchContext).toHaveBeenCalledExactlyOnceWith(input.binding);
-    expect(current.createLaunchContextResolver).toHaveBeenCalledTimes(1);
-    expect(resolveContext).toHaveBeenCalledExactlyOnceWith(input);
+    await expect(validatorDeps.resolveContext(input)).resolves.toBe(context);
+    expect(current.qualifyBackend).toHaveBeenCalledOnce();
+    expect(deps.provisioning.launchContext).toHaveBeenCalledTimes(2);
+    expect(deps.provisioning.launchContext).toHaveBeenNthCalledWith(1, input.binding);
+    expect(deps.provisioning.launchContext).toHaveBeenNthCalledWith(2, input.binding);
+    expect(current.createLaunchContextResolver).toHaveBeenCalledTimes(2);
+    expect(resolveContext).toHaveBeenCalledTimes(2);
+    expect(resolveContext).toHaveBeenNthCalledWith(1, input);
+    expect(resolveContext).toHaveBeenNthCalledWith(2, input);
 
     const targetCatalog = { workspaceRoot: "/workspace" } as DebugLaunchCatalogDeps;
     const targetCatalogFactory = deps.provisioning.targetCatalog as Mock<
@@ -781,7 +834,7 @@ describe("DAP production composition", () => {
     vi.resetModules();
     const fresh: typeof import("./dapProductionService.js") =
       await import("./dapProductionService.js");
-    const service = fresh.createDapProductionService(portableDeps(inertEndpoint()));
+    const service = fresh.createDapProductionService(fixture().deps);
     expect(Object.keys(service)).toStrictEqual([
       "manager",
       "registry",
@@ -804,6 +857,7 @@ describe("DAP production composition", () => {
       "createLayer2Validator",
       "createEndpointDeps",
       "createTargetRevalidator",
+      "qualifyBackend",
       "createLaunchContextResolver",
       "createLauncher",
       "connectEndpoint",
@@ -811,6 +865,36 @@ describe("DAP production composition", () => {
       "createAdapterCatalog",
       "createNodeAdapterSpec",
     ]);
+    await service.dispose();
+  });
+
+  it("does not execute a child process when plan resolution fails after construction", async () => {
+    const current = fixture();
+    const service = createDapProductionService(current.deps);
+    const constructionTrace = readFileSync(current.trace, "utf8");
+    expect(constructionTrace).toBe("qualification-probe\n");
+    rmSync(current.node);
+
+    await expect(
+      service.manager.start({
+        identity: {
+          sessionId: "session_prestart_failure",
+          workspaceId: "workspace_a",
+          workspacePartitionKey: "project_a",
+          browserSessionBinding: "browser_a",
+          targetKind: "file",
+          activationRevision: 4,
+          network: "none",
+          filesystem: "executionRoot",
+        },
+        adapterRuntime: "node",
+        adapterProviderId: "node",
+        planCandidate: { kind: "file", fileId: "app.js" },
+      }),
+    ).rejects.toThrow();
+
+    expect(readFileSync(current.trace, "utf8")).toBe(constructionTrace);
+    expect(service.registry.sessionIds()).toStrictEqual([]);
     await service.dispose();
   });
 

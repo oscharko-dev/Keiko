@@ -183,7 +183,7 @@ function dependencies(overrides: Partial<DebugCapsuleLauncherDeps> = {}): DebugC
   return {
     now: () => 10,
     epoch: () => 3,
-    activationRevision: () => 7,
+    activationCurrent: (_partition, revision) => revision === 7,
     revalidateTarget: () => true,
     platform: "linux",
     ...overrides,
@@ -303,7 +303,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: () => true,
       platform: "linux",
     });
@@ -341,15 +341,15 @@ describe("production debug capsule launcher", () => {
   it.each([
     [
       "expiry",
-      { now: (): number => 1_000, epoch: (): number => 3, activationRevision: (): number => 7 },
+      { now: (): number => 1_000, epoch: (): number => 3, activationCurrent: (): boolean => true },
     ],
     [
       "epoch",
-      { now: (): number => 10, epoch: (): number => 4, activationRevision: (): number => 7 },
+      { now: (): number => 10, epoch: (): number => 4, activationCurrent: (): boolean => true },
     ],
     [
       "activation",
-      { now: (): number => 10, epoch: (): number => 3, activationRevision: (): number => 8 },
+      { now: (): number => 10, epoch: (): number => 3, activationCurrent: (): boolean => false },
     ],
   ])("fails before spawn on final %s drift", async (_label, clocks) => {
     const current = fixture();
@@ -363,13 +363,40 @@ describe("production debug capsule launcher", () => {
     });
   });
 
+  it("binds activation freshness to both workspace partition and exact revision", async () => {
+    const first = fixture().envelope;
+    const second = fixture().envelope;
+    const sameRevisionWrongWorkspace = vi.fn(
+      (partition: string, revision: number) =>
+        partition === second.workspaceIdentity.identityDigest && revision === 7,
+    );
+    await expectInvalidBeforeSpawn(first, { activationCurrent: sameRevisionWrongWorkspace });
+    expect(sameRevisionWrongWorkspace).toHaveBeenCalledExactlyOnceWith(
+      first.workspaceIdentity.identityDigest,
+      7,
+    );
+
+    const differentRevision = resign(first, { activationRevision: 8 });
+    const rightWorkspaceOldRevision = vi.fn(
+      (partition: string, revision: number) =>
+        partition === first.workspaceIdentity.identityDigest && revision === 7,
+    );
+    await expectInvalidBeforeSpawn(differentRevision, {
+      activationCurrent: rightWorkspaceOldRevision,
+    });
+    expect(rightWorkspaceOldRevision).toHaveBeenCalledExactlyOnceWith(
+      first.workspaceIdentity.identityDigest,
+      8,
+    );
+  });
+
   it("rechecks epoch in the same turn after target validation", async () => {
     const current = fixture();
     let epoch = 3;
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => epoch,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: () => {
         epoch = 4;
         return true;
@@ -386,7 +413,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: () => true,
       platform: "linux",
     });
@@ -411,7 +438,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: target,
       platform: "linux",
     });
@@ -429,7 +456,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: target,
       platform: "linux",
     });
@@ -452,7 +479,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: () => true,
       platform: "linux",
     });
@@ -469,7 +496,7 @@ describe("production debug capsule launcher", () => {
     const launcher = createProductionDebugCapsuleLauncher({
       now: () => 10,
       epoch: () => 3,
-      activationRevision: () => 7,
+      activationCurrent: (_partition, revision) => revision === 7,
       revalidateTarget: target,
       platform: "linux",
     });
@@ -1073,6 +1100,25 @@ describe("production debug capsule launcher", () => {
         tracker,
       ),
     ).resolves.toMatchObject({ qualified: true, descendants: 0 });
+  });
+
+  it("captures the live scope before an immediate wrapper exit", async () => {
+    const current = fixture();
+    const child = fakeChild();
+    const procRoot = temporary();
+    writeProcStat(procRoot, "42424", "1", "100");
+    const launcher = createProductionDebugCapsuleLauncher(
+      dependencies({ procRoot, spawnProcess: spawnReturning(child.child) }),
+    );
+    const handle = await launcher(current.envelope, new AbortController().signal);
+
+    child.child.emit("exit", 0, null);
+    rmSync(join(procRoot, "42424"), { recursive: true });
+
+    await expect(handle.inspectScope()).resolves.toMatchObject({
+      qualified: true,
+      descendants: 0,
+    });
   });
 
   it("fails closed without a pre-exit scope observation or readable process table", async () => {

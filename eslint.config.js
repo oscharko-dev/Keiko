@@ -1,5 +1,6 @@
 // Flat ESLint config. typescript-eslint strict + type-checked. Zero-warning policy enforced via --max-warnings=0.
 import js from "@eslint/js";
+import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
@@ -44,7 +45,7 @@ const sonarCompatibilityPlugin = {
   },
 };
 
-export default tseslint.config(
+export default defineConfig(
   {
     ignores: [
       ".stryker-tmp/**",
@@ -166,7 +167,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/banking-quality-gate-worker.mjs"],
+    files: ["scripts/keiko-for-quality-worker.mjs"],
     languageOptions: {
       globals: {
         Response: "readonly",
@@ -179,7 +180,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/__tests__/banking-quality-gate-worker.test.mjs"],
+    files: ["scripts/__tests__/keiko-for-quality-worker.test.mjs"],
     languageOptions: {
       globals: {
         Buffer: "readonly",
@@ -195,8 +196,8 @@ export default tseslint.config(
       "scripts/check-mutation-quality.mjs",
       "scripts/check-mutation-scope.mjs",
       "scripts/check-sonar-pr-quality-gate.mjs",
-      "scripts/banking-quality-gate-core.mjs",
-      "scripts/banking-quality-gate-worker.mjs",
+      "scripts/keiko-for-quality-core.mjs",
+      "scripts/keiko-for-quality-worker.mjs",
     ],
     plugins: { "keiko-sonar": sonarCompatibilityPlugin },
     rules: {

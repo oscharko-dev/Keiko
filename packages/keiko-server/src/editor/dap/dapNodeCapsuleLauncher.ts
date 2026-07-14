@@ -18,7 +18,7 @@ import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
 export interface DebugCapsuleLauncherDeps {
   readonly now: () => number;
   readonly epoch: () => number;
-  readonly activationRevision: () => number;
+  readonly activationCurrent: (workspacePartitionKey: string, expectedRevision: number) => boolean;
   readonly revalidateTarget: (envelope: DebugSpawnEnvelope) => boolean;
   readonly platform?: NodeJS.Platform | undefined;
   readonly procRoot?: string | undefined;
@@ -165,7 +165,7 @@ function authorityCurrent(
     (deps.platform ?? process.platform) === "linux" &&
     deps.now() < envelope.expiresAtMs &&
     deps.epoch() === envelope.epoch &&
-    deps.activationRevision() === envelope.activationRevision
+    deps.activationCurrent(envelope.workspaceIdentity.identityDigest, envelope.activationRevision)
   );
 }
 
@@ -436,6 +436,13 @@ function wrapChild(
     groupKill(child, "SIGKILL");
     throw new DapProcessManagerError("INVALID_CAPSULE_PLAN");
   }
+  const pid = child.pid;
+  const scopeTracker = createLinuxScopeTracker();
+  try {
+    recordLiveScope(scopeTracker, readProcessTable(procRoot), pid);
+  } catch {
+    // The mandatory teardown inspection remains fail closed when procfs cannot be read.
+  }
   let exited = false;
   const exitCallbacks = new Set<() => Promise<void>>();
   child.once("exit", () => {
@@ -445,8 +452,6 @@ function wrapChild(
   child.stdin.on("error", () => {
     // Exit and containment observation own this failure.
   });
-  const pid = child.pid;
-  const scopeTracker = createLinuxScopeTracker();
   // DAP uses the private endpoint; inherited capsule stdio must never backpressure startup.
   child.stdout.resume();
   child.stderr.resume();

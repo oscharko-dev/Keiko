@@ -5,7 +5,8 @@ import {
   checkFailures,
   commentIsCurrent,
   currentCheckStart,
-  evaluateBankingQualityGate,
+  evaluateKeikoForQuality,
+  hasCurrentSocketNoAlertEvidence,
   isBotEvidence,
   packageAlerts,
   parseGitarFindings,
@@ -13,7 +14,7 @@ import {
   stabilityFailures,
   validatedSet,
   validatedRiskAllowlist,
-} from "../banking-quality-gate-core.mjs";
+} from "../keiko-for-quality-core.mjs";
 
 const headSha = "a".repeat(40);
 const completedAt = "2026-07-11T10:00:00.000Z";
@@ -66,10 +67,10 @@ function passingInput() {
 }
 
 function evaluate(update = {}) {
-  return evaluateBankingQualityGate({ ...passingInput(), ...update });
+  return evaluateKeikoForQuality({ ...passingInput(), ...update });
 }
 
-describe("Banking Quality Gate core", () => {
+describe("Keiko for Quality core", () => {
   it("pins the complete required-check policy to exact producer app IDs", () => {
     expect(requiredChecks).toEqual([
       { appId: 15368, name: "ci" },
@@ -228,10 +229,22 @@ describe("Banking Quality Gate core", () => {
       check.name === "Gitar" ? { ...check, completedAt: "2026-07-11T10:01:00.000Z" } : check,
     );
     expect(
-      stabilityFailures(checks, input.comments, Date.parse("2026-07-11T10:02:00.000Z"), 60_000),
+      stabilityFailures(
+        checks,
+        input.comments,
+        Date.parse("2026-07-11T10:02:00.000Z"),
+        60_000,
+        headSha,
+      ),
     ).toEqual([]);
     expect(
-      stabilityFailures(checks, input.comments, Date.parse("2026-07-11T10:01:59.999Z"), 60_000),
+      stabilityFailures(
+        checks,
+        input.comments,
+        Date.parse("2026-07-11T10:01:59.999Z"),
+        60_000,
+        headSha,
+      ),
     ).toEqual(["Review-product evidence is inside the stability window."]);
     expect(
       stabilityFailures(
@@ -239,12 +252,91 @@ describe("Banking Quality Gate core", () => {
         input.comments,
         now,
         60_000,
+        headSha,
       ),
     ).toEqual([]);
   });
 
   it("accepts only complete current-head evidence after the stability window", () => {
     expect(evaluate()).toEqual({ failures: [], passed: true });
+  });
+
+  it("accepts an explicit clean Socket check when Socket correctly posts no comment", () => {
+    const input = passingInput();
+    input.comments = input.comments.filter((comment) => comment.authorId !== 95510084);
+    input.checks = input.checks.map((check) =>
+      check.name === "Socket Security: Pull Request Alerts"
+        ? { ...check, socketNoAlerts: true }
+        : check,
+    );
+
+    expect(hasCurrentSocketNoAlertEvidence(input.checks, headSha)).toBe(true);
+    expect(evaluateKeikoForQuality(input)).toEqual({ failures: [], passed: true });
+  });
+
+  it("binds clean Socket output to every exact current-head check attribute", () => {
+    const cleanCheck = {
+      appId: 156372,
+      completedAt,
+      conclusion: "success",
+      headSha,
+      name: "Socket Security: Pull Request Alerts",
+      socketNoAlerts: true,
+      status: "completed",
+    };
+    expect(hasCurrentSocketNoAlertEvidence([cleanCheck], headSha)).toBe(true);
+    for (const invalid of [
+      { ...cleanCheck, appId: 1 },
+      { ...cleanCheck, conclusion: "neutral" },
+      { ...cleanCheck, headSha: "b".repeat(40) },
+      { ...cleanCheck, name: "Socket Security: Project Report" },
+      { ...cleanCheck, socketNoAlerts: false },
+      { ...cleanCheck, status: "in_progress" },
+    ]) {
+      expect(hasCurrentSocketNoAlertEvidence([invalid], headSha)).toBe(false);
+    }
+    expect(hasCurrentSocketNoAlertEvidence([], headSha)).toBe(false);
+  });
+
+  it("fails closed without a current Socket comment or an explicit clean check output", () => {
+    const input = passingInput();
+    input.comments = input.comments.filter((comment) => comment.authorId !== 95510084);
+    expect(hasCurrentSocketNoAlertEvidence(input.checks, headSha)).toBe(false);
+    expect(evaluateKeikoForQuality(input).failures).toEqual(
+      expect.arrayContaining([
+        "Current Socket alert evidence is missing.",
+        "Review-product stability evidence is incomplete.",
+      ]),
+    );
+  });
+
+  it("requires both Socket check timestamps when deciding comment freshness", () => {
+    const input = passingInput();
+    for (const checkName of [
+      "Socket Security: Project Report",
+      "Socket Security: Pull Request Alerts",
+    ]) {
+      const checks = input.checks.map((check) =>
+        check.name === checkName ? { ...check, startedAt: "2026-07-11T10:00:00.001Z" } : check,
+      );
+      expect(stabilityFailures(checks, input.comments, now, 60_000, headSha)).toContain(
+        "Review-product stability evidence is incomplete.",
+      );
+    }
+  });
+
+  it("does not lower stability completeness when a current Socket comment already exists", () => {
+    const input = passingInput();
+    const checks = input.checks
+      .filter((check) => check.name !== "Socket Security: Project Report")
+      .map((check) =>
+        check.name === "Socket Security: Pull Request Alerts"
+          ? { ...check, socketNoAlerts: true }
+          : check,
+      );
+    expect(stabilityFailures(checks, input.comments, now, 60_000, headSha)).toContain(
+      "Review-product stability evidence is incomplete.",
+    );
   });
 
   it.each([
@@ -401,7 +493,7 @@ describe("Banking Quality Gate core", () => {
     delete input.socketRiskAllowlist;
     delete input.stabilityMs;
     input.checks = input.checks.map((check) => ({ ...check, completedAt: undefined }));
-    expect(evaluateBankingQualityGate(input).failures).toEqual(
+    expect(evaluateKeikoForQuality(input).failures).toEqual(
       expect.arrayContaining([
         "1 Socket warning(s) remain.",
         "Review-product stability evidence is incomplete.",

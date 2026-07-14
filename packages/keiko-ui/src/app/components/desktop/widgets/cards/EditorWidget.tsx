@@ -1135,7 +1135,7 @@ export function EditorWidget({
       const applyMove = (): void => {
         moveFrame = null;
         const drag = pointerTabDragRef.current;
-        if (drag === null || !drag.dragging) return;
+        if (!drag?.dragging) return;
         const insertTarget = tabInsertionTargetFromPoint(
           drag,
           lastMoveX,
@@ -1204,7 +1204,7 @@ export function EditorWidget({
               ) ?? tabInsertTargetRef.current);
         pointerTabDragRef.current = null;
         clearDragFeedback();
-        if (drag === null || !drag.dragging) return;
+        if (!drag?.dragging) return;
         upEvent.preventDefault();
         window.setTimeout(() => {
           suppressNextTabClickRef.current = null;
@@ -1252,11 +1252,7 @@ export function EditorWidget({
   const suppressTabClickAfterPointerDrag = useCallback(
     (paneId: string, path: string, event: MouseEvent<HTMLButtonElement>): void => {
       const suppressedTab = suppressNextTabClickRef.current;
-      if (
-        suppressedTab === null ||
-        suppressedTab.paneId !== paneId ||
-        suppressedTab.file !== path
-      ) {
+      if (suppressedTab?.paneId !== paneId || suppressedTab.file !== path) {
         return;
       }
       suppressNextTabClickRef.current = null;

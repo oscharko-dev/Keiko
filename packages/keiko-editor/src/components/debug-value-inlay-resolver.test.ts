@@ -12,6 +12,7 @@ function snapshot(overrides: Partial<EditorDebugValueSnapshot> = {}): EditorDebu
     paused: true,
     pauseGeneration: 1,
     documentUri: "keiko-editor://current",
+    description: "Pausierte Debug-Werte",
     values: [{ line: 2, column: 8, value: "42" }],
     ...overrides,
   };
@@ -52,7 +53,7 @@ describe("registerDebugValueInlays", () => {
       {
         range: { startLineNumber: 2, startColumn: 8, endLineNumber: 2, endColumn: 9 },
         options: {
-          description: "Paused debug value",
+          description: "Pausierte Debug-Werte",
           after: { content: " = 42", inlineClassName: "keiko-debug-inline-value" },
           isWholeLine: true,
         },

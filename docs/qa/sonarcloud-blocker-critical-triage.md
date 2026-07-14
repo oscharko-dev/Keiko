@@ -7,7 +7,7 @@ conflicts with a rule this repository already enforces more strictly, or because
 reading confirmed the flagged pattern is safe/intentional. Each row states the recommended
 SonarCloud resolution (`Won't Fix` or `False Positive`); resolving them in the SonarCloud UI is a
 governed maintainer action with write access. SonarCloud analysis and its stricter repository
-verifier are wired into the required `ci` aggregate under ADR-0131 and ADR-0135; `AGENTS.md` §10
+verifier are wired into the required `ci` aggregate under ADR-0131 and ADR-0134; `AGENTS.md` §10
 remains the authoritative required-checks list.
 
 For findings that _do_ need a code change, see the corresponding PR (PR 1–4) instead. For the two

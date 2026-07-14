@@ -19,6 +19,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { useDebugSession } from "../cards/useDebugSession";
+import {
+  debugSessionStatus,
+  useDebuggingTranslate as useTranslate,
+  type DebuggingTranslate,
+} from "./debugging-i18n";
 
 export interface DebugPanelProps {
   readonly root: string;
@@ -86,6 +91,7 @@ function nodeRows(
   level: number,
   expanded: ReadonlySet<string>,
   parentId: string,
+  t: DebuggingTranslate,
 ): readonly TreeRow[] {
   return nodes.flatMap((node, index): readonly TreeRow[] => {
     const id = `${parentId}.${String(index)}`;
@@ -94,7 +100,7 @@ function nodeRows(
         {
           id,
           parentId,
-          label: `More values omitted (${String(node.omittedCount)})`,
+          label: t("omittedVariables", { count: node.omittedCount }),
           level,
           expandable: false,
           expanded: false,
@@ -115,7 +121,7 @@ function nodeRows(
         ...(node.variableRef === undefined ? {} : { variableRef: node.variableRef }),
         node,
       },
-      ...(isExpanded ? nodeRows(node.children, level + 1, expanded, id) : []),
+      ...(isExpanded ? nodeRows(node.children, level + 1, expanded, id, t) : []),
     ];
   });
 }
@@ -124,6 +130,7 @@ function scopeRows(
   scopes: readonly { readonly scopeRef: string; readonly name: { readonly value: string } }[],
   nodesByParent: ReadonlyMap<string, { readonly nodes: readonly DebugVariableNode[] }>,
   expanded: ReadonlySet<string>,
+  t: DebuggingTranslate,
 ): readonly TreeRow[] {
   return scopes.flatMap((scope) => {
     const id = `scope:${scope.scopeRef}`;
@@ -138,7 +145,7 @@ function scopeRows(
         expanded: isExpanded,
         variableRef: scope.scopeRef,
       },
-      ...(isExpanded ? nodeRows(children, 2, expanded, id) : []),
+      ...(isExpanded ? nodeRows(children, 2, expanded, id, t) : []),
     ];
   });
 }
@@ -166,6 +173,7 @@ function Tree(props: {
   readonly rows: readonly TreeRow[];
   readonly onExpand: (row: TreeRow) => void;
   readonly onEdit: (row: TreeRow) => void;
+  readonly t: DebuggingTranslate;
 }): ReactNode {
   const [focusId, setFocusId] = useState(props.rows[0]?.id ?? "");
   const refs = useRef(new Map<string, HTMLButtonElement>());
@@ -200,7 +208,7 @@ function Tree(props: {
     }
   };
   return (
-    <div role="tree" aria-label="Variables">
+    <div role="tree" aria-label={props.t("variables")}>
       {props.rows.map((row) => (
         <button
           key={row.id}
@@ -235,9 +243,10 @@ export function draftWatchId(sequence: number): string {
 
 function WatchEditor(props: {
   readonly watches: readonly WatchExpression[];
-  readonly onSave: (watches: readonly WatchExpression[]) => Promise<void>;
+  readonly onSave: (watches: readonly WatchExpression[]) => Promise<boolean>;
   readonly onEvaluate: (watchId: string) => void;
   readonly canEvaluate: boolean;
+  readonly t: DebuggingTranslate;
 }): ReactNode {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -256,8 +265,7 @@ function WatchEditor(props: {
         : props.watches.map((watch) =>
             watch.watchId === editing ? { ...watch, expression: draft } : watch,
           );
-    await props.onSave(next);
-    setEditing(null);
+    if (await props.onSave(next)) setEditing(null);
   };
   const beginNew = (): void => {
     draftSequence.current += 1;
@@ -265,8 +273,8 @@ function WatchEditor(props: {
   };
   return (
     <section aria-labelledby="debug-watch-heading" style={SECTION_STYLE}>
-      <h2 id="debug-watch-heading">Watch</h2>
-      <p>Watches are explicit local-human expressions and may have debuggee side effects.</p>
+      <h2 id="debug-watch-heading">{props.t("watch")}</h2>
+      <p>{props.t("watchHelp")}</p>
       {props.watches.map((watch) => (
         <div key={watch.watchId} style={{ display: "flex", gap: "6px" }}>
           <code>{watch.expression}</code>
@@ -275,20 +283,20 @@ function WatchEditor(props: {
             disabled={!props.canEvaluate}
             onClick={() => props.onEvaluate(watch.watchId)}
           >
-            {`Evaluate ${watch.expression}`}
+            {props.t("evaluateWatch", { expression: watch.expression })}
           </button>
           <button type="button" onClick={() => begin(watch)}>
-            Edit
+            {props.t("edit")}
           </button>
         </div>
       ))}
       {editing === null ? (
         <button type="button" onClick={beginNew}>
-          Add watch
+          {props.t("addWatch")}
         </button>
       ) : (
-        <div role="group" aria-label="Watch expression editor">
-          <label htmlFor="debug-watch-expression">Watch expression</label>
+        <div role="group" aria-label={props.t("watchEditor")}>
+          <label htmlFor="debug-watch-expression">{props.t("watchExpression")}</label>
           <input
             id="debug-watch-expression"
             value={draft}
@@ -300,14 +308,84 @@ function WatchEditor(props: {
               void save();
             }}
           >
-            Save
+            {props.t("save")}
           </button>
           <button type="button" onClick={() => setEditing(null)}>
-            Cancel
+            {props.t("cancel")}
           </button>
         </div>
       )}
     </section>
+  );
+}
+
+type DebugControlAction = "continue" | "pause" | "next" | "stepIn" | "stepOut" | "stop";
+
+function canControl(session: DebugSession, action: DebugControlAction): boolean {
+  if (action === "continue" || action === "next" || action === "stepIn" || action === "stepOut")
+    return session.status === "paused";
+  if (action === "pause") return session.status === "running";
+  return ["reserved", "starting", "running", "paused"].includes(session.status);
+}
+
+function exceptionFilterLabel(t: DebuggingTranslate, filterId: string): string {
+  if (filterId === "caught") return t("filterCaught");
+  if (filterId === "uncaught") return t("filterUncaught");
+  return filterId;
+}
+
+function CallStack(props: {
+  readonly frames: readonly StackFrame[];
+  readonly selectedFrameRef: string | undefined;
+  readonly onSelect: (frame: StackFrame) => void;
+  readonly label: string;
+}): ReactNode {
+  const selectedIndex = Math.max(
+    0,
+    props.frames.findIndex((frame) => frame.frameRef === props.selectedFrameRef),
+  );
+  const [focusIndex, setFocusIndex] = useState(selectedIndex);
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => setFocusIndex(selectedIndex), [selectedIndex]);
+  const move = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
+    const keys = ["ArrowUp", "ArrowDown", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? props.frames.length - 1
+          : Math.max(
+              0,
+              Math.min(props.frames.length - 1, index + (event.key === "ArrowUp" ? -1 : 1)),
+            );
+    setFocusIndex(next);
+    refs.current[next]?.focus();
+    const frame = props.frames[next];
+    if (frame !== undefined) props.onSelect(frame);
+  };
+  return (
+    <div role="listbox" aria-label={props.label}>
+      {props.frames.map((frame, index) => (
+        <button
+          key={frame.frameRef}
+          ref={(element) => {
+            refs.current[index] = element;
+          }}
+          type="button"
+          role="option"
+          aria-selected={frame.frameRef === props.selectedFrameRef}
+          tabIndex={focusIndex === index ? 0 : -1}
+          onFocus={() => setFocusIndex(index)}
+          onKeyDown={(event) => move(event, index)}
+          onClick={() => props.onSelect(frame)}
+        >
+          {frame.name.value}
+          {frame.sourceFileId === undefined ? "" : ` — ${frame.sourceFileId}:${String(frame.line)}`}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -320,6 +398,7 @@ export function DebugPanel({
   openEditorFile,
   onRevealFrame,
 }: DebugPanelProps): ReactNode {
+  const t = useTranslate();
   const enabled = debugEnabled && workspaceId !== undefined && workspaceId.length > 0;
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -331,6 +410,7 @@ export function DebugPanel({
   const [watchResults, setWatchResults] = useState<ReadonlyMap<string, WatchEvaluationResult>>(
     new Map(),
   );
+  const [actionError, setActionError] = useState(false);
   const session = snapshot.session;
   const selectedFrame =
     snapshot.stack?.frames.find((frame) => frame.frameRef === selectedFrameRef) ??
@@ -343,25 +423,30 @@ export function DebugPanel({
     [selectedFrame, snapshot.scopesByFrame],
   );
   const rows = useMemo(
-    () => scopeRows(scopes, snapshot.variablesByParent, expanded),
-    [expanded, scopes, snapshot.variablesByParent],
+    () => scopeRows(scopes, snapshot.variablesByParent, expanded, t),
+    [expanded, scopes, snapshot.variablesByParent, t],
   );
   const loadStack = actions.loadStack;
   const loadScopes = actions.loadScopes;
 
   useEffect(() => {
-    if (session?.status === "paused") void loadStack(session);
+    if (session?.status === "paused") void loadStack(session).catch(() => setActionError(true));
   }, [loadStack, session]);
 
   useEffect(() => {
     if (session?.status === "paused" && selectedFrame !== undefined) {
-      void loadScopes(session, selectedFrame.frameRef);
+      void loadScopes(session, selectedFrame.frameRef).catch(() => setActionError(true));
     }
   }, [loadScopes, selectedFrame, session]);
 
   useEffect(() => {
     setWatchResults(new Map());
   }, [session?.pauseGeneration, session?.sessionId]);
+
+  const perform = (operation: Promise<unknown>, onSuccess?: () => void): void => {
+    setActionError(false);
+    void operation.then(onSuccess).catch(() => setActionError(true));
+  };
 
   const selectFrame = (frame: StackFrame): void => {
     setSelectedFrameRef(frame.frameRef);
@@ -378,20 +463,20 @@ export function DebugPanel({
       else next.add(row.id);
       return next;
     });
-    if (session !== null) void actions.loadVariables(session, row.variableRef);
+    if (session !== null) perform(actions.loadVariables(session, row.variableRef));
   };
 
   if (!debugEnabled) {
     return (
-      <section aria-label="Debug" style={PANEL_STYLE}>
-        <p>Debugging is unavailable until enabled by policy.</p>
+      <section aria-label={t("panelLabel")} style={PANEL_STYLE}>
+        <p>{t("unavailableByPolicy")}</p>
       </section>
     );
   }
   if (workspaceId === undefined || workspaceId.length === 0) {
     return (
-      <section aria-label="Debug" style={PANEL_STYLE}>
-        <p>Debugging is unavailable until the host supplies a canonical workspace identity.</p>
+      <section aria-label={t("panelLabel")} style={PANEL_STYLE}>
+        <p>{t("unavailableWithoutWorkspace")}</p>
       </section>
     );
   }
@@ -399,29 +484,43 @@ export function DebugPanel({
   const filters = snapshot.instrumentation?.exceptionFilters ?? [];
   const watches = snapshot.instrumentation?.watches ?? [];
   const start = (): void => {
-    if (activeFile === undefined || activeFile.length === 0 || activationRevision === undefined)
+    if (
+      session !== null ||
+      activeFile === undefined ||
+      activeFile.length === 0 ||
+      activationRevision === undefined
+    )
       return;
-    void actions.start({ kind: "file", fileId: activeFile }, activationRevision);
+    perform(actions.start({ kind: "file", fileId: activeFile }, activationRevision));
   };
-  const control = (action: "next" | "stepIn" | "stepOut" | "stop"): void => {
-    if (session === null) return;
-    void actions.control(session, action);
+  const control = (action: DebugControlAction): void => {
+    if (session === null || !canControl(session, action)) return;
+    perform(actions.control(session, action));
   };
   const evaluateWatch = (watchId: string): void => {
     if (session?.status !== "paused" || selectedFrame === undefined) return;
-    void actions.evaluateWatch(session, watchId, selectedFrame.frameRef).then((result) => {
-      if (result === null) return;
-      setWatchResults((current) => new Map(current).set(result.watchId, result));
-    });
+    setActionError(false);
+    void actions
+      .evaluateWatch(session, watchId, selectedFrame.frameRef)
+      .then((result) => {
+        if (result === null) return;
+        setWatchResults((current) => new Map(current).set(result.watchId, result));
+      })
+      .catch(() => setActionError(true));
   };
   return (
-    <section aria-label="Debug" style={PANEL_STYLE}>
+    <section aria-label={t("panelLabel")} style={PANEL_STYLE}>
       <header>
-        <h1>Debug</h1>
-        <p>{session === null ? "No active debug session." : `Session is ${session.status}.`}</p>
+        <h1>{t("panelLabel")}</h1>
+        <p>
+          {session === null
+            ? t("noActiveSession")
+            : t("sessionStatus", { status: debugSessionStatus(t, session.status) })}
+        </p>
         {session?.status === "paused" && snapshot.stopDescription !== null ? (
-          <p role="status">{`Exception: ${snapshot.stopDescription.value}`}</p>
+          <p>{t("exceptionDescription", { description: snapshot.stopDescription.value })}</p>
         ) : null}
+        {actionError ? <p role="alert">{t("actionFailed")}</p> : null}
         {session === null ? (
           <button
             type="button"
@@ -432,45 +531,59 @@ export function DebugPanel({
             }
             onClick={start}
           >
-            Start debugging current file
+            {t("startCurrentFile")}
           </button>
         ) : (
-          <div role="group" aria-label="Debug controls">
+          <div role="group" aria-label={t("controlsLabel")}>
             <button
               type="button"
-              disabled={session.status !== "paused"}
+              disabled={!canControl(session, "continue")}
+              onClick={() => control("continue")}
+            >
+              {t("continue")}
+            </button>
+            <button
+              type="button"
+              disabled={!canControl(session, "pause")}
+              onClick={() => control("pause")}
+            >
+              {t("pause")}
+            </button>
+            <button
+              type="button"
+              disabled={!canControl(session, "next")}
               onClick={() => control("next")}
             >
-              Step over
+              {t("stepOver")}
             </button>
             <button
               type="button"
-              disabled={session.status !== "paused"}
+              disabled={!canControl(session, "stepIn")}
               onClick={() => control("stepIn")}
             >
-              Step into
+              {t("stepInto")}
             </button>
             <button
               type="button"
-              disabled={session.status !== "paused"}
+              disabled={!canControl(session, "stepOut")}
               onClick={() => control("stepOut")}
             >
-              Step out
+              {t("stepOut")}
             </button>
             <button
               type="button"
-              disabled={session.status !== "paused" && session.status !== "running"}
+              disabled={!canControl(session, "stop")}
               onClick={() => control("stop")}
             >
-              Stop debugging
+              {t("stop")}
             </button>
           </div>
         )}
       </header>
       <section aria-labelledby="debug-exception-heading" style={SECTION_STYLE}>
-        <h2 id="debug-exception-heading">Exception breakpoints</h2>
+        <h2 id="debug-exception-heading">{t("exceptionBreakpoints")}</h2>
         {filters.length === 0 ? (
-          <p>No exception filters are available.</p>
+          <p>{t("noExceptionFilters")}</p>
         ) : (
           filters.map((filter) => (
             <label key={filter.filterId} style={{ display: "block" }}>
@@ -478,46 +591,37 @@ export function DebugPanel({
                 type="checkbox"
                 checked={filter.enabled}
                 onChange={() => {
-                  void actions.saveExceptionFilters(
-                    toggleExceptionFilter(filters, filter.filterId),
+                  perform(
+                    actions.saveExceptionFilters(toggleExceptionFilter(filters, filter.filterId)),
                   );
                 }}
               />
-              {filter.filterId}
+              {exceptionFilterLabel(t, filter.filterId)}
             </label>
           ))
         )}
       </section>
       <section aria-labelledby="debug-stack-heading" style={SECTION_STYLE}>
-        <h2 id="debug-stack-heading">Call stack</h2>
+        <h2 id="debug-stack-heading">{t("callStack")}</h2>
         {snapshot.stack === null ? (
-          <p>Pause a session to inspect its stack.</p>
+          <p>{t("pauseForStack")}</p>
         ) : (
-          <div role="listbox" aria-label="Call stack">
-            {snapshot.stack.frames.map((frame) => (
-              <button
-                key={frame.frameRef}
-                type="button"
-                role="option"
-                aria-selected={frame.frameRef === selectedFrame?.frameRef}
-                onClick={() => selectFrame(frame)}
-              >
-                {frame.name.value}
-                {frame.sourceFileId === undefined
-                  ? ""
-                  : ` — ${frame.sourceFileId}:${String(frame.line)}`}
-              </button>
-            ))}
-          </div>
+          <CallStack
+            frames={snapshot.stack.frames}
+            selectedFrameRef={selectedFrame?.frameRef}
+            onSelect={selectFrame}
+            label={t("callStack")}
+          />
         )}
       </section>
       <section aria-labelledby="debug-variables-heading" style={SECTION_STYLE}>
-        <h2 id="debug-variables-heading">Variables</h2>
+        <h2 id="debug-variables-heading">{t("variables")}</h2>
         {selectedFrame === undefined ? (
-          <p>No paused frame is selected.</p>
+          <p>{t("noPausedFrame")}</p>
         ) : (
           <Tree
             rows={rows}
+            t={t}
             onExpand={expand}
             onEdit={(row) =>
               setEditingVariable(
@@ -532,8 +636,8 @@ export function DebugPanel({
           />
         )}
         {editingVariable === null ? null : (
-          <div role="group" aria-label="Paused variable editor">
-            <label htmlFor="debug-variable-value">New variable value</label>
+          <div role="group" aria-label={t("pausedVariableEditor")}>
+            <label htmlFor="debug-variable-value">{t("newVariableValue")}</label>
             <input
               id="debug-variable-value"
               value={editingVariable.value}
@@ -545,41 +649,49 @@ export function DebugPanel({
               type="button"
               onClick={() => {
                 if (session !== null)
-                  void actions.setVariable(
-                    session,
-                    editingVariable.reference,
-                    editingVariable.value,
+                  perform(
+                    actions.setVariable(session, editingVariable.reference, editingVariable.value),
+                    () => setEditingVariable(null),
                   );
-                setEditingVariable(null);
               }}
             >
-              Save
+              {t("save")}
             </button>
             <button type="button" onClick={() => setEditingVariable(null)}>
-              Cancel
+              {t("cancel")}
             </button>
           </div>
         )}
       </section>
       <WatchEditor
         watches={watches}
-        onSave={actions.saveWatches}
+        onSave={async (nextWatches) => {
+          setActionError(false);
+          try {
+            await actions.saveWatches(nextWatches);
+            return true;
+          } catch {
+            setActionError(true);
+            return false;
+          }
+        }}
         onEvaluate={evaluateWatch}
         canEvaluate={session?.status === "paused" && selectedFrame !== undefined}
+        t={t}
       />
       <section aria-labelledby="debug-console-heading" style={SECTION_STYLE}>
-        <h2 id="debug-console-heading">Debug console output</h2>
-        <p>Output and registered-watch results only. This console never evaluates typed input.</p>
-        <pre aria-label="Debug output" style={OUTPUT_STYLE}>
+        <h2 id="debug-console-heading">{t("consoleHeading")}</h2>
+        <p>{t("consoleHelp")}</p>
+        <pre aria-label={t("debugOutput")} style={OUTPUT_STYLE}>
           {snapshot.console.entries.map((entry) => `[${entry.category}] ${entry.text}`).join("\n")}
         </pre>
-        <ul aria-label="Registered watch results">
+        <ul aria-label={t("watchResults")}>
           {watches.map((watch) => {
             const result =
               watchResults.get(watch.watchId) ?? snapshot.watchResults.get(watch.watchId);
             return (
               <li key={watch.watchId}>
-                <code>{watch.expression}</code>: {result?.value?.value ?? "Not evaluated"}
+                <code>{watch.expression}</code>: {result?.value?.value ?? t("notEvaluated")}
               </li>
             );
           })}

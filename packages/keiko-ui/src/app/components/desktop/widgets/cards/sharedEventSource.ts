@@ -10,6 +10,7 @@ interface SharedEventSourceEntry {
   readonly subscribersByType: Map<string, Set<SharedEventListener>>;
   readonly dispatchersByType: Map<string, EventListener>;
   refCount: number;
+  lastEventId: number | undefined;
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
 }
@@ -46,10 +47,30 @@ function reconnectDelay(entry: SharedEventSourceEntry): number {
   return base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
 }
 
+function recordLastEventId(
+  entry: SharedEventSourceEntry,
+  event: Event,
+  resetCursor: boolean,
+): void {
+  const raw = (event as MessageEvent<string>).lastEventId;
+  if (!/^\d+$/u.test(raw)) return;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return;
+  entry.lastEventId = resetCursor ? parsed : Math.max(entry.lastEventId ?? 0, parsed);
+}
+
+function resumeUrl(entry: SharedEventSourceEntry): string {
+  if (entry.lastEventId === undefined || typeof window === "undefined") return entry.url;
+  const parsed = new URL(entry.url, window.location.origin);
+  parsed.searchParams.set("lastEventId", String(entry.lastEventId));
+  return `${parsed.pathname}${parsed.search}`;
+}
+
 function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListener {
   let dispatcher = entry.dispatchersByType.get(type);
   if (dispatcher !== undefined) return dispatcher;
   dispatcher = (event: Event): void => {
+    recordLastEventId(entry, event, type === "editor-debug:snapshot-required");
     const subscribers = entry.subscribersByType.get(type);
     if (subscribers === undefined || subscribers.size === 0) return;
     for (const subscriber of subscribers) {
@@ -94,7 +115,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   ) {
     return;
   }
-  const source = createSameOriginApiEventSource(entry.url);
+  const source = createSameOriginApiEventSource(resumeUrl(entry));
   if (source === null) return;
   entry.source = source;
   source.onopen = () => {
@@ -145,6 +166,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     subscribersByType: new Map(),
     dispatchersByType: new Map(),
     refCount: 0,
+    lastEventId: undefined,
     reconnectAttempts: 0,
     reconnectTimer: undefined,
   };

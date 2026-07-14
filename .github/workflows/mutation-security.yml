@@ -56,7 +56,7 @@ jobs:
             npm run test:mutation:security
           fi
       - name: Prove governed debug launch static controls
-        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.required == 'true' }}
+        if: ${{ github.event_name != 'pull_request' || steps.scope.outputs.debug_launch_required == 'true' }}
         run: npm run test:mutation:debug-launch-security
       - name: Confirm mutation testing is not applicable
         if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.required != 'true' }}

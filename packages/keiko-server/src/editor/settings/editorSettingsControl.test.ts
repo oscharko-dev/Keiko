@@ -311,6 +311,7 @@ describe("editor settings control service", () => {
       });
     };
     const debugActivation: DebugActivationControlService = {
+      isCurrent: () => true,
       resolve: (context) => ({
         ok: true,
         schemaVersion: "1",
@@ -356,6 +357,7 @@ describe("editor settings control service", () => {
   it("rolls back a debugging mutation when the mandatory synchronous revocation fails", async () => {
     const root = temporaryDirectory("editor-settings-debug-revocation-failure-root");
     const debugActivation: DebugActivationControlService = {
+      isCurrent: () => true,
       resolve: (context) => ({
         ok: true,
         schemaVersion: "1",

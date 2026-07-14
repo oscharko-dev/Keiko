@@ -876,7 +876,7 @@ function ConversationThreadImpl({
     streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0
       ? streamingAssistantMessage
       : undefined;
-  const lastTurnId = turns[turns.length - 1]?.id;
+  const lastTurnId = turns.at(-1)?.id;
   const latestAssistantId = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];

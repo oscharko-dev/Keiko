@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { isWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -31,6 +41,17 @@ export interface DebugProvisionedArtifact {
   readonly capsulePath: string;
 }
 
+export interface DebugBackendQualificationInput {
+  readonly backend: DebugProvisionedArtifact;
+  readonly platform?: NodeJS.Platform | undefined;
+}
+
+export interface QualifiedDebugBackend {
+  readonly platform: NodeJS.Platform;
+  readonly availability: BackendAvailability;
+  readonly backendExecutable: ApprovedDebugArtifact;
+}
+
 export interface DebugLaunchContextResolverDeps {
   readonly workspaceRoot: string;
   readonly workspaceTrusted: boolean;
@@ -44,6 +65,7 @@ export interface DebugLaunchContextResolverDeps {
   readonly npmUserConfig: DebugProvisionedArtifact;
   readonly npmGlobalConfig: DebugProvisionedArtifact;
   readonly backend: DebugProvisionedArtifact;
+  readonly backendQualification: QualifiedDebugBackend;
   readonly runtimeClosure: readonly DebugProvisionedArtifact[];
   readonly platform?: NodeJS.Platform | undefined;
   readonly containerImage?: string | undefined;
@@ -187,6 +209,24 @@ function strictBubblewrapProbe(backend: ApprovedDebugArtifact, runtime: string):
   return qualified;
 }
 
+function privateQualificationRuntime(): string {
+  const supplied = mkdtempSync(join(tmpdir(), "keiko-dap-qualification-"));
+  try {
+    chmodSync(supplied, 0o700);
+    const runtime = realpathSync(supplied);
+    const stat = lstatSync(runtime);
+    if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700 || stat.uid !== currentUid()) {
+      throw new Error("INVALID_DEBUG_RUNTIME");
+    }
+    return runtime;
+  } catch (error: unknown) {
+    // Stryker disable next-line BooleanLiteral: supplied was created successfully in this synchronous
+    // function and recursive removal has identical behavior with either force value while it exists.
+    rmSync(supplied, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function probeBackend(
   backend: ApprovedDebugArtifact,
   platform: NodeJS.Platform,
@@ -214,9 +254,33 @@ function probeBackend(
   });
 }
 
+export function qualifyProductionDebugBackend(
+  input: DebugBackendQualificationInput,
+): QualifiedDebugBackend {
+  const platform = input.platform ?? process.platform;
+  const backendExecutable = inspectArtifact(input.backend);
+  if (platform !== "linux" || basename(backendExecutable.realPath) !== "bwrap") {
+    throw new Error("INVALID_DEBUG_BACKEND");
+  }
+  const runtime = privateQualificationRuntime();
+  try {
+    const availability = probeBackend(backendExecutable, platform, runtime);
+    // Stryker disable next-line ConditionalExpression,BlockStatement,StringLiteral: probeBackend
+    // already throws INVALID_DEBUG_BACKEND for the only supported bwrap identity when this flag is
+    // false; this retained assertion documents the production qualification invariant.
+    if (!availability.bubblewrap) throw new Error("INVALID_DEBUG_BACKEND");
+    return Object.freeze({ platform, availability, backendExecutable });
+  } finally {
+    rmSync(runtime, { recursive: true, force: true });
+  }
+}
+
 function inspectRuntime(path: string): DebugRuntimeMountInspection {
   const real = realpathSync(path);
   const stat = lstatSync(path);
+  // Stryker disable next-line ConditionalExpression,LogicalOperator: runtimeDirectory validates
+  // the same directory type, mode, and owner synchronously without an intervening await. This
+  // repeated final-mount assertion is intentionally retained as defense in depth.
   const valid = stat.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === currentUid();
   if (!valid) throw new Error("INVALID_DEBUG_RUNTIME");
   const identityDigest = createHash("sha256")
@@ -275,6 +339,37 @@ function adapterArtifact(
   });
 }
 
+function artifactIdentityMatches(
+  expected: ApprovedDebugArtifact,
+  observed: ApprovedDebugArtifact,
+): boolean {
+  return (
+    expected.realPath === observed.realPath &&
+    expected.approvedRoot === observed.approvedRoot &&
+    expected.capsulePath === observed.capsulePath &&
+    expected.identityDigest === observed.identityDigest &&
+    expected.device === observed.device &&
+    expected.inode === observed.inode &&
+    expected.size === observed.size &&
+    expected.mode === observed.mode &&
+    expected.ownerUid === observed.ownerUid
+  );
+}
+
+function qualifiedBackend(deps: DebugLaunchContextResolverDeps): ApprovedDebugArtifact {
+  const platform = deps.platform ?? process.platform;
+  const observed = inspectArtifact(deps.backend);
+  const qualification = deps.backendQualification;
+  if (
+    qualification.platform !== platform ||
+    !qualification.availability.bubblewrap ||
+    !artifactIdentityMatches(qualification.backendExecutable, observed)
+  ) {
+    throw new Error("INVALID_DEBUG_BACKEND");
+  }
+  return observed;
+}
+
 export function createProductionDebugLaunchContextResolver(
   deps: DebugLaunchContextResolverDeps,
 ): (input: DebugCapsuleLayer2Input) => Promise<DebugLaunchRuntimeContext> {
@@ -287,7 +382,7 @@ export function createProductionDebugLaunchContextResolver(
     assertRuntimeLayout(input, hostRuntimeDirectory);
     const hostSocketPath = join(hostRuntimeDirectory, SOCKET_NAME);
     const capsuleSocketPath = `${CAPSULE_RUNTIME_ROOT}/${SOCKET_NAME}`;
-    const backend = inspectArtifact(deps.backend);
+    const backend = qualifiedBackend(deps);
     return Object.freeze({
       workspaceRoot: deps.workspaceRoot,
       canonicalWorkspaceRoot: workspaceRoot,
@@ -297,7 +392,7 @@ export function createProductionDebugLaunchContextResolver(
       fs: deps.fs,
       discover: deps.discover,
       platform: deps.platform ?? process.platform,
-      availability: probeBackend(backend, deps.platform ?? process.platform, hostRuntimeDirectory),
+      availability: deps.backendQualification.availability,
       hostRuntimeDirectory,
       runtimeRoot,
       hostSocketPath,

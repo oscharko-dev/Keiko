@@ -977,7 +977,7 @@ export function NewWindowDialog({
       // window (focusable via tabIndex={-1}) or the New-window FAB — the same
       // deterministic targets as WindowFrame's close-with-focus-restore. The rAF
       // waits for React to commit the new window before querying it.
-      if (trigger !== null && trigger.isConnected) {
+      if (trigger?.isConnected === true) {
         trigger.focus();
         return;
       }

@@ -6,10 +6,8 @@ import type {
   DebugActivationReasonCode,
   DebugActivationSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { useLocale } from "@/lib/i18n";
-
 import styles from "./DebuggingSettings.module.css";
-import { debuggingTranslate, type DebuggingTranslate } from "./debugging-i18n";
+import { type DebuggingTranslate, useDebuggingTranslate as useTranslate } from "./debugging-i18n";
 import { useDebuggingSettings } from "./useDebuggingSettings";
 
 type PanelState = DebugActivationSummary["state"] | "unavailable";
@@ -53,7 +51,7 @@ function issueLabel(issue: "load" | "mutation" | "conflict", t: DebuggingTransla
 }
 
 export function DebuggingSettings({ root }: { readonly root?: string | undefined }): ReactNode {
-  const t = debuggingTranslate(useLocale());
+  const t = useTranslate();
   const view = useDebuggingSettings(root);
   const [confirming, setConfirming] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);

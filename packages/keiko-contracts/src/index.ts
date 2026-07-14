@@ -670,7 +670,7 @@ export {
   parseLspFrameHeader,
 } from "./lsp-process.js";
 
-// ─── Governed debug adapter lifecycle (Issue #2343, Epic #2096, ADR-0134) ─────────────────────
+// ─── Governed debug adapter lifecycle (Issue #2343, Epic #2096, ADR-0136) ─────────────────────
 export type {
   DebugSessionState,
   DebugLifecycleEventKind,
@@ -684,7 +684,7 @@ export {
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 
-// ─── Governed debug browser wire contracts (Issue #2345, Epic #2096, ADR-0134) ───────────────
+// ─── Governed debug browser wire contracts (Issue #2345, Epic #2096, ADR-0136) ───────────────
 export type {
   DebugSessionStatus,
   DebugEventKind,

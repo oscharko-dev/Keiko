@@ -8,7 +8,7 @@
 // is available AND the server-frozen catalog is non-empty (AC2). The browser only ever names a
 // catalog task id — no free-form image, argv, or docker flags ever leave the UI.
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
 import {
   cancelContainerRun,
@@ -295,7 +295,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
   }, [running]);
 
   const onSubmit = useCallback(
-    async (e: FormEvent<HTMLFormElement>): Promise<void> => {
+    async (e: SubmitEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
       if (running || runningRef.current || !hasRunControl || taskId.length === 0) return;
       setError(null);

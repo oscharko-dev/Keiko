@@ -65,7 +65,7 @@ function readmeLinkTargets(adrDir) {
 export function checkAdrRegistry(adrDir) {
   const files = readdirSync(adrDir)
     .filter((name) => ADR_FILE.test(name))
-    .sort();
+    .sort((left, right) => left.localeCompare(right));
   if (files.length === 0) {
     return ["No ADR files found — wrong path or empty registry."];
   }
