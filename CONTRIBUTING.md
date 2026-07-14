@@ -16,7 +16,7 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All 16 app-bound required status checks must pass on the current pull-request head before a change
+All 13 app-bound required status checks must pass on the current pull-request head before a change
 can merge into `dev`:
 
 1. `ci`
@@ -29,19 +29,18 @@ can merge into `dev`:
 8. `Review dependency diff (dev/main)`
 9. `ui`
 10. `Scan dependency lockfiles`
-11. `Mutation quality gate`
-12. `SonarCloud Code Analysis`
-13. `Socket Security: Project Report`
-14. `Socket Security: Pull Request Alerts`
-15. `Gitar`
-16. `Keiko for Quality`
+11. `SonarCloud Code Analysis`
+12. `Socket Security: Project Report`
+13. `Socket Security: Pull Request Alerts`
 
-No human approving review or manual merge is required. Gitar may repair the PR branch
-autonomously, and GitHub native auto-merge integrates only after `Keiko for Quality` validates the
-exact current head. Auto-merge remains disabled until the independent App and its negative and
-positive live probes are complete. See
-[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Gitar configuration,
-large-PR acceptance, safe commands, and plan boundaries are governed by
+No human approving review or manual merge is required. GitHub native auto-merge integrates only
+after the direct required checks succeed on the exact current head and every review conversation
+is resolved. Gitar and `Keiko for Quality` remain advisory until they independently satisfy the
+availability and liveness requirements in
+[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation testing runs daily and
+on explicit dispatch; shared-runner performance evidence runs after merge and for releases. Neither
+unbounded workload is part of the pull-request critical path. Gitar configuration, large-PR
+acceptance, safe commands, and plan boundaries are governed by
 [`docs/qa/gitar-review-policy.md`](docs/qa/gitar-review-policy.md).
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
