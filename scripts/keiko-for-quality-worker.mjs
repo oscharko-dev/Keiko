@@ -567,8 +567,9 @@ async function reconciledPullRequests(env) {
   try {
     for (const discovered of await discoverOpenPullRequests(env))
       pulls.set(trackedPullKey(discovered), discovered);
-  } catch {
-    console.error("pull reconciliation failed");
+  } catch (error) {
+    const errorKind = error instanceof Error ? error.name : "UnknownError";
+    console.error(`pull reconciliation failed errorKind=${errorKind}`);
   }
   return pulls.values();
 }
