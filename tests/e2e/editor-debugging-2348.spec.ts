@@ -24,6 +24,21 @@ const PROGRAM = "src/program.ts";
 const THROWS = "src/throws.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
 const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
+const DEBUG_ACTIVATION_STATES = new Set([
+  "available",
+  "disabled",
+  "disabledByPolicy",
+  "notProvisioned",
+]);
+const DEBUG_ACTIVATION_REASONS = new Set([
+  "AVAILABLE",
+  "NOT_PROVISIONED",
+  "POLICY_DENIED",
+  "POLICY_UNAVAILABLE",
+  "PRODUCT_UNSUPPORTED",
+  "WORKSPACE_ACTIVATION_UNSET",
+  "WORKSPACE_DISABLED",
+]);
 
 interface DebugSessionProjection {
   readonly pauseGeneration: number;
@@ -202,25 +217,59 @@ interface DebugActivationProjection {
   readonly workspaceId: string;
 }
 
+function activationDiagnostic(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  fallback: string,
+): string {
+  return typeof value === "string" && allowed.has(value) ? value : fallback;
+}
+
+function validDebugActivationProjection(
+  workspaceId: unknown,
+  activationRevision: unknown,
+  state: unknown,
+): DebugActivationProjection | undefined {
+  if (
+    typeof workspaceId !== "string" ||
+    typeof activationRevision !== "number" ||
+    !Number.isSafeInteger(activationRevision) ||
+    state !== "available"
+  ) {
+    return undefined;
+  }
+  return { activationRevision, workspaceId };
+}
+
 function debugActivationProjection(value: unknown): DebugActivationProjection {
   const result = value as {
     readonly snapshot?: {
       readonly debugWorkspaceId?: unknown;
-      readonly debugging?: { readonly revision?: unknown; readonly state?: unknown };
+      readonly debugging?: {
+        readonly reasonCode?: unknown;
+        readonly revision?: unknown;
+        readonly state?: unknown;
+      };
     };
   };
   const workspaceId = result.snapshot?.debugWorkspaceId;
   const debugging = result.snapshot?.debugging;
   const activationRevision = debugging?.revision;
-  if (
-    typeof workspaceId !== "string" ||
-    typeof activationRevision !== "number" ||
-    !Number.isSafeInteger(activationRevision) ||
-    debugging?.state !== "available"
-  ) {
-    throw new Error("DEBUG_ACTIVATION_RESPONSE_INVALID");
+  const projection = validDebugActivationProjection(
+    workspaceId,
+    activationRevision,
+    debugging?.state,
+  );
+  if (projection === undefined) {
+    const state = activationDiagnostic(debugging?.state, DEBUG_ACTIVATION_STATES, "INVALID_STATE");
+    const reasonCode = activationDiagnostic(
+      debugging?.reasonCode,
+      DEBUG_ACTIVATION_REASONS,
+      "INVALID_REASON",
+    );
+    throw new Error(`DEBUG_ACTIVATION_RESPONSE_INVALID:${state}:${reasonCode}`);
   }
-  return { activationRevision, workspaceId };
+  return projection;
 }
 
 async function activateDebugging(page: Page, root: string): Promise<DebugActivationProjection> {

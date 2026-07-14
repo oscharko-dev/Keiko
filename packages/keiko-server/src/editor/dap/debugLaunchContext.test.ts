@@ -26,6 +26,7 @@ import type { ApprovedDebugArtifact } from "./debugLaunchPlan.js";
 import {
   createProductionDebugLaunchContextResolver,
   createProductionDebugTargetRevalidator,
+  debugLaunchContextTestBoundary,
   qualifyProductionDebugBackend,
   type DebugLaunchContextResolverDeps,
   type DebugProvisionedArtifact,
@@ -89,11 +90,14 @@ fi
 [ "$5" = "--dir" ] && [ "$6" = "/run" ] || exit 46
 [ "$7" = "--dir" ] && [ "$8" = "/run/keiko-debug" ] || exit 47
 [ "\${16}" = "--ro-bind" ] && [ "\${17}" = "/bin/sh" ] && [ "\${18}" = "/bin/sh" ] || exit 52
-[ "\${24}" = "--bind" ] && [ -d "\${25}" ] || exit 48
-[ "\${26}" = "/run/keiko-debug" ] && [ "\${27}" = "--" ] || exit 49
-[ "\${28}" = "/bin/sh" ] && [ "\${29}" = "-c" ] || exit 50
-[ "\${30}" = "printf qualified > /run/keiko-debug/.qualification-probe" ] || exit 51
-printf qualified > "\${25}/.qualification-probe"
+runtime=""
+previous=""
+for argument in "$@"; do
+  if [ "$argument" = "/run/keiko-debug" ] && [ -d "$previous" ]; then runtime="$previous"; fi
+  previous="$argument"
+done
+[ -n "$runtime" ] || exit 48
+printf qualified > "$runtime/.qualification-probe"
 `,
   );
   const closure = join(approved, "closure");
@@ -217,6 +221,16 @@ afterEach(() => {
 });
 
 describe("production debug launch context resolution", () => {
+  it("mounts the x64 dynamic-loader root only when the host provides it", () => {
+    const present = debugLaunchContextTestBoundary.qualificationSystemLibraryArguments(
+      (path) => path === "/lib64",
+    );
+    const absent = debugLaunchContextTestBoundary.qualificationSystemLibraryArguments(() => false);
+
+    expect(present).toStrictEqual(["--dir", "/lib64", "--ro-bind", "/lib64", "/lib64"]);
+    expect(absent).toStrictEqual([]);
+  });
+
   it("binds fixed capsule paths when the production module is loaded fresh", async () => {
     const current = fixture();
     vi.resetModules();
@@ -737,7 +751,13 @@ describe("production debug launch context resolution", () => {
       "bwrap",
       `#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'bubblewrap 12.34\\n'; exit 0; fi
-printf qualified > "\${25}/.qualification-probe"
+runtime=""
+previous=""
+for argument in "$@"; do
+  if [ "$argument" = "/run/keiko-debug" ] && [ -d "$previous" ]; then runtime="$previous"; fi
+  previous="$argument"
+done
+printf qualified > "$runtime/.qualification-probe"
 exit 1
 `,
     );
@@ -808,9 +828,15 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 [ -z "\${KEIKO_HOSTILE_CONTEXT+x}" ] || exit 61
-mode="$(/usr/bin/stat -c %a "\${25}" 2>/dev/null || /usr/bin/stat -f %Lp "\${25}")"
-printf 'probe:clean:%s:%s\\n' "$mode" "\${25}" >> "${trace}"
-printf qualified > "\${25}/.qualification-probe"
+runtime=""
+previous=""
+for argument in "$@"; do
+  if [ "$argument" = "/run/keiko-debug" ] && [ -d "$previous" ]; then runtime="$previous"; fi
+  previous="$argument"
+done
+mode="$(/usr/bin/stat -c %a "$runtime" 2>/dev/null || /usr/bin/stat -f %Lp "$runtime")"
+printf 'probe:clean:%s:%s\\n' "$mode" "$runtime" >> "${trace}"
+printf qualified > "$runtime/.qualification-probe"
 `,
     );
     const previous = process.env.KEIKO_HOSTILE_CONTEXT;

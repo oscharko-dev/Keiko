@@ -29,10 +29,21 @@ const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug";
 const SOCKET_NAME = "dap.sock";
 const NPM_USER_CONFIG_PATH = "/opt/keiko-debug/npm-user-config";
 const NPM_GLOBAL_CONFIG_PATH = "/opt/keiko-debug/npm-global-config";
+const OPTIONAL_SYSTEM_LIBRARY_ROOTS = ["/lib64"] as const;
 
 function currentUid(): number {
   if (process.getuid === undefined) throw new Error("INVALID_DEBUG_RUNTIME");
   return process.getuid();
+}
+
+function qualificationSystemLibraryArguments(
+  pathExists: (path: string) => boolean = existsSync,
+): readonly string[] {
+  return Object.freeze(
+    OPTIONAL_SYSTEM_LIBRARY_ROOTS.flatMap((root) =>
+      pathExists(root) ? ["--dir", root, "--ro-bind", root, root] : [],
+    ),
+  );
 }
 
 export interface DebugProvisionedArtifact {
@@ -194,6 +205,7 @@ function strictBubblewrapProbe(backend: ApprovedDebugArtifact, runtime: string):
       "--ro-bind",
       "/lib",
       "/lib",
+      ...qualificationSystemLibraryArguments(),
       "--bind",
       runtime,
       CAPSULE_RUNTIME_ROOT,
@@ -437,3 +449,8 @@ export function createProductionDebugTargetRevalidator(
     }
   };
 }
+
+/** @internal Pure mount projection exposed only for deterministic platform-layout tests. */
+export const debugLaunchContextTestBoundary = Object.freeze({
+  qualificationSystemLibraryArguments,
+});
