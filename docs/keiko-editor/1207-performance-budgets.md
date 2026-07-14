@@ -184,12 +184,14 @@ inline-decoration work, and state selectors must remain outside the direct keyst
 `npm run test:e2e:editor-perf` records this proof through the existing `@release-evidence` harness
 in `docs/release/1209-perf-evidence.json` at `b5IdleDebugSession`. The scenario enables the
 server-projected debugging capability, waits for the real browser bootstrap and debug SSE stream,
-starts a file-target DAP session, and leaves it idle for at least 1,100 ms before typing in the open
-editor. It records one Chrome DevTools Timeline `EventDispatch` input-processing slice per inserted
-character, each slice's matched input-event count, its p95, the Long Task observer count and maximum,
-the active-session state, and accepted debug-output bytes. The gate requires a positive-duration
-trace sample with at least one matched input event for every character, p95 < 50 ms, exactly zero
-long tasks, and zero accepted output bytes; it always stops the session after capture.
+starts a file-target DAP session, and leaves it idle for at least 1,100 ms before refocusing and typing
+in the open editor. One completed Chrome DevTools Timeline trace covers the full burst; the harness
+groups each character's `EventDispatch` work from `keydown` through `keyup`, including Monaco keys
+such as Space that are handled without `beforeinput`/`input`. It records each group's matched event
+count, its p95, the Long Task observer count and maximum, the active-session state, and accepted
+debug-output bytes. The gate requires a positive-duration trace sample with at least one matched
+event for every character, p95 < 50 ms, exactly zero long tasks, and zero accepted output bytes; it
+always stops the session after capture.
 Consequently, a zero Long Task count is only the independent no-long-task assertion, never a claim of
 zero milliseconds of per-keystroke work.
 

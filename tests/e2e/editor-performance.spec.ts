@@ -947,24 +947,47 @@ interface InputProcessingMeasurement {
   readonly matchedEventCount: number;
 }
 
-function inputDispatchMeasurement(events: readonly TraceEvent[]): InputProcessingMeasurement {
-  const matchedEvents = events.filter(
-    (event) =>
-      event.name === "EventDispatch" &&
-      event.phase === "X" &&
-      (traceDispatchType(event) === "beforeinput" || traceDispatchType(event) === "input"),
-  );
-  const microseconds = matchedEvents.reduce((total, event) => total + event.dur, 0);
-  return {
-    durationMs: Math.round((microseconds / 1_000) * 1_000) / 1_000,
-    matchedEventCount: matchedEvents.length,
+function inputDispatchMeasurements(events: readonly TraceEvent[]): InputProcessingMeasurement[] {
+  // Monaco handles some keys (notably Space) directly in keydown without emitting beforeinput or
+  // input. Group the complete keyboard dispatch from keydown through keyup so every real keystroke
+  // has one non-vacuous sample and all synchronous editor work is included.
+  const inputDispatchTypes = new Set([
+    "keydown",
+    "keypress",
+    "beforeinput",
+    "textInput",
+    "input",
+    "keyup",
+  ]);
+  const measurements: InputProcessingMeasurement[] = [];
+  let microseconds = 0;
+  let matchedEventCount = 0;
+  const flush = (): void => {
+    if (matchedEventCount === 0) return;
+    measurements.push({
+      durationMs: Math.round((microseconds / 1_000) * 1_000) / 1_000,
+      matchedEventCount,
+    });
+    microseconds = 0;
+    matchedEventCount = 0;
   };
+  for (const event of events) {
+    if (event.name !== "EventDispatch" || event.phase !== "X") continue;
+    const type = traceDispatchType(event);
+    if (type === "keydown") flush();
+    if (type === undefined || !inputDispatchTypes.has(type)) continue;
+    microseconds += event.dur;
+    matchedEventCount += 1;
+    if (type === "keyup") flush();
+  }
+  flush();
+  return measurements;
 }
 
-async function captureInputProcessingMs(
+async function captureInputProcessingSamples(
   page: Page,
-  text: string,
-): Promise<InputProcessingMeasurement> {
+  chunks: readonly string[],
+): Promise<readonly InputProcessingMeasurement[]> {
   const client = await page.context().newCDPSession(page);
   const events: TraceEvent[] = [];
   const complete = new Promise<void>((resolve) => {
@@ -978,8 +1001,11 @@ async function captureInputProcessingMs(
     transferMode: "ReportEvents",
   });
   try {
-    await page.keyboard.insertText(text);
     await awaitNextPaint(page);
+    for (const chunk of chunks) {
+      await page.keyboard.type(chunk);
+      await awaitNextPaint(page);
+    }
     await client.send("Tracing.end");
     await Promise.race([
       complete,
@@ -990,14 +1016,14 @@ async function captureInputProcessingMs(
         timeout.unref();
       }),
     ]);
-    const measurement = inputDispatchMeasurement(events);
-    if (measurement.matchedEventCount === 0) {
+    const measurements = inputDispatchMeasurements(events);
+    if (measurements.length !== chunks.length) {
       throw new Error("EDITOR_PERF_INPUT_DISPATCH_NOT_CAPTURED");
     }
-    if (measurement.durationMs <= 0) {
+    if (measurements.some((measurement) => measurement.durationMs <= 0)) {
       throw new Error("EDITOR_PERF_INPUT_DISPATCH_DURATION_NOT_POSITIVE");
     }
-    return measurement;
+    return measurements;
   } finally {
     await client.detach();
   }
@@ -1018,19 +1044,16 @@ async function measureIdleDebugTyping(
 ): Promise<IdleDebugMetrics> {
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 10_000 });
-  await editor.click({ timeout: 8_000 });
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  await page.keyboard.press(`${modifier}+KeyA`);
   const observerInstalled = await installIdleDebugLongTaskObserver(page);
   await page.waitForTimeout(IDLE_DEBUG_INTERVAL_MS);
+  await editor.click({ timeout: 8_000 });
+  await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
-  const matchedInputEventCounts: number[] = [];
-  const processingSamples: number[] = [];
-  for (const chunk of TYPING_CHUNKS) {
-    const measurement = await captureInputProcessingMs(page, chunk);
-    matchedInputEventCounts.push(measurement.matchedEventCount);
-    processingSamples.push(measurement.durationMs);
-  }
+  const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
+  const matchedInputEventCounts = measurements.map((measurement) => measurement.matchedEventCount);
+  const processingSamples = measurements.map((measurement) => measurement.durationMs);
   await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000)]);
   const [longTasks, liveSession] = await Promise.all([
     idleDebugLongTasks(page),
