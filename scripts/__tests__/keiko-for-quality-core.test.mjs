@@ -101,12 +101,21 @@ describe("Keiko for Quality core", () => {
     expect(isBotEvidence({ ...exact, appId: 8 }, identity, false)).toBe(true);
   });
 
-  it("parses Gitar totals only from the exact bounded review format", () => {
+  it("parses only bounded Gitar finding evidence", () => {
     expect(parseGitarFindings("12 resolved / 15 findings")).toBe(3);
     expect(parseGitarFindings("12  resolved /  15  findings")).toBe(3);
     expect(parseGitarFindings("12 resolved/15 findings")).toBe(3);
     expect(parseGitarFindings("2 resolved / 1 findings")).toBeUndefined();
     expect(parseGitarFindings("12 resolved / findings")).toBeUndefined();
+    expect(
+      parseGitarFindings(
+        "<details>\n<summary><b>Code Review</b> <kbd>✅ Approved</kbd></summary>\n\n" +
+          "Relocates the audited marker and adds a regression test. No issues found.\n\n" +
+          "</details>",
+      ),
+    ).toBe(0);
+    expect(parseGitarFindings("<kbd>✅ Approved</kbd>")).toBeUndefined();
+    expect(parseGitarFindings("No issues found.")).toBeUndefined();
   });
 
   it("extracts and deduplicates exact Socket package versions", () => {
