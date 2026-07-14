@@ -4,7 +4,7 @@ import { loadGitarSources, validateGitarSources } from "../check-gitar-config.mj
 function validSources() {
   return {
     approval:
-      "Only auto-approve the exact current head after every finding at every severity is resolved. Never auto-approve incomplete evidence. Keiko for Quality remains required.",
+      "Only auto-approve the exact current head after every finding at every severity is resolved. Never auto-approve incomplete evidence. The direct app-bound required checks remain required.",
     reviews: [
       {
         name: "00-governance-and-delivery.md",
@@ -23,7 +23,7 @@ function validSources() {
     ].map((name) => {
       const actions =
         name === "governance-and-delivery.md"
-          ? "Enable Auto-Apply and never unblock, force-push, push to dev, or bypass Keiko for Quality"
+          ? "Enable Auto-Apply and never unblock, force-push, push to dev, or bypass direct required checks"
           : name === "verification-and-coverage.md"
             ? "Auto-apply owning-layer fixes"
             : "Post a comment with a checklist";
@@ -89,7 +89,7 @@ describe("Gitar configuration gate", () => {
         "Gitar auto-approve criteria must define explicit exclusions",
         "Gitar auto-approve criteria must require exact current head",
         "Gitar auto-approve criteria must require every finding at every severity",
-        "Gitar auto-approve criteria must require Keiko for Quality",
+        "Gitar auto-approve criteria must require direct app-bound required checks",
       ]),
     );
   });

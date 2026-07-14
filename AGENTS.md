@@ -22,7 +22,7 @@ product.
 > ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
 > their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the app-bound `Keiko for Quality` check validates the exact current head. Direct pushes to
+> after the direct app-bound required checks succeed on the exact current head. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -40,7 +40,7 @@ governed in detail by
   before high/critical-risk work or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
-  integrated automatically only after `Keiko for Quality` succeeds.
+  integrated automatically only after the direct required checks succeed.
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -52,7 +52,7 @@ This shapes the product _and_ how you work on it:
   update its PR, repair deterministic findings, arm native auto-merge, and close the issue after
   verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
   required check, use `gitar unblock`, dismiss a finding to obtain green status, or merge outside
-  the ADR-0135 `Keiko for Quality` path.
+  the ADR-0135 direct-check path.
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
@@ -313,7 +313,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
   history, signed squash merges, no direct agent merge, and platform-native auto-merge only after
-  `Keiko for Quality` validates the exact current head.
+  the direct required checks validate the exact current head.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -324,14 +324,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `ci` · `actionlint` · `Verify pinned action SHAs` · `zizmor` · `Analyze (actions)` ·
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
   `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
-  `Mutation quality gate` · `SonarCloud Code Analysis` ·
-  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts` · `Gitar` ·
-  `Keiko for Quality`
+  `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
+  `Socket Security: Pull Request Alerts`
 
-  No human approving review is required for `dev`. Do not enable native auto-merge until the
-  independent app-bound `Keiko for Quality` check has passed its live negative and positive probes
-  and is required with administrator enforcement; see
-  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md).
+  No human approving review is required for `dev`. Gitar and `Keiko for Quality` are advisory and
+  must not be added to branch protection until their availability, bounded settlement, and
+  non-self-deadlocking repair path pass the live probes in
+  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation and hosted-runner
+  performance evidence run outside the PR critical path.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

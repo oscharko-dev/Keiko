@@ -4,6 +4,6 @@ resolved by an owning-layer fix with deterministic regression or boundary covera
 reported as unreviewed because of a service limit.
 
 Never auto-approve stale, partial, skipped, cancelled, timed-out, unparseable, wrong-producer, or
-non-zero-finding evidence. A Gitar approval may arm GitHub native auto-merge, but it never replaces
-the app-bound `Keiko for Quality` required check. Never use `gitar unblock`, force-push, push directly
+non-zero-finding evidence. A Gitar approval may inform GitHub native auto-merge, but it never
+replaces the direct app-bound required checks. Never use `gitar unblock`, force-push, push directly
 to `dev`, dismiss a finding to obtain green status, or widen task authority.

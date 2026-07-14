@@ -1,0 +1,198 @@
+#!/opt/keiko-runtime/node
+import { rmSync } from "node:fs";
+import { createServer } from "node:net";
+
+const delimiter = Buffer.from("\r\n\r\n", "ascii");
+const socketPath = socketArgument(process.argv.slice(2));
+let sequence = 1;
+
+if (socketPath === undefined) process.exit(2);
+rmSync(socketPath, { force: true });
+
+const server = createServer((connection) => {
+  let pending = Buffer.alloc(0);
+  let exceptionBreakpointsEnabled = false;
+  connection.on("data", (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    pending = drain(connection, pending, (request) => {
+      exceptionBreakpointsEnabled = dispatch(request, connection, exceptionBreakpointsEnabled);
+    });
+  });
+});
+
+server.listen(socketPath);
+
+function socketArgument(args) {
+  const index = args.indexOf("--server");
+  const value = index < 0 ? undefined : args[index + 1];
+  return typeof value === "string" && value.startsWith("/") ? value : undefined;
+}
+
+function frame(connection, message) {
+  const body = Buffer.from(JSON.stringify({ seq: sequence++, ...message }), "utf8");
+  connection.write(
+    Buffer.concat([Buffer.from(`Content-Length: ${String(body.length)}\r\n\r\n`, "ascii"), body]),
+  );
+}
+
+function response(connection, request, body = {}) {
+  frame(connection, {
+    type: "response",
+    request_seq: request.seq,
+    success: true,
+    command: request.command,
+    body,
+  });
+}
+
+function event(connection, eventName, body = {}) {
+  frame(connection, { type: "event", event: eventName, body });
+}
+
+function stop(connection, reason) {
+  event(connection, "stopped", {
+    reason,
+    threadId: 1,
+    allThreadsStopped: true,
+    ...(reason === "exception" ? { description: "Fixture uncaught exception" } : {}),
+  });
+}
+
+function continueAndStop(connection) {
+  event(connection, "continued", { threadId: 1, allThreadsContinued: true });
+  setImmediate(() => stop(connection, "step"));
+}
+
+function dispatch(request, connection, exceptionBreakpointsEnabled) {
+  if (request?.type !== "request" || !Number.isSafeInteger(request.seq)) {
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "initialize") {
+    response(connection, request, {
+      supportsConfigurationDoneRequest: true,
+      supportsSetVariable: true,
+      supportsTerminateRequest: true,
+    });
+    event(connection, "initialized");
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "launch") {
+    response(connection, request);
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "configurationDone") {
+    response(connection, request);
+    setImmediate(() => stop(connection, exceptionBreakpointsEnabled ? "exception" : "breakpoint"));
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "setBreakpoints") {
+    const breakpoints = Array.isArray(request.arguments?.breakpoints)
+      ? request.arguments.breakpoints
+      : [];
+    response(connection, request, {
+      breakpoints: breakpoints.map((breakpoint) => ({ ...breakpoint, verified: true })),
+    });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "setExceptionBreakpoints") {
+    const filters = Array.isArray(request.arguments?.filters) ? request.arguments.filters : [];
+    response(connection, request, { breakpoints: [] });
+    return filters.includes("uncaught");
+  }
+  if (request.command === "threads") {
+    response(connection, request, { threads: [{ id: 1, name: "fixture-main" }] });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "stackTrace") {
+    const exception = exceptionBreakpointsEnabled;
+    response(connection, request, {
+      stackFrames: [
+        {
+          id: 1,
+          name: exception ? "throwsFixture" : "breakpointFixture",
+          source: {
+            path: exception
+              ? "/keiko-execution-root/src/throws.ts"
+              : "/keiko-execution-root/src/program.ts",
+          },
+          line: exception ? 8 : 4,
+          column: 1,
+        },
+      ],
+      totalFrames: 1,
+    });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "scopes") {
+    response(connection, request, {
+      scopes: [{ name: "Local", variablesReference: 1, expensive: false }],
+    });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "variables") {
+    response(connection, request, {
+      variables: [
+        { name: "total", value: "2", type: "number", variablesReference: 0 },
+        { name: "message", value: "safe fixture", type: "string", variablesReference: 0 },
+      ],
+    });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "evaluate") {
+    response(connection, request, { result: "2", type: "number", variablesReference: 0 });
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "setVariable") {
+    response(connection, request, {
+      value: request.arguments?.value ?? "",
+      type: "number",
+      variablesReference: 0,
+    });
+    return exceptionBreakpointsEnabled;
+  }
+  if (["continue", "next", "stepIn", "stepOut"].includes(request.command)) {
+    response(connection, request);
+    continueAndStop(connection);
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "pause") {
+    response(connection, request);
+    setImmediate(() => stop(connection, "pause"));
+    return exceptionBreakpointsEnabled;
+  }
+  if (request.command === "disconnect") {
+    response(connection, request);
+    connection.end();
+    server.close(() => process.exit(0));
+    return exceptionBreakpointsEnabled;
+  }
+  frame(connection, {
+    type: "response",
+    request_seq: request.seq,
+    success: false,
+    command: request.command,
+    message: "UNSUPPORTED",
+  });
+  return exceptionBreakpointsEnabled;
+}
+
+function drain(connection, pending, handle) {
+  let rest = pending;
+  for (;;) {
+    const headerEnd = rest.indexOf(delimiter);
+    if (headerEnd < 0) return rest;
+    const header = rest.subarray(0, headerEnd).toString("ascii");
+    const match = /^Content-Length:\s*(\d+)\s*$/iu.exec(header);
+    if (match === null) process.exit(3);
+    const length = Number.parseInt(match[1] ?? "", 10);
+    const bodyStart = headerEnd + delimiter.length;
+    const bodyEnd = bodyStart + length;
+    if (rest.length < bodyEnd) return rest;
+    try {
+      handle(JSON.parse(rest.subarray(bodyStart, bodyEnd).toString("utf8")));
+    } catch {
+      process.exit(4);
+    }
+    rest = rest.subarray(bodyEnd);
+  }
+}

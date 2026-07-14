@@ -9,12 +9,15 @@ import type {
 } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
 
-export type EditorInlayHintKind = "type" | "parameter" | "enum";
+export type EditorInlayHintKind = "type" | "parameter" | "enum" | "value";
+export type EditorInlayHintStyle = "standard" | "debug-value";
 
 export interface EditorInlayHint {
   readonly position: EditorPosition;
   readonly label: string;
   readonly kind: EditorInlayHintKind;
+  /** Semantic projection metadata; paused values render through the dedicated decoration bridge. */
+  readonly style?: EditorInlayHintStyle | undefined;
   readonly paddingLeft?: boolean | undefined;
   readonly paddingRight?: boolean | undefined;
 }
@@ -53,6 +56,7 @@ export interface MonacoInlayHint {
   readonly label: string;
   readonly position: MonacoPositionLike;
   readonly kind: 1 | 2;
+  readonly style: EditorInlayHintStyle;
   readonly paddingLeft: boolean;
   readonly paddingRight: boolean;
 }
@@ -106,6 +110,7 @@ function toMonacoHint(hint: EditorInlayHint): MonacoInlayHint {
     label: hint.label,
     position: { lineNumber: hint.position.line + 1, column: hint.position.column + 1 },
     kind: hint.kind === "parameter" ? 2 : 1,
+    style: hint.kind === "value" ? "debug-value" : (hint.style ?? "standard"),
     paddingLeft: hint.paddingLeft ?? false,
     paddingRight: hint.paddingRight ?? false,
   };

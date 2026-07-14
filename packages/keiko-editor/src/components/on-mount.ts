@@ -21,6 +21,22 @@ import {
   buildAskKeikoAboutSelectionRunHandler,
   buildGenerateTestsActionDescriptor,
 } from "./command-actions.js";
+import {
+  buildDebugCommandActionDescriptors,
+  type EditorDebugCommandHandlers,
+} from "./debug-command-actions.js";
+import {
+  registerEditorBreakpointGutter,
+  type EditorBreakpointGutterBridge,
+  type EditorDebugBreakpointHost,
+  type MonacoBreakpointGutterEditor,
+} from "./breakpoint-gutter-bridge.js";
+import {
+  registerDebugValueInlays,
+  type DebugValueInlayBridge,
+  type EditorDebugValueSnapshot,
+} from "./debug-value-inlay-resolver.js";
+import { installDebugMonacoStyles } from "./debug-monaco-styles.js";
 import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 import type { AskKeikoAboutSelectionHandler } from "./types.js";
@@ -173,13 +189,17 @@ export interface MountMonaco {
   };
   readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
-  readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
+  readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number; readonly Shift: number };
   // `KeyK` backs Ask Keiko, `KeyT` Generate Tests, `F2` Rename Symbol, and `KeyS` save.
   readonly KeyCode: {
     readonly KeyS: number;
     readonly KeyK: number;
     readonly KeyT: number;
     readonly F2: number;
+    readonly F5: number;
+    readonly F6: number;
+    readonly F10: number;
+    readonly F11: number;
   };
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
@@ -396,6 +416,16 @@ export interface WireEditorConflicts {
   readonly degraded: boolean;
 }
 
+export interface WireEditorDebug {
+  readonly gutter: EditorDebugBreakpointHost;
+  readonly commands: EditorDebugCommandHandlers;
+  readonly resolvePausedValues?: ((documentUri: string) => EditorDebugValueSnapshot) | undefined;
+}
+
+export interface EditorDebugBridge extends MonacoDisposable {
+  refresh(): void;
+}
+
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
@@ -407,9 +437,11 @@ export interface MountEditor {
   onDidChangeCursorSelection(
     listener: (event: { selection: monaco.Selection }) => void,
   ): monaco.IDisposable;
+  onDidChangeModel?(listener: () => void): monaco.IDisposable;
   onDidFocusEditorWidget?(listener: () => void): monaco.IDisposable;
   onMouseDown?(
     listener: (event: {
+      readonly event: { readonly rightButton: boolean };
       readonly target: {
         readonly type: number;
         readonly position?: { readonly lineNumber: number } | null | undefined;
@@ -502,7 +534,9 @@ export interface WireEditorOnMountArgs {
   readonly gitGutter?: WireEditorGitGutter | undefined;
   readonly blame?: WireEditorBlame | undefined;
   readonly conflicts?: WireEditorConflicts | undefined;
+  readonly debug?: WireEditorDebug | undefined;
   readonly onGitGutterBridge?: ((bridge: EditorGitGutterBridge | null) => void) | undefined;
+  readonly onDebugBridge?: ((bridge: EditorDebugBridge | null) => void) | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -1069,6 +1103,110 @@ function installConflicts(args: WireEditorOnMountArgs): ConflictBridge | null {
   });
 }
 
+function installDebugGutter(
+  args: WireEditorOnMountArgs,
+  gutter: EditorDebugBreakpointHost,
+): EditorBreakpointGutterBridge | null {
+  const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+  if (
+    targetType === undefined ||
+    args.editor.onMouseDown === undefined ||
+    args.editor.getPosition === undefined
+  )
+    return null;
+  const editor: MonacoBreakpointGutterEditor = {
+    deltaDecorations: (oldIds, decorations): string[] =>
+      args.editor.deltaDecorations(oldIds, [
+        ...decorations,
+      ] as monaco.editor.IModelDeltaDecoration[]),
+    onMouseDown: args.editor.onMouseDown.bind(args.editor),
+    getPosition: (): { readonly lineNumber: number; readonly column: number } | null =>
+      args.editor.getPosition?.() ?? null,
+    addAction: (descriptor): MonacoDisposable => args.editor.addAction(descriptor),
+  };
+  return registerEditorBreakpointGutter({ ...gutter, editor, glyphMarginTargetType: targetType });
+}
+
+function installDebugValues(
+  args: WireEditorOnMountArgs,
+  resolve: ((documentUri: string) => EditorDebugValueSnapshot) | undefined,
+): DebugValueInlayBridge | null {
+  if (resolve === undefined) return null;
+  const inlays = registerDebugValueInlays({
+    editor: {
+      deltaDecorations: (oldIds, decorations): string[] =>
+        args.editor.deltaDecorations(oldIds, [
+          ...decorations,
+        ] as monaco.editor.IModelDeltaDecoration[]),
+    },
+    documentUri: (): string => args.editor.getModel?.()?.uri?.toString() ?? "",
+    resolve: (): EditorDebugValueSnapshot =>
+      resolve(args.editor.getModel?.()?.uri?.toString() ?? ""),
+  });
+  const modelSubscription = args.editor.onDidChangeModel?.(() => {
+    inlays.refresh();
+  });
+  return {
+    refresh(): void {
+      inlays.refresh();
+    },
+    dispose(): void {
+      modelSubscription?.dispose();
+      inlays.dispose();
+    },
+  };
+}
+
+function installDebug(args: WireEditorOnMountArgs): EditorDebugBridge | null {
+  const debug = args.debug;
+  if (debug === undefined) return null;
+  const styles = installDebugMonacoStyles(args.container);
+  const actions = buildDebugCommandActionDescriptors({
+    keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
+    handlers: debug.commands,
+  }).map((descriptor) => args.editor.addAction(descriptor));
+  const gutter = installDebugGutter(args, debug.gutter);
+  const values = installDebugValues(args, debug.resolvePausedValues);
+  const bridge: EditorDebugBridge = {
+    refresh(): void {
+      gutter?.refresh();
+      values?.refresh();
+    },
+    dispose(): void {
+      gutter?.dispose();
+      values?.dispose();
+      for (const action of actions) action.dispose();
+      styles.dispose();
+    },
+  };
+  args.onDebugBridge?.(bridge);
+  return bridge;
+}
+
+function installMountSubscriptions(args: WireEditorOnMountArgs): readonly DisposableLike[] {
+  return [
+    subscribeCursor(args),
+    subscribeSelection(args),
+    installCompletionProvider(args),
+    installInlineCompletionProvider(args),
+    installDiagnostics(args),
+    installHoverProvider(args),
+    installDocumentSymbolProvider(args),
+    installFormattingProvider(args),
+    installDefinitionProvider(args),
+    installTypeDefinitionProvider(args),
+    installImplementationProvider(args),
+    installCallHierarchyAction(args),
+    installInlayHintsProvider(args),
+    installSemanticTokensProvider(args),
+    installReferencesProvider(args),
+    installCodeActionProvider(args),
+    installSignatureHelpProvider(args),
+    installDebug(args),
+    ...installSourceControl(args),
+  ].filter(isDisposable);
+}
+
 function installSourceControl(args: WireEditorOnMountArgs): readonly DisposableLike[] {
   const bridges = [installGitGutter(args), installBlame(args), installConflicts(args)];
   return bridges.filter(
@@ -1097,50 +1235,14 @@ function installMountFoundation(args: WireEditorOnMountArgs): {
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const { action, removeBackstop } = installMountFoundation(args);
-  const cursorSub = subscribeCursor(args);
-  const selectionSub = subscribeSelection(args);
-  const completionSub = installCompletionProvider(args);
-  const inlineCompletionSub = installInlineCompletionProvider(args);
-  const diagnosticsSub = installDiagnostics(args);
-  const hoverSub = installHoverProvider(args);
-  const symbolsSub = installDocumentSymbolProvider(args);
-  const formattingSub = installFormattingProvider(args);
-  const definitionSub = installDefinitionProvider(args);
-  const typeDefinitionSub = installTypeDefinitionProvider(args);
-  const implementationSub = installImplementationProvider(args);
-  const callHierarchySub = installCallHierarchyAction(args);
-  const inlayHintsSub = installInlayHintsProvider(args);
-  const referencesSub = installReferencesProvider(args);
-  const codeActionsSub = installCodeActionProvider(args);
-  const signatureHelpSub = installSignatureHelpProvider(args);
   const commandActions = installCommandActions(args);
-  const sourceControlSubs = installSourceControl(args);
-  const disposables = [
-    action,
-    cursorSub,
-    selectionSub,
-    completionSub,
-    inlineCompletionSub,
-    diagnosticsSub,
-    hoverSub,
-    symbolsSub,
-    formattingSub,
-    definitionSub,
-    typeDefinitionSub,
-    implementationSub,
-    callHierarchySub,
-    inlayHintsSub,
-    installSemanticTokensProvider(args),
-    referencesSub,
-    codeActionsSub,
-    signatureHelpSub,
-    ...sourceControlSubs,
-  ].filter(isDisposable);
+  const disposables = [action, ...installMountSubscriptions(args)];
   if (args.autoFocus) {
     args.editor.focus();
   }
   return () => {
     args.onGitGutterBridge?.(null);
+    args.onDebugBridge?.(null);
     removeBackstop();
     disposeAll([...disposables, ...commandActions]);
   };

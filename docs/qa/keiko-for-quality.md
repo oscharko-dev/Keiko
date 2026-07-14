@@ -1,124 +1,77 @@
-# Keiko for Quality
+# Keiko `dev` quality gates
 
 ## Current enforcement
 
-Pull requests targeting `dev` are fail-closed behind app-bound GitHub required checks. The direct
-checks cover build and test quality, action security, CodeQL, container/SBOM scanning, dependency
-review, UI quality, OSV, mutation testing, SonarCloud, Socket, and Gitar. Each new commit invalidates
-the previous head's evidence because GitHub evaluates required checks on the current PR head.
+Pull requests targeting `dev` are protected by 13 direct, app-bound checks on the exact current
+head:
 
-GitHub's separate preview Code Quality setup is disabled. It duplicated the repository CodeQL
-workflow and attempted a context-free C# analysis. Keiko does contain one productive C# signing
-source and two productive C sources; ADR-0134 excludes them from Linux Sonar analysis and requires
-build-aware compiler, analyzer, and behavior evidence on Windows/macOS. The required, SHA-pinned
-CodeQL workflow remains authoritative for `actions` and `javascript-typescript`.
+1. `ci`
+2. `actionlint`
+3. `Verify pinned action SHAs`
+4. `zizmor`
+5. `Analyze (actions)`
+6. `Analyze (javascript-typescript)`
+7. `Build, scan, SBOM, smoke`
+8. `Review dependency diff (dev/main)`
+9. `ui`
+10. `Scan dependency lockfiles`
+11. `SonarCloud Code Analysis`
+12. `Socket Security: Project Report`
+13. `Socket Security: Pull Request Alerts`
 
-No human approving review is required. Native auto-merge remains disabled during activation so a
-current `CHANGES_REQUESTED` review and unresolved conversation stay blocking even when a bot's
-processing check is green. Autonomous repair is allowed, but automatic merge is enabled only after
-the independent aggregate below passes its negative and positive live probes.
+Branch protection uses strict current-branch checks and administrator enforcement. GitHub Actions
+contexts are pinned to App ID `15368`, SonarQube Cloud to App ID `12526`, and both Socket contexts
+to App ID `156372`. A same-named check from another producer does not satisfy protection.
 
-## Independent aggregate gate
+GitHub invalidates prior evidence on every new commit. Native auto-merge may integrate only after
+all direct required checks succeed, the branch is current with `dev`, and every review conversation
+is resolved. No approving human review is required.
 
-The final `Keiko for Quality` check must be produced by the dedicated open-source GitHub App
-`Keiko for Quality`, not by repository Actions and not by code from a pull request. The App uses
-the existing Keiko logo. Until it is deployed and validated, no check with this name is added to
-branch protection and native auto-merge remains disabled.
+## Critical-path boundary
 
-The app is installed only on `oscharko-dev/Keiko` and receives the minimum permissions:
+A check belongs in branch protection only when it is emitted for every eligible pull request,
+machine-readable, bound to a stable producer App ID, and bounded by a repository-owned runtime.
+The following analysis remains valuable but is not merge-critical:
 
-- Checks: read/write;
-- Pull requests: read and write, because GitHub requires pull-request write access for the
-  app-authored status comment on a pull request even when Issues write access is present;
-- Issues and comments: read/write, limited to one redacted status comment per pull request;
-- Metadata: read.
+- `Gitar` review may be absent when automatic processing is paused by plan pacing. Its comments and
+  fixes remain advisory until the service proves current-head check emission within a bounded SLO.
+- `Keiko for Quality` is dormant and non-required. The external aggregate cannot safely control the
+  same protection path needed to repair its own evaluator.
+- Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
+  remains required engineering evidence for tractable trust-boundary changes.
+- Hosted-runner performance evidence uses ten samples after merge or on a release lane. Functional
+  UI build, lint, typecheck, coverage, accessibility, smoke, editor E2E, and package checks remain in
+  the required `ui` job.
 
-It receives no Contents write, Actions write, Administration, or repository-secret access. The
-external runtime validates webhook HMAC signatures and rejects replayed events, unexpected
-repositories/installations, and stale head SHAs. It stores metadata only: repository, PR number,
-head SHA, check name, producer App ID, status, timestamps, and finding counts.
+## Failure classification
 
-## PR dashboard comment
+Treat these states differently:
 
-The App creates one top-level `Keiko for Quality` comment per pull request and updates it in place.
-An invisible version marker binds ownership and prevents duplicate comments. Events produced by
-the App's own check or comment are ignored to prevent self-triggered loops.
+- A completed direct check with a product, security, coverage, architecture, or deterministic
+  functional failure is blocking and must be repaired at the owning layer.
+- A missing quota-dependent check, a multi-hour analysis workload, or runner-performance jitter is
+  an availability/evidence-lane defect. It must not be relabeled as a product failure.
+- A pending direct required check remains pending through GitHub's native semantics. An aggregate
+  must not convert missing or in-progress evidence into terminal failure.
+- A new commit invalidates all prior head-bound results; stale success is never reused.
 
-The comment presents a compact `Waiting`, `Blocked`, or `Ready for auto-merge` decision, the
-12-character current-head prefix, successful/required check counts, an explicit SonarQube Cloud
-native-gate result, Gitar and Socket evidence, Gitar Auto-Apply state, native auto-merge state, and
-an expandable list of blocking or waiting evidence. The full repository-specific Sonar contract
-remains enforced through the direct `ci` aggregate. The comment contains only allowlisted check
-names, counts, states, and timestamps. It never includes logs, payload bodies, secrets, customer
-data, private endpoints, or PII.
+## Dormant aggregate implementation
 
-The open-source Worker implementation, least-privilege GitHub App manifest, and Cloudflare
-deployment template live in [`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/).
-Runtime credentials exist only in the external runtime's secret store.
+The repository retains the open implementation under
+[`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/) and its
+redacted evaluator tests for audit and possible redesign. The GitHub App receives no Contents,
+Actions, Administration, or repository-secret access. Its historical check and dashboard comment
+are not merge authority.
 
-## Fail-closed evidence rules
+The aggregate may be reconsidered only after live probes prove all of the following:
 
-For a PR against `dev`, the app's check remains pending or failed unless every current required
-check is successful and was emitted by its allowlisted App ID. Missing, stale, skipped, neutral,
-cancelled, timed-out, or differently produced evidence is blocking.
+1. every pull-request head receives exactly one app-bound check without manual prompting;
+2. missing or running inputs remain neutral/pending, while terminal failures remain red;
+3. reconciliation settles within a documented SLO without repeated unchanged writes;
+4. service quotas and vendor plan limits cannot omit required evidence;
+5. the gate's own deployment and repair path does not depend on that gate succeeding; and
+6. negative probes for stale head, wrong producer, failed direct checks, Socket warning, and Sonar
+   failure all block, followed by a complete positive probe.
 
-Processing success alone is insufficient for review products:
-
-- Gitar requires no current `CHANGES_REQUESTED` review and no unresolved finding for the head;
-- Socket requires no warning or error alert for the head; an accepted risk is valid only when it
-  matches an exact owner command, the external deployment allowlist, and the package/version and
-  lockfile integrity policy in
-  [`supply-chain-risk-acceptances.json`](supply-chain-risk-acceptances.json);
-- SonarCloud requires native gate `OK`, exact current head, zero unresolved issues and new
-  violations, at least 85 percent new-code coverage, at most 3 percent new duplication, and all new
-  and overall security hotspots reviewed. Missing rates require an explicit zero applicability
-  count; the dormant custom-gate definition must match the repository contract;
-- mutation testing requires at least 80 percent with no survivor/no-coverage mutant for changed
-  critical code; complete scheduled scans additionally fail on any regression or new fingerprint
-  against the documented 61.66-percent historical baseline until that debt reaches 80 percent.
-
-Unknown or changed Gitar/Socket evidence formats are parser failures, never success. A short,
-bounded stability window follows the final Gitar and Socket events before the aggregate check may
-turn green.
-
-Gitar zero-finding evidence is accepted in either of its two observed app-authored formats: an
-exact numeric `resolved / findings` total, or the compact `✅ Approved` code-review summary paired
-with the exact `No issues found.` statement. `Approved with suggestions`, `No blocking issues`,
-free-form approval text, and contradictory numeric totals remain blocking. Producer App ID, bot
-identity, current-head check success, comment freshness, and the stability window are still
-required in both cases.
-
-Gitar and Socket comments must have been updated after their current-head checks started. When
-Socket intentionally creates no pull-request comment because there are no dependency changes or
-alerts, the current-head Pull Request Alerts check must instead contain explicit clean output and
-zero annotations. A successful check without that exact evidence remains blocking. This prevents a
-successful processing check on a new commit from reusing a clean comment from an older head.
-Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
-evidence is still mandatory.
-
-Webhook delivery is the low-latency trigger, not the only liveness mechanism. Every scheduled
-reconciliation independently resolves the App installation for `TARGET_REPOSITORY`, enumerates
-all open pull requests targeting `dev`, merges them with the bounded D1 tracking set, and
-re-evaluates each pull request. A lost, duplicated, replay-rejected, or delayed webhook therefore
-cannot leave a new `dev` pull request permanently without the aggregate check. Check runs,
-reviews, and comments are read with bounded pagination; incomplete or over-limit collections fail
-closed. Atomic D1 uniqueness rejects replayed actionable GitHub delivery identifiers after
-signature and target validation; ignored event classes do not consume a write. Hourly expiry keeps
-the metadata-only replay set bounded without the Workers KV write ceiling. The dashboard comment
-is updated only when its redacted decision body changes, preventing
-the reconciliation loop from generating a new webhook every minute.
-
-The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction
-commands, and Core/Pro plan boundaries are defined in
-[`gitar-review-policy.md`](gitar-review-policy.md).
-
-## Activation protocol
-
-The dedicated app is made required only after its trusted implementation has been deployed from a
-protected revision, emitted the expected check name and App ID, and completed all negative probes:
-missing/red checks, wrong App ID, stale evidence, Sonar 84.9 percent/open issue, Gitar finding,
-Socket warning, mutation score below 80 percent, and a new commit after previous success. The
-positive probe must then allow GitHub native auto-merge without a human review or merge click,
-while every deliberately red or absent technical gate remains unbypassable, including by
-administrators. After activation, `Keiko for Quality` is added as an app-bound required check and
-Gitar Auto-Approve/Auto-Merge may be enabled.
+Until every condition is met and branch protection is changed through a reviewed maintainer
+decision, `Keiko for Quality` remains advisory and non-required.

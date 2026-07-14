@@ -562,13 +562,18 @@ jobs:
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215
-      - name: Release performance E2E evidence
+      - name: Governed editor debugging E2E (#2348)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:e2e:editor-debugging-2348
+      - name: Release performance E2E evidence
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          KEIKO_PERF_RUNS: "10"
         run: |
           npm run test:e2e:editor-perf
           npm run test:e2e:workspace-perf
       - name: Performance evidence freshness + budget gate
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        if: ${{ github.event_name != 'pull_request' }}
         run: npm run check:perf-evidence
       - name: Build package and UI assets
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}

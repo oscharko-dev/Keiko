@@ -15,14 +15,25 @@
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
-import { isCommandAllowed, buildSandboxEnv } from "@oscharko-dev/keiko-tools";
+import { extname, isAbsolute, join } from "node:path";
+import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
-import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspProcessErrorCode } from "@oscharko-dev/keiko-contracts";
+import {
+  EditorProcessHardeningError,
+  buildCopyOnlyProcessEnv as buildSharedCopyOnlyProcessEnv,
+  createIsolatedProcessDirectory as createSharedIsolatedProcessDirectory,
+  escalateKill as escalateSharedKill,
+  resolveExecutableCandidateOutsideWorkspace as resolveSharedExecutableCandidate,
+  type ChildExitRegistration as SharedChildExitRegistration,
+  type IsolatedProcessDirectory,
+  type KillableChild as SharedKillableChild,
+  type KillScheduler as SharedKillScheduler,
+  type WorkspaceExternalExecutable as SharedWorkspaceExternalExecutable,
+} from "../processHardening.js";
 import type { LspSpawnHandle } from "./lspTransport.js";
 
 // Typed failure carrying only a content-free `LspProcessErrorCode` — never a path, server output, or
@@ -50,10 +61,7 @@ export type LspSpawnFn = (
   onError(callback: (error: Error) => void): void;
 };
 
-export interface EphemeralHome {
-  readonly path: string;
-  cleanup(): void;
-}
+export type EphemeralHome = IsolatedProcessDirectory;
 
 export interface ApprovedExecutablePath {
   readonly path: string;
@@ -62,67 +70,8 @@ export interface ApprovedExecutablePath {
 
 // Minimal child surface `escalateKill` needs. Both a real `ChildProcess` and the in-memory fake
 // satisfy it, so the escalation sequence is unit-testable with an injected kill tracker.
-export interface KillableChild {
-  readonly pid?: number | undefined;
-  kill(signal: NodeJS.Signals): void;
-}
-
-function pathEntries(processEnv: NodeJS.ProcessEnv): readonly string[] {
-  const pathValue = processEnv.PATH ?? "";
-  return pathValue.length === 0 ? [] : pathValue.split(delimiter).filter(Boolean);
-}
-
-function executableExtensions(
-  processEnv: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): readonly string[] {
-  if (platform !== "win32") {
-    return [""];
-  }
-  return (processEnv.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .filter((value) => value.length > 0);
-}
-
-interface ResolvedCandidate {
-  readonly path: string;
-  readonly real: string;
-}
-
-function probeCandidate(
-  directory: string,
-  name: string,
-  ext: string,
-): ResolvedCandidate | undefined {
-  const candidate = resolvePath(resolvePath(directory), name + ext);
-  try {
-    accessSync(candidate, constants.X_OK);
-    return { path: candidate, real: realpathSync(candidate) };
-  } catch {
-    return undefined;
-  }
-}
-
-function realWorkspaceRoot(root: string): string {
-  try {
-    return realpathSync(root);
-  } catch {
-    return root;
-  }
-}
-
-// Mirrors `exec.ts assertExecutableOutsideWorkspace`: a candidate is rejected if EITHER its lexical
-// path OR its symlink-resolved real path lies inside the workspace, so a symlink planted in the
-// workspace cannot point at a workspace-external binary and bypass the check (ADR-0069 I2).
-function resolvesInsideWorkspace(
-  candidate: ResolvedCandidate,
-  lexicalRoot: string,
-  realRoot: string,
-): boolean {
-  return (
-    isWithinWorkspace(lexicalRoot, candidate.path) || isWithinWorkspace(realRoot, candidate.real)
-  );
-}
+export type KillableChild = SharedKillableChild;
+export type WorkspaceExternalExecutable = SharedWorkspaceExternalExecutable;
 
 // Resolves a bare executable name on the operator's PATH to an absolute real path that lies OUTSIDE
 // the workspace root (ADR-0069 I2/I5). Throws `EXECUTABLE_NOT_FOUND` when the name has a separator,
@@ -133,40 +82,33 @@ export function resolveExecutableOutsideWorkspace(
   processEnv: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (name.length === 0 || name.includes("/") || name.includes("\\") || name.includes(" ")) {
-    throw new LspProcessError("EXECUTABLE_NOT_FOUND");
-  }
-  const lexicalRoot = workspace.root;
-  const realRoot = realWorkspaceRoot(lexicalRoot);
-  for (const directory of pathEntries(processEnv)) {
-    for (const ext of executableExtensions(processEnv, platform)) {
-      const candidate = probeCandidate(directory, name, ext);
-      if (candidate === undefined) {
-        continue;
-      }
-      if (resolvesInsideWorkspace(candidate, lexicalRoot, realRoot)) {
-        throw new LspProcessError("EXECUTABLE_NOT_FOUND");
-      }
-      return candidate.real;
+  return resolveExecutableCandidateOutsideWorkspace(name, workspace, processEnv, platform).real;
+}
+
+export function resolveExecutableCandidateOutsideWorkspace(
+  name: string,
+  workspace: WorkspaceInfo,
+  processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): WorkspaceExternalExecutable {
+  try {
+    return resolveSharedExecutableCandidate(name, workspace, processEnv, platform);
+  } catch (error: unknown) {
+    if (error instanceof EditorProcessHardeningError) {
+      throw new LspProcessError("EXECUTABLE_NOT_FOUND");
     }
+    throw error;
   }
-  throw new LspProcessError("EXECUTABLE_NOT_FOUND");
 }
 
 // Creates an empty per-process HOME directory. The server child receives this as HOME/USERPROFILE so
 // it cannot read or write the operator's real home; `cleanup` removes it best-effort on dispose.
 export function createEphemeralHome(): EphemeralHome {
-  const path = mkdtempSync(join(tmpdir(), "keiko-lsp-home-"));
-  return {
-    path,
-    cleanup: (): void => {
-      try {
-        rmSync(path, { recursive: true, force: true });
-      } catch {
-        // Best-effort: a failed cleanup of a temp directory must never block dispose.
-      }
-    },
-  };
+  return createIsolatedProcessDirectory("keiko-lsp-home-");
+}
+
+export function createIsolatedProcessDirectory(prefix: string): EphemeralHome {
+  return createSharedIsolatedProcessDirectory(prefix);
 }
 
 function privateExecutableName(name: string, resolved: string): string {
@@ -236,7 +178,7 @@ function safeKill(child: KillableChild, signal: NodeJS.Signals): void {
 // Registers a one-shot callback fired when the child exits, so `escalateKill` can resolve before the
 // grace timer elapses. The manager wires this from the child's exit event (a prompt exit during
 // dispose then short-circuits the wait, FIX 2); callers without an exit event omit it.
-export type ChildExitRegistration = (onExit: () => void) => void;
+export type ChildExitRegistration = SharedChildExitRegistration;
 
 // Escalates termination: SIGTERM, then SIGKILL after `gracePeriodMs` measured on the injected clock.
 // Resolves immediately if the child has already exited, or as soon as it exits during the grace
@@ -248,39 +190,13 @@ export function escalateKill(
   child: KillableChild,
   gracePeriodMs: number,
   exited: () => boolean,
-  scheduler: KillScheduler = defaultKillScheduler,
+  scheduler?: KillScheduler,
   whenExited?: ChildExitRegistration,
 ): Promise<void> {
-  safeKill(child, "SIGTERM");
-  if (exited()) {
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = (sendKill: boolean): void => {
-      if (settled) return;
-      settled = true;
-      if (sendKill && !exited()) {
-        safeKill(child, "SIGKILL");
-      }
-      resolve();
-    };
-    whenExited?.(() => {
-      finish(false);
-    });
-    scheduler.setTimer(() => {
-      finish(true);
-    }, gracePeriodMs);
-  });
+  return escalateSharedKill(child, gracePeriodMs, exited, scheduler, whenExited);
 }
 
-export interface KillScheduler {
-  setTimer(callback: () => void, delayMs: number): unknown;
-}
-
-const defaultKillScheduler: KillScheduler = {
-  setTimer: (callback, delayMs) => setTimeout(callback, delayMs).unref(),
-};
+export type KillScheduler = SharedKillScheduler;
 
 function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   const stdin = child.stdin;
@@ -360,5 +276,12 @@ export function preflightSpawnEnv(
   if (!decision.allowed) {
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
   }
-  return buildSandboxEnv(processEnv, envAllowlist);
+  return buildSharedCopyOnlyProcessEnv(processEnv, envAllowlist);
+}
+
+export function buildCopyOnlyProcessEnv(
+  processEnv: NodeJS.ProcessEnv,
+  envAllowlist: readonly string[],
+): Record<string, string> {
+  return buildSharedCopyOnlyProcessEnv(processEnv, envAllowlist);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveEditorStatusBar,
+  debugField,
   editorLanguageLabel,
   type EditorStatusBarInput,
   type EditorStatusBarViewModel,
@@ -175,6 +176,32 @@ describe("deriveEditorStatusBar run + language + completions + selection", () =>
     expect(field(deriveEditorStatusBar(input({ selectedLineCount: 4 })), "selection")?.label).toBe(
       "4 lines selected",
     );
+  });
+});
+
+describe("deriveEditorStatusBar debug field", () => {
+  it("is absent until the host injects a debug projection", () => {
+    expect(debugField(undefined)).toBeNull();
+    expect(field(deriveEditorStatusBar(input()), "debug")).toBeUndefined();
+  });
+
+  it("uses the existing assertive status region for a paused session", () => {
+    const view = deriveEditorStatusBar(input({ debug: { state: "paused" } }));
+    expect(field(view, "debug")).toMatchObject({
+      id: "debug",
+      tone: "accent",
+      live: true,
+      assertive: true,
+    });
+    expect(view.alertSummary).toContain("Debug session paused");
+  });
+
+  it("announces running and stopped state politely without a second live surface", () => {
+    const running = deriveEditorStatusBar(input({ debug: { state: "running" } }));
+    const stopped = deriveEditorStatusBar(input({ debug: { state: "stopped" } }));
+    expect(running.liveSummary).toContain("Debug running");
+    expect(stopped.liveSummary).toContain("Debug session stopped");
+    expect(running.alertSummary).toBe("");
   });
 });
 

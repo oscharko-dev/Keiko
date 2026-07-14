@@ -38,12 +38,33 @@ function workspaceEvidence(gestureOverrides = {}) {
   };
 }
 
+function idleDebugEvidence(overrides = {}) {
+  return {
+    attempted: true,
+    budgetMax: 50,
+    captured: true,
+    expectedSampleCount: 3,
+    idleIntervalMs: 500,
+    longTaskCount: 0,
+    matchedInputEventCounts: [2, 1, 3],
+    maxLongTaskMs: 0,
+    outputAcceptedBytes: 0,
+    p95: 6,
+    processingSamples: [4, 6, 5],
+    sessionStatus: "paused",
+    totalMatchedInputEvents: 6,
+    traceCaptured: true,
+    ...overrides,
+  };
+}
+
 function editorEvidence(overrides = {}) {
   return {
     measuredAtIso: "2026-07-03T12:00:00.000Z",
     commit: "6c3d061e",
     b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, p50: 848, p95: 940 },
     b5KeystrokeMs: { budgetMax: 50, captured: true, maxLongTaskMs: 0 },
+    b5IdleDebugSession: idleDebugEvidence(),
     b6InteractionMs: { budgetP75: 200, captured: true, p75: 16 },
     b11Memory: { supported: true, baselineBytes: 1, peakBytes: 1, residualBytes: 1, cycles: 2 },
     workerLoadCapture: {
@@ -125,6 +146,77 @@ describe("evaluateEditorEvidence", () => {
     const result = evaluateEditorEvidence(editorEvidence({ b11Memory: { supported: false } }));
     expect(result.passed).toBe(false);
     expect(result.failures.join("\n")).toMatch(/b11 memory/u);
+  });
+
+  it("fails when idle-debug evidence is missing", () => {
+    const result = evaluateEditorEvidence(editorEvidence({ b5IdleDebugSession: undefined }));
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toMatch(/missing b5IdleDebugSession/u);
+  });
+
+  it("rejects all-zero idle-debug samples and input-event counts", () => {
+    const result = evaluateEditorEvidence(
+      editorEvidence({
+        b5IdleDebugSession: idleDebugEvidence({
+          matchedInputEventCounts: [0, 0, 0],
+          p95: 0,
+          processingSamples: [0, 0, 0],
+          totalMatchedInputEvents: 0,
+        }),
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toMatch(/non-positive measurement/u);
+    expect(result.failures.join("\n")).toMatch(/zero or invalid match count/u);
+  });
+
+  it("rejects a missing input dispatch in any idle-debug sample", () => {
+    const result = evaluateEditorEvidence(
+      editorEvidence({
+        b5IdleDebugSession: idleDebugEvidence({
+          matchedInputEventCounts: [2, 0, 3],
+          totalMatchedInputEvents: 5,
+        }),
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toMatch(/zero or invalid match count/u);
+  });
+
+  it("rejects inconsistent matched input-event totals", () => {
+    const result = evaluateEditorEvidence(
+      editorEvidence({
+        b5IdleDebugSession: idleDebugEvidence({ totalMatchedInputEvents: 99 }),
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toMatch(/totalMatchedInputEvents 99 != 6/u);
+  });
+
+  it("enforces idle-debug sample, long-task, output, and session guards", () => {
+    const result = evaluateEditorEvidence(
+      editorEvidence({
+        b5IdleDebugSession: idleDebugEvidence({
+          longTaskCount: 1,
+          maxLongTaskMs: 55,
+          outputAcceptedBytes: 12,
+          p95: 55,
+          processingSamples: [4, 55, 5],
+          sessionStatus: "stopped",
+        }),
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.join("\n")).toMatch(/p95 55ms >= budget 50ms/u);
+    expect(result.failures.join("\n")).toMatch(/processing sample reached budget/u);
+    expect(result.failures.join("\n")).toMatch(/one or more long tasks/u);
+    expect(result.failures.join("\n")).toMatch(/accepted visible output/u);
+    expect(result.failures.join("\n")).toMatch(/neither paused nor running/u);
   });
 });
 

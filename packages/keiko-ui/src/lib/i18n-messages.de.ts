@@ -147,6 +147,8 @@ export const DE_MESSAGES = {
   // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
   // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
   // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
+  // Governed-debug panel, gutter, prompt, command, status, and accessibility text lives in the
+  // existing lazy `debugging-i18n.ts` EN/DE catalog so dormant debugging stays out of the shell.
   // The Epic #2093 audit follow-up (unavailable-repository contract-shape fix in gitRoutes.ts,
   // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
   // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the

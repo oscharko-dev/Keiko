@@ -137,6 +137,22 @@ describe("typescript project service", () => {
     expect(service.cacheSize()).toBe(0);
   });
 
+  it("resets the aggregate read budget for each request served by a cached project", () => {
+    writeProject();
+    const service = createTypescriptProjectService();
+    const limits = { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxWorkspaceReadFiles: 2 };
+    const overlay = "import { helper } from './helper.js';\nexport const value = helper(1);\n";
+    const helperPath = join(root, "src", "helper.ts");
+
+    for (let request = 0; request < 5; request += 1) {
+      const result = service.resolveProject(ctx("src/main.ts", overlay, limits));
+      expect(result.kind).toBe("project");
+      if (result.kind !== "project") throw new Error("expected cached project");
+      expect(result.project.sourceText(helperPath)).toContain("function helper");
+      expect(result.project.truncated).toBe(false);
+    }
+  });
+
   it("fails closed with a structured error when project file enumeration exceeds the cap", () => {
     writeProject();
     for (let index = 0; index < 8; index += 1) {

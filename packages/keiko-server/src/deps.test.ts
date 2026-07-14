@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -8,10 +9,12 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import {
   DEFAULT_CONTEXT_PROFILE,
@@ -38,12 +41,16 @@ import type {
 import {
   buildRedactor,
   buildUiHandlerDeps,
+  createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
 } from "./deps.js";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
+import { buildCspHeader } from "./csp.js";
+import { createUiServer, UI_HOST } from "./server.js";
+import type { DapProductionProvisioning } from "./editor/dap/dapProductionService.js";
 
 const tmpDirs: string[] = [];
 
@@ -57,6 +64,75 @@ function tmp(prefix: string): string {
   const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
+}
+
+function operatorDapDocument(): Record<string, unknown> {
+  const artifact = (name: string, capsulePath: string): Record<string, string> => ({
+    hostPath: `/operator/runtime/${name}`,
+    approvedRoot: "/operator/runtime",
+    capsulePath,
+  });
+  return {
+    schemaVersion: 1,
+    adapter: {
+      executableName: "js-debug",
+      executableArgs: ["--server=/run/keiko-debug/dap.sock"],
+      trustedRoots: ["/operator/runtime"],
+      approvedPath: "/operator/runtime:/usr/bin",
+    },
+    launch: {
+      adapterApprovedRoot: "/operator/runtime",
+      node: artifact("node", "/opt/keiko-runtime/node"),
+      npm: artifact("npm", "/opt/keiko-runtime/npm"),
+      shell: artifact("shell", "/opt/keiko-runtime/shell"),
+      npmUserConfig: artifact("npm-user", "/opt/keiko-debug/npm-user-config"),
+      npmGlobalConfig: artifact("npm-global", "/opt/keiko-debug/npm-global-config"),
+      backend: artifact("bwrap", "/opt/keiko-backend/bwrap"),
+      runtimeClosure: [artifact("runtime-lib", "/opt/keiko-runtime/lib")],
+    },
+  };
+}
+
+function qualifiedOperatorDapDocument(): {
+  readonly document: Record<string, unknown>;
+  readonly nodePath: string;
+} {
+  const approvedRoot = tmp("dap-qualified-artifacts-");
+  const artifact = (name: string, capsulePath: string): Record<string, string> => ({
+    hostPath: join(approvedRoot, name),
+    approvedRoot,
+    capsulePath,
+  });
+  for (const name of ["js-debug", "node", "npm", "shell", "bwrap"]) {
+    const path = join(approvedRoot, name);
+    writeFileSync(path, name, "utf8");
+    chmodSync(path, 0o700);
+  }
+  writeFileSync(join(approvedRoot, "npm-user"), "", "utf8");
+  writeFileSync(join(approvedRoot, "npm-global"), "", "utf8");
+  writeFileSync(join(approvedRoot, "runtime-lib"), "runtime", "utf8");
+  return {
+    nodePath: join(approvedRoot, "node"),
+    document: {
+      schemaVersion: 1,
+      adapter: {
+        executableName: "js-debug",
+        executableArgs: ["--server=/run/keiko-debug/dap.sock"],
+        trustedRoots: [approvedRoot],
+        approvedPath: approvedRoot,
+      },
+      launch: {
+        adapterApprovedRoot: approvedRoot,
+        node: artifact("node", "/opt/keiko-runtime/node"),
+        npm: artifact("npm", "/opt/keiko-runtime/npm"),
+        shell: artifact("shell", "/opt/keiko-runtime/shell"),
+        npmUserConfig: artifact("npm-user", "/opt/keiko-debug/npm-user-config"),
+        npmGlobalConfig: artifact("npm-global", "/opt/keiko-debug/npm-global-config"),
+        backend: artifact("bwrap", "/opt/keiko-backend/bwrap"),
+        runtimeClosure: [artifact("runtime-lib", "/opt/keiko-runtime/lib")],
+      },
+    },
+  };
 }
 
 function realWorkspaceFs(): WorkspaceFs {
@@ -249,6 +325,213 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
     expect(deps.store).toBe(store);
     expect(deps.managedLspControl).toBeDefined();
+  }, 15000);
+
+  it("constructs and composes the real fail-closed debug activation control (#2347)", async () => {
+    const store = createInMemoryUiStore();
+    const root = tmp("debug-activation-workspace-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("debug-activation-evidence-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("debug-activation-state-"), "keiko-ui.db"),
+    });
+
+    const snapshot = await deps.editorSettingsControl?.read(root);
+    let server = createUiServer({
+      staticRoot: root,
+      csp: buildCspHeader([]),
+      port: 0,
+      handlerDeps: deps,
+    });
+    await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
+    const port = (server.address() as AddressInfo).port;
+    await new Promise<void>((resolve) =>
+      server.close(() => {
+        resolve();
+      }),
+    );
+    server = createUiServer({
+      staticRoot: root,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: deps,
+    });
+    await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+    const response = await fetch(
+      `http://${UI_HOST}:${String(port)}/api/editor/settings?root=${encodeURIComponent(root)}`,
+    );
+    const responseBody = (await response.json()) as {
+      readonly debugging?: { readonly reasonCode: string; readonly policyResult: string };
+    };
+    await new Promise<void>((resolve) =>
+      server.close(() => {
+        resolve();
+      }),
+    );
+
+    expect(deps.debugActivationControl).toBeDefined();
+    expect(snapshot?.debugging).toMatchObject({
+      policyResult: "denied",
+    });
+    expect(["PRODUCT_UNSUPPORTED", "POLICY_UNAVAILABLE"]).toContain(
+      snapshot?.debugging?.reasonCode,
+    );
+    expect(response.status, JSON.stringify(responseBody)).toBe(200);
+    expect(responseBody.debugging?.policyResult).toBe("denied");
+    await deps.dispose?.();
+  }, 15000);
+
+  it("fails closed when explicit DAP provisioning lacks backend qualification (#2096)", async () => {
+    const store = createInMemoryUiStore();
+    const root = tmp("dap-production-workspace-");
+    store.createProject(root);
+    const provisioning = {
+      adapter: {
+        executableName: "adapter-bin",
+        executableArgs: [],
+        trustedRoots: ["/approved"],
+        provisioningDigest: "a".repeat(64),
+      },
+      backendQualification: undefined,
+      adapterPreflight: (): never => {
+        throw new Error("not reached during composition");
+      },
+      launchContext: (): never => {
+        throw new Error("not reached during composition");
+      },
+      targetCatalog: (): never => {
+        throw new Error("not reached during composition");
+      },
+    } as unknown as DapProductionProvisioning;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("dap-production-evidence-"),
+      env: {},
+      store,
+      uiDbPath: join(tmp("dap-production-state-"), "keiko-ui.db"),
+      dapProductionProvisioning: provisioning,
+      dapProductSupport: () => "supported",
+      dapDeploymentPolicy: () => "allowed",
+      dapProvisioning: () => "provisioned",
+    });
+
+    expect(deps.dapDebug).toBeUndefined();
+    expect(await deps.editorSettingsControl?.read(root)).toMatchObject({
+      debugging: { state: "disabled" },
+    });
+    await deps.dispose?.();
+  }, 15000);
+
+  it("does not compose DAP from a syntactically valid document with missing artifacts", async () => {
+    const store = createInMemoryUiStore();
+    const root = tmp("dap-operator-document-workspace-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("dap-operator-document-evidence-"),
+      env: { KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(operatorDapDocument()) },
+      store,
+      uiDbPath: join(tmp("dap-operator-document-state-"), "keiko-ui.db"),
+      dapProductSupport: () => "supported",
+      dapDeploymentPolicy: () => "allowed",
+    });
+
+    expect(deps.dapDebug).toBeUndefined();
+    const enabled = await deps.editorSettingsControl?.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "enable-unqualified-debugging",
+      realRoot: root,
+      scope: "workspace",
+      values: { debuggingEnabled: true },
+    });
+    expect(enabled).toMatchObject({
+      kind: "ok",
+      snapshot: { debugging: { state: "notProvisioned", reasonCode: "NOT_PROVISIONED" } },
+    });
+    await deps.dispose?.();
+  }, 15000);
+
+  it("requires non-spawning operator artifact qualification and denies identity drift", () => {
+    const qualified = qualifiedOperatorDapDocument();
+    let contentReads = 0;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        contentReads += 1;
+        return readFileSync(hostPath);
+      },
+    );
+    const initializationReads = contentReads;
+    expect(qualification()).toBe("provisioned");
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBe(initializationReads);
+
+    writeFileSync(qualified.nodePath, "drifted-node", "utf8");
+    expect(qualification()).toBe("notProvisioned");
+    expect(contentReads).toBeGreaterThan(initializationReads);
+  });
+
+  it("denies provisioning when artifact metadata changes during initial qualification", () => {
+    const qualified = qualifiedOperatorDapDocument();
+    let mutated = false;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        const content = readFileSync(hostPath);
+        if (!mutated) {
+          mutated = true;
+          writeFileSync(qualified.nodePath, "drifted-during-qualification", "utf8");
+        }
+        return content;
+      },
+    );
+
+    expect(mutated).toBe(true);
+    expect(qualification()).toBe("notProvisioned");
+  });
+
+  it("rehashes metadata drift once and accepts an unchanged artifact identity", () => {
+    const qualified = qualifiedOperatorDapDocument();
+    let contentReads = 0;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        contentReads += 1;
+        return readFileSync(hostPath);
+      },
+    );
+    const initializationReads = contentReads;
+
+    utimesSync(qualified.nodePath, new Date(1_000), new Date(1_000));
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBeGreaterThan(initializationReads);
+    const refreshReads = contentReads;
+
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBe(refreshReads);
+  });
+
+  it("does not compose DAP from an invalid operator document", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("dap-invalid-operator-document-evidence-"),
+      env: { KEIKO_DAP_OPERATOR_PROVISIONING_JSON: "{not-json" },
+      store: createInMemoryUiStore(),
+      uiDbPath: join(tmp("dap-invalid-operator-document-state-"), "keiko-ui.db"),
+    });
+
+    expect(deps.dapDebug).toBeUndefined();
+    await deps.dispose?.();
   }, 15000);
 
   it("creates a node store at uiDbPath when no store is injected", () => {

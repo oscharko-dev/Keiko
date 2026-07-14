@@ -23,6 +23,8 @@ import type {
   ManagedLspControlService,
   ManagedLspControlSnapshot,
 } from "../lsp/managedLspControl.js";
+import type { DebugActivationControlService } from "../dap/debugActivationControl.js";
+import { debugActivationWorkspaceFingerprint } from "../dap/debugActivationEvidence.js";
 import {
   editorSettingsWorkspaceFingerprint,
   type EditorSettingsChangeEvent,
@@ -67,6 +69,8 @@ export interface EditorSettingsControlOptions {
         readonly settings: readonly EditorM7ResolvedSetting[];
       }) => EditorM7AiActivationSummary)
     | undefined;
+  /** ADR-0136 D7 derived gate; `debuggingEnabled` remains the only durable opt-in. */
+  readonly debugActivation?: DebugActivationControlService | undefined;
 }
 
 type MutableRecord = EditorSettingsUserRecord | EditorSettingsWorkspaceRecord;
@@ -293,6 +297,14 @@ function affectedIds(mutation: EditorSettingsControlMutation): readonly EditorM7
   return mutation.values === undefined ? [] : (Object.keys(mutation.values) as EditorM7SettingId[]);
 }
 
+function debugWorkspaceActivation(
+  settings: readonly EditorM7ResolvedSetting[],
+): "enabled" | "disabled" | "unset" {
+  const setting = settings.find((entry) => entry.id === "debuggingEnabled");
+  if (setting === undefined || setting.source === "builtInDefault") return "unset";
+  return setting.value === true ? "enabled" : "disabled";
+}
+
 function changedValues(
   record: MutableRecord,
   mutation: EditorSettingsControlMutation,
@@ -349,12 +361,24 @@ async function loadSnapshot(
     ceiling: options.policyCeiling?.(),
     managedLanguageSnapshot,
   });
-  const aiAssistance = options.aiAssistance?.({
+  const debugging = options.debugActivation?.resolve({
     realRoot,
     revision: snapshot.revision,
-    settings: snapshot.settings,
+    workspaceActivation: debugWorkspaceActivation(snapshot.settings),
   });
-  return aiAssistance === undefined ? snapshot : { ...snapshot, aiAssistance };
+  const withDebugging = {
+    ...snapshot,
+    ...(debugging === undefined ? {} : { debugging }),
+    ...(realRoot === undefined
+      ? {}
+      : { debugWorkspaceId: debugActivationWorkspaceFingerprint(realRoot) }),
+  };
+  const aiAssistance = options.aiAssistance?.({
+    realRoot,
+    revision: withDebugging.revision,
+    settings: withDebugging.settings,
+  });
+  return aiAssistance === undefined ? withDebugging : { ...withDebugging, aiAssistance };
 }
 
 async function mutateLocked(
@@ -413,17 +437,61 @@ async function commitMutation(
   target: MutableRecord,
 ): Promise<EditorM7SettingsMutationResult> {
   const next = recordWithMutation(target, mutation);
-  if (next.record.kind === "user") options.store.commitUser(next.record);
-  else if (mutation.realRoot !== undefined)
-    options.store.commitWorkspace(mutation.realRoot, next.record);
+  persistMutationRecord(next.record, mutation.realRoot, options);
   const snapshot = await loadSnapshot(mutation.realRoot, options);
+  try {
+    await synchronizeDebugActivation(mutation, next.changed, snapshot, options);
+  } catch (error: unknown) {
+    // Never leave a durable opt-in narrowed while its mandatory session teardown failed. The caller
+    // receives the failure, the original setting is restored, and no stale mutation is acknowledged.
+    persistMutationRecord(target, mutation.realRoot, options);
+    throw error;
+  }
+  const finalSnapshot = await loadSnapshot(mutation.realRoot, options);
   return {
     kind: "ok",
     changed: next.changed,
-    revision: snapshot.revision,
-    etag: snapshot.etag,
-    snapshot,
+    revision: finalSnapshot.revision,
+    etag: finalSnapshot.etag,
+    snapshot: finalSnapshot,
   };
+}
+
+function persistMutationRecord(
+  record: MutableRecord,
+  realRoot: string | undefined,
+  options: EditorSettingsControlOptions,
+): void {
+  if (record.kind === "user") {
+    options.store.commitUser(record);
+    return;
+  }
+  if (realRoot !== undefined) options.store.commitWorkspace(realRoot, record);
+}
+
+async function synchronizeDebugActivation(
+  mutation: EditorSettingsControlMutation,
+  changed: boolean,
+  snapshot: EditorM7SettingsSnapshot,
+  options: EditorSettingsControlOptions,
+): Promise<void> {
+  if (
+    options.debugActivation === undefined ||
+    mutation.realRoot === undefined ||
+    !affectedIds(mutation).includes("debuggingEnabled")
+  ) {
+    return;
+  }
+  const setting = snapshot.settings.find((entry) => entry.id === "debuggingEnabled");
+  await options.debugActivation.synchronize({
+    action: setting?.value === true ? "activate" : "deactivate",
+    changed,
+    context: {
+      realRoot: mutation.realRoot,
+      revision: snapshot.revision,
+      workspaceActivation: debugWorkspaceActivation(snapshot.settings),
+    },
+  });
 }
 
 export function createEditorSettingsControlService(

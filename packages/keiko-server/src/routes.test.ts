@@ -74,6 +74,25 @@ describe("API route contract", () => {
     }
   });
 
+  it("registers exactly the two governed debug activation settings mutations (#2347)", () => {
+    const patterns = [
+      "/api/editor/settings/debug/activate",
+      "/api/editor/settings/debug/deactivate",
+    ];
+    for (const pattern of patterns) {
+      expect(
+        API_ROUTES.filter((route) => route.method === "POST" && route.pattern === pattern),
+        `${pattern} must be registered exactly once`,
+      ).toHaveLength(1);
+      expect(matchRoute("POST", pattern)).toMatchObject({
+        definition: { method: "POST", pattern },
+      });
+    }
+    expect(
+      API_ROUTES.filter((route) => route.pattern.startsWith("/api/editor/settings/debug/")),
+    ).toHaveLength(2);
+  });
+
   it("includes the user-facing workspace search route pair (#2108)", () => {
     for (const pattern of [
       "/api/editor/workspace-search",

@@ -174,6 +174,32 @@ keystroke, satisfying "ghost-text rendering yields to input." For large buffers,
 removes the per-render-expensive features to keep main-thread work within B5. The absolute INP and
 per-keystroke long-task figures are browser-measured by #1209 (§10).
 
+### B5 governed-debugging idle-session addendum (#2348)
+
+This is an addendum to B5, not a new B14 budget. When one governed DAP session is active but idle
+(paused or running without visible output), the existing per-keystroke requirement remains **less
+than 50 ms with zero debug-attributable long tasks**. Debug polling, SSE projection,
+inline-decoration work, and state selectors must remain outside the direct keystroke path.
+
+`npm run test:e2e:editor-perf` records this proof through the existing `@release-evidence` harness
+in `docs/release/1209-perf-evidence.json` at `b5IdleDebugSession`. The scenario enables the
+server-projected debugging capability, waits for the real browser bootstrap and debug SSE stream,
+starts a file-target DAP session, and leaves it idle for at least 1,100 ms before refocusing and typing
+in the open editor. One completed Chrome DevTools Timeline trace covers the full burst; the harness
+groups each character's `EventDispatch` work from `keydown` through `keyup`, including Monaco keys
+such as Space that are handled without `beforeinput`/`input`. It records each group's matched event
+count, its p95, the Long Task observer count and maximum, the active-session state, and accepted
+debug-output bytes. The gate requires a positive-duration trace sample with at least one matched
+event for every character, p95 < 50 ms, exactly zero long tasks, and zero accepted output bytes; it
+always stops the session after capture.
+Consequently, a zero Long Task count is only the independent no-long-task assertion, never a claim of
+zero milliseconds of per-keystroke work.
+
+The final evidence must compare clean `origin/dev` and the candidate in Linux under identical
+toolchain, lockfile, browser, warm-up, and repetition conditions described by ADR-0136 D12. It must
+record the candidate provenance, measured-work percentile, long-task count, and any B4/B6/B11 or
+bundle deltas. No measurement result is recorded by this documentation addendum.
+
 ## 10. Release-evidence handoff (#1209)
 
 #1209 records measured evidence against this table using the packaged CLI serving the production
@@ -185,7 +211,9 @@ static UI (`tests/e2e/config/playwright.editor-performance.config.ts` + `tests/e
 2. **Cold start (B4):** open the first editor card; record open → interactive p50/p95 across repeated
    runs on a representative dev machine.
 3. **Typing (B5/B6):** type into a source buffer with completion enabled; record per-keystroke
-   main-thread work (no long task > 50 ms) and INP (≤ 200 ms at p75).
+   main-thread work (no long task > 50 ms) and INP (≤ 200 ms at p75). The same harness also runs the
+   #2348 B5 idle-debug addendum: a real active-but-idle DAP session must retain p95 input processing
+   below 50 ms with zero long tasks and zero visible debug output.
 4. **Worker memory (B11):** open/close multiple editor cards; confirm growth remains ≤ 128 MiB per
    simultaneously open card after warm start and residual growth after card close + GC/settle remains
    ≤ 16 MiB (the deterministic disposal proof is `editor-memory-lifecycle.test.ts`).
@@ -221,6 +249,7 @@ recorded here as an explicit, justified limitation.
 npm run build:packages                       # build keiko-editor dist for the gate
 npm run build:ui
 npm run check:editor-bundle-size -- --require-static-export  # B1, B10, Monaco version pin
+npm run test:e2e:editor-perf                 # browser B4/B5/B6/B11 plus the #2348 idle-debug B5 evidence
 npm --workspace @oscharko-dev/keiko-editor test   # disposal, cancellation, large-file, degraded mode
 npx vitest run scripts/__tests__/editor-bundle-size.test.mjs
 npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative

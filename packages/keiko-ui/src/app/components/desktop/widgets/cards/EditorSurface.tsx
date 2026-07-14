@@ -128,6 +128,8 @@ export interface EditorSurfaceProps {
   readonly showStatusFooter?: boolean | undefined;
   readonly editorGitGutter?: KeikoCodeEditorProps["editorGitGutter"] | undefined;
   readonly editorBlame?: KeikoCodeEditorProps["editorBlame"] | undefined;
+  /** Default-off governed debugging host, threaded without computing activation policy here. */
+  readonly debug?: KeikoCodeEditorProps["debug"] | undefined;
   readonly gitGutterRefreshNonce?: number | undefined;
   readonly editorConflicts?: KeikoCodeEditorProps["editorConflicts"] | undefined;
 }
@@ -223,6 +225,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         showStatusFooter={props.showStatusFooter}
         editorGitGutter={props.editorGitGutter}
         editorBlame={props.editorBlame}
+        debug={props.debug}
         gitGutterRefreshNonce={props.gitGutterRefreshNonce}
         editorConflicts={props.editorConflicts}
       />

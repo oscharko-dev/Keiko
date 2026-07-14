@@ -38,6 +38,7 @@ export interface EditorPaletteHost {
   trustWorkspaceScripts(): void;
   revokeWorkspaceScriptTrust(): void;
   openProblems(): void;
+  readonly openDebugPanel?: (() => void) | undefined;
 }
 
 export interface EditorPaletteCommand {
@@ -113,6 +114,12 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
     titleKey: "editor.command.openProblems",
     run: (host) => host.openProblems(),
     isAvailable: (host) => host.root.length > 0,
+  },
+  {
+    id: "editor.openDebugPanel",
+    title: "Open Debug",
+    run: (host) => host.openDebugPanel?.(),
+    isAvailable: (host) => host.root.length > 0 && host.openDebugPanel !== undefined,
   },
   // Issue #2212 (ADR-0126) — run affordances through the governed verification route. The four run
   // actions are available only while idle; cancel only while a run is active (mutually exclusive).
