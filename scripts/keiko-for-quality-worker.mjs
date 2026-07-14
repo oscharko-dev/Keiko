@@ -456,7 +456,7 @@ export async function reserveDelivery(database, delivery, now = Date.now()) {
     const { changes } = result.meta;
     if (changes === 0) return false;
     if (changes === 1) return true;
-    throw new Error();
+    throw new Error("D1 reported an unexpected delivery change count.");
   } catch (error) {
     const errorKind = error instanceof Error ? error.name : "UnknownError";
     console.error(`reserveDelivery failed errorKind=${errorKind}`);
