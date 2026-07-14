@@ -12,7 +12,10 @@ import {
 import type { DebugVariableNode, SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { useDebugSession } from "./useDebugSession";
-import { useDebuggingTranslate, type DebuggingTranslate } from "../panels/debugging-i18n";
+import {
+  useDebuggingTranslate as useTranslate,
+  type DebuggingTranslate,
+} from "../panels/debugging-i18n";
 
 export interface EditorDebugSessionHostProps {
   readonly workspaceId: string | undefined;
@@ -243,7 +246,7 @@ export function EditorDebugSessionHost({
   onHostChange,
   onSessionStateChange,
 }: EditorDebugSessionHostProps): ReactNode {
-  const t = useDebuggingTranslate();
+  const t = useTranslate();
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
   const [contextMenu, setContextMenu] = useState<BreakpointContext | null>(null);
   const [actionError, setActionError] = useState(false);

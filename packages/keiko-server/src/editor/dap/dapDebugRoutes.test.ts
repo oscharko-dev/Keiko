@@ -1752,7 +1752,7 @@ describe("governed DAP debug routes", () => {
   it("never returns raw host paths, target ids, capsule paths, or adapter identities", async () => {
     enableDebug();
     const cookie = cookieFrom(await bootstrap());
-    const targetId = "sensitive_catalog_target";
+    const targetId = "npm-script:sensitive-catalog-target";
     const response = await fetch(`${baseUrl()}/api/editor/debug/sessions`, {
       method: "POST",
       headers: { ...JSON_HEADERS, Cookie: cookie },
