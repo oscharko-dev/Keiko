@@ -148,7 +148,6 @@
     "check:coverage:functions": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --metric functions",
     "check:lcov-source-mapping": "node scripts/check-lcov-source-mapping.mjs --base origin/dev --head HEAD",
     "check:sonar-scope": "node scripts/sonar-analysis-scope.mjs",
-    "check:sonar-new-code": "node scripts/check-sonar-new-code.mjs",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",
     "check:coverage:branches:strict": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --metric branches --strict",
@@ -191,7 +190,6 @@
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-sonarjs": "^4.2.0",
     "prettier": "^3.0.0",
     "typescript-eslint": "^8.63.0",
     "vitest": "^4.1.10"

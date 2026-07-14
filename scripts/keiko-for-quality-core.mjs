@@ -2,17 +2,6 @@ const actionsAppId = 15368;
 const gitarIdentity = { appId: 827041, userId: 159877585 };
 const socketIdentity = { appId: 156372, userId: 95510084 };
 const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
-const runningCheckStatuses = new Set(["in_progress", "pending", "queued", "requested", "waiting"]);
-const terminalConclusions = new Set([
-  "action_required",
-  "cancelled",
-  "failure",
-  "neutral",
-  "skipped",
-  "stale",
-  "success",
-  "timed_out",
-]);
 
 export const requiredChecks = [
   ["ci", actionsAppId],
@@ -42,60 +31,18 @@ function startedAt(check) {
   return Number.isFinite(value) ? value : undefined;
 }
 
-function checkTimestamp(check) {
-  return Math.max(completedAt(check) ?? 0, startedAt(check) ?? 0);
-}
-
-function latestCheck(checks, headSha, name) {
-  return checks
-    .filter((check) => check.name === name && check.headSha === headSha)
-    .toSorted(
-      (left, right) =>
-        checkTimestamp(right) - checkTimestamp(left) || (right.id ?? 0) - (left.id ?? 0),
-    )[0];
-}
-
-function reviewProductSettled(checks, headSha, names, now, stabilityMs) {
-  const currentChecks = names.map((name) => latestCheck(checks, headSha, name));
-  if (
-    currentChecks.some(
-      (check) =>
-        check === undefined || check.status !== "completed" || check.conclusion !== "success",
-    )
-  )
-    return false;
-  const completedTimes = currentChecks.map(completedAt);
-  return completedTimes.every(Number.isFinite) && Math.max(...completedTimes) + stabilityMs <= now;
-}
-
-function blocking(message) {
-  return { kind: "blocking", message };
-}
-
-function waiting(message) {
-  return { kind: "waiting", message };
-}
-
-function safeConclusion(value) {
-  return terminalConclusions.has(value) ? value : "invalid conclusion";
-}
-
-export function checkProblems(checks, headSha) {
+export function checkFailures(checks, headSha) {
   return requiredChecks.flatMap(({ appId, name }) => {
-    const check = latestCheck(checks, headSha, name);
-    if (check === undefined) return [waiting(`Missing current-head check: ${name}.`)];
-    if (check.appId !== appId) return [blocking(`Wrong producer for ${name}.`)];
-    if (runningCheckStatuses.has(check.status))
-      return [waiting(`Check is still running: ${name}.`)];
-    if (check.status !== "completed") return [blocking(`Invalid check state for ${name}.`)];
-    if (check.conclusion !== "success")
-      return [blocking(`Check failed: ${name} (${safeConclusion(check.conclusion)}).`)];
+    const candidates = checks.filter((check) => check.name === name && check.headSha === headSha);
+    const check = candidates.toSorted(
+      (left, right) => (completedAt(right) ?? 0) - (completedAt(left) ?? 0),
+    )[0];
+    if (check === undefined) return [`Missing current-head check: ${name}.`];
+    if (check.appId !== appId) return [`Wrong producer for ${name}.`];
+    if (check.status !== "completed" || check.conclusion !== "success")
+      return [`Check is not successful: ${name}.`];
     return [];
   });
-}
-
-export function checkFailures(checks, headSha) {
-  return checkProblems(checks, headSha).map(({ message }) => message);
 }
 
 export function isBotEvidence(value, identity, requireApp) {
@@ -176,8 +123,8 @@ export function hasCurrentSocketNoAlertEvidence(checks, headSha) {
   );
 }
 
-function gitarProblems(checks, reviews, comments, headSha, now, stabilityMs) {
-  const problems = [];
+function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist, socketRiskActors) {
+  const failures = [];
   if (
     reviews.some(
       (review) =>
@@ -186,98 +133,35 @@ function gitarProblems(checks, reviews, comments, headSha, now, stabilityMs) {
         review.state === "CHANGES_REQUESTED",
     )
   ) {
-    problems.push(blocking("Gitar has an active CHANGES_REQUESTED review for the current head."));
+    failures.push("Gitar has an active CHANGES_REQUESTED review for the current head.");
   }
   const gitar = latestComment(comments, gitarIdentity);
   const gitarStart = currentCheckStart(checks, headSha, ["Gitar"]);
   const findings = commentIsCurrent(gitar, gitarStart) ? parseGitarFindings(gitar.body) : undefined;
-  if (findings === undefined) {
-    const problem = reviewProductSettled(checks, headSha, ["Gitar"], now, stabilityMs)
-      ? blocking
-      : waiting;
-    problems.push(problem("Current Gitar finding evidence is missing or unparseable."));
-  } else if (findings !== 0)
-    problems.push(blocking(`Gitar has ${String(findings)} unresolved finding(s).`));
-  return problems;
-}
+  if (findings === undefined)
+    failures.push("Current Gitar finding evidence is missing or unparseable.");
+  else if (findings !== 0) failures.push(`Gitar has ${String(findings)} unresolved finding(s).`);
 
-function currentSocketProblems(
-  socket,
-  comments,
-  socketRiskAllowlist,
-  socketRiskActors,
-  socketStart,
-) {
-  const alerts = packageAlerts(socket.body);
-  const accepted = acceptedSocketRisks(
-    comments,
-    socketRiskAllowlist,
-    socketRiskActors,
-    socketStart,
-  );
-  const unresolved = alerts.filter((entry) => !accepted.has(entry));
-  const problems = [];
-  if (unresolved.length > 0)
-    problems.push(blocking(`${String(unresolved.length)} Socket warning(s) remain.`));
-  if (/\bError\b/u.test(socket.body)) problems.push(blocking("Socket reports an error alert."));
-  return problems;
-}
-
-function socketProblems(
-  checks,
-  comments,
-  headSha,
-  socketRiskAllowlist,
-  socketRiskActors,
-  now,
-  stabilityMs,
-) {
   const socket = latestComment(comments, socketIdentity);
   const socketStart = currentCheckStart(checks, headSha, [
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
   ]);
-  if (commentIsCurrent(socket, socketStart))
-    return currentSocketProblems(
-      socket,
+  if (commentIsCurrent(socket, socketStart)) {
+    const alerts = packageAlerts(socket.body);
+    const accepted = acceptedSocketRisks(
       comments,
       socketRiskAllowlist,
       socketRiskActors,
       socketStart,
     );
-  if (hasCurrentSocketNoAlertEvidence(checks, headSha)) return [];
-  const problem = reviewProductSettled(
-    checks,
-    headSha,
-    ["Socket Security: Project Report", "Socket Security: Pull Request Alerts"],
-    now,
-    stabilityMs,
-  )
-    ? blocking
-    : waiting;
-  return [problem("Current Socket alert evidence is missing.")];
-}
-
-function reviewProblems(input) {
-  return [
-    ...gitarProblems(
-      input.checks,
-      input.reviews,
-      input.comments,
-      input.headSha,
-      input.now,
-      input.stabilityMs,
-    ),
-    ...socketProblems(
-      input.checks,
-      input.comments,
-      input.headSha,
-      input.socketRiskAllowlist,
-      input.socketRiskActors,
-      input.now,
-      input.stabilityMs,
-    ),
-  ];
+    const unresolved = alerts.filter((entry) => !accepted.has(entry));
+    if (unresolved.length > 0)
+      failures.push(`${String(unresolved.length)} Socket warning(s) remain.`);
+    if (/\bError\b/u.test(socket.body)) failures.push("Socket reports an error alert.");
+  } else if (!hasCurrentSocketNoAlertEvidence(checks, headSha))
+    failures.push("Current Socket alert evidence is missing.");
+  return failures;
 }
 
 export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
@@ -319,33 +203,23 @@ export function validatedRiskAllowlist(value) {
 export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
-  const stabilityMs = input.stabilityMs ?? 60_000;
-  const problems = [
-    ...checkProblems(input.checks, input.headSha),
-    ...reviewProblems({
-      checks: input.checks,
-      comments: input.comments,
-      headSha: input.headSha,
-      now: input.now,
-      reviews: input.reviews,
-      socketRiskActors: riskActors,
-      socketRiskAllowlist: riskAllowlist,
-      stabilityMs,
-    }),
-    ...stabilityFailures(input.checks, input.comments, input.now, stabilityMs, input.headSha).map(
-      waiting,
+  const failures = [
+    ...checkFailures(input.checks, input.headSha),
+    ...reviewFailures(
+      input.checks,
+      input.reviews,
+      input.comments,
+      input.headSha,
+      riskAllowlist,
+      riskActors,
+    ),
+    ...stabilityFailures(
+      input.checks,
+      input.comments,
+      input.now,
+      input.stabilityMs ?? 60_000,
+      input.headSha,
     ),
   ];
-  const blockingFailures = problems
-    .filter(({ kind }) => kind === "blocking")
-    .map(({ message }) => message);
-  const waitingFailures = problems
-    .filter(({ kind }) => kind === "waiting")
-    .map(({ message }) => message);
-  return {
-    blockingFailures,
-    failures: problems.map(({ message }) => message),
-    passed: problems.length === 0,
-    waitingFailures,
-  };
+  return { failures, passed: failures.length === 0 };
 }

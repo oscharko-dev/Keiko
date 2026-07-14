@@ -2,15 +2,7 @@
 
 ## Status
 
-Accepted (2026-07-11), amended (2026-07-14).
-
-The 2026-07-14 amendment narrows the pull-request verifier to deterministic merge-risk signals.
-The native Sonar gate, exact-head binding, 85-percent new-code coverage, 3-percent duplication
-ceiling, and complete security-hotspot review remain blocking. Ordinary maintainability and
-accessibility findings remain visible Sonar review feedback but no longer fail the repository
-verifier independently when the native gate is `OK`. This amendment supersedes the zero-finding
-parts of D2 and D5 for pull-request delivery; it does not weaken security analysis, hotspot review,
-coverage, duplication, or scanner-integrity checks.
+Accepted (2026-07-11).
 
 ## Context
 
@@ -70,7 +62,7 @@ server-computed Quality Gate result and exit non-zero when it is red. The same `
 then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev`; its result is
 transitively mandatory through the required `ci` aggregate. The verifier
 queries SonarCloud for the exact PR and rejects stale analysis revisions, a native gate other than
-`OK`, new-code coverage below 85 percent, new-code
+`OK`, any unresolved issue or new violation, new-code coverage below 85 percent, new-code
 duplication above 3 percent, or less than 100 percent hotspot review. Missing analysis or metrics
 fail closed. The verifier is independently covered by deterministic API-shaped fixtures.
 
@@ -107,7 +99,7 @@ the underlying defect (Autoscan never sets `sonar.projectVersion`, so the `previ
 degrades to an unnamed `"not provided"` marker) is fixed by resolving the project version from
 `package.json` at scan time and passing it via `-Dsonar.projectVersion`.
 
-### D5 — Quality Gate hardening (New Code only; amended for PR delivery)
+### D5 — Quality Gate hardening (New Code only, zero-tolerance for new findings)
 
 The built-in "Sonar way" gate is kept as the baseline; the following changes harden it for a
 regulated, agent-authored codebase (implemented as a copy of "Sonar way",

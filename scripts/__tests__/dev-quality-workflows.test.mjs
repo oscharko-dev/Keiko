@@ -93,18 +93,6 @@ describe("dev quality workflows", () => {
     );
   });
 
-  it("keeps release performance evidence off the pull-request critical path", () => {
-    const performanceStep = ci.match(
-      / {6}- name: Release performance E2E evidence\n[\s\S]*?(?=\n {6}- name: Performance evidence freshness)/u,
-    )?.[0];
-
-    expect(performanceStep).toBeDefined();
-    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
-    expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
-    expect(performanceStep).toContain("npm run test:e2e:editor-perf");
-    expect(performanceStep).not.toContain("continue-on-error");
-  });
-
   it("contains no privileged pull-request trigger", () => {
     expect(mutation).not.toContain("pull_request_target");
     expect(mutation).not.toContain("workflow_run");

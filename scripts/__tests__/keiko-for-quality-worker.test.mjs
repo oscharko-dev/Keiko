@@ -12,7 +12,6 @@ import worker, {
   autoApplyState,
   base64Url,
   bytesFromHex,
-  checkBody,
   constantTimeEqual,
   dashboardComment,
   discoverOpenPullRequests,
@@ -252,10 +251,6 @@ function runD1(query, state, values) {
 
 function allD1(query, state, values) {
   if (!query.startsWith("SELECT installation_id")) throw new Error(`Unexpected D1 read: ${query}`);
-  if (query.includes("WHERE owner = ?1")) {
-    const row = state.tracked.get(`${values[0]}/${values[1]}#${String(values[2])}`);
-    return { results: row === undefined ? [] : [{ installation_id: row.installation_id }] };
-  }
   const rows = [...state.tracked.values()].sort((left, right) =>
     `${left.owner}/${left.repository}#${String(left.pull_number)}`.localeCompare(
       `${right.owner}/${right.repository}#${String(right.pull_number)}`,
@@ -523,20 +518,18 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("classifies only exact hard failures", () => {
-    expect(hardFailure({ blockingFailures: ["Wrong producer for ci."] })).toBe(true);
-    expect(hardFailure({ blockingFailures: [] })).toBe(false);
-  });
-
-  it("publishes running prerequisites as a neutral pending check", () => {
-    const body = checkBody({
-      blockingFailures: [],
-      failures: ["Check is still running: ci."],
-      passed: false,
-      waitingFailures: ["Check is still running: ci."],
-    });
-
-    expect(body).toMatchObject({ status: "in_progress" });
-    expect(body).not.toHaveProperty("conclusion");
+    for (const failure of [
+      "Wrong producer for ci.",
+      "Gitar has an active CHANGES_REQUESTED review for the current head.",
+      "Gitar has 1 unresolved finding(s).",
+      "1 Socket warning(s) remain.",
+      "Socket reports an error alert.",
+      "Check is not successful: ci.",
+    ]) {
+      expect(hardFailure(["soft", failure])).toBe(true);
+    }
+    expect(hardFailure([])).toBe(false);
+    expect(hardFailure(["Missing current-head check: ci."])).toBe(false);
   });
 
   it("matches only this app's exact check event", () => {
@@ -631,11 +624,9 @@ describe("Keiko for Quality worker trust boundary", () => {
       headSha,
       pull: { auto_merge: { enabled_at: "2026-07-13T18:00:00.000Z" } },
       result: {
-        blockingFailures: [],
         evaluatedAt: Date.parse("2026-07-13T18:00:00.000Z"),
         failures: [],
         passed: true,
-        waitingFailures: [],
       },
     });
     expect(ready).toBe(
@@ -680,16 +671,11 @@ describe("Keiko for Quality worker trust boundary", () => {
       headSha,
       pull: { auto_merge: null },
       result: {
-        blockingFailures: [],
         failures: [
           "Missing current-head check: ci.",
           "Missing current-head check: SonarCloud Code Analysis.",
         ],
         passed: false,
-        waitingFailures: [
-          "Missing current-head check: ci.",
-          "Missing current-head check: SonarCloud Code Analysis.",
-        ],
       },
     });
     expect(waiting).toContain("⏳ **Waiting for evidence**");
@@ -697,7 +683,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
     expect(waiting).toContain("Missing current-head check: ci.");
     expect(waiting).toContain(
-      "| SonarQube Cloud | ⏳ Missing current-head check: SonarCloud Code Analysis. |",
+      "| SonarQube Cloud | ❌ Missing current-head check: SonarCloud Code Analysis. |",
     );
     expect(waiting).toContain(
       "- Missing current-head check: ci.\n- Missing current-head check: SonarCloud Code Analysis.",
@@ -708,16 +694,11 @@ describe("Keiko for Quality worker trust boundary", () => {
       comments,
       headSha,
       pull: { auto_merge: null },
-      result: {
-        blockingFailures: ["Gitar has 1 unresolved finding(s)."],
-        failures: ["Gitar has 1 unresolved finding(s)."],
-        passed: false,
-        waitingFailures: [],
-      },
+      result: { failures: ["Gitar has 1 unresolved finding(s)."], passed: false },
     });
     expect(blocked).toContain("❌ **Blocked**");
     expect(blocked).toContain("<details open>");
-    expect(blocked).toContain("<summary>Blocking evidence (1)</summary>");
+    expect(blocked).toContain("<summary>Blocking or waiting evidence (1)</summary>");
     expect(blocked).not.toContain("secret-value");
 
     const invalidChecks = [
@@ -732,7 +713,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       comments: [],
       headSha,
       pull: {},
-      result: { blockingFailures: [], failures: [], passed: false, waitingFailures: [] },
+      result: { failures: [], passed: false },
     });
     expect(invalidCount).toContain("| Required checks | 0/15 successful |");
     expect(invalidCount).toContain("| GitHub Auto-Merge | not armed |");
@@ -742,12 +723,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     const headSha = "a".repeat(40);
     const baseEvidence = { checks: [], comments: [], reviews: [] };
     const pull = { auto_merge: null, head: { sha: headSha } };
-    const result = {
-      blockingFailures: [],
-      failures: ["Missing current-head check: ci."],
-      passed: false,
-      waitingFailures: ["Missing current-head check: ci."],
-    };
+    const result = { failures: ["Missing current-head check: ci."], passed: false };
     const createFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 100 }));
     await publishDashboardComment({
       owner: "owner",
@@ -1012,7 +988,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     const headSha = "9".repeat(40);
     for (const [result, expected] of [
       [
-        { blockingFailures: [], failures: [], passed: true, waitingFailures: [] },
+        { failures: [], passed: true },
         {
           conclusion: "success",
           output: {
@@ -1023,12 +999,7 @@ describe("Keiko for Quality worker trust boundary", () => {
         },
       ],
       [
-        {
-          blockingFailures: ["Wrong producer for ci.", "second failure"],
-          failures: ["Wrong producer for ci.", "second failure"],
-          passed: false,
-          waitingFailures: [],
-        },
+        { failures: ["Wrong producer for ci.", "second failure"], passed: false },
         {
           conclusion: "failure",
           output: {
@@ -1039,12 +1010,7 @@ describe("Keiko for Quality worker trust boundary", () => {
         },
       ],
       [
-        {
-          blockingFailures: [],
-          failures: ["Missing current-head check: ci.", "waiting"],
-          passed: false,
-          waitingFailures: ["Missing current-head check: ci.", "waiting"],
-        },
+        { failures: ["Missing current-head check: ci.", "waiting"], passed: false },
         {
           output: {
             summary: "Missing current-head check: ci.\nwaiting",
@@ -1089,92 +1055,13 @@ describe("Keiko for Quality worker trust boundary", () => {
         }),
       )
       .mockResolvedValueOnce(response({ id: 7 }));
-    await publishCheck(
-      "owner",
-      "repo",
-      "a".repeat(40),
-      { blockingFailures: [], failures: [], passed: true, waitingFailures: [] },
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
+    await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
+      GITHUB_APP_ID: "999",
+    });
     const [, init] = fetchMock.mock.calls[1];
     expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/repos/owner/repo/check-runs/7");
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body)).not.toHaveProperty("head_sha");
-  });
-
-  it("does not rewrite an unchanged app check", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      response({
-        check_runs: [
-          {
-            app: { id: 999 },
-            conclusion: "success",
-            id: 7,
-            name: "Keiko for Quality",
-            output: {
-              summary: "All current-head Keiko for Quality evidence is valid.",
-              title: "Keiko for Quality",
-            },
-            status: "completed",
-          },
-        ],
-        total_count: 1,
-      }),
-    );
-
-    await publishCheck(
-      "owner",
-      "repo",
-      "a".repeat(40),
-      { blockingFailures: [], failures: [], passed: true, waitingFailures: [] },
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("creates a pending check after a terminal app check", async () => {
-    const headSha = "a".repeat(40);
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        response({
-          check_runs: [
-            {
-              app: { id: 999 },
-              conclusion: "failure",
-              id: 7,
-              name: "Keiko for Quality",
-              status: "completed",
-            },
-          ],
-          total_count: 1,
-        }),
-      )
-      .mockResolvedValueOnce(response({ id: 8 }));
-
-    await publishCheck(
-      "owner",
-      "repo",
-      headSha,
-      {
-        blockingFailures: [],
-        failures: ["Check is still running: ci."],
-        passed: false,
-        waitingFailures: ["Check is still running: ci."],
-      },
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
-
-    expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/repos/owner/repo/check-runs");
-    expect(fetchMock.mock.calls[1][1].method).toBe("POST");
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
-      head_sha: headSha,
-      status: "in_progress",
-    });
   });
 
   it("does not treat a non-object app field as trusted check identity", async () => {
@@ -1187,14 +1074,9 @@ describe("Keiko for Quality worker trust boundary", () => {
         }),
       )
       .mockResolvedValueOnce(response({ id: 8 }));
-    await publishCheck(
-      "owner",
-      "repo",
-      "a".repeat(40),
-      { blockingFailures: [], failures: [], passed: true, waitingFailures: [] },
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
+    await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
+      GITHUB_APP_ID: "999",
+    });
     expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/repos/owner/repo/check-runs");
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
   });
@@ -1212,14 +1094,9 @@ describe("Keiko for Quality worker trust boundary", () => {
         }),
       )
       .mockResolvedValueOnce(response({ id: 8 }));
-    await publishCheck(
-      "owner",
-      "repo",
-      "a".repeat(40),
-      { blockingFailures: [], failures: [], passed: true, waitingFailures: [] },
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
+    await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
+      GITHUB_APP_ID: "999",
+    });
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
   });
 
@@ -1808,9 +1685,6 @@ describe("Keiko for Quality worker trust boundary", () => {
     await Promise.all(waits);
     expect(waits).toHaveLength(1);
     expect(state.prepare).toHaveBeenCalledWith(expect.stringContaining("FROM tracked_pulls"));
-    expect(
-      state.prepare.mock.calls.some(([query]) => query.startsWith("INSERT INTO tracked_pulls")),
-    ).toBe(false);
   });
 
   it("discovers open dev pull requests without relying on webhook delivery", async () => {

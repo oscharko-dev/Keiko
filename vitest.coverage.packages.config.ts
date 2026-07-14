@@ -44,7 +44,6 @@ export default defineConfig({
         "scripts/check-sonar-analysis-log.mjs",
         "scripts/check-sonar-main-quality-gate.mjs",
         "scripts/check-sonar-pr-quality-gate.mjs",
-        "scripts/check-sonar-new-code.mjs",
         "scripts/sonar-analysis-scope.mjs",
         "scripts/sonar-quality-gate-contract.mjs",
       ],
@@ -93,12 +92,6 @@ export default defineConfig({
           statements: 90,
         },
         "scripts/check-sonar-pr-quality-gate.mjs": {
-          branches: 85,
-          functions: 90,
-          lines: 90,
-          statements: 90,
-        },
-        "scripts/check-sonar-new-code.mjs": {
           branches: 85,
           functions: 90,
           lines: 90,

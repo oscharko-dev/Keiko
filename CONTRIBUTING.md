@@ -44,10 +44,6 @@ positive live probes are complete. See
 large-PR acceptance, safe commands, and plan boundaries are governed by
 [`docs/qa/gitar-review-policy.md`](docs/qa/gitar-review-policy.md).
 
-While current-head inputs are missing, queued, or in progress, `Keiko for Quality` remains neutral
-and pending. It turns red only for terminally failed or invalid evidence. Both states remain
-required and block auto-merge until all 15 constituent checks and review-product evidence pass.
-
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),
 [ADR-0020](docs/adr/ADR-0020-workspace-tooling-and-architecture-gate.md),

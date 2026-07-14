@@ -193,7 +193,6 @@ export default defineConfig(
       "scripts/check-mutation-quality.mjs",
       "scripts/check-mutation-scope.mjs",
       "scripts/check-sonar-pr-quality-gate.mjs",
-      "scripts/check-sonar-new-code.mjs",
       "scripts/keiko-for-quality-core.mjs",
       "scripts/keiko-for-quality-worker.mjs",
     ],

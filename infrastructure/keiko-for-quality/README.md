@@ -37,9 +37,7 @@ still match `package-lock.json`; the required repository test enforces that bind
 The one-minute schedule is a liveness backstop, not merely a stability timer. It discovers every
 open pull request targeting `dev` through the exact GitHub App installation, so webhook loss or
 replay rejection cannot strand a new pull request. Keep the schedule enabled even when webhook
-delivery is healthy. Unchanged dashboard comments and app-check bodies are not rewritten, and
-tracked-pull state is read before write; the steady-state sweep therefore performs no recurring
-GitHub or D1 write for an unchanged pull request.
+delivery is healthy. Unchanged dashboard comments are not rewritten.
 
 D1 is the atomic replay and metadata store. A unique delivery identifier rejects duplicate GitHub
 webhooks without relying on eventually consistent reads. The Worker reserves a delivery only after

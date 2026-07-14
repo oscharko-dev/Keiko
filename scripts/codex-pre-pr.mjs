@@ -88,7 +88,6 @@ export function createPrePrSteps(options = {}) {
     npmStep("gitar-config", ["run", "check:gitar-config"], { platform }),
     npmStep("ui-i18n", ["run", "check:ui-i18n"], { platform }),
     npmStep("sonar-scope", ["run", "check:sonar-scope"], { platform }),
-    npmStep("sonar-new-code", ["run", "check:sonar-new-code"], { platform }),
     nativeQualityStep(platform),
     npmStep("ui-typecheck", ["run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"], {
       platform,
@@ -97,6 +96,7 @@ export function createPrePrSteps(options = {}) {
       env: lintEnv,
       platform,
     }),
+    npmStep("unit-tests", ["test"], { platform }),
     npmStep("coverage-quality", ["run", "test:coverage:quality"], { platform }),
     npmStep("lcov-source-mapping", ["run", "check:lcov-source-mapping"], { platform }),
     npmStep("architecture", ["run", "arch:check"], { platform }),
