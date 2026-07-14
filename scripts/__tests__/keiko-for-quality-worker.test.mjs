@@ -1135,6 +1135,48 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("creates a pending check after a terminal app check", async () => {
+    const headSha = "a".repeat(40);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        response({
+          check_runs: [
+            {
+              app: { id: 999 },
+              conclusion: "failure",
+              id: 7,
+              name: "Keiko for Quality",
+              status: "completed",
+            },
+          ],
+          total_count: 1,
+        }),
+      )
+      .mockResolvedValueOnce(response({ id: 8 }));
+
+    await publishCheck(
+      "owner",
+      "repo",
+      headSha,
+      {
+        blockingFailures: [],
+        failures: ["Check is still running: ci."],
+        passed: false,
+        waitingFailures: ["Check is still running: ci."],
+      },
+      "token",
+      { GITHUB_APP_ID: "999" },
+    );
+
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/repos/owner/repo/check-runs");
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+      head_sha: headSha,
+      status: "in_progress",
+    });
+  });
+
   it("does not treat a non-object app field as trusted check identity", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

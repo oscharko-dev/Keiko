@@ -232,18 +232,20 @@ export async function publishCheck(owner, repository, headSha, result, token, en
     `/repos/${owner}/${repository}/commits/${headSha}/check-runs`,
     token,
   );
-  const existing = checkRuns.find(
-    (check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID),
-  );
+  const existing = checkRuns
+    .filter((check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID))
+    .toSorted((left, right) => Number(right.id ?? 0) - Number(left.id ?? 0))[0];
   const body = checkBody(result);
   if (existing !== undefined && checkMatchesBody(existing, body)) return;
+  const createCheck =
+    existing === undefined || (existing.status === "completed" && body.status === "in_progress");
   const path =
-    existing === undefined
+    createCheck
       ? `/repos/${owner}/${repository}/check-runs`
       : `/repos/${owner}/${repository}/check-runs/${String(existing.id)}`;
   await github(path, token, {
-    body: JSON.stringify(existing === undefined ? { ...body, head_sha: headSha } : body),
-    method: existing === undefined ? "POST" : "PATCH",
+    body: JSON.stringify(createCheck ? { ...body, head_sha: headSha } : body),
+    method: createCheck ? "POST" : "PATCH",
   });
 }
 
