@@ -1040,7 +1040,7 @@ describe("useDebugSession", () => {
     );
   });
 
-  it("retains a bounded exception description while refreshing the canonical session projection", async () => {
+  it("retains an exception when session-started follows the immediate stopped event", async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
@@ -1053,7 +1053,10 @@ describe("useDebugSession", () => {
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const source = FakeEventSource.instances[0];
     const stopped = source?.listeners.get("editor-debug:stopped");
-    if (stopped === undefined) throw new Error("Expected stopped-event listener.");
+    const started = source?.listeners.get("editor-debug:session-started");
+    if (stopped === undefined || started === undefined) {
+      throw new Error("Expected debug lifecycle listeners.");
+    }
 
     act(() => {
       for (const listener of stopped) {
@@ -1067,6 +1070,18 @@ describe("useDebugSession", () => {
               reason: "exception",
               allThreadsStopped: true,
               description: bounded("Fixture uncaught exception"),
+            },
+          }),
+        } as MessageEvent);
+      }
+      for (const listener of started) {
+        listener({
+          data: JSON.stringify({
+            sequence: 2,
+            event: {
+              kind: "session-started",
+              sessionId: "session-1",
+              status: "running",
             },
           }),
         } as MessageEvent);

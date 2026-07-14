@@ -578,12 +578,19 @@ function validRequestedBreakpointFields(
   );
 }
 
+function parseRequestedArray<T>(
+  value: unknown,
+  parser: (candidate: unknown) => T | undefined,
+): readonly T[] | undefined {
+  if (!isDenseArray(value)) return undefined;
+  const parsed = value.map(parser);
+  return parsed.includes(undefined) ? undefined : (parsed as readonly T[]);
+}
+
 function parseRequestedBreakpoints(
   value: unknown,
 ): readonly RequestedSourceBreakpoint[] | undefined {
-  if (!isDenseArray(value)) return undefined;
-  const parsed = value.map(parseRequestedBreakpoint);
-  return parsed.includes(undefined) ? undefined : (parsed as readonly RequestedSourceBreakpoint[]);
+  return parseRequestedArray(value, parseRequestedBreakpoint);
 }
 
 function parseRequestedWatch(value: unknown): RequestedWatchExpression | undefined {
@@ -595,9 +602,7 @@ function parseRequestedWatch(value: unknown): RequestedWatchExpression | undefin
 }
 
 function parseRequestedWatches(value: unknown): readonly RequestedWatchExpression[] | undefined {
-  if (!isDenseArray(value)) return undefined;
-  const parsed = value.map(parseRequestedWatch);
-  return parsed.includes(undefined) ? undefined : (parsed as readonly RequestedWatchExpression[]);
+  return parseRequestedArray(value, parseRequestedWatch);
 }
 
 function parseRequestedExceptionFilter(

@@ -201,12 +201,9 @@ describe("DebugPanel", () => {
       />,
     );
 
-    await user.click(screen.getByRole("option", { name: /second/i }));
+    await user.click(screen.getByRole("button", { name: /second/i }));
 
-    expect(screen.getByRole("option", { name: /second/i })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: /second/i })).toHaveAttribute("aria-pressed", "true");
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo",
       path: "src/second.ts",
@@ -337,7 +334,7 @@ describe("DebugPanel", () => {
     });
     render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
 
-    await user.click(screen.getByRole("option", { name: /second/i }));
+    await user.click(screen.getByRole("button", { name: /second/i }));
     await user.click(screen.getByRole("button", { name: "Evaluate total" }));
 
     expect(actions.evaluateWatch).toHaveBeenCalledWith(
@@ -367,15 +364,15 @@ describe("DebugPanel", () => {
   it("supports pointer-free call-stack focus and selection", async () => {
     const user = userEvent.setup();
     render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
-    const first = screen.getByRole("option", { name: /first/i });
-    const second = screen.getByRole("option", { name: /second/i });
+    const first = screen.getByRole("button", { name: /first/i });
+    const second = screen.getByRole("button", { name: /second/i });
     first.focus();
 
     await user.keyboard("{ArrowDown}");
     expect(second).toHaveFocus();
     await user.keyboard("{Enter}");
 
-    expect(second).toHaveAttribute("aria-selected", "true");
+    expect(second).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders visible controls and accessibility labels from the German catalog", async () => {

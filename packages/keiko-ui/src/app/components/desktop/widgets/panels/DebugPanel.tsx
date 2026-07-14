@@ -53,6 +53,11 @@ interface TreeRow {
   readonly node?: DebugVariableNode | undefined;
 }
 
+interface EditingVariable {
+  readonly reference: string;
+  readonly value: string;
+}
+
 const PANEL_STYLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
@@ -67,6 +72,7 @@ const SECTION_STYLE: CSSProperties = {
   padding: "8px",
 };
 const TREE_ROW_STYLE: CSSProperties = { display: "block", width: "100%", textAlign: "left" };
+const GROUP_STYLE: CSSProperties = { border: 0, margin: 0, padding: 0 };
 const OUTPUT_STYLE: CSSProperties = {
   background: "var(--surface-raised, var(--surface))",
   fontFamily: "var(--font-mono, monospace)",
@@ -81,7 +87,7 @@ const OUTPUT_STYLE: CSSProperties = {
 function nextTreeId(key: string, ids: readonly string[], current: string): string {
   const index = Math.max(0, ids.indexOf(current));
   if (key === "Home") return ids[0] ?? current;
-  if (key === "End") return ids[ids.length - 1] ?? current;
+  if (key === "End") return ids.at(-1) ?? current;
   if (key === "ArrowUp") return ids[Math.max(0, index - 1)] ?? current;
   return ids[Math.min(ids.length - 1, index + 1)] ?? current;
 }
@@ -124,6 +130,11 @@ function nodeRows(
       ...(isExpanded ? nodeRows(node.children, level + 1, expanded, id, t) : []),
     ];
   });
+}
+
+function treeRowMarker(row: TreeRow): string {
+  if (!row.expandable) return "";
+  return row.expanded ? "▾ " : "▸ ";
 }
 
 function scopeRows(
@@ -229,7 +240,7 @@ function Tree(props: {
             if (row.expandable) props.onExpand(row);
           }}
         >
-          {row.expandable ? `${row.expanded ? "▾" : "▸"} ` : ""}
+          {treeRowMarker(row)}
           {row.label}
         </button>
       ))}
@@ -295,7 +306,7 @@ function WatchEditor(props: {
           {props.t("addWatch")}
         </button>
       ) : (
-        <div role="group" aria-label={props.t("watchEditor")}>
+        <fieldset aria-label={props.t("watchEditor")} style={GROUP_STYLE}>
           <label htmlFor="debug-watch-expression">{props.t("watchExpression")}</label>
           <input
             id="debug-watch-expression"
@@ -313,7 +324,7 @@ function WatchEditor(props: {
           <button type="button" onClick={() => setEditing(null)}>
             {props.t("cancel")}
           </button>
-        </div>
+        </fieldset>
       )}
     </section>
   );
@@ -347,43 +358,43 @@ function CallStack(props: {
   const [focusIndex, setFocusIndex] = useState(selectedIndex);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   useEffect(() => setFocusIndex(selectedIndex), [selectedIndex]);
+  const nextFrameIndex = (key: string, index: number): number => {
+    if (key === "Home") return 0;
+    if (key === "End") return props.frames.length - 1;
+    const delta = key === "ArrowUp" ? -1 : 1;
+    return Math.max(0, Math.min(props.frames.length - 1, index + delta));
+  };
   const move = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
     const keys = ["ArrowUp", "ArrowDown", "Home", "End"];
     if (!keys.includes(event.key)) return;
     event.preventDefault();
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? props.frames.length - 1
-          : Math.max(
-              0,
-              Math.min(props.frames.length - 1, index + (event.key === "ArrowUp" ? -1 : 1)),
-            );
+    const next = nextFrameIndex(event.key, index);
     setFocusIndex(next);
     refs.current[next]?.focus();
     const frame = props.frames[next];
     if (frame !== undefined) props.onSelect(frame);
   };
   return (
-    <div role="listbox" aria-label={props.label}>
+    <div role="list" aria-label={props.label}>
       {props.frames.map((frame, index) => (
-        <button
-          key={frame.frameRef}
-          ref={(element) => {
-            refs.current[index] = element;
-          }}
-          type="button"
-          role="option"
-          aria-selected={frame.frameRef === props.selectedFrameRef}
-          tabIndex={focusIndex === index ? 0 : -1}
-          onFocus={() => setFocusIndex(index)}
-          onKeyDown={(event) => move(event, index)}
-          onClick={() => props.onSelect(frame)}
-        >
-          {frame.name.value}
-          {frame.sourceFileId === undefined ? "" : ` — ${frame.sourceFileId}:${String(frame.line)}`}
-        </button>
+        <div key={frame.frameRef} role="listitem">
+          <button
+            ref={(element) => {
+              refs.current[index] = element;
+            }}
+            type="button"
+            aria-pressed={frame.frameRef === props.selectedFrameRef}
+            tabIndex={focusIndex === index ? 0 : -1}
+            onFocus={() => setFocusIndex(index)}
+            onKeyDown={(event) => move(event, index)}
+            onClick={() => props.onSelect(frame)}
+          >
+            {frame.name.value}
+            {frame.sourceFileId === undefined
+              ? ""
+              : ` — ${frame.sourceFileId}:${String(frame.line)}`}
+          </button>
+        </div>
       ))}
     </div>
   );
@@ -403,10 +414,7 @@ export function DebugPanel({
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selectedFrameRef, setSelectedFrameRef] = useState<string | null>(null);
-  const [editingVariable, setEditingVariable] = useState<{
-    readonly reference: string;
-    readonly value: string;
-  } | null>(null);
+  const [editingVariable, setEditingVariable] = useState<EditingVariable | null>(null);
   const [watchResults, setWatchResults] = useState<ReadonlyMap<string, WatchEvaluationResult>>(
     new Map(),
   );
@@ -534,7 +542,7 @@ export function DebugPanel({
             {t("startCurrentFile")}
           </button>
         ) : (
-          <div role="group" aria-label={t("controlsLabel")}>
+          <fieldset aria-label={t("controlsLabel")} style={GROUP_STYLE}>
             <button
               type="button"
               disabled={!canControl(session, "continue")}
@@ -577,7 +585,7 @@ export function DebugPanel({
             >
               {t("stop")}
             </button>
-          </div>
+          </fieldset>
         )}
       </header>
       <section aria-labelledby="debug-exception-heading" style={SECTION_STYLE}>
@@ -623,20 +631,17 @@ export function DebugPanel({
             rows={rows}
             t={t}
             onExpand={expand}
-            onEdit={(row) =>
-              setEditingVariable(
-                row.variableRef === undefined
-                  ? null
-                  : {
-                      reference: row.variableRef,
-                      value: row.node?.kind === "variable" ? row.node.value.value : "",
-                    },
-              )
-            }
+            onEdit={(row) => {
+              if (row.variableRef === undefined) setEditingVariable(null);
+              else {
+                const value = row.node?.kind === "variable" ? row.node.value.value : "";
+                setEditingVariable({ reference: row.variableRef, value });
+              }
+            }}
           />
         )}
         {editingVariable === null ? null : (
-          <div role="group" aria-label={t("pausedVariableEditor")}>
+          <fieldset aria-label={t("pausedVariableEditor")} style={GROUP_STYLE}>
             <label htmlFor="debug-variable-value">{t("newVariableValue")}</label>
             <input
               id="debug-variable-value"
@@ -660,7 +665,7 @@ export function DebugPanel({
             <button type="button" onClick={() => setEditingVariable(null)}>
               {t("cancel")}
             </button>
-          </div>
+          </fieldset>
         )}
       </section>
       <WatchEditor

@@ -1,6 +1,5 @@
 export type DebugAdapterTargetKind = "catalog" | "file";
 export type DebugAdapterLaunchKind = "launch";
-export type DebugAdapterAttachKind = never;
 
 export interface DebugAdapterSpec {
   readonly runtime: "node";
@@ -15,7 +14,7 @@ export interface DebugAdapterSpec {
   readonly networkPolicy: "none";
   readonly supportedTargetKinds: readonly DebugAdapterTargetKind[];
   readonly supportedLaunchKinds: readonly DebugAdapterLaunchKind[];
-  readonly supportedAttachKinds: readonly DebugAdapterAttachKind[];
+  readonly supportedAttachKinds: readonly never[];
   readonly reverseRequestAllowlist: readonly string[];
 }
 

@@ -1,6 +1,9 @@
 function isAsciiAlphaNumeric(character: string): boolean {
-  const code = character.charCodeAt(0);
-  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  const code = character.codePointAt(0);
+  return (
+    code !== undefined &&
+    ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122))
+  );
 }
 
 function isSafeScriptCharacter(character: string): boolean {

@@ -8,7 +8,7 @@ import type {
 import { useTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
-import type { WindowCfgRecord, WindowRenderContext } from "../windows/WindowsRegistry";
+import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { WindowCfgValue } from "../windows/types";
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";

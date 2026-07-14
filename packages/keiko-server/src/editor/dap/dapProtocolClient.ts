@@ -82,7 +82,9 @@ export function createDapProtocolClient(deps: DapProtocolClientDeps): DapProtoco
     lastIncomingSeq: 0,
     disposed: false,
   };
-  void consume(runtime, deps);
+  consume(runtime, deps).catch(() => {
+    dispose(runtime);
+  });
   return {
     request: <T>(command: string, args: unknown, options: DapRequestOptions): Promise<T> =>
       request<T>(runtime, deps.sendFrame, command, args, options),
@@ -90,11 +92,15 @@ export function createDapProtocolClient(deps: DapProtocolClientDeps): DapProtoco
       request<T>(runtime, deps.sendFrame, command, args, { lane: "control", deadlineMs }),
     onEvent: (handler): (() => void) => {
       runtime.handlers.add(handler);
-      return (): void => void runtime.handlers.delete(handler);
+      return (): void => {
+        runtime.handlers.delete(handler);
+      };
     },
     onStopped: (handler): (() => void) => {
       runtime.stoppedHandlers.add(handler);
-      return (): void => void runtime.stoppedHandlers.delete(handler);
+      return (): void => {
+        runtime.stoppedHandlers.delete(handler);
+      };
     },
     pendingCount: (): number => runtime.pending.size,
     dispose: (): void => {
@@ -110,9 +116,9 @@ async function request<T>(
   args: unknown,
   options: DapRequestOptions,
 ): Promise<T> {
-  if (runtime.disposed) return Promise.reject(new DapProtocolError("CLIENT_DISPOSED"));
+  if (runtime.disposed) throw new DapProtocolError("CLIENT_DISPOSED");
   if (!hasCapacity(runtime, options.lane)) {
-    return Promise.reject(new DapProtocolError("REQUEST_LIMIT"));
+    throw new DapProtocolError("REQUEST_LIMIT");
   }
   const seq = runtime.nextSeq++;
   let requestSequence = 0;
@@ -142,7 +148,9 @@ async function request<T>(
     send(JSON.stringify({ seq: requestSequence, type: "request", command, arguments: args }));
   } catch {
     settleRejected(runtime, requestSequence, "WRITE_FAILED");
-    void fatal(runtime, "WRITE_FAILED");
+    fatal(runtime, "WRITE_FAILED").catch(() => {
+      dispose(runtime);
+    });
   }
   return pending;
 }
@@ -225,15 +233,19 @@ async function dispatch(
     await fatal(runtime, "MALFORMED_MESSAGE");
     return;
   }
-  const valid =
-    message.type === "response"
-      ? settleResponse(runtime, message)
-      : message.type === "event"
-        ? await dispatchEvent(runtime, message)
-        : message.type === "request"
-          ? await rejectReverse(send, runtime, message)
-          : false;
+  const valid = await dispatchMessage(runtime, send, message);
   if (!valid) await fatal(runtime, "MALFORMED_MESSAGE");
+}
+
+async function dispatchMessage(
+  runtime: Runtime,
+  send: (body: string) => void,
+  message: Record<string, unknown>,
+): Promise<boolean> {
+  if (message.type === "response") return settleResponse(runtime, message);
+  if (message.type === "event") return dispatchEvent(runtime, message);
+  if (message.type === "request") return rejectReverse(send, runtime, message);
+  return false;
 }
 
 function acceptIncomingSequence(runtime: Runtime, value: unknown): boolean {
@@ -367,14 +379,16 @@ function rejectReverse(
       }),
     );
   } catch {
-    void fatal(runtime, "WRITE_FAILED");
+    fatal(runtime, "WRITE_FAILED").catch(() => {
+      dispose(runtime);
+    });
   }
   return Promise.resolve(true);
 }
 
 function dispose(runtime: Runtime): void {
   runtime.disposed = true;
-  for (const seq of [...runtime.pending.keys()]) settleRejected(runtime, seq, "CLIENT_DISPOSED");
+  for (const seq of runtime.pending.keys()) settleRejected(runtime, seq, "CLIENT_DISPOSED");
   runtime.handlers.clear();
   runtime.stoppedHandlers.clear();
   runtime.retired.clear();

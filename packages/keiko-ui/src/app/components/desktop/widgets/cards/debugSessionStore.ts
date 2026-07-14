@@ -74,6 +74,7 @@ export interface DebugSessionSnapshot {
 
 interface DebugProjectState {
   snapshot: DebugSessionSnapshot;
+  latestPause: DebugPauseIdentity | null;
   readonly listeners: Set<() => void>;
 }
 
@@ -105,14 +106,18 @@ const states = new Map<string, DebugProjectState>();
 function stateFor(workspaceId: string): DebugProjectState {
   const existing = states.get(workspaceId);
   if (existing !== undefined) return existing;
-  const state: DebugProjectState = { snapshot: EMPTY_SNAPSHOT, listeners: new Set() };
+  const state: DebugProjectState = {
+    snapshot: EMPTY_SNAPSHOT,
+    latestPause: null,
+    listeners: new Set(),
+  };
   states.set(workspaceId, state);
   return state;
 }
 
 function publish(state: DebugProjectState, snapshot: DebugSessionSnapshot): void {
   state.snapshot = snapshot;
-  for (const listener of [...state.listeners]) listener();
+  for (const listener of state.listeners) listener();
 }
 
 function entryBytes(entry: DebugConsoleEntry): number {
@@ -201,16 +206,20 @@ interface DebugSessionUpdateOptions {
 function stalePauseProjection(
   current: DebugSession | null,
   next: DebugSession | null,
+  latestPause: DebugPauseIdentity | null,
   allowSameGenerationResume: boolean,
 ): boolean {
+  const pause =
+    current?.status === "paused"
+      ? { sessionId: current.sessionId, pauseGeneration: current.pauseGeneration }
+      : latestPause;
   return (
-    current !== null &&
+    pause !== null &&
     next !== null &&
-    current.sessionId === next.sessionId &&
-    (next.pauseGeneration < current.pauseGeneration ||
-      (current.status === "paused" &&
-        next.status !== "paused" &&
-        next.pauseGeneration === current.pauseGeneration &&
+    pause.sessionId === next.sessionId &&
+    (next.pauseGeneration < pause.pauseGeneration ||
+      (next.status !== "paused" &&
+        next.pauseGeneration === pause.pauseGeneration &&
         !allowSameGenerationResume))
   );
 }
@@ -218,15 +227,20 @@ function stalePauseProjection(
 function progressedBeyondPause(
   current: DebugSession | null,
   next: DebugSession | null,
+  latestPause: DebugPauseIdentity | null,
   allowSameGenerationResume: boolean,
 ): boolean {
+  const pause =
+    current?.status === "paused"
+      ? { sessionId: current.sessionId, pauseGeneration: current.pauseGeneration }
+      : latestPause;
   return (
-    current?.status === "paused" &&
+    pause !== null &&
     next !== null &&
-    next.sessionId === current.sessionId &&
+    next.sessionId === pause.sessionId &&
     next.status !== "paused" &&
-    (next.pauseGeneration > current.pauseGeneration ||
-      (allowSameGenerationResume && next.pauseGeneration === current.pauseGeneration))
+    (next.pauseGeneration > pause.pauseGeneration ||
+      (allowSameGenerationResume && next.pauseGeneration === pause.pauseGeneration))
   );
 }
 
@@ -238,20 +252,39 @@ export function setDebugSession(
   const state = stateFor(workspaceId);
   const allowSameGenerationResume = options.allowSameGenerationResume ?? false;
   if (session !== null && session.workspaceId !== workspaceId) return;
-  if (stalePauseProjection(state.snapshot.session, session, allowSameGenerationResume)) return;
+  if (
+    stalePauseProjection(
+      state.snapshot.session,
+      session,
+      state.latestPause,
+      allowSameGenerationResume,
+    )
+  ) {
+    return;
+  }
+  const progressed = progressedBeyondPause(
+    state.snapshot.session,
+    session,
+    state.latestPause,
+    allowSameGenerationResume,
+  );
   const changedPause =
     session === null ||
     state.snapshot.session?.sessionId !== session.sessionId ||
     state.snapshot.session.pauseGeneration !== session.pauseGeneration ||
     session.status !== "paused";
   const next = changedPause ? resetPausedProjections(state.snapshot) : state.snapshot;
+  if (
+    session === null ||
+    progressed ||
+    (state.latestPause !== null && state.latestPause.sessionId !== session.sessionId)
+  ) {
+    state.latestPause = null;
+  }
   publish(state, {
     ...next,
     session,
-    ...(session === null ||
-    progressedBeyondPause(state.snapshot.session, session, allowSameGenerationResume)
-      ? { stopDescription: null }
-      : {}),
+    ...(session === null || progressed ? { stopDescription: null } : {}),
   });
 }
 
@@ -360,6 +393,7 @@ export function replaceDebugPausedProjections(
 
 export function beginDebugStreamResync(workspaceId: string): void {
   const state = stateFor(workspaceId);
+  state.latestPause = null;
   publish(state, {
     ...resetPausedProjections(state.snapshot),
     console: EMPTY_CONSOLE,
@@ -374,6 +408,73 @@ export function synchronizeDebugSequence(workspaceId: string, sequence: number):
   publish(state, { ...state.snapshot, sequence });
 }
 
+function applySessionStarted(
+  state: DebugProjectState,
+  snapshot: DebugSessionSnapshot,
+  event: Extract<DebugEvent, { readonly kind: "session-started" }>,
+): DebugSessionSnapshot {
+  const supersededPause =
+    state.latestPause?.sessionId === event.sessionId ? state.latestPause : null;
+  let next = snapshot;
+  if (supersededPause === null) {
+    state.latestPause = null;
+    next = { ...resetPausedProjections(next), stopDescription: null };
+  }
+  if (next.session?.sessionId !== event.sessionId) return { ...next, session: null };
+  return {
+    ...next,
+    session: {
+      ...next.session,
+      status: supersededPause === null ? event.status : "paused",
+      ...(supersededPause === null ? {} : { pauseGeneration: supersededPause.pauseGeneration }),
+    },
+  };
+}
+
+function applyContinued(
+  state: DebugProjectState,
+  snapshot: DebugSessionSnapshot,
+  event: Extract<DebugEvent, { readonly kind: "continued" }>,
+): DebugSessionSnapshot {
+  if (state.latestPause?.sessionId === event.sessionId) state.latestPause = null;
+  const next = { ...resetPausedProjections(snapshot), stopDescription: null };
+  if (next.session?.sessionId !== event.sessionId) return next;
+  return {
+    ...next,
+    session: { ...next.session, status: "running", pauseGeneration: event.pauseGeneration },
+  };
+}
+
+function applyStopped(
+  state: DebugProjectState,
+  snapshot: DebugSessionSnapshot,
+  event: Extract<DebugEvent, { readonly kind: "stopped" }>,
+): DebugSessionSnapshot {
+  state.latestPause = { sessionId: event.sessionId, pauseGeneration: event.pauseGeneration };
+  const next = {
+    ...resetPausedProjections(snapshot),
+    stopDescription: event.reason === "exception" ? (event.description ?? null) : null,
+  };
+  if (next.session?.sessionId !== event.sessionId) return next;
+  return {
+    ...next,
+    session: { ...next.session, status: "paused", pauseGeneration: event.pauseGeneration },
+  };
+}
+
+function applyTerminalEvent(
+  state: DebugProjectState,
+  snapshot: DebugSessionSnapshot,
+  event: Extract<DebugEvent, { readonly kind: "session-stopped" | "exited" }>,
+): DebugSessionSnapshot {
+  if (state.latestPause?.sessionId === event.sessionId) state.latestPause = null;
+  return {
+    ...resetPausedProjections(snapshot),
+    session: snapshot.session?.sessionId === event.sessionId ? null : snapshot.session,
+    stopDescription: null,
+  };
+}
+
 export function applyDebugEvent(workspaceId: string, sequence: number, event: DebugEvent): void {
   const state = stateFor(workspaceId);
   if (sequence <= state.snapshot.sequence) return;
@@ -383,41 +484,14 @@ export function applyDebugEvent(workspaceId: string, sequence: number, event: De
       ...next,
       console: boundedConsole(next.console, eventConsoleEntry(event, sequence)),
     };
-  } else if (event.kind === "session-started" || event.kind === "continued") {
-    next = { ...resetPausedProjections(next), stopDescription: null };
-    if (next.session?.sessionId === event.sessionId) {
-      next = {
-        ...next,
-        session: {
-          ...next.session,
-          status: event.kind === "continued" ? "running" : event.status,
-          ...(event.kind === "continued" ? { pauseGeneration: event.pauseGeneration } : {}),
-        },
-      };
-    } else if (event.kind === "session-started") {
-      next = { ...next, session: null };
-    }
+  } else if (event.kind === "session-started") {
+    next = applySessionStarted(state, next, event);
+  } else if (event.kind === "continued") {
+    next = applyContinued(state, next, event);
   } else if (event.kind === "stopped") {
-    next = {
-      ...resetPausedProjections(next),
-      stopDescription: event.reason === "exception" ? (event.description ?? null) : null,
-    };
-    if (next.session?.sessionId === event.sessionId) {
-      next = {
-        ...next,
-        session: {
-          ...next.session,
-          status: "paused",
-          pauseGeneration: event.pauseGeneration,
-        },
-      };
-    }
+    next = applyStopped(state, next, event);
   } else if (event.kind === "session-stopped" || event.kind === "exited") {
-    next = {
-      ...resetPausedProjections(next),
-      session: next.session?.sessionId === event.sessionId ? null : next.session,
-      stopDescription: null,
-    };
+    next = applyTerminalEvent(state, next, event);
   }
   publish(state, next);
 }

@@ -78,15 +78,15 @@ export interface DebugLifecycleEvent extends DebugLifecycleEvidence {
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const EVENT_KINDS: readonly DebugLifecycleEventKind[] = [
+const EVENT_KINDS = new Set<DebugLifecycleEventKind>([
   "start",
   "active",
   "stop",
   "failure",
   "session-revoked",
   "teardown",
-];
-const STATES: readonly DebugSessionState[] = [
+]);
+const STATES = new Set<DebugSessionState>([
   "reserved",
   "starting",
   "running",
@@ -97,8 +97,8 @@ const STATES: readonly DebugSessionState[] = [
   "revoked",
   "terminationPending",
   "restartThrottled",
-];
-const REASONS: readonly DebugLifecycleReason[] = [
+]);
+const REASONS = new Set<DebugLifecycleReason>([
   "requested",
   "adapterExit",
   "debuggeeExit",
@@ -114,7 +114,7 @@ const REASONS: readonly DebugLifecycleReason[] = [
   "writeFailure",
   "unexpectedEof",
   "stopped",
-];
+]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
   "eventKind",
@@ -143,9 +143,9 @@ function hasExactKeys(record: Record<string, unknown>): boolean {
 
 function hasClosedVocabulary(record: Record<string, unknown>): boolean {
   return (
-    EVENT_KINDS.includes(record.eventKind as DebugLifecycleEventKind) &&
-    STATES.includes(record.state as DebugSessionState) &&
-    REASONS.includes(record.reason as DebugLifecycleReason)
+    EVENT_KINDS.has(record.eventKind as DebugLifecycleEventKind) &&
+    STATES.has(record.state as DebugSessionState) &&
+    REASONS.has(record.reason as DebugLifecycleReason)
   );
 }
 

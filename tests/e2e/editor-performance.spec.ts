@@ -532,7 +532,7 @@ function isFinalDiagnosticsResponse(response: Response): boolean {
 }
 
 function waitForFinalDiagnosticsRecompute(page: Page): Promise<Response> {
-  return page.waitForResponse(isFinalDiagnosticsResponse);
+  return page.waitForResponse(isFinalDiagnosticsResponse, { timeout: 5_000 });
 }
 
 async function insertMeasuredChunks(page: Page): Promise<void> {
@@ -579,7 +579,7 @@ async function replaceEditorText(
   // apply on the main thread), not just the synchronous keydown handling. A fixed 250ms sleep (less
   // than the 400ms debounce) read metrics BEFORE that cost ever ran; waiting for the real response
   // instead makes this budget capable of observing a violation at all.
-  await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000).then(() => false)]);
+  await diagnosticsRecomputed;
   return observerInstalled;
 }
 
@@ -907,7 +907,11 @@ async function stopIdleDebugSession(page: Page, session: IdleDebugSession): Prom
 
 async function installIdleDebugLongTaskObserver(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const state = { longTasks: [] as number[], observerInstalled: false };
+    const state = {
+      installedAtMs: performance.now(),
+      longTasks: [] as number[],
+      observerInstalled: false,
+    };
     (window as unknown as { __keikoIdleDebugPerf: typeof state }).__keikoIdleDebugPerf = state;
     try {
       new PerformanceObserver((list) => {
@@ -919,6 +923,20 @@ async function installIdleDebugLongTaskObserver(page: Page): Promise<boolean> {
     }
     return state.observerInstalled;
   });
+}
+
+async function waitForIdleDebugObservationWindow(page: Page): Promise<void> {
+  await page.waitForFunction((minimumDurationMs) => {
+    const state = (
+      window as unknown as {
+        __keikoIdleDebugPerf?: { readonly installedAtMs?: number | undefined };
+      }
+    ).__keikoIdleDebugPerf;
+    return (
+      state?.installedAtMs !== undefined &&
+      performance.now() - state.installedAtMs >= minimumDurationMs
+    );
+  }, IDLE_DEBUG_INTERVAL_MS);
 }
 
 function traceEvent(value: unknown): TraceEvent | undefined {
@@ -1045,7 +1063,7 @@ async function measureIdleDebugTyping(
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 10_000 });
   const observerInstalled = await installIdleDebugLongTaskObserver(page);
-  await page.waitForTimeout(IDLE_DEBUG_INTERVAL_MS);
+  await waitForIdleDebugObservationWindow(page);
   await editor.click({ timeout: 8_000 });
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
@@ -1054,7 +1072,7 @@ async function measureIdleDebugTyping(
   const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
   const matchedInputEventCounts = measurements.map((measurement) => measurement.matchedEventCount);
   const processingSamples = measurements.map((measurement) => measurement.durationMs);
-  await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000)]);
+  await diagnosticsRecomputed;
   const [longTasks, liveSession] = await Promise.all([
     idleDebugLongTasks(page),
     readIdleDebugSession(page, session),

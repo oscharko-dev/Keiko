@@ -162,14 +162,10 @@ function assertImmutableMounts(input: StrictDebugCapsuleInput): void {
 }
 
 function backendExecutable(input: StrictDebugCapsuleInput, backend: SandboxBackend): string {
-  const executable =
-    backend === "bubblewrap"
-      ? input.backendExecutables?.bubblewrap
-      : backend === "container-docker"
-        ? input.backendExecutables?.docker
-        : backend === "container-podman"
-          ? input.backendExecutables?.podman
-          : undefined;
+  let executable: string | undefined;
+  if (backend === "bubblewrap") executable = input.backendExecutables?.bubblewrap;
+  else if (backend === "container-docker") executable = input.backendExecutables?.docker;
+  else if (backend === "container-podman") executable = input.backendExecutables?.podman;
   if (executable === undefined) throw new StrictDebugCapsulePlanError();
   const normalized = normalizedAbsolute(executable);
   if (normalized === "/") throw new StrictDebugCapsulePlanError();
@@ -177,14 +173,10 @@ function backendExecutable(input: StrictDebugCapsuleInput, backend: SandboxBacke
 }
 
 function backendExecutableDigest(input: StrictDebugCapsuleInput, backend: SandboxBackend): string {
-  const digest =
-    backend === "bubblewrap"
-      ? input.backendExecutableIdentityDigests?.bubblewrap
-      : backend === "container-docker"
-        ? input.backendExecutableIdentityDigests?.docker
-        : backend === "container-podman"
-          ? input.backendExecutableIdentityDigests?.podman
-          : undefined;
+  let digest: string | undefined;
+  if (backend === "bubblewrap") digest = input.backendExecutableIdentityDigests?.bubblewrap;
+  else if (backend === "container-docker") digest = input.backendExecutableIdentityDigests?.docker;
+  else if (backend === "container-podman") digest = input.backendExecutableIdentityDigests?.podman;
   if (digest === undefined || !isSha256Digest(digest)) throw new StrictDebugCapsulePlanError();
   return digest;
 }

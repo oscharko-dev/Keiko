@@ -216,8 +216,8 @@ function* drainFrames(
   // Iterate an immutable view of bytes already required for frame parsing. Each frame consumes at
   // least one header byte, so this bounds malformed reset behavior without an input-sized control
   // array or a mutable loop counter that can be mutation-corrupted into an infinite loop.
-  for (const _byte of frameBudget) {
-    void _byte;
+  for (const byte of frameBudget) {
+    if (!Number.isSafeInteger(byte)) return;
     if (!pending.hasHeaderDelimiter()) {
       guardHeaderBound(pending);
       return;

@@ -36,12 +36,19 @@ type BreakpointAction = BreakpointContext["actions"][number];
 
 const MAX_INLINE_SUMMARY_VALUES = 20;
 const MAX_INLINE_SUMMARY_CHARS = 320;
-const ACTIVE_SESSION_STATES: readonly DebugSessionState[] = [
+const ACTIVE_SESSION_STATES = new Set<DebugSessionState>([
   "reserved",
   "starting",
   "running",
   "paused",
-];
+]);
+
+function nextMenuIndex(key: string, current: number, last: number): number {
+  if (key === "Home") return 0;
+  if (key === "End") return last;
+  const delta = key === "ArrowUp" ? -1 : 1;
+  return (current + delta + last + 1) % (last + 1);
+}
 
 function debugBreakpoint(fileId: string, line: number): SourceBreakpoint {
   return {
@@ -196,12 +203,7 @@ export function BreakpointContextMenu(props: {
     event.preventDefault();
     const current = Math.max(0, refs.current.indexOf(document.activeElement as HTMLButtonElement));
     const last = actions.length - 1;
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? last
-          : (current + (event.key === "ArrowUp" ? -1 : 1) + last + 1) % (last + 1);
+    const next = nextMenuIndex(event.key, current, last);
     refs.current[next]?.focus();
   };
   return (
@@ -371,7 +373,7 @@ export function EditorDebugSessionHost({
           if (action === "continue") return session === null || session.status === "paused";
           if (action === "pause") return session?.status === "running";
           if (action === "stop")
-            return session !== null && ACTIVE_SESSION_STATES.includes(session.status);
+            return session !== null && ACTIVE_SESSION_STATES.has(session.status);
           return session?.status === "paused";
         },
         continue: (): void => {
@@ -393,7 +395,7 @@ export function EditorDebugSessionHost({
           if (session?.status === "paused") perform(actions.control(session, "stepOut"));
         },
         stop: (): void => {
-          if (session !== null && ACTIVE_SESSION_STATES.includes(session.status))
+          if (session !== null && ACTIVE_SESSION_STATES.has(session.status))
             perform(actions.control(session, "stop"));
         },
       },

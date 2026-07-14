@@ -26,14 +26,14 @@ export function installDebugMonacoStyles(container: HTMLElement): MonacoDisposab
   const scope = scopeName();
   const document = container.ownerDocument;
   const style = document.createElement("style");
-  style.setAttribute("data-keiko-debug-decoration-style", scope);
+  style.dataset.keikoDebugDecorationStyle = scope;
   style.textContent = styleText(scope);
-  container.setAttribute("data-keiko-debug-decorations", scope);
+  container.dataset.keikoDebugDecorations = scope;
   document.head.append(style);
   return {
     dispose(): void {
-      if (container.getAttribute("data-keiko-debug-decorations") === scope) {
-        container.removeAttribute("data-keiko-debug-decorations");
+      if (container.dataset.keikoDebugDecorations === scope) {
+        delete container.dataset.keikoDebugDecorations;
       }
       style.remove();
     },

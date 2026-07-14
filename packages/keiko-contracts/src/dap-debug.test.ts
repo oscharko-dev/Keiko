@@ -315,7 +315,18 @@ describe("DAP debug leaf contracts", () => {
       exceptionFilters: [exceptionFilter],
       watches: [watch],
     } as const satisfies InstrumentationSnapshot;
-    expect({ session, frame, scope, result, snapshot }).toBeDefined();
+    const strictFixtures: readonly [
+      DebugSession,
+      StackFrame,
+      Scope,
+      WatchEvaluationResult,
+      InstrumentationSnapshot,
+    ] = [session, frame, scope, result, snapshot];
+    expect([
+      strictFixtures[1].name.value,
+      strictFixtures[2].name.value,
+      strictFixtures[3].value?.value,
+    ]).toStrictEqual(["main", "Local", "42"]);
   });
 
   it.each(validRequests)("accepts a valid %s request", (_name, parser, value) => {

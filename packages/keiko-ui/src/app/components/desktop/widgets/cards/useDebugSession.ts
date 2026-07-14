@@ -307,112 +307,161 @@ function parseSession(value: unknown): DebugSession | null {
   };
 }
 
+function parseOutputEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "output" }> | null {
+  const category = stringValue(value.category);
+  const text = stringValue(value.text);
+  const originalBytes = numberValue(value.originalBytes);
+  const omittedBytes = numberValue(value.omittedBytes);
+  if (
+    sessionId === null ||
+    text === null ||
+    originalBytes === null ||
+    omittedBytes === null ||
+    typeof value.truncated !== "boolean" ||
+    (category !== "stdout" && category !== "stderr" && category !== "console")
+  ) {
+    return null;
+  }
+  return {
+    kind: "output",
+    sessionId,
+    category,
+    text,
+    truncated: value.truncated,
+    originalBytes,
+    omittedBytes,
+  };
+}
+
+function parseContinuedEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "continued" }> | null {
+  const pauseGeneration = numberValue(value.pauseGeneration);
+  return sessionId === null || pauseGeneration === null
+    ? null
+    : { kind: "continued", sessionId, pauseGeneration };
+}
+
+const STOP_REASONS = new Set(["breakpoint", "exception", "pause", "step", "entry", "restart"]);
+
+function parseStoppedEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "stopped" }> | null {
+  const pauseGeneration = numberValue(value.pauseGeneration);
+  const reason = stringValue(value.reason);
+  const description = value.description === undefined ? undefined : boundedText(value.description);
+  if (
+    sessionId === null ||
+    pauseGeneration === null ||
+    (value.description !== undefined && description === null) ||
+    typeof value.allThreadsStopped !== "boolean" ||
+    reason === null ||
+    !STOP_REASONS.has(reason)
+  )
+    return null;
+  const event = {
+    kind: "stopped" as const,
+    sessionId,
+    pauseGeneration,
+    reason: reason as Extract<DebugEvent, { readonly kind: "stopped" }>["reason"],
+    allThreadsStopped: value.allThreadsStopped,
+  };
+  return description === null || description === undefined ? event : { ...event, description };
+}
+
+function parseSessionStartedEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "session-started" }> | null {
+  const status = stringValue(value.status);
+  return sessionId === null || (status !== "starting" && status !== "running")
+    ? null
+    : { kind: "session-started", sessionId, status };
+}
+
+const TERMINAL_REASONS = new Set(["requested", "exited", "failed", "revoked", "limit"]);
+
+function parseSessionStoppedEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "session-stopped" }> | null {
+  const status = stringValue(value.status);
+  const reason = stringValue(value.reason);
+  if (
+    sessionId === null ||
+    (status !== "stopped" && status !== "failed" && status !== "revoked") ||
+    reason === null ||
+    !TERMINAL_REASONS.has(reason)
+  )
+    return null;
+  return {
+    kind: "session-stopped",
+    sessionId,
+    status,
+    reason: reason as Extract<DebugEvent, { readonly kind: "session-stopped" }>["reason"],
+  };
+}
+
+function parseExitedEvent(
+  value: Readonly<Record<string, unknown>>,
+  sessionId: string | null,
+): Extract<DebugEvent, { readonly kind: "exited" }> | null {
+  const exitCode = numberValue(value.exitCode);
+  return sessionId === null || exitCode === null ? null : { kind: "exited", sessionId, exitCode };
+}
+
+function parseBreakpointsChangedEvent(
+  value: Readonly<Record<string, unknown>>,
+): Extract<DebugEvent, { readonly kind: "breakpoints-changed" }> | null {
+  const workspaceId = stringValue(value.workspaceId);
+  const revision = numberValue(value.revision);
+  const breakpointCount = numberValue(value.breakpointCount);
+  const verifiedCount = numberValue(value.verifiedCount);
+  return workspaceId === null ||
+    revision === null ||
+    breakpointCount === null ||
+    verifiedCount === null
+    ? null
+    : { kind: "breakpoints-changed", workspaceId, revision, breakpointCount, verifiedCount };
+}
+
+function parseProjectionTruncatedEvent(
+  value: Readonly<Record<string, unknown>>,
+): Extract<DebugEvent, { readonly kind: "projection-truncated" }> | null {
+  const originalBytes = numberValue(value.originalBytes);
+  return value.reason !== "sse-event-size" || originalBytes === null
+    ? null
+    : { kind: "projection-truncated", reason: "sse-event-size", originalBytes };
+}
+
 function parseEvent(value: unknown): DebugEvent | null {
   if (!isRecord(value)) return null;
-  const kind = stringValue(value.kind);
   const sessionId = stringValue(value.sessionId);
-  if (kind === "output") {
-    const category = stringValue(value.category);
-    const text = stringValue(value.text);
-    const originalBytes = numberValue(value.originalBytes);
-    const omittedBytes = numberValue(value.omittedBytes);
-    if (
-      sessionId === null ||
-      text === null ||
-      originalBytes === null ||
-      omittedBytes === null ||
-      typeof value.truncated !== "boolean" ||
-      (category !== "stdout" && category !== "stderr" && category !== "console")
-    ) {
+  switch (stringValue(value.kind)) {
+    case "output":
+      return parseOutputEvent(value, sessionId);
+    case "continued":
+      return parseContinuedEvent(value, sessionId);
+    case "stopped":
+      return parseStoppedEvent(value, sessionId);
+    case "session-started":
+      return parseSessionStartedEvent(value, sessionId);
+    case "session-stopped":
+      return parseSessionStoppedEvent(value, sessionId);
+    case "exited":
+      return parseExitedEvent(value, sessionId);
+    case "breakpoints-changed":
+      return parseBreakpointsChangedEvent(value);
+    case "projection-truncated":
+      return parseProjectionTruncatedEvent(value);
+    default:
       return null;
-    }
-    return {
-      kind,
-      sessionId,
-      category,
-      text,
-      truncated: value.truncated,
-      originalBytes,
-      omittedBytes,
-    };
   }
-  if (kind === "continued") {
-    const pauseGeneration = numberValue(value.pauseGeneration);
-    return sessionId === null || pauseGeneration === null
-      ? null
-      : { kind, sessionId, pauseGeneration };
-  }
-  if (kind === "stopped") {
-    const pauseGeneration = numberValue(value.pauseGeneration);
-    const reason = stringValue(value.reason);
-    const description =
-      value.description === undefined ? undefined : boundedText(value.description);
-    if (
-      sessionId === null ||
-      pauseGeneration === null ||
-      (value.description !== undefined && description === null) ||
-      typeof value.allThreadsStopped !== "boolean" ||
-      (reason !== "breakpoint" &&
-        reason !== "exception" &&
-        reason !== "pause" &&
-        reason !== "step" &&
-        reason !== "entry" &&
-        reason !== "restart")
-    )
-      return null;
-    return {
-      kind,
-      sessionId,
-      pauseGeneration,
-      reason,
-      allThreadsStopped: value.allThreadsStopped,
-      ...(description === null || description === undefined ? {} : { description }),
-    };
-  }
-  if (kind === "session-started") {
-    const status = stringValue(value.status);
-    return sessionId === null || (status !== "starting" && status !== "running")
-      ? null
-      : { kind, sessionId, status };
-  }
-  if (kind === "session-stopped") {
-    const status = stringValue(value.status);
-    const reason = stringValue(value.reason);
-    if (
-      sessionId === null ||
-      (status !== "stopped" && status !== "failed" && status !== "revoked") ||
-      (reason !== "requested" &&
-        reason !== "exited" &&
-        reason !== "failed" &&
-        reason !== "revoked" &&
-        reason !== "limit")
-    )
-      return null;
-    return { kind, sessionId, status, reason };
-  }
-  if (kind === "exited") {
-    const exitCode = numberValue(value.exitCode);
-    return sessionId === null || exitCode === null ? null : { kind, sessionId, exitCode };
-  }
-  if (kind === "breakpoints-changed") {
-    const workspaceId = stringValue(value.workspaceId);
-    const revision = numberValue(value.revision);
-    const breakpointCount = numberValue(value.breakpointCount);
-    const verifiedCount = numberValue(value.verifiedCount);
-    return workspaceId === null ||
-      revision === null ||
-      breakpointCount === null ||
-      verifiedCount === null
-      ? null
-      : { kind, workspaceId, revision, breakpointCount, verifiedCount };
-  }
-  if (kind === "projection-truncated") {
-    const originalBytes = numberValue(value.originalBytes);
-    return value.reason !== "sse-event-size" || originalBytes === null
-      ? null
-      : { kind, reason: "sse-event-size", originalBytes };
-  }
-  return null;
 }
 
 function parseEnvelope(value: unknown): DebugEventEnvelope | null {
@@ -764,6 +813,31 @@ export interface UseDebugSessionResult {
   readonly actions: DebugSessionActions;
 }
 
+const ABORTING_EVENT_KINDS = new Set<DebugEvent["kind"]>([
+  "session-started",
+  "session-stopped",
+  "stopped",
+  "continued",
+  "exited",
+]);
+
+interface DebugStreamLifecycle {
+  cancelled: boolean;
+  eventQueue: Promise<void>;
+}
+
+function enqueueDebugStreamMessage(
+  lifecycle: DebugStreamLifecycle,
+  message: MessageEvent<string>,
+  handler: (message: MessageEvent<string>) => Promise<void>,
+): void {
+  lifecycle.eventQueue = lifecycle.eventQueue
+    .then(() => (lifecycle.cancelled ? undefined : handler(message)))
+    .catch((): void => {
+      // The server returns redacted envelopes; keep the stream alive without logging.
+    });
+}
+
 export function useDebugSession(
   workspaceId: string | undefined,
   enabled = false,
@@ -785,15 +859,12 @@ export function useDebugSession(
     abortRequests(requestControllers.current);
   }, []);
 
-  const trackedRequest = useCallback(
-    async (url: string, init?: RequestInit): Promise<unknown | null> => {
-      const response = await runAbortable(requestControllers.current, (signal) =>
-        requestJson(url, { ...init, signal }),
-      );
-      return response ?? null;
-    },
-    [],
-  );
+  const trackedRequest = useCallback(async (url: string, init?: RequestInit): Promise<unknown> => {
+    const response = await runAbortable(requestControllers.current, (signal) =>
+      requestJson(url, { ...init, signal }),
+    );
+    return response ?? null;
+  }, []);
 
   const bootstrap = useCallback(async (): Promise<void> => {
     if (!enabled || stableWorkspaceId.length === 0) return;
@@ -891,15 +962,7 @@ export function useDebugSession(
       const parsed = parseEnvelope(parseJson(message.data));
       if (parsed === null) return;
       const event = parsed.event;
-      if (
-        event.kind === "session-started" ||
-        event.kind === "session-stopped" ||
-        event.kind === "stopped" ||
-        event.kind === "continued" ||
-        event.kind === "exited"
-      ) {
-        abortPendingRequests();
-      }
+      if (ABORTING_EVENT_KINDS.has(event.kind)) abortPendingRequests();
       applyDebugEvent(stableWorkspaceId, parsed.sequence, event);
       if (event.kind === "session-stopped" || event.kind === "exited") return;
       if (event.kind === "breakpoints-changed") {
@@ -928,34 +991,27 @@ export function useDebugSession(
   useEffect(() => {
     if (!enabled || stableWorkspaceId.length === 0) return;
     let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
-    let eventQueue = Promise.resolve();
+    const lifecycle: DebugStreamLifecycle = { cancelled: false, eventQueue: Promise.resolve() };
     const start = async (): Promise<void> => {
       try {
         await bootstrap();
-        if (cancelled) return;
+        if (lifecycle.cancelled) return;
         await refreshInstrumentation();
-        if (cancelled) return;
+        if (lifecycle.cancelled) return;
         unsubscribe = subscribeSharedEventSource(
           debugUrl(stableWorkspaceId, "events"),
           DEBUG_EVENTS,
-          (message) => {
-            eventQueue = eventQueue
-              .then(async (): Promise<void> => {
-                if (!cancelled) await handleStreamMessage(message);
-              })
-              .catch((): void => {
-                // The server returns redacted envelopes; keep the stream alive without logging.
-              });
-          },
+          (message) => enqueueDebugStreamMessage(lifecycle, message, handleStreamMessage),
         );
       } catch {
         // The server returns a redacted error envelope. Do not log debuggee output or projections.
       }
     };
-    void start();
+    start().catch(() => {
+      // Startup already returns only redacted failures; no debug payload is logged here.
+    });
     return (): void => {
-      cancelled = true;
+      lifecycle.cancelled = true;
       streamResyncRequired.current = false;
       abortPendingRequests();
       unsubscribe?.();
@@ -1251,8 +1307,7 @@ export function useDebugSession(
       if (response === null) return;
       const projection = parseSetVariableProjection(response);
       if (
-        projection === null ||
-        projection.sessionId !== identity.sessionId ||
+        projection?.sessionId !== identity.sessionId ||
         projection.pauseGeneration !== identity.pauseGeneration
       ) {
         throw new Error("Debug variable projection was invalid.");

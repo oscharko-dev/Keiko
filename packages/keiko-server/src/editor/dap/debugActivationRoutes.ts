@@ -48,7 +48,8 @@ function parseBody(value: unknown): ParsedBody | undefined {
 
 function singleHeader(ctx: RouteContext, name: "idempotency-key" | "if-match"): string | undefined {
   const value = ctx.req.headers[name];
-  return Array.isArray(value) ? (value.length === 1 ? value[0] : undefined) : value;
+  if (!Array.isArray(value)) return value;
+  return value.length === 1 ? value[0] : undefined;
 }
 
 function hasControlCharacter(value: string): boolean {

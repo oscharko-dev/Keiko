@@ -855,6 +855,8 @@ function validateExceptionBreakpointResponse(response: unknown): void {
   for (const breakpoint of adapterArray(body.breakpoints)) adapterBreakpoint(breakpoint);
 }
 
+type BreakpointActivation = "inactive" | "armed" | "unavailable";
+
 async function reconcileActiveBreakpoints(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -862,7 +864,7 @@ async function reconcileActiveBreakpoints(
   result: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
 ): Promise<{
   readonly result: BreakpointStoreMutationResult;
-  readonly activation: "inactive" | "armed" | "unavailable";
+  readonly activation: BreakpointActivation;
 }> {
   const update = await updateActiveBreakpoints(service, workspace, fileId, result.snapshot);
   if (update.kind !== "response") return { result, activation: update.kind };

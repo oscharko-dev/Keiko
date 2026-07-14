@@ -218,7 +218,9 @@ export function createDapEventBridge(): DapEventBridge {
         replay: replay.replay,
         snapshot: snapshot(state),
         snapshotRequired: replay.snapshotRequired,
-        unsubscribe: (): void => void state.subscribers.delete(subscriberId),
+        unsubscribe: (): void => {
+          state.subscribers.delete(subscriberId);
+        },
       };
     },
     snapshot: (channel) => snapshot(channels.get(channelKey(channel))),

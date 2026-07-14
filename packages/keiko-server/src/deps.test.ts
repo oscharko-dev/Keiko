@@ -456,12 +456,44 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
   it("requires non-spawning operator artifact qualification and denies identity drift", () => {
     const qualified = qualifiedOperatorDapDocument();
-    const qualification = createOperatorProvisioningQualification({
-      KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
-    });
+    let contentReads = 0;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        contentReads += 1;
+        return readFileSync(hostPath);
+      },
+    );
+    const initializationReads = contentReads;
     expect(qualification()).toBe("provisioned");
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBe(initializationReads);
 
     writeFileSync(qualified.nodePath, "drifted-node", "utf8");
+    expect(qualification()).toBe("notProvisioned");
+    expect(contentReads).toBeGreaterThan(initializationReads);
+  });
+
+  it("denies provisioning when artifact metadata changes during initial qualification", () => {
+    const qualified = qualifiedOperatorDapDocument();
+    let mutated = false;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        const content = readFileSync(hostPath);
+        if (!mutated) {
+          mutated = true;
+          writeFileSync(qualified.nodePath, "drifted-during-qualification", "utf8");
+        }
+        return content;
+      },
+    );
+
+    expect(mutated).toBe(true);
     expect(qualification()).toBe("notProvisioned");
   });
 

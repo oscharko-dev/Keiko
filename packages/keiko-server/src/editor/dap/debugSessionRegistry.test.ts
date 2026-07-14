@@ -649,7 +649,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
       limitReached: false,
     });
     const multibyte = await registry.acceptOutput("session_a", Buffer.from("€".repeat(6_000)));
-    expect(multibyte.accepted.length).toBe(16_382);
+    expect(multibyte.accepted).toHaveLength(16_382);
     expect(multibyte.accepted.toString("utf8")).toMatch(/\[truncated\]$/u);
     expect(multibyte.omittedBytes).toBe(1_629);
     expect(multibyte.limitReached).toBe(false);

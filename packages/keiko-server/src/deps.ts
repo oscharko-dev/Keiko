@@ -1647,14 +1647,18 @@ interface DapArtifactQualification {
   readonly allowDirectory: boolean;
 }
 
+type DapArtifactContentReader = (hostPath: string) => Uint8Array;
+
 function qualifiedArtifactFile(
   artifact: DapOperatorProvisionedArtifact,
   qualification: DapArtifactQualification,
+  contentReader?: DapArtifactContentReader,
 ): readonly unknown[] {
   const supplied = lstatSync(artifact.hostPath);
   const realPath = realpathSync(artifact.hostPath);
   const approvedRoot = realpathSync(artifact.approvedRoot);
   const stat = lstatSync(realPath);
+  const change = lstatSync(realPath, { bigint: true });
   if (
     supplied.isSymbolicLink() ||
     realPath === approvedRoot ||
@@ -1665,7 +1669,7 @@ function qualifiedArtifactFile(
   ) {
     throw new Error("INVALID_DAP_PROVISIONING");
   }
-  return [
+  const metadata = [
     artifact.hostPath,
     realPath,
     approvedRoot,
@@ -1675,19 +1679,24 @@ function qualifiedArtifactFile(
     stat.size,
     stat.mode,
     stat.uid,
-    createHash("sha256").update(readFileSync(realPath)).digest("hex"),
+    change.mtimeNs.toString(),
+    change.ctimeNs.toString(),
   ];
+  return contentReader === undefined
+    ? metadata
+    : [...metadata, createHash("sha256").update(contentReader(realPath)).digest("hex")];
 }
 
 function qualifiedArtifact(
   artifact: DapOperatorProvisionedArtifact,
   qualification: DapArtifactQualification,
+  contentReader?: DapArtifactContentReader,
 ): readonly (readonly unknown[])[] {
   const supplied = lstatSync(artifact.hostPath);
   if (supplied.isSymbolicLink()) throw new Error("INVALID_DAP_PROVISIONING");
   const realPath = realpathSync(artifact.hostPath);
   const stat = lstatSync(realPath);
-  if (stat.isFile()) return [qualifiedArtifactFile(artifact, qualification)];
+  if (stat.isFile()) return [qualifiedArtifactFile(artifact, qualification, contentReader)];
   if (!qualification.allowDirectory || !stat.isDirectory()) {
     throw new Error("INVALID_DAP_PROVISIONING");
   }
@@ -1701,11 +1710,15 @@ function qualifiedArtifact(
           capsulePath: join(artifact.capsulePath, entry.name),
         },
         qualification,
+        contentReader,
       ),
     );
 }
 
-function qualifiedAdapterIdentity(document: DapOperatorProvisioningDocument): readonly unknown[] {
+function qualifiedAdapterIdentity(
+  document: DapOperatorProvisioningDocument,
+  contentReader?: DapArtifactContentReader,
+): readonly unknown[] {
   const adapter = document.adapter;
   for (const directory of adapter.approvedPath.split(delimiter)) {
     const hostPath = join(directory, adapter.executableName);
@@ -1717,6 +1730,7 @@ function qualifiedAdapterIdentity(document: DapOperatorProvisioningDocument): re
           capsulePath: "/opt/keiko-debug/adapter",
         },
         { executable: true, empty: false, allowDirectory: false },
+        contentReader,
       );
       const realPath = String(identity[1]);
       if (adapter.trustedRoots.some((root) => isWithinWorkspace(realpathSync(root), realPath))) {
@@ -1731,6 +1745,7 @@ function qualifiedAdapterIdentity(document: DapOperatorProvisioningDocument): re
 
 function operatorProvisioningIdentity(
   document: DapOperatorProvisioningDocument,
+  contentReader?: DapArtifactContentReader,
 ): string | undefined {
   try {
     const launch = document.launch;
@@ -1738,14 +1753,17 @@ function operatorProvisioningIdentity(
     const data = { executable: false, empty: false, allowDirectory: true } as const;
     const empty = { executable: false, empty: true, allowDirectory: false } as const;
     const identities = [
-      qualifiedAdapterIdentity(document),
-      ...qualifiedArtifact(launch.node, executable),
-      ...qualifiedArtifact(launch.npm, executable),
-      ...qualifiedArtifact(launch.shell, executable),
-      ...qualifiedArtifact(launch.backend, executable),
-      ...qualifiedArtifact(launch.npmUserConfig, empty),
-      ...qualifiedArtifact(launch.npmGlobalConfig, empty),
-      ...launch.runtimeClosure.flatMap((artifact) => qualifiedArtifact(artifact, data)),
+      document,
+      qualifiedAdapterIdentity(document, contentReader),
+      ...qualifiedArtifact(launch.node, executable, contentReader),
+      ...qualifiedArtifact(launch.npm, executable, contentReader),
+      ...qualifiedArtifact(launch.shell, executable, contentReader),
+      ...qualifiedArtifact(launch.backend, executable, contentReader),
+      ...qualifiedArtifact(launch.npmUserConfig, empty, contentReader),
+      ...qualifiedArtifact(launch.npmGlobalConfig, empty, contentReader),
+      ...launch.runtimeClosure.flatMap((artifact) =>
+        qualifiedArtifact(artifact, data, contentReader),
+      ),
     ];
     return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
   } catch {
@@ -1753,19 +1771,47 @@ function operatorProvisioningIdentity(
   }
 }
 
+interface OperatorProvisioningSnapshot {
+  readonly signal: string;
+  readonly identity: string;
+}
+
+function operatorProvisioningSnapshot(
+  document: DapOperatorProvisioningDocument,
+  contentReader: DapArtifactContentReader,
+  expectedSignal?: string,
+): OperatorProvisioningSnapshot | undefined {
+  const signal = expectedSignal ?? operatorProvisioningIdentity(document);
+  if (signal === undefined) return undefined;
+  const identity = operatorProvisioningIdentity(document, contentReader);
+  const confirmedSignal = operatorProvisioningIdentity(document);
+  if (identity === undefined || confirmedSignal !== signal) return undefined;
+  return { signal: confirmedSignal, identity };
+}
+
 /** @internal Non-spawning activation preflight; exported only for deterministic server tests. */
 export function createOperatorProvisioningQualification(
   env: NodeJS.ProcessEnv,
+  contentReader: DapArtifactContentReader = readFileSync,
 ): () => DebugProvisioning {
   const initial = operatorDapDocument(env);
-  const approvedIdentity =
-    initial === undefined ? undefined : operatorProvisioningIdentity(initial);
+  const approved =
+    initial === undefined ? undefined : operatorProvisioningSnapshot(initial, contentReader);
+  const approvedIdentity = approved?.identity;
+  let cachedSignal = approved?.signal;
+  let cachedIdentity = approvedIdentity;
   return (): DebugProvisioning => {
     const current = operatorDapDocument(env);
     if (approvedIdentity === undefined || current === undefined) return "notProvisioned";
-    return operatorProvisioningIdentity(current) === approvedIdentity
-      ? "provisioned"
-      : "notProvisioned";
+    const signal = operatorProvisioningIdentity(current);
+    if (signal === undefined) return "notProvisioned";
+    if (signal !== cachedSignal) {
+      const snapshot = operatorProvisioningSnapshot(current, contentReader, signal);
+      if (snapshot === undefined) return "notProvisioned";
+      cachedSignal = snapshot.signal;
+      cachedIdentity = snapshot.identity;
+    }
+    return cachedIdentity === approvedIdentity ? "provisioned" : "notProvisioned";
   };
 }
 

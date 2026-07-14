@@ -94,9 +94,9 @@ export function DebuggingSettings({ root }: { readonly root?: string | undefined
       </output>
       {root === undefined ? <p className={styles.empty}>{t("noWorkspace")}</p> : null}
       {root !== undefined && view.loading && view.summary === undefined ? (
-        <p className={styles.empty} role="status">
+        <output className={styles.empty} aria-live="polite">
           {t("loading")}
-        </p>
+        </output>
       ) : null}
       {view.issue === undefined ? null : (
         <div className={styles.alert} role="alert">

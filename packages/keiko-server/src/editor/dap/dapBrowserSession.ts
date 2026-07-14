@@ -28,17 +28,19 @@ export type DebugBrowserSessionEnsureResult =
     }
   | { readonly ok: false; readonly reason: "capacity" };
 
+type DebugBrowserCookieHeader = string | readonly string[] | undefined;
+
 export interface DebugBrowserSessionRegistry {
   issue(
     workspacePartitionKey: string,
-    cookieHeader?: string | readonly string[],
+    cookieHeader?: DebugBrowserCookieHeader,
   ): DebugBrowserSessionIssueResult;
   ensure(
     workspacePartitionKey: string,
-    cookieHeader?: string | readonly string[],
+    cookieHeader?: DebugBrowserCookieHeader,
   ): DebugBrowserSessionEnsureResult;
   authorize(
-    cookieHeader: string | readonly string[] | undefined,
+    cookieHeader: DebugBrowserCookieHeader,
     workspacePartitionKey: string,
   ): DebugBrowserAuthorization;
 }
@@ -72,10 +74,7 @@ function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function cookieValue(
-  header: string | readonly string[] | undefined,
-  name: string,
-): string | undefined {
+function cookieValue(header: DebugBrowserCookieHeader, name: string): string | undefined {
   const joined = typeof header === "string" ? header : header?.join(";");
   if (joined === undefined) return undefined;
   const matches = joined
@@ -94,13 +93,10 @@ function setCookie(name: string, token: string, ttlMs: number): string {
   )}; HttpOnly; SameSite=Strict`;
 }
 
-function removeExpired(records: Map<string, BrowserSessionRecord>, now: number): void {
-  for (const [binding, record] of records) {
-    if (record.expiresAtMs <= now) records.delete(binding);
-  }
-}
-
-function removeExpiredProfiles(records: Map<string, BrowserProfileRecord>, now: number): void {
+function removeExpired<T extends { readonly expiresAtMs: number }>(
+  records: Map<string, T>,
+  now: number,
+): void {
   for (const [binding, record] of records) {
     if (record.expiresAtMs <= now) records.delete(binding);
   }
@@ -156,7 +152,7 @@ function issueBrowserSession(
 ): BrowserSessionIssueInternalResult {
   const now = runtime.now();
   removeExpired(runtime.records, now);
-  removeExpiredProfiles(runtime.profiles, now);
+  removeExpired(runtime.profiles, now);
   if (runtime.records.size >= runtime.capacity) return { ok: false, reason: "capacity" };
   const currentProfile = existingProfile(runtime, header, now);
   const issuedProfile = currentProfile === undefined ? issueProfile(runtime, now) : undefined;

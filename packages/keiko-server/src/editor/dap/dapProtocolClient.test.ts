@@ -98,7 +98,7 @@ describe("dapProtocolClient", () => {
         ),
       );
       await vi.waitFor(() => {
-        expect(sent.length).toBe(expectedCount);
+        expect(sent).toHaveLength(expectedCount);
       });
       const response = messages(sent).at(-1);
       expect(response).toMatchObject({ type: "response", success: false, command });

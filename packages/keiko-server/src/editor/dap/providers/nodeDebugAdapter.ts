@@ -1,5 +1,4 @@
 import type {
-  DebugAdapterAttachKind,
   DebugAdapterLaunchKind,
   DebugAdapterSpec,
   DebugAdapterTargetKind,
@@ -8,7 +7,7 @@ import type {
 const NODE_ENV_ALLOWLIST = Object.freeze(["LANG", "LC_ALL", "LC_CTYPE"]);
 const NODE_TARGET_KINDS: readonly DebugAdapterTargetKind[] = Object.freeze(["catalog", "file"]);
 const NODE_LAUNCH_KINDS: readonly DebugAdapterLaunchKind[] = Object.freeze(["launch"]);
-const NODE_ATTACH_KINDS: readonly DebugAdapterAttachKind[] = Object.freeze([]);
+const NODE_ATTACH_KINDS: readonly never[] = Object.freeze([]);
 
 export function createNodeDebugAdapterSpec(
   executableName: string,

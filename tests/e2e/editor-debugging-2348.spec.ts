@@ -453,7 +453,7 @@ async function expectPaused(
 ): Promise<DebugSessionProjection> {
   const paused = await expectServerPaused(page, session);
   await expect(panel.getByText("Session is paused.")).toBeVisible();
-  await expect(panel.getByRole("option", { name: new RegExp(frameName) })).toBeVisible();
+  await expect(panel.getByRole("button", { name: new RegExp(frameName) })).toBeVisible();
   return paused;
 }
 
@@ -643,7 +643,7 @@ test("#2348 drives a separate uncaught exception breakpoint through the real DAP
   const session = await startFromEditor(page, pane);
   expect((await stack).status()).toBe(200);
   await expectPaused(page, panel, session, "throwsFixture");
-  await expect(panel.getByRole("option", { name: /src\/throws\.ts:8/ })).toBeVisible();
+  await expect(panel.getByRole("button", { name: /src\/throws\.ts:8/ })).toBeVisible();
   await expect
     .poll(() => capturedExceptionEvent(page))
     .toMatchObject({

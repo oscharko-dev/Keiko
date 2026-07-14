@@ -234,9 +234,8 @@ describe("debugSessionStore", () => {
     resetDebugSessionStoreForTests();
   });
 
-  it("rejects a same-generation running refresh after an exception pause", () => {
+  it("preserves an exception pause when session-started arrives after stopped", () => {
     const workspaceId = "canonical-workspace-id";
-    setDebugSession(workspaceId, session("running", 0));
     applyDebugEvent(workspaceId, 1, {
       kind: "stopped",
       sessionId: "session-1",
@@ -251,8 +250,14 @@ describe("debugSessionStore", () => {
         omittedBytes: 0,
       },
     });
-    setDebugSession(workspaceId, session("paused", 1));
+    applyDebugEvent(workspaceId, 2, {
+      kind: "session-started",
+      sessionId: "session-1",
+      status: "running",
+    });
+    setDebugSession(workspaceId, session("running", 0));
     setDebugSession(workspaceId, session("running", 1));
+    setDebugSession(workspaceId, session("paused", 1));
 
     expect(debugSessionSnapshot(workspaceId)).toMatchObject({
       session: { status: "paused", pauseGeneration: 1 },

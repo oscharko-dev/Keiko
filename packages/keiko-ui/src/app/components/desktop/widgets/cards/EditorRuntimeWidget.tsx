@@ -639,10 +639,6 @@ export interface EditorRuntimeWidgetProps {
   readonly onOutlineStateChange?:
     ((paneId: string, snapshot: EditorOutlineSnapshot) => void) | undefined;
   readonly outlineRevealRequest?: EditorOutlineRevealRequest | undefined;
-  /** Server-resolved capability only; default is false until #2347 wires its policy gate. */
-  readonly debugCapabilityEnabled?: boolean | undefined;
-  /** Complete host port stays absent until a canonical workspace identity is supplied by the host. */
-  readonly debugHost?: EditorSurfaceProps["debug"] | undefined;
   /** Opens the transient bounded debug projection for this editor's resolved workspace. */
   readonly onOpenDebugPanel?: (() => void) | undefined;
 }

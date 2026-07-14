@@ -296,8 +296,8 @@ function reachesRoot(
   rootPid: number,
 ): boolean {
   let current = start;
-  for (const _ancestor of parents.keys()) {
-    void _ancestor;
+  for (const ancestor of parents.keys()) {
+    if (!Number.isSafeInteger(ancestor)) return false;
     if (current === rootPid) return true;
     current = parents.get(current) ?? -1;
   }
@@ -412,7 +412,7 @@ function isSpawnedDebugChild(child: ChildProcess): child is RunningDebugChild {
 function byteSink(child: RunningDebugChild): QualifiedDebugCapsuleHandle["sink"] {
   return {
     write: (chunk): void => {
-      void child.stdin.write(chunk);
+      child.stdin.write(chunk);
     },
   };
 }

@@ -14,9 +14,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { isWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { DebugCapsuleLayer2Input } from "./debugCapsulePlan.js";
-import type { DebugWorkspaceIdentity } from "./debugCapsulePlan.js";
-import type { DebugSpawnEnvelope } from "./debugCapsulePlan.js";
+import type {
+  DebugCapsuleLayer2Input,
+  DebugSpawnEnvelope,
+  DebugWorkspaceIdentity,
+} from "./debugCapsulePlan.js";
 import type { DebugLaunchCatalogDeps } from "./debugLaunchCatalog.js";
 import { deriveCatalogDebugTarget, deriveFileDebugTarget } from "./debugLaunchCatalog.js";
 import {

@@ -527,6 +527,18 @@ function rollbackProvisional(sessions: Map<string, SessionRuntime>, sessionId: s
   if (session?.promotion === undefined) sessions.delete(sessionId);
 }
 
+function teardownThenReject(
+  sessions: Map<string, SessionRuntime>,
+  deps: DebugSessionRegistryDeps,
+  sessionId: string,
+  reason: "startupFailed" | "restartThrottled",
+  code: "INVALID_CAPSULE_PLAN" | "STARTUP_THROTTLED",
+): Promise<never> {
+  return teardown(sessions, deps, sessionId, reason).then((): never => {
+    throw registryError(code);
+  });
+}
+
 function beginStartupAttempt(
   sessions: Map<string, SessionRuntime>,
   deps: DebugSessionRegistryDeps,
@@ -537,13 +549,21 @@ function beginStartupAttempt(
   assertAcceptingStartup(session);
   const now = deps.now();
   if (session.promotion.planExpiresAtMs <= now) {
-    return teardown(sessions, deps, session.input.sessionId, "startupFailed").then(() =>
-      Promise.reject(registryError("INVALID_CAPSULE_PLAN")),
+    return teardownThenReject(
+      sessions,
+      deps,
+      session.input.sessionId,
+      "startupFailed",
+      "INVALID_CAPSULE_PLAN",
     );
   }
   if (!session.restartThrottle.mayStart(now, false)) {
-    return teardown(sessions, deps, session.input.sessionId, "restartThrottled").then(() =>
-      Promise.reject(registryError("STARTUP_THROTTLED")),
+    return teardownThenReject(
+      sessions,
+      deps,
+      session.input.sessionId,
+      "restartThrottled",
+      "STARTUP_THROTTLED",
     );
   }
   const attempt = { attemptId: ++session.nextAttemptId, controller: new AbortController() };
@@ -843,7 +863,7 @@ async function reconcileAll(
   sessions: Map<string, SessionRuntime>,
   deps: DebugSessionRegistryDeps,
 ): Promise<void> {
-  for (const session of [...sessions.values()]) await reconcileSession(sessions, deps, session);
+  for (const session of sessions.values()) await reconcileSession(sessions, deps, session);
 }
 
 async function reconcileSession(
@@ -1186,6 +1206,11 @@ function isTerminating(session: SessionRuntime): boolean {
   return session.teardownPromise !== undefined;
 }
 
+function projectionHealth(session: SessionRuntime): DebugSessionProjection["health"] {
+  if (session.terminalEvidence.length > 0) return "evidencePending";
+  return session.teardownPromise === undefined ? "ready" : "terminationPending";
+}
+
 function projection(session: SessionRuntime): DebugSessionProjection {
   return {
     sessionId: session.input.sessionId,
@@ -1200,12 +1225,7 @@ function projection(session: SessionRuntime): DebugSessionProjection {
     outputTruncatedEvents: session.outputTruncatedEvents,
     pendingRequestCount: session.protocol?.pendingCount() ?? 0,
     startupAttemptCount: session.restartThrottle.attemptCount(),
-    health:
-      session.terminalEvidence.length > 0
-        ? "evidencePending"
-        : session.teardownPromise !== undefined
-          ? "terminationPending"
-          : "ready",
+    health: projectionHealth(session),
     supportsSetVariable: session.supportsSetVariable,
   };
 }

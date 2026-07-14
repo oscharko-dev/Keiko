@@ -144,7 +144,7 @@ export function parseDebugFileTarget(
 /** @internal Opaque target parser exposed for direct mutation verification. */
 export function parseOpaqueDebugTarget(candidate: unknown): OpaqueTarget {
   assertDebugTargetCandidate(candidate);
-  const keys = Object.keys(candidate).sort();
+  const keys = Object.keys(candidate).sort((left, right) => left.localeCompare(right));
   const kind = debugOwnTargetData(candidate, "kind");
   const parsed =
     parseDebugCatalogTarget(candidate, keys, kind) ?? parseDebugFileTarget(candidate, keys, kind);
@@ -335,8 +335,8 @@ function sameRecord(
   first: Readonly<Record<string, string>>,
   second: Readonly<Record<string, string>>,
 ): boolean {
-  const firstKeys = Object.keys(first).sort();
-  const secondKeys = Object.keys(second).sort();
+  const firstKeys = Object.keys(first).sort((left, right) => left.localeCompare(right));
+  const secondKeys = Object.keys(second).sort((left, right) => left.localeCompare(right));
   return (
     firstKeys.length === secondKeys.length &&
     firstKeys.every((key, index) => key === secondKeys[index] && first[key] === second[key])
@@ -577,17 +577,20 @@ function spawnArtifacts(context: DebugLaunchRuntimeContext): readonly DebugSpawn
   );
 }
 
-function spawnEnvelope(
-  input: DebugCapsuleLayer2Input,
-  candidate: OpaqueTarget,
-  context: DebugLaunchRuntimeContext,
-  target: DebugLaunchTarget,
-  capsule: Layer2DebugCapsulePlan["capsule"],
-  endpoint: Layer2DebugCapsulePlan["endpoint"],
-  clock: { readonly epoch: number; readonly expiresAtMs: number },
-  runtimeIdentityDigest: string,
-  provisioningDigest: string,
-): DebugSpawnEnvelope {
+interface SpawnEnvelopeInput {
+  readonly input: DebugCapsuleLayer2Input;
+  readonly candidate: OpaqueTarget;
+  readonly context: DebugLaunchRuntimeContext;
+  readonly target: DebugLaunchTarget;
+  readonly capsule: Layer2DebugCapsulePlan["capsule"];
+  readonly endpoint: Layer2DebugCapsulePlan["endpoint"];
+  readonly clock: { readonly epoch: number; readonly expiresAtMs: number };
+  readonly runtimeIdentityDigest: string;
+  readonly provisioningDigest: string;
+}
+
+function spawnEnvelope(args: SpawnEnvelopeInput): DebugSpawnEnvelope {
+  const { input, candidate, context, target, capsule, endpoint, clock } = args;
   const runtimeDirectoryIdentity: DebugRuntimeDirectoryIdentity = Object.freeze({
     realPath: context.runtimeMount.hostRealPath,
     identityDigest: context.runtimeMount.identityDigest,
@@ -600,8 +603,8 @@ function spawnEnvelope(
     schemaVersion: "1" as const,
     providerId: input.adapter.providerId,
     backend: capsule.backend,
-    provisioningDigest,
-    runtimeIdentityDigest,
+    provisioningDigest: args.provisioningDigest,
+    runtimeIdentityDigest: args.runtimeIdentityDigest,
     runtimeDirectoryIdentity,
     capsuleCommand: context.backendExecutable.realPath,
     capsuleArgs: Object.freeze([...capsule.args]),
@@ -713,29 +716,31 @@ function assertCapsuleBackend(
   if (!valid) throw new DebugCapsulePlanError();
 }
 
-function finalLayer2Plan(
-  input: DebugCapsuleLayer2Input,
-  capsule: Layer2DebugCapsulePlan["capsule"],
-  runtimeIdentityDigest: string,
-  envelope: DebugSpawnEnvelope,
-  clock: { readonly epoch: number; readonly expiresAtMs: number },
-  endpoint: Layer2DebugCapsulePlan["endpoint"],
-  launchIdentityDigest: string,
-  launchRequestValue: ClosedDebugLaunchRequest,
-  provisioningDigest: string,
-): Layer2DebugCapsulePlan {
+interface FinalLayer2PlanInput {
+  readonly input: DebugCapsuleLayer2Input;
+  readonly capsule: Layer2DebugCapsulePlan["capsule"];
+  readonly runtimeIdentityDigest: string;
+  readonly envelope: DebugSpawnEnvelope;
+  readonly clock: { readonly epoch: number; readonly expiresAtMs: number };
+  readonly endpoint: Layer2DebugCapsulePlan["endpoint"];
+  readonly launchIdentityDigest: string;
+  readonly launchRequest: ClosedDebugLaunchRequest;
+  readonly provisioningDigest: string;
+}
+
+function finalLayer2Plan(args: FinalLayer2PlanInput): Layer2DebugCapsulePlan {
   return Object.freeze({
     schemaVersion: "1",
-    ...input.binding,
-    provisioningDigest,
-    backend: capsule.backend,
-    runtimeIdentityDigest,
-    capsule,
-    spawnEnvelope: envelope,
-    ...clock,
-    launchIdentityDigest,
-    planId: envelope.planId,
-    endpoint,
+    ...args.input.binding,
+    provisioningDigest: args.provisioningDigest,
+    backend: args.capsule.backend,
+    runtimeIdentityDigest: args.runtimeIdentityDigest,
+    capsule: args.capsule,
+    spawnEnvelope: args.envelope,
+    ...args.clock,
+    launchIdentityDigest: args.launchIdentityDigest,
+    planId: args.envelope.planId,
+    endpoint: args.endpoint,
     attestation: Object.freeze({
       filesystem: "executionRoot",
       network: "none",
@@ -743,7 +748,7 @@ function finalLayer2Plan(
       runtimeDirectoryMode: "0700",
       endpointOwnership: "currentUser",
     }),
-    launchRequest: launchRequestValue,
+    launchRequest: args.launchRequest,
   }) as unknown as Layer2DebugCapsulePlan;
 }
 
@@ -764,7 +769,7 @@ function assemblePlan(
   const clock = planClock(deps, input.binding.activationRevision);
   const endpoint = endpointPlan(context);
   const launch = launchRequest(execution, context);
-  const envelope = spawnEnvelope(
+  const envelope = spawnEnvelope({
     input,
     candidate,
     context,
@@ -772,9 +777,9 @@ function assemblePlan(
     capsule,
     endpoint,
     clock,
-    runtimeDigest,
+    runtimeIdentityDigest: runtimeDigest,
     provisioningDigest,
-  );
+  });
   const launchIdentityDigest = hash([
     input.binding,
     provisioningDigest,
@@ -785,17 +790,17 @@ function assemblePlan(
     endpoint,
     envelope,
   ]);
-  return finalLayer2Plan(
+  return finalLayer2Plan({
     input,
     capsule,
-    runtimeDigest,
+    runtimeIdentityDigest: runtimeDigest,
     envelope,
     clock,
     endpoint,
     launchIdentityDigest,
-    launch,
+    launchRequest: launch,
     provisioningDigest,
-  );
+  });
 }
 
 export function createDebugLaunchLayer2Validator(
