@@ -973,6 +973,22 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     expect(handle.terminateScope).toHaveBeenCalledTimes(1);
   });
 
+  it("does not project terminal evidence again from a queued reconciliation", async () => {
+    const { records, registry } = setup();
+    await activate(registry);
+
+    const stopping = registry.stop("session_a");
+    const reconciling = registry.reconcile();
+    await Promise.all([stopping, reconciling]);
+
+    expect(records.map(({ evidence }) => evidence.eventKind)).toStrictEqual([
+      "start",
+      "active",
+      "stop",
+      "teardown",
+    ]);
+  });
+
   it("continues whole-scope termination when protocol disposal throws", async () => {
     const { records, registry } = setup();
     await registry.reserve(identity());

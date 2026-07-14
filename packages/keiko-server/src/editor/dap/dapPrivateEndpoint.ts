@@ -6,7 +6,6 @@ import type {
 import { lstat, realpath } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { basename, dirname } from "node:path";
-import { getuid } from "node:process";
 import { createDapFrameReader, writeDapFrame, type DapByteSource } from "./dapFrameCodec.js";
 import { isSafeDapSocketBasename } from "./debugLaunchSecurityPredicates.js";
 
@@ -83,11 +82,10 @@ function fileMode(mode: number): string {
 }
 
 function ownerClass(uid: number): string {
-  const readUid = getuid as () => number;
-  return classifyEndpointOwner(uid, readUid());
+  return classifyEndpointOwner(uid, process.getuid?.());
 }
 
-export function classifyEndpointOwner(uid: number, currentUid: number): string {
+export function classifyEndpointOwner(uid: number, currentUid: number | undefined): string {
   return uid === currentUid ? "currentUser" : "other";
 }
 

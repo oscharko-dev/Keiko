@@ -162,6 +162,24 @@ describe("private DAP endpoint", () => {
   it("classifies exact endpoint ownership", () => {
     expect(classifyEndpointOwner(7, 7)).toBe("currentUser");
     expect(classifyEndpointOwner(7, 8)).toBe("other");
+    expect(classifyEndpointOwner(7, undefined)).toBe("other");
+  });
+
+  it("fails production ownership classification closed without a POSIX uid API", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dap-owner-"));
+    const descriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+    Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
+    try {
+      await expect(
+        createNodeDapPrivateEndpointDeps().inspectDirectory(root),
+      ).resolves.toMatchObject({
+        owner: "other",
+      });
+    } finally {
+      if (descriptor === undefined) delete (process as { getuid?: unknown }).getuid;
+      else Object.defineProperty(process, "getuid", descriptor);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   it("surfaces exact closed endpoint errors", () => {
     for (const code of ["PRIVATE_ENDPOINT_INVALID", "PRIVATE_ENDPOINT_UNSUPPORTED"] as const) {

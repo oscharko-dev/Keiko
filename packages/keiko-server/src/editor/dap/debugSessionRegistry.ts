@@ -864,7 +864,9 @@ async function runReconcile(
   deps: DebugSessionRegistryDeps,
   session: SessionRuntime,
 ): Promise<void> {
-  if (session.teardownPromise === undefined) return;
+  if (sessions.get(session.input.sessionId) !== session || session.teardownPromise === undefined) {
+    return;
+  }
   disposeProtocol(session);
   const endpointClosing = closeEndpoint(session);
   const capsuleCount = session.capsules.length;
@@ -901,9 +903,6 @@ function scheduleTerminationReconcile(
   session.terminationRetryScheduled = true;
   const timer = setTimeout(() => {
     session.terminationRetryScheduled = false;
-    if (sessions.get(session.input.sessionId) !== session) {
-      return;
-    }
     void reconcileSession(sessions, deps, session);
   }, TERMINATION_RECONCILE_RETRY_MS);
   timer.unref();

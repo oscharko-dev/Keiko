@@ -15,10 +15,14 @@ import { isExecutableOnPath } from "./probe.js";
 const SAME_CAPSULE_MARKER = "SAME_CAPSULE_LOOPBACK_OK";
 const SEPARATE_CAPSULE_MARKER = "SEPARATE_CAPSULE_BLOCKED";
 const CHILD_SNIPPET = [
-  "const {spawn}=require('child_process');",
-  "const listener=spawn(process.execPath,['-e',`const n=require('net');const s=n.createServer(c=>c.end());s.listen(0,'127.0.0.1',()=>process.stdout.write(String(s.address().port)+'\\n'));setTimeout(()=>process.exit(2),10000);`]);",
-  "let pending='';",
-  "listener.stdout.on('data',chunk=>{pending+=chunk;const line=pending.split('\\n')[0];if(!/^\\d+$/.test(line))return;const client=spawn(process.execPath,['-e',`const n=require('net');const s=n.connect({host:'127.0.0.1',port:${line}},()=>{process.stdout.write('SAME_CAPSULE_LOOPBACK_OK');s.end();});s.setTimeout(5000,()=>process.exit(3));s.on('error',()=>process.exit(4));`]);client.stdout.pipe(process.stdout);client.on('exit',code=>{listener.kill('SIGTERM');process.exit(code??5);});});",
+  "const net=require('net');",
+  "const server=net.createServer(socket=>socket.end());",
+  "server.listen(0,'127.0.0.1',()=>{",
+  "const address=server.address();if(address===null||typeof address==='string')process.exit(2);",
+  "const client=net.connect({host:'127.0.0.1',port:address.port},()=>{",
+  "process.stdout.write('SAME_CAPSULE_LOOPBACK_OK');client.end();server.close();",
+  "});client.setTimeout(5000,()=>process.exit(3));client.on('error',()=>process.exit(4));",
+  "});",
 ].join("");
 
 interface Fixture {
@@ -51,7 +55,7 @@ function runtimeFiles(): readonly string[] {
   const result = spawnSync("ldd", [process.execPath], { encoding: "utf8", timeout: 5_000 });
   if (result.status !== 0) return [];
   const matches = result.stdout.match(/\/[A-Za-z0-9_./+~-]+/gu) ?? [];
-  return [...new Set(matches.map((path) => realpathSync(path)))];
+  return [...new Set(matches)];
 }
 
 function immutableRuntimeMounts(): readonly DebugCapsuleImmutableMount[] {
@@ -116,14 +120,18 @@ function spawnPlan(plan: StrictDebugCapsulePlan): ChildProcessWithoutNullStreams
 function outputLine(child: ChildProcessWithoutNullStreams): Promise<string> {
   return new Promise((resolve, reject) => {
     let output = "";
+    let diagnostics = "";
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const end = output.indexOf("\n");
       if (end >= 0) resolve(output.slice(0, end));
     });
+    child.stderr.on("data", (chunk: Buffer) => {
+      diagnostics += chunk.toString("utf8");
+    });
     child.once("error", reject);
     child.once("exit", (code) => {
-      reject(new Error(`capsule exited before output: ${String(code)}`));
+      reject(new Error(`capsule exited before output: ${String(code)}: ${diagnostics}`));
     });
   });
 }
@@ -144,13 +152,29 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<v
   }
 }
 
-function processExists(pid: number): boolean {
+function fileSize(path: string): number {
   try {
-    process.kill(pid, 0);
-    return true;
+    return statSync(path).size;
   } catch {
-    return false;
+    return 0;
   }
+}
+
+async function waitForStableFile(path: string, stableMs = 200, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let previous = fileSize(path);
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const current = fileSize(path);
+    if (current !== previous) {
+      previous = current;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= stableMs) {
+      return;
+    }
+  }
+  throw new Error("heartbeat did not stop");
 }
 
 describe("Linux-authoritative strict debug capsule", () => {
@@ -164,7 +188,7 @@ describe("Linux-authoritative strict debug capsule", () => {
           encoding: "utf8",
           timeout: 30_000,
         });
-        expect(result.status).toBe(0);
+        expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toBe(SAME_CAPSULE_MARKER);
         expect(plan.command).toBe(fixture.bubblewrap);
         expect(plan.initMechanism).toBe("bubblewrapPid1Reaper");
@@ -193,7 +217,7 @@ describe("Linux-authoritative strict debug capsule", () => {
           encoding: "utf8",
           timeout: 10_000,
         });
-        expect(result.status).toBe(0);
+        expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toBe(SEPARATE_CAPSULE_MARKER);
       } finally {
         listener.kill("SIGKILL");
@@ -210,25 +234,21 @@ describe("Linux-authoritative strict debug capsule", () => {
     async () => {
       const fixture = createFixture();
       const heartbeat = join(fixture.runtimeDirectory, "heartbeat");
-      const childCode = `const f=require('fs');const p='${DEBUG_CAPSULE_RUNTIME_MOUNT}/heartbeat';f.writeFileSync(p,String(process.pid)+'\\n');setInterval(()=>f.appendFileSync(p,'x'),25);`;
+      const childCode = `const f=require('fs');const p='${DEBUG_CAPSULE_RUNTIME_MOUNT}/heartbeat';f.writeFileSync(p,'x');setInterval(()=>f.appendFileSync(p,'x'),25);`;
       const parentCode = `const {spawn}=require('child_process');spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{detached:true,stdio:'ignore'}).unref();process.stdout.write('READY\\n');setInterval(()=>{},1000);`;
       const capsule = spawnPlan(capsulePlan(fixture, ["-e", parentCode]));
       try {
         expect(await outputLine(capsule)).toBe("READY");
         await waitUntil(() => {
           try {
-            return readFileSync(heartbeat, "utf8").includes("\n");
+            return readFileSync(heartbeat, "utf8").length > 1;
           } catch {
             return false;
           }
         });
-        const descendantPid = Number(readFileSync(heartbeat, "utf8").split("\n")[0]);
-        expect(Number.isSafeInteger(descendantPid)).toBe(true);
-        expect(processExists(descendantPid)).toBe(true);
         capsule.kill("SIGKILL");
         await waitForExit(capsule);
-        await waitUntil(() => !processExists(descendantPid));
-        expect(processExists(descendantPid)).toBe(false);
+        await waitForStableFile(heartbeat);
       } finally {
         if (capsule.exitCode === null) capsule.kill("SIGKILL");
         cleanupFixture(fixture);

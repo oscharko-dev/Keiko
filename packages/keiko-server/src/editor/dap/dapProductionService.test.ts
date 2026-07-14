@@ -348,7 +348,7 @@ const server = createServer((socket) => {
       ${replacement}
       if (request.command === "launch") {
         const initialized = JSON.stringify({ seq: adapterSequence++, type: "event", event: "initialized" });
-        socket.write("Content-Length: " + Buffer.byteLength(initialized) + "\r\n\r\n" + initialized);
+        socket.write("Content-Length: " + Buffer.byteLength(initialized) + "\\r\\n\\r\\n" + initialized);
       }
       const responseBody = request.command === "initialize"
         ? { supportsConfigurationDoneRequest: true, supportsSetVariable: true }
@@ -938,6 +938,7 @@ describe("DAP production composition", () => {
         "dap:initialize",
         "target-revalidate",
         "dap:launch",
+        "dap:configurationDone",
         "journal:active",
       ]);
 
