@@ -137,13 +137,18 @@ export function appId(app) {
 }
 
 export async function evidence(owner, repository, pullNumber, headSha, token) {
-  const [checkPayload, reviews, comments] = await Promise.all([
+  const [checkPayload, reviews, comments, files] = await Promise.all([
     github(`/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`, token),
     allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/reviews`, token),
     allPages(`/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`, token),
+    allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/files`, token),
   ]);
   if (!Array.isArray(checkPayload?.check_runs)) throw new Error("GitHub omitted check runs.");
+  const changedFiles = files.map((file) => file?.filename);
+  if (changedFiles.some((file) => typeof file !== "string"))
+    throw new Error("GitHub omitted a changed file name.");
   return {
+    changedFiles,
     checks: checkPayload.check_runs.map((check) => ({
       appId: check.app?.id,
       completedAt: check.completed_at,

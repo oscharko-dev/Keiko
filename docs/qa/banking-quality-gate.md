@@ -66,7 +66,11 @@ Unknown or changed Gitar/Socket evidence formats are parser failures, never succ
 bounded stability window follows the final Gitar and Socket events before the aggregate check may
 turn green.
 
-Gitar and Socket comments must have been updated after their current-head checks started. This
+Gitar comments must have been updated after their current-head checks started. Socket comments are
+required on the same current-head boundary whenever the pull request changes a Keiko dependency
+manifest. Source-only pull requests instead require both successful current-head Socket checks,
+because Socket intentionally does not create a pull-request comment without a dependency diff or
+alert. Missing or malformed changed-file evidence falls back to requiring the Socket comment. This
 prevents a successful processing check on a new commit from reusing a clean comment from an older
 head. Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
 evidence is still mandatory.
