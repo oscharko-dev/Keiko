@@ -243,7 +243,7 @@ function fixture(): {
     },
     adapter: artifact(paths.adapter, "/opt/keiko-debug/adapter"),
     node: artifact(paths.node, "/opt/keiko-runtime/node"),
-    npm: artifact(paths.npm, "/opt/keiko-runtime/npm"),
+    npm: artifact(paths.npm, "/opt/keiko-runtime/npm/bin/npm-cli.js"),
     shell: artifact(paths.shell, "/opt/keiko-runtime/shell"),
     npmUserConfig: artifact(paths.npmUserConfig, "/opt/keiko-debug/npm-user-config"),
     npmGlobalConfig: artifact(paths.npmGlobalConfig, "/opt/keiko-debug/npm-global-config"),
@@ -551,8 +551,9 @@ describe("stateless debug launch Layer-2 planning", () => {
       command: "launch",
       arguments: {
         request: "launch",
-        runtimeExecutable: "/opt/keiko-runtime/npm",
+        runtimeExecutable: "/opt/keiko-runtime/node",
         runtimeArgs: [
+          "/opt/keiko-runtime/npm/bin/npm-cli.js",
           "--ignore-scripts",
           "--script-shell=/opt/keiko-runtime/shell",
           "--userconfig=/opt/keiko-debug/npm-user-config",

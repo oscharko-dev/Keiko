@@ -88,6 +88,7 @@ function expectedArgs(
   policy: DebugLaunchPolicy,
 ): readonly string[] {
   return [
+    policy.npmExecutable,
     "--ignore-scripts",
     `--script-shell=${policy.shellExecutable}`,
     `--userconfig=${policy.npmUserConfig}`,
@@ -106,7 +107,7 @@ function structureAllowed(execution: ClosedDebugExecution, policy: DebugLaunchPo
     );
   }
   return (
-    execution.executable === policy.npmExecutable &&
+    execution.executable === policy.nodeExecutable &&
     execution.shell === policy.shellExecutable &&
     isSafeScriptName(execution.scriptName) &&
     sameArgs(execution.args, expectedArgs(execution, policy))

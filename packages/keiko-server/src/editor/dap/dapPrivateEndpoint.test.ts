@@ -155,6 +155,10 @@ function planWithSocketPaths(
 }
 
 describe("private DAP endpoint", () => {
+  it("allows a bounded production startup window for provisioned adapters", () => {
+    expect(createNodeDapPrivateEndpointDeps().maxAttempts).toBe(100);
+  });
+
   it("classifies exact endpoint ownership", () => {
     expect(classifyEndpointOwner(7, 7)).toBe("currentUser");
     expect(classifyEndpointOwner(7, 8)).toBe("other");

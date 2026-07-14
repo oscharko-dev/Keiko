@@ -25,7 +25,7 @@ function document(): unknown {
     launch: {
       adapterApprovedRoot: "/operator",
       node: artifact("node", "/opt/keiko-runtime/node"),
-      npm: artifact("npm", "/opt/keiko-runtime/npm"),
+      npm: artifact("npm", "/opt/keiko-runtime/npm/bin/npm-cli.js"),
       shell: artifact("shell", "/opt/keiko-runtime/shell"),
       npmUserConfig: artifact("npm-user", "/opt/keiko-debug/npm-user-config"),
       npmGlobalConfig: artifact("npm-global", "/opt/keiko-debug/npm-global-config"),

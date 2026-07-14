@@ -387,6 +387,7 @@ type RecordBuilder<T> = (value: UnknownRecord) => T;
 
 const TEXT_ENCODER = new TextEncoder();
 const OPAQUE_ID = /^[A-Za-z0-9_-]{1,128}$/u;
+const CATALOG_TARGET_ID = /^npm-script:[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:/u;
 const BREAKPOINT_VERIFICATIONS: readonly SourceBreakpointVerification[] = [
   "pending",
@@ -429,6 +430,14 @@ function isPositiveCoordinate(value: unknown): value is number {
 
 function isOpaqueId(value: unknown): value is string {
   return typeof value === "string" && OPAQUE_ID.test(value);
+}
+
+function isCatalogTargetId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= DEFAULT_DEBUG_PAYLOAD_LIMITS.maxOpaqueIdChars &&
+    CATALOG_TARGET_ID.test(value)
+  );
 }
 
 function isCanonicalFileId(value: unknown): value is string {
@@ -497,7 +506,7 @@ function hasSchema(value: UnknownRecord): boolean {
 function isDebugLaunchTarget(value: unknown): value is DebugLaunchTarget {
   if (!isRecord(value)) return false;
   if (value.kind === "catalog") {
-    return hasOnlyKeys(value, ["kind", "targetId"]) && isOpaqueId(value.targetId);
+    return hasOnlyKeys(value, ["kind", "targetId"]) && isCatalogTargetId(value.targetId);
   }
   return (
     value.kind === "file" &&

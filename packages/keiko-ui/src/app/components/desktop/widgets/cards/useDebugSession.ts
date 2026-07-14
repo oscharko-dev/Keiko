@@ -1015,10 +1015,10 @@ export function useDebugSession(
       );
       if (response !== null && action !== "pause") {
         abortPendingRequests();
-        setDebugSession(stableWorkspaceId, {
-          ...session,
-          status: action === "stop" ? "stopping" : "running",
-        });
+        setDebugSession(
+          stableWorkspaceId,
+          action === "stop" ? null : { ...session, status: "running" },
+        );
       }
     },
     [abortPendingRequests, enabled, stableWorkspaceId, trackedRequest],

@@ -35,6 +35,7 @@ const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
 const NPM_USER_CONFIG_PATH = "/opt/keiko-debug/npm-user-config" as const;
 const NPM_GLOBAL_CONFIG_PATH = "/opt/keiko-debug/npm-global-config" as const;
+const NPM_CLI_PATH = "/opt/keiko-runtime/npm/bin/npm-cli.js" as const;
 const PLAN_TTL_MS = 30_000;
 
 export interface ApprovedDebugArtifact {
@@ -283,7 +284,7 @@ function validateArtifacts(context: DebugLaunchRuntimeContext): void {
   if (context.platform === "win32") throw new DebugCapsulePlanError();
   validateArtifact(context.adapter, "/opt/keiko-debug/adapter", context.workspaceRoot);
   validateArtifact(context.node, "/opt/keiko-runtime/node", context.workspaceRoot);
-  validateArtifact(context.npm, "/opt/keiko-runtime/npm", context.workspaceRoot);
+  validateArtifact(context.npm, NPM_CLI_PATH, context.workspaceRoot);
   validateArtifact(context.shell, "/opt/keiko-runtime/shell", context.workspaceRoot);
   validateArtifact(context.npmUserConfig, NPM_USER_CONFIG_PATH, context.workspaceRoot);
   validateArtifact(context.npmGlobalConfig, NPM_GLOBAL_CONFIG_PATH, context.workspaceRoot);
@@ -379,8 +380,9 @@ function executionFor(
     // Stryker disable next-line StringLiteral: compile-time discriminant; execution and wire output
     // are independently fixed and changing this literal does not change the resulting closed plan.
     kind: "catalog",
-    executable: context.npm.capsulePath,
+    executable: context.node.capsulePath,
     args: [
+      context.npm.capsulePath,
       "--ignore-scripts",
       `--script-shell=${context.shell.capsulePath}`,
       `--userconfig=${context.npmUserConfig.capsulePath}`,
@@ -444,6 +446,7 @@ function launchRequest(
     });
   }
   const runtimeArgs: ClosedCatalogDebugLaunchArguments["runtimeArgs"] = Object.freeze([
+    context.npm.capsulePath,
     "--ignore-scripts",
     `--script-shell=${execution.shell}`,
     `--userconfig=${context.npmUserConfig.capsulePath}`,

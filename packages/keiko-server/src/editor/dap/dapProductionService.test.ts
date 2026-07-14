@@ -444,7 +444,7 @@ function fixture(replaceWorkspaceOnInitialize = false): Fixture {
           ...catalog,
           adapterApprovedRoot: approved,
           node: provisioned(node, "/opt/keiko-runtime/node"),
-          npm: provisioned(npm, "/opt/keiko-runtime/npm"),
+          npm: provisioned(npm, "/opt/keiko-runtime/npm/bin/npm-cli.js"),
           shell: provisioned(shell, "/opt/keiko-runtime/shell"),
           npmUserConfig: provisioned(npmUserConfig, "/opt/keiko-debug/npm-user-config"),
           npmGlobalConfig: provisioned(npmGlobalConfig, "/opt/keiko-debug/npm-global-config"),

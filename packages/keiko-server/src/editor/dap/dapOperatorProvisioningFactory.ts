@@ -73,8 +73,7 @@ function launchContext(
     backend: artifact(launch.backend),
     runtimeClosure: launch.runtimeClosure.map(artifact),
     platform: process.platform,
-    layer1Allowed: (executable): boolean =>
-      executable === launch.node.capsulePath || executable === launch.npm.capsulePath,
+    layer1Allowed: (executable): boolean => executable === launch.node.capsulePath,
     ...(launch.containerImage === undefined ? {} : { containerImage: launch.containerImage }),
   };
 }

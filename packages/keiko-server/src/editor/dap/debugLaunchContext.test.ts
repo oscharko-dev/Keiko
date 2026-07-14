@@ -88,6 +88,7 @@ fi
 [ "$4" = "--new-session" ] || exit 45
 [ "$5" = "--dir" ] && [ "$6" = "/run" ] || exit 46
 [ "$7" = "--dir" ] && [ "$8" = "/run/keiko-debug" ] || exit 47
+[ "\${16}" = "--ro-bind" ] && [ "\${17}" = "/bin/sh" ] && [ "\${18}" = "/bin/sh" ] || exit 52
 [ "\${24}" = "--bind" ] && [ -d "\${25}" ] || exit 48
 [ "\${26}" = "/run/keiko-debug" ] && [ "\${27}" = "--" ] || exit 49
 [ "\${28}" = "/bin/sh" ] && [ "\${29}" = "-c" ] || exit 50
@@ -125,7 +126,7 @@ printf qualified > "\${25}/.qualification-probe"
       discover: () => ({ schemaVersion: "1", projectId: "project_a", tasks: [] }),
       adapterApprovedRoot: approved,
       node: provisioned(executable(approved, "node"), "/opt/keiko-runtime/node"),
-      npm: provisioned(executable(approved, "npm"), "/opt/keiko-runtime/npm"),
+      npm: provisioned(executable(approved, "npm"), "/opt/keiko-runtime/npm/bin/npm-cli.js"),
       shell: provisioned(executable(approved, "shell"), "/opt/keiko-runtime/shell"),
       npmUserConfig: provisioned(npmUserConfig, "/opt/keiko-debug/npm-user-config"),
       npmGlobalConfig: provisioned(npmGlobalConfig, "/opt/keiko-debug/npm-global-config"),

@@ -412,6 +412,45 @@ describe("useDebugSession", () => {
     expect(result.current.snapshot.stack).toBeNull();
   });
 
+  it("keeps a successful stop terminal when the control response follows the stream event", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url === "/api/editor/debug/control") {
+        const source = FakeEventSource.instances[0];
+        const terminated = source?.listeners.get("editor-debug:session-stopped");
+        if (terminated === undefined) throw new Error("Expected terminal debug listener.");
+        for (const listener of terminated) {
+          listener({
+            data: JSON.stringify({
+              sequence: 1,
+              event: {
+                kind: "session-stopped",
+                sessionId: "session-1",
+                status: "stopped",
+                reason: "requested",
+              },
+            }),
+          } as MessageEvent);
+        }
+        return response({ sessionId: "session-1", status: "stopped" });
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+
+    await act(async () => result.current.actions.control(current, "stop"));
+
+    expect(result.current.snapshot.session).toBeNull();
+  });
+
   it("aborts every old pause projection when a newer pause generation arrives", async () => {
     const stack = deferredResponse();
     const scopes = deferredResponse();

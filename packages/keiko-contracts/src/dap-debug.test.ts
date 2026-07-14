@@ -76,7 +76,7 @@ const validRequests = [
     {
       schemaVersion,
       workspaceId,
-      target: { kind: "catalog", targetId: "target_1" },
+      target: { kind: "catalog", targetId: "npm-script:debug:catalog" },
       activationRevision: 0,
     },
     {
@@ -362,6 +362,33 @@ describe("DAP debug leaf contracts", () => {
     }
     expect(parseSetBreakpointsRequest(sparseBreakpoints)).toMatchObject({ ok: false });
     expect(parseSetWatchesRequest(sparseWatches)).toMatchObject({ ok: false });
+  });
+
+  it("accepts only canonical catalog launch target ids", () => {
+    const request = {
+      schemaVersion,
+      workspaceId,
+      target: { kind: "catalog", targetId: "npm-script:debug:catalog" },
+      activationRevision: 0,
+    };
+    expect(parseDebugSessionStartRequest(request).ok).toBe(true);
+
+    for (const targetId of [
+      "target_1",
+      "npm-script:",
+      "npm-script:-debug",
+      "npm-script: debug",
+      "npm-script:debug!",
+      "npm-script:débug",
+      `npm-script:${"x".repeat(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxOpaqueIdChars)}`,
+    ]) {
+      expect(
+        parseDebugSessionStartRequest({
+          ...request,
+          target: { kind: "catalog", targetId },
+        }).ok,
+      ).toBe(false);
+    }
   });
 
   it("rejects unsafe numeric bounds, breakpoint shape mismatches, and free evaluate expressions", () => {

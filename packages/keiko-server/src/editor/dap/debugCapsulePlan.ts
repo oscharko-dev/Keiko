@@ -32,7 +32,7 @@ export interface ClosedFileDebugLaunchArguments {
 export interface ClosedCatalogDebugLaunchArguments {
   readonly request: "launch";
   readonly runtimeExecutable: string;
-  readonly runtimeArgs: readonly [string, string, string, string, string, "run", string];
+  readonly runtimeArgs: readonly [string, string, string, string, string, string, "run", string];
   readonly cwd: "/keiko-execution-root";
   readonly console: "internalConsole";
 }

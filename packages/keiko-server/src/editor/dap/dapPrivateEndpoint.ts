@@ -74,7 +74,7 @@ export function createNodeDapPrivateEndpointDeps(): DapPrivateEndpointDeps {
     realpath,
     connect: connectNodeSocket,
     wait: (attempt) => waitForAttempt(attempt),
-    maxAttempts: 50,
+    maxAttempts: 100,
   };
 }
 

@@ -36,6 +36,8 @@ interface CapturedDebugEvent {
   readonly data: string;
 }
 
+let activeSessionId: string | undefined;
+
 declare global {
   interface Window {
     __keikoCapturedDebugEvents?: CapturedDebugEvent[];
@@ -101,6 +103,31 @@ async function capturedExceptionEvent(page: Page): Promise<unknown> {
     });
     return entry === undefined ? null : (JSON.parse(entry.data) as unknown);
   });
+}
+
+async function capturedStartedSessionId(page: Page): Promise<string> {
+  let sessionId: string | undefined;
+  await expect
+    .poll(async () => {
+      sessionId = await page.evaluate(() => {
+        for (const candidate of [...(window.__keikoCapturedDebugEvents ?? [])].reverse()) {
+          if (candidate.event !== "editor-debug:session-started") continue;
+          try {
+            const parsed = JSON.parse(candidate.data) as {
+              readonly event?: { readonly sessionId?: unknown };
+            };
+            if (typeof parsed.event?.sessionId === "string") return parsed.event.sessionId;
+          } catch {
+            continue;
+          }
+        }
+        return undefined;
+      });
+      return sessionId;
+    })
+    .not.toBeUndefined();
+  if (sessionId === undefined) throw new Error("DEBUG_SESSION_START_EVENT_NOT_OBSERVED");
+  return sessionId;
 }
 
 function fixture(path: string): string {
@@ -170,7 +197,33 @@ async function grantWorkspaceScriptTrust(page: Page, root: string): Promise<void
   expect(response.status(), await response.text()).toBe(200);
 }
 
-async function activateDebugging(page: Page, root: string): Promise<void> {
+interface DebugActivationProjection {
+  readonly activationRevision: number;
+  readonly workspaceId: string;
+}
+
+function debugActivationProjection(value: unknown): DebugActivationProjection {
+  const result = value as {
+    readonly snapshot?: {
+      readonly debugWorkspaceId?: unknown;
+      readonly debugging?: { readonly revision?: unknown; readonly state?: unknown };
+    };
+  };
+  const workspaceId = result.snapshot?.debugWorkspaceId;
+  const debugging = result.snapshot?.debugging;
+  const activationRevision = debugging?.revision;
+  if (
+    typeof workspaceId !== "string" ||
+    typeof activationRevision !== "number" ||
+    !Number.isSafeInteger(activationRevision) ||
+    debugging?.state !== "available"
+  ) {
+    throw new Error("DEBUG_ACTIVATION_RESPONSE_INVALID");
+  }
+  return { activationRevision, workspaceId };
+}
+
+async function activateDebugging(page: Page, root: string): Promise<DebugActivationProjection> {
   const settings = await page.request.get(`/api/editor/settings?root=${encodeURIComponent(root)}`);
   expect(settings.status()).toBe(200);
   const body = (await settings.json()) as { readonly workspaceRevision?: unknown };
@@ -184,11 +237,15 @@ async function activateDebugging(page: Page, root: string): Promise<void> {
     },
   });
   expect(response.status(), await response.text()).toBe(200);
+  return debugActivationProjection(await response.json());
 }
 
-async function startCatalogDebugging(page: Page, root: string): Promise<DebugSessionProjection> {
+async function startCatalogDebugging(
+  page: Page,
+  activation: DebugActivationProjection,
+): Promise<DebugSessionProjection> {
   const bootstrap = await page.request.post("/api/editor/debug/bootstrap", {
-    data: { schemaVersion: "1", workspaceId: root },
+    data: { schemaVersion: "1", workspaceId: activation.workspaceId },
     headers: { "x-keiko-csrf": "1" },
   });
   expect(bootstrap.status(), await bootstrap.text()).toBe(200);
@@ -212,7 +269,9 @@ async function startCatalogDebugging(page: Page, root: string): Promise<DebugSes
     headers: { "x-keiko-csrf": "1" },
   });
   expect(response.status(), await response.text()).toBe(201);
-  return debugSession(await response.json());
+  const session = debugSession(await response.json());
+  activeSessionId = session.sessionId;
+  return session;
 }
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
@@ -261,7 +320,7 @@ async function toggleBreakpointFromEditorPalette(page: Page): Promise<void> {
   await page.keyboard.press("F1");
   const palette = page.locator(".quick-input-widget");
   await expect(palette).toBeVisible();
-  await palette.locator("input").fill(">Toggle Breakpoint");
+  await palette.locator("input").fill(">Debug: Toggle Breakpoint");
   await page.keyboard.press("Enter");
 }
 
@@ -284,8 +343,17 @@ async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionP
   await pane.locator(EDITOR_SELECTORS.monaco).click();
   await page.keyboard.press("F5");
   const response = await started;
-  expect(response.status(), await response.text()).toBe(201);
-  return debugSession(await response.json());
+  if (response.status() !== 201) {
+    throw new Error(`DEBUG_SESSION_START_FAILED:${String(response.status())}`);
+  }
+  const sessionId = await capturedStartedSessionId(page);
+  activeSessionId = sessionId;
+  const projection = await page.request.get(
+    `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
+  );
+  expect(projection.status(), await projection.text()).toBe(200);
+  const session = debugSession(await projection.json());
+  return session;
 }
 
 async function stopFromDebugPanel(page: Page, panel: Locator): Promise<void> {
@@ -296,6 +364,7 @@ async function stopFromDebugPanel(page: Page, panel: Locator): Promise<void> {
   );
   await panel.getByRole("button", { name: "Stop debugging" }).click();
   expect((await stopped).status()).toBe(200);
+  activeSessionId = undefined;
   await expect(panel.getByText("No active debug session.")).toBeVisible();
 }
 
@@ -445,7 +514,30 @@ async function prepareExceptionDebugging(page: Page): Promise<PreparedExceptionD
   return { pane, panel };
 }
 
-test.afterEach(() => {
+async function cleanupActiveSession(page: Page): Promise<void> {
+  const sessionId = activeSessionId;
+  activeSessionId = undefined;
+  if (sessionId === undefined) return;
+  const health = await page.request.get(
+    `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
+  );
+  if (health.status() === 404) return;
+  expect(health.status(), await health.text()).toBe(200);
+  const session = debugSession(await health.json());
+  const stopped = await page.request.post("/api/editor/debug/control", {
+    data: {
+      schemaVersion: "1",
+      sessionId,
+      action: "stop",
+      pauseGeneration: session.pauseGeneration,
+    },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(stopped.status(), await stopped.text()).toBe(200);
+}
+
+test.afterEach(async ({ page }) => {
+  await cleanupActiveSession(page);
   cleanupEditorWorkspaces();
 });
 
@@ -453,6 +545,7 @@ test("#2348 drives the real DAP session from breakpoint through step, inline val
   page,
 }) => {
   const project = workspace();
+  await captureDebugEvents(page);
   await createProject(page, project.root);
   await grantWorkspaceScriptTrust(page, project.root);
   await seedEditorWindow(page, {
@@ -510,7 +603,7 @@ test("#2348 drives a separate uncaught exception breakpoint through the real DAP
         reason: "exception",
       },
     });
-  await expect(panel.getByRole("status")).toHaveText("Exception: Fixture uncaught exception");
+  await expect(panel.getByText("Exception: Fixture uncaught exception")).toBeVisible();
   await stopFromDebugPanel(page, panel);
 });
 
@@ -520,9 +613,9 @@ test("#2348 launches a governed catalog target through the real npm CLI artifact
   const project = workspace();
   await createProject(page, project.root);
   await grantWorkspaceScriptTrust(page, project.root);
-  await activateDebugging(page, project.root);
+  const activation = await activateDebugging(page, project.root);
 
-  const session = await startCatalogDebugging(page, project.root);
+  const session = await startCatalogDebugging(page, activation);
 
   expect(session.targetKind).toBe("catalog");
 });

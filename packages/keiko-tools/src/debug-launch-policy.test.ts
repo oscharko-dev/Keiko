@@ -16,6 +16,7 @@ const policy: DebugLaunchPolicy = {
   layer1Allowed: () => true,
 };
 const catalogArgs = [
+  policy.npmExecutable,
   "--ignore-scripts",
   `--script-shell=${policy.shellExecutable}`,
   `--userconfig=${policy.npmUserConfig}`,
@@ -140,7 +141,7 @@ describe("debug launch Layer-2 policy", () => {
       validateDebugLaunchPolicy(
         {
           kind: "catalog",
-          executable: policy.npmExecutable,
+          executable: policy.nodeExecutable,
           args: catalogArgs,
           scriptName: "start",
           shell: policy.shellExecutable,
@@ -160,7 +161,7 @@ describe("debug launch Layer-2 policy", () => {
         validateDebugLaunchPolicy(
           {
             kind: "catalog",
-            executable: policy.npmExecutable,
+            executable: policy.nodeExecutable,
             args,
             scriptName,
             shell: policy.shellExecutable,
@@ -181,7 +182,7 @@ describe("debug launch Layer-2 policy", () => {
         validateDebugLaunchPolicy(
           {
             kind: "catalog",
-            executable: policy.npmExecutable,
+            executable: policy.nodeExecutable,
             args,
             scriptName,
             shell: policy.shellExecutable,
@@ -195,9 +196,10 @@ describe("debug launch Layer-2 policy", () => {
   );
 
   it.each([
-    { executable: "/workspace/npm" },
+    { executable: policy.npmExecutable },
     { shell: "/workspace/sh" },
     { scriptName: "-hostile" },
+    { args: catalogArgs.slice(1) },
     { args: ["--ignore-scripts", `--script-shell=${policy.shellExecutable}`, "run", "other"] },
     { args: ["--ignore-scripts", `--script-shell=${policy.shellExecutable}`, "run"] },
     { args: ["--ignore-scripts", "--script-shell=/workspace/sh", "run", "start"] },
@@ -209,7 +211,7 @@ describe("debug launch Layer-2 policy", () => {
   ])("rejects catalog structural drift %#", (drift) => {
     const execution = {
       kind: "catalog" as const,
-      executable: policy.npmExecutable,
+      executable: policy.nodeExecutable,
       args: catalogArgs,
       scriptName: "start",
       shell: policy.shellExecutable,
@@ -287,7 +289,7 @@ describe("debug launch Layer-2 policy", () => {
   it("runs every independent policy denial in one mutation-complete test", () => {
     const catalog = {
       kind: "catalog" as const,
-      executable: policy.npmExecutable,
+      executable: policy.nodeExecutable,
       args: catalogArgs,
       scriptName: "start",
       shell: policy.shellExecutable,

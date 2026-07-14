@@ -30,7 +30,7 @@ function document(): Record<string, unknown> {
     launch: {
       adapterApprovedRoot: externalAdapterRoot(),
       node: artifact("node", "/opt/keiko-runtime/node"),
-      npm: artifact("npm", "/opt/keiko-runtime/npm"),
+      npm: artifact("npm", "/opt/keiko-runtime/npm/bin/npm-cli.js"),
       shell: artifact("shell", "/opt/keiko-runtime/shell"),
       npmUserConfig: artifact("npm-user-config", "/opt/keiko-debug/npm-user-config"),
       npmGlobalConfig: artifact("npm-global-config", "/opt/keiko-debug/npm-global-config"),
