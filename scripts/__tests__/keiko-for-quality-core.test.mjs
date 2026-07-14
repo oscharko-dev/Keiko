@@ -109,6 +109,30 @@ describe("Keiko for Quality core", () => {
     expect(parseGitarFindings("12 resolved / findings")).toBeUndefined();
   });
 
+  it("accepts only Gitar's exact compact clean-review evidence", () => {
+    const compact = [
+      "<details>",
+      "<summary><b>Code Review</b> <kbd>✅ Approved</kbd></summary>",
+      "",
+      "Reviewed the current head. No issues found.",
+      "",
+      "</details>",
+    ].join("\n");
+    expect(parseGitarFindings(compact)).toBe(0);
+    expect(parseGitarFindings(compact.replace("<summary><b>", "<summary>\n<b>"))).toBe(0);
+    expect(parseGitarFindings(compact.replace("</b> <kbd>", "</b>  <kbd>"))).toBe(0);
+    expect(parseGitarFindings(compact.replace("</kbd></summary>", "</kbd>\n</summary>"))).toBe(0);
+    for (const ambiguous of [
+      compact.replace("✅ Approved", "👍 Approved with suggestions"),
+      compact.replace("No issues found.", "No blocking issues found."),
+      compact.replace("No issues found.", "Review completed."),
+      "✅ Approved — No issues found.",
+      `${compact}\n0 resolved / 1 findings`,
+    ]) {
+      expect(parseGitarFindings(ambiguous)).not.toBe(0);
+    }
+  });
+
   it("extracts and deduplicates exact Socket package versions", () => {
     expect(packageAlerts("No warnings: npm/execa@9.6.1")).toEqual([]);
     expect(

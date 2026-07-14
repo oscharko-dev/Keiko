@@ -61,10 +61,14 @@ function latestComment(comments, identity) {
 
 export function parseGitarFindings(body) {
   const match = /\b(\d+)\s+resolved\s*\/\s*(\d+)\s+findings\b/iu.exec(body);
-  if (match === null) return undefined;
-  const resolved = Number(match[1]);
-  const total = Number(match[2]);
-  return resolved <= total ? total - resolved : undefined;
+  if (match !== null) {
+    const resolved = Number(match[1]);
+    const total = Number(match[2]);
+    return resolved <= total ? total - resolved : undefined;
+  }
+  const compactCleanReview =
+    /<summary>\s*<b>Code Review<\/b>\s*<kbd>✅ Approved<\/kbd>\s*<\/summary>[\s\S]*?\bNo issues found\.\s*<\/details>/iu;
+  return compactCleanReview.test(body) ? 0 : undefined;
 }
 
 export function packageAlerts(body) {

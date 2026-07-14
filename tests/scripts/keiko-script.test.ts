@@ -120,6 +120,17 @@ describe("scripts/keiko.sh", () => {
       expect(r.status).toBe(2);
       expect(r.stderr).toContain("KEIKO_UI_HOST must be 127.0.0.1 or localhost");
     });
+
+    it("keeps the audited S5332 disposition on the validated loopback sink", () => {
+      const lines = readFileSync(SCRIPT, "utf8").split("\n");
+      const sink = lines.findIndex((line) => line.includes('curl -fsS "$HEALTH_URL"'));
+      expect(sink).toBeGreaterThan(0);
+      expect(lines[sink - 1]).toContain("strict loopback allowlist");
+      expect(lines[sink]).toContain("# NOSONAR");
+      expect(lines.find((line) => line.startsWith('LOOPBACK_ORIGIN="http'))).not.toContain(
+        "NOSONAR",
+      );
+    });
   });
 
   describe("pid-file hygiene", () => {
