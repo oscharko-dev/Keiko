@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
 import type { QuickAccessCommand } from "../quickAccessRegistry";
@@ -96,6 +97,19 @@ function symbolResults(response: WorkspaceSymbolSearchResponse): readonly Symbol
   }));
 }
 
+function quickAccessEmptyText(
+  t: I18nTranslate,
+  mode: QuickAccessMode,
+  root: string | undefined,
+  query: string,
+): string {
+  if (mode === "commands") return t("quickAccess.empty.commands");
+  if (root === undefined) return t("quickAccess.empty.noRoot");
+  return query.trim().length === 0
+    ? t("quickAccess.empty.startSearch")
+    : t("quickAccess.empty.files");
+}
+
 export function UnifiedQuickAccessPalette({
   initialMode,
   root,
@@ -103,6 +117,7 @@ export function UnifiedQuickAccessPalette({
   openEditorFile,
   onClose,
 }: UnifiedQuickAccessPaletteProps): ReactNode {
+  const t = useTranslate();
   const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
   const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
   const [selected, setSelected] = useState(0);
@@ -224,14 +239,7 @@ export function UnifiedQuickAccessPalette({
   };
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
-  const emptyText =
-    mode === "commands"
-      ? "No matching commands."
-      : root === undefined
-        ? "No active workspace root."
-        : query.trim().length === 0
-          ? "Type to search workspace files and symbols."
-          : "No matching files or symbols.";
+  const emptyText = quickAccessEmptyText(t, mode, root, query);
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
@@ -246,10 +254,10 @@ export function UnifiedQuickAccessPalette({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 id="quick-access-title" className="sr-only">
-          Quick access
+          {t("quickAccess.title")}
         </h2>
         <p id="quick-access-desc" className="sr-only">
-          Search workspace files and symbols, or prefix the query with greater-than to run commands.
+          {t("quickAccess.description")}
         </p>
         <div className="cmdk-input">
           <input
@@ -259,14 +267,12 @@ export function UnifiedQuickAccessPalette({
             aria-controls={listId}
             aria-activedescendant={itemCount > 0 ? optionId(selected) : undefined}
             aria-label={
-              mode === "commands"
-                ? "Command query"
-                : "Workspace file or symbol query. Prefix with greater-than for commands"
+              mode === "commands" ? t("quickAccess.query.commands") : t("quickAccess.query.files")
             }
             placeholder={
               mode === "commands"
-                ? "Run a command..."
-                : "Search files and symbols...  (prefix with > for commands)"
+                ? t("quickAccess.placeholder.commands")
+                : t("quickAccess.placeholder.files")
             }
             spellCheck={false}
             autoComplete="off"
@@ -277,7 +283,11 @@ export function UnifiedQuickAccessPalette({
           <span className="kbd">esc</span>
         </div>
         <div className="sr-only" role="status">
-          {itemCount === 0 ? emptyText : `${String(itemCount)} result${itemCount === 1 ? "" : "s"}`}
+          {itemCount === 0
+            ? emptyText
+            : t(itemCount === 1 ? "quickAccess.result.singular" : "quickAccess.result.plural", {
+                count: itemCount,
+              })}
         </div>
         <div id={listId} role="listbox" className="cmdk-list">
           {itemCount === 0 ? (

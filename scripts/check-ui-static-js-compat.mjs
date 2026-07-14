@@ -9,6 +9,7 @@ import { parse } from "acorn";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { rejectUiStaticSymlink, resolveUiStaticRoot } from "./lib/ui-static-root-boundary.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
@@ -40,6 +41,7 @@ async function collectJavaScriptFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    rejectUiStaticSymlink(entry);
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...(await collectJavaScriptFiles(full)));
@@ -113,7 +115,8 @@ function parseJavaScript(source, sourceType) {
 }
 
 export async function checkUiStaticJavaScriptCompatibility(staticRoot = DEFAULT_STATIC_ROOT) {
-  const files = await collectJavaScriptFiles(staticRoot);
+  const trustedStaticRoot = await resolveUiStaticRoot(repoRoot, staticRoot);
+  const files = await collectJavaScriptFiles(trustedStaticRoot);
   const failures = [];
   for (const file of files) {
     const source = await readFile(file, "utf8");

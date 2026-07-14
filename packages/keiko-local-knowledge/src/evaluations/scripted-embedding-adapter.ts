@@ -7,8 +7,8 @@
 //   - No `Date.now()`, `Math.random()`, `performance.now()`, or `Date()` reads.
 //   - No global mutable state. The adapter holds only the immutable identity + the
 //     constructor's `topicSalts` map; nothing mutates after construction.
-//   - No `fetch` import, no network IO of any kind. The `request` method always resolves
-//     synchronously through `Promise.resolve`.
+//   - No `fetch` import, no network IO of any kind. The `request` method resolves through the async
+//     adapter contract without scheduling external work.
 //
 // Vector layout: a `vectorDimensions`-wide `Float32Array` filled by an FNV-1a hash of the
 // input string (32-bit, see RFC reference text). Lane 0 carries a normalised input length
@@ -178,6 +178,9 @@ export function createScriptedEmbeddingAdapter(
   const endpoint = options.endpoint ?? "https://scripted.local/v1";
   const apiKey = options.apiKey ?? "scripted-test-key";
 
+  // The adapter contract is asynchronous even though this deterministic fixture has no operation to
+  // await; keeping the direct return avoids an unnecessary promise wrapper (S7746).
+  // eslint-disable-next-line @typescript-eslint/require-await
   const request = async (req: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
     const { topics, stripped } = extractTopics(req.input);
     const hash = fnv1a32(stripped);
@@ -190,7 +193,7 @@ export function createScriptedEmbeddingAdapter(
       modelId: identity.modelId,
       ...(identity.modelRevision !== undefined ? { modelRevision: identity.modelRevision } : {}),
     };
-    return Promise.resolve({ ok: true, value: successValue });
+    return { ok: true, value: successValue };
   };
 
   return {

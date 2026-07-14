@@ -237,7 +237,7 @@
     <script>
       // Underline tabs — roving tabindex + arrow / Home / End (WAI-ARIA tabs)
       (function () {
-        var tabs = [].slice.call(document.querySelectorAll("#utabs .c-utab"));
+        var tabs = Array.prototype.slice.call(document.querySelectorAll("#utabs .c-utab"));
         function select(t, focus) {
           tabs.forEach(function (x) {
             var on = x === t;
@@ -279,7 +279,7 @@
       // Context menu — roving focus, arrows, Home/End, Esc, type-ahead-free
       (function () {
         var menu = document.getElementById("ctxmenu");
-        var items = [].slice.call(menu.querySelectorAll(".c-ctx-item"));
+        var items = Array.prototype.slice.call(menu.querySelectorAll(".c-ctx-item"));
         items.forEach(function (it, i) {
           it.addEventListener("mouseenter", function () {
             focusItem(i);

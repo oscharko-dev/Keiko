@@ -12,6 +12,7 @@ import {
   useSetLocale,
   useTranslate,
 } from "./i18n";
+import { translateOptionalWidget } from "./optional-widget-i18n";
 
 function Probe(): ReactNode {
   const { locale, setLocale, t } = useI18n();
@@ -95,6 +96,30 @@ describe("translate", () => {
     expect(translate("de", "workspace.selection.many", { count: 3 })).toBe(
       "3 Arbeitsbereichsfenster ausgewählt",
     );
+  });
+
+  it("translates the remediated widget surfaces from the German catalog", async () => {
+    await loadLocaleMessages("de");
+
+    expect(translate("de", "quickAccess.title")).toBe("Schnellzugriff");
+    expect(translate("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
+    expect(translateOptionalWidget("de", "documentationBrowser.action.prepareIndexing")).toBe(
+      "Indizierung vorbereiten",
+    );
+    expect(translateOptionalWidget("de", "gitDelivery.state.ready-to-execute")).toBe(
+      "Bereit zur Ausführung",
+    );
+    expect(translateOptionalWidget("de", "promptEnhancer.action.enhance")).toBe(
+      "Prompt verbessern",
+    );
+    expect(
+      translate("de", "terminalWidget.result.finished", {
+        code: 0,
+        duration: 12,
+        truncated: "",
+        timedOut: "",
+      }),
+    ).toBe("Befehl abgeschlossen: Exit-Code 0, 12 ms");
   });
 });
 

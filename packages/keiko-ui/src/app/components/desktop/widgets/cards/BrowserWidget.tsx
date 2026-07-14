@@ -5,9 +5,10 @@
 // state is driven by the BFF; the displayed `url` prop is a display hint only.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import styles from "./BrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
+import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
 import {
   browserApplyScreenshot,
   browserContent,
@@ -47,55 +48,317 @@ const DEFAULT_CDP_PORT = 9222;
 const DEFAULT_URL = "http://localhost:5173";
 const MAX_EVENT_LOG = 50;
 
-function errorFromUnknown(value: unknown): ErrorState {
+function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
-  return { code: "INTERNAL", message: "Unexpected error." };
+  return { code: "INTERNAL", message: t("browserWidget.error.unexpected") };
 }
 
-function eventLabel(kind: BrowserEventEnvelope["kind"]): string {
+function eventLabel(kind: BrowserEventEnvelope["kind"], t: I18nTranslate): string {
   switch (kind) {
     case "session-opened":
-      return "session opened";
+      return t("browserWidget.event.sessionOpened");
     case "navigated":
-      return "navigated";
+      return t("browserWidget.event.navigated");
     case "screenshot-captured":
-      return "screenshot captured";
+      return t("browserWidget.event.screenshotCaptured");
     case "page-content-captured":
-      return "content captured";
+      return t("browserWidget.event.contentCaptured");
     case "session-closed":
-      return "session closed";
+      return t("browserWidget.event.sessionClosed");
     case "trust-warning":
-      return "trust warning";
+      return t("browserWidget.event.trustWarning");
     case "error":
-      return "error";
+      return t("browserWidget.event.error");
   }
 }
 
-function eventDetail(event: BrowserEventEnvelope): string {
-  const p = event.payload;
-  if (event.kind === "navigated") {
-    const origin = typeof p.originOnly === "string" ? p.originOnly : "";
-    const status = typeof p.httpStatus === "number" ? ` (${String(p.httpStatus)})` : "";
-    return `${origin}${status}`;
-  }
-  if (event.kind === "screenshot-captured") {
-    return p.persisted === true ? "persisted" : "dry-run";
-  }
-  if (event.kind === "page-content-captured") {
-    return typeof p.byteLength === "number" ? `${String(p.byteLength)} bytes` : "";
-  }
-  if (event.kind === "error" || event.kind === "trust-warning") {
-    return typeof p.message === "string"
-      ? p.message
-      : typeof p.warning === "string"
-        ? p.warning
+function navigatedEventDetail(payload: BrowserEventEnvelope["payload"]): string {
+  const origin = typeof payload.originOnly === "string" ? payload.originOnly : "";
+  const status = typeof payload.httpStatus === "number" ? ` (${String(payload.httpStatus)})` : "";
+  return `${origin}${status}`;
+}
+
+function errorEventDetail(payload: BrowserEventEnvelope["payload"]): string {
+  if (typeof payload.message === "string") return payload.message;
+  return typeof payload.warning === "string" ? payload.warning : "";
+}
+
+function eventDetail(event: BrowserEventEnvelope, t: I18nTranslate): string {
+  switch (event.kind) {
+    case "navigated":
+      return navigatedEventDetail(event.payload);
+    case "screenshot-captured":
+      return event.payload.persisted === true
+        ? t("browserWidget.event.persisted")
+        : t("browserWidget.event.dryRun");
+    case "page-content-captured":
+      return typeof event.payload.byteLength === "number"
+        ? t("browserWidget.event.bytes", { count: event.payload.byteLength })
         : "";
+    case "error":
+    case "trust-warning":
+      return errorEventDetail(event.payload);
+    default:
+      return "";
+  }
+}
+
+interface BrowserStatusAnnouncementInput {
+  readonly working: boolean;
+  readonly busyLabel: string | null;
+  readonly pendingShot: PendingShot | null;
+  readonly persistedPath: string | null;
+  readonly lastOrigin: string | null;
+  readonly reachability: CdpReachability | null;
+  readonly session: BrowserSessionMeta | null;
+}
+
+function browserStatusAnnouncement(
+  input: BrowserStatusAnnouncementInput,
+  t: I18nTranslate,
+): string {
+  if (input.working && input.busyLabel !== null) return input.busyLabel;
+  if (input.pendingShot !== null) return t("browserWidget.status.screenshotReady");
+  if (input.persistedPath !== null) {
+    return t("browserWidget.status.persistedAs", { path: input.persistedPath });
+  }
+  if (input.lastOrigin !== null) {
+    return t("browserWidget.status.currentOrigin", { origin: input.lastOrigin });
+  }
+  if (input.reachability !== null && input.session === null) {
+    return t("browserWidget.status.reachable", {
+      state: input.reachability.reachable
+        ? t("browserWidget.common.yes")
+        : t("browserWidget.common.no"),
+    });
   }
   return "";
 }
 
+function pendingScreenshotSource(pendingShot: PendingShot | null): string | null {
+  return pendingShot === null ? null : `data:image/png;base64,${pendingShot.dataBase64}`;
+}
+
+function browserActionAvailability(
+  working: boolean,
+  session: BrowserSessionMeta | null,
+  pendingShot: PendingShot | null,
+): {
+  readonly openDisabled: boolean;
+  readonly sessionRequiredDisabled: boolean;
+  readonly checkDisabled: boolean;
+  readonly applyDisabled: boolean;
+} {
+  return {
+    openDisabled: working || session !== null,
+    sessionRequiredDisabled: working || session === null,
+    checkDisabled: working || session !== null,
+    applyDisabled: working || pendingShot === null,
+  };
+}
+
+interface BrowserActionInput {
+  readonly disabled: boolean;
+  readonly busyLabel: string;
+  readonly onBusy: (label: string) => void;
+  readonly run: () => Promise<void>;
+  readonly onError: (error: unknown) => void;
+}
+
+function browserActionHandler(input: BrowserActionInput): () => void {
+  return (): void => {
+    if (input.disabled) return;
+    input.onBusy(input.busyLabel);
+    input.run().catch(input.onError);
+  };
+}
+
+function attachBrowserEventListeners(
+  source: EventSource,
+  pushEvent: (event: BrowserEventEnvelope) => void,
+): void {
+  const kinds: BrowserEventEnvelope["kind"][] = [
+    "session-opened",
+    "navigated",
+    "screenshot-captured",
+    "page-content-captured",
+    "session-closed",
+    "trust-warning",
+    "error",
+  ];
+  for (const kind of kinds) {
+    source.addEventListener(`browser:${kind}`, (event: MessageEvent<string>) => {
+      try {
+        pushEvent(JSON.parse(event.data) as BrowserEventEnvelope);
+      } catch {
+        // Ignore malformed frames from a stale or incompatible event stream.
+      }
+    });
+  }
+}
+
+function attachBrowserStreamErrorHandler(
+  source: EventSource,
+  setError: (error: ErrorState) => void,
+  t: I18nTranslate,
+): void {
+  source.onerror = (): void => {
+    if (source.readyState !== EventSource.CLOSED) return;
+    setError({
+      code: "EVENT_STREAM_CLOSED",
+      message: t("browserWidget.error.streamDisconnected"),
+    });
+  };
+}
+
+function useBrowserEventStream(
+  session: BrowserSessionMeta | null,
+  pushEvent: (event: BrowserEventEnvelope) => void,
+  setError: (error: ErrorState) => void,
+  eventSourceRef: RefObject<EventSource | null>,
+  t: I18nTranslate,
+): void {
+  useEffect(() => {
+    if (session === null) {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      return;
+    }
+    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
+    if (source === null) return;
+    attachBrowserEventListeners(source, pushEvent);
+    attachBrowserStreamErrorHandler(source, setError, t);
+    eventSourceRef.current = source;
+    return (): void => {
+      source.close();
+      eventSourceRef.current = null;
+    };
+  }, [session, pushEvent, setError, eventSourceRef, t]);
+}
+
+function browserEventError(event: BrowserEventEnvelope): ErrorState | null {
+  if (event.kind !== "error") return null;
+  return {
+    code: typeof event.payload.code === "string" ? event.payload.code : "INTERNAL",
+    message: typeof event.payload.message === "string" ? event.payload.message : "Error.",
+  };
+}
+
+function useBrowserEventHandler(
+  setEvents: Dispatch<SetStateAction<readonly BrowserEventEnvelope[]>>,
+  setLastOrigin: Dispatch<SetStateAction<string | null>>,
+  setError: Dispatch<SetStateAction<ErrorState | null>>,
+): (event: BrowserEventEnvelope) => void {
+  return useCallback(
+    (event: BrowserEventEnvelope): void => {
+      setEvents((prev) => {
+        const next = [...prev, event];
+        return next.length > MAX_EVENT_LOG ? next.slice(next.length - MAX_EVENT_LOG) : next;
+      });
+      if (event.kind === "navigated" && typeof event.payload.originOnly === "string") {
+        setLastOrigin(event.payload.originOnly);
+      }
+      const eventError = browserEventError(event);
+      if (eventError !== null) setError(eventError);
+    },
+    [setError, setEvents, setLastOrigin],
+  );
+}
+
+interface BrowserStatusLinesProps {
+  readonly working: boolean;
+  readonly busyLabel: string | null;
+  readonly reachability: CdpReachability | null;
+  readonly session: BrowserSessionMeta | null;
+  readonly lastOrigin: string | null;
+  readonly pendingShot: PendingShot | null;
+  readonly persistedPath: string | null;
+  readonly error: ErrorState | null;
+  readonly t: I18nTranslate;
+}
+
+function BrowserStatusLines(props: BrowserStatusLinesProps): ReactNode {
+  return (
+    <>
+      {props.working && props.busyLabel !== null ? (
+        <p className="bw-status">{props.busyLabel}</p>
+      ) : null}
+      {props.reachability !== null && props.session === null ? (
+        <p className="bw-status">
+          {props.t("browserWidget.status.reachable", {
+            state: props.reachability.reachable
+              ? props.t("browserWidget.common.yes")
+              : props.t("browserWidget.common.no"),
+          })}
+          {props.reachability.browserVersion === null
+            ? ""
+            : ` — ${props.reachability.browserVersion}`}
+        </p>
+      ) : null}
+      {props.lastOrigin !== null ? (
+        <p className="bw-status">
+          {props.t("browserWidget.status.currentOriginPrefix")}{" "}
+          <span className="mono">{props.lastOrigin}</span>
+        </p>
+      ) : null}
+      {props.pendingShot !== null ? (
+        <p className="bw-status">{props.t("browserWidget.status.screenshotReady")}</p>
+      ) : null}
+      {props.persistedPath !== null ? (
+        <p className="bw-status">
+          {props.t("browserWidget.status.persistedAsPrefix")}{" "}
+          <span className="mono">{props.persistedPath}</span>.
+        </p>
+      ) : null}
+      {props.error !== null ? (
+        <div className="bw-error" role="alert">
+          {props.error.message} <span className="err-code mono">({props.error.code})</span>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+interface BrowserPreviewProps {
+  readonly pendingShot: PendingShot | null;
+  readonly pendingShotSrc: string | null;
+  readonly session: BrowserSessionMeta | null;
+  readonly t: I18nTranslate;
+}
+
+function BrowserPreview({
+  pendingShot,
+  pendingShotSrc,
+  session,
+  t,
+}: BrowserPreviewProps): ReactNode {
+  if (pendingShot !== null) {
+    return (
+      // next/image cannot optimize an in-memory data: URL screenshot blob; the BFF already
+      // capped this at 10 MB and there is no remote source to optimize through.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className="bw-screenshot"
+        src={pendingShotSrc ?? undefined}
+        alt={t("browserWidget.preview.alt")}
+      />
+    );
+  }
+  return (
+    <>
+      <div className="ph-stripes" aria-hidden="true" />
+      <div className="bw-overlay mono">
+        {session === null
+          ? t("browserWidget.preview.noSession")
+          : t("browserWidget.preview.sessionOpen")}
+      </div>
+    </>
+  );
+}
+
 export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
+  const t = useTranslate();
   const initialPort = props.cdpPort ?? DEFAULT_CDP_PORT;
   const initialUrl = props.url ?? DEFAULT_URL;
   const [portInput, setPortInput] = useState<string>(String(initialPort));
@@ -117,66 +380,16 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
     setError(null);
   }, []);
 
-  const pushEvent = useCallback((event: BrowserEventEnvelope): void => {
-    setEvents((prev) => {
-      const next = [...prev, event];
-      return next.length > MAX_EVENT_LOG ? next.slice(next.length - MAX_EVENT_LOG) : next;
-    });
-    if (event.kind === "navigated" && typeof event.payload.originOnly === "string") {
-      setLastOrigin(event.payload.originOnly);
-    }
-    if (event.kind === "error") {
-      const code = typeof event.payload.code === "string" ? event.payload.code : "INTERNAL";
-      const message = typeof event.payload.message === "string" ? event.payload.message : "Error.";
-      setError({ code, message });
-    }
-  }, []);
+  const handleUnhandledError = useCallback(
+    (caught: unknown): void => {
+      setError(errorFromUnknown(caught, t));
+    },
+    [t],
+  );
 
-  useEffect(() => {
-    if (session === null) {
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
-      return;
-    }
-    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
-    if (source === null) return;
-    const kinds: BrowserEventEnvelope["kind"][] = [
-      "session-opened",
-      "navigated",
-      "screenshot-captured",
-      "page-content-captured",
-      "session-closed",
-      "trust-warning",
-      "error",
-    ];
-    for (const kind of kinds) {
-      source.addEventListener(`browser:${kind}`, (ev: MessageEvent<string>) => {
-        try {
-          const envelope = JSON.parse(ev.data) as BrowserEventEnvelope;
-          pushEvent(envelope);
-        } catch {
-          // ignore malformed frame
-        }
-      });
-    }
-    // GEN-RES-BROWSER-001 — EventSource auto-reconnects on transient network errors, but
-    // a FATAL failure (readyState CLOSED — e.g. the BFF restarted and no longer knows
-    // this session, answering non-200) previously died silently: the event log just
-    // stopped with no signal. Surface it through the widget's existing error state so
-    // the user knows the live feed is gone; reopening the session restores it.
-    source.onerror = (): void => {
-      if (source.readyState !== EventSource.CLOSED) return;
-      setError({
-        code: "EVENT_STREAM_CLOSED",
-        message: "Live browser events disconnected. Reopen the session to resume the feed.",
-      });
-    };
-    eventSourceRef.current = source;
-    return (): void => {
-      source.close();
-      eventSourceRef.current = null;
-    };
-  }, [session, pushEvent]);
+  const pushEvent = useBrowserEventHandler(setEvents, setLastOrigin, setError);
+
+  useBrowserEventStream(session, pushEvent, setError, eventSourceRef, t);
 
   const handleCheckStatus = useCallback(async (): Promise<void> => {
     clearError();
@@ -186,11 +399,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       const status = await fetchBrowserStatus(port);
       setReachability(status);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [portInput, clearError]);
+  }, [portInput, clearError, t]);
 
   const handleOpen = useCallback(async (): Promise<void> => {
     clearError();
@@ -203,11 +416,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       setPersistedPath(null);
       setLastOrigin(null);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [portInput, clearError]);
+  }, [portInput, clearError, t]);
 
   const handleClose = useCallback(async (): Promise<void> => {
     if (session === null) return;
@@ -220,11 +433,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       setPersistedPath(null);
       setLastOrigin(null);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [session, clearError]);
+  }, [session, clearError, t]);
 
   const handleNavigate = useCallback(async (): Promise<void> => {
     if (session === null) return;
@@ -234,11 +447,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       const result = await browserNavigate(session.sessionId, urlInput);
       setLastOrigin(result.originOnly);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [session, urlInput, clearError]);
+  }, [session, urlInput, clearError, t]);
 
   const handleScreenshot = useCallback(async (): Promise<void> => {
     if (session === null) return;
@@ -250,11 +463,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         setPendingShot({ seq: result.seq, dataBase64: result.dataBase64 });
       }
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [session, clearError]);
+  }, [session, clearError, t]);
 
   const handleApply = useCallback(async (): Promise<void> => {
     if (session === null || pendingShot === null) return;
@@ -265,11 +478,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       if (result.persisted) setPersistedPath(result.path);
       setPendingShot(null);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [session, pendingShot, clearError]);
+  }, [session, pendingShot, clearError, t]);
 
   const handleContent = useCallback(async (): Promise<void> => {
     if (session === null) return;
@@ -278,40 +491,27 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
     try {
       await browserContent(session.sessionId);
     } catch (err) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     } finally {
       setWorking(false);
     }
-  }, [session, clearError]);
+  }, [session, clearError, t]);
 
   // GEN-PERF-WIDGET-007 — the screenshot base64 can be ~13 MB; building the data: URL
   // inline in JSX reallocated the whole string on every unrelated re-render (SSE event,
   // busyLabel, error). Memoize on the pending shot so unrelated renders reuse it.
-  const pendingShotSrc = useMemo(
-    () => (pendingShot === null ? null : `data:image/png;base64,${pendingShot.dataBase64}`),
-    [pendingShot],
-  );
+  const pendingShotSrc = useMemo(() => pendingScreenshotSource(pendingShot), [pendingShot]);
 
-  const openDisabled = useMemo(() => working || session !== null, [working, session]);
-  const sessionRequiredDisabled = useMemo(() => working || session === null, [working, session]);
-  const checkDisabled = working || session !== null;
-  const applyDisabled = working || pendingShot === null;
+  const { openDisabled, sessionRequiredDisabled, checkDisabled, applyDisabled } =
+    browserActionAvailability(working, session, pendingShot);
 
   // uiux-fix F018 C124: the busiest status wins the announcement; the persistent
   // sr-only live region below must exist BEFORE the text changes, otherwise
   // NVDA/VoiceOver frequently miss the first (and only) announcement.
-  const statusAnnouncement =
-    working && busyLabel !== null
-      ? busyLabel
-      : pendingShot !== null
-        ? "Screenshot ready (dry-run) — press Apply to persist."
-        : persistedPath !== null
-          ? `Persisted as ${persistedPath}.`
-          : lastOrigin !== null
-            ? `Current origin: ${lastOrigin}`
-            : reachability !== null && session === null
-              ? `Reachable: ${reachability.reachable ? "yes" : "no"}`
-              : "";
+  const statusAnnouncement = browserStatusAnnouncement(
+    { working, busyLabel, pendingShot, persistedPath, lastOrigin, reachability, session },
+    t,
+  );
 
   return (
     <div className={`browser ${styles.lazyWidgetScope}`}>
@@ -322,7 +522,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           aria-hidden="true"
         />
         <label className="bw-field">
-          <span className="bw-field-label">Port</span>
+          <span className="bw-field-label">{t("browserWidget.field.port")}</span>
           <input
             type="text"
             inputMode="numeric"
@@ -333,7 +533,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           />
         </label>
         <label className="bw-field bw-field-url">
-          <span className="bw-field-label">URL</span>
+          <span className="bw-field-label">{t("browserWidget.field.url")}</span>
           <input
             type="url"
             className="bw-input bw-input-url"
@@ -348,90 +548,104 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           tabindex which these independent buttons do not implement (C254).
           uiux-fix F018 C124: aria-disabled + click guards instead of HTML disabled —
           disabling the just-clicked (focused) button throws keyboard focus to <body>. */}
-      <div className="bw-actions" role="group" aria-label="Browser actions">
+      <div className="bw-actions" role="group" aria-label={t("browserWidget.actions.group")}>
         <button
           type="button"
           className="bw-btn"
-          onClick={(): void => {
-            if (checkDisabled) return;
-            setBusyLabel("Checking Chrome…");
-            void handleCheckStatus();
-          }}
+          onClick={browserActionHandler({
+            disabled: checkDisabled,
+            busyLabel: t("browserWidget.busy.check"),
+            onBusy: setBusyLabel,
+            run: handleCheckStatus,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={checkDisabled}
         >
-          Check
+          {t("browserWidget.action.check")}
         </button>
         <button
           type="button"
           className="bw-btn bw-btn-primary"
-          onClick={(): void => {
-            if (openDisabled) return;
-            setBusyLabel("Opening session…");
-            void handleOpen();
-          }}
+          onClick={browserActionHandler({
+            disabled: openDisabled,
+            busyLabel: t("browserWidget.busy.open"),
+            onBusy: setBusyLabel,
+            run: handleOpen,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={openDisabled}
         >
-          Open session
+          {t("browserWidget.action.open")}
         </button>
         <button
           type="button"
           className="bw-btn"
-          onClick={(): void => {
-            if (sessionRequiredDisabled) return;
-            setBusyLabel("Navigating…");
-            void handleNavigate();
-          }}
+          onClick={browserActionHandler({
+            disabled: sessionRequiredDisabled,
+            busyLabel: t("browserWidget.busy.navigate"),
+            onBusy: setBusyLabel,
+            run: handleNavigate,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={sessionRequiredDisabled}
         >
-          Navigate
+          {t("browserWidget.action.navigate")}
         </button>
         <button
           type="button"
           className="bw-btn"
-          onClick={(): void => {
-            if (sessionRequiredDisabled) return;
-            setBusyLabel("Capturing screenshot…");
-            void handleScreenshot();
-          }}
+          onClick={browserActionHandler({
+            disabled: sessionRequiredDisabled,
+            busyLabel: t("browserWidget.busy.screenshot"),
+            onBusy: setBusyLabel,
+            run: handleScreenshot,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={sessionRequiredDisabled}
         >
-          Screenshot
+          {t("browserWidget.action.screenshot")}
         </button>
         <button
           type="button"
           className="bw-btn"
-          onClick={(): void => {
-            if (applyDisabled) return;
-            setBusyLabel("Applying screenshot…");
-            void handleApply();
-          }}
+          onClick={browserActionHandler({
+            disabled: applyDisabled,
+            busyLabel: t("browserWidget.busy.apply"),
+            onBusy: setBusyLabel,
+            run: handleApply,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={applyDisabled}
         >
-          Apply
+          {t("browserWidget.action.apply")}
         </button>
         <button
           type="button"
           className="bw-btn"
-          onClick={(): void => {
-            if (sessionRequiredDisabled) return;
-            setBusyLabel("Capturing HTML…");
-            void handleContent();
-          }}
+          onClick={browserActionHandler({
+            disabled: sessionRequiredDisabled,
+            busyLabel: t("browserWidget.busy.captureHtml"),
+            onBusy: setBusyLabel,
+            run: handleContent,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={sessionRequiredDisabled}
         >
-          Capture HTML
+          {t("browserWidget.action.captureHtml")}
         </button>
         <button
           type="button"
           className="bw-btn bw-btn-danger"
-          onClick={(): void => {
-            if (sessionRequiredDisabled) return;
-            setBusyLabel("Closing session…");
-            void handleClose();
-          }}
+          onClick={browserActionHandler({
+            disabled: sessionRequiredDisabled,
+            busyLabel: t("browserWidget.busy.close"),
+            onBusy: setBusyLabel,
+            run: handleClose,
+            onError: handleUnhandledError,
+          })}
           aria-disabled={sessionRequiredDisabled}
         >
-          Close
+          {t("browserWidget.action.close")}
         </button>
       </div>
 
@@ -442,66 +656,30 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         {statusAnnouncement}
       </p>
 
-      {working && busyLabel !== null ? <p className="bw-status">{busyLabel}</p> : null}
-
-      {reachability !== null && session === null ? (
-        <p className="bw-status">
-          Reachable: {reachability.reachable ? "yes" : "no"}
-          {reachability.browserVersion === null ? "" : ` — ${reachability.browserVersion}`}
-        </p>
-      ) : null}
-
-      {lastOrigin !== null ? (
-        <p className="bw-status">
-          Current origin: <span className="mono">{lastOrigin}</span>
-        </p>
-      ) : null}
-
-      {pendingShot !== null ? (
-        <p className="bw-status">Screenshot ready (dry-run) — press Apply to persist.</p>
-      ) : null}
-
-      {persistedPath !== null ? (
-        <p className="bw-status">
-          Persisted as <span className="mono">{persistedPath}</span>.
-        </p>
-      ) : null}
-
-      {/* uiux-fix F018 C124: human message first; the machine code is a small mono
-          detail instead of a bold prefix ("INTERNAL: Unexpected error."). */}
-      {error !== null ? (
-        <div className="bw-error" role="alert">
-          {error.message} <span className="err-code mono">({error.code})</span>
-        </div>
-      ) : null}
+      <BrowserStatusLines
+        working={working}
+        busyLabel={busyLabel}
+        reachability={reachability}
+        session={session}
+        lastOrigin={lastOrigin}
+        pendingShot={pendingShot}
+        persistedPath={persistedPath}
+        error={error}
+        t={t}
+      />
 
       <div className="bw-view">
-        {pendingShot !== null ? (
-          // next/image cannot optimize an in-memory data: URL screenshot blob; the BFF already
-          // capped this at 10 MB and there is no remote source to optimize through.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            className="bw-screenshot"
-            src={pendingShotSrc ?? undefined}
-            alt="Pending screenshot preview"
-          />
-        ) : (
-          <>
-            <div className="ph-stripes" aria-hidden="true" />
-            {/* C261 — no live stream exists; screenshots are captured manually,
-                so the copy must direct the user instead of promising a preview. */}
-            <div className="bw-overlay mono">
-              {session === null
-                ? "No session — choose a port and press Open session"
-                : "Session open — use Screenshot to capture a preview"}
-            </div>
-          </>
-        )}
+        <BrowserPreview
+          pendingShot={pendingShot}
+          pendingShotSrc={pendingShotSrc}
+          session={session}
+          t={t}
+        />
       </div>
 
       {/* role="log" exposes the aria-label and announces appended entries
           (implicit aria-live="polite"); a bare aria-live div has no accessible name. */}
-      <div className="bw-log" role="log" aria-label="Browser event log">
+      <div className="bw-log" role="log" aria-label={t("browserWidget.log.ariaLabel")}>
         <ul className="bw-log-list">
           {/* uiux-fix F018 C124: newest-first like the Terminal and Agent logs — the
               140px scroll viewport otherwise hides exactly the newest entries. */}
@@ -510,8 +688,8 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
             .reverse()
             .map((event, idx) => (
               <li key={`${String(event.kind)}-${String(idx)}`} className="bw-log-item">
-                <span className="bw-log-kind">{eventLabel(event.kind)}</span>
-                <span className="bw-log-detail mono">{eventDetail(event)}</span>
+                <span className="bw-log-kind">{eventLabel(event.kind, t)}</span>
+                <span className="bw-log-detail mono">{eventDetail(event, t)}</span>
               </li>
             ))}
         </ul>

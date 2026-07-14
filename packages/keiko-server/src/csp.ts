@@ -49,7 +49,7 @@ export function extractInlineScriptHashes(htmlDocuments: readonly string[]): rea
       i = next;
     }
   }
-  return [...tokens].sort();
+  return [...tokens].sort((left, right) => left.localeCompare(right));
 }
 
 // Builds the full CSP header value. `scriptHashes` are folded into `script-src` alongside `'self'`.

@@ -1285,7 +1285,9 @@ function scopedParsedScreens(
 // id / provenance ref is stable regardless of the order or duplicates a caller passed. The route layer
 // already canonicalises incoming requests; this keeps direct/internal callers consistent too.
 function canonicalFigmaScreenIds(screenIds: readonly string[]): readonly string[] {
-  return [...new Set(screenIds.map((id) => id.trim()).filter((id) => id.length > 0))].sort();
+  return [...new Set(screenIds.map((id) => id.trim()).filter((id) => id.length > 0))].sort(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 function figmaSnapshotSourceRef(

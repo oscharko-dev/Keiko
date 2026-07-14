@@ -998,7 +998,250 @@ export function PdfCitationPreviewWindow({
     }
   };
 
-  return (
+  const renderPage = (pageNumber: number, pdf: PdfDocumentProxy): ReactNode => {
+    const pageSize = rotatedSize(
+      measuredSizes[pageNumber] ?? defaultPageSize ?? { width: 612, height: 792 },
+      rotation,
+    );
+    const minHeight = Math.max(220, Math.round(pageSize.height * effectiveScale));
+    const shouldRender = Math.abs(pageNumber - currentPage) <= RENDER_RADIUS;
+    const pageFailure = pageRenderFailures[pageNumber];
+    const pageFailureActionLabel =
+      pageFailure?.action === "reopen"
+        ? t("pdfCitationPreviewWindow.action.reopenPreview")
+        : t("pdfCitationPreviewWindow.action.retryPage");
+    return (
+      <section
+        key={pageNumber}
+        ref={(element) => {
+          if (element === null) {
+            pageRefs.current.delete(pageNumber);
+            return;
+          }
+          pageRefs.current.set(pageNumber, element);
+        }}
+        className="pdfv-page"
+        style={{ minHeight: `${String(minHeight)}px` }}
+      >
+        <div className="pdfv-page-frame">
+          <div className="pdfv-page-meta mono">
+            {t("pdfCitationPreviewWindow.page", { pageNumber })}
+          </div>
+          {pageFailure !== undefined ? (
+            <div className="lk-empty pdfv-page-error" role="alert">
+              <div className="lk-empty-icon">
+                <Icons.info size={18} />
+              </div>
+              <p className="lk-empty-title">{pageFailure.title}</p>
+              <p className="lk-empty-body">{pageFailure.message}</p>
+              <button
+                type="button"
+                className="tm-action pdfv-retry"
+                disabled={reopening}
+                onClick={() => {
+                  if (pageFailure.action === "reopen") {
+                    void reopenPreview(pageFailure);
+                    return;
+                  }
+                  setPageRenderFailures((previous) => {
+                    const next = { ...previous };
+                    delete next[pageNumber];
+                    return next;
+                  });
+                }}
+              >
+                {reopening
+                  ? t("pdfCitationPreviewWindow.action.openingPreview")
+                  : pageFailureActionLabel}
+              </button>
+            </div>
+          ) : shouldRender ? (
+            <PdfCanvasPage
+              active
+              onError={handlePageRenderError}
+              onMeasured={handlePageMeasured}
+              pageNumber={pageNumber}
+              pdf={pdf}
+              rotation={rotation}
+              scale={effectiveScale}
+            />
+          ) : (
+            <div className="pdfv-page-skeleton" aria-hidden="true" />
+          )}
+        </div>
+      </section>
+    );
+  };
+
+  const renderCitationContext = (): ReactNode => {
+    if (activeCitation === undefined) return null;
+    return (
+      <section
+        className="pdfv-context"
+        aria-label={t("pdfCitationPreviewWindow.citationContext.ariaLabel")}
+      >
+        <div className="pdfv-context-head">
+          <div className="pdfv-context-copy">
+            <p className="pdfv-context-eyebrow">
+              {t("pdfCitationPreviewWindow.citationContext.eyebrow")}
+            </p>
+            <h3 className="pdfv-context-title">
+              <span className="pdfv-context-marker">{activeCitation.citation.marker}</span>
+              <span className="pdfv-context-document">{activeCitation.display.documentLabel}</span>
+              <span className="pdfv-context-page">
+                {citationContextPageLabel(activeCitation.display, t)}
+              </span>
+            </h3>
+            {activeCitation.display.sourceLabel === undefined ? null : (
+              <p className="pdfv-context-message">{activeCitation.display.sourceLabel}</p>
+            )}
+          </div>
+          <div className="pdfv-context-actions">
+            <button
+              type="button"
+              className="tm-action pdfv-back-to-chat"
+              aria-describedby={
+                backToChat.reason === undefined ? undefined : backToChatDescriptionId
+              }
+              aria-disabled={backToChat.enabled ? undefined : "true"}
+              data-tip={backToChat.reason ?? t("pdfCitationPreviewWindow.backToChat.defaultTip")}
+              onClick={() => {
+                if (!backToChat.enabled) return;
+                activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
+              }}
+            >
+              <Icons.back size={14} />
+              <span>{t("pdfCitationPreviewWindow.backToChat.label")}</span>
+            </button>
+            {backToChat.reason === undefined ? null : (
+              <span id={backToChatDescriptionId} className="pdfv-back-to-chat-hint">
+                {backToChat.reason}
+              </span>
+            )}
+          </div>
+        </div>
+        {citationContext !== undefined && citationContextCitations.length > 1 ? (
+          <details className="pdfv-context-details">
+            <summary className="pdfv-context-summary">
+              <span>{t("pdfCitationPreviewWindow.sameAnswerCitations")}</span>
+              <span className="pdfv-context-count">{citationContextCitations.length}</span>
+              <Icons.chevron size={13} />
+            </summary>
+            <ul
+              className="grounded-citations pdfv-context-list"
+              aria-label={t("pdfCitationPreviewWindow.sameAnswerCitations")}
+            >
+              {citationContextCitations.map((citation) => {
+                const active = citation.citation.stableId === citationContext.activeStableId;
+                const fullLabel = citationContextLabel({
+                  label: citation.citation.label,
+                  marker: citation.citation.marker,
+                  source: citation.citation.source,
+                });
+                return (
+                  <li key={citation.citation.stableId} className="grounded-citations-item">
+                    <button
+                      type="button"
+                      className="grounded-citation grounded-citation-action pdfv-context-citation"
+                      aria-label={`${fullLabel} ${citationContextPageLabel(citation.display, t)}`}
+                      aria-pressed={active}
+                      data-active={active ? "true" : "false"}
+                      data-tip={fullLabel}
+                      onClick={() => {
+                        if (active) return;
+                        activateContextCitation(citation.citation.stableId);
+                      }}
+                    >
+                      <span className="grounded-citation-range">{citation.citation.marker}</span>
+                      <span className="grounded-citation-action-label">
+                        {active
+                          ? t("pdfCitationPreviewWindow.citationActive")
+                          : citationContextPageLabel(citation.display, t)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        ) : null}
+      </section>
+    );
+  };
+
+  const renderFailureState = (failureState: PreviewFailure): ReactNode => (
+    <div className="lk-empty pdfv-status" role="alert" aria-describedby={failureDescriptionId}>
+      <div className="lk-empty-icon">
+        <Icons.info size={20} />
+      </div>
+      <p className="lk-empty-title">{failureState.title}</p>
+      <p id={failureDescriptionId} className="lk-empty-body">
+        {failureState.message}
+      </p>
+      {failureState.action !== undefined ? (
+        <button
+          type="button"
+          className="tm-action pdfv-retry"
+          aria-describedby={failureDescriptionId}
+          disabled={reopening}
+          onClick={() => {
+            if (failureState.action === "reopen") {
+              void reopenPreview(failureState);
+              return;
+            }
+            setRetryToken((value) => value + 1);
+          }}
+        >
+          {reopening ? t("pdfCitationPreviewWindow.action.openingPreview") : failureActionLabel}
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const renderLoadedDocument = (pdf: PdfDocumentProxy): ReactNode => (
+    <div
+      ref={scrollRef}
+      className="pdfv-scroll"
+      // Scrollable page region: tabIndex makes the overflow region keyboard-scrollable
+      // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      tabIndex={0}
+      role="region"
+      aria-label={t("pdfCitationPreviewWindow.scrollRegionLabel", {
+        documentLabel: display.documentLabel,
+      })}
+    >
+      {pageWindow.topSpacerHeight > 0 ? (
+        <div
+          className="pdfv-page-spacer"
+          style={{ height: `${String(pageWindow.topSpacerHeight)}px` }}
+          aria-hidden="true"
+        />
+      ) : null}
+      {pageWindow.pages.map((pageNumber) => renderPage(pageNumber, pdf))}
+      {pageWindow.bottomSpacerHeight > 0 ? (
+        <div
+          className="pdfv-page-spacer"
+          style={{ height: `${String(pageWindow.bottomSpacerHeight)}px` }}
+          aria-hidden="true"
+        />
+      ) : null}
+    </div>
+  );
+
+  const renderDocumentState = (): ReactNode => {
+    if (failure !== null) return renderFailureState(failure);
+    if (doc !== null) return renderLoadedDocument(doc);
+    return (
+      <div className="lk-loading pdfv-status" role="status" aria-live="polite">
+        {showSlowLoad
+          ? t("pdfCitationPreviewWindow.loading.rendering")
+          : t("pdfCitationPreviewWindow.loading.opening")}
+      </div>
+    );
+  };
+
+  const renderPreview = (): ReactNode => (
     <div className={`pdfv-shell ${styles.lazyWidgetScope}`}>
       <div className="pdfv-header">
         <div className="pdfv-heading">
@@ -1016,100 +1259,7 @@ export function PdfCitationPreviewWindow({
         <span className="pdfv-chip">{anchorQualityLabel(display.anchorQuality, t)}</span>
       </div>
 
-      {activeCitation !== undefined ? (
-        <section
-          className="pdfv-context"
-          aria-label={t("pdfCitationPreviewWindow.citationContext.ariaLabel")}
-        >
-          <div className="pdfv-context-head">
-            <div className="pdfv-context-copy">
-              <p className="pdfv-context-eyebrow">
-                {t("pdfCitationPreviewWindow.citationContext.eyebrow")}
-              </p>
-              <h3 className="pdfv-context-title">
-                <span className="pdfv-context-marker">{activeCitation.citation.marker}</span>
-                <span className="pdfv-context-document">
-                  {activeCitation.display.documentLabel}
-                </span>
-                <span className="pdfv-context-page">
-                  {citationContextPageLabel(activeCitation.display, t)}
-                </span>
-              </h3>
-              {activeCitation.display.sourceLabel === undefined ? null : (
-                <p className="pdfv-context-message">{activeCitation.display.sourceLabel}</p>
-              )}
-            </div>
-            <div className="pdfv-context-actions">
-              <button
-                type="button"
-                className="tm-action pdfv-back-to-chat"
-                aria-describedby={
-                  backToChat.reason === undefined ? undefined : backToChatDescriptionId
-                }
-                aria-disabled={backToChat.enabled ? undefined : "true"}
-                data-tip={backToChat.reason ?? t("pdfCitationPreviewWindow.backToChat.defaultTip")}
-                onClick={() => {
-                  if (!backToChat.enabled) return;
-                  activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
-                }}
-              >
-                <Icons.back size={14} />
-                <span>{t("pdfCitationPreviewWindow.backToChat.label")}</span>
-              </button>
-              {backToChat.reason === undefined ? null : (
-                <span id={backToChatDescriptionId} className="pdfv-back-to-chat-hint">
-                  {backToChat.reason}
-                </span>
-              )}
-            </div>
-          </div>
-          {citationContext !== undefined && citationContextCitations.length > 1 ? (
-            <details className="pdfv-context-details">
-              <summary className="pdfv-context-summary">
-                <span>{t("pdfCitationPreviewWindow.sameAnswerCitations")}</span>
-                <span className="pdfv-context-count">{citationContextCitations.length}</span>
-                <Icons.chevron size={13} />
-              </summary>
-              <ul
-                className="grounded-citations pdfv-context-list"
-                aria-label={t("pdfCitationPreviewWindow.sameAnswerCitations")}
-              >
-                {citationContextCitations.map((citation) => {
-                  const active = citation.citation.stableId === citationContext.activeStableId;
-                  const fullLabel = citationContextLabel({
-                    label: citation.citation.label,
-                    marker: citation.citation.marker,
-                    source: citation.citation.source,
-                  });
-                  return (
-                    <li key={citation.citation.stableId} className="grounded-citations-item">
-                      <button
-                        type="button"
-                        className="grounded-citation grounded-citation-action pdfv-context-citation"
-                        aria-label={`${fullLabel} ${citationContextPageLabel(citation.display, t)}`}
-                        aria-pressed={active}
-                        data-active={active ? "true" : "false"}
-                        data-tip={fullLabel}
-                        onClick={() => {
-                          if (active) return;
-                          activateContextCitation(citation.citation.stableId);
-                        }}
-                      >
-                        <span className="grounded-citation-range">{citation.citation.marker}</span>
-                        <span className="grounded-citation-action-label">
-                          {active
-                            ? t("pdfCitationPreviewWindow.citationActive")
-                            : citationContextPageLabel(citation.display, t)}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </details>
-          ) : null}
-        </section>
-      ) : null}
+      {renderCitationContext()}
 
       {showToolbar ? (
         <fieldset className="pdfv-toolbar">
@@ -1236,143 +1386,9 @@ export function PdfCitationPreviewWindow({
         </fieldset>
       ) : null}
 
-      {failure !== null ? (
-        <div className="lk-empty pdfv-status" role="alert" aria-describedby={failureDescriptionId}>
-          <div className="lk-empty-icon">
-            <Icons.info size={20} />
-          </div>
-          <p className="lk-empty-title">{failure.title}</p>
-          <p id={failureDescriptionId} className="lk-empty-body">
-            {failure.message}
-          </p>
-          {failure.action !== undefined ? (
-            <button
-              type="button"
-              className="tm-action pdfv-retry"
-              aria-describedby={failureDescriptionId}
-              disabled={reopening}
-              onClick={() => {
-                if (failure.action === "reopen") {
-                  void reopenPreview(failure);
-                  return;
-                }
-                setRetryToken((value) => value + 1);
-              }}
-            >
-              {reopening ? t("pdfCitationPreviewWindow.action.openingPreview") : failureActionLabel}
-            </button>
-          ) : null}
-        </div>
-      ) : doc === null ? (
-        <div className="lk-loading pdfv-status" role="status" aria-live="polite">
-          {showSlowLoad
-            ? t("pdfCitationPreviewWindow.loading.rendering")
-            : t("pdfCitationPreviewWindow.loading.opening")}
-        </div>
-      ) : (
-        <div
-          ref={scrollRef}
-          className="pdfv-scroll"
-          // Scrollable page region: tabIndex makes the overflow region keyboard-scrollable
-          // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-          tabIndex={0}
-          role="region"
-          aria-label={t("pdfCitationPreviewWindow.scrollRegionLabel", {
-            documentLabel: display.documentLabel,
-          })}
-        >
-          {pageWindow.topSpacerHeight > 0 ? (
-            <div
-              className="pdfv-page-spacer"
-              style={{ height: `${String(pageWindow.topSpacerHeight)}px` }}
-              aria-hidden="true"
-            />
-          ) : null}
-          {pageWindow.pages.map((pageNumber) => {
-            const pageSize = rotatedSize(
-              measuredSizes[pageNumber] ?? defaultPageSize ?? { width: 612, height: 792 },
-              rotation,
-            );
-            const minHeight = Math.max(220, Math.round(pageSize.height * effectiveScale));
-            const shouldRender = Math.abs(pageNumber - currentPage) <= RENDER_RADIUS;
-            const pageFailure = pageRenderFailures[pageNumber];
-            const pageFailureActionLabel =
-              pageFailure?.action === "reopen"
-                ? t("pdfCitationPreviewWindow.action.reopenPreview")
-                : t("pdfCitationPreviewWindow.action.retryPage");
-
-            return (
-              <section
-                key={pageNumber}
-                ref={(element) => {
-                  if (element === null) {
-                    pageRefs.current.delete(pageNumber);
-                    return;
-                  }
-                  pageRefs.current.set(pageNumber, element);
-                }}
-                className="pdfv-page"
-                style={{ minHeight: `${String(minHeight)}px` }}
-              >
-                <div className="pdfv-page-frame">
-                  <div className="pdfv-page-meta mono">
-                    {t("pdfCitationPreviewWindow.page", { pageNumber })}
-                  </div>
-                  {pageFailure !== undefined ? (
-                    <div className="lk-empty pdfv-page-error" role="alert">
-                      <div className="lk-empty-icon">
-                        <Icons.info size={18} />
-                      </div>
-                      <p className="lk-empty-title">{pageFailure.title}</p>
-                      <p className="lk-empty-body">{pageFailure.message}</p>
-                      <button
-                        type="button"
-                        className="tm-action pdfv-retry"
-                        disabled={reopening}
-                        onClick={() => {
-                          if (pageFailure.action === "reopen") {
-                            void reopenPreview(pageFailure);
-                            return;
-                          }
-                          setPageRenderFailures((previous) => {
-                            const next = { ...previous };
-                            delete next[pageNumber];
-                            return next;
-                          });
-                        }}
-                      >
-                        {reopening
-                          ? t("pdfCitationPreviewWindow.action.openingPreview")
-                          : pageFailureActionLabel}
-                      </button>
-                    </div>
-                  ) : shouldRender ? (
-                    <PdfCanvasPage
-                      active
-                      onError={handlePageRenderError}
-                      onMeasured={handlePageMeasured}
-                      pageNumber={pageNumber}
-                      pdf={doc}
-                      rotation={rotation}
-                      scale={effectiveScale}
-                    />
-                  ) : (
-                    <div className="pdfv-page-skeleton" aria-hidden="true" />
-                  )}
-                </div>
-              </section>
-            );
-          })}
-          {pageWindow.bottomSpacerHeight > 0 ? (
-            <div
-              className="pdfv-page-spacer"
-              style={{ height: `${String(pageWindow.bottomSpacerHeight)}px` }}
-              aria-hidden="true"
-            />
-          ) : null}
-        </div>
-      )}
+      {renderDocumentState()}
     </div>
   );
+
+  return renderPreview();
 }

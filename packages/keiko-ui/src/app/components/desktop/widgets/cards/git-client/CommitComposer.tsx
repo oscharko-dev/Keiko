@@ -14,8 +14,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../../Icons";
-import { violationLabel, warningLabel } from "./git-client-seam";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { CodeList, MutationOutcome, StatusPill } from "./git-client-ui";
 import {
@@ -57,6 +57,68 @@ export function composeCommitMessage(summary: string, body: string): string {
   return detail === "" ? subject : `${subject}\n\n${detail}`;
 }
 
+function commitHint(
+  hasRepository: boolean,
+  hasStaged: boolean,
+  subjectEmpty: boolean,
+  missingFreshPreview: boolean,
+  policyBlocked: boolean,
+  t: I18nTranslate,
+): string {
+  if (!hasRepository) return t("commitComposer.hint.selectRepository");
+  if (!hasStaged) return t("commitComposer.hint.stageChanges");
+  if (subjectEmpty) return t("commitComposer.hint.enterSummary");
+  if (missingFreshPreview) return t("commitComposer.hint.waitPreview");
+  if (policyBlocked) return t("commitComposer.hint.resolvePolicy");
+  return t("commitComposer.hint.commitsStaged");
+}
+
+interface CommitFlowActionsProps {
+  readonly hasRepository: boolean;
+  readonly onCreatePullRequest: (() => void) | undefined;
+  readonly onMerge: (() => void) | undefined;
+  readonly t: I18nTranslate;
+}
+
+function CommitFlowActions({
+  hasRepository,
+  onCreatePullRequest,
+  onMerge,
+  t,
+}: CommitFlowActionsProps): ReactNode {
+  if (onCreatePullRequest === undefined && onMerge === undefined) return null;
+  return (
+    <div style={FLOW_ROW_STYLE}>
+      {onCreatePullRequest !== undefined ? (
+        <button
+          type="button"
+          style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+          disabled={!hasRepository}
+          onClick={onCreatePullRequest}
+        >
+          <span style={{ color: "var(--fg-dim)" }}>
+            <Icons.pullRequest size={16} />
+          </span>
+          {t("commitComposer.action.createPullRequest")}
+        </button>
+      ) : null}
+      {onMerge !== undefined ? (
+        <button
+          type="button"
+          style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+          disabled={!hasRepository}
+          onClick={onMerge}
+        >
+          <span style={{ color: "var(--fg-dim)" }}>
+            <Icons.merge size={16} />
+          </span>
+          {t("commitComposer.action.merge")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function CommitComposer({
   projectId,
   branchName,
@@ -72,6 +134,7 @@ export function CommitComposer({
   onCreatePullRequest,
   onMerge,
 }: CommitComposerProps): ReactNode {
+  const t = useTranslate();
   const [summary, setSummary] = useState("");
   const [body, setBody] = useState("");
   const baseId = useId();
@@ -101,37 +164,40 @@ export function CommitComposer({
   const commitDisabled =
     busy || !hasRepository || !hasStaged || subjectEmpty || missingFreshPreview || policyBlocked;
 
-  let hint: string;
-  if (!hasRepository) hint = "Select a repository to commit.";
-  else if (!hasStaged) hint = "Stage changes to commit them to the current branch.";
-  else if (subjectEmpty) hint = "Enter a commit summary.";
-  else if (missingFreshPreview) hint = "Wait for commit policy preview.";
-  else if (policyBlocked) hint = "Resolve the commit-policy issues below to commit.";
-  else hint = "Commits the staged changes to the current branch.";
+  const hint = commitHint(
+    hasRepository,
+    hasStaged,
+    subjectEmpty,
+    missingFreshPreview,
+    policyBlocked,
+    t,
+  );
 
   const commitLabel =
-    branchName !== undefined && branchName !== "" ? `Commit to ${branchName}` : "Commit";
+    branchName !== undefined && branchName !== ""
+      ? t("commitComposer.action.commitTo", { branch: branchName })
+      : t("commitComposer.action.commit");
 
   return (
-    <section style={COMMIT_PANEL_STYLE} aria-label="Commit">
+    <section style={COMMIT_PANEL_STYLE} aria-label={t("commitComposer.action.commit")}>
       <input
         type="text"
-        aria-label="Summary"
+        aria-label={t("commitComposer.field.summary")}
         style={summaryFieldStyle(false)}
         value={summary}
         disabled={!hasRepository}
         aria-invalid={policyBlocked ? "true" : undefined}
         aria-describedby={policyBlocked ? previewId : hintId}
         onChange={(e) => setSummary(e.target.value)}
-        placeholder="Concise summary of the change"
+        placeholder={t("commitComposer.field.summaryPlaceholder")}
       />
       <textarea
-        aria-label="Description"
+        aria-label={t("commitComposer.field.description")}
         style={DESCRIPTION_FIELD_STYLE}
         value={body}
         disabled={!hasRepository}
         onChange={(e) => setBody(e.target.value)}
-        placeholder="Optional — explain the intent and verification"
+        placeholder={t("commitComposer.field.descriptionPlaceholder")}
       />
       <p
         id={hintId}
@@ -150,36 +216,12 @@ export function CommitComposer({
       >
         <Icons.commit size={16} /> {commitLabel}
       </button>
-      {onCreatePullRequest !== undefined || onMerge !== undefined ? (
-        <div style={FLOW_ROW_STYLE}>
-          {onCreatePullRequest !== undefined ? (
-            <button
-              type="button"
-              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
-              disabled={!hasRepository}
-              onClick={onCreatePullRequest}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>
-                <Icons.pullRequest size={16} />
-              </span>
-              Create pull request
-            </button>
-          ) : null}
-          {onMerge !== undefined ? (
-            <button
-              type="button"
-              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
-              disabled={!hasRepository}
-              onClick={onMerge}
-            >
-              <span style={{ color: "var(--fg-dim)" }}>
-                <Icons.merge size={16} />
-              </span>
-              Merge…
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <CommitFlowActions
+        hasRepository={hasRepository}
+        onCreatePullRequest={onCreatePullRequest}
+        onMerge={onMerge}
+        t={t}
+      />
       {previewError !== null ? (
         <div
           role="alert"
@@ -189,13 +231,13 @@ export function CommitComposer({
           }}
         >
           <StatusPill tone="danger">
-            <Icons.info size={11} /> Preview unavailable
+            <Icons.info size={11} /> {t("commitComposer.preview.unavailable")}
           </StatusPill>
           <p style={SUBTLE_TEXT_STYLE}>{previewError}</p>
         </div>
       ) : null}
       {visiblePreview !== null ? (
-        <CommitPolicyPreview id={previewId} preview={visiblePreview} />
+        <CommitPolicyPreview id={previewId} preview={visiblePreview} t={t} />
       ) : null}
       <MutationOutcome outcome={outcome} error={error} testid="git-commit-outcome" />
     </section>
@@ -208,9 +250,11 @@ export function CommitComposer({
 function CommitPolicyPreview({
   id,
   preview,
+  t,
 }: {
   readonly id: string;
   readonly preview: GitDeliveryCommitPreviewResponse;
+  readonly t: I18nTranslate;
 }): ReactNode {
   const violations = preview.messageValidation.ok ? [] : preview.messageValidation.violations;
   const blocked = !preview.messageValidation.ok;
@@ -225,32 +269,45 @@ function CommitPolicyPreview({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <StatusPill tone={blocked ? "danger" : "success"}>
-          <Icons.check size={11} /> {blocked ? "Policy: action needed" : "Meets commit policy"}
+          <Icons.check size={11} />{" "}
+          {blocked
+            ? t("commitComposer.preview.policyActionNeeded")
+            : t("commitComposer.preview.meetsPolicy")}
         </StatusPill>
         <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>
-          {summary.stagedFileCount} staged file
-          {summary.stagedFileCount === 1 ? "" : "s"} across {summary.areaCount} area
-          {summary.areaCount === 1 ? "" : "s"}
-          {summary.touchesTests ? " · touches tests" : ""}
+          {t("commitComposer.preview.summary", {
+            files: summary.stagedFileCount,
+            fileNoun:
+              summary.stagedFileCount === 1
+                ? t("commitComposer.preview.fileSingular")
+                : t("commitComposer.preview.filePlural"),
+            areas: summary.areaCount,
+            areaNoun:
+              summary.areaCount === 1
+                ? t("commitComposer.preview.areaSingular")
+                : t("commitComposer.preview.areaPlural"),
+            tests: summary.touchesTests ? t("commitComposer.preview.touchesTestsSuffix") : "",
+          })}
         </p>
       </div>
       {intent.suggestedSubjectPrefix !== undefined ? (
         <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>
-          Suggested prefix: <code style={MONO_INLINE_STYLE}>{intent.suggestedSubjectPrefix}</code>
+          {t("commitComposer.preview.suggestedPrefix")}{" "}
+          <code style={MONO_INLINE_STYLE}>{intent.suggestedSubjectPrefix}</code>
         </p>
       ) : null}
       <CodeList
-        label="Message-policy violations"
+        label={t("commitComposer.preview.messageViolations")}
         testid="git-commit-violations"
-        items={violations.map((v) => ({ key: v, text: violationLabel(v) }))}
+        items={violations.map((v) => ({ key: v, text: t(`commitComposer.violation.${v}`) }))}
       />
       <CodeList
-        label="Quality warnings"
+        label={t("commitComposer.preview.qualityWarnings")}
         testid="git-commit-warnings"
-        items={intent.warnings.map((w) => ({ key: w, text: warningLabel(w) }))}
+        items={intent.warnings.map((w) => ({ key: w, text: t(`commitComposer.warning.${w}`) }))}
       />
       <CodeList
-        label="Preflight findings"
+        label={t("commitComposer.preview.preflightFindings")}
         testid="git-commit-findings"
         items={preview.preflightFindingCodes.map((c) => ({ key: c, text: c }))}
       />

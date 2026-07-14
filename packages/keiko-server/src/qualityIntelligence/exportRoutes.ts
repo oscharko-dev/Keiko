@@ -282,14 +282,16 @@ function integrityPayloadForCandidate(candidate: QI.QualityIntelligenceTestCaseC
   return {
     id: candidate.id,
     runId: candidate.runId,
-    derivedFromAtomIds: [...candidate.derivedFromAtomIds].sort(),
+    derivedFromAtomIds: [...candidate.derivedFromAtomIds].sort((left, right) =>
+      left.localeCompare(right),
+    ),
     title: candidate.title,
     preconditions: candidate.preconditions,
     steps: candidate.steps,
     expectedResults: candidate.expectedResults,
     priority: candidate.priority,
     riskClass: candidate.riskClass,
-    tags: [...candidate.tags].sort(),
+    tags: [...candidate.tags].sort((left, right) => left.localeCompare(right)),
     status: candidate.status,
   };
 }
@@ -332,7 +334,7 @@ function buildBundle(
     diagnostics.add("export:redaction-attestation-missing");
   }
   const modelProvenance = buildModelProvenance(manifest);
-  const diagnosticsList = [...diagnostics].sort();
+  const diagnosticsList = [...diagnostics].sort((left, right) => left.localeCompare(right));
   const integrity = sha256Hex(
     canonicalise({
       runId,
@@ -344,8 +346,10 @@ function buildBundle(
       contents: contents
         .map((entry) => ({
           candidateId: entry.candidateId,
-          coverageMapRefs: [...entry.coverageMapRefs].sort(),
-          findingRefs: [...entry.findingRefs].sort(),
+          coverageMapRefs: [...entry.coverageMapRefs].sort((left, right) =>
+            left.localeCompare(right),
+          ),
+          findingRefs: [...entry.findingRefs].sort((left, right) => left.localeCompare(right)),
         }))
         .sort((a, b) =>
           a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0,

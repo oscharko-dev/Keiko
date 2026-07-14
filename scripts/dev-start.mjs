@@ -133,7 +133,7 @@ async function findAvailablePort(start) {
   throw new Error(`No free loopback port found at or above ${String(start)}`);
 }
 
-async function fetchOk(url, validate = () => true) {
+async function fetchOk(url, validate = async () => true) {
   const response = await globalThis.fetch(url, { cache: "no-store" });
   if (!response.ok) return `HTTP ${String(response.status)}`;
   return (await validate(response)) ? "ok" : "unexpected response";

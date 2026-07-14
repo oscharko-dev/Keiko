@@ -294,7 +294,11 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   // broken pipe must not escape as an unhandled process error.
   stdin.on("error", () => undefined);
   return {
-    stdin: { write: (chunk: Buffer): void => void stdin.write(chunk) },
+    stdin: {
+      write: (chunk: Buffer): void => {
+        stdin.write(chunk);
+      },
+    },
     stdout,
     stderr,
     pid: child.pid,

@@ -17,6 +17,7 @@ import {
 import styles from "./TerminalWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import { formatBytes, formatMs } from "../../../../../lib/format";
+import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
 import {
   abortTerminalExecution,
   createTerminalExecution,
@@ -51,10 +52,10 @@ const TERMINAL_EVENT_SOURCE_TYPES = [
   "terminal:execution-cancelled",
 ] as const;
 
-function errorFromUnknown(value: unknown): ErrorState {
+function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
-  return { code: "INTERNAL", message: "Unexpected error." };
+  return { code: "INTERNAL", message: t("terminalWidget.error.unexpected") };
 }
 
 function parseArgs(input: string): readonly string[] {
@@ -71,16 +72,16 @@ function createRequestId(): string {
   return `terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function eventLabel(kind: TerminalEventEnvelope["kind"]): string {
+function eventLabel(kind: TerminalEventEnvelope["kind"], t: I18nTranslate): string {
   switch (kind) {
     case "execution-started":
-      return "started";
+      return t("terminalWidget.event.started");
     case "execution-completed":
-      return "completed";
+      return t("terminalWidget.event.completed");
     case "execution-failed":
-      return "failed";
+      return t("terminalWidget.event.failed");
     case "execution-cancelled":
-      return "cancelled";
+      return t("terminalWidget.event.cancelled");
   }
 }
 
@@ -101,7 +102,71 @@ function eventDetail(event: TerminalEventEnvelope): string {
   return "";
 }
 
+function terminalResultAnnouncement(
+  result: TerminalExecutionResult | null,
+  t: I18nTranslate,
+): string {
+  if (result === null) return "";
+  const truncated = result.truncated ? t("terminalWidget.result.truncatedSuffix") : "";
+  const timedOut = result.timedOut ? t("terminalWidget.result.timedOutSuffix") : "";
+  return t("terminalWidget.result.finished", {
+    code: String(result.exitCode),
+    duration: result.durationMs,
+    truncated,
+    timedOut,
+  });
+}
+
+function TerminalResult({
+  result,
+  t,
+}: {
+  readonly result: TerminalExecutionResult | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (result === null) return null;
+  return (
+    <div className="tm-result">
+      <div className="tm-badges">
+        <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
+          {t("terminalWidget.result.exit", { code: String(result.exitCode) })}
+        </span>
+        <span className="tm-badge">{result.durationMs} ms</span>
+        {result.truncated ? (
+          <span className="tm-badge tm-badge-warn">{t("terminalWidget.result.truncated")}</span>
+        ) : null}
+        {result.timedOut ? (
+          <span className="tm-badge tm-badge-warn">{t("terminalWidget.result.timedOut")}</span>
+        ) : null}
+      </div>
+      {result.stdout.length > 0 ? (
+        <pre
+          className="tm-stdout"
+          role="region"
+          aria-label={t("terminalWidget.result.stdoutAriaLabel")}
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+          tabIndex={0}
+        >
+          {result.stdout}
+        </pre>
+      ) : null}
+      {result.stderr.length > 0 ? (
+        <pre
+          className="tm-stderr"
+          role="region"
+          aria-label={t("terminalWidget.result.stderrAriaLabel")}
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+          tabIndex={0}
+        >
+          {result.stderr}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
 export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
+  const t = useTranslate();
   const [policy, setPolicy] = useState<TerminalPolicySummary | null>(null);
   const [command, setCommand] = useState<string>("");
   const [argsInput, setArgsInput] = useState<string>("");
@@ -128,12 +193,12 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         setCommand((current) => (current.length > 0 ? current : (p.commands[0] ?? "")));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(errorFromUnknown(err));
+        if (!cancelled) setError(errorFromUnknown(err, t));
       });
     return (): void => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   // Populate the cwd datalist suggestions from the BFF directory picker. Refetches whenever
   // the project path or the typed cwd changes. Errors are silently swallowed — suggestions
@@ -225,7 +290,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         const next = await createTerminalExecution(executionInput);
         setResult(next);
       } catch (err: unknown) {
-        setError(errorFromUnknown(err));
+        setError(errorFromUnknown(err, t));
       } finally {
         runningRef.current = false;
         setRunning(false);
@@ -233,7 +298,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         setInFlightExecutionId(null);
       }
     },
-    [argsInput, command, cwdInput, projectInput, running],
+    [argsInput, command, cwdInput, projectInput, running, t],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
@@ -241,9 +306,9 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
     try {
       await abortTerminalExecution(inFlightExecutionId);
     } catch (err: unknown) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     }
-  }, [inFlightExecutionId]);
+  }, [inFlightExecutionId, t]);
 
   const limits = useMemo(() => policy?.limits ?? null, [policy]);
 
@@ -263,22 +328,22 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
     <div className={`terminal ${styles.lazyWidgetScope}`}>
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
         <label className="tm-field">
-          <span>Project path</span>
+          <span>{t("terminalWidget.field.projectPath")}</span>
           <input
             type="text"
             value={projectInput}
             onChange={(e) => setProjectInput(e.target.value)}
-            placeholder="/absolute/path/to/project"
+            placeholder={t("terminalWidget.field.projectPathPlaceholder")}
             required
           />
         </label>
         <div className="tm-field">
-          <span>Command</span>
+          <span>{t("terminalWidget.field.command")}</span>
           <KeikoSelect
             value={command}
-            ariaLabel="Command"
+            ariaLabel={t("terminalWidget.field.command")}
             disabled={policy === null}
-            menuTitle="Allowed commands"
+            menuTitle={t("terminalWidget.field.allowedCommands")}
             mono
             sections={[
               {
@@ -293,21 +358,21 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           />
         </div>
         <label className="tm-field">
-          <span>Args (space-separated)</span>
+          <span>{t("terminalWidget.field.args")}</span>
           <input
             type="text"
             value={argsInput}
             onChange={(e) => setArgsInput(e.target.value)}
-            placeholder="e.g. -la src"
+            placeholder={t("terminalWidget.field.argsPlaceholder")}
           />
         </label>
         <label className="tm-field">
-          <span>Working directory (optional)</span>
+          <span>{t("terminalWidget.field.cwd")}</span>
           <input
             type="text"
             value={cwdInput}
             onChange={(e) => setCwdInput(e.target.value)}
-            placeholder="(project root)"
+            placeholder={t("terminalWidget.field.cwdPlaceholder")}
             list="tm-cwd-suggestions"
           />
           <datalist id="tm-cwd-suggestions">
@@ -331,7 +396,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             disabled={policy === null}
             aria-disabled={running || policy === null}
           >
-            {running ? "Running…" : "Run"}
+            {running ? t("terminalWidget.action.running") : t("terminalWidget.action.run")}
           </button>
           {running ? (
             <button
@@ -340,7 +405,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
               aria-disabled={inFlightExecutionId === null}
               onClick={() => void onAbort()}
             >
-              Cancel
+              {t("terminalWidget.action.cancel")}
             </button>
           ) : null}
         </div>
@@ -348,8 +413,10 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             ("256.0 KB · 30.0 s") instead of raw byte/ms integers. */}
         {limits !== null ? (
           <p className="tm-limits">
-            Limits: {formatBytes(limits.maxOutputBytes)} output ·{" "}
-            {formatMs(limits.defaultTimeoutMs)} timeout
+            {t("terminalWidget.limits", {
+              output: formatBytes(limits.maxOutputBytes),
+              timeout: formatMs(limits.defaultTimeoutMs),
+            })}
           </p>
         ) : null}
       </form>
@@ -365,7 +432,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           <button
             type="button"
             className="tm-error-dismiss"
-            aria-label="Dismiss error"
+            aria-label={t("terminalWidget.error.dismiss")}
             onClick={() => setError(null)}
           >
             ✕
@@ -378,52 +445,9 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           NVDA/VoiceOver. This persistent sr-only mirror carries the announcement;
           the visible result block below stays conditional. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {result !== null
-          ? `Command finished: exit ${String(result.exitCode)}, ${String(result.durationMs)} ms${
-              result.truncated ? ", output truncated" : ""
-            }${result.timedOut ? ", timed out" : ""}`
-          : ""}
+        {terminalResultAnnouncement(result, t)}
       </p>
-
-      {result !== null ? (
-        <div className="tm-result">
-          <div className="tm-badges">
-            <span
-              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
-            >
-              exit {String(result.exitCode)}
-            </span>
-            <span className="tm-badge">{result.durationMs} ms</span>
-            {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
-            {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
-          </div>
-          {/* GEN-UI-KEYBOARD-005 — the stdout/stderr <pre> is an overflow:auto scroll
-              container (max-height 16rem); expose it as a focusable named region so
-              keyboard-only users can scroll it (WCAG 2.1.1). */}
-          {result.stdout.length > 0 ? (
-            <pre
-              className="tm-stdout"
-              role="region"
-              aria-label="Command stdout"
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-              tabIndex={0}
-            >
-              {result.stdout}
-            </pre>
-          ) : null}
-          {result.stderr.length > 0 ? (
-            <pre
-              className="tm-stderr"
-              role="region"
-              aria-label="Command stderr"
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-              tabIndex={0}
-            >
-              {result.stderr}
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+      <TerminalResult result={result} t={t} />
 
       <ul
         className="tm-events"
@@ -431,11 +455,11 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         aria-live="polite"
         aria-relevant="additions text"
         aria-atomic="false"
-        aria-label="Recent terminal events"
+        aria-label={t("terminalWidget.log.ariaLabel")}
       >
         {events.map((event, idx) => (
           <li key={`${event.executionId}-${String(idx)}-${event.kind}`} className="tm-event">
-            <span className="tm-event-kind">{eventLabel(event.kind)}</span>
+            <span className="tm-event-kind">{eventLabel(event.kind, t)}</span>
             <span className="tm-event-detail">{eventDetail(event)}</span>
           </li>
         ))}

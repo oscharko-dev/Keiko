@@ -169,7 +169,7 @@ function ProjectRow({
                   data-active={activeChatId === chat.id}
                   tabIndex={-1}
                   onClick={() => {
-                    void onChat(chat);
+                    onChat(chat);
                   }}
                 >
                   <span className="chat-title">{chat.title}</span>

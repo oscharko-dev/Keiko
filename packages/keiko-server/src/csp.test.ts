@@ -40,7 +40,7 @@ describe("extractInlineScriptHashes", () => {
     const forward = extractInlineScriptHashes([a, b]);
     const reverse = extractInlineScriptHashes([b, a]);
     expect(forward).toEqual(reverse);
-    expect([...forward]).toEqual([...forward].sort());
+    expect([...forward]).toEqual([...forward].sort((left, right) => left.localeCompare(right)));
   });
 
   it("returns no hashes for an empty document set", () => {

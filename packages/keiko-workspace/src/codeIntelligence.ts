@@ -644,6 +644,35 @@ function collectGoModules(
   return modules;
 }
 
+function readTsCompilerOptions(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  relativePath: string,
+): Record<string, unknown> | undefined {
+  try {
+    const text = readWorkspaceFile(scope.workspace, relativePath, { maxBytes: 262_144 }, fs).text;
+    const result = ts.parseConfigFileTextToJson(relativePath, text);
+    const parsed: unknown = result.error === undefined ? (result.config as unknown) : undefined;
+    return isRecord(parsed) && isRecord(parsed.compilerOptions)
+      ? parsed.compilerOptions
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectTsConfigAliases(
+  aliases: TsPathAlias[],
+  compilerOptions: Readonly<Record<string, unknown>>,
+  configDir: string,
+  baseUrl: string,
+): void {
+  if (!isRecord(compilerOptions.paths)) return;
+  for (const [pattern, targets] of Object.entries(compilerOptions.paths)) {
+    aliases.push({ configDir, baseUrl, pattern, targets: asStringArray(targets) });
+  }
+}
+
 function collectTsImportResolverConfig(
   scope: SearchScope,
   fs: WorkspaceFs,
@@ -652,37 +681,15 @@ function collectTsImportResolverConfig(
   const aliases: TsPathAlias[] = [];
   const baseUrls: string[] = [];
   for (const candidate of candidates) {
-    if (!isTsconfigPath(candidate.relativePath)) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      const text = readWorkspaceFile(
-        scope.workspace,
-        candidate.relativePath,
-        { maxBytes: 262_144 },
-        fs,
-      ).text;
-      const result = ts.parseConfigFileTextToJson(candidate.relativePath, text);
-      parsed = result.error === undefined ? result.config : undefined;
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed) || !isRecord(parsed.compilerOptions)) {
-      continue;
-    }
-    const compilerOptions = parsed.compilerOptions;
+    if (!isTsconfigPath(candidate.relativePath)) continue;
+    const compilerOptions = readTsCompilerOptions(scope, fs, candidate.relativePath);
+    if (compilerOptions === undefined) continue;
     const baseUrl = typeof compilerOptions.baseUrl === "string" ? compilerOptions.baseUrl : ".";
     const configDir = tsconfigDir(candidate.relativePath);
     if (typeof compilerOptions.baseUrl === "string") {
       baseUrls.push(normalizeScopePath(posix.join(configDir, compilerOptions.baseUrl)));
     }
-    if (!isRecord(compilerOptions.paths)) {
-      continue;
-    }
-    for (const [pattern, targets] of Object.entries(compilerOptions.paths)) {
-      aliases.push({ configDir, baseUrl, pattern, targets: asStringArray(targets) });
-    }
+    collectTsConfigAliases(aliases, compilerOptions, configDir, baseUrl);
   }
   return {
     aliases,
@@ -788,37 +795,45 @@ function resolvePackageTargetPath(
     : resolveCandidate(pathSet, sourceSibling, JS_EXTENSIONS);
 }
 
+function resolveWorkspacePackageEntry(
+  pathSet: ReadonlySet<string>,
+  pkg: WorkspacePackageAlias,
+): string | undefined {
+  for (const target of pkg.entryTargets) {
+    const resolved = resolvePackageTargetPath(pathSet, pkg, target);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
+function resolveWorkspacePackageSubpath(
+  subpath: string,
+  pathSet: ReadonlySet<string>,
+  pkg: WorkspacePackageAlias,
+): string | undefined {
+  const exact = pkg.exports.find((item) => item.subpath === subpath);
+  const wildcard = pkg.exports
+    .map((item) => ({ item, substitution: wildcardSubstitution(item.subpath, subpath) }))
+    .find((entry) => entry.substitution !== undefined);
+  const targets = exact?.targets ?? wildcard?.item.targets ?? [subpath];
+  const substitution = wildcard?.substitution ?? "";
+  for (const target of targets.map((candidate) => applyWildcard(candidate, substitution))) {
+    const resolved = resolvePackageTargetPath(pathSet, pkg, target);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
 function resolveWorkspacePackageTarget(
   specifier: string,
   pathSet: ReadonlySet<string>,
   resolver: TsImportResolverConfig,
 ): string | undefined {
   for (const pkg of resolver.packages) {
-    if (specifier === pkg.name) {
-      for (const target of pkg.entryTargets) {
-        const resolved = resolvePackageTargetPath(pathSet, pkg, target);
-        if (resolved !== undefined) {
-          return resolved;
-        }
-      }
-      continue;
-    }
-    if (!specifier.startsWith(`${pkg.name}/`)) {
-      continue;
-    }
+    if (specifier === pkg.name) return resolveWorkspacePackageEntry(pathSet, pkg);
+    if (!specifier.startsWith(`${pkg.name}/`)) continue;
     const subpath = specifier.slice(pkg.name.length + 1);
-    const exact = pkg.exports.find((item) => item.subpath === subpath);
-    const wildcard = pkg.exports
-      .map((item) => ({ item, substitution: wildcardSubstitution(item.subpath, subpath) }))
-      .find((entry) => entry.substitution !== undefined);
-    const targets = exact?.targets ?? wildcard?.item.targets ?? [subpath];
-    const substitution = wildcard?.substitution ?? "";
-    for (const target of targets.map((candidate) => applyWildcard(candidate, substitution))) {
-      const resolved = resolvePackageTargetPath(pathSet, pkg, target);
-      if (resolved !== undefined) {
-        return resolved;
-      }
-    }
+    return resolveWorkspacePackageSubpath(subpath, pathSet, pkg);
   }
   return undefined;
 }
@@ -875,85 +890,122 @@ function resolvePythonRelativeImport(
   );
 }
 
+type ImportResolution = Pick<CodeImportEdge, "targetPath" | "confidence">;
+
+function importResolution(target: string | undefined): ImportResolution {
+  return target === undefined
+    ? { confidence: "heuristic" }
+    : { targetPath: target, confidence: "resolved" };
+}
+
+function resolveLocalImport(
+  edge: Omit<CodeImportEdge, "targetPath" | "confidence">,
+  pathSet: ReadonlySet<string>,
+): ImportResolution {
+  const importerDir = dirname(edge.importerPath);
+  const joined = edge.specifier.startsWith("/")
+    ? edge.specifier.slice(1)
+    : posix.join(importerDir === "." ? "" : importerDir, edge.specifier);
+  return importResolution(
+    resolveCandidate(pathSet, joined, edge.language === "python" ? PY_EXTENSIONS : JS_EXTENSIONS),
+  );
+}
+
+function resolveTypescriptImportTarget(
+  specifier: string,
+  pathSet: ReadonlySet<string>,
+  resolver: TsImportResolverConfig,
+): string | undefined {
+  return (
+    resolveTsAliasTarget(specifier, pathSet, resolver) ??
+    resolveWorkspacePackageTarget(specifier, pathSet, resolver)
+  );
+}
+
+function resolveJvmImport(
+  language: CodeImportEdge["language"],
+  specifier: string,
+  pathSet: ReadonlySet<string>,
+): ImportResolution {
+  const sourceExtension =
+    language === "kotlin"
+      ? "kt"
+      : language === "scala"
+        ? "scala"
+        : language === "groovy"
+          ? "groovy"
+          : "java";
+  return importResolution(
+    suffixCandidate(pathSet, `${specifier.replace(/\./gu, "/")}.${sourceExtension}`),
+  );
+}
+
+function resolvePythonImport(specifier: string, pathSet: ReadonlySet<string>): ImportResolution {
+  const modulePath = specifier.replace(/\./gu, "/");
+  return importResolution(
+    resolveCandidate(pathSet, modulePath, PY_EXTENSIONS) ??
+      suffixCandidate(pathSet, `${modulePath}.py`) ??
+      suffixCandidate(pathSet, `${modulePath}/__init__.py`),
+  );
+}
+
+function resolveGoImport(
+  specifier: string,
+  pathSet: ReadonlySet<string>,
+  resolver: TsImportResolverConfig,
+): ImportResolution {
+  return importResolution(
+    resolveGoModuleTarget(specifier, pathSet, resolver) ??
+      suffixCandidate(pathSet, `${specifier.replace(/^.*?\//u, "")}.go`) ??
+      suffixCandidate(pathSet, specifier),
+  );
+}
+
+function resolveFallbackImport(
+  edge: Omit<CodeImportEdge, "targetPath" | "confidence">,
+  pathSet: ReadonlySet<string>,
+): ImportResolution {
+  const last = edge.specifier.split(/[/.]/u).filter(Boolean).at(-1);
+  return importResolution(
+    last === undefined
+      ? undefined
+      : suffixCandidate(pathSet, `${last}.${extension(edge.importerPath)}`),
+  );
+}
+
 function resolveImportTarget(
   edge: Omit<CodeImportEdge, "targetPath" | "confidence">,
   pathSet: ReadonlySet<string>,
   resolver: TsImportResolverConfig,
 ): Pick<CodeImportEdge, "targetPath" | "confidence"> {
   const specifier = edge.specifier;
-  const importerDir = dirname(edge.importerPath);
   if (edge.language === "python" && specifier.startsWith(".")) {
-    const target = resolvePythonRelativeImport(edge.importerPath, specifier, pathSet);
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
+    return importResolution(resolvePythonRelativeImport(edge.importerPath, specifier, pathSet));
   }
   if (specifier.startsWith(".") || specifier.startsWith("/")) {
-    const joined = specifier.startsWith("/")
-      ? specifier.slice(1)
-      : posix.join(importerDir === "." ? "" : importerDir, specifier);
-    const target = resolveCandidate(
-      pathSet,
-      joined,
-      edge.language === "python" ? PY_EXTENSIONS : JS_EXTENSIONS,
-    );
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
+    return resolveLocalImport(edge, pathSet);
   }
   if (specifier.startsWith("@/")) {
-    const target = resolveCandidate(pathSet, `src/${specifier.slice(2)}`, JS_EXTENSIONS);
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
+    return importResolution(resolveCandidate(pathSet, `src/${specifier.slice(2)}`, JS_EXTENSIONS));
   }
-  if (edge.language === "typescript" || edge.language === "javascript") {
-    const target =
-      resolveTsAliasTarget(specifier, pathSet, resolver) ??
-      resolveWorkspacePackageTarget(specifier, pathSet, resolver);
-    if (target !== undefined) {
-      return { targetPath: target, confidence: "resolved" };
+  switch (edge.language) {
+    case "typescript":
+    case "javascript": {
+      const target = resolveTypescriptImportTarget(specifier, pathSet, resolver);
+      return target === undefined ? resolveFallbackImport(edge, pathSet) : importResolution(target);
     }
+    case "java":
+    case "kotlin":
+    case "scala":
+    case "groovy":
+      return resolveJvmImport(edge.language, specifier, pathSet);
+    case "python":
+      return resolvePythonImport(specifier, pathSet);
+    case "go":
+      return resolveGoImport(specifier, pathSet, resolver);
+    default:
+      return resolveFallbackImport(edge, pathSet);
   }
-  if (
-    edge.language === "java" ||
-    edge.language === "kotlin" ||
-    edge.language === "scala" ||
-    edge.language === "groovy"
-  ) {
-    const suffix = `${specifier.replace(/\./g, "/")}.${edge.language === "kotlin" ? "kt" : edge.language === "scala" ? "scala" : edge.language === "groovy" ? "groovy" : "java"}`;
-    const target = suffixCandidate(pathSet, suffix);
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
-  }
-  if (edge.language === "python") {
-    const modulePath = specifier.replace(/\./g, "/");
-    const target =
-      resolveCandidate(pathSet, modulePath, PY_EXTENSIONS) ??
-      suffixCandidate(pathSet, `${modulePath}.py`) ??
-      suffixCandidate(pathSet, `${modulePath}/__init__.py`);
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
-  }
-  if (edge.language === "go") {
-    const target =
-      resolveGoModuleTarget(specifier, pathSet, resolver) ??
-      suffixCandidate(pathSet, `${specifier.replace(/^.*?\//u, "")}.go`) ??
-      suffixCandidate(pathSet, specifier);
-    return target === undefined
-      ? { confidence: "heuristic" }
-      : { targetPath: target, confidence: "resolved" };
-  }
-  const last = specifier.split(/[/.]/u).filter(Boolean).at(-1);
-  const target =
-    last === undefined
-      ? undefined
-      : suffixCandidate(pathSet, `${last}.${extension(edge.importerPath)}`);
-  return target === undefined
-    ? { confidence: "heuristic" }
-    : { targetPath: target, confidence: "resolved" };
 }
 
 function collectImportEdges(
@@ -1074,6 +1126,75 @@ function collectTypescriptImportEdges(
   return edges;
 }
 
+function resolvedTargetsBySpecifier(
+  file: SourceFile,
+  imports: readonly CodeImportEdge[],
+  kind?: CodeImportEdge["kind"],
+): ReadonlyMap<string, string> {
+  const targets = new Map<string, string>();
+  for (const edge of imports) {
+    if (edge.importerPath !== file.scopePath || edge.targetPath === undefined) continue;
+    if (kind !== undefined && edge.kind !== kind) continue;
+    targets.set(edge.specifier, edge.targetPath);
+  }
+  return targets;
+}
+
+function appendTypescriptImportBinding(
+  bindings: CodeImportBinding[],
+  file: SourceFile,
+  resolver: TypescriptReExportResolverContext,
+  targetBySpecifier: ReadonlyMap<string, string>,
+  specifier: string,
+  localName: string,
+  importedName: string,
+): void {
+  const targetPath = targetBySpecifier.get(specifier);
+  if (targetPath === undefined) return;
+  const resolved = resolveTypescriptReExportedSymbol(targetPath, importedName, resolver);
+  bindings.push({
+    importerPath: file.scopePath,
+    localName,
+    importedName: resolved?.importedName ?? importedName,
+    targetPath: resolved?.targetPath ?? targetPath,
+  });
+}
+
+function appendTypescriptImportDeclarationBindings(
+  bindings: CodeImportBinding[],
+  file: SourceFile,
+  resolver: TypescriptReExportResolverContext,
+  targetBySpecifier: ReadonlyMap<string, string>,
+  statement: ts.ImportDeclaration,
+): void {
+  const specifier = stringLiteralText(statement.moduleSpecifier);
+  const clause = statement.importClause;
+  if (specifier === undefined || clause === undefined) return;
+  if (clause.name !== undefined) {
+    appendTypescriptImportBinding(
+      bindings,
+      file,
+      resolver,
+      targetBySpecifier,
+      specifier,
+      clause.name.text,
+      "default",
+    );
+  }
+  if (clause.namedBindings === undefined || !ts.isNamedImports(clause.namedBindings)) return;
+  for (const element of clause.namedBindings.elements) {
+    appendTypescriptImportBinding(
+      bindings,
+      file,
+      resolver,
+      targetBySpecifier,
+      specifier,
+      element.name.text,
+      element.propertyName?.text ?? element.name.text,
+    );
+  }
+}
+
 function collectTypescriptImportBindings(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
@@ -1083,49 +1204,17 @@ function collectTypescriptImportBindings(
   if (sourceFile === undefined) {
     return [];
   }
-  const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath === file.scopePath && edge.targetPath !== undefined) {
-      targetBySpecifier.set(edge.specifier, edge.targetPath);
-    }
-  }
+  const targetBySpecifier = resolvedTargetsBySpecifier(file, imports);
   const bindings: CodeImportBinding[] = [];
-  const pushBinding = (specifier: string, localName: string, importedName: string): void => {
-    const targetPath = targetBySpecifier.get(specifier);
-    if (targetPath === undefined) {
-      return;
-    }
-    const resolved = resolveTypescriptReExportedSymbol(targetPath, importedName, resolver);
-    bindings.push({
-      importerPath: file.scopePath,
-      localName,
-      importedName: resolved?.importedName ?? importedName,
-      targetPath: resolved?.targetPath ?? targetPath,
-    });
-  };
   for (const statement of sourceFile.statements) {
-    if (!ts.isImportDeclaration(statement)) {
-      continue;
-    }
-    const specifier = stringLiteralText(statement.moduleSpecifier);
-    if (specifier === undefined) {
-      continue;
-    }
-    const clause = statement.importClause;
-    if (clause === undefined) {
-      continue;
-    }
-    if (clause.name !== undefined) {
-      pushBinding(specifier, clause.name.text, "default");
-    }
-    if (clause.namedBindings === undefined) {
-      continue;
-    }
-    if (ts.isNamedImports(clause.namedBindings)) {
-      for (const element of clause.namedBindings.elements) {
-        pushBinding(specifier, element.name.text, element.propertyName?.text ?? element.name.text);
-      }
-    }
+    if (!ts.isImportDeclaration(statement)) continue;
+    appendTypescriptImportDeclarationBindings(
+      bindings,
+      file,
+      resolver,
+      targetBySpecifier,
+      statement,
+    );
   }
   return bindings;
 }
@@ -1171,6 +1260,31 @@ function collectPolyglotImportBindings(
   return bindings;
 }
 
+function appendTypescriptReExportBindings(
+  bindings: TypescriptReExportBinding[],
+  exporterPath: string,
+  targetBySpecifier: ReadonlyMap<string, string>,
+  statement: ts.ExportDeclaration,
+): void {
+  const specifier = stringLiteralText(statement.moduleSpecifier);
+  const targetPath = specifier === undefined ? undefined : targetBySpecifier.get(specifier);
+  if (targetPath === undefined) return;
+  const clause = statement.exportClause;
+  if (clause === undefined) {
+    bindings.push({ exporterPath, targetPath });
+    return;
+  }
+  if (!ts.isNamedExports(clause)) return;
+  for (const element of clause.elements) {
+    bindings.push({
+      exporterPath,
+      exportedName: element.name.text,
+      importedName: element.propertyName?.text ?? element.name.text,
+      targetPath,
+    });
+  }
+}
+
 function collectTypescriptReExportBindings(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
@@ -1179,42 +1293,11 @@ function collectTypescriptReExportBindings(
   if (sourceFile === undefined) {
     return [];
   }
-  const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (
-      edge.kind === "export" &&
-      edge.importerPath === file.scopePath &&
-      edge.targetPath !== undefined
-    ) {
-      targetBySpecifier.set(edge.specifier, edge.targetPath);
-    }
-  }
+  const targetBySpecifier = resolvedTargetsBySpecifier(file, imports, "export");
   const bindings: TypescriptReExportBinding[] = [];
   for (const statement of sourceFile.statements) {
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-    const specifier = stringLiteralText(statement.moduleSpecifier);
-    const targetPath = specifier === undefined ? undefined : targetBySpecifier.get(specifier);
-    if (targetPath === undefined) {
-      continue;
-    }
-    const clause = statement.exportClause;
-    if (clause === undefined) {
-      bindings.push({ exporterPath: file.scopePath, targetPath });
-      continue;
-    }
-    if (!ts.isNamedExports(clause)) {
-      continue;
-    }
-    for (const element of clause.elements) {
-      bindings.push({
-        exporterPath: file.scopePath,
-        exportedName: element.name.text,
-        importedName: element.propertyName?.text ?? element.name.text,
-        targetPath,
-      });
-    }
+    if (!ts.isExportDeclaration(statement)) continue;
+    appendTypescriptReExportBindings(bindings, file.scopePath, targetBySpecifier, statement);
   }
   return bindings;
 }
@@ -1227,38 +1310,38 @@ function hasDefaultModifier(node: ts.Node): boolean {
   );
 }
 
+function defaultExportNames(statement: ts.Statement): readonly string[] {
+  if (
+    (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+    hasDefaultModifier(statement)
+  ) {
+    return [declarationNameText(statement.name) ?? "default"];
+  }
+  if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+    return [ts.isIdentifier(statement.expression) ? statement.expression.text : "default"];
+  }
+  if (
+    !ts.isExportDeclaration(statement) ||
+    statement.moduleSpecifier !== undefined ||
+    statement.exportClause === undefined ||
+    !ts.isNamedExports(statement.exportClause)
+  ) {
+    return [];
+  }
+  return statement.exportClause.elements
+    .filter((element) => element.name.text === "default")
+    .map((element) => element.propertyName?.text ?? element.name.text);
+}
+
 function collectTypescriptDefaultExports(file: SourceFile): readonly TypescriptDefaultExport[] {
   const sourceFile = file.syntaxTree;
   if (sourceFile === undefined) {
     return [];
   }
   const defaults: TypescriptDefaultExport[] = [];
-  const pushDefault = (symbolName: string | undefined): void => {
-    defaults.push({ scopePath: file.scopePath, symbolName: symbolName ?? "default" });
-  };
   for (const statement of sourceFile.statements) {
-    if (
-      (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
-      hasDefaultModifier(statement)
-    ) {
-      pushDefault(declarationNameText(statement.name));
-      continue;
-    }
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      pushDefault(ts.isIdentifier(statement.expression) ? statement.expression.text : "default");
-      continue;
-    }
-    if (
-      ts.isExportDeclaration(statement) &&
-      statement.moduleSpecifier === undefined &&
-      statement.exportClause !== undefined &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const element of statement.exportClause.elements) {
-        if (element.name.text === "default") {
-          pushDefault(element.propertyName?.text ?? element.name.text);
-        }
-      }
+    for (const symbolName of defaultExportNames(statement)) {
+      defaults.push({ scopePath: file.scopePath, symbolName });
     }
   }
   return defaults;
@@ -1298,6 +1381,69 @@ function fileDefinesTypescriptSymbol(
   return (resolver.symbolsByFile.get(scopePath) ?? []).some((symbol) => symbol.name === symbolName);
 }
 
+interface TypescriptReExportResolutionRequest {
+  readonly exportedName: string;
+  readonly resolver: TypescriptReExportResolverContext;
+  readonly seen: ReadonlySet<string>;
+  readonly depth: number;
+}
+
+function resolveDefaultTypescriptExport(
+  exporterPath: string,
+  resolver: TypescriptReExportResolverContext,
+): ResolvedTypescriptImportTarget | undefined {
+  for (const symbolName of resolver.defaultExportsByFile.get(exporterPath) ?? []) {
+    if (fileDefinesTypescriptSymbol(resolver, exporterPath, symbolName)) {
+      return { targetPath: exporterPath, importedName: symbolName };
+    }
+  }
+  return undefined;
+}
+
+function resolveTypescriptReExportBinding(
+  binding: TypescriptReExportBinding,
+  importedName: string,
+  request: TypescriptReExportResolutionRequest,
+): ResolvedTypescriptImportTarget | undefined {
+  const resolved = resolveTypescriptReExportedSymbol(
+    binding.targetPath,
+    importedName,
+    request.resolver,
+    request.seen,
+    request.depth + 1,
+  );
+  if (resolved !== undefined) return resolved;
+  return fileDefinesTypescriptSymbol(request.resolver, binding.targetPath, importedName)
+    ? { targetPath: binding.targetPath, importedName }
+    : undefined;
+}
+
+function resolveNamedTypescriptReExport(
+  bindings: readonly TypescriptReExportBinding[],
+  request: TypescriptReExportResolutionRequest,
+): ResolvedTypescriptImportTarget | undefined {
+  for (const binding of bindings) {
+    if (binding.exportedName !== request.exportedName || binding.importedName === undefined) {
+      continue;
+    }
+    const resolved = resolveTypescriptReExportBinding(binding, binding.importedName, request);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
+function resolveWildcardTypescriptReExport(
+  bindings: readonly TypescriptReExportBinding[],
+  request: TypescriptReExportResolutionRequest,
+): ResolvedTypescriptImportTarget | undefined {
+  for (const binding of bindings) {
+    if (binding.exportedName !== undefined) continue;
+    const resolved = resolveTypescriptReExportBinding(binding, request.exportedName, request);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
 function resolveTypescriptReExportedSymbol(
   exporterPath: string,
   exportedName: string,
@@ -1315,56 +1461,17 @@ function resolveTypescriptReExportedSymbol(
   const nextSeen = new Set(seen);
   nextSeen.add(key);
   if (exportedName === "default") {
-    for (const symbolName of resolver.defaultExportsByFile.get(exporterPath) ?? []) {
-      if (fileDefinesTypescriptSymbol(resolver, exporterPath, symbolName)) {
-        return { targetPath: exporterPath, importedName: symbolName };
-      }
-    }
+    const resolvedDefault = resolveDefaultTypescriptExport(exporterPath, resolver);
+    if (resolvedDefault !== undefined) return resolvedDefault;
   }
   if (fileDefinesTypescriptSymbol(resolver, exporterPath, exportedName)) {
     return { targetPath: exporterPath, importedName: exportedName };
   }
   const reExports = resolver.reExportsByFile.get(exporterPath) ?? [];
-  for (const binding of reExports) {
-    if (binding.exportedName !== exportedName || binding.importedName === undefined) {
-      continue;
-    }
-    const resolved = resolveTypescriptReExportedSymbol(
-      binding.targetPath,
-      binding.importedName,
-      resolver,
-      nextSeen,
-      depth + 1,
-    );
-    if (resolved !== undefined) {
-      return resolved;
-    }
-    if (fileDefinesTypescriptSymbol(resolver, binding.targetPath, binding.importedName)) {
-      return { targetPath: binding.targetPath, importedName: binding.importedName };
-    }
-  }
-  if (exportedName === "default") {
-    return undefined;
-  }
-  for (const binding of reExports) {
-    if (binding.exportedName !== undefined) {
-      continue;
-    }
-    const resolved = resolveTypescriptReExportedSymbol(
-      binding.targetPath,
-      exportedName,
-      resolver,
-      nextSeen,
-      depth + 1,
-    );
-    if (resolved !== undefined) {
-      return resolved;
-    }
-    if (fileDefinesTypescriptSymbol(resolver, binding.targetPath, exportedName)) {
-      return { targetPath: binding.targetPath, importedName: exportedName };
-    }
-  }
-  return undefined;
+  const request = { exportedName, resolver, seen: nextSeen, depth };
+  const named = resolveNamedTypescriptReExport(reExports, request);
+  if (named !== undefined || exportedName === "default") return named;
+  return resolveWildcardTypescriptReExport(reExports, request);
 }
 
 const NON_FIELD_COMPONENT_NAMES = new Set([
@@ -1426,59 +1533,79 @@ function fieldNameFromComponent(component: string): string | undefined {
   return candidate;
 }
 
+interface FieldComponentSplitState {
+  current: string;
+  parenDepth: number;
+  bracketDepth: number;
+  braceDepth: number;
+  angleDepth: number;
+  quoted: "'" | '"' | undefined;
+  escaped: boolean;
+}
+
+function appendQuotedFieldCharacter(state: FieldComponentSplitState, character: string): void {
+  state.current += character;
+  if (state.escaped) {
+    state.escaped = false;
+  } else if (character === "\\") {
+    state.escaped = true;
+  } else if (character === state.quoted) {
+    state.quoted = undefined;
+  }
+}
+
+function updateFieldComponentDepth(state: FieldComponentSplitState, character: string): boolean {
+  if (character === "(") state.parenDepth += 1;
+  else if (character === ")" && state.parenDepth > 0) state.parenDepth -= 1;
+  else if (character === "[") state.bracketDepth += 1;
+  else if (character === "]" && state.bracketDepth > 0) state.bracketDepth -= 1;
+  else if (character === "{") state.braceDepth += 1;
+  else if (character === "}" && state.braceDepth > 0) state.braceDepth -= 1;
+  else if (character === "<") state.angleDepth += 1;
+  else if (character === ">" && state.angleDepth > 0) state.angleDepth -= 1;
+  else return false;
+  return true;
+}
+
+function isTopLevelFieldSeparator(state: FieldComponentSplitState, character: string): boolean {
+  return (
+    character === "," &&
+    state.parenDepth === 0 &&
+    state.bracketDepth === 0 &&
+    state.braceDepth === 0 &&
+    state.angleDepth === 0
+  );
+}
+
 function splitFieldComponents(text: string): readonly string[] {
   const components: string[] = [];
-  let current = "";
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let braceDepth = 0;
-  let angleDepth = 0;
-  let quoted: "'" | '"' | undefined;
-  let escaped = false;
+  const state: FieldComponentSplitState = {
+    current: "",
+    parenDepth: 0,
+    bracketDepth: 0,
+    braceDepth: 0,
+    angleDepth: 0,
+    quoted: undefined,
+    escaped: false,
+  };
   for (const character of text) {
-    if (quoted !== undefined) {
-      current += character;
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === quoted) {
-        quoted = undefined;
-      }
+    if (state.quoted !== undefined) {
+      appendQuotedFieldCharacter(state, character);
       continue;
     }
     if (character === "'" || character === '"') {
-      quoted = character;
-    } else if (character === "(") {
-      parenDepth += 1;
-    } else if (character === ")" && parenDepth > 0) {
-      parenDepth -= 1;
-    } else if (character === "[") {
-      bracketDepth += 1;
-    } else if (character === "]" && bracketDepth > 0) {
-      bracketDepth -= 1;
-    } else if (character === "{") {
-      braceDepth += 1;
-    } else if (character === "}" && braceDepth > 0) {
-      braceDepth -= 1;
-    } else if (character === "<") {
-      angleDepth += 1;
-    } else if (character === ">" && angleDepth > 0) {
-      angleDepth -= 1;
-    } else if (
-      character === "," &&
-      parenDepth === 0 &&
-      bracketDepth === 0 &&
-      braceDepth === 0 &&
-      angleDepth === 0
-    ) {
-      components.push(current);
-      current = "";
+      state.quoted = character;
+    } else if (updateFieldComponentDepth(state, character)) {
+      state.current += character;
+      continue;
+    } else if (isTopLevelFieldSeparator(state, character)) {
+      components.push(state.current);
+      state.current = "";
       continue;
     }
-    current += character;
+    state.current += character;
   }
-  components.push(current);
+  components.push(state.current);
   return components;
 }
 
@@ -1541,82 +1668,133 @@ function collectOpenApiJsonSchemaSymbols(file: SourceFile): readonly CodeSymbol[
   return symbols;
 }
 
+interface OpenApiYamlState {
+  phase: "root" | "components" | "schemas";
+  componentsIndent: number;
+  schemasIndent: number;
+  currentName: string | undefined;
+  currentLine: number;
+  currentFields: string[];
+  inProperties: boolean;
+  propertiesIndent: number;
+}
+
+function flushOpenApiYamlSchema(
+  file: SourceFile,
+  state: OpenApiYamlState,
+  symbols: CodeSymbol[],
+): void {
+  if (state.currentName !== undefined && state.currentFields.length > 0) {
+    symbols.push(
+      openApiSchemaSymbol(file, state.currentName, state.currentFields, state.currentLine),
+    );
+  }
+  state.currentName = undefined;
+  state.currentFields = [];
+  state.inProperties = false;
+  state.propertiesIndent = -1;
+}
+
+function advanceOpenApiComponentsState(
+  state: OpenApiYamlState,
+  trimmed: string,
+  indent: number,
+): void {
+  if (indent <= state.componentsIndent && !/^components\s*:/u.test(trimmed)) {
+    state.phase = "root";
+  } else if (/^schemas\s*:\s*$/u.test(trimmed)) {
+    state.phase = "schemas";
+    state.schemasIndent = indent;
+  }
+}
+
+function beginOpenApiYamlSchema(
+  file: SourceFile,
+  state: OpenApiYamlState,
+  symbols: CodeSymbol[],
+  name: string,
+  lineNumber: number,
+): void {
+  flushOpenApiYamlSchema(file, state, symbols);
+  state.currentName = name;
+  state.currentLine = lineNumber;
+}
+
+function advanceOpenApiSchemasState(
+  file: SourceFile,
+  state: OpenApiYamlState,
+  symbols: CodeSymbol[],
+  trimmed: string,
+  indent: number,
+  lineNumber: number,
+): void {
+  if (indent <= state.schemasIndent && !/^schemas\s*:/u.test(trimmed)) {
+    flushOpenApiYamlSchema(file, state, symbols);
+    state.phase = "components";
+    return;
+  }
+  const schemaName = /^([A-Za-z_][\w.-]*)\s*:\s*$/u.exec(trimmed)?.[1];
+  if (
+    schemaName !== undefined &&
+    indent > state.schemasIndent &&
+    indent <= state.schemasIndent + 2
+  ) {
+    beginOpenApiYamlSchema(file, state, symbols, schemaName, lineNumber);
+    return;
+  }
+  if (state.currentName === undefined) return;
+  if (/^properties\s*:\s*$/u.test(trimmed)) {
+    state.inProperties = true;
+    state.propertiesIndent = indent;
+    return;
+  }
+  if (state.inProperties && indent <= state.propertiesIndent) state.inProperties = false;
+  if (!state.inProperties) return;
+  const fieldName = /^([A-Za-z_][\w-]*)\s*:/u.exec(trimmed)?.[1];
+  if (fieldName !== undefined) state.currentFields.push(fieldName);
+}
+
+function advanceOpenApiYamlState(
+  file: SourceFile,
+  state: OpenApiYamlState,
+  symbols: CodeSymbol[],
+  line: string,
+  lineNumber: number,
+): void {
+  const trimmed = line.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("#")) return;
+  const indent = line.length - line.trimStart().length;
+  if (state.phase === "root") {
+    if (/^components\s*:\s*$/u.test(trimmed)) {
+      state.phase = "components";
+      state.componentsIndent = indent;
+    }
+    return;
+  }
+  if (state.phase === "components") {
+    advanceOpenApiComponentsState(state, trimmed, indent);
+    return;
+  }
+  advanceOpenApiSchemasState(file, state, symbols, trimmed, indent, lineNumber);
+}
+
 function collectOpenApiYamlSchemaSymbols(file: SourceFile): readonly CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
   const lines = file.text.split(/\r?\n/u);
-  let inComponents = false;
-  let componentsIndent = -1;
-  let inSchemas = false;
-  let schemasIndent = -1;
-  let currentName: string | undefined;
-  let currentLine = 1;
-  let currentFields: string[] = [];
-  let inProperties = false;
-  let propertiesIndent = -1;
-  const flush = (): void => {
-    if (currentName !== undefined && currentFields.length > 0) {
-      symbols.push(openApiSchemaSymbol(file, currentName, currentFields, currentLine));
-    }
-    currentName = undefined;
-    currentFields = [];
-    inProperties = false;
-    propertiesIndent = -1;
+  const state: OpenApiYamlState = {
+    phase: "root",
+    componentsIndent: -1,
+    schemasIndent: -1,
+    currentName: undefined,
+    currentLine: 1,
+    currentFields: [],
+    inProperties: false,
+    propertiesIndent: -1,
   };
   lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith("#")) {
-      return;
-    }
-    const indent = line.length - line.trimStart().length;
-    if (!inComponents) {
-      if (/^components\s*:\s*$/u.test(trimmed)) {
-        inComponents = true;
-        componentsIndent = indent;
-      }
-      return;
-    }
-    if (!inSchemas) {
-      if (indent <= componentsIndent && !/^components\s*:/u.test(trimmed)) {
-        inComponents = false;
-        return;
-      }
-      if (/^schemas\s*:\s*$/u.test(trimmed)) {
-        inSchemas = true;
-        schemasIndent = indent;
-      }
-      return;
-    }
-    if (indent <= schemasIndent && !/^schemas\s*:/u.test(trimmed)) {
-      flush();
-      inSchemas = false;
-      return;
-    }
-    const schemaMatch = /^([A-Za-z_][\w.-]*)\s*:\s*$/u.exec(trimmed);
-    if (schemaMatch?.[1] !== undefined && indent > schemasIndent && indent <= schemasIndent + 2) {
-      flush();
-      currentName = schemaMatch[1];
-      currentLine = index + 1;
-      return;
-    }
-    if (currentName === undefined) {
-      return;
-    }
-    if (/^properties\s*:\s*$/u.test(trimmed)) {
-      inProperties = true;
-      propertiesIndent = indent;
-      return;
-    }
-    if (inProperties && indent <= propertiesIndent) {
-      inProperties = false;
-    }
-    if (inProperties) {
-      const fieldMatch = /^([A-Za-z_][\w-]*)\s*:/u.exec(trimmed);
-      if (fieldMatch?.[1] !== undefined) {
-        currentFields.push(fieldMatch[1]);
-      }
-    }
+    advanceOpenApiYamlState(file, state, symbols, line, index + 1);
   });
-  flush();
+  flushOpenApiYamlSchema(file, state, symbols);
   return symbols;
 }
 
@@ -1679,6 +1857,32 @@ function fieldNameFromGoStructTag(tagText: string | undefined): string | undefin
   return tagName;
 }
 
+function declarationFieldNames(
+  line: string,
+  language: CodeLanguage,
+  insideBlock: boolean,
+): readonly string[] {
+  const declarationLine = line.replace(/@\w+(?:\([^)]*\))?/gu, " ").replace(/\[[^\]]+\]\s*/gu, " ");
+  const names = [
+    /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*[:;]/u.exec(declarationLine)?.[1],
+    /^\s*(?:private|protected|public)?\s*(?:final\s+)?[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*(?:[=;])/u.exec(
+      declarationLine,
+    )?.[1],
+    /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
+      declarationLine,
+    )?.[1],
+    /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
+      declarationLine,
+    )?.[1],
+  ].filter((name): name is string => name !== undefined);
+  if (language !== "go" || !insideBlock) return names;
+  const goStructField = /^\s*([A-Za-z_][\w]*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
+  const goName = fieldNameFromGoStructTag(goStructField?.[2]) ?? goStructField?.[1];
+  return goName === undefined || NON_FIELD_COMPONENT_NAMES.has(goName.toLowerCase())
+    ? names
+    : [...names, goName];
+}
+
 function collectBlockFields(
   lines: readonly string[],
   startIndex: number,
@@ -1686,61 +1890,17 @@ function collectBlockFields(
 ): readonly string[] {
   const fields: string[] = [];
   let pendingSerializedFieldName: string | undefined;
-  const pushField = (fieldName: string): void => {
-    fields.push(pendingSerializedFieldName ?? fieldName);
-    pendingSerializedFieldName = undefined;
-  };
   for (let i = startIndex; i < Math.min(lines.length, startIndex + 80); i += 1) {
     const line = lines[i] ?? "";
-    if (i > startIndex && /^\s*\}/u.test(line)) {
-      break;
-    }
+    if (i > startIndex && /^\s*\}/u.test(line)) break;
     const serializedFieldName = fieldNameFromSerializationAnnotation(line);
-    if (serializedFieldName !== undefined) {
-      pendingSerializedFieldName = serializedFieldName;
+    if (serializedFieldName !== undefined) pendingSerializedFieldName = serializedFieldName;
+    const names = declarationFieldNames(line, language, i > startIndex);
+    for (const fieldName of names) {
+      fields.push(pendingSerializedFieldName ?? fieldName);
+      pendingSerializedFieldName = undefined;
     }
-    const declarationLine = line
-      .replace(/@\w+(?:\([^)]*\))?/gu, " ")
-      .replace(/\[[^\]]+\]\s*/gu, " ");
-    let consumedField = false;
-    const match = /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*[:;]/u.exec(declarationLine);
-    if (match?.[1] !== undefined) {
-      consumedField = true;
-      pushField(match[1]);
-    }
-    const javaField =
-      /^\s*(?:private|protected|public)?\s*(?:final\s+)?[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*(?:[=;])/u.exec(
-        declarationLine,
-      );
-    if (javaField?.[1] !== undefined) {
-      consumedField = true;
-      pushField(javaField[1]);
-    }
-    const kotlinProperty =
-      /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
-        declarationLine,
-      );
-    if (kotlinProperty?.[1] !== undefined) {
-      consumedField = true;
-      pushField(kotlinProperty[1]);
-    }
-    const csharpProperty =
-      /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
-        declarationLine,
-      );
-    if (csharpProperty?.[1] !== undefined) {
-      consumedField = true;
-      pushField(csharpProperty[1]);
-    }
-    if (language === "go" && i > startIndex) {
-      const goStructField = /^\s*([A-Za-z_][\w]*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
-      const fieldName = fieldNameFromGoStructTag(goStructField?.[2]) ?? goStructField?.[1];
-      if (fieldName !== undefined && !NON_FIELD_COMPONENT_NAMES.has(fieldName.toLowerCase())) {
-        consumedField = true;
-        pushField(fieldName);
-      }
-    }
-    if (!consumedField && serializedFieldName === undefined && declarationLine.trim().length > 0) {
+    if (names.length === 0 && serializedFieldName === undefined && line.trim().length > 0) {
       pendingSerializedFieldName = undefined;
     }
   }
@@ -1981,6 +2141,103 @@ function stripLineComment(line: string, language: CodeLanguage): string {
   return line.slice(0, end);
 }
 
+function resumeDelimitedComment(
+  line: string,
+  index: number,
+  delimiter: string,
+): number | undefined {
+  const end = line.indexOf(delimiter, index);
+  return end < 0 ? undefined : end + delimiter.length;
+}
+
+interface CommentStart {
+  readonly index: number;
+  readonly kind: "block" | "python-triple";
+}
+
+function nextBlockOrDocstringStart(
+  line: string,
+  index: number,
+  language: CodeLanguage,
+): CommentStart | undefined {
+  const blockStart = line.indexOf("/*", index);
+  const tripleStart =
+    language === "python"
+      ? [line.indexOf('"""', index), line.indexOf("'''", index)]
+          .filter((value) => value >= 0)
+          .sort((a, b) => a - b)[0]
+      : undefined;
+  if (blockStart < 0 && tripleStart === undefined) return undefined;
+  if (blockStart < 0) return { index: tripleStart ?? -1, kind: "python-triple" };
+  return tripleStart === undefined || blockStart <= tripleStart
+    ? { index: blockStart, kind: "block" }
+    : { index: tripleStart, kind: "python-triple" };
+}
+
+interface StripCommentStep {
+  readonly text: string;
+  readonly nextIndex?: number | undefined;
+}
+
+function resumeActiveCommentStep(
+  line: string,
+  index: number,
+  state: { inBlockComment: boolean; inPythonTripleQuote: string | undefined },
+): StripCommentStep | undefined {
+  if (state.inBlockComment) {
+    const nextIndex = resumeDelimitedComment(line, index, "*/");
+    if (nextIndex === undefined) return { text: "" };
+    state.inBlockComment = false;
+    return { text: "", nextIndex };
+  }
+  if (state.inPythonTripleQuote === undefined) return undefined;
+  const nextIndex = resumeDelimitedComment(line, index, state.inPythonTripleQuote);
+  if (nextIndex === undefined) return { text: "" };
+  state.inPythonTripleQuote = undefined;
+  return { text: "", nextIndex };
+}
+
+function stripNewBlockCommentStep(
+  line: string,
+  start: number,
+  prefix: string,
+  state: { inBlockComment: boolean },
+): StripCommentStep {
+  const nextIndex = resumeDelimitedComment(line, start + 2, "*/");
+  if (nextIndex !== undefined) return { text: prefix, nextIndex };
+  state.inBlockComment = true;
+  return { text: prefix };
+}
+
+function stripNewTripleQuoteStep(
+  line: string,
+  start: number,
+  prefix: string,
+  state: { inPythonTripleQuote: string | undefined },
+): StripCommentStep {
+  const quote = line.slice(start, start + 3);
+  const nextIndex = resumeDelimitedComment(line, start + 3, quote);
+  if (nextIndex !== undefined) return { text: prefix, nextIndex };
+  state.inPythonTripleQuote = quote;
+  return { text: prefix };
+}
+
+function stripCommentStep(
+  line: string,
+  index: number,
+  state: { inBlockComment: boolean; inPythonTripleQuote: string | undefined },
+  language: CodeLanguage,
+): StripCommentStep {
+  const active = resumeActiveCommentStep(line, index, state);
+  if (active !== undefined) return active;
+  const start = nextBlockOrDocstringStart(line, index, language);
+  if (start === undefined) return { text: line.slice(index) };
+  const prefix = line.slice(index, start.index);
+  return start.kind === "block"
+    ? stripNewBlockCommentStep(line, start.index, prefix, state)
+    : stripNewTripleQuoteStep(line, start.index, prefix, state);
+}
+
 function stripBlockCommentsFromLine(
   line: string,
   state: { inBlockComment: boolean; inPythonTripleQuote: string | undefined },
@@ -1989,58 +2246,10 @@ function stripBlockCommentsFromLine(
   let output = "";
   let index = 0;
   while (index < line.length) {
-    if (state.inBlockComment) {
-      const end = line.indexOf("*/", index);
-      if (end < 0) {
-        return output;
-      }
-      index = end + 2;
-      state.inBlockComment = false;
-      continue;
-    }
-    if (state.inPythonTripleQuote !== undefined) {
-      const end = line.indexOf(state.inPythonTripleQuote, index);
-      if (end < 0) {
-        return output;
-      }
-      index = end + state.inPythonTripleQuote.length;
-      state.inPythonTripleQuote = undefined;
-      continue;
-    }
-    const blockStart = line.indexOf("/*", index);
-    const tripleStart =
-      language === "python"
-        ? [line.indexOf('"""', index), line.indexOf("'''", index)]
-            .filter((value) => value >= 0)
-            .sort((a, b) => a - b)[0]
-        : undefined;
-    const nextStart =
-      blockStart < 0
-        ? tripleStart
-        : tripleStart === undefined
-          ? blockStart
-          : Math.min(blockStart, tripleStart);
-    if (nextStart === undefined || nextStart < 0) {
-      output += line.slice(index);
-      break;
-    }
-    output += line.slice(index, nextStart);
-    if (nextStart === blockStart) {
-      const end = line.indexOf("*/", nextStart + 2);
-      if (end < 0) {
-        state.inBlockComment = true;
-        break;
-      }
-      index = end + 2;
-      continue;
-    }
-    const quote = line.slice(nextStart, nextStart + 3);
-    const end = line.indexOf(quote, nextStart + 3);
-    if (end < 0) {
-      state.inPythonTripleQuote = quote;
-      break;
-    }
-    index = end + 3;
+    const step = stripCommentStep(line, index, state, language);
+    output += step.text;
+    if (step.nextIndex === undefined) return output;
+    index = step.nextIndex;
   }
   return output;
 }
@@ -2077,6 +2286,129 @@ function lineCommentMarkerAt(
   return undefined;
 }
 
+interface EndpointMaskState {
+  readonly chars: string[];
+  readonly codeMask: Uint8Array;
+  index: number;
+  stringDelimiter: "'" | '"' | "`" | undefined;
+  escaped: boolean;
+  inBlockComment: boolean;
+  pythonTripleQuote: string | undefined;
+}
+
+function maskEndpointIndex(state: EndpointMaskState, index: number): void {
+  if (state.chars[index] !== "\n" && state.chars[index] !== "\r") {
+    state.chars[index] = " ";
+  }
+  state.codeMask[index] = 0;
+}
+
+function advanceEndpointBlockComment(text: string, state: EndpointMaskState): boolean {
+  if (!state.inBlockComment) return false;
+  if (text.startsWith("*/", state.index)) {
+    maskEndpointIndex(state, state.index);
+    maskEndpointIndex(state, state.index + 1);
+    state.index += 2;
+    state.inBlockComment = false;
+  } else {
+    maskEndpointIndex(state, state.index);
+    state.index += 1;
+  }
+  return true;
+}
+
+function advanceEndpointTripleQuote(text: string, state: EndpointMaskState): boolean {
+  const quote = state.pythonTripleQuote;
+  if (quote === undefined) return false;
+  if (text.startsWith(quote, state.index)) {
+    for (let offset = 0; offset < quote.length; offset += 1) {
+      maskEndpointIndex(state, state.index + offset);
+    }
+    state.index += quote.length;
+    state.pythonTripleQuote = undefined;
+  } else {
+    maskEndpointIndex(state, state.index);
+    state.index += 1;
+  }
+  return true;
+}
+
+function advanceEndpointString(text: string, state: EndpointMaskState): boolean {
+  const delimiter = state.stringDelimiter;
+  if (delimiter === undefined) return false;
+  state.codeMask[state.index] = 0;
+  const character = text[state.index];
+  if (state.escaped) state.escaped = false;
+  else if (character === "\\") state.escaped = true;
+  else if (character === delimiter) state.stringDelimiter = undefined;
+  else if (delimiter !== "`" && (character === "\n" || character === "\r")) {
+    state.stringDelimiter = undefined;
+  }
+  state.index += 1;
+  return true;
+}
+
+function startEndpointTripleQuote(
+  text: string,
+  language: CodeLanguage,
+  state: EndpointMaskState,
+): boolean {
+  if (
+    language !== "python" ||
+    (!text.startsWith('"""', state.index) && !text.startsWith("'''", state.index))
+  ) {
+    return false;
+  }
+  state.pythonTripleQuote = text.slice(state.index, state.index + 3);
+  for (let offset = 0; offset < 3; offset += 1) {
+    maskEndpointIndex(state, state.index + offset);
+  }
+  state.index += 3;
+  return true;
+}
+
+function startEndpointBlockComment(text: string, state: EndpointMaskState): boolean {
+  if (!text.startsWith("/*", state.index)) return false;
+  maskEndpointIndex(state, state.index);
+  maskEndpointIndex(state, state.index + 1);
+  state.index += 2;
+  state.inBlockComment = true;
+  return true;
+}
+
+function maskEndpointLineComment(
+  text: string,
+  language: CodeLanguage,
+  state: EndpointMaskState,
+): boolean {
+  if (lineCommentMarkerAt(text, state.index, language) === undefined) return false;
+  while (state.index < text.length && text[state.index] !== "\n" && text[state.index] !== "\r") {
+    maskEndpointIndex(state, state.index);
+    state.index += 1;
+  }
+  return true;
+}
+
+function startEndpointString(text: string, state: EndpointMaskState): void {
+  const character = text[state.index];
+  if (character === "'" || character === '"' || character === "`") {
+    state.stringDelimiter = character;
+    state.escaped = false;
+    state.codeMask[state.index] = 0;
+  }
+  state.index += 1;
+}
+
+function advanceEndpointMask(text: string, language: CodeLanguage, state: EndpointMaskState): void {
+  if (advanceEndpointBlockComment(text, state)) return;
+  if (advanceEndpointTripleQuote(text, state)) return;
+  if (advanceEndpointString(text, state)) return;
+  if (startEndpointTripleQuote(text, language, state)) return;
+  if (startEndpointBlockComment(text, state)) return;
+  if (maskEndpointLineComment(text, language, state)) return;
+  startEndpointString(text, state);
+}
+
 function maskEndpointCommentOrDocstringText(
   text: string,
   language: CodeLanguage,
@@ -2084,95 +2416,17 @@ function maskEndpointCommentOrDocstringText(
   const chars = text.split("");
   const codeMask = new Uint8Array(text.length);
   codeMask.fill(1);
-
-  const maskAt = (index: number): void => {
-    if (chars[index] !== "\n" && chars[index] !== "\r") {
-      chars[index] = " ";
-    }
-    codeMask[index] = 0;
+  const state: EndpointMaskState = {
+    chars,
+    codeMask,
+    index: 0,
+    stringDelimiter: undefined,
+    escaped: false,
+    inBlockComment: false,
+    pythonTripleQuote: undefined,
   };
-
-  let index = 0;
-  let stringDelimiter: "'" | '"' | "`" | undefined;
-  let escaped = false;
-  let inBlockComment = false;
-  let pythonTripleQuote: string | undefined;
-  while (index < text.length) {
-    if (inBlockComment) {
-      if (text.startsWith("*/", index)) {
-        maskAt(index);
-        maskAt(index + 1);
-        index += 2;
-        inBlockComment = false;
-        continue;
-      }
-      maskAt(index);
-      index += 1;
-      continue;
-    }
-
-    if (pythonTripleQuote !== undefined) {
-      if (text.startsWith(pythonTripleQuote, index)) {
-        for (let offset = 0; offset < pythonTripleQuote.length; offset += 1) {
-          maskAt(index + offset);
-        }
-        index += pythonTripleQuote.length;
-        pythonTripleQuote = undefined;
-        continue;
-      }
-      maskAt(index);
-      index += 1;
-      continue;
-    }
-
-    if (stringDelimiter !== undefined) {
-      codeMask[index] = 0;
-      if (escaped) {
-        escaped = false;
-      } else if (text[index] === "\\") {
-        escaped = true;
-      } else if (text[index] === stringDelimiter) {
-        stringDelimiter = undefined;
-      } else if (stringDelimiter !== "`" && (text[index] === "\n" || text[index] === "\r")) {
-        stringDelimiter = undefined;
-      }
-      index += 1;
-      continue;
-    }
-
-    if (language === "python" && (text.startsWith('"""', index) || text.startsWith("'''", index))) {
-      pythonTripleQuote = text.slice(index, index + 3);
-      for (let offset = 0; offset < 3; offset += 1) {
-        maskAt(index + offset);
-      }
-      index += 3;
-      continue;
-    }
-
-    if (text.startsWith("/*", index)) {
-      maskAt(index);
-      maskAt(index + 1);
-      index += 2;
-      inBlockComment = true;
-      continue;
-    }
-
-    const lineCommentMarker = lineCommentMarkerAt(text, index, language);
-    if (lineCommentMarker !== undefined) {
-      while (index < text.length && text[index] !== "\n" && text[index] !== "\r") {
-        maskAt(index);
-        index += 1;
-      }
-      continue;
-    }
-
-    const char = text[index];
-    if (char === "'" || char === '"' || char === "`") {
-      stringDelimiter = char;
-      escaped = false;
-      codeMask[index] = 0;
-    }
-    index += 1;
+  while (state.index < text.length) {
+    advanceEndpointMask(text, language, state);
   }
 
   const lineOffsets: number[] = [0];
@@ -2720,41 +2974,90 @@ function namedStringArg(args: string | undefined, name: string): string | undefi
   return pattern.exec(args ?? "")?.[2];
 }
 
-function collectPythonRoutePrefixes(scan: EndpointScanText): ReadonlyMap<string, string> {
+function collectDeclaredPythonPrefixes(
+  scan: EndpointScanText,
+  constructor: "APIRouter" | "Blueprint",
+  argumentName: "prefix" | "url_prefix",
+): ReadonlyMap<string, string> {
   const prefixes = new Map<string, string>();
-  for (const match of scan.text.matchAll(/\b([A-Za-z_][\w]*)\s*=\s*APIRouter\s*\(([^)]*)\)/gu)) {
-    if (!matchStartsInCode(scan, match)) {
-      continue;
-    }
+  const pattern = new RegExp(`\\b([A-Za-z_][\\w]*)\\s*=\\s*${constructor}\\s*\\(([^)]*)\\)`, "gu");
+  for (const match of scan.text.matchAll(pattern)) {
+    if (!matchStartsInCode(scan, match)) continue;
     const variableName = match[1];
-    const prefix = namedStringArg(match[2], "prefix");
-    if (variableName !== undefined && prefix !== undefined) {
-      prefixes.set(variableName, prefix);
-    }
+    const prefix = namedStringArg(match[2], argumentName);
+    if (variableName !== undefined && prefix !== undefined) prefixes.set(variableName, prefix);
   }
-  for (const match of scan.text.matchAll(/\b([A-Za-z_][\w]*)\s*=\s*Blueprint\s*\(([^)]*)\)/gu)) {
-    if (!matchStartsInCode(scan, match)) {
-      continue;
-    }
-    const variableName = match[1];
-    const prefix = namedStringArg(match[2], "url_prefix");
-    if (variableName !== undefined && prefix !== undefined) {
-      prefixes.set(variableName, prefix);
-    }
-  }
+  return prefixes;
+}
+
+function applyIncludedPythonRouterPrefixes(
+  scan: EndpointScanText,
+  prefixes: Map<string, string>,
+): void {
   for (const match of scan.text.matchAll(
     /\b[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*\.include_router\s*\(\s*([A-Za-z_][\w]*)\s*(?:,\s*([^)]*))?\)/gu,
   )) {
-    if (!matchStartsInCode(scan, match)) {
-      continue;
-    }
+    if (!matchStartsInCode(scan, match)) continue;
     const routerName = match[1];
     const prefix = namedStringArg(match[2], "prefix");
     if (routerName !== undefined && prefix !== undefined) {
       prefixes.set(routerName, combineRoutePath(prefix, prefixes.get(routerName) ?? ""));
     }
   }
+}
+
+function collectPythonRoutePrefixes(scan: EndpointScanText): ReadonlyMap<string, string> {
+  const prefixes = new Map([
+    ...collectDeclaredPythonPrefixes(scan, "APIRouter", "prefix"),
+    ...collectDeclaredPythonPrefixes(scan, "Blueprint", "url_prefix"),
+  ]);
+  applyIncludedPythonRouterPrefixes(scan, prefixes);
   return prefixes;
+}
+
+interface OpenApiYamlEndpointState {
+  inPaths: boolean;
+  pathsIndent: number;
+  currentPath: string | undefined;
+  currentPathLine: number;
+}
+
+function openApiYamlEndpointForLine(
+  file: SourceFile,
+  state: OpenApiYamlEndpointState,
+  line: string,
+  lineNumber: number,
+): ApiEndpoint | "done" | undefined {
+  const trimmed = line.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("#")) return undefined;
+  const indent = line.length - line.trimStart().length;
+  if (!state.inPaths) {
+    if (/^paths\s*:\s*$/u.test(trimmed)) {
+      state.inPaths = true;
+      state.pathsIndent = indent;
+    }
+    return undefined;
+  }
+  if (indent <= state.pathsIndent && !trimmed.startsWith("/")) return "done";
+  const path = /^["']?(\/[^:"']*)["']?\s*:\s*$/u.exec(trimmed)?.[1];
+  if (path !== undefined) {
+    state.currentPath = path;
+    state.currentPathLine = lineNumber;
+    return undefined;
+  }
+  const method = /^([A-Za-z]+)\s*:\s*$/u.exec(trimmed)?.[1]?.toLowerCase();
+  if (state.currentPath === undefined || method === undefined || !HTTP_METHODS.has(method)) {
+    return undefined;
+  }
+  return {
+    role: "server",
+    method: method.toUpperCase(),
+    path: normalizeRoutePath(state.currentPath),
+    scopePath: file.scopePath,
+    lineRange: lineRange(state.currentPathLine),
+    language: file.language,
+    parser: "polyglot-regex",
+  };
 }
 
 function graphqlEndpointPath(kind: string, fieldName: string): string {
@@ -3027,46 +3330,16 @@ function collectOpenApiJsonEndpoints(file: SourceFile): readonly ApiEndpoint[] {
 function collectOpenApiYamlEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
   const lines = file.text.split(/\r?\n/u);
-  let inPaths = false;
-  let pathsIndent = -1;
-  let currentPath: string | undefined;
-  let currentPathLine = 1;
+  const state: OpenApiYamlEndpointState = {
+    inPaths: false,
+    pathsIndent: -1,
+    currentPath: undefined,
+    currentPathLine: 1,
+  };
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith("#")) {
-      continue;
-    }
-    const indent = line.length - line.trimStart().length;
-    if (!inPaths) {
-      if (/^paths\s*:\s*$/u.test(trimmed)) {
-        inPaths = true;
-        pathsIndent = indent;
-      }
-      continue;
-    }
-    if (indent <= pathsIndent && !trimmed.startsWith("/")) {
-      break;
-    }
-    const pathMatch = /^["']?(\/[^:"']*)["']?\s*:\s*$/u.exec(trimmed);
-    if (pathMatch?.[1] !== undefined) {
-      currentPath = pathMatch[1];
-      currentPathLine = index + 1;
-      continue;
-    }
-    const methodMatch = /^([A-Za-z]+)\s*:\s*$/u.exec(trimmed);
-    const method = methodMatch?.[1]?.toLowerCase();
-    if (currentPath !== undefined && method !== undefined && HTTP_METHODS.has(method)) {
-      endpoints.push({
-        role: "server",
-        method: method.toUpperCase(),
-        path: normalizeRoutePath(currentPath),
-        scopePath: file.scopePath,
-        lineRange: lineRange(currentPathLine),
-        language: file.language,
-        parser: "polyglot-regex",
-      });
-    }
+    const endpoint = openApiYamlEndpointForLine(file, state, lines[index] ?? "", index + 1);
+    if (endpoint === "done") break;
+    if (endpoint !== undefined) endpoints.push(endpoint);
   }
   return endpoints;
 }
@@ -3075,6 +3348,396 @@ function collectOpenApiEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   return extension(file.scopePath) === "json"
     ? collectOpenApiJsonEndpoints(file)
     : collectOpenApiYamlEndpoints(file);
+}
+
+interface EndpointCollectionState {
+  pendingSpringClassPrefix: string | undefined;
+  springClassPrefix: string | undefined;
+  springClassBraceDepth: number;
+  insideSpringClass: boolean;
+  springAnyClassBraceDepth: number;
+  pendingDotNetClassRoute: string | undefined;
+  pendingDotNetMethodRoute: string | undefined;
+  pendingDotNetMethod: string | undefined;
+  dotNetClassPrefix: string | undefined;
+  dotNetClassName: string | undefined;
+  dotNetClassBraceDepth: number;
+  pendingNestClassPrefix: string | undefined;
+  nestClassPrefix: string | undefined;
+  nestClassBraceDepth: number;
+}
+
+interface EndpointLineContext {
+  readonly file: SourceFile;
+  readonly scan: EndpointScanText;
+  readonly endpoints: ApiEndpoint[];
+  readonly state: EndpointCollectionState;
+  readonly line: string;
+  readonly lineNo: number;
+  readonly lineOffset: number;
+  readonly hasRtkQueryApi: boolean;
+  readonly axiosBasePaths: ReadonlyMap<string, string>;
+  readonly expressRouterMounts: ReadonlyMap<string, string>;
+  readonly pythonRoutePrefixes: ReadonlyMap<string, string>;
+}
+
+function createEndpointCollectionState(): EndpointCollectionState {
+  return {
+    pendingSpringClassPrefix: undefined,
+    springClassPrefix: undefined,
+    springClassBraceDepth: 0,
+    insideSpringClass: false,
+    springAnyClassBraceDepth: 0,
+    pendingDotNetClassRoute: undefined,
+    pendingDotNetMethodRoute: undefined,
+    pendingDotNetMethod: undefined,
+    dotNetClassPrefix: undefined,
+    dotNetClassName: undefined,
+    dotNetClassBraceDepth: 0,
+    pendingNestClassPrefix: undefined,
+    nestClassPrefix: undefined,
+    nestClassBraceDepth: 0,
+  };
+}
+
+function emitEndpoint(
+  context: EndpointLineContext,
+  role: "server" | "client",
+  method: string,
+  path: string,
+): void {
+  context.endpoints.push({
+    role,
+    method: method.toUpperCase(),
+    path: normalizeRoutePath(path),
+    scopePath: context.file.scopePath,
+    lineRange: lineRange(context.lineNo),
+    language: context.file.language,
+    parser: "polyglot-regex",
+  });
+}
+
+function detectEndpointClassDeclarations(context: EndpointLineContext): void {
+  const { line, lineOffset, scan, state } = context;
+  const springClass = firstCodeMatch(
+    line,
+    /\b(?:class|interface|record)\s+[A-Za-z_][\w$]*/u,
+    scan,
+    lineOffset,
+  );
+  if (springClass !== undefined) {
+    state.insideSpringClass = true;
+    state.springAnyClassBraceDepth = 0;
+    if (state.pendingSpringClassPrefix !== undefined) {
+      state.springClassPrefix = state.pendingSpringClassPrefix;
+      state.pendingSpringClassPrefix = undefined;
+      state.springClassBraceDepth = 0;
+    }
+  }
+  const nestClass = firstCodeMatch(line, /\bclass\s+[A-Za-z_][\w$]*/u, scan, lineOffset);
+  if (state.pendingNestClassPrefix !== undefined && nestClass !== undefined) {
+    state.nestClassPrefix = state.pendingNestClassPrefix;
+    state.pendingNestClassPrefix = undefined;
+    state.nestClassBraceDepth = 0;
+  }
+  const className = firstCodeMatch(line, /\bclass\s+([A-Za-z_][\w]*)/u, scan, lineOffset)?.[1];
+  if (state.pendingDotNetClassRoute !== undefined && className !== undefined) {
+    state.dotNetClassPrefix = replaceDotNetRouteTokens(state.pendingDotNetClassRoute, className);
+    state.dotNetClassName = className;
+    state.pendingDotNetClassRoute = undefined;
+    state.dotNetClassBraceDepth = 0;
+  }
+}
+
+function collectDotNetLineEndpoints(context: EndpointLineContext): void {
+  const { line, lineOffset, scan, state } = context;
+  const route = parseDotNetRouteAttribute(line);
+  if (route !== undefined) {
+    const path = replaceDotNetRouteTokens(route.path, state.dotNetClassName);
+    if (route.isRoute) {
+      if (state.dotNetClassName === undefined) state.pendingDotNetClassRoute = path;
+      else state.pendingDotNetMethodRoute = path;
+    } else {
+      state.pendingDotNetMethod = route.method;
+      if (path.length > 0) state.pendingDotNetMethodRoute = path;
+    }
+  } else if (
+    (state.pendingDotNetMethod !== undefined || state.pendingDotNetMethodRoute !== undefined) &&
+    dotNetMethodDeclaration(line)
+  ) {
+    emitEndpoint(
+      context,
+      "server",
+      state.pendingDotNetMethod ?? "ANY",
+      combineRoutePath(state.dotNetClassPrefix, state.pendingDotNetMethodRoute ?? ""),
+    );
+    state.pendingDotNetMethod = undefined;
+    state.pendingDotNetMethodRoute = undefined;
+  }
+  const minimal = firstCodeMatch(
+    line,
+    /\b\w+\.Map(Get|Post|Put|Patch|Delete|Head|Options|Methods)\s*\(\s*(["'`])([^"'`]+)\2([^)]*)/u,
+    scan,
+    lineOffset,
+  );
+  if (minimal?.[1] !== undefined && minimal[3] !== undefined) {
+    emitEndpoint(
+      context,
+      "server",
+      dotNetMinimalApiMethod(minimal[1], minimal[4] ?? ""),
+      minimal[3],
+    );
+  }
+}
+
+function collectSpringLineEndpoints(context: EndpointLineContext): void {
+  const { line, lineOffset, scan, state } = context;
+  const spring = firstCodeMatch(
+    line,
+    /@(?:(Get|Post|Put|Patch|Delete)Mapping|RequestMapping)(?:\s*\(([^)]*)\))?/u,
+    scan,
+    lineOffset,
+  );
+  if (spring === undefined) return;
+  const isRequestMapping = line.includes("@RequestMapping");
+  const method = springMappingMethod(spring[1], spring[2]);
+  const path = springMappingPath(spring[2]);
+  if (isRequestMapping && !state.insideSpringClass && state.springClassPrefix === undefined) {
+    if (path !== undefined) state.pendingSpringClassPrefix = path;
+  } else if (path !== undefined || (!isRequestMapping && state.insideSpringClass)) {
+    emitEndpoint(context, "server", method, combineRoutePath(state.springClassPrefix, path ?? ""));
+  }
+}
+
+function collectNestLineEndpoints(context: EndpointLineContext): void {
+  const { file, line, lineOffset, scan, state } = context;
+  if (file.language !== "typescript" && file.language !== "javascript") return;
+  const controller = firstCodeMatch(
+    line,
+    /@Controller\s*\(\s*(?:(["'`])([^"'`]+)\1)?\s*\)/u,
+    scan,
+    lineOffset,
+  );
+  if (controller !== undefined) state.pendingNestClassPrefix = controller[2] ?? "";
+  const route = firstCodeMatch(
+    line,
+    /@(Get|Post|Put|Patch|Delete|Head|Options|All)\s*\(\s*(?:(["'`])([^"'`]+)\2)?/u,
+    scan,
+    lineOffset,
+  );
+  if (route?.[1] !== undefined) {
+    emitEndpoint(
+      context,
+      "server",
+      nestHttpMethod(route[1]),
+      combineRoutePath(state.nestClassPrefix, route[3] ?? ""),
+    );
+  }
+}
+
+function isExpressServerObject(name: string, mounts: ReadonlyMap<string, string>): boolean {
+  return ["app", "router", "server"].includes(name) || mounts.has(name);
+}
+
+function collectExpressLineEndpoints(context: EndpointLineContext): void {
+  const { line, lineOffset, scan, expressRouterMounts } = context;
+  const direct = firstCodeMatch(
+    line,
+    /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
+    scan,
+    lineOffset,
+  );
+  if (direct?.[1] !== undefined && direct[2] !== undefined && direct[3] !== undefined) {
+    const path = combineRoutePath(expressRouterMounts.get(direct[1]), direct[3]);
+    if (isExpressServerObject(direct[1], expressRouterMounts)) {
+      emitEndpoint(context, "server", direct[2], path);
+    }
+  }
+  const chained = firstCodeMatch(
+    line,
+    /\b([A-Za-z_$][\w$]*)\.route\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*\.\s*(get|post|put|patch|delete|head|options)\b/iu,
+    scan,
+    lineOffset,
+  );
+  if (chained?.[1] !== undefined && chained[3] !== undefined && chained[4] !== undefined) {
+    const path = combineRoutePath(expressRouterMounts.get(chained[1]), chained[3]);
+    if (isExpressServerObject(chained[1], expressRouterMounts)) {
+      emitEndpoint(context, "server", chained[4], path);
+    }
+  }
+}
+
+function collectPythonLineEndpoints(context: EndpointLineContext): void {
+  const { file, line, lineOffset, scan, pythonRoutePrefixes } = context;
+  const route = firstCodeMatch(
+    line,
+    /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.route\s*\(\s*["']([^"']+)["'](?:[^)]*methods\s*=\s*\[["']([A-Z]+)["'])?/iu,
+    scan,
+    lineOffset,
+  );
+  if (route?.[1] !== undefined && route[2] !== undefined) {
+    emitEndpoint(
+      context,
+      "server",
+      route[3] ?? "ANY",
+      combineRoutePath(pythonRoutePrefixes.get(route[1]), route[2]),
+    );
+  }
+  const methodRoute = firstCodeMatch(
+    line,
+    /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
+    scan,
+    lineOffset,
+  );
+  if (
+    methodRoute?.[1] !== undefined &&
+    methodRoute[2] !== undefined &&
+    methodRoute[3] !== undefined
+  ) {
+    emitEndpoint(
+      context,
+      "server",
+      methodRoute[2],
+      combineRoutePath(pythonRoutePrefixes.get(methodRoute[1]), methodRoute[3]),
+    );
+  }
+  if (file.language !== "python") return;
+  const django = firstCodeMatch(
+    line,
+    /\b(?:path|re_path|url)\s*\(\s*r?(["'])([^"']+)\1/iu,
+    scan,
+    lineOffset,
+  );
+  if (django?.[2] !== undefined) emitEndpoint(context, "server", "ANY", django[2]);
+}
+
+function collectGoLineEndpoints(context: EndpointLineContext): void {
+  const { file, line, lineOffset, scan } = context;
+  if (file.language !== "go") return;
+  const standard = firstCodeMatch(
+    line,
+    /\bhttp\.HandleFunc\s*\(\s*["']([^"']+)["']/u,
+    scan,
+    lineOffset,
+  );
+  if (standard?.[1] !== undefined) emitEndpoint(context, "server", "ANY", standard[1]);
+  const methodRoute = firstCodeMatch(
+    line,
+    /\b[A-Za-z_][\w]*\.(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(["'`])([^"'`]+)\2/iu,
+    scan,
+    lineOffset,
+  );
+  if (methodRoute?.[1] !== undefined && methodRoute[3] !== undefined) {
+    emitEndpoint(context, "server", goRouterMethodName(methodRoute[1]), methodRoute[3]);
+  }
+  const handleFunc = firstCodeMatch(
+    line,
+    /\b[A-Za-z_][\w]*\.HandleFunc\s*\(\s*(["'`])([^"'`]+)\1[^)]*\)(?:\.Methods\s*\(([^)]*)\))?/u,
+    scan,
+    lineOffset,
+  );
+  if (handleFunc?.[2] !== undefined) {
+    emitEndpoint(context, "server", goHttpMethodFromMethodsArgs(handleFunc[3]), handleFunc[2]);
+  }
+}
+
+function collectRtkLineEndpoints(context: EndpointLineContext): void {
+  if (!context.hasRtkQueryApi) return;
+  const { line, lineOffset, scan } = context;
+  const direct = firstCodeMatch(
+    line,
+    /\bquery\s*:\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(["'`])([^"'`]+)\1/u,
+    scan,
+    lineOffset,
+  );
+  if (direct?.[2] !== undefined) emitEndpoint(context, "client", "ANY", direct[2]);
+  const url = firstCodeMatch(line, /\burl\s*:\s*(["'`])([^"'`]+)\1/u, scan, lineOffset);
+  if (url?.[2] === undefined) return;
+  const method =
+    firstCodeMatch(line, /\bmethod\s*:\s*(["'])([A-Z]+)\1/iu, scan, lineOffset)?.[2] ?? "ANY";
+  emitEndpoint(context, "client", method, url[2]);
+}
+
+function collectAxiosLineEndpoints(context: EndpointLineContext): void {
+  const { line, lineOffset, scan, axiosBasePaths } = context;
+  const call = firstCodeMatch(
+    line,
+    /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete)\s*\(\s*(["'`])([^"'`]+)\3/iu,
+    scan,
+    lineOffset,
+  );
+  if (call?.[1] === undefined || call[2] === undefined || call[4] === undefined) return;
+  const objectName = call[1];
+  if (!["axios", "client", "api"].includes(objectName) && !axiosBasePaths.has(objectName)) return;
+  emitEndpoint(
+    context,
+    "client",
+    call[2],
+    combineRoutePath(axiosBasePaths.get(objectName), call[4]),
+  );
+}
+
+function updateSpringEndpointScopes(context: EndpointLineContext): void {
+  const { line, state } = context;
+  if (state.springClassPrefix !== undefined) {
+    state.springClassBraceDepth += braceDelta(line);
+    if (state.springClassBraceDepth <= 0 && line.includes("}")) {
+      state.springClassPrefix = undefined;
+      state.springClassBraceDepth = 0;
+    }
+  }
+  if (state.insideSpringClass) {
+    state.springAnyClassBraceDepth += braceDelta(line);
+    if (state.springAnyClassBraceDepth <= 0 && line.includes("}")) {
+      state.insideSpringClass = false;
+      state.springAnyClassBraceDepth = 0;
+      state.pendingSpringClassPrefix = undefined;
+    }
+  }
+}
+
+function updateDotNetEndpointScope(context: EndpointLineContext): void {
+  const { line, state } = context;
+  if (state.dotNetClassPrefix !== undefined) {
+    state.dotNetClassBraceDepth += braceDelta(line);
+    if (state.dotNetClassBraceDepth <= 0 && line.includes("}")) {
+      state.dotNetClassPrefix = undefined;
+      state.dotNetClassName = undefined;
+      state.pendingDotNetMethod = undefined;
+      state.pendingDotNetMethodRoute = undefined;
+      state.dotNetClassBraceDepth = 0;
+    }
+  }
+}
+
+function updateNestEndpointScope(context: EndpointLineContext): void {
+  const { line, state } = context;
+  if (state.nestClassPrefix !== undefined) {
+    state.nestClassBraceDepth += braceDelta(line);
+    if (state.nestClassBraceDepth <= 0 && line.includes("}")) {
+      state.nestClassPrefix = undefined;
+      state.nestClassBraceDepth = 0;
+    }
+  }
+}
+
+function updateEndpointClassScopes(context: EndpointLineContext): void {
+  updateSpringEndpointScopes(context);
+  updateDotNetEndpointScope(context);
+  updateNestEndpointScope(context);
+}
+
+function collectEndpointLine(context: EndpointLineContext): void {
+  detectEndpointClassDeclarations(context);
+  collectDotNetLineEndpoints(context);
+  collectSpringLineEndpoints(context);
+  collectNestLineEndpoints(context);
+  collectExpressLineEndpoints(context);
+  collectPythonLineEndpoints(context);
+  collectGoLineEndpoints(context);
+  collectRtkLineEndpoints(context);
+  collectAxiosLineEndpoints(context);
+  updateEndpointClassScopes(context);
 }
 
 function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
@@ -3092,314 +3755,26 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
   endpoints.push(...collectGraphqlClientEndpoints(file, scan));
   endpoints.push(...collectProtobufClientEndpoints(file, scan));
   endpoints.push(...collectFetchClientEndpoints(file, scan));
-  const lines = scan.lines;
-  let pendingSpringClassPrefix: string | undefined;
-  let springClassPrefix: string | undefined;
-  let springClassBraceDepth = 0;
-  let insideSpringClass = false;
-  let springAnyClassBraceDepth = 0;
-  let pendingDotNetClassRoute: string | undefined;
-  let pendingDotNetMethodRoute: string | undefined;
-  let pendingDotNetMethod: string | undefined;
-  let dotNetClassPrefix: string | undefined;
-  let dotNetClassNameValue: string | undefined;
-  let dotNetClassBraceDepth = 0;
-  let pendingNestClassPrefix: string | undefined;
-  let nestClassPrefix: string | undefined;
-  let nestClassBraceDepth = 0;
+  const state = createEndpointCollectionState();
   const hasRtkQueryApi =
     /\bcreateApi\s*\(/u.test(scan.text) || /\bbuilder\.(?:query|mutation)\b/u.test(scan.text);
   const axiosBasePaths = collectAxiosBasePaths(scan);
   const expressRouterMounts = collectExpressRouterMounts(scan);
   const pythonRoutePrefixes = collectPythonRoutePrefixes(scan);
-  lines.forEach((line, index) => {
-    const lineNo = index + 1;
-    const lineOffset = scan.lineOffsets[index] ?? 0;
-    const springClassDeclaration = firstCodeMatch(
-      line,
-      /\b(?:class|interface|record)\s+[A-Za-z_][\w$]*/u,
+  scan.lines.forEach((line, index) => {
+    collectEndpointLine({
+      file,
       scan,
-      lineOffset,
-    );
-    if (springClassDeclaration !== undefined) {
-      insideSpringClass = true;
-      springAnyClassBraceDepth = 0;
-      if (pendingSpringClassPrefix !== undefined) {
-        springClassPrefix = pendingSpringClassPrefix;
-        pendingSpringClassPrefix = undefined;
-        springClassBraceDepth = 0;
-      }
-    }
-    if (
-      pendingNestClassPrefix !== undefined &&
-      firstCodeMatch(line, /\bclass\s+[A-Za-z_][\w$]*/u, scan, lineOffset) !== undefined
-    ) {
-      nestClassPrefix = pendingNestClassPrefix;
-      pendingNestClassPrefix = undefined;
-      nestClassBraceDepth = 0;
-    }
-    const className = firstCodeMatch(line, /\bclass\s+([A-Za-z_][\w]*)/u, scan, lineOffset)?.[1];
-    if (pendingDotNetClassRoute !== undefined && className !== undefined) {
-      dotNetClassPrefix = replaceDotNetRouteTokens(pendingDotNetClassRoute, className);
-      dotNetClassNameValue = className;
-      pendingDotNetClassRoute = undefined;
-      dotNetClassBraceDepth = 0;
-    }
-    const emit = (role: "server" | "client", method: string, path: string): void => {
-      endpoints.push({
-        role,
-        method: method.toUpperCase(),
-        path: normalizeRoutePath(path),
-        scopePath: file.scopePath,
-        lineRange: lineRange(lineNo),
-        language: file.language,
-        parser: "polyglot-regex",
-      });
-    };
-    const dotNetRoute = parseDotNetRouteAttribute(line);
-    if (dotNetRoute !== undefined) {
-      const routePath = replaceDotNetRouteTokens(dotNetRoute.path, dotNetClassNameValue);
-      if (dotNetRoute.isRoute) {
-        if (dotNetClassNameValue === undefined) {
-          pendingDotNetClassRoute = routePath;
-        } else {
-          pendingDotNetMethodRoute = routePath;
-        }
-      } else {
-        pendingDotNetMethod = dotNetRoute.method;
-        if (routePath.length > 0) {
-          pendingDotNetMethodRoute = routePath;
-        }
-      }
-    } else if (
-      (pendingDotNetMethod !== undefined || pendingDotNetMethodRoute !== undefined) &&
-      dotNetMethodDeclaration(line)
-    ) {
-      emit(
-        "server",
-        pendingDotNetMethod ?? "ANY",
-        combineRoutePath(dotNetClassPrefix, pendingDotNetMethodRoute ?? ""),
-      );
-      pendingDotNetMethod = undefined;
-      pendingDotNetMethodRoute = undefined;
-    }
-    const dotNetMinimalApi = firstCodeMatch(
+      endpoints,
+      state,
       line,
-      /\b\w+\.Map(Get|Post|Put|Patch|Delete|Head|Options|Methods)\s*\(\s*(["'`])([^"'`]+)\2([^)]*)/u,
-      scan,
-      lineOffset,
-    );
-    if (dotNetMinimalApi?.[1] !== undefined && dotNetMinimalApi[3] !== undefined) {
-      emit(
-        "server",
-        dotNetMinimalApiMethod(dotNetMinimalApi[1], dotNetMinimalApi[4] ?? ""),
-        dotNetMinimalApi[3],
-      );
-    }
-    const spring = firstCodeMatch(
-      line,
-      /@(?:(Get|Post|Put|Patch|Delete)Mapping|RequestMapping)(?:\s*\(([^)]*)\))?/u,
-      scan,
-      lineOffset,
-    );
-    if (spring !== undefined) {
-      const isRequestMapping = line.includes("@RequestMapping");
-      const method = springMappingMethod(spring[1], spring[2]);
-      const path = springMappingPath(spring[2]);
-      if (isRequestMapping && !insideSpringClass && springClassPrefix === undefined) {
-        if (path !== undefined) {
-          pendingSpringClassPrefix = path;
-        }
-      } else if (path !== undefined || (!isRequestMapping && insideSpringClass)) {
-        emit("server", method, combineRoutePath(springClassPrefix, path ?? ""));
-      }
-    }
-    const nestController = firstCodeMatch(
-      line,
-      /@Controller\s*\(\s*(?:(["'`])([^"'`]+)\1)?\s*\)/u,
-      scan,
-      lineOffset,
-    );
-    if (
-      (file.language === "typescript" || file.language === "javascript") &&
-      nestController !== undefined
-    ) {
-      pendingNestClassPrefix = nestController[2] ?? "";
-    }
-    const nestRoute = firstCodeMatch(
-      line,
-      /@(Get|Post|Put|Patch|Delete|Head|Options|All)\s*\(\s*(?:(["'`])([^"'`]+)\2)?/u,
-      scan,
-      lineOffset,
-    );
-    if (
-      (file.language === "typescript" || file.language === "javascript") &&
-      nestRoute?.[1] !== undefined
-    ) {
-      emit(
-        "server",
-        nestHttpMethod(nestRoute[1]),
-        combineRoutePath(nestClassPrefix, nestRoute[3] ?? ""),
-      );
-    }
-    const express = firstCodeMatch(
-      line,
-      /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
-      scan,
-      lineOffset,
-    );
-    if (express?.[1] !== undefined && express[2] !== undefined && express[3] !== undefined) {
-      const objectName = express[1];
-      const path = combineRoutePath(expressRouterMounts.get(objectName), express[3]);
-      if (["app", "router", "server"].includes(objectName) || expressRouterMounts.has(objectName)) {
-        emit("server", express[2], path);
-      }
-    }
-    const expressRouteChain = firstCodeMatch(
-      line,
-      /\b([A-Za-z_$][\w$]*)\.route\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*\.\s*(get|post|put|patch|delete|head|options)\b/iu,
-      scan,
-      lineOffset,
-    );
-    if (
-      expressRouteChain?.[1] !== undefined &&
-      expressRouteChain[3] !== undefined &&
-      expressRouteChain[4] !== undefined
-    ) {
-      const objectName = expressRouteChain[1];
-      const path = combineRoutePath(expressRouterMounts.get(objectName), expressRouteChain[3]);
-      if (["app", "router", "server"].includes(objectName) || expressRouterMounts.has(objectName)) {
-        emit("server", expressRouteChain[4], path);
-      }
-    }
-    const pyRoute = firstCodeMatch(
-      line,
-      /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.route\s*\(\s*["']([^"']+)["'](?:[^)]*methods\s*=\s*\[["']([A-Z]+)["'])?/iu,
-      scan,
-      lineOffset,
-    );
-    if (pyRoute?.[1] !== undefined && pyRoute[2] !== undefined) {
-      emit(
-        "server",
-        pyRoute[3] ?? "ANY",
-        combineRoutePath(pythonRoutePrefixes.get(pyRoute[1]), pyRoute[2]),
-      );
-    }
-    const pyMethodRoute = firstCodeMatch(
-      line,
-      /@([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\.(get|post|put|patch|delete|head|options)\s*\(\s*["']([^"']+)["']/iu,
-      scan,
-      lineOffset,
-    );
-    if (
-      pyMethodRoute?.[1] !== undefined &&
-      pyMethodRoute[2] !== undefined &&
-      pyMethodRoute[3] !== undefined
-    )
-      emit(
-        "server",
-        pyMethodRoute[2],
-        combineRoutePath(pythonRoutePrefixes.get(pyMethodRoute[1]), pyMethodRoute[3]),
-      );
-    if (file.language === "python") {
-      const djangoRoute = firstCodeMatch(
-        line,
-        /\b(?:path|re_path|url)\s*\(\s*r?(["'])([^"']+)\1/iu,
-        scan,
-        lineOffset,
-      );
-      if (djangoRoute?.[2] !== undefined) emit("server", "ANY", djangoRoute[2]);
-    }
-    if (file.language === "go") {
-      const goRoute = firstCodeMatch(
-        line,
-        /\bhttp\.HandleFunc\s*\(\s*["']([^"']+)["']/u,
-        scan,
-        lineOffset,
-      );
-      if (goRoute?.[1] !== undefined) emit("server", "ANY", goRoute[1]);
-      const goMethodRoute = firstCodeMatch(
-        line,
-        /\b[A-Za-z_][\w]*\.(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(["'`])([^"'`]+)\2/iu,
-        scan,
-        lineOffset,
-      );
-      if (goMethodRoute?.[1] !== undefined && goMethodRoute[3] !== undefined) {
-        emit("server", goRouterMethodName(goMethodRoute[1]), goMethodRoute[3]);
-      }
-      const goHandleFuncRoute = firstCodeMatch(
-        line,
-        /\b[A-Za-z_][\w]*\.HandleFunc\s*\(\s*(["'`])([^"'`]+)\1[^)]*\)(?:\.Methods\s*\(([^)]*)\))?/u,
-        scan,
-        lineOffset,
-      );
-      if (goHandleFuncRoute?.[2] !== undefined) {
-        emit("server", goHttpMethodFromMethodsArgs(goHandleFuncRoute[3]), goHandleFuncRoute[2]);
-      }
-    }
-    if (hasRtkQueryApi) {
-      const rtkDirectQuery = firstCodeMatch(
-        line,
-        /\bquery\s*:\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(["'`])([^"'`]+)\1/u,
-        scan,
-        lineOffset,
-      );
-      if (rtkDirectQuery?.[2] !== undefined) emit("client", "ANY", rtkDirectQuery[2]);
-      const rtkUrl = firstCodeMatch(line, /\burl\s*:\s*(["'`])([^"'`]+)\1/u, scan, lineOffset);
-      if (rtkUrl?.[2] !== undefined) {
-        const rtkMethod =
-          firstCodeMatch(line, /\bmethod\s*:\s*(["'])([A-Z]+)\1/iu, scan, lineOffset)?.[2] ?? "ANY";
-        emit("client", rtkMethod, rtkUrl[2]);
-      }
-    }
-    const axiosCall = firstCodeMatch(
-      line,
-      /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete)\s*\(\s*(["'`])([^"'`]+)\3/iu,
-      scan,
-      lineOffset,
-    );
-    if (axiosCall?.[1] !== undefined && axiosCall[2] !== undefined && axiosCall[4] !== undefined) {
-      const objectName = axiosCall[1];
-      if (["axios", "client", "api"].includes(objectName) || axiosBasePaths.has(objectName)) {
-        emit(
-          "client",
-          axiosCall[2],
-          combineRoutePath(axiosBasePaths.get(objectName), axiosCall[4]),
-        );
-      }
-    }
-    if (springClassPrefix !== undefined) {
-      springClassBraceDepth += braceDelta(line);
-      if (springClassBraceDepth <= 0 && line.includes("}")) {
-        springClassPrefix = undefined;
-        springClassBraceDepth = 0;
-      }
-    }
-    if (insideSpringClass) {
-      springAnyClassBraceDepth += braceDelta(line);
-      if (springAnyClassBraceDepth <= 0 && line.includes("}")) {
-        insideSpringClass = false;
-        springAnyClassBraceDepth = 0;
-        pendingSpringClassPrefix = undefined;
-      }
-    }
-    if (dotNetClassPrefix !== undefined) {
-      dotNetClassBraceDepth += braceDelta(line);
-      if (dotNetClassBraceDepth <= 0 && line.includes("}")) {
-        dotNetClassPrefix = undefined;
-        dotNetClassNameValue = undefined;
-        pendingDotNetMethod = undefined;
-        pendingDotNetMethodRoute = undefined;
-        dotNetClassBraceDepth = 0;
-      }
-    }
-    if (nestClassPrefix !== undefined) {
-      nestClassBraceDepth += braceDelta(line);
-      if (nestClassBraceDepth <= 0 && line.includes("}")) {
-        nestClassPrefix = undefined;
-        nestClassBraceDepth = 0;
-      }
-    }
+      lineNo: index + 1,
+      lineOffset: scan.lineOffsets[index] ?? 0,
+      hasRtkQueryApi,
+      axiosBasePaths,
+      expressRouterMounts,
+      pythonRoutePrefixes,
+    });
   });
   return endpoints;
 }
@@ -4433,6 +4808,226 @@ function seedMatchesPackageDependency(seed: GraphSeed, edge: PackageDependencyEd
   );
 }
 
+interface GraphExpansionContext {
+  readonly scope: SearchScope;
+  readonly query: RetrievalQuery;
+  readonly nowMs: number;
+  readonly index: CodeIntelligenceIndex;
+  readonly expanded: EvidenceAtom[];
+  readonly seenAtoms: Set<string>;
+  readonly queue: GraphSeed[];
+  readonly seenSeeds: Set<string>;
+}
+
+function graphSeedQueue(directAtoms: readonly EvidenceAtom[], seenSeeds: Set<string>): GraphSeed[] {
+  const queue: GraphSeed[] = [];
+  const seedAtoms = [...directAtoms]
+    .sort(compareEvidenceAtoms)
+    .slice(0, GRAPH_NEIGHBOR_SEED_ATOM_LIMIT);
+  for (const atom of seedAtoms) {
+    if (atom.edge === undefined) {
+      pushGraphSeed(queue, seenSeeds, atom.scopePath, undefined, 1, atom.score);
+    } else if (atom.edge.kind === "import" || atom.edge.kind === "export") {
+      if (atom.edge.target.scopePath !== atom.edge.source.scopePath) {
+        pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.target, 1, atom.score);
+      }
+    } else {
+      pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.source, 1, atom.score);
+      pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.target, 1, atom.score);
+    }
+  }
+  return queue;
+}
+
+function pushGraphNeighbor(
+  context: GraphExpansionContext,
+  atom: EvidenceAtom,
+  nextDepth: number,
+): void {
+  if (
+    context.expanded.length >= GRAPH_NEIGHBOR_ATOM_LIMIT ||
+    context.seenAtoms.has(atom.stableId)
+  ) {
+    return;
+  }
+  context.seenAtoms.add(atom.stableId);
+  context.expanded.push(atom);
+  if (atom.edge !== undefined) {
+    pushEndpointGraphSeeds(
+      context.queue,
+      context.seenSeeds,
+      atom.edge.source,
+      nextDepth,
+      atom.score,
+    );
+    pushEndpointGraphSeeds(
+      context.queue,
+      context.seenSeeds,
+      atom.edge.target,
+      nextDepth,
+      atom.score,
+    );
+  }
+}
+
+function expandImportNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.imports) {
+    if (item.targetPath === undefined || !seedMatchesImport(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      importEdgeAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, importEdgeScore(context.query, item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandSymbolNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.symbols) {
+    if (!seedMatchesSymbol(seed, item.scopePath, item.name)) continue;
+    pushGraphNeighbor(
+      context,
+      symbolAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, symbolScore()),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandCallNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.calls) {
+    if (!seedMatchesCall(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      callAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, callScore(item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandReferenceNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.references) {
+    if (!seedMatchesReference(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      referenceAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, referenceScore(item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandApiContractNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.apiContracts) {
+    if (!seedMatchesApiContract(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      apiContractAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, apiContractScore(item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandDtoContractNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.dtoContracts) {
+    if (!seedMatchesDtoContract(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      dtoContractAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, dtoContractScore(item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandPackageDependencyNeighbors(
+  context: GraphExpansionContext,
+  seed: GraphSeed,
+  nextDepth: number,
+): void {
+  for (const item of context.index.packageDependencies) {
+    if (!seedMatchesPackageDependency(seed, item)) continue;
+    pushGraphNeighbor(
+      context,
+      packageDependencyAtom(
+        context.scope,
+        context.query,
+        context.nowMs,
+        item,
+        graphNeighborScore(seed, packageDependencyScore(item)),
+      ),
+      nextDepth,
+    );
+  }
+}
+
+function expandGraphSeed(context: GraphExpansionContext, seed: GraphSeed): void {
+  const nextDepth = seed.depth + 1;
+  expandImportNeighbors(context, seed, nextDepth);
+  expandSymbolNeighbors(context, seed, nextDepth);
+  expandCallNeighbors(context, seed, nextDepth);
+  expandReferenceNeighbors(context, seed, nextDepth);
+  expandApiContractNeighbors(context, seed, nextDepth);
+  expandDtoContractNeighbors(context, seed, nextDepth);
+  expandPackageDependencyNeighbors(context, seed, nextDepth);
+}
+
 function expandGraphNeighborhood(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -4442,126 +5037,31 @@ function expandGraphNeighborhood(
 ): readonly EvidenceAtom[] {
   const expanded: EvidenceAtom[] = [];
   const seenAtoms = new Set(directAtoms.map((atom) => atom.stableId));
-  const queue: GraphSeed[] = [];
   const seenSeeds = new Set<string>();
-  const seedAtoms = [...directAtoms]
-    .sort(compareEvidenceAtoms)
-    .slice(0, GRAPH_NEIGHBOR_SEED_ATOM_LIMIT);
-  for (const atom of seedAtoms) {
-    if (atom.edge === undefined) {
-      pushGraphSeed(queue, seenSeeds, atom.scopePath, undefined, 1, atom.score);
-      continue;
-    }
-    if (atom.edge.kind === "import" || atom.edge.kind === "export") {
-      if (atom.edge.target.scopePath !== atom.edge.source.scopePath) {
-        pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.target, 1, atom.score);
-      }
-      continue;
-    }
-    pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.source, 1, atom.score);
-    pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.target, 1, atom.score);
-  }
-  const pushNeighbor = (atom: EvidenceAtom, nextDepth: number): void => {
-    if (expanded.length >= GRAPH_NEIGHBOR_ATOM_LIMIT || seenAtoms.has(atom.stableId)) {
-      return;
-    }
-    seenAtoms.add(atom.stableId);
-    expanded.push(atom);
-    if (atom.edge !== undefined) {
-      pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.source, nextDepth, atom.score);
-      pushEndpointGraphSeeds(queue, seenSeeds, atom.edge.target, nextDepth, atom.score);
-    }
-  };
+  const queue = graphSeedQueue(directAtoms, seenSeeds);
+  const context = { scope, query, nowMs, index, expanded, seenAtoms, queue, seenSeeds };
   let cursor = 0;
   while (cursor < queue.length && expanded.length < GRAPH_NEIGHBOR_ATOM_LIMIT) {
     const seed = queue[cursor];
     cursor += 1;
-    if (seed === undefined || seed.depth > GRAPH_NEIGHBOR_DEPTH_LIMIT) {
-      continue;
-    }
-    const nextDepth = seed.depth + 1;
-    for (const item of index.imports) {
-      if (item.targetPath !== undefined && seedMatchesImport(seed, item)) {
-        pushNeighbor(
-          importEdgeAtom(
-            scope,
-            query,
-            nowMs,
-            item,
-            graphNeighborScore(seed, importEdgeScore(query, item)),
-          ),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.symbols) {
-      if (seedMatchesSymbol(seed, item.scopePath, item.name)) {
-        pushNeighbor(
-          symbolAtom(scope, query, nowMs, item, graphNeighborScore(seed, symbolScore())),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.calls) {
-      if (seedMatchesCall(seed, item)) {
-        pushNeighbor(
-          callAtom(scope, query, nowMs, item, graphNeighborScore(seed, callScore(item))),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.references) {
-      if (seedMatchesReference(seed, item)) {
-        pushNeighbor(
-          referenceAtom(scope, query, nowMs, item, graphNeighborScore(seed, referenceScore(item))),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.apiContracts) {
-      if (seedMatchesApiContract(seed, item)) {
-        pushNeighbor(
-          apiContractAtom(
-            scope,
-            query,
-            nowMs,
-            item,
-            graphNeighborScore(seed, apiContractScore(item)),
-          ),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.dtoContracts) {
-      if (seedMatchesDtoContract(seed, item)) {
-        pushNeighbor(
-          dtoContractAtom(
-            scope,
-            query,
-            nowMs,
-            item,
-            graphNeighborScore(seed, dtoContractScore(item)),
-          ),
-          nextDepth,
-        );
-      }
-    }
-    for (const item of index.packageDependencies) {
-      if (seedMatchesPackageDependency(seed, item)) {
-        pushNeighbor(
-          packageDependencyAtom(
-            scope,
-            query,
-            nowMs,
-            item,
-            graphNeighborScore(seed, packageDependencyScore(item)),
-          ),
-          nextDepth,
-        );
-      }
-    }
+    if (seed === undefined || seed.depth > GRAPH_NEIGHBOR_DEPTH_LIMIT) continue;
+    expandGraphSeed(context, seed);
   }
   return expanded;
+}
+
+function matchingAtoms<T>(
+  items: readonly T[],
+  terms: readonly string[],
+  query: RetrievalQuery,
+  textFor: (item: T) => string,
+  atomFor: (item: T) => EvidenceAtom,
+): readonly EvidenceAtom[] {
+  const atoms: EvidenceAtom[] = [];
+  for (const item of items) {
+    if (includesAny(textFor(item), terms, query)) atoms.push(atomFor(item));
+  }
+  return atoms;
 }
 
 export function queryCodeIntelligenceIndex(
@@ -4571,36 +5071,61 @@ export function queryCodeIntelligenceIndex(
   nowMs: number,
 ): readonly EvidenceAtom[] {
   const terms = queryTerms(query);
-  const atoms: EvidenceAtom[] = [];
-  for (const item of index.imports) {
-    const text = `${item.specifier} ${item.importerPath} ${item.targetPath ?? ""}`;
-    if (includesAny(text, terms, query)) atoms.push(importEdgeAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.symbols) {
-    const text = `${item.name} ${item.scopePath} ${item.fields.join(" ")}`;
-    if (includesAny(text, terms, query)) atoms.push(symbolAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.calls) {
-    const text = `${item.calleeName} ${item.targetName} ${item.callerPath} ${item.targetPath}`;
-    if (includesAny(text, terms, query)) atoms.push(callAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.references) {
-    const text = `${item.referenceName} ${item.targetName} ${item.referencerPath} ${item.targetPath}`;
-    if (includesAny(text, terms, query)) atoms.push(referenceAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.apiContracts) {
-    const text = `${item.client.method} ${item.client.path} ${item.client.scopePath} ${item.server.scopePath}`;
-    if (includesAny(text, terms, query)) atoms.push(apiContractAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.dtoContracts) {
-    const text = `${item.source.name} ${item.target.name} ${item.sharedFields.join(" ")} ${item.source.scopePath} ${item.target.scopePath}`;
-    if (includesAny(text, terms, query)) atoms.push(dtoContractAtom(scope, query, nowMs, item));
-  }
-  for (const item of index.packageDependencies) {
-    const text = `${item.sourcePackage} ${item.targetPackage} ${item.dependencyKind} ${item.sourcePath} ${item.targetPath}`;
-    if (includesAny(text, terms, query))
-      atoms.push(packageDependencyAtom(scope, query, nowMs, item));
-  }
+  const atoms: EvidenceAtom[] = [
+    ...matchingAtoms(
+      index.imports,
+      terms,
+      query,
+      (item) => `${item.specifier} ${item.importerPath} ${item.targetPath ?? ""}`,
+      (item) => importEdgeAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.symbols,
+      terms,
+      query,
+      (item) => `${item.name} ${item.scopePath} ${item.fields.join(" ")}`,
+      (item) => symbolAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.calls,
+      terms,
+      query,
+      (item) => `${item.calleeName} ${item.targetName} ${item.callerPath} ${item.targetPath}`,
+      (item) => callAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.references,
+      terms,
+      query,
+      (item) =>
+        `${item.referenceName} ${item.targetName} ${item.referencerPath} ${item.targetPath}`,
+      (item) => referenceAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.apiContracts,
+      terms,
+      query,
+      (item) =>
+        `${item.client.method} ${item.client.path} ${item.client.scopePath} ${item.server.scopePath}`,
+      (item) => apiContractAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.dtoContracts,
+      terms,
+      query,
+      (item) =>
+        `${item.source.name} ${item.target.name} ${item.sharedFields.join(" ")} ${item.source.scopePath} ${item.target.scopePath}`,
+      (item) => dtoContractAtom(scope, query, nowMs, item),
+    ),
+    ...matchingAtoms(
+      index.packageDependencies,
+      terms,
+      query,
+      (item) =>
+        `${item.sourcePackage} ${item.targetPackage} ${item.dependencyKind} ${item.sourcePath} ${item.targetPath}`,
+      (item) => packageDependencyAtom(scope, query, nowMs, item),
+    ),
+  ];
   atoms.push(...expandGraphNeighborhood(scope, query, nowMs, index, atoms));
   const deduped = new Map<string, EvidenceAtom>();
   for (const atom of atoms.sort(compareEvidenceAtoms)) {

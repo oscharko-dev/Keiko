@@ -2089,7 +2089,74 @@ export function FigmaSnapshotWindow({
     );
   };
 
-  if (isViewSourceMode) {
+  const renderViewSourceScreens = (): ReactNode => {
+    if (summary === null) {
+      return (
+        <div className="figma-view-source-empty">
+          <p className="figma-view-source-empty-title">
+            {isLoading
+              ? t("figmaSnapshotWindow.viewSourceMode.loadingSelectedView")
+              : t("figmaSnapshotWindow.viewSourceMode.notLoaded")}
+          </p>
+          {!isLoading && (
+            <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
+              {t("figmaSnapshotWindow.viewSourceMode.loadViewButton")}
+            </button>
+          )}
+        </div>
+      );
+    }
+    if (displayedScreens.length === 0) {
+      return (
+        <div className="lk-empty">
+          <p className="lk-empty-body">
+            {t("figmaSnapshotWindow.viewSourceMode.screenNotPresent")}
+          </p>
+        </div>
+      );
+    }
+    return displayedScreens.map((entry) => {
+      const imageSrc =
+        entry.kind === "rendered"
+          ? figmaSnapshotScreenImageUrl(summary.runId, entry.imageIndex)
+          : undefined;
+      const imageDragPayload: FigmaImageDragPayload | undefined =
+        imageSrc === undefined
+          ? undefined
+          : {
+              snapshotRunId: summary.runId,
+              screenId: entry.screen.screenId,
+              name: entry.screen.name,
+              imageSrc,
+              ...(sourceWindowId === undefined ? {} : { sourceWindowId }),
+            };
+      return (
+        <FigmaViewSourceCard
+          key={entry.screen.screenId}
+          name={entry.screen.name}
+          screenId={entry.screen.screenId}
+          irSummary={entry.screen.irSummary}
+          imageSrc={imageSrc}
+          imageByteLength={entry.kind === "rendered" ? entry.screen.imageByteLength : undefined}
+          structuralReason={entry.kind === "structural" ? entry.screen.reason : undefined}
+          snapshotRunId={summary.runId}
+          capturedAt={formatDate(summary.fetchedAt)}
+          imageDragPayload={imageDragPayload}
+        />
+      );
+    });
+  };
+
+  const renderScreenJsonError = (): ReactNode => {
+    if (screenJsonState !== "error" || screenJsonError === null) return null;
+    return (
+      <p className="figma-snapshot-error" role="alert">
+        {screenJsonError}
+      </p>
+    );
+  };
+
+  const renderViewSourceMode = (): ReactNode => {
     const sourceName = selectedScreenName ?? selectedScreenIds.join(", ");
     const canInspectJson =
       inspectableScreenId !== undefined &&
@@ -2150,65 +2217,9 @@ export function FigmaSnapshotWindow({
           )}
         </div>
 
-        {summary === null ? (
-          <div className="figma-view-source-empty">
-            <p className="figma-view-source-empty-title">
-              {isLoading
-                ? t("figmaSnapshotWindow.viewSourceMode.loadingSelectedView")
-                : t("figmaSnapshotWindow.viewSourceMode.notLoaded")}
-            </p>
-            {!isLoading && (
-              <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
-                {t("figmaSnapshotWindow.viewSourceMode.loadViewButton")}
-              </button>
-            )}
-          </div>
-        ) : displayedScreens.length > 0 ? (
-          displayedScreens.map((entry) => {
-            const imageSrc =
-              entry.kind === "rendered"
-                ? figmaSnapshotScreenImageUrl(summary.runId, entry.imageIndex)
-                : undefined;
-            const imageDragPayload: FigmaImageDragPayload | undefined =
-              imageSrc === undefined
-                ? undefined
-                : {
-                    snapshotRunId: summary.runId,
-                    screenId: entry.screen.screenId,
-                    name: entry.screen.name,
-                    imageSrc,
-                    ...(sourceWindowId !== undefined ? { sourceWindowId } : {}),
-                  };
-            return (
-              <FigmaViewSourceCard
-                key={entry.screen.screenId}
-                name={entry.screen.name}
-                screenId={entry.screen.screenId}
-                irSummary={entry.screen.irSummary}
-                imageSrc={imageSrc}
-                imageByteLength={
-                  entry.kind === "rendered" ? entry.screen.imageByteLength : undefined
-                }
-                structuralReason={entry.kind === "structural" ? entry.screen.reason : undefined}
-                snapshotRunId={summary.runId}
-                capturedAt={formatDate(summary.fetchedAt)}
-                imageDragPayload={imageDragPayload}
-              />
-            );
-          })
-        ) : (
-          <div className="lk-empty">
-            <p className="lk-empty-body">
-              {t("figmaSnapshotWindow.viewSourceMode.screenNotPresent")}
-            </p>
-          </div>
-        )}
+        {renderViewSourceScreens()}
 
-        {screenJsonState === "error" && screenJsonError !== null ? (
-          <p className="figma-snapshot-error" role="alert">
-            {screenJsonError}
-          </p>
-        ) : null}
+        {renderScreenJsonError()}
 
         {screenJsonState === "done" && screenJson !== null ? (
           <section
@@ -2274,177 +2285,84 @@ export function FigmaSnapshotWindow({
         ) : null}
       </section>
     );
-  }
+  };
 
-  return (
-    <section className="figma-snapshot-window" aria-label={t("rail.figma")}>
-      {/* ── Board link input ────────────────────────────────────────────── */}
-      <form className="figma-snapshot-form" onSubmit={handleSubmit} noValidate>
-        <label className="figma-snapshot-label" htmlFor={inputId}>
-          {t("figmaSnapshotWindow.form.boardLinkLabel")}
-        </label>
-        <div className="figma-snapshot-input-row">
-          <input
-            id={inputId}
-            type="url"
-            className="figma-snapshot-input"
-            placeholder={t("figmaSnapshotWindow.form.boardLinkPlaceholder")}
-            value={boardLink}
-            onChange={(e) => {
-              setBoardLink(e.target.value);
-              // Editing the link invalidates any previous error — clear it so stale
-              // and current feedback never contradict each other.
-              if (errorNotice !== null) setErrorNotice(null);
-              if (buildState === "error") setBuildState("idle");
-              if (detachedBuild !== null) setDetachedBuild(null);
-              if (consentInvalid) setConsentInvalid(false);
-            }}
-            aria-describedby={linkError !== null ? `${validationId} ${statusId}` : statusId}
-            aria-invalid={linkError !== null ? "true" : undefined}
-            readOnly={busy}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {/* While busy the button stays enabled (aria-disabled + handler guard) so the
-              browser does not drop focus of the just-activated control to <body>. */}
-          <button
-            type="submit"
-            className="figma-snapshot-trigger-btn"
-            disabled={!linkValid && !busy}
-            aria-disabled={!linkValid || busy ? "true" : undefined}
-            aria-busy={isBuilding}
-          >
-            {isBuilding
-              ? t("figmaSnapshotWindow.form.building")
-              : t("figmaSnapshotWindow.form.snapshotButton")}
-          </button>
-        </div>
-        {linkError !== null && (
-          <p id={validationId} className="figma-snapshot-link-error" role="alert">
-            {linkError}
-          </p>
-        )}
-        {/* Explicit read-only-scope acknowledgement (#760): recorded server-side before the first
-            fetch for a board. The connector reads files + renders images — it never writes. */}
-        <label className="figma-snapshot-consent">
-          <input
-            type="checkbox"
-            className="figma-snapshot-consent-checkbox"
-            ref={consentRef}
-            checked={consentChecked}
-            // uiux-fix F038 C210: a consent-blocked snapshot marks THIS control invalid so the
-            // error visibly points at the checkbox (focus moves here too, see flagConsentRequired).
-            aria-invalid={consentInvalid ? "true" : undefined}
-            onChange={(e) => {
-              setConsentChecked(e.target.checked);
-              // Checking the box answers a consent error — clear stale feedback.
-              if (errorNotice !== null) setErrorNotice(null);
-              if (buildState === "error") setBuildState("idle");
-              setConsentInvalid(false);
-            }}
-            disabled={isBuilding}
-          />
-          <span>
-            {t("figmaSnapshotWindow.form.consentPrefix")}
-            <code>file_content:read</code>
-            {t("figmaSnapshotWindow.form.consentSuffix")}{" "}
-            <span className="figma-snapshot-consent-required">
-              {t("figmaSnapshotWindow.form.consentRequired")}
-            </span>
-          </span>
-        </label>
-        <p className="figma-snapshot-hint">{t("figmaSnapshotWindow.form.hint")}</p>
-      </form>
+  if (isViewSourceMode) return renderViewSourceMode();
 
-      {/* ── Fix #5: assertive egress alert is a SIBLING of the status region, not nested ── */}
-      {buildState === "error" && errorNotice !== null && errorNotice.assertive === true && (
-        <div
-          className="figma-snapshot-error-card"
-          role="alert"
-          aria-labelledby={`${statusId}-error-title`}
-        >
-          <p id={`${statusId}-error-title`} className="figma-snapshot-error-title">
-            {errorNotice.title}
-          </p>
-          <p className="figma-snapshot-error-detail">{errorNotice.detail}</p>
-          {errorNotice.status !== undefined && (
-            <p className="figma-snapshot-error-status">{errorNotice.status}</p>
-          )}
-          {errorNotice.remediation !== undefined && (
-            <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
-          )}
-          {/* Issue #1399: PAT/credential errors get a direct click-through to the Figma access-token
-              settings so the operator does not have to search for the setting. Focus is deliberately
-              NOT moved here (unlike the consent/revoke flows, which point at a specific form control):
-              this is an async build result like the sibling egress alerts above, so role="alert"
-              announces the button text and the user reaches it as the next tab stop — stealing focus
-              on an async network outcome would be an unexpected context change (WCAG 3.2.5). */}
-          {errorNotice.tokenConfig === true && openTokenSettings !== undefined && (
-            <button
-              type="button"
-              className="figma-snapshot-error-action"
-              onClick={openTokenSettings}
-            >
-              {t("figmaSnapshotWindow.error.openTokenSettings")}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ── Status / progress ─────────────────────────────────────────────── */}
+  const renderAssertiveBuildError = (): ReactNode => {
+    if (buildState !== "error" || errorNotice === null || errorNotice.assertive !== true)
+      return null;
+    return (
       <div
-        id={statusId}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="figma-snapshot-status"
+        className="figma-snapshot-error-card"
+        role="alert"
+        aria-labelledby={`${statusId}-error-title`}
       >
-        {isBuilding && (
-          <p className="figma-snapshot-progress">
-            {t("figmaSnapshotWindow.status.buildingProgress")}{" "}
-            {buildElapsedLabel !== null
-              ? t("figmaSnapshotWindow.status.elapsedSuffix", { elapsed: buildElapsedLabel })
-              : ""}{" "}
-            {t("figmaSnapshotWindow.status.largeBoardsNote")}
-          </p>
+        <p id={`${statusId}-error-title`} className="figma-snapshot-error-title">
+          {errorNotice.title}
+        </p>
+        <p className="figma-snapshot-error-detail">{errorNotice.detail}</p>
+        {errorNotice.status === undefined ? null : (
+          <p className="figma-snapshot-error-status">{errorNotice.status}</p>
         )}
-        {isLoading && (
-          <p className="figma-snapshot-progress">
-            {t("figmaSnapshotWindow.status.loadingStoredSnapshot")}
-          </p>
+        {errorNotice.remediation === undefined ? null : (
+          <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
         )}
-        {/* WCAG 4.1.3: completion is announced here (visually hidden — the visible
-            result renders below, outside this live region). */}
-        {buildState === "done" && summary !== null && (
-          <p className="sr-only">
-            {t("figmaSnapshotWindow.status.snapshotCompleteAnnouncement", {
-              reductionHint: summary.reductionHint,
-            })}
-          </p>
-        )}
-        {codeState === "done" && code !== null && (
-          <p className="sr-only">
-            {code.fileCount !== 1
-              ? t("figmaSnapshotWindow.status.codeGeneratedPlural", { count: code.fileCount })
-              : t("figmaSnapshotWindow.status.codeGeneratedSingular", { count: code.fileCount })}
-          </p>
-        )}
-        {/* Fix #7: status note when a cancel brings us back to idle. */}
-        {buildState === "idle" && (
-          <p className="sr-only" aria-live="polite">
-            {/* intentionally empty when idle — screen reader sees nothing */}
-          </p>
-        )}
-        {/* uiux-fix F045 C375 / Fix #5: no role="alert" inside this polite atomic live region —
-            the assertive egress card was moved above as a sibling. Non-assertive errors render
-            here as plain text; the live region itself announces them. */}
-        {buildState === "error" && errorNotice !== null && errorNotice.assertive !== true && (
-          <p className="figma-snapshot-error">{errorNotice.detail}</p>
-        )}
+        {errorNotice.tokenConfig === true && openTokenSettings !== undefined ? (
+          <button type="button" className="figma-snapshot-error-action" onClick={openTokenSettings}>
+            {t("figmaSnapshotWindow.error.openTokenSettings")}
+          </button>
+        ) : null}
       </div>
+    );
+  };
 
-      {/* ── Fix #7: Cancel button during build ────────────────────────────── */}
-      {isBuilding && (
+  const renderBuildStatus = (): ReactNode => (
+    <div
+      id={statusId}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className="figma-snapshot-status"
+    >
+      {isBuilding ? (
+        <p className="figma-snapshot-progress">
+          {t("figmaSnapshotWindow.status.buildingProgress")}{" "}
+          {buildElapsedLabel === null
+            ? ""
+            : t("figmaSnapshotWindow.status.elapsedSuffix", { elapsed: buildElapsedLabel })}{" "}
+          {t("figmaSnapshotWindow.status.largeBoardsNote")}
+        </p>
+      ) : null}
+      {isLoading ? (
+        <p className="figma-snapshot-progress">
+          {t("figmaSnapshotWindow.status.loadingStoredSnapshot")}
+        </p>
+      ) : null}
+      {buildState === "done" && summary !== null ? (
+        <p className="sr-only">
+          {t("figmaSnapshotWindow.status.snapshotCompleteAnnouncement", {
+            reductionHint: summary.reductionHint,
+          })}
+        </p>
+      ) : null}
+      {codeState === "done" && code !== null ? (
+        <p className="sr-only">
+          {code.fileCount !== 1
+            ? t("figmaSnapshotWindow.status.codeGeneratedPlural", { count: code.fileCount })
+            : t("figmaSnapshotWindow.status.codeGeneratedSingular", { count: code.fileCount })}
+        </p>
+      ) : null}
+      {buildState === "idle" ? <p className="sr-only" aria-live="polite" /> : null}
+      {buildState === "error" && errorNotice !== null && errorNotice.assertive !== true ? (
+        <p className="figma-snapshot-error">{errorNotice.detail}</p>
+      ) : null}
+    </div>
+  );
+
+  const renderBuildNotices = (): ReactNode => (
+    <>
+      {isBuilding ? (
         <div className="figma-snapshot-cancel-row">
           <button type="button" className="figma-snapshot-cancel-btn" onClick={handleCancel}>
             {t("common.cancel")}
@@ -2453,9 +2371,8 @@ export function FigmaSnapshotWindow({
             {t("figmaSnapshotWindow.build.cancelNote")}
           </p>
         </div>
-      )}
-
-      {detachedBuild !== null && !busy && (
+      ) : null}
+      {detachedBuild !== null && !busy ? (
         <div className="figma-snapshot-stored-notice">
           <p className="figma-snapshot-stored-text">
             {t("figmaSnapshotWindow.build.detachedNotice")}
@@ -2464,10 +2381,8 @@ export function FigmaSnapshotWindow({
             {t("figmaSnapshotWindow.build.reconnect")}
           </button>
         </div>
-      )}
-
-      {/* ── First-run guidance (nothing captured or stored yet) ───────────── */}
-      {buildState === "idle" && summary === null && detachedBuild === null && !showLoadStored && (
+      ) : null}
+      {buildState === "idle" && summary === null && detachedBuild === null && !showLoadStored ? (
         <div className="figma-snapshot-empty">
           <p className="figma-snapshot-empty-title">{t("figmaSnapshotWindow.empty.title")}</p>
           <ol className="figma-snapshot-empty-steps">
@@ -2477,12 +2392,8 @@ export function FigmaSnapshotWindow({
           </ol>
           <p className="figma-snapshot-empty-note">{t("figmaSnapshotWindow.empty.note")}</p>
         </div>
-      )}
-
-      {/* ── Load stored snapshot ──────────────────────────────────────────── */}
-      {/* Fix #1: showLoadStored now includes buildState==="error" so the Load button
-          stays mounted after a load failure — it is the retry affordance. */}
-      {showLoadStored && (
+      ) : null}
+      {showLoadStored ? (
         <div className="figma-snapshot-stored-notice">
           <p className="figma-snapshot-stored-text">
             {t("figmaSnapshotWindow.storedSnapshot.available")}
@@ -2499,113 +2410,206 @@ export function FigmaSnapshotWindow({
               : t("figmaSnapshotWindow.storedSnapshot.loadButton")}
           </button>
         </div>
-      )}
+      ) : null}
+    </>
+  );
 
-      <section
-        className="figma-snapshot-dashboard"
-        aria-label={t("figmaSnapshotWindow.dashboard.eyebrow")}
-      >
-        <div className="figma-snapshot-dashboard-header">
-          <div>
-            <p className="figma-snapshot-dashboard-eyebrow">
-              {t("figmaSnapshotWindow.dashboard.eyebrow")}
-            </p>
-            <h2 className="figma-snapshot-dashboard-title">
-              {t("figmaSnapshotWindow.dashboard.title")}
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="figma-snapshot-dashboard-refresh"
-            onClick={refreshDashboard}
-          >
-            {t("figmaSnapshotWindow.dashboard.refresh")}
-          </button>
-        </div>
-        <div
-          className="figma-snapshot-dashboard-tabs"
-          role="tablist"
-          aria-label={t("figmaSnapshotWindow.dashboard.tabsAriaLabel")}
+  const renderSnapshotForm = (): ReactNode => (
+    <form className="figma-snapshot-form" onSubmit={handleSubmit} noValidate>
+      <label className="figma-snapshot-label" htmlFor={inputId}>
+        {t("figmaSnapshotWindow.form.boardLinkLabel")}
+      </label>
+      <div className="figma-snapshot-input-row">
+        <input
+          id={inputId}
+          type="url"
+          className="figma-snapshot-input"
+          placeholder={t("figmaSnapshotWindow.form.boardLinkPlaceholder")}
+          value={boardLink}
+          onChange={(e) => {
+            setBoardLink(e.target.value);
+            // Editing the link invalidates any previous error — clear it so stale
+            // and current feedback never contradict each other.
+            if (errorNotice !== null) setErrorNotice(null);
+            if (buildState === "error") setBuildState("idle");
+            if (detachedBuild !== null) setDetachedBuild(null);
+            if (consentInvalid) setConsentInvalid(false);
+          }}
+          aria-describedby={linkError !== null ? `${validationId} ${statusId}` : statusId}
+          aria-invalid={linkError !== null ? "true" : undefined}
+          readOnly={busy}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {/* While busy the button stays enabled (aria-disabled + handler guard) so the
+          browser does not drop focus of the just-activated control to <body>. */}
+        <button
+          type="submit"
+          className="figma-snapshot-trigger-btn"
+          disabled={!linkValid && !busy}
+          aria-disabled={!linkValid || busy ? "true" : undefined}
+          aria-busy={isBuilding}
         >
-          <button
-            type="button"
-            className="figma-snapshot-dashboard-tab"
-            role="tab"
-            aria-selected={dashboardTab === "board"}
-            aria-controls={`${dashboardId}-board-panel`}
-            id={`${dashboardId}-board-tab`}
-            onClick={() => {
-              if (currentScope !== null) setDashboardTab("board");
-            }}
-            disabled={currentScope === null}
-          >
-            {t("figmaSnapshotWindow.dashboard.tabBoard")}
-          </button>
-          <button
-            type="button"
-            className="figma-snapshot-dashboard-tab"
-            role="tab"
-            aria-selected={dashboardTab === "recent"}
-            aria-controls={`${dashboardId}-recent-panel`}
-            id={`${dashboardId}-recent-tab`}
-            onClick={() => {
-              setDashboardTab("recent");
-            }}
-          >
-            {t("figmaSnapshotWindow.dashboard.tabRecent")}
-          </button>
-        </div>
-        {snapshotManagementError !== null ? (
-          <p
-            className="figma-snapshot-dashboard-status figma-snapshot-dashboard-status-error"
-            role="alert"
-          >
-            {snapshotManagementError}
+          {isBuilding
+            ? t("figmaSnapshotWindow.form.building")
+            : t("figmaSnapshotWindow.form.snapshotButton")}
+        </button>
+      </div>
+      {linkError !== null && (
+        <p id={validationId} className="figma-snapshot-link-error" role="alert">
+          {linkError}
+        </p>
+      )}
+      {/* Explicit read-only-scope acknowledgement (#760): recorded server-side before the first
+        fetch for a board. The connector reads files + renders images — it never writes. */}
+      <label className="figma-snapshot-consent">
+        <input
+          type="checkbox"
+          className="figma-snapshot-consent-checkbox"
+          ref={consentRef}
+          checked={consentChecked}
+          // uiux-fix F038 C210: a consent-blocked snapshot marks THIS control invalid so the
+          // error visibly points at the checkbox (focus moves here too, see flagConsentRequired).
+          aria-invalid={consentInvalid ? "true" : undefined}
+          onChange={(e) => {
+            setConsentChecked(e.target.checked);
+            // Checking the box answers a consent error — clear stale feedback.
+            if (errorNotice !== null) setErrorNotice(null);
+            if (buildState === "error") setBuildState("idle");
+            setConsentInvalid(false);
+          }}
+          disabled={isBuilding}
+        />
+        <span>
+          {t("figmaSnapshotWindow.form.consentPrefix")}
+          <code>file_content:read</code>
+          {t("figmaSnapshotWindow.form.consentSuffix")}{" "}
+          <span className="figma-snapshot-consent-required">
+            {t("figmaSnapshotWindow.form.consentRequired")}
+          </span>
+        </span>
+      </label>
+      <p className="figma-snapshot-hint">{t("figmaSnapshotWindow.form.hint")}</p>
+    </form>
+  );
+
+  const renderSnapshotDashboard = (): ReactNode => (
+    <section
+      className="figma-snapshot-dashboard"
+      aria-label={t("figmaSnapshotWindow.dashboard.eyebrow")}
+    >
+      <div className="figma-snapshot-dashboard-header">
+        <div>
+          <p className="figma-snapshot-dashboard-eyebrow">
+            {t("figmaSnapshotWindow.dashboard.eyebrow")}
           </p>
-        ) : null}
-        {dashboardTab === "board" ? (
-          <div
-            id={`${dashboardId}-board-panel`}
-            className="figma-snapshot-dashboard-panel"
-            role="tabpanel"
-            aria-labelledby={`${dashboardId}-board-tab`}
-          >
-            {currentScope === null
-              ? renderDashboardList(
-                  [],
-                  false,
-                  null,
-                  t("figmaSnapshotWindow.dashboard.noBoardSelectedTitle"),
-                  t("figmaSnapshotWindow.dashboard.noBoardSelectedDetail"),
-                  false,
-                )
-              : renderDashboardList(
-                  boardSnapshots,
-                  boardSnapshotsLoading,
-                  boardSnapshotsError,
-                  t("figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle"),
-                  t("figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail"),
-                  false,
-                )}
-          </div>
-        ) : (
-          <div
-            id={`${dashboardId}-recent-panel`}
-            className="figma-snapshot-dashboard-panel"
-            role="tabpanel"
-            aria-labelledby={`${dashboardId}-recent-tab`}
-          >
-            {renderDashboardList(
-              recentSnapshots,
-              recentSnapshotsLoading,
-              recentSnapshotsError,
-              t("figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle"),
-              t("figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail"),
-              true,
-            )}
-          </div>
-        )}
-      </section>
+          <h2 className="figma-snapshot-dashboard-title">
+            {t("figmaSnapshotWindow.dashboard.title")}
+          </h2>
+        </div>
+        <button
+          type="button"
+          className="figma-snapshot-dashboard-refresh"
+          onClick={refreshDashboard}
+        >
+          {t("figmaSnapshotWindow.dashboard.refresh")}
+        </button>
+      </div>
+      <div
+        className="figma-snapshot-dashboard-tabs"
+        role="tablist"
+        aria-label={t("figmaSnapshotWindow.dashboard.tabsAriaLabel")}
+      >
+        <button
+          type="button"
+          className="figma-snapshot-dashboard-tab"
+          role="tab"
+          aria-selected={dashboardTab === "board"}
+          aria-controls={`${dashboardId}-board-panel`}
+          id={`${dashboardId}-board-tab`}
+          onClick={() => {
+            if (currentScope !== null) setDashboardTab("board");
+          }}
+          disabled={currentScope === null}
+        >
+          {t("figmaSnapshotWindow.dashboard.tabBoard")}
+        </button>
+        <button
+          type="button"
+          className="figma-snapshot-dashboard-tab"
+          role="tab"
+          aria-selected={dashboardTab === "recent"}
+          aria-controls={`${dashboardId}-recent-panel`}
+          id={`${dashboardId}-recent-tab`}
+          onClick={() => {
+            setDashboardTab("recent");
+          }}
+        >
+          {t("figmaSnapshotWindow.dashboard.tabRecent")}
+        </button>
+      </div>
+      {snapshotManagementError !== null ? (
+        <p
+          className="figma-snapshot-dashboard-status figma-snapshot-dashboard-status-error"
+          role="alert"
+        >
+          {snapshotManagementError}
+        </p>
+      ) : null}
+      {dashboardTab === "board" ? (
+        <div
+          id={`${dashboardId}-board-panel`}
+          className="figma-snapshot-dashboard-panel"
+          role="tabpanel"
+          aria-labelledby={`${dashboardId}-board-tab`}
+        >
+          {currentScope === null
+            ? renderDashboardList(
+                [],
+                false,
+                null,
+                t("figmaSnapshotWindow.dashboard.noBoardSelectedTitle"),
+                t("figmaSnapshotWindow.dashboard.noBoardSelectedDetail"),
+                false,
+              )
+            : renderDashboardList(
+                boardSnapshots,
+                boardSnapshotsLoading,
+                boardSnapshotsError,
+                t("figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle"),
+                t("figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail"),
+                false,
+              )}
+        </div>
+      ) : (
+        <div
+          id={`${dashboardId}-recent-panel`}
+          className="figma-snapshot-dashboard-panel"
+          role="tabpanel"
+          aria-labelledby={`${dashboardId}-recent-tab`}
+        >
+          {renderDashboardList(
+            recentSnapshots,
+            recentSnapshotsLoading,
+            recentSnapshotsError,
+            t("figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle"),
+            t("figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail"),
+            true,
+          )}
+        </div>
+      )}
+    </section>
+  );
+
+  const renderSnapshotWorkspace = (): ReactNode => (
+    <section className="figma-snapshot-window" aria-label={t("rail.figma")}>
+      {/* ── Board link input ────────────────────────────────────────────── */}
+      {renderSnapshotForm()}
+
+      {renderAssertiveBuildError()}
+      {renderBuildStatus()}
+      {renderBuildNotices()}
+      {renderSnapshotDashboard()}
 
       {/* ── Snapshot summary ──────────────────────────────────────────────── */}
       {/* Fix #2: render the result section whenever summary !== null (not only when
@@ -2891,4 +2895,6 @@ export function FigmaSnapshotWindow({
       )}
     </section>
   );
+
+  return renderSnapshotWorkspace();
 }

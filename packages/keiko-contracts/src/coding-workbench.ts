@@ -644,9 +644,8 @@ export function strictestCodingWorkbenchPolicyEffect(
 export function decideCodingWorkbenchActionForMode(
   mode: CodingWorkbenchMode,
   actionClass: CodingWorkbenchActionClass,
-  connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
+  _connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
 ): CodingWorkbenchActionPolicyDecision {
-  void connectorScopes;
   const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
   if (!policy.allowedActionClasses.includes(actionClass)) {
     return denyCodingWorkbenchAction(actionClass);

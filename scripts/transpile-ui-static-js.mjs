@@ -8,6 +8,7 @@ import presetEnv from "@babel/preset-env";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { rejectUiStaticSymlink, resolveUiStaticRoot } from "./lib/ui-static-root-boundary.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
@@ -23,6 +24,7 @@ async function collectJavaScriptFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    rejectUiStaticSymlink(entry);
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...(await collectJavaScriptFiles(full)));
@@ -68,7 +70,8 @@ async function transformJavaScript(file) {
 }
 
 export async function transpileUiStaticJavaScript(staticRoot = DEFAULT_STATIC_ROOT) {
-  const files = await collectJavaScriptFiles(staticRoot);
+  const trustedStaticRoot = await resolveUiStaticRoot(repoRoot, staticRoot);
+  const files = await collectJavaScriptFiles(trustedStaticRoot);
   let changed = 0;
   for (const file of files) {
     if (await transformJavaScript(file)) {

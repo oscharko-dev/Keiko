@@ -2507,7 +2507,7 @@ function fileStateCacheIdentity(
   } catch {
     return undefined;
   }
-  return identity.sort();
+  return identity.sort((left, right) => left.localeCompare(right));
 }
 
 interface ReadyPlanResult {

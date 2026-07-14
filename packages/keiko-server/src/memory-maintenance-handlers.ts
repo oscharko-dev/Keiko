@@ -410,8 +410,7 @@ export function maybeRunAutoMaintenance(
   }
 }
 
-export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  void ctx;
+export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {

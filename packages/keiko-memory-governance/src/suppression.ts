@@ -79,12 +79,13 @@ function statusSuppression(status: MemoryStatus): SuppressionResult | null {
       // top of this predicate. Review queues surface proposed records through direct
       // status filtering rather than retrieval.
       return null;
-    default: {
-      const _exhaustive: never = status;
-      void _exhaustive;
-      return null;
-    }
+    default:
+      return unsupportedStatus(status);
   }
+}
+
+function unsupportedStatus(_status: never): never {
+  throw new Error("Unsupported memory status");
 }
 
 function validitySuppression(memory: MemoryRecord, nowMs: number): SuppressionResult | null {

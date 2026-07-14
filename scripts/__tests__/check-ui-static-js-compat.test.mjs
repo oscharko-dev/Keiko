@@ -1,29 +1,37 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { checkUiStaticJavaScriptCompatibility } from "../check-ui-static-js-compat.mjs";
 
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+
 describe("checkUiStaticJavaScriptCompatibility", () => {
   let root = "";
+  let outsideRoot = "";
 
   afterEach(async () => {
     if (root.length > 0) {
       await rm(root, { recursive: true, force: true });
       root = "";
     }
+    if (outsideRoot.length > 0) {
+      await rm(outsideRoot, { recursive: true, force: true });
+      outsideRoot = "";
+    }
   });
 
   async function writeChunk(source) {
-    root = await mkdtemp(join(tmpdir(), "keiko-ui-static-compat-"));
+    root = await mkdtemp(join(repoRoot, ".keiko-ui-static-compat-"));
     const chunkDir = join(root, "_next", "static", "chunks");
     await mkdir(chunkDir, { recursive: true });
     await writeFile(join(chunkDir, "chunk.js"), source, "utf8");
   }
 
   async function writeWorker(source) {
-    root = await mkdtemp(join(tmpdir(), "keiko-ui-static-compat-"));
+    root = await mkdtemp(join(repoRoot, ".keiko-ui-static-compat-"));
     const workerDir = join(root, "_next", "static", "media");
     await mkdir(workerDir, { recursive: true });
     await writeFile(join(workerDir, "editor.worker.abc123.js"), source, "utf8");
@@ -57,5 +65,25 @@ describe("checkUiStaticJavaScriptCompatibility", () => {
     await writeChunk("console.log(import.meta.url);\n");
 
     await expect(checkUiStaticJavaScriptCompatibility(root)).rejects.toThrow("import.meta");
+  });
+
+  it("rejects a static root outside the repository", async () => {
+    outsideRoot = await mkdtemp(join(tmpdir(), "keiko-ui-static-outside-"));
+
+    await expect(checkUiStaticJavaScriptCompatibility(outsideRoot)).rejects.toThrow(
+      "must stay inside the repository",
+    );
+  });
+
+  it("rejects symbolic links before reading JavaScript", async () => {
+    root = await mkdtemp(join(repoRoot, ".keiko-ui-static-compat-"));
+    outsideRoot = await mkdtemp(join(tmpdir(), "keiko-ui-static-outside-"));
+    const outsideFile = join(outsideRoot, "outside.js");
+    await writeFile(outsideFile, "globalThis.compromised = true;\n", "utf8");
+    await symlink(outsideFile, join(root, "linked.js"));
+
+    await expect(checkUiStaticJavaScriptCompatibility(root)).rejects.toThrow(
+      "must not contain symbolic links",
+    );
   });
 });

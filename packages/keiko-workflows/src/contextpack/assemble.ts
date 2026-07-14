@@ -556,7 +556,7 @@ function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly o
 
 function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonly string[] {
   if (input.cacheIdentity !== undefined) {
-    return [...input.cacheIdentity].sort();
+    return [...input.cacheIdentity].sort((left, right) => left.localeCompare(right));
   }
   return cacheExcerpts(input.excerpts);
 }
@@ -577,7 +577,7 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
     diagnostics: cacheDiagnostics(input.diagnostics),
     excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
-    editablePaths: [...resolved.editablePaths].sort(),
+    editablePaths: [...resolved.editablePaths].sort((left, right) => left.localeCompare(right)),
     rerankerName: resolved.reranker.name,
   });
   return [`fp-${sha256Hex(fingerprintSource)}`];

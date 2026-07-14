@@ -319,7 +319,9 @@ describe("ecosystems registry — invariants", () => {
   });
 
   it("CANONICAL_MANIFEST_BASENAMES is sorted, de-duplicated and covers the core build manifests", () => {
-    expect([...CANONICAL_MANIFEST_BASENAMES]).toEqual([...CANONICAL_MANIFEST_BASENAMES].sort());
+    expect([...CANONICAL_MANIFEST_BASENAMES]).toEqual(
+      [...CANONICAL_MANIFEST_BASENAMES].sort((left, right) => left.localeCompare(right)),
+    );
     expect(new Set(CANONICAL_MANIFEST_BASENAMES).size).toBe(CANONICAL_MANIFEST_BASENAMES.length);
     for (const name of [
       "pom.xml",

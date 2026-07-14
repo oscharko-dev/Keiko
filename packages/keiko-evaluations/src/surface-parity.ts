@@ -96,7 +96,7 @@ const RUN_REQUEST_EXPECTATIONS: readonly RunRequestExpectation[] = [
     kind: "unit-tests",
     workflowId: "unit-test-generation",
     input: {
-      workspaceRoot: "/tmp/keiko-surface-parity",
+      workspaceRoot: "/workspace/keiko-surface-parity",
       target: { kind: "file", filePath: "src/example.ts" },
     },
   },
@@ -104,7 +104,7 @@ const RUN_REQUEST_EXPECTATIONS: readonly RunRequestExpectation[] = [
     kind: "bug-investigation",
     workflowId: "bug-investigation",
     input: {
-      workspaceRoot: "/tmp/keiko-surface-parity",
+      workspaceRoot: "/workspace/keiko-surface-parity",
       report: { description: "example failure" },
     },
   },
@@ -158,12 +158,16 @@ function captureCliHelp(
 ): string {
   const chunks: string[] = [];
   const io: SurfaceParityCliIo = {
-    out: (text: string): void => void chunks.push(text),
-    err: (text: string): void => void chunks.push(text),
+    out: (text: string): void => {
+      chunks.push(text);
+    },
+    err: (text: string): void => {
+      chunks.push(text);
+    },
   };
   // The handlers print their usage string synchronously before any async work when --help fails to
   // parse as a real invocation, so the captured chunks already contain the flag names we assert.
-  void run(["--help"], io, {});
+  run(["--help"], io, {});
   return chunks.join("");
 }
 

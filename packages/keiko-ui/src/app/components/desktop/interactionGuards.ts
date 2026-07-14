@@ -151,7 +151,7 @@ export function isHandToolKeyIgnoredTarget(target: EventTarget | null): boolean 
 
 export function workspaceInteractionLocked(): boolean {
   if (typeof document === "undefined") return false;
-  return document.documentElement.getAttribute("data-keiko-modal-open") === "true";
+  return document.documentElement.dataset.keikoModalOpen === "true";
 }
 
 // Ref-counted body cursor/userSelect override shared by every drag/pan gesture (window drag, canvas

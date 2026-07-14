@@ -19,14 +19,14 @@ export function useModalInteractionLock({
     const trigger = restoreFocus ? (document.activeElement as HTMLElement | null) : null;
     const previousCount = Number(root.dataset.keikoModalOpenCount ?? "0");
     root.dataset.keikoModalOpenCount = String(previousCount + 1);
-    root.setAttribute("data-keiko-modal-open", "true");
+    root.dataset.keikoModalOpen = "true";
     initialFocusRef?.current?.focus();
 
     return () => {
       const nextCount = Math.max(0, Number(root.dataset.keikoModalOpenCount ?? "1") - 1);
       if (nextCount === 0) {
         delete root.dataset.keikoModalOpenCount;
-        root.removeAttribute("data-keiko-modal-open");
+        delete root.dataset.keikoModalOpen;
       } else {
         root.dataset.keikoModalOpenCount = String(nextCount);
       }

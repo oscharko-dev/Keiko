@@ -267,8 +267,8 @@ const deriveCoverageMapIdString = (
   const payload = [
     "v1",
     String(runId),
-    [...atomHashes].sort().join(""),
-    [...candidateIds].sort().join(""),
+    [...atomHashes].sort(compareString).join(""),
+    [...candidateIds].sort(compareString).join(""),
   ].join("");
   return `qi-coverage-${sha256Hex(payload).slice(0, 32)}`;
 };

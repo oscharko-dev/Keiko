@@ -1097,7 +1097,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
   const evidenceRefs = evidenceRefsFor(input.ingestedAtoms);
   emitQueuedAndStarted(ctx);
   try {
-    await withStage(ctx, "plan", async () => Promise.resolve());
+    await withStage(ctx, "plan", () => undefined);
     const generation = await withStage(ctx, "candidates", async () =>
       generateCandidates(ctx, input, deps),
     );
@@ -1127,8 +1127,8 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       }
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
-    const coverageMap = await withStage(ctx, "coverage", async () =>
-      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
+    const coverageMap = await withStage(ctx, "coverage", () =>
+      buildCoverageMap({ runId: input.plan.id, atoms, candidates }),
     );
     const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
     const excerptByAtomId = excerptsByAtomId(input.ingestedAtoms);
@@ -1143,13 +1143,13 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       }
     }
     const atomTextById = atomTextByIdFor(input.ingestedAtoms);
-    const rawFindings = await withStage(ctx, "validate", async () => {
+    const rawFindings = await withStage(ctx, "validate", () => {
       const requirementQualityFindings = analyzeRequirementQualityFailSoft(
         input.plan.id,
         input.ingestedAtoms,
       );
       const validationFindings = validateCandidates(input.plan.id, candidates, { atomTextById });
-      return Promise.resolve([...requirementQualityFindings, ...validationFindings]);
+      return [...requirementQualityFindings, ...validationFindings];
     });
     // Order by severity (critical -> low) BEFORE truncation so that, if the run hits the
     // per-run findings cap, the most severe findings — uncovered-requirement gaps included —
@@ -1170,7 +1170,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       );
     const findings = truncateFindings(allFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
-    const evidence = await withStage(ctx, "finalize", async () => {
+    const evidence = await withStage(ctx, "finalize", () => {
       const completedAt = ctx.clock.nowIso();
       const sourceFingerprints = input.envelopes.map((e) => ({
         envelopeId: String(e.id),
@@ -1212,7 +1212,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         ),
         completedAt,
       );
-      return Promise.resolve(result);
+      return result;
     });
     emit(ctx, { kind: "run:succeeded" });
     return Object.freeze<QualityIntelligenceRunSummary>({

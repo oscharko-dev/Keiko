@@ -90,7 +90,7 @@ function scopeKey(scope: SelectedScope): string {
     workspaceRoot: scope.workspaceRoot,
     scopeId: scope.scopeId,
     kind: scope.kind,
-    relativePaths: [...scope.relativePaths].sort(),
+    relativePaths: [...scope.relativePaths].sort((left, right) => left.localeCompare(right)),
     conversationId: scope.conversationId,
     connectedAtMs: scope.connectedAtMs,
   });

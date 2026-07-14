@@ -150,47 +150,43 @@ export async function runQualityIntelligenceTestDesign(
   const ctx = contextFor(QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR, input.plan, deps);
   emitQueuedAndStarted(ctx);
   try {
-    await withStage(ctx, "plan", async () => Promise.resolve());
+    await withStage(ctx, "plan", () => undefined);
     // Intent derivation is a deterministic sub-step of candidate design, not a separately surfaced
     // stage. The shared qi:test-design descriptor declares the model-routed lifecycle
     // (plan, candidates, judge, coverage, validate, finalize); emitting an undeclared "intent"
     // stage here threw via assertStageRegistered and made this scripted entry impossible to
     // succeed. Derive intent inside the declared "candidates" stage so the scripted entry stays a
     // strict subset of the descriptor's stage set.
-    const rawCandidates = await withStage(ctx, "candidates", async () => {
+    const rawCandidates = await withStage(ctx, "candidates", () => {
       const intent = deriveIntent(input.envelopes, ctx.profile);
-      return Promise.resolve(
-        designTestCaseCandidates({
-          runId: input.plan.id,
-          intent,
-          atoms: input.atoms,
-          profile: ctx.profile,
-        }),
-      );
+      return designTestCaseCandidates({
+        runId: input.plan.id,
+        intent,
+        atoms: input.atoms,
+        profile: ctx.profile,
+      });
     });
     const candidates = truncateCandidates(rawCandidates, ctx.limits.maxCandidatesPerRun);
     emitCandidateProposed(ctx, candidates);
-    const coverageMatrix = await withStage(ctx, "coverage", async () =>
-      Promise.resolve(coverageMatrixFor(input.plan.id, input.atoms, candidates)),
+    const coverageMatrix = await withStage(ctx, "coverage", () =>
+      coverageMatrixFor(input.plan.id, input.atoms, candidates),
     );
-    const rawFindings = await withStage(ctx, "validate", async () =>
-      Promise.resolve(validateCandidates(input.plan.id, candidates)),
+    const rawFindings = await withStage(ctx, "validate", () =>
+      validateCandidates(input.plan.id, candidates),
     );
     const findings = truncateFindings(rawFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
-    const evidence = await withStage(ctx, "finalize", async () =>
-      Promise.resolve(
-        persistRun({
-          ctx,
-          status: "succeeded",
-          candidatesCount: candidates.length,
-          findings,
-          provenanceRefs: input.provenanceRefs,
-          completedAt: ctx.clock.nowIso(),
-          evidenceStore: deps.evidenceStore,
-          coverageMatrix,
-        }),
-      ),
+    const evidence = await withStage(ctx, "finalize", () =>
+      persistRun({
+        ctx,
+        status: "succeeded",
+        candidatesCount: candidates.length,
+        findings,
+        provenanceRefs: input.provenanceRefs,
+        completedAt: ctx.clock.nowIso(),
+        evidenceStore: deps.evidenceStore,
+        coverageMatrix,
+      }),
     );
     emit(ctx, { kind: "run:succeeded" });
     return Object.freeze<QualityIntelligenceRunSummary>({
@@ -220,23 +216,21 @@ export async function runQualityIntelligenceCoverageReview(
   const ctx = contextFor(QI_COVERAGE_REVIEW_WORKFLOW_DESCRIPTOR, input.plan, deps);
   emitQueuedAndStarted(ctx);
   try {
-    await withStage(ctx, "plan", async () => Promise.resolve());
-    const coverageMatrix = await withStage(ctx, "analyse", async () =>
-      Promise.resolve(coverageMatrixFor(input.plan.id, input.atoms, input.candidates)),
+    await withStage(ctx, "plan", () => undefined);
+    const coverageMatrix = await withStage(ctx, "analyse", () =>
+      coverageMatrixFor(input.plan.id, input.atoms, input.candidates),
     );
-    const evidence = await withStage(ctx, "report", async () =>
-      Promise.resolve(
-        persistRun({
-          ctx,
-          status: "succeeded",
-          candidatesCount: input.candidates.length,
-          findings: Object.freeze([]),
-          provenanceRefs: input.provenanceRefs,
-          completedAt: ctx.clock.nowIso(),
-          evidenceStore: deps.evidenceStore,
-          coverageMatrix,
-        }),
-      ),
+    const evidence = await withStage(ctx, "report", () =>
+      persistRun({
+        ctx,
+        status: "succeeded",
+        candidatesCount: input.candidates.length,
+        findings: Object.freeze([]),
+        provenanceRefs: input.provenanceRefs,
+        completedAt: ctx.clock.nowIso(),
+        evidenceStore: deps.evidenceStore,
+        coverageMatrix,
+      }),
     );
     emit(ctx, { kind: "run:succeeded" });
     return Object.freeze<QualityIntelligenceRunSummary>({
@@ -313,27 +307,25 @@ export async function runQualityIntelligenceValidation(
   const ctx = contextFor(QI_VALIDATION_WORKFLOW_DESCRIPTOR, input.plan, deps);
   emitQueuedAndStarted(ctx);
   try {
-    await withStage(ctx, "plan", async () => Promise.resolve());
+    await withStage(ctx, "plan", () => undefined);
     await withStage(ctx, "run-judges", async () => {
       await maybeRunJudges(ctx, input.candidates, deps.modelRouted);
     });
-    const rawFindings = await withStage(ctx, "reconcile", async () =>
-      Promise.resolve(validateCandidates(input.plan.id, input.candidates)),
+    const rawFindings = await withStage(ctx, "reconcile", () =>
+      validateCandidates(input.plan.id, input.candidates),
     );
     const findings = truncateFindings(rawFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
-    const evidence = await withStage(ctx, "report", async () =>
-      Promise.resolve(
-        persistRun({
-          ctx,
-          status: "succeeded",
-          candidatesCount: input.candidates.length,
-          findings,
-          provenanceRefs: input.provenanceRefs,
-          completedAt: ctx.clock.nowIso(),
-          evidenceStore: deps.evidenceStore,
-        }),
-      ),
+    const evidence = await withStage(ctx, "report", () =>
+      persistRun({
+        ctx,
+        status: "succeeded",
+        candidatesCount: input.candidates.length,
+        findings,
+        provenanceRefs: input.provenanceRefs,
+        completedAt: ctx.clock.nowIso(),
+        evidenceStore: deps.evidenceStore,
+      }),
     );
     emit(ctx, { kind: "run:succeeded" });
     return Object.freeze<QualityIntelligenceRunSummary>({
@@ -363,29 +355,27 @@ export async function runQualityIntelligenceArtifactRefinement(
   const ctx = contextFor(QI_ARTIFACT_REFINEMENT_WORKFLOW_DESCRIPTOR, input.plan, deps);
   emitQueuedAndStarted(ctx);
   try {
-    await withStage(ctx, "plan", async () => Promise.resolve());
-    const refinedRaw = await withStage(ctx, "refine", async () =>
-      Promise.resolve(deduplicateCandidates(input.candidates)),
+    await withStage(ctx, "plan", () => undefined);
+    const refinedRaw = await withStage(ctx, "refine", () =>
+      deduplicateCandidates(input.candidates),
     );
     const refined = truncateCandidates(refinedRaw, ctx.limits.maxCandidatesPerRun);
     emitCandidateProposed(ctx, refined);
-    const rawFindings = await withStage(ctx, "validate", async () =>
-      Promise.resolve(validateCandidates(input.plan.id, refined)),
+    const rawFindings = await withStage(ctx, "validate", () =>
+      validateCandidates(input.plan.id, refined),
     );
     const findings = truncateFindings(rawFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
-    const evidence = await withStage(ctx, "report", async () =>
-      Promise.resolve(
-        persistRun({
-          ctx,
-          status: "succeeded",
-          candidatesCount: refined.length,
-          findings,
-          provenanceRefs: input.provenanceRefs,
-          completedAt: ctx.clock.nowIso(),
-          evidenceStore: deps.evidenceStore,
-        }),
-      ),
+    const evidence = await withStage(ctx, "report", () =>
+      persistRun({
+        ctx,
+        status: "succeeded",
+        candidatesCount: refined.length,
+        findings,
+        provenanceRefs: input.provenanceRefs,
+        completedAt: ctx.clock.nowIso(),
+        evidenceStore: deps.evidenceStore,
+      }),
     );
     emit(ctx, { kind: "run:succeeded" });
     return Object.freeze<QualityIntelligenceRunSummary>({

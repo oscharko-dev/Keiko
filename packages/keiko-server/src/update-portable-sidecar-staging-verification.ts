@@ -69,7 +69,7 @@ function listFiles(root: string, sidecar: PortableSidecarRuntimeVerification): r
       fail("sidecar-payload-outside-root", "sidecar payload contains unsupported entries", sidecar);
     }
   }
-  return files.sort();
+  return files.sort((left, right) => left.localeCompare(right));
 }
 
 function hashDirectoryTree(root: string, sidecar: PortableSidecarRuntimeVerification): string {

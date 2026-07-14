@@ -427,7 +427,7 @@ function normalizedForDigest(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
   return Object.fromEntries(
     Object.keys(value)
-      .sort()
+      .sort((left, right) => left.localeCompare(right))
       .map((key) => [key, normalizedForDigest(value[key])]),
   );
 }

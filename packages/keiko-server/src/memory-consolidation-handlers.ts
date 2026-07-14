@@ -490,14 +490,10 @@ function failScheduledJob(
   running: ReturnType<typeof transitionJob>,
   jobId: string,
   memories: readonly MemoryRecord[],
-  error: unknown,
 ): void {
   const completedAt = Date.now();
-  // COUPLING-004: do NOT persist the raw `error.message` onto the job record — it surfaces to the
-  // browser via the job envelope and can embed a filesystem path or SQL fragment. Use the same
-  // fixed, cause-free string finalizeTerminalJob() records for a failed engine run. `error` is left
-  // observable server-side to the caller; only the safe constant crosses the trust boundary.
-  void error;
+  // COUPLING-004: persist only the same fixed, cause-free string that finalizeTerminalJob() uses;
+  // a raw error can contain a filesystem path or SQL fragment that must not cross into the browser.
   const message = "Consolidation run failed.";
   registry.fail(
     jobId,
@@ -590,8 +586,8 @@ async function runScheduledJob(
     );
     const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
     finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
-  } catch (error) {
-    failScheduledJob(registry, running, jobId, memories, error);
+  } catch {
+    failScheduledJob(registry, running, jobId, memories);
   }
 }
 
@@ -609,10 +605,9 @@ function scheduleJob(
   });
 }
 
-function registerJobLimit(error: unknown): RouteResult {
+function registerJobLimit(): RouteResult {
   // COUPLING-004: never forward the raw `error.message` into the 409 envelope. A code-keyed fixed
   // string carries the outcome without leaking any dynamic detail across the trust boundary.
-  void error;
   return {
     status: 409,
     body: errorBody("CONSOLIDATION_JOB_LIMIT", "Consolidation job limit reached."),
@@ -648,8 +643,8 @@ export async function handleCreateConsolidationJob(
       settings: input.settings,
       memoryCount: 0,
     });
-  } catch (error) {
-    return registerJobLimit(error);
+  } catch {
+    return registerJobLimit();
   }
   scheduleJob(deps, jobId, vault, input.selection, input.settings);
   return createJobResponse(deps, record);

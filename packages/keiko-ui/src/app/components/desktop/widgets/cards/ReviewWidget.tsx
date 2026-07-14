@@ -92,6 +92,14 @@ function hasDiff(report: RunReport): boolean {
   return report.proposedDiff !== undefined && report.proposedDiff !== "";
 }
 
+function selectedDiffFileIndex(
+  diff: ReturnType<typeof parseUnifiedDiff> | null,
+  activeFile: number | null,
+): number | null {
+  if (diff === null || diff.files.length === 0) return null;
+  return Math.min(activeFile ?? 0, diff.files.length - 1);
+}
+
 function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): ReactNode {
   const t = useTranslate();
   if (hasManifest) {
@@ -120,6 +128,39 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
     <button type="button" className="rv-evidence-link rv-evidence-disabled" disabled>
       {t("reviewWidget.evidence")}
     </button>
+  );
+}
+
+interface ReviewFetchErrorProps {
+  readonly loading: boolean;
+  readonly error: ErrorState | null;
+  readonly hasManifest: boolean;
+  readonly evidenceError: ErrorState | null;
+  readonly evidenceHref: string;
+  readonly t: I18nTranslate;
+}
+
+function ReviewFetchError(props: ReviewFetchErrorProps): ReactNode {
+  if (props.loading || props.error === null) return null;
+  return (
+    <div role="alert" className="rv-error">
+      {props.error.code === "NOT_FOUND" ? (
+        props.t("reviewWidget.notFound")
+      ) : (
+        <>
+          {props.error.message} <span className="err-code mono">({props.error.code})</span>
+        </>
+      )}
+      {props.hasManifest || props.evidenceError !== null ? (
+        <span className="rv-error-evidence">
+          <EvidenceControl
+            href={props.evidenceHref}
+            hasManifest={props.hasManifest}
+            error={props.evidenceError}
+          />
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -241,10 +282,7 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
     [diff],
   );
   const diffFileCount = diff?.files.length ?? 0;
-  const selectedFileIndex =
-    diff !== null && diff.files.length > 0
-      ? Math.min(activeFile ?? 0, diff.files.length - 1)
-      : null;
+  const selectedFileIndex = selectedDiffFileIndex(diff, activeFile);
   const selectedFile = selectedFileIndex !== null ? diff?.files[selectedFileIndex] : undefined;
   const isRunning = report?.status === "running";
 
@@ -303,26 +341,14 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
 
       {/* State 3: fetch error. uiux-fix F018 C124: the human message leads; the
           machine code is demoted to a small mono detail instead of a bold prefix. */}
-      {!loading && fetchError !== null && (
-        <div role="alert" className="rv-error">
-          {fetchError.code === "NOT_FOUND" ? (
-            t("reviewWidget.notFound")
-          ) : (
-            <>
-              {fetchError.message} <span className="err-code mono">({fetchError.code})</span>
-            </>
-          )}
-          {(hasManifest || evidenceError !== null) && (
-            <span className="rv-error-evidence">
-              <EvidenceControl
-                href={evidenceHref}
-                hasManifest={hasManifest}
-                error={evidenceError}
-              />
-            </span>
-          )}
-        </div>
-      )}
+      <ReviewFetchError
+        loading={loading}
+        error={fetchError}
+        hasManifest={hasManifest}
+        evidenceError={evidenceError}
+        evidenceHref={evidenceHref}
+        t={t}
+      />
 
       {/* State 4: running. uiux-fix F018 C124: the live region stays mounted (class
           swaps to .sr-only when empty) so AT reliably announce the text — a region

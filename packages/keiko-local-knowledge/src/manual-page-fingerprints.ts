@@ -35,7 +35,7 @@ export function computeManualCrawlRunFingerprint(pages: readonly ManualPageFinge
   const FIELD_SEPARATOR = "\u0001";
   const canonical = [...pages]
     .map((page) => `${page.relativePath}${FIELD_SEPARATOR}${page.contentFingerprint}`)
-    .sort()
+    .sort((left, right) => left.localeCompare(right))
     .join("\n");
   return computeManualPageFingerprint(new TextEncoder().encode(canonical));
 }

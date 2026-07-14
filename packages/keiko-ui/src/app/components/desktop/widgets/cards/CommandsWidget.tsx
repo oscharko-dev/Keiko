@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
+import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
 import {
   cancelCommandRun,
   commandEventsUrl,
@@ -40,10 +41,10 @@ const COMMAND_EVENT_SOURCE_TYPES = [
   "command:run-cancelled",
 ] as const;
 
-function errorFromUnknown(value: unknown): ErrorState {
+function errorFromUnknown(value: unknown, t: I18nTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
-  return { code: "INTERNAL", message: "Unexpected error." };
+  return { code: "INTERNAL", message: t("commandsWidget.error.unexpected") };
 }
 
 function createRequestId(): string {
@@ -51,21 +52,22 @@ function createRequestId(): string {
   return `command-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function taskLabel(task: CommandTask): string {
-  const trust = task.trustState === "trusted" ? "" : " · approval required";
+function taskLabel(task: CommandTask, t: I18nTranslate): string {
+  const trust =
+    task.trustState === "trusted" ? "" : t("commandsWidget.task.approvalRequiredSuffix");
   return `${task.kind} · ${task.label}${trust}`;
 }
 
-function eventLabel(kind: CommandRunnerEvent["kind"]): string {
+function eventLabel(kind: CommandRunnerEvent["kind"], t: I18nTranslate): string {
   switch (kind) {
     case "run-started":
-      return "started";
+      return t("commandsWidget.event.started");
     case "run-completed":
-      return "completed";
+      return t("commandsWidget.event.completed");
     case "run-failed":
-      return "failed";
+      return t("commandsWidget.event.failed");
     case "run-cancelled":
-      return "cancelled";
+      return t("commandsWidget.event.cancelled");
   }
 }
 
@@ -87,16 +89,84 @@ function isOwnEvent(event: CommandRunnerEvent, requestId: string | null): boolea
   );
 }
 
-function resultSummary(result: CommandTaskRunResult): string {
-  const parts = [`exit ${String(result.exitCode)}`, `${String(result.durationMs)} ms`];
-  if (result.truncated) parts.push("output truncated");
-  if (result.timedOut) parts.push("timed out");
+function resultSummary(result: CommandTaskRunResult, t: I18nTranslate): string {
+  const parts = [
+    t("commandsWidget.result.exit", { code: String(result.exitCode) }),
+    t("commandsWidget.result.duration", { duration: result.durationMs }),
+  ];
+  if (result.truncated) parts.push(t("commandsWidget.result.outputTruncated"));
+  if (result.timedOut) parts.push(t("commandsWidget.result.timedOut"));
   parts.push(result.failureReason);
-  parts.push(`run ${result.runId}`, `task ${result.taskId}`);
-  return `Run finished: ${parts.join(", ")}`;
+  parts.push(
+    t("commandsWidget.result.run", { id: result.runId }),
+    t("commandsWidget.result.task", { id: result.taskId }),
+  );
+  return t("commandsWidget.result.finished", { details: parts.join(", ") });
+}
+
+function CommandResult({
+  result,
+  t,
+}: {
+  readonly result: CommandTaskRunResult | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <>
+      <p className="sr-only" role="status" aria-live="polite">
+        {result !== null ? resultSummary(result, t) : ""}
+      </p>
+      {result !== null ? (
+        <div className="tm-result">
+          <div className="tm-badges">
+            <span
+              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
+            >
+              {t("commandsWidget.result.exit", { code: String(result.exitCode) })}
+            </span>
+            <span className="tm-badge">{result.durationMs} ms</span>
+            <span className="tm-badge">{result.failureReason}</span>
+            <span className="tm-badge">{t("commandsWidget.result.run", { id: result.runId })}</span>
+            <span className="tm-badge">
+              {t("commandsWidget.result.task", { id: result.taskId })}
+            </span>
+            {result.truncated ? (
+              <span className="tm-badge tm-badge-warn">{t("commandsWidget.result.truncated")}</span>
+            ) : null}
+            {result.timedOut ? (
+              <span className="tm-badge tm-badge-warn">{t("commandsWidget.result.timedOut")}</span>
+            ) : null}
+          </div>
+          {result.stdout.length > 0 ? (
+            <pre
+              className="tm-stdout"
+              role="region"
+              aria-label={t("commandsWidget.result.stdoutAriaLabel")}
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stdout}
+            </pre>
+          ) : null}
+          {result.stderr.length > 0 ? (
+            <pre
+              className="tm-stderr"
+              role="region"
+              aria-label={t("commandsWidget.result.stderrAriaLabel")}
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stderr}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
+  const t = useTranslate();
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   useEffect(() => {
     setProjectInput(props.projectPath ?? "");
@@ -135,13 +205,13 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
       .catch((err: unknown) => {
         if (!cancelled) {
           setTasks([]);
-          setError(errorFromUnknown(err));
+          setError(errorFromUnknown(err, t));
         }
       });
     return (): void => {
       cancelled = true;
     };
-  }, [projectInput]);
+  }, [projectInput, t]);
 
   // Subscribe to the global command event channel. Cancel is only armed for the run that echoes the
   // current requestId, so a foreign run-started on the shared channel can never hijack ownership.
@@ -192,7 +262,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         const next = await createCommandRun({ projectId: projectInput, taskId, requestId });
         setResult(next);
       } catch (err: unknown) {
-        setError(errorFromUnknown(err));
+        setError(errorFromUnknown(err, t));
       } finally {
         runningRef.current = false;
         setRunning(false);
@@ -200,7 +270,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         setInFlightRunId(null);
       }
     },
-    [projectInput, runnableTaskSelected, running, taskId],
+    [projectInput, runnableTaskSelected, running, taskId, t],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
@@ -208,34 +278,34 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
     try {
       await cancelCommandRun(inFlightRunId);
     } catch (err: unknown) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     }
-  }, [inFlightRunId]);
+  }, [inFlightRunId, t]);
 
   return (
     <div className={`terminal commands ${styles.lazyWidgetScope}`}>
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
         <label className="tm-field">
-          <span>Project path</span>
+          <span>{t("commandsWidget.field.projectPath")}</span>
           <input
             type="text"
             value={projectInput}
             onChange={(e) => setProjectInput(e.target.value)}
-            placeholder="/absolute/path/to/project"
+            placeholder={t("commandsWidget.field.projectPathPlaceholder")}
             required
           />
         </label>
         <div className="tm-field">
-          <span>Task</span>
+          <span>{t("commandsWidget.field.task")}</span>
           <KeikoSelect
             value={taskId}
-            ariaLabel="Task"
+            ariaLabel={t("commandsWidget.field.task")}
             disabled={tasks.length === 0}
-            menuTitle="Discovered tasks"
+            menuTitle={t("commandsWidget.field.discoveredTasks")}
             mono
             sections={[
               {
-                options: tasks.map((task) => ({ value: task.id, label: taskLabel(task) })),
+                options: tasks.map((task) => ({ value: task.id, label: taskLabel(task, t) })),
               },
             ]}
             onValueChange={setTaskId}
@@ -254,7 +324,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             disabled={!runnableTaskSelected}
             aria-disabled={runDisabled}
           >
-            {running ? "Running…" : "Run task"}
+            {running ? t("commandsWidget.action.running") : t("commandsWidget.action.run")}
           </button>
           {running ? (
             <button
@@ -264,18 +334,18 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
               aria-disabled={inFlightRunId === null}
               onClick={() => void onAbort()}
             >
-              Cancel
+              {t("commandsWidget.action.cancel")}
             </button>
           ) : null}
         </div>
         {tasks.length === 0 && projectInput.length > 0 && error === null ? (
           <p className="tm-limits" role="status">
-            No runnable test, build, or run tasks were discovered for this project.
+            {t("commandsWidget.empty.noRunnableTasks")}
           </p>
         ) : null}
         {selectedTaskRequiresApproval ? (
           <p className="tm-limits" role="status">
-            Server-side workspace trust is required before this repository-authored script can run.
+            {t("commandsWidget.trust.required")}
           </p>
         ) : null}
       </form>
@@ -288,7 +358,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
           <button
             type="button"
             className="tm-error-dismiss"
-            aria-label="Dismiss error"
+            aria-label={t("commandsWidget.error.dismiss")}
             onClick={() => setError(null)}
           >
             ✕
@@ -296,63 +366,19 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         </div>
       ) : null}
 
-      <p className="sr-only" role="status" aria-live="polite">
-        {result !== null ? resultSummary(result) : ""}
-      </p>
-
-      {result !== null ? (
-        <div className="tm-result">
-          <div className="tm-badges">
-            <span
-              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
-            >
-              exit {String(result.exitCode)}
-            </span>
-            <span className="tm-badge">{result.durationMs} ms</span>
-            <span className="tm-badge">{result.failureReason}</span>
-            <span className="tm-badge">run {result.runId}</span>
-            <span className="tm-badge">task {result.taskId}</span>
-            {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
-            {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
-          </div>
-          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll containers exposed as focusable
-              named regions so keyboard-only users can scroll them (WCAG 2.1.1). */}
-          {result.stdout.length > 0 ? (
-            <pre
-              className="tm-stdout"
-              role="region"
-              aria-label="Task stdout"
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-              tabIndex={0}
-            >
-              {result.stdout}
-            </pre>
-          ) : null}
-          {result.stderr.length > 0 ? (
-            <pre
-              className="tm-stderr"
-              role="region"
-              aria-label="Task stderr"
-              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-              tabIndex={0}
-            >
-              {result.stderr}
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+      <CommandResult result={result} t={t} />
 
       <div
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
         aria-atomic="false"
-        aria-label="Recent command run events"
+        aria-label={t("commandsWidget.log.ariaLabel")}
       >
         <ul className="tm-events">
           {events.map((event, idx) => (
             <li key={`${event.runId}-${String(idx)}-${event.kind}`} className="tm-event">
-              <span className="tm-event-kind">{eventLabel(event.kind)}</span>
+              <span className="tm-event-kind">{eventLabel(event.kind, t)}</span>
               <span className="tm-event-detail">{eventDetail(event)}</span>
             </li>
           ))}
