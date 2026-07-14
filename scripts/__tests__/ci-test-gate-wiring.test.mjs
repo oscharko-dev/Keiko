@@ -72,6 +72,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:editor-perf",
   "npm run test:e2e:workspace-perf",
@@ -124,6 +125,15 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("uses the documented stable sample count for CI editor performance evidence", () => {
+    const performanceStep = ci.slice(
+      ci.indexOf("      - name: Release performance E2E evidence"),
+      ci.indexOf("      - name: Performance evidence freshness + budget gate"),
+    );
+    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
+    expect(performanceStep).toContain("npm run test:e2e:editor-perf");
+  });
+
   it("keeps Keiko native warnings strict while treating MSVC SDK headers as external", () => {
     expect(windowsNativeQuality).toContain('"/nologo", "/std:c17", "/W4", "/WX", "/analyze"');
     expect(windowsNativeQuality).toContain('"/external:env:INCLUDE", "/external:W0"');

@@ -46,6 +46,13 @@ const ProblemsPanel = dynamic(
   () => import("./panels/ProblemsPanel").then((mod) => mod.ProblemsPanel),
   { ssr: false, loading: windowChunkFallback },
 );
+const DebugPanelSessionHost = dynamic(
+  () => import("./DebugPanelSessionHost").then((mod) => mod.DebugPanelSessionHost),
+  {
+    ssr: false,
+    loading: windowChunkFallback,
+  },
+);
 const PromptEnhancerPanel = dynamic(
   () => import("./panels/PromptEnhancerPanel").then((mod) => mod.PromptEnhancerPanel),
   { ssr: false, loading: windowChunkFallback },
@@ -327,6 +334,7 @@ registerWindowRender("problems", (cfg, ctx) => {
   const root = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   return <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />;
 });
+registerWindowRender("debug", (cfg, ctx) => <DebugPanelSessionHost cfg={cfg} ctx={ctx} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow
     cfg={cfg}

@@ -55,6 +55,12 @@ export const EDITOR_COMMAND_KEYBINDINGS: Readonly<
   "editor.generateTests": { mac: "⌘⌥T", pc: "Ctrl+Alt+T" },
   "editor.askKeikoAboutSelection": { mac: "⌘⌥K", pc: "Ctrl+Alt+K" },
   "editor.renameSymbol": { mac: "F2", pc: "F2" },
+  "editor.debugContinue": { mac: "F5", pc: "F5" },
+  "editor.debugPause": { mac: "F6", pc: "F6" },
+  "editor.debugStepOver": { mac: "F10", pc: "F10" },
+  "editor.debugStepInto": { mac: "F11", pc: "F11" },
+  "editor.debugStepOut": { mac: "⇧F11", pc: "Shift+F11" },
+  "editor.debugStop": { mac: "⇧F5", pc: "Shift+F5" },
 };
 
 /** Stable id and label for the host-owned Generate Tests action (palette + context-menu entry). */

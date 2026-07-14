@@ -105,10 +105,10 @@ interface ProjectDiscovery {
   readonly truncated: boolean;
 }
 
-// Mutable accounting shared across every read a cached program performs, so the file-count and
-// aggregate-byte caps bound the whole program's lifetime rather than resetting on each host call.
-// Kept separate from the per-call parse/read caches so the budget can be shared while file content
-// is always read fresh (no stale-content leak when a file's on-disk version changes).
+// Mutable request-scoped accounting shared across every host read a cached program performs, so the
+// file-count and aggregate-byte caps cannot reset between TypeScript callbacks in one operation.
+// The host resets this state only when resolveProject starts a new top-level request; otherwise a
+// healthy cached project would permanently exhaust its budget after several independent requests.
 interface ReadBudget {
   files: number;
   bytes: number;
@@ -412,8 +412,8 @@ class ProjectLanguageServiceHost implements ts.LanguageServiceHost {
   // LanguageService polls the returned token during traversal so an expired deadline interrupts an
   // otherwise-uninterruptible cross-file analysis.
   private cancellation: LanguageCancellation | undefined;
-  // Program-lifetime read accounting + realpath cache, shared across every host read so the
-  // aggregate byte/file caps bound the whole program. File content itself is always read fresh
+  // Request-scoped read accounting + realpath cache, shared across every host callback so the
+  // aggregate byte/file caps bound one complete operation. File content itself is always read fresh
   // (a per-call readCache) so a changed on-disk version is never served stale.
   private readonly budget: ReadBudget = newReadBudget();
   private readonly realCache = new Map<string, string | undefined>();
@@ -436,7 +436,11 @@ class ProjectLanguageServiceHost implements ts.LanguageServiceHost {
     this.overlayVersion += 1;
   }
 
-  public setCancellation(cancellation: LanguageCancellation): void {
+  public beginRequest(cancellation: LanguageCancellation): void {
+    this.budget.files = 0;
+    this.budget.bytes = 0;
+    this.budget.truncated = false;
+    this.realCache.clear();
     this.cancellation = cancellation;
   }
 
@@ -633,7 +637,7 @@ class CachedTypescriptProjectService implements TypescriptProjectService {
       ctx.limits,
     );
     host.updateOverlay(ctx.overlayPath, ctx.overlayText);
-    host.setCancellation(ctx.cancellation);
+    host.beginRequest(ctx.cancellation);
     const entry: ProjectEntry = {
       key,
       configPath: discovery.configPath,
@@ -658,7 +662,7 @@ class CachedTypescriptProjectService implements TypescriptProjectService {
     entry: ProjectEntry,
   ): TypescriptProjectServiceResult {
     entry.host.updateOverlay(ctx.overlayPath, ctx.overlayText);
-    entry.host.setCancellation(ctx.cancellation);
+    entry.host.beginRequest(ctx.cancellation);
     entry.lastUsed = Date.now();
     entry.useCount += 1;
     this.scheduleIdle(entry);

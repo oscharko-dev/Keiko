@@ -2,6 +2,7 @@ import type { EditorM7PolicyCeiling } from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
+import type { DebugActivationControlService } from "../dap/debugActivationControl.js";
 import {
   createEditorSettingsControlService,
   type EditorSettingsControlService,
@@ -15,6 +16,7 @@ import {
 export interface NodeEditorSettingsControlOptions {
   readonly stateDir: string;
   readonly managedLspControl?: ManagedLspControlService | undefined;
+  readonly debugActivation?: DebugActivationControlService | undefined;
   readonly processEnv?: Readonly<Record<string, string | undefined>> | undefined;
 }
 
@@ -32,6 +34,7 @@ export function createNodeEditorSettingsControl(
     store: createEditorSettingsStore({ stateDir: options.stateDir }),
     mutex: createWorkspaceMutexRegistry(),
     managedLspControl: options.managedLspControl,
+    debugActivation: options.debugActivation,
     policyCeiling: () => policyCeilingFor(processEnv),
     aiAssistance: ({ revision, settings }) =>
       resolveEditorAiAssistStatuses({ env: processEnv, revision, settings }),

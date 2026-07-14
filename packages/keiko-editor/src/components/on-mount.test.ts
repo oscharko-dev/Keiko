@@ -1,8 +1,11 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
+import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 
 import { isSaveChord, wireEditorOnMount } from "./on-mount.js";
 import type {
   MonacoDocumentSemanticTokensProvider,
+  EditorDebugBridge,
   MountEditor,
   MountMonaco,
   WireEditorOnMountArgs,
@@ -173,8 +176,8 @@ function buildFakes(): Fakes {
     container: buildContainer(),
     monaco: {
       editor: { defineTheme: vi.fn() },
-      KeyMod: { CtrlCmd: 2048, Alt: 512 },
-      KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
+      KeyMod: { CtrlCmd: 2048, Alt: 512, Shift: 1024 },
+      KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
     },
     cursorListener: null,
     selectionListener: null,
@@ -382,6 +385,240 @@ describe("wireEditorOnMount", () => {
         capture: true,
       },
     );
+  });
+
+  it("installs the explicit debug port end-to-end and removes every bounded projection on teardown", () => {
+    const fakes = buildFakes();
+    const container = document.createElement("div");
+    const actionIds: string[] = [];
+    const decorationCalls: (readonly unknown[])[] = [];
+    let mouseListener: Parameters<NonNullable<MountEditor["onMouseDown"]>>[0] | null = null;
+    const mouseDisposable = { dispose: vi.fn() };
+    const breakpoints: readonly SourceBreakpoint[] = [
+      {
+        id: "breakpoint-7",
+        fileId: "src/debug.ts",
+        line: 7,
+        kind: "conditional",
+        enabled: true,
+        verification: "verified",
+      },
+    ];
+    const debugActions = {
+      continue: vi.fn(),
+      pause: vi.fn(),
+      stepOver: vi.fn(),
+      stepInto: vi.fn(),
+      stepOut: vi.fn(),
+      stop: vi.fn(),
+    };
+    const toggleBreakpoint = vi.fn();
+    const contextMenu = vi.fn();
+    let debugModelUri = "inmemory://debug/src/debug.ts";
+    let debugSnapshotUri = debugModelUri;
+    const editor = {
+      ...fakes.editor,
+      addAction: (descriptor: FakeActionDescriptor): FakeDisposable => {
+        actionIds.push(descriptor.id ?? "");
+        return fakes.editor.addAction(descriptor);
+      },
+      deltaDecorations: (oldIds: string[], next: readonly unknown[]): string[] => {
+        decorationCalls.push([oldIds, next]);
+        return next.map((_, index) => `debug-decoration-${String(index)}`);
+      },
+      onMouseDown: (
+        listener: Parameters<NonNullable<MountEditor["onMouseDown"]>>[0],
+      ): FakeDisposable => {
+        mouseListener = listener;
+        return mouseDisposable;
+      },
+      getPosition: (): { readonly lineNumber: number; readonly column: number } => ({
+        lineNumber: 7,
+        column: 1,
+      }),
+      getModel: () => ({
+        getValue: (): string => "const answer = 42;",
+        getLineCount: (): number => 1,
+        getLineMaxColumn: (): number => 19,
+        uri: { toString: (): string => debugModelUri },
+      }),
+    } as unknown as MountEditor;
+    const bridgeRef: { current: EditorDebugBridge | null } = { current: null };
+    const dispose = wire(fakes, {
+      editor,
+      monaco: {
+        ...fakes.monaco,
+        editor: {
+          ...fakes.monaco.editor,
+          MouseTargetType: { GUTTER_GLYPH_MARGIN: 7 },
+        },
+      },
+      container,
+      debug: {
+        gutter: {
+          resolveBreakpoints: (): readonly SourceBreakpoint[] => breakpoints,
+          pausedLine: 7,
+          labels: {
+            toggle: "Toggle Breakpoint",
+            conditional: "Toggle Conditional Breakpoint",
+            logpoint: "Edit Logpoint",
+            enable: "Enable Breakpoint",
+            disable: "Disable Breakpoint",
+          },
+          onToggleBreakpoint: toggleBreakpoint,
+          onToggleConditionalBreakpoint: vi.fn(),
+          onEditLogpoint: vi.fn(),
+          onToggleBreakpointEnabled: vi.fn(),
+          onOpenContextMenu: contextMenu,
+        },
+        commands: debugActions,
+        resolvePausedValues: () => ({
+          paused: true,
+          pauseGeneration: 3,
+          documentUri: debugSnapshotUri,
+          values: [{ line: 6, column: 4, value: "42" }],
+        }),
+      },
+      onDebugBridge: (next): void => {
+        bridgeRef.current = next;
+      },
+    });
+
+    expect(bridgeRef.current).not.toBeNull();
+    expect(actionIds).toEqual(
+      expect.arrayContaining([
+        "keiko.editor.debugContinue",
+        "keiko.editor.debugPause",
+        "keiko.editor.debugStepOver",
+        "keiko.editor.debugStepInto",
+        "keiko.editor.debugStepOut",
+        "keiko.editor.debugStop",
+        "keiko.editor.debugToggleBreakpoint",
+        "keiko.editor.debugToggleConditionalBreakpoint",
+        "keiko.editor.debugEditLogpoint",
+        "keiko.editor.debugToggleBreakpointEnabled",
+      ]),
+    );
+    expect(container.querySelectorAll("style[data-keiko-debug-decoration-style]")).toHaveLength(0);
+    expect(document.head.querySelectorAll("style[data-keiko-debug-decoration-style]")).toHaveLength(
+      1,
+    );
+    expect(decorationCalls).toHaveLength(2);
+    expect(decorationCalls[0]?.[1]).toHaveLength(1);
+    expect(decorationCalls[1]?.[1]).toHaveLength(1);
+
+    const invokeMouseListener = mouseListener as unknown as Parameters<
+      NonNullable<MountEditor["onMouseDown"]>
+    >[0];
+    invokeMouseListener({
+      event: { rightButton: false },
+      target: { type: 7, position: { lineNumber: 7 } },
+    });
+    invokeMouseListener({
+      event: { rightButton: true },
+      target: { type: 7, position: { lineNumber: 7 } },
+    });
+    expect(toggleBreakpoint).toHaveBeenCalledWith(7);
+    expect(contextMenu).toHaveBeenCalledWith(
+      expect.objectContaining({ line: 7, breakpoint: breakpoints[0] }),
+    );
+
+    if (bridgeRef.current === null) throw new Error("debug bridge was not installed");
+    bridgeRef.current.refresh();
+    expect(decorationCalls).toHaveLength(4);
+
+    debugModelUri = "inmemory://debug/src/renamed.ts";
+    debugSnapshotUri = debugModelUri;
+    bridgeRef.current.refresh();
+    expect(decorationCalls).toHaveLength(6);
+    expect(decorationCalls[5]?.[1]).toHaveLength(1);
+
+    dispose();
+    expect(mouseDisposable.dispose).toHaveBeenCalledOnce();
+    expect(decorationCalls).toHaveLength(8);
+    expect(bridgeRef.current).toBeNull();
+    expect(container.hasAttribute("data-keiko-debug-decorations")).toBe(false);
+    expect(document.head.querySelectorAll("style[data-keiko-debug-decoration-style]")).toHaveLength(
+      0,
+    );
+  });
+
+  it("keeps the paused-value bridge available until Monaco attaches its model", () => {
+    const fakes = buildFakes();
+    const container = document.createElement("div");
+    const bridgeRef: { current: EditorDebugBridge | null } = { current: null };
+    const modelUri = "inmemory://delayed-model";
+    let modelAttached = false;
+    let modelChangeListener: (() => void) | null = null;
+    const decorationCalls: (readonly unknown[])[] = [];
+    const triggerModelChange = (): void => {
+      if (modelChangeListener === null) throw new Error("model change was not observed");
+      modelChangeListener();
+    };
+    const editor = {
+      ...fakes.editor,
+      deltaDecorations: (_oldIds: string[], decorations: readonly unknown[]): string[] => {
+        decorationCalls.push(decorations);
+        return decorations.map((_, index) => `delayed-model-${String(index)}`);
+      },
+      getModel: (): { readonly uri: { toString: () => string } } | null =>
+        modelAttached ? { uri: { toString: (): string => modelUri } } : null,
+      onDidChangeModel: (listener: () => void): FakeDisposable => {
+        modelChangeListener = listener;
+        return { dispose: vi.fn() };
+      },
+    } as unknown as MountEditor;
+    const dispose = wire(fakes, {
+      container,
+      editor,
+      debug: {
+        gutter: {
+          resolveBreakpoints: (): readonly SourceBreakpoint[] => [],
+          labels: {
+            toggle: "Toggle Breakpoint",
+            conditional: "Toggle Conditional Breakpoint",
+            logpoint: "Edit Logpoint",
+            enable: "Enable Breakpoint",
+            disable: "Disable Breakpoint",
+          },
+          onToggleBreakpoint: vi.fn(),
+          onToggleConditionalBreakpoint: vi.fn(),
+          onEditLogpoint: vi.fn(),
+          onToggleBreakpointEnabled: vi.fn(),
+          onOpenContextMenu: vi.fn(),
+        },
+        commands: {
+          continue: vi.fn(),
+          pause: vi.fn(),
+          stepOver: vi.fn(),
+          stepInto: vi.fn(),
+          stepOut: vi.fn(),
+          stop: vi.fn(),
+        },
+        resolvePausedValues: (documentUri) => ({
+          paused: true,
+          pauseGeneration: 1,
+          documentUri,
+          values: [{ line: 1, column: 1, value: "rendered after model attachment" }],
+        }),
+      },
+      onDebugBridge: (next): void => {
+        bridgeRef.current = next;
+      },
+    });
+
+    expect(fakes.actionDescriptors().map((descriptor) => descriptor.id)).toEqual(
+      expect.arrayContaining(["keiko.editor.debugContinue", "keiko.editor.debugStop"]),
+    );
+    expect(fakes.actionDescriptors().map((descriptor) => descriptor.id)).not.toEqual(
+      expect.arrayContaining(["keiko.editor.debugToggleBreakpoint"]),
+    );
+    expect(decorationCalls[0]).toEqual([]);
+    if (bridgeRef.current === null) throw new Error("debug bridge was not installed");
+    modelAttached = true;
+    triggerModelChange();
+    expect(decorationCalls[1]).toHaveLength(1);
+    dispose();
   });
 });
 

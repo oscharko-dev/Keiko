@@ -183,7 +183,10 @@ describe("workspace watch routes", () => {
     );
     let stale: Response | undefined;
     try {
-      const initial = await readUntil(stream, "editor-watch:snapshot");
+      // `ready` is emitted only after the server has registered the watch subscription. Waiting for
+      // it prevents the fixture event below from racing an unregistered SSE listener under coverage.
+      const initial = await readUntil(stream, "event: ready");
+      expect(initial).toContain("editor-watch:snapshot");
       expect(initial).not.toContain(workspaceRoot);
       await waitForBaselineSeed();
 

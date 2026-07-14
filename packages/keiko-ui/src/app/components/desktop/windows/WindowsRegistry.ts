@@ -50,6 +50,8 @@ export type WindowType =
   | "localKnowledge"
   // Issue #2213 (Epic #2092) — workspace Problems panel. Singleton tool window.
   | "problems"
+  // Issue #2346 (Epic #2096) — one bounded debug window with stack, variables, watches, and output.
+  | "debug"
   // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
   // cards. QI lives inside the Workspace like every other window, not as a full-page route.
   | "quality"
@@ -670,6 +672,18 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 480,
     min: { w: 360, h: 280 },
     tiny: { w: 300, h: 200 },
+    tool: true,
+    singleton: true,
+  },
+  debug: {
+    title: "Debug",
+    icon: "activity",
+    accent: true,
+    desc: "Governed debug session state",
+    w: 680,
+    h: 560,
+    min: { w: 400, h: 320 },
+    tiny: { w: 300, h: 240 },
     tool: true,
     singleton: true,
   },

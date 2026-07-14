@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createLspFrameReader,
@@ -31,6 +31,13 @@ async function collect(source: AsyncGenerator<Buffer, void, void>): Promise<Buff
 }
 
 describe("createLspFrameReader", () => {
+  it("surfaces exact content-free reject metadata", () => {
+    expect(new LspFrameRejectError("MALFORMED_HEADER")).toMatchObject({
+      name: "LspFrameRejectError",
+      message: "MALFORMED_HEADER",
+      reason: "MALFORMED_HEADER",
+    });
+  });
   it("reads a single well-formed frame", async () => {
     const bodies = await collect(createLspFrameReader(fromChunks([frame('{"a":1}')]), 1024));
     expect(bodies).toHaveLength(1);
@@ -149,6 +156,22 @@ describe("createLspFrameReader", () => {
     expect(bodies[0]?.toString("utf8")).toBe(bodyText);
   });
 
+  it("reads a maximum-size valid frame without allocating an input-sized control array", async () => {
+    const body = "x".repeat(1024 * 1024);
+    const wire = frame(body);
+    const arrayFrom = vi.spyOn(Array, "from").mockImplementation(() => {
+      throw new Error("input-sized control allocation");
+    });
+    try {
+      const bodies = await collect(
+        createLspFrameReader(fromChunks([wire]), Buffer.byteLength(body)),
+      );
+      expect(bodies).toStrictEqual([Buffer.from(body)]);
+    } finally {
+      arrayFrom.mockRestore();
+    }
+  });
+
   it("finds a header terminator that straddles a chunk boundary", async () => {
     // The `\r\n\r\n` delimiter is split across two chunks; the overlap-retaining scan must still find
     // it. Split exactly in the middle of the 4-byte delimiter.
@@ -157,6 +180,42 @@ describe("createLspFrameReader", () => {
     const chunks = [whole.subarray(0, headerEnd), whole.subarray(headerEnd)];
     const bodies = await collect(createLspFrameReader(fromChunks(chunks), 1_048_576));
     expect(bodies[0]?.toString("utf8")).toBe('{"k":"v"}');
+  });
+
+  it("finds the delimiter across one-byte chunks and ignores empty chunks", async () => {
+    const whole = frame("x");
+    const chunks = [Buffer.alloc(0), ...[...whole].map((byte) => Buffer.from([byte]))];
+    const bodies = await collect(createLspFrameReader(fromChunks(chunks), 1));
+    expect(bodies).toStrictEqual([Buffer.from("x")]);
+  });
+
+  it("accepts optional headers and the first duplicate length in compatibility mode", async () => {
+    const wire = Buffer.from(
+      "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n" +
+        "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+      "ascii",
+    );
+    await expect(collect(createLspFrameReader(fromChunks([wire]), 2))).resolves.toStrictEqual([
+      Buffer.from("{}"),
+    ]);
+  });
+
+  it("waits for an incomplete body in compatibility mode", async () => {
+    const wire = Buffer.from("Content-Length: 4\r\n\r\n{}", "ascii");
+    await expect(collect(createLspFrameReader(fromChunks([wire]), 4))).resolves.toStrictEqual([]);
+  });
+
+  it.each([
+    Buffer.from("Content-Length: 4\r\n", "ascii"),
+    Buffer.from("Content-Length: 4\r\n\r\n{}", "ascii"),
+  ])("rejects a truncated stream at EOF with exact content-free metadata", async (wire) => {
+    await expect(
+      collect(createLspFrameReader(fromChunks([wire]), 4, { rejectTruncatedEof: true })),
+    ).rejects.toMatchObject({
+      name: "LspFrameRejectError",
+      message: "MALFORMED_HEADER",
+      reason: "MALFORMED_HEADER",
+    });
   });
 });
 

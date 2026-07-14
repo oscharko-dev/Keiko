@@ -6,6 +6,7 @@ const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
+const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 
 describe("dev quality workflows", () => {
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -21,6 +22,9 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("npm run test:mutation:security");
     expect(mutation).not.toContain("check-mutation-scope.mjs");
     expect(mutation).not.toContain("continue-on-error: true");
+    expect(packageJson.scripts["test:mutation:security"]).toContain(
+      "npm run test:mutation:debug-launch-security",
+    );
 
     const install = mutation.indexOf("npm ci --ignore-scripts");
     const buildPackages = mutation.indexOf("npm run build:packages");
@@ -28,6 +32,8 @@ describe("dev quality workflows", () => {
     expect(buildPackages).toBeGreaterThan(install);
     expect(buildPackages).toBeLessThan(mutationRun);
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
+    expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
   });
 
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {

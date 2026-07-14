@@ -275,6 +275,12 @@ const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
 
+const EditorDebugSessionHost = dynamic<
+  import("./EditorDebugSessionHost").EditorDebugSessionHostProps
+>(() => import("./EditorDebugSessionHost").then((mod) => mod.EditorDebugSessionHost), {
+  ssr: false,
+});
+
 const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./EditorDiffSurface"), {
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
@@ -490,6 +496,11 @@ const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
 const FORMAT_ON_SAVE_DEADLINE_MS = 5_000;
 const UTF8_ENCODER = new TextEncoder();
+/**
+ * #2347 replaces this consumption seam with its server-resolved, minimum-wins capability result.
+ * This slice deliberately cannot infer authorization from the browser-visible workspace root.
+ */
+export const DEFAULT_DEBUG_CAPABILITY_ENABLED = false;
 
 interface FormatOnSaveState {
   readonly enabled: boolean;
@@ -628,6 +639,8 @@ export interface EditorRuntimeWidgetProps {
   readonly onOutlineStateChange?:
     ((paneId: string, snapshot: EditorOutlineSnapshot) => void) | undefined;
   readonly outlineRevealRequest?: EditorOutlineRevealRequest | undefined;
+  /** Opens the transient bounded debug projection for this editor's resolved workspace. */
+  readonly onOpenDebugPanel?: (() => void) | undefined;
 }
 
 export interface EditorExternalSaveRequest {
@@ -1435,12 +1448,20 @@ function EditorRuntimeWidget({
   linkedCapsuleSetIds,
   onOutlineStateChange,
   outlineRevealRequest,
+  onOpenDebugPanel,
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
   const editorSettings = useEditorSettings(root);
+  const debugActivation = editorSettings.snapshot?.debugging;
+  const debugEnabled = debugActivation?.state === "available";
+  const debugWorkspaceId = editorSettings.snapshot?.debugWorkspaceId;
+  const [debugEditorHost, setDebugEditorHost] = useState<EditorSurfaceProps["debug"]>(undefined);
+  const [debugSessionState, setDebugSessionState] = useState<
+    import("./EditorDebugSessionHost").DebugSessionState | null
+  >(null);
   const workspaceSnippets = useWorkspaceSnippets(root);
   // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
   // Monaco model registry. Every mounted editor surface renders this component, so the registry
@@ -3753,6 +3774,7 @@ function EditorRuntimeWidget({
           // why.
           formatting: { available: formattingEnabled, source: builtinFormatting },
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
+          ...(debugSessionState === null ? {} : { debug: { state: debugSessionState } }),
         });
 
   const showUnifiedStatusBar =
@@ -5183,6 +5205,17 @@ function EditorRuntimeWidget({
   } else if (hasTarget && buffer !== null && fileModel !== null) {
     panel = (
       <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
+        {debugEnabled ? (
+          <EditorDebugSessionHost
+            workspaceId={debugWorkspaceId}
+            activationRevision={debugActivation?.revision}
+            enabled={debugEnabled}
+            fileId={file}
+            onOpenDebugPanel={onOpenDebugPanel}
+            onHostChange={setDebugEditorHost}
+            onSessionStateChange={setDebugSessionState}
+          />
+        ) : null}
         <EditorSurface
           key={editorSurfaceKey}
           buffer={buffer}
@@ -5244,6 +5277,7 @@ function EditorRuntimeWidget({
           showStatusFooter={false}
           editorGitGutter={editorGitGutter}
           editorBlame={editorBlame}
+          debug={debugEditorHost}
           gitGutterRefreshNonce={gitGutterRefreshNonce}
           editorConflicts={editorConflicts}
         />

@@ -31,15 +31,20 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
+  type DebugDeploymentPolicy,
+  type DebugProductSupport,
+  type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
+import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
@@ -144,12 +149,31 @@ import type {
   WorkspaceReconciliationService,
   WorkspaceRepairService,
 } from "./task-workspace/types.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
+import type { DapDebugRouteService } from "./editor/dap/dapDebugRoutes.js";
+import { createDapDebugRouteService } from "./editor/dap/dapDebugRoutes.js";
+import { createDapOperatorProvisioning } from "./editor/dap/dapOperatorProvisioningFactory.js";
+import {
+  parseDapOperatorProvisioningDocument,
+  type DapOperatorProvisionedArtifact,
+  type DapOperatorProvisioningDocument,
+} from "./editor/dap/dapOperatorProvisioning.js";
+import {
+  createDapProductionService,
+  type DapProductionProvisioning,
+  type DapProductionService,
+} from "./editor/dap/dapProductionService.js";
+import { inspectDebugWorkspaceIdentity } from "./editor/dap/debugLaunchContext.js";
+import {
+  createDebugActivationControlService,
+  type DebugActivationControlService,
+} from "./editor/dap/debugActivationControl.js";
+import type { DebugActivationEvidence } from "./editor/dap/debugActivationEvidence.js";
 import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.js";
 import type { GitRouteOptions } from "./gitRoutes.js";
 import type { NativeFileDialogRouteOptions } from "./native-file-dialog/route.js";
@@ -396,6 +420,12 @@ export interface UiHandlerDeps {
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
+  // Epic #2096 / Issue #2345 — route-facing composition over the canonical DAP manager,
+  // instrumentation store, browser capability registry, pause references, and SSE bridge. Optional
+  // until #2347 replaces the temporary default-off route flag with the production activation gate.
+  readonly dapDebug?: DapDebugRouteService | undefined;
+  // ADR-0136 D7's derived debug capability gate. The M7 setting remains the durable opt-in.
+  readonly debugActivationControl?: DebugActivationControlService | undefined;
   // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
   // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
   readonly managedLspControl?: ManagedLspControlService | undefined;
@@ -561,8 +591,21 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Optional published DAP service. Activation only uses this bounded revocation seam; it never
+  // reaches into adapter transport or launch internals.
+  readonly dapDebug?: DapDebugRouteService | undefined;
+  /**
+   * Operator-owned, workspace-external DAP provisioning. The normal BFF composes this only when
+   * all four activation factors below are supplied; absent configuration remains unavailable.
+   */
+  readonly dapProductionProvisioning?: DapProductionProvisioning | undefined;
+  readonly dapProductSupport?: (realRoot: string | undefined) => DebugProductSupport;
+  readonly dapDeploymentPolicy?: (realRoot: string | undefined) => DebugDeploymentPolicy;
+  readonly dapProvisioning?: (realRoot: string) => DebugProvisioning;
   // Deterministic activation-control seam for route/bootstrap tests.
   readonly managedLspControl?: ManagedLspControlService | undefined;
+  // Deterministic debug-activation control seam for route/bootstrap tests.
+  readonly debugActivationControl?: DebugActivationControlService | undefined;
   // Deterministic editor-settings control seam for route/bootstrap tests.
   readonly editorSettingsControl?: EditorSettingsControlService | undefined;
   readonly editorSettingsEvents?: EditorSettingsEventBus | undefined;
@@ -1522,11 +1565,18 @@ interface PeripheralManagers {
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly managedLspControl: ManagedLspControlService;
+  readonly debugActivationControl: DebugActivationControlService;
   readonly editorSettingsControl: EditorSettingsControlService;
   readonly editorSettingsEvents: EditorSettingsEventBus;
   readonly workspaceWatchService: WorkspaceWatchService;
   readonly workspaceSnippets: WorkspaceSnippetsService;
   readonly memoryAuthorization: MemoryAuthorizationContext;
+}
+
+interface DapRuntimeReference {
+  current: DapDebugRouteService | undefined;
+  productionQualified: boolean;
+  readonly workspaceRoots: Map<string, string>;
 }
 
 function buildLocalKnowledgeRemediation(options: {
@@ -1569,6 +1619,247 @@ interface BuildPeripheralsArgs {
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly runtimeStateDir: string;
+  readonly dapRuntime: DapRuntimeReference;
+}
+
+function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
+  return "unavailable";
+}
+
+function missingDebugProvisioning(): DebugProvisioning {
+  return "notProvisioned";
+}
+
+function operatorDapDocument(env: NodeJS.ProcessEnv): DapOperatorProvisioningDocument | undefined {
+  const raw = env.KEIKO_DAP_OPERATOR_PROVISIONING_JSON;
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = parseDapOperatorProvisioningDocument(JSON.parse(raw) as unknown);
+    return parsed.ok ? parsed.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface DapArtifactQualification {
+  readonly executable: boolean;
+  readonly empty: boolean;
+  readonly allowDirectory: boolean;
+}
+
+type DapArtifactContentReader = (hostPath: string) => Uint8Array;
+
+function qualifiedArtifactFile(
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+  contentReader?: DapArtifactContentReader,
+): readonly unknown[] {
+  const supplied = lstatSync(artifact.hostPath);
+  const realPath = realpathSync(artifact.hostPath);
+  const approvedRoot = realpathSync(artifact.approvedRoot);
+  const stat = lstatSync(realPath);
+  const change = lstatSync(realPath, { bigint: true });
+  if (
+    supplied.isSymbolicLink() ||
+    realPath === approvedRoot ||
+    !isWithinWorkspace(approvedRoot, realPath) ||
+    !stat.isFile() ||
+    (qualification.executable && (stat.mode & 0o111) === 0) ||
+    (qualification.empty && stat.size !== 0)
+  ) {
+    throw new Error("INVALID_DAP_PROVISIONING");
+  }
+  const stableMetadata = [
+    artifact.hostPath,
+    realPath,
+    approvedRoot,
+    artifact.capsulePath,
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mode,
+    stat.uid,
+  ];
+  return contentReader === undefined
+    ? [...stableMetadata, change.mtimeNs.toString(), change.ctimeNs.toString()]
+    : [...stableMetadata, createHash("sha256").update(contentReader(realPath)).digest("hex")];
+}
+
+function qualifiedArtifact(
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+  contentReader?: DapArtifactContentReader,
+): readonly (readonly unknown[])[] {
+  const supplied = lstatSync(artifact.hostPath);
+  if (supplied.isSymbolicLink()) throw new Error("INVALID_DAP_PROVISIONING");
+  const realPath = realpathSync(artifact.hostPath);
+  const stat = lstatSync(realPath);
+  if (stat.isFile()) return [qualifiedArtifactFile(artifact, qualification, contentReader)];
+  if (!qualification.allowDirectory || !stat.isDirectory()) {
+    throw new Error("INVALID_DAP_PROVISIONING");
+  }
+  return readdirSync(realPath, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) =>
+      qualifiedArtifact(
+        {
+          hostPath: join(realPath, entry.name),
+          approvedRoot: artifact.approvedRoot,
+          capsulePath: join(artifact.capsulePath, entry.name),
+        },
+        qualification,
+        contentReader,
+      ),
+    );
+}
+
+function qualifiedAdapterIdentity(
+  document: DapOperatorProvisioningDocument,
+  contentReader?: DapArtifactContentReader,
+): readonly unknown[] {
+  const adapter = document.adapter;
+  for (const directory of adapter.approvedPath.split(delimiter)) {
+    const hostPath = join(directory, adapter.executableName);
+    try {
+      const identity = qualifiedArtifactFile(
+        {
+          hostPath,
+          approvedRoot: document.launch.adapterApprovedRoot,
+          capsulePath: "/opt/keiko-debug/adapter",
+        },
+        { executable: true, empty: false, allowDirectory: false },
+        contentReader,
+      );
+      const realPath = String(identity[1]);
+      if (adapter.trustedRoots.some((root) => isWithinWorkspace(realpathSync(root), realPath))) {
+        return identity;
+      }
+    } catch {
+      // Continue through the closed operator-approved PATH only.
+    }
+  }
+  throw new Error("INVALID_DAP_PROVISIONING");
+}
+
+function operatorProvisioningIdentity(
+  document: DapOperatorProvisioningDocument,
+  contentReader?: DapArtifactContentReader,
+): string | undefined {
+  try {
+    const launch = document.launch;
+    const executable = { executable: true, empty: false, allowDirectory: false } as const;
+    const data = { executable: false, empty: false, allowDirectory: true } as const;
+    const empty = { executable: false, empty: true, allowDirectory: false } as const;
+    const identities = [
+      document,
+      qualifiedAdapterIdentity(document, contentReader),
+      ...qualifiedArtifact(launch.node, executable, contentReader),
+      ...qualifiedArtifact(launch.npm, executable, contentReader),
+      ...qualifiedArtifact(launch.shell, executable, contentReader),
+      ...qualifiedArtifact(launch.backend, executable, contentReader),
+      ...qualifiedArtifact(launch.npmUserConfig, empty, contentReader),
+      ...qualifiedArtifact(launch.npmGlobalConfig, empty, contentReader),
+      ...launch.runtimeClosure.flatMap((artifact) =>
+        qualifiedArtifact(artifact, data, contentReader),
+      ),
+    ];
+    return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+interface OperatorProvisioningSnapshot {
+  readonly signal: string;
+  readonly identity: string;
+}
+
+function operatorProvisioningSnapshot(
+  document: DapOperatorProvisioningDocument,
+  contentReader: DapArtifactContentReader,
+  expectedSignal?: string,
+): OperatorProvisioningSnapshot | undefined {
+  const signal = expectedSignal ?? operatorProvisioningIdentity(document);
+  if (signal === undefined) return undefined;
+  const identity = operatorProvisioningIdentity(document, contentReader);
+  const confirmedSignal = operatorProvisioningIdentity(document);
+  if (identity === undefined || confirmedSignal !== signal) return undefined;
+  return { signal: confirmedSignal, identity };
+}
+
+/** @internal Non-spawning activation preflight; exported only for deterministic server tests. */
+export function createOperatorProvisioningQualification(
+  env: NodeJS.ProcessEnv,
+  contentReader: DapArtifactContentReader = readFileSync,
+): () => DebugProvisioning {
+  const initial = operatorDapDocument(env);
+  const approved =
+    initial === undefined ? undefined : operatorProvisioningSnapshot(initial, contentReader);
+  const approvedIdentity = approved?.identity;
+  let cachedSignal = approved?.signal;
+  let cachedIdentity = approvedIdentity;
+  return (): DebugProvisioning => {
+    const current = operatorDapDocument(env);
+    if (approvedIdentity === undefined || current === undefined) return "notProvisioned";
+    const signal = operatorProvisioningIdentity(current);
+    if (signal === undefined) return "notProvisioned";
+    if (signal !== cachedSignal) {
+      const snapshot = operatorProvisioningSnapshot(current, contentReader, signal);
+      if (snapshot === undefined) return "notProvisioned";
+      cachedSignal = snapshot.signal;
+      cachedIdentity = snapshot.identity;
+    }
+    return cachedIdentity === approvedIdentity ? "provisioned" : "notProvisioned";
+  };
+}
+
+function buildDebugActivationControl(args: BuildPeripheralsArgs): DebugActivationControlService {
+  const operatorConfigured = operatorDapDocument(args.options.env) !== undefined;
+  const operatorProvisioning = createOperatorProvisioningQualification(args.options.env);
+  return (
+    args.options.debugActivationControl ??
+    createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport:
+        args.options.dapProductSupport ??
+        ((): DebugProductSupport => (process.platform === "linux" ? "supported" : "unsupported")),
+      deploymentPolicy:
+        args.options.dapDeploymentPolicy ??
+        ((): DebugDeploymentPolicy =>
+          operatorConfigured ? "allowed" : unavailableDebugDeploymentPolicy()),
+      provisioning:
+        args.options.dapProvisioning ??
+        ((): DebugProvisioning =>
+          operatorConfigured && args.dapRuntime.productionQualified
+            ? operatorProvisioning()
+            : missingDebugProvisioning()),
+      projectEvidence: (fingerprint, evidence): void => {
+        args.evidenceStore.put(
+          `debug-activation-${fingerprint}-${String(evidence.revision)}-${evidence.action}`,
+          JSON.stringify(debugActivationEvidenceProjection(evidence)),
+        );
+      },
+      disposeActiveSession: (realRoot): Promise<void> => disposeActiveDebugSession(args, realRoot),
+      onSweepFailure: (failure): void => {
+        args.evidenceStore.put(
+          `debug-activation-sweep-failure-${randomUUID()}`,
+          JSON.stringify(failure),
+        );
+      },
+    })
+  );
+}
+
+async function disposeActiveDebugSession(
+  args: BuildPeripheralsArgs,
+  realRoot: string,
+): Promise<void> {
+  const service = args.dapRuntime.current;
+  if (service === undefined) return;
+  const sessionId = service.manager.workspaceSessionId(
+    inspectDebugWorkspaceIdentity(realRoot).identityDigest,
+  );
+  if (sessionId !== undefined) await service.manager.revoke(sessionId);
 }
 
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
@@ -1592,6 +1883,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       redact: args.liveRedactor,
       evidenceStore: args.evidenceStore,
     });
+  const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({
       store: args.uiStore,
@@ -1643,11 +1935,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
         env: args.options.env,
       }),
     managedLspControl,
+    debugActivationControl,
     editorSettingsControl:
       args.options.editorSettingsControl ??
       createNodeEditorSettingsControl({
         stateDir: args.runtimeStateDir,
         managedLspControl,
+        debugActivation: debugActivationControl,
         processEnv: args.options.env,
       }),
     editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
@@ -1660,6 +1954,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
+}
+
+function debugActivationEvidenceProjection(
+  evidence: DebugActivationEvidence,
+): Readonly<Record<string, DebugActivationEvidence>> {
+  return { evidence };
 }
 
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
@@ -1991,7 +2291,10 @@ function atlassianConnectorCredentialFields(
   };
 }
 
-function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralManagers {
+function buildAssemblyPeripherals(
+  args: UiHandlerDepsAssemblyArgs,
+  dapRuntime: DapRuntimeReference,
+): PeripheralManagers {
   return buildPeripherals({
     options: args.options,
     uiStore: args.bundle.uiStore,
@@ -2001,11 +2304,159 @@ function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralMa
     runtimeConfig: args.runtimeConfig,
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
+    dapRuntime,
   });
 }
 
+function createComposedDapRouteService(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+  production: DapProductionService,
+): DapDebugRouteService {
+  return createDapDebugRouteService({
+    production,
+    stateDir: dirname(args.resolvedUiDbPath),
+    now: Date.now,
+    activation: async (realRoot) => {
+      runtime.workspaceRoots.set(inspectDebugWorkspaceIdentity(realRoot).identityDigest, realRoot);
+      const snapshot = await peripherals.editorSettingsControl.read(realRoot);
+      return snapshot.debugging ?? unavailableDebugActivation(snapshot.revision);
+    },
+  });
+}
+
+function dapActivationCurrent(
+  runtime: DapRuntimeReference,
+  control: DebugActivationControlService,
+  workspacePartitionKey: string,
+  expectedRevision: number,
+): boolean {
+  const root = runtime.workspaceRoots.get(workspacePartitionKey);
+  if (root === undefined) return false;
+  try {
+    const currentPartition = inspectDebugWorkspaceIdentity(root).identityDigest;
+    return currentPartition === workspacePartitionKey && control.isCurrent(root, expectedRevision);
+  } catch {
+    return false;
+  }
+}
+
+function unavailableDebugActivation(
+  revision: number,
+): Awaited<ReturnType<DapDebugRouteService["activation"]>> {
+  return {
+    ok: true,
+    schemaVersion: "1",
+    adapterId: "node-typescript",
+    revision,
+    state: "disabled",
+    reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+    policyResult: "denied",
+  };
+}
+
+function dapWorkspaceContext(
+  peripherals: PeripheralManagers,
+  root: string,
+): { readonly root: string; readonly projectId: string; readonly trusted: boolean } | undefined {
+  try {
+    const workspace = detectWorkspaceAt(root, nodeWorkspaceFs);
+    const canonicalRoot = nodeWorkspaceFs.realPath(root);
+    return {
+      root: canonicalRoot,
+      projectId: canonicalRoot,
+      trusted: peripherals.workspaceScriptTrust.isTrusted(canonicalRoot, workspace),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function recordDapCompositionFailure(evidenceStore: EvidenceStore): void {
+  try {
+    evidenceStore.put(
+      `debug-runtime-composition-failure-${randomUUID()}`,
+      JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeCompositionFailure" }),
+    );
+  } catch {
+    // Production DAP remains unavailable even when its content-free diagnostic cannot persist.
+  }
+}
+
+function createQualifiedDapProductionService(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+  provisioning: DapProductionProvisioning,
+): DapProductionService | undefined {
+  try {
+    return createDapProductionService({
+      provisioning,
+      evidenceStore: args.evidenceStore,
+      appendJournal: (partition, evidence): Promise<void> => {
+        args.evidenceStore.put(
+          `debug-session-${partition}-${randomUUID()}`,
+          JSON.stringify(evidence),
+        );
+        return Promise.resolve();
+      },
+      now: Date.now,
+      epoch: () => 0,
+      activationCurrent: (partition, revision): boolean =>
+        dapActivationCurrent(runtime, peripherals.debugActivationControl, partition, revision),
+      emitOutputLimit: (): void => undefined,
+      onRuntimeFailure: (): void => {
+        args.evidenceStore.put(
+          `debug-runtime-failure-${randomUUID()}`,
+          JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeFailure" }),
+        );
+      },
+    });
+  } catch {
+    recordDapCompositionFailure(args.evidenceStore);
+    return undefined;
+  }
+}
+
+function composeDapRuntime(
+  args: UiHandlerDepsAssemblyArgs,
+  peripherals: PeripheralManagers,
+  runtime: DapRuntimeReference,
+): DapProductionService | undefined {
+  const document = operatorDapDocument(args.options.env);
+  const provisioning =
+    args.options.dapProductionProvisioning ??
+    (document === undefined
+      ? undefined
+      : createDapOperatorProvisioning({
+          document,
+          processEnv: args.options.env,
+          fs: nodeWorkspaceFs,
+          discover: peripherals.commandRunner.discover,
+          workspaceForPartition: (partition) => {
+            const root = runtime.workspaceRoots.get(partition);
+            return root === undefined ? undefined : dapWorkspaceContext(peripherals, root);
+          },
+          workspaceForRoot: (root) => dapWorkspaceContext(peripherals, root),
+        }));
+  if (provisioning === undefined) return undefined;
+  const production = createQualifiedDapProductionService(args, peripherals, runtime, provisioning);
+  if (production === undefined) return undefined;
+  runtime.productionQualified = true;
+  runtime.current = createComposedDapRouteService(args, peripherals, runtime, production);
+  return production;
+}
+
+// eslint-disable-next-line max-lines-per-function -- root dependency composition is intentionally reviewable together.
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
-  const peripherals = buildAssemblyPeripherals(args);
+  const dapRuntime: DapRuntimeReference = {
+    current: args.options.dapDebug,
+    productionQualified: args.options.dapDebug !== undefined,
+    workspaceRoots: new Map(),
+  };
+  const peripherals = buildAssemblyPeripherals(args, dapRuntime);
+  const dapProduction = composeDapRuntime(args, peripherals, dapRuntime);
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2037,11 +2488,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
+    ...(dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current }),
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
     dispose: async (): Promise<void> => {
       await shutdownHostLspPool();
+      await dapProduction?.dispose();
+      peripherals.debugActivationControl.dispose();
       peripherals.workspaceWatchService.disposeAll();
       args.bundle.dispose?.();
     },

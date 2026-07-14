@@ -28,7 +28,9 @@ export type EditorHostCapability =
   // from the patch-review-scoped `runVerification` so neither wrongly gates the other. Maps 1:1 to the
   // `runWorkspaceVerification` host method.
   | "runWorkspaceVerification"
-  | "fetchGitBlame";
+  | "fetchGitBlame"
+  /** Human-controlled debug controls; absent until the host resolves the debug capability. */
+  | "debug";
 
 export type EditorCommandId =
   | "editor.save"
@@ -65,13 +67,26 @@ export type EditorCommandId =
   | "editor.previousConflict"
   | "editor.acceptConflictOurs"
   | "editor.acceptConflictTheirs"
-  | "editor.acceptConflictBoth";
+  | "editor.acceptConflictBoth"
+  | "editor.debugContinue"
+  | "editor.debugPause"
+  | "editor.debugStepOver"
+  | "editor.debugStepInto"
+  | "editor.debugStepOut"
+  | "editor.debugStop"
+  | "editor.debugToggleBreakpoint"
+  | "editor.debugToggleConditionalBreakpoint"
+  | "editor.debugEditLogpoint"
+  | "editor.debugToggleBreakpointEnabled";
 
 export interface EditorCommand {
   readonly id: EditorCommandId;
   readonly title: string;
   readonly requiredCapabilities: readonly EditorHostCapability[];
 }
+
+export type EditorDebugSessionState =
+  "reserved" | "starting" | "running" | "paused" | "stopping" | "stopped" | "failed" | "revoked";
 
 export interface EditorCommandContext {
   readonly readOnly: boolean;
@@ -89,6 +104,8 @@ export interface EditorCommandContext {
   // Issue #2212: host-resolved — true when the active file, or its resolved test counterpart, can be
   // targeted by `editor.runFileTests` (so the editor needs no test-file-naming knowledge itself).
   readonly activeFileVerifiable: boolean;
+  /** Host-projected debugger state. `null` means no active session; missing state fails closed. */
+  readonly debugSessionState: EditorDebugSessionState | null;
   readonly mergeConflictCount?: number | undefined;
   readonly availableCapabilities: readonly EditorHostCapability[];
 }

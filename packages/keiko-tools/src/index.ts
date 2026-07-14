@@ -117,6 +117,12 @@ export { EditorAgentToolHost, type EditorAgentToolOutput } from "./editor-agent-
 // `terminal-policy.ts` re-exports the symbol surface src/ui/terminal.ts depends on. Surface
 // every name it exports so the shim at src/tools/terminal-policy.ts can forward from here.
 export * from "./terminal-policy.js";
+export {
+  validateDebugLaunchPolicy,
+  type ClosedDebugExecution,
+  type DebugLaunchPolicy,
+  type DebugLaunchPolicyDecision,
+} from "./debug-launch-policy.js";
 
 // ─── Governed Git mutation execution kernel (Issue #472, Epic #470) ──────────────────
 // The deterministic preflight/orchestration kernel for governed local Git writes. The Node

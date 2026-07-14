@@ -6,6 +6,7 @@ import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import { LOCALE_LABELS, useLocale, useSetLocale } from "@/lib/i18n";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
@@ -899,7 +900,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
   );
 }
 
-type Tab = "models" | "general" | "editor" | "languages" | "security";
+type Tab = "models" | "general" | "editor" | "languages" | "debugging" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -1231,7 +1232,9 @@ export function SettingsPanel({
   return (
     <div className="set">
       <div className="set-tabs">
-        {(["models", "general", "editor", "languages", "security"] as readonly Tab[]).map((id) => (
+        {(
+          ["models", "general", "editor", "languages", "debugging", "security"] as readonly Tab[]
+        ).map((id) => (
           <button
             type="button"
             key={id}
@@ -1274,6 +1277,7 @@ export function SettingsPanel({
         )}
         {tab === "editor" && <EditorSettingsPanel root={root} />}
         {tab === "languages" && <ManagedLanguageSettings root={root} />}
+        {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}
@@ -1287,5 +1291,6 @@ function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
   if (tab === "general") return t("settings.tabs.general");
   if (tab === "editor") return t("settings.tabs.editor");
   if (tab === "languages") return t("settings.tabs.languages");
+  if (tab === "debugging") return t("settings.tabs.debugging");
   return t("settings.tabs.security");
 }

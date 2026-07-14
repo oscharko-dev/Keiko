@@ -58,6 +58,20 @@ function editorReleaseEvidenceStep(platform) {
   );
 }
 
+function editorDebuggingE2eStep(platform) {
+  if (platform === "linux") {
+    return npmStep("editor-debugging-e2e", ["run", "test:e2e:editor-debugging-2348"], {
+      platform,
+    });
+  }
+  return skippedNpmStep(
+    "editor-debugging-e2e",
+    ["run", "test:e2e:editor-debugging-2348"],
+    "Skipped on non-Linux hosts because the governed debugging E2E requires the Linux Bubblewrap qualification boundary; required Linux CI executes it.",
+    platform,
+  );
+}
+
 function nativeQualityStep(platform) {
   if (platform === "darwin") {
     return npmStep("native-quality", ["run", "check:native:macos"], { platform });
@@ -120,6 +134,7 @@ export function createPrePrSteps(options = {}) {
       ["run", "check:editor-bundle-size", "--", "--require-static-export"],
       { platform },
     ),
+    editorDebuggingE2eStep(platform),
     npmStep("e2e-smoke", ["run", "test:e2e:smoke"], { platform }),
   ];
 }

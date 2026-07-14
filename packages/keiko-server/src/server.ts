@@ -70,11 +70,11 @@ function writeJson(
   res: ServerResponse,
   status: number,
   body: unknown,
-  headers: Readonly<Record<string, string>> = {},
+  headers: Readonly<Record<string, string | readonly string[]>> = {},
 ): void {
   res.statusCode = status;
   for (const [key, value] of Object.entries(headers)) {
-    res.setHeader(key, value);
+    res.setHeader(key, typeof value === "string" ? value : [...value]);
   }
   if (status === 304) {
     res.end();

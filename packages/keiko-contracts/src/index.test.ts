@@ -1041,6 +1041,57 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").ManagedLspEvidenceParseResult>();
   });
 
+  it("governed debug lifecycle contracts are reachable through the barrel (#2343)", async () => {
+    const m = await import("./index.js");
+    expect(m.DEBUG_LIFECYCLE_SCHEMA_VERSION).toBe("1");
+    expect(typeof m.isDebugLifecycleEvidence).toBe("function");
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").DebugSessionState>();
+    pin<import("./index.js").DebugLifecycleEventKind>();
+    pin<import("./index.js").DebugLifecycleReason>();
+    pin<import("./index.js").DebugProcessErrorCode>();
+    pin<import("./index.js").DebugLifecycleEvidence>();
+    pin<import("./index.js").DebugLifecycleEvent>();
+  });
+
+  it("governed debug browser contracts are reachable through the barrel (#2345)", async () => {
+    const m = await import("./index.js");
+    expect(m.DAP_DEBUG_CONTRACT_SCHEMA_VERSION).toBe("1");
+    expect(m.DEBUG_SESSION_STATUSES).toContain("revoked");
+    expect(m.DEBUG_EVENT_KINDS).toContain("output");
+    expect(m.SOURCE_BREAKPOINT_KINDS).toEqual(["line", "conditional", "logpoint"]);
+    expect(m.DEFAULT_DEBUG_PAYLOAD_LIMITS.maxGraphNodes).toBe(1_000);
+    expect(typeof m.parseDebugSessionStartRequest).toBe("function");
+    expect(typeof m.parseSetBreakpointsRequest).toBe("function");
+    expect(typeof m.parseEvaluateWatchRequest).toBe("function");
+    expect(typeof m.buildDebugVariableTree).toBe("function");
+    expect(typeof m.buildDebugOutputEvent).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").DebugSession>();
+    pin<import("./index.js").DebugLaunchTarget>();
+    pin<import("./index.js").SourceBreakpoint>();
+    pin<import("./index.js").ExceptionBreakpointFilter>();
+    pin<import("./index.js").StackFrame>();
+    pin<import("./index.js").Scope>();
+    pin<import("./index.js").DebugVariableNode>();
+    pin<import("./index.js").WatchExpression>();
+    pin<import("./index.js").WatchEvaluationResult>();
+    pin<import("./index.js").InstrumentationSnapshot>();
+    pin<import("./index.js").DebugEvent>();
+    pin<import("./index.js").DebugBootstrapRequest>();
+    pin<import("./index.js").DebugSessionStartRequest>();
+    pin<import("./index.js").DebugSessionControlRequest>();
+    pin<import("./index.js").SetBreakpointsRequest>();
+    pin<import("./index.js").SetExceptionBreakpointsRequest>();
+    pin<import("./index.js").StackTraceRequest>();
+    pin<import("./index.js").ScopesRequest>();
+    pin<import("./index.js").VariablesRequest>();
+    pin<import("./index.js").SetVariableRequest>();
+    pin<import("./index.js").SetWatchesRequest>();
+    pin<import("./index.js").EvaluateWatchRequest>();
+  });
+
   it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
     const m = await import("./index.js");
     expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");

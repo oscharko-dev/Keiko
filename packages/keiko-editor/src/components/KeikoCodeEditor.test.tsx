@@ -134,8 +134,8 @@ vi.mock("@monaco-editor/react", () => {
   const fakeMonaco = {
     editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
-    KeyMod: { CtrlCmd: 2048, Alt: 512 },
-    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
+    KeyMod: { CtrlCmd: 2048, Alt: 512, Shift: 1024 },
+    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
     languages: {
       CompletionItemKind: {
         Text: 1,
@@ -705,6 +705,47 @@ describe("KeikoCodeEditor — selection and cursor reporting", () => {
       range: { start: { line: 0, column: 6 }, end: { line: 0, column: 11 } },
       text: "value",
     });
+  });
+
+  it("keeps debug affordances absent by default and mounts only the closed controls when injected", async () => {
+    const handlers = {
+      continue: vi.fn(),
+      pause: vi.fn(),
+      stepOver: vi.fn(),
+      stepInto: vi.fn(),
+      stepOut: vi.fn(),
+      stop: vi.fn(),
+    };
+    const debug = {
+      gutter: {
+        resolveBreakpoints: (): readonly [] => [],
+        labels: {
+          toggle: "Toggle Breakpoint",
+          conditional: "Toggle Conditional Breakpoint",
+          logpoint: "Edit Logpoint",
+          enable: "Enable Breakpoint",
+          disable: "Disable Breakpoint",
+        },
+        onToggleBreakpoint: vi.fn(),
+        onToggleConditionalBreakpoint: vi.fn(),
+        onEditLogpoint: vi.fn(),
+        onToggleBreakpointEnabled: vi.fn(),
+        onOpenContextMenu: vi.fn(),
+      },
+      commands: handlers,
+    };
+    const { rerender } = render(<KeikoCodeEditor {...baseProps()} />);
+    await flushMount();
+    expect(() => captured.editor?.runAction("keiko.editor.debugContinue", {})).toThrow();
+
+    rerender(<KeikoCodeEditor {...baseProps({ debug })} />);
+    await flushMount();
+    captured.editor?.runAction("keiko.editor.debugContinue", {});
+    captured.editor?.runAction("keiko.editor.debugStop", {});
+    expect(handlers.continue).toHaveBeenCalledOnce();
+    expect(handlers.stop).toHaveBeenCalledOnce();
+    const forbiddenId = ["keiko.editor.debug", "Re", "start"].join("");
+    expect(() => captured.editor?.runAction(forbiddenId, {})).toThrow();
   });
 });
 

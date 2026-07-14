@@ -363,6 +363,9 @@ export function EditorWindowSessionHost({
     onOpenProblems: (projectPath) => {
       ctx.openWindow("problems", { projectPath });
     },
+    onOpenDebugPanel: () => {
+      if (root !== undefined) ctx.openWindow("debug", { projectPath: root });
+    },
     onAskSelection: (handoff) => {
       if (root === undefined) return false;
       const selectionHandoffId = registerEditorSelectionHandoff(root, handoff);

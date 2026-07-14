@@ -1,0 +1,187 @@
+.section {
+  display: grid;
+  gap: 12px;
+}
+
+.header,
+.card,
+.copy,
+.dialog {
+  display: grid;
+  gap: 8px;
+}
+
+.title,
+.state,
+.dialogTitle {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.title {
+  font-size: 13px;
+}
+
+.description,
+.reason,
+.guidance,
+.empty,
+.optInHelp {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  padding: 12px;
+}
+
+.cardHeader,
+.optIn,
+.alert,
+.dialogActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.state {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 10px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.state[data-state="available"] {
+  border-color: var(--ok);
+}
+
+.state[data-state="disabledByPolicy"],
+.state[data-state="unavailable"] {
+  border-color: var(--danger);
+}
+
+.state[data-state="notProvisioned"] {
+  border-color: var(--warn);
+}
+
+.optIn {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
+.optInLabel {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.toggle {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--surface-inset);
+  cursor: pointer;
+  position: relative;
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 120ms ease;
+}
+
+.toggle:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.toggle:checked::after {
+  transform: translateX(14px);
+  background: var(--surface-base);
+}
+
+.toggle:focus-visible,
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.toggle:disabled,
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.alert {
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 9px;
+}
+
+.button {
+  min-height: 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 5px 9px;
+}
+
+.danger {
+  border-color: var(--danger);
+}
+
+.dialogBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--surface-base) 78%, transparent);
+}
+
+.dialog {
+  width: min(420px, 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  padding: 14px;
+}
+
+.dialogTitle {
+  font-size: 13px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

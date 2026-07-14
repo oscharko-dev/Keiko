@@ -20,6 +20,7 @@ import {
   type EditorM7AiActivationInput,
   type EditorM7ModelEntry,
   type EditorM7SettingId,
+  type EditorM7SettingsSnapshot,
 } from "./editor-m7.js";
 
 function aiInput(change: Partial<EditorM7AiActivationInput> = {}): EditorM7AiActivationInput {
@@ -39,6 +40,12 @@ function aiInput(change: Partial<EditorM7AiActivationInput> = {}): EditorM7AiAct
 }
 
 describe("M7 editor setting registry", () => {
+  it("declares an additive opaque debug workspace identity projection", () => {
+    const workspaceId: NonNullable<EditorM7SettingsSnapshot["debugWorkspaceId"]> = "a".repeat(64);
+
+    expect(workspaceId).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   it("declares bounded defaults, scopes, live semantics, and M6-compatible defaults", () => {
     const defaults = defaultEditorM7Settings();
     expect(EDITOR_M7_SCHEMA_VERSION).toBe("1");
@@ -51,6 +58,7 @@ describe("M7 editor setting registry", () => {
     expect(defaults.renderWhitespace).toBe("selection");
     expect(defaults.inlineCompletion).toBe(false);
     expect(defaults.keybindingOverrides).toEqual([]);
+    expect(defaults.debuggingEnabled).toBe(false);
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.description.length > 0)).toBe(true);
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.scopes.length > 0)).toBe(true);
   });
@@ -78,6 +86,10 @@ describe("M7 editor setting registry", () => {
 
   it("fails closed for workspace-denied, unknown, future, hostile, and oversized input", () => {
     expect(parseEditorM7SettingPatch("workspace", { minimap: true })).toMatchObject({
+      ok: false,
+      reasonCode: "WORKSPACE_SCOPE_DENIED",
+    });
+    expect(parseEditorM7SettingPatch("user", { debuggingEnabled: true })).toMatchObject({
       ok: false,
       reasonCode: "WORKSPACE_SCOPE_DENIED",
     });

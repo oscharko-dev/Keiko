@@ -70,6 +70,12 @@ export interface EditorStatusRun {
   readonly busy: boolean;
 }
 
+/** Content-free debug lifecycle projection; values, frames, output, and targets never enter the bar. */
+export interface EditorStatusDebug {
+  readonly state:
+    "reserved" | "starting" | "running" | "paused" | "stopping" | "stopped" | "failed" | "revoked";
+}
+
 export interface EditorStatusLanguageService {
   readonly providerId: string | null;
   readonly available: boolean;
@@ -104,6 +110,7 @@ export interface EditorStatusBarInput {
   readonly formatting?:
     { readonly available: boolean; readonly source: EditorBuiltinFormattingSource } | undefined;
   readonly run?: EditorStatusRun | undefined;
+  readonly debug?: EditorStatusDebug | undefined;
   readonly readOnly?: boolean | undefined;
 }
 
@@ -258,6 +265,42 @@ function runField(run: EditorStatusRun | undefined): EditorStatusField | null {
   };
 }
 
+export function debugField(debug: EditorStatusDebug | undefined): EditorStatusField | null {
+  if (debug === undefined) return null;
+  if (debug.state === "paused") {
+    return {
+      id: "debug",
+      label: "Debug paused",
+      ariaLabel: "Debug session paused",
+      tone: "accent",
+      live: true,
+      assertive: true,
+    };
+  }
+  if (debug.state === "failed" || debug.state === "revoked") {
+    return {
+      id: "debug",
+      label: "Debug unavailable",
+      ariaLabel: "Debug session unavailable",
+      tone: "error",
+      live: true,
+      assertive: true,
+    };
+  }
+  if (debug.state === "stopped") {
+    return {
+      id: "debug",
+      label: "Debug stopped",
+      ariaLabel: "Debug session stopped",
+      tone: "default",
+      live: true,
+      assertive: false,
+    };
+  }
+  const label = debug.state === "running" ? "Debug running" : "Debug starting";
+  return { id: "debug", label, ariaLabel: label, tone: "accent", live: true, assertive: false };
+}
+
 function languageServiceField(
   service: EditorStatusLanguageService | undefined,
 ): EditorStatusField | null {
@@ -409,6 +452,7 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
   pushOptional(fields, languageServiceField(input.languageService));
   pushOptional(fields, formattingField(input.formatting));
   pushOptional(fields, runField(input.run));
+  pushOptional(fields, debugField(input.debug));
   fields.push(cursorField(input.cursor));
   pushOptional(fields, selectionField(input.selectedLineCount));
   fields.push(saveField(input));

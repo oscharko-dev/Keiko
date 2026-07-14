@@ -3,6 +3,8 @@
 // malformed, oversized, future-versioned, unknown, or policy-disallowed input returns a typed denial
 // instead of throwing or preserving untrusted fields.
 
+import type { DebugActivationSummary } from "./debug-activation.js";
+
 export const EDITOR_M7_SCHEMA_VERSION = "1" as const;
 
 export type EditorM7ParseResult<T> =
@@ -55,7 +57,8 @@ export type EditorM7SettingId =
   | "largeFileMode"
   | "modelRetentionCount"
   | "modelRetentionBytes"
-  | "keybindingOverrides";
+  | "keybindingOverrides"
+  | "debuggingEnabled";
 
 export type EditorM7WordWrap = "off" | "on" | "wordWrapColumn" | "bounded";
 export type EditorM7WhitespaceRendering = "none" | "selection" | "boundary" | "all";
@@ -132,6 +135,12 @@ export interface EditorM7SettingsSnapshot {
       }
     | undefined;
   readonly aiAssistance?: EditorM7AiActivationSummary | undefined;
+  readonly debugging?: DebugActivationSummary | undefined;
+  /**
+   * Opaque server-projected identity accepted by the governed debug routes. It is derived only
+   * after the server has resolved the workspace root; browser code must not derive it from `root`.
+   */
+  readonly debugWorkspaceId?: string | undefined;
 }
 
 export type EditorM7SettingsMutationAction = "set" | "reset";
@@ -348,6 +357,15 @@ export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = 
     maxItems: 64,
     maxItemBytes: 192,
     description: "Bounded M7 keyboard shortcut override records.",
+  },
+  {
+    id: "debuggingEnabled",
+    type: "boolean",
+    defaultValue: false,
+    scopes: Object.freeze(["workspace"] as const),
+    effect: "live",
+    security: "policyCeiling",
+    description: "Explicit workspace opt-in for governed Node.js/TypeScript debugging.",
   },
 ] as const satisfies readonly EditorM7SettingDefinition[]);
 

@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createE2eDapOperatorProvisioning } from "../support/dapOperatorProvisioning.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
@@ -10,6 +11,18 @@ const stateDir =
   process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
+const dapAdapterFixturePath = join(
+  root,
+  "tests",
+  "e2e",
+  "fixtures",
+  "editor-debugging-2348",
+  "dap-socket-adapter.fixture",
+);
+const dapOperatorProvisioning = createE2eDapOperatorProvisioning({
+  adapterFixturePath: dapAdapterFixturePath,
+  stateDir,
+});
 const prepareRuntimeConfig = [
   "const fs = require('node:fs');",
   `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
@@ -48,6 +61,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
+      KEIKO_DAP_OPERATOR_PROVISIONING_JSON: dapOperatorProvisioning,
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),

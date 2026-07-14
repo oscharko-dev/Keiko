@@ -279,6 +279,10 @@
     "en": "Languages",
     "de": "Sprachen"
   },
+  "settings.tabs.debugging": {
+    "en": "Debugging",
+    "de": "Debugging"
+  },
   "settings.tabs.security": {
     "en": "Security",
     "de": "Sicherheit"
