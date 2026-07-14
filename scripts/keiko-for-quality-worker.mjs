@@ -239,10 +239,9 @@ export async function publishCheck(owner, repository, headSha, result, token, en
   if (existing !== undefined && checkMatchesBody(existing, body)) return;
   const createCheck =
     existing === undefined || (existing.status === "completed" && body.status === "in_progress");
-  const path =
-    createCheck
-      ? `/repos/${owner}/${repository}/check-runs`
-      : `/repos/${owner}/${repository}/check-runs/${String(existing.id)}`;
+  const path = createCheck
+    ? `/repos/${owner}/${repository}/check-runs`
+    : `/repos/${owner}/${repository}/check-runs/${String(existing.id)}`;
   await github(path, token, {
     body: JSON.stringify(createCheck ? { ...body, head_sha: headSha } : body),
     method: createCheck ? "POST" : "PATCH",

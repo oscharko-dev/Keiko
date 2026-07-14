@@ -201,7 +201,13 @@ function gitarProblems(checks, reviews, comments, headSha, now, stabilityMs) {
   return problems;
 }
 
-function currentSocketProblems(socket, comments, socketRiskAllowlist, socketRiskActors, socketStart) {
+function currentSocketProblems(
+  socket,
+  comments,
+  socketRiskAllowlist,
+  socketRiskActors,
+  socketStart,
+) {
   const alerts = packageAlerts(socket.body);
   const accepted = acceptedSocketRisks(
     comments,

@@ -15,12 +15,7 @@ function finiteNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export function evaluateSonarPullRequest({
-  analysis,
-  headSha,
-  measures,
-  overallMeasures,
-}) {
+export function evaluateSonarPullRequest({ analysis, headSha, measures, overallMeasures }) {
   return [
     ...analysisFailures(analysis, headSha),
     ...lineCountFailures(measures),
