@@ -11,7 +11,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
+  type SubmitEvent,
   type ReactNode,
 } from "react";
 import styles from "./TerminalWidget.module.css";
@@ -171,7 +171,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             typeof payload.requestId === "string" &&
             payload.requestId === pendingRequestIdRef.current;
           if (requestMatches) {
-            setInFlightExecutionId((current) => (current !== null ? current : parsed.executionId));
+            setInFlightExecutionId((current) => current ?? parsed.executionId);
           }
         }
         // Clear the captured id when the run ends so the next submit starts clean.
@@ -203,7 +203,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   }, [running]);
 
   const onSubmit = useCallback(
-    async (e: FormEvent<HTMLFormElement>): Promise<void> => {
+    async (e: SubmitEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
       if (running) return;
       setError(null);

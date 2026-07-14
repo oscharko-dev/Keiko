@@ -10,6 +10,7 @@ import {
   packageAlerts,
   parseGitarFindings,
   requiredChecks,
+  requiresSocketComment,
   stabilityFailures,
   validatedSet,
   validatedRiskAllowlist,
@@ -22,6 +23,7 @@ const risk = "npm/execa@9.6.1";
 
 function passingInput() {
   return {
+    changedFiles: ["package.json"],
     checks: requiredChecks.map(({ appId, name }) => ({
       appId,
       completedAt,
@@ -241,10 +243,38 @@ describe("Banking Quality Gate core", () => {
         60_000,
       ),
     ).toEqual([]);
+
+    const commentsWithoutSocket = input.comments.filter((comment) => comment.authorId !== 95510084);
+    expect(stabilityFailures(input.checks, commentsWithoutSocket, now, 60_000)).toEqual([
+      "Review-product stability evidence is incomplete.",
+    ]);
+    expect(stabilityFailures(input.checks, commentsWithoutSocket, now, 60_000, false)).toEqual([]);
+    const sourceOnlyComments = input.comments.map((comment) =>
+      comment.authorId === 95510084
+        ? { ...comment, updatedAt: "2026-07-11T10:01:30.000Z" }
+        : comment,
+    );
+    expect(stabilityFailures(input.checks, sourceOnlyComments, now, 60_000, false)).toEqual([]);
   });
 
   it("accepts only complete current-head evidence after the stability window", () => {
     expect(evaluate()).toEqual({ failures: [], passed: true });
+  });
+
+  it("requires Socket comments only when dependency manifests changed", () => {
+    expect(requiresSocketComment(["package.json"])).toBe(true);
+    expect(requiresSocketComment(["packages/app/package-lock.json"])).toBe(true);
+    expect(requiresSocketComment([String.raw`packages\app\package.json`])).toBe(true);
+    expect(requiresSocketComment(["scripts/native/quality.csproj"])).toBe(true);
+    expect(requiresSocketComment(["scripts/check.mjs", "src/index.ts"])).toBe(false);
+    expect(requiresSocketComment(undefined)).toBe(true);
+    expect(requiresSocketComment(["src/index.ts", null])).toBe(true);
+
+    const comments = passingInput().comments.filter((comment) => comment.authorId !== 95510084);
+    expect(evaluate({ changedFiles: ["scripts/check.mjs"], comments }).passed).toBe(true);
+    expect(evaluate({ changedFiles: ["package.json"], comments }).failures).toContain(
+      "Current Socket alert evidence is missing.",
+    );
   });
 
   it.each([

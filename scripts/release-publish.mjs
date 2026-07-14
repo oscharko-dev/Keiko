@@ -213,8 +213,8 @@ function run(cmd, args, options = {}) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    const stdout = result.stdout === undefined ? "" : result.stdout;
-    const stderr = result.stderr === undefined ? "" : result.stderr;
+    const stdout = result.stdout;
+    const stderr = result.stderr;
     fail(
       `${cmd} ${args.join(" ")} exited ${String(result.status)}\n` +
         `stdout:\n${stdout}\n` +

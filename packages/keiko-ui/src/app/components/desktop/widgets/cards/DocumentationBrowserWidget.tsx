@@ -240,7 +240,7 @@ function ScopePreviewView({
         <dt>Scope</dt>
         <dd className="mono">
           {preview.originSummary}
-          {preview.pathPrefixSummary === null ? "" : preview.pathPrefixSummary}
+          {preview.pathPrefixSummary ?? ""}
         </dd>
       </div>
       <div className="db-scope-row">

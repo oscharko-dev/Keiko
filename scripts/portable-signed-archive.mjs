@@ -31,7 +31,7 @@ export function portableResourceRoot(stageRoot, platformTarget) {
 function treeSize(root) {
   let size = 0;
   const walk = (current) => {
-    for (const name of readdirSync(current).sort()) {
+    for (const name of readdirSync(current).sort((left, right) => left.localeCompare(right))) {
       const path = join(current, name);
       const entry = lstatSync(path);
       if (entry.isDirectory()) walk(path);

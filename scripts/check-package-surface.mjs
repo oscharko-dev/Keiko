@@ -195,7 +195,7 @@ function collectTypeExports(entryPoint) {
   return checker
     .getExportsOfModule(symbol)
     .map((item) => item.getName())
-    .sort();
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function assertServerRuntimeSurface(paths) {

@@ -85,6 +85,7 @@ export function createPrePrSteps(options = {}) {
     npmStep("typecheck", ["run", "typecheck"], { platform }),
     npmStep("lint", ["run", "lint"], { env: lintEnv, platform }),
     npmStep("format", ["run", "format:check"], { platform }),
+    npmStep("ui-i18n", ["run", "check:ui-i18n"], { platform }),
     npmStep("sonar-scope", ["run", "check:sonar-scope"], { platform }),
     nativeQualityStep(platform),
     npmStep("ui-typecheck", ["run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"], {

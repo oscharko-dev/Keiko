@@ -526,13 +526,13 @@ function ScreenCard({
   };
   const handlePointerMove = (event: PointerEvent<HTMLElement>): void => {
     const session = pointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
     if (moved >= JSON_DRAG_THRESHOLD_PX) event.preventDefault();
   };
   const handlePointerUp = (event: PointerEvent<HTMLElement>): void => {
     const session = pointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     pointerDragRef.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
     const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
@@ -549,7 +549,7 @@ function ScreenCard({
   };
   const handlePointerCancel = (event: PointerEvent<HTMLElement>): void => {
     const session = pointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     pointerDragRef.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -749,13 +749,13 @@ function FigmaViewSourceCard({
   };
   const handleImagePointerMove = (event: PointerEvent<HTMLElement>): void => {
     const session = imagePointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
     if (moved >= JSON_DRAG_THRESHOLD_PX) event.preventDefault();
   };
   const handleImagePointerUp = (event: PointerEvent<HTMLElement>): void => {
     const session = imagePointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     imagePointerDragRef.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
     const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
@@ -771,7 +771,7 @@ function FigmaViewSourceCard({
   };
   const handleImagePointerCancel = (event: PointerEvent<HTMLElement>): void => {
     const session = imagePointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     imagePointerDragRef.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -1658,7 +1658,7 @@ export function FigmaSnapshotWindow({
 
   const handleJsonPointerMove = useCallback((event: PointerEvent<HTMLElement>): void => {
     const session = jsonPointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
     if (moved >= JSON_DRAG_THRESHOLD_PX) event.preventDefault();
   }, []);
@@ -1666,7 +1666,7 @@ export function FigmaSnapshotWindow({
   const handleJsonPointerUp = useCallback(
     (event: PointerEvent<HTMLElement>): void => {
       const session = jsonPointerDragRef.current;
-      if (session === null || session.pointerId !== event.pointerId) return;
+      if (session?.pointerId !== event.pointerId) return;
       jsonPointerDragRef.current = null;
       event.currentTarget.releasePointerCapture(event.pointerId);
       const moved = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
@@ -1685,7 +1685,7 @@ export function FigmaSnapshotWindow({
 
   const handleJsonPointerCancel = useCallback((event: PointerEvent<HTMLElement>): void => {
     const session = jsonPointerDragRef.current;
-    if (session === null || session.pointerId !== event.pointerId) return;
+    if (session?.pointerId !== event.pointerId) return;
     jsonPointerDragRef.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
   }, []);

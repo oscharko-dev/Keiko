@@ -236,8 +236,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   useEffect(() => {
     let cancelled = false;
     const previousTarget = loadTargetRef.current;
-    const targetChanged =
-      previousTarget === null || previousTarget.root !== root || previousTarget.path !== path;
+    const targetChanged = previousTarget?.root !== root || previousTarget.path !== path;
     const isManualRefresh = previousTarget !== null && !targetChanged && refreshKey > 0;
     loadTargetRef.current = { root, path };
 

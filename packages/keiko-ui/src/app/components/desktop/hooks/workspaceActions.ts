@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
@@ -48,9 +48,9 @@ function addPosition(
 
 interface MutateArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
-  readonly zc: MutableRefObject<number>;
+  readonly zc: RefObject<number>;
   readonly worldVP: () => ViewportWorld | null;
-  readonly winsRef?: MutableRefObject<AppWindow[]>;
+  readonly winsRef?: RefObject<AppWindow[]>;
 }
 
 type Mutations = Pick<
@@ -209,9 +209,7 @@ function makeFocus(setWins: MutateArgs["setWins"], zc: MutateArgs["zc"]): Worksp
 
 function makeClose(setWins: MutateArgs["setWins"]): WorkspaceApi["close"] {
   return (id) =>
-    setWins((ws) =>
-      ws === null || !ws.some((w) => w.id === id) ? ws : ws.filter((w) => w.id !== id),
-    );
+    setWins((ws) => (!ws?.some((w) => w.id === id) ? ws : ws.filter((w) => w.id !== id)));
 }
 
 function makeMinimize(setWins: MutateArgs["setWins"]): WorkspaceApi["minimize"] {
@@ -487,7 +485,7 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (vp === null) return ws;
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
-      if (existing !== undefined && existing.minimized === true) {
+      if (existing?.minimized === true) {
         return list.map((w) =>
           w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
         );
@@ -818,7 +816,7 @@ export function makeLayoutActions(
 
 interface SnapArgs {
   readonly setSnapPrev: Dispatch<SetStateAction<SnapPrev | null>>;
-  readonly snapZone: MutableRefObject<SnapZone | null>;
+  readonly snapZone: RefObject<SnapZone | null>;
   readonly worldVP: () => ViewportWorld | null;
   readonly update: WorkspaceApi["update"];
 }
@@ -863,15 +861,14 @@ export function makeSnapActions({
 
 interface ConnectArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
-  readonly viewRef: MutableRefObject<View>;
-  readonly winsRef: MutableRefObject<AppWindow[]>;
-  readonly connsRef: MutableRefObject<Connection[]>;
-  readonly winsByIdRef?: MutableRefObject<ReadonlyMap<string, AppWindow>> | undefined;
-  readonly connsByIdRef?: MutableRefObject<ReadonlyMap<string, Connection>> | undefined;
-  readonly connsByEndpointRef?:
-    MutableRefObject<ReadonlyMap<string, readonly Connection[]>> | undefined;
-  readonly connectingRef: MutableRefObject<ConnectingState | null>;
-  readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
+  readonly viewRef: RefObject<View>;
+  readonly winsRef: RefObject<AppWindow[]>;
+  readonly connsRef: RefObject<Connection[]>;
+  readonly winsByIdRef?: RefObject<ReadonlyMap<string, AppWindow>> | undefined;
+  readonly connsByIdRef?: RefObject<ReadonlyMap<string, Connection>> | undefined;
+  readonly connsByEndpointRef?: RefObject<ReadonlyMap<string, readonly Connection[]>> | undefined;
+  readonly connectingRef: RefObject<ConnectingState | null>;
+  readonly connectCleanupRef: RefObject<(() => void) | null>;
   readonly focus: WorkspaceApi["focus"];
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly setConnecting: Dispatch<SetStateAction<ConnectingState | null>>;
@@ -1355,7 +1352,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winById(otherId);
-      if (w === undefined || w.type !== "files") continue;
+      if (w?.type !== "files") continue;
       filesWindows.push(w);
     }
     if (filesWindows.length === 0) return null;

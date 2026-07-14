@@ -996,7 +996,9 @@ async function pruneWorkspaceIndexSnapshots(
         stat: await stat(runtimeFilePath(runtimeDir, entry.name)),
       })),
   );
-  const excess = files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs).slice(maxSnapshots);
+  const sortedByNewest = [...files];
+  sortedByNewest.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  const excess = sortedByNewest.slice(maxSnapshots);
   await Promise.all(excess.map(async (entry) => rm(entry.path, { force: true })));
 }
 

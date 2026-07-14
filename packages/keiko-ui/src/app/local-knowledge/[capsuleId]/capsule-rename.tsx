@@ -5,7 +5,7 @@
 // PATCHes /capsules/:id and asks the parent to reload so every section reflects the new
 // label. Metadata editing is intentionally not exposed yet (no store migration).
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref, type SubmitEvent } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { renameCapsule, type RenameCapsulePatch } from "@/lib/local-knowledge-api";
 import { useLocalKnowledgeTranslate as useTranslate } from "../local-knowledge-i18n";
@@ -36,7 +36,7 @@ interface RenameFieldsProps {
   readonly onNameChange: (value: string) => void;
   readonly onDescriptionChange: (value: string) => void;
   readonly onCancel: () => void;
-  readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
 }
 
 function RenameFields({
@@ -60,7 +60,7 @@ function RenameFields({
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || busy) return;
       const form = formRef.current;
-      if (form !== null && form.contains(document.activeElement)) onCancel();
+      if (form?.contains(document.activeElement) === true) onCancel();
     };
     document.addEventListener("keydown", onKey);
     return () => {
@@ -170,7 +170,7 @@ export function CapsuleRename({
     setError(null);
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function handleSubmit(event: SubmitEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmedName = name.trim();
     if (trimmedName.length === 0) {

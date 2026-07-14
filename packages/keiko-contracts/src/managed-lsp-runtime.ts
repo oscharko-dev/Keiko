@@ -568,7 +568,7 @@ function isRustSettings(value: unknown): value is ManagedLspRustSettings {
   if (!isRecord(value)) return false;
   const validTarget =
     value.target === null ||
-    (typeof value.target === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/u.test(value.target));
+    (typeof value.target === "string" && /^\w[\w.-]{0,127}$/u.test(value.target));
   return [
     hasOnlyKeys(value, [
       "toolchain",

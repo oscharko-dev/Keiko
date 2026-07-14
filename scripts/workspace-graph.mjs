@@ -40,7 +40,7 @@ async function expandWorkspacePattern(root, pattern) {
     return entries
       .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
       .map((entry) => join(baseDir, entry.name))
-      .sort();
+      .sort((left, right) => left.localeCompare(right));
   }
 
   if (normalized.includes("*")) {

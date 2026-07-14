@@ -173,7 +173,7 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
     .getExportsOfModule(symbol)
     .map((item) => item.getName())
     .filter((item) => item !== "__Probe")
-    .sort();
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function packRoot() {

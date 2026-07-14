@@ -114,7 +114,7 @@ function isPortableExecutable(path) {
 
 function walkFiles(root, current, depth, state) {
   if (depth > MAX_DEPTH) fail("payload tree exceeds the bounded directory depth");
-  for (const name of readdirSync(current).sort()) {
+  for (const name of readdirSync(current).sort((left, right) => left.localeCompare(right))) {
     const path = join(current, name);
     const entry = lstatSync(path);
     if (entry.isSymbolicLink()) fail("payload tree contains a link or reparse point");

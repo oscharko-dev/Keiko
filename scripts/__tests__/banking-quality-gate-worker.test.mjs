@@ -100,8 +100,8 @@ function reviewsResponse(url, headSha, options) {
   ]);
 }
 
-function commentsResponse() {
-  return response([
+function commentsResponse(options) {
+  const comments = [
     {
       author_association: "NONE",
       body: "0 resolved / 0 findings",
@@ -122,7 +122,17 @@ function commentsResponse() {
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 1, login: "oscharko", type: "User" },
     },
-  ]);
+  ];
+  return response(
+    options.omitSocketComment
+      ? comments.filter((comment) => comment.user.id !== 95510084)
+      : comments,
+  );
+}
+
+function filesResponse(options) {
+  if (options.invalidFiles) return response([{ filename: "scripts/check.mjs" }, null]);
+  return response((options.changedFiles ?? ["package.json"]).map((filename) => ({ filename })));
 }
 
 function checksResponse(headSha, options) {
@@ -146,7 +156,8 @@ function githubMock(headSha, options = {}) {
     if (path.includes("/access_tokens")) return response({ token: "installation-token" });
     if (path.endsWith("/pulls/2329")) return pullResponse(headSha, options);
     if (path.endsWith("/reviews")) return reviewsResponse(url, headSha, options);
-    if (path.endsWith("/comments")) return commentsResponse();
+    if (path.endsWith("/comments")) return commentsResponse(options);
+    if (path.endsWith("/files")) return filesResponse(options);
     if (path.includes(`/commits/${headSha}/check-runs`)) return checksResponse(headSha, options);
     const writeResponse = checkWriteResponse(path, init?.method);
     if (writeResponse !== undefined) return writeResponse;
@@ -431,6 +442,38 @@ describe("Banking Quality Gate worker trust boundary", () => {
       "https://api.github.com/app/installations/42/access_tokens",
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("publishes success for source-only changes without a Socket comment", async () => {
+    const headSha = "6".repeat(40);
+    const fetchMock = githubMock(headSha, {
+      changedFiles: ["scripts/check.mjs", "src/index.ts"],
+      omitSocketComment: true,
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "source-only",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    expect(JSON.parse(publish[1].body)).toMatchObject({
+      conclusion: "success",
+      head_sha: headSha,
+      status: "completed",
+    });
   });
 
   it("publishes exact success, failure, and pending check contracts", async () => {
@@ -728,8 +771,10 @@ describe("Banking Quality Gate worker trust boundary", () => {
             user: null,
           },
         ]),
-      );
+      )
+      .mockResolvedValueOnce(response([{ filename: "scripts/check.mjs" }]));
     await expect(evidence("owner", "repo", 2, headSha, "token")).resolves.toEqual({
+      changedFiles: ["scripts/check.mjs"],
       checks: [
         {
           appId: undefined,
@@ -762,10 +807,33 @@ describe("Banking Quality Gate worker trust boundary", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(null))
       .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response([]))
       .mockResolvedValueOnce(response([]));
     await expect(evidence("owner", "repo", 2, "a".repeat(40), "token")).rejects.toThrow(
       "omitted check runs",
     );
+  });
+
+  it("rejects changed-file evidence without exact file names", async () => {
+    const headSha = "7".repeat(40);
+    githubMock(headSha, { invalidFiles: true });
+    const state = stateBinding();
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "invalid-files",
+      ),
+      environment(state),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await expect(waits[0]).rejects.toThrow("omitted a changed file name");
   });
 
   it("uses fail-closed defaults when optional policy environment values are absent", async () => {
