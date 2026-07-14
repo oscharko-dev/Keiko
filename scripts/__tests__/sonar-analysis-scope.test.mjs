@@ -38,6 +38,7 @@ const validProperties = [
   "sonar.sources=.",
   "sonar.tests=.",
   "sonar.sourceEncoding=UTF-8",
+  "sonar.plsql.file.suffixes=-",
   "sonar.test.inclusions=tests/**",
   "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
   "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.cs",
@@ -132,6 +133,7 @@ describe("Sonar analysis scope", () => {
     expect(failures).toEqual(
       expect.arrayContaining([
         expect.stringContaining("sonar.tests=."),
+        expect.stringContaining("sonar.plsql.file.suffixes="),
         "native quality source is not tracked: native/launcher.c",
         "native source has no compensating quality gate: native/new.c",
       ]),
