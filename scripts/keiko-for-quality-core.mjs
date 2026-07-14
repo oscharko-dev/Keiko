@@ -2,8 +2,6 @@ const actionsAppId = 15368;
 const gitarIdentity = { appId: 827041, userId: 159877585 };
 const socketIdentity = { appId: 156372, userId: 95510084 };
 const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
-const socketManifestPattern =
-  /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|packages\.lock\.json|[^/]+\.csproj)$/u;
 
 export const requiredChecks = [
   ["ci", actionsAppId],
@@ -109,22 +107,19 @@ export function commentIsCurrent(comment, checkStart) {
   return Number.isFinite(checkStart) && updatedAt >= checkStart;
 }
 
-export function requiresSocketComment(changedFiles) {
-  if (!Array.isArray(changedFiles)) return true;
-  return changedFiles.some(
-    (file) => typeof file !== "string" || socketManifestPattern.test(file.replaceAll("\\", "/")),
+export function hasCurrentSocketNoAlertEvidence(checks, headSha) {
+  return checks.some(
+    (check) =>
+      check.appId === socketIdentity.appId &&
+      check.conclusion === "success" &&
+      check.headSha === headSha &&
+      check.name === "Socket Security: Pull Request Alerts" &&
+      check.socketNoAlerts === true &&
+      check.status === "completed",
   );
 }
 
-function reviewFailures(
-  checks,
-  reviews,
-  comments,
-  headSha,
-  socketRiskAllowlist,
-  socketRiskActors,
-  socketCommentRequired,
-) {
+function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist, socketRiskActors) {
   const failures = [];
   if (
     reviews.some(
@@ -143,16 +138,12 @@ function reviewFailures(
     failures.push("Current Gitar finding evidence is missing or unparseable.");
   else if (findings !== 0) failures.push(`Gitar has ${String(findings)} unresolved finding(s).`);
 
-  if (!socketCommentRequired) return failures;
-
   const socket = latestComment(comments, socketIdentity);
   const socketStart = currentCheckStart(checks, headSha, [
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
   ]);
-  if (!commentIsCurrent(socket, socketStart))
-    failures.push("Current Socket alert evidence is missing.");
-  else {
+  if (commentIsCurrent(socket, socketStart)) {
     const alerts = packageAlerts(socket.body);
     const accepted = acceptedSocketRisks(
       comments,
@@ -164,30 +155,30 @@ function reviewFailures(
     if (unresolved.length > 0)
       failures.push(`${String(unresolved.length)} Socket warning(s) remain.`);
     if (/\bError\b/u.test(socket.body)) failures.push("Socket reports an error alert.");
-  }
+  } else if (!hasCurrentSocketNoAlertEvidence(checks, headSha))
+    failures.push("Current Socket alert evidence is missing.");
   return failures;
 }
 
-export function stabilityFailures(
-  checks,
-  comments,
-  now,
-  stabilityMs,
-  socketCommentRequired = true,
-) {
-  const evidenceValues = [
+export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
+  const socketStart = currentCheckStart(checks, headSha, [
+    "Socket Security: Project Report",
+    "Socket Security: Pull Request Alerts",
+  ]);
+  const socket = latestComment(comments, socketIdentity);
+  const currentSocket = commentIsCurrent(socket, socketStart) ? socket : undefined;
+  const cleanWithoutComment =
+    currentSocket === undefined && hasCurrentSocketNoAlertEvidence(checks, headSha);
+  const evidenceTimes = [
     ...checks
       .filter((check) => check.name === "Gitar" || check.name.startsWith("Socket Security:"))
       .map(completedAt),
     latestComment(comments, gitarIdentity)?.updatedAt,
-  ];
-  if (socketCommentRequired)
-    evidenceValues.push(latestComment(comments, socketIdentity)?.updatedAt);
-  const evidenceTimes = evidenceValues
+    currentSocket?.updatedAt,
+  ]
     .map((value) => (typeof value === "number" ? value : Date.parse(value)))
     .filter(Number.isFinite);
-  const requiredEvidenceCount = socketCommentRequired ? 5 : 4;
-  if (evidenceTimes.length < requiredEvidenceCount)
+  if (evidenceTimes.length < (cleanWithoutComment ? 4 : 5))
     return ["Review-product stability evidence is incomplete."];
   return Math.max(...evidenceTimes) + stabilityMs > now
     ? ["Review-product evidence is inside the stability window."]
@@ -205,10 +196,9 @@ export function validatedRiskAllowlist(value) {
   return validatedSet(value, npmRiskPattern);
 }
 
-export function evaluateBankingQualityGate(input) {
+export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
-  const socketCommentRequired = requiresSocketComment(input.changedFiles);
   const failures = [
     ...checkFailures(input.checks, input.headSha),
     ...reviewFailures(
@@ -218,14 +208,13 @@ export function evaluateBankingQualityGate(input) {
       input.headSha,
       riskAllowlist,
       riskActors,
-      socketCommentRequired,
     ),
     ...stabilityFailures(
       input.checks,
       input.comments,
       input.now,
       input.stabilityMs ?? 60_000,
-      socketCommentRequired,
+      input.headSha,
     ),
   ];
   return { failures, passed: failures.length === 0 };

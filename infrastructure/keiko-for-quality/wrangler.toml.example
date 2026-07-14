@@ -1,12 +1,12 @@
-name = "keiko-banking-quality-gate"
-main = "../../scripts/banking-quality-gate-worker.mjs"
+name = "keiko-for-quality"
+main = "../../scripts/keiko-for-quality-worker.mjs"
 compatibility_date = "2026-07-11"
 
 [triggers]
 crons = ["* * * * *"]
 
 [[kv_namespaces]]
-binding = "BANKING_GATE_STATE"
+binding = "KEIKO_FOR_QUALITY_STATE"
 id = "replace-with-production-kv-id"
 
 [vars]

@@ -17,7 +17,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] `Parent Epic: #<epic_number>` is present and points to the governing open epic.
 - [ ] This issue is linked as a GitHub sub-issue of the parent epic, not only referenced in Markdown.
 - [ ] This issue appears under the parent epic swimlane on the public `Keiko Product Delivery` board.
-- [ ] Project fields are set before handoff: `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, inherited or explicit `Priority`, and `Human Review Required: Yes`.
+- [ ] Project fields are set before autonomous delivery: `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, inherited or explicit `Priority`, and `Human Review Required: No`.
 - [ ] The parent epic remains `Classification: Epic`, `Status: Open Epics`, and positioned in the board's top-to-bottom implementation order.
 - [ ] Card Chat or conversation-card work uses this same parent/sub-issue and board placement flow; do not create loose chat/card issues outside an epic swimlane.
 
@@ -51,11 +51,11 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] Set project `Classification` to `Task`.
 - [ ] Set project `Status` to `Open Issues` while the issue is open and unclaimed.
 - [ ] Confirm this issue is visible under the parent epic swimlane through the GitHub sub-issue relationship.
-- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Ready for Human Review`, `Blocked`, `Waiting for User`, or `Done`.
+- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Blocked`, `Waiting for User`, or `Done`.
 - [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
 - [ ] When implementation starts, fill the `Branch` field with the active branch name.
-- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `Yes`.
-- [ ] When the PR is ready for maintainer review, set `Workflow State` to `Ready for Human Review` and replace the issue label with `status: ready for human review`.
+- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `No`.
+- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while Gitar repairs or deterministic gates settle.
 - [ ] Do not mark `Done` until the PR is merged, closure evidence exists, the issue is closed, and project `Status` is set to `Done`.
 
 ## Expected Verification

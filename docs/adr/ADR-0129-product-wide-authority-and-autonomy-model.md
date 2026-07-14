@@ -67,10 +67,13 @@ Invalid or expired authority, workspace escape, denied sensitive paths, secret e
 (including stored connector credentials and tokens), unsupported actions, exhausted budgets, and
 platform restrictions fail closed in every mode, on every surface.
 
-### D4 — Delivery stays separately human-approved
+### D4 — Delivery follows the governing deployment contract
 
-Commit, push, pull-request creation, merge, and authority widening remain separately
-human-approved delivery actions in all modes, unchanged from the human-control invariant.
+Product delivery and authority widening remain separately governed delivery actions. For Keiko
+repository work targeting `dev`, ADR-0135 supersedes the former per-action human approval rule:
+accepted task authority permits branch commits, pushes, and pull-request updates, while the
+app-bound `Keiko for Quality` check exclusively authorizes GitHub native auto-merge. Direct pushes
+to `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 
 ### D5 — Vocabulary home and naming
 
@@ -104,4 +107,6 @@ with the existing supersession convention before the new surface ships.
   Authority Envelope, connector scopes, evidence rules.
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md) — corrected mode semantics,
   policy matrix, editor docking, supersession of stale per-action-approval records.
+- [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) — deterministic,
+  human-free repository delivery to `dev` through the `Keiko for Quality` aggregate.
 - `AGENTS.md` — human-control invariant and the three user-facing modes.

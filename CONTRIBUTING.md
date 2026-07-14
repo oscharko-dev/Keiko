@@ -16,7 +16,7 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All 15 app-bound required status checks must pass on the current pull-request head before a change
+All 16 app-bound required status checks must pass on the current pull-request head before a change
 can merge into `dev`:
 
 1. `ci`
@@ -34,11 +34,15 @@ can merge into `dev`:
 13. `Socket Security: Project Report`
 14. `Socket Security: Pull Request Alerts`
 15. `Gitar`
+16. `Keiko for Quality`
 
-During the Banking Quality Gate recovery, the maintainer/contributor approval bypass is disabled,
-so the applicable review requirement also remains blocking. It may be restored only after the
-independent app-bound aggregate gate and its negative live probes are complete. See
-[`docs/qa/banking-quality-gate.md`](docs/qa/banking-quality-gate.md).
+No human approving review or manual merge is required. Gitar may repair the PR branch
+autonomously, and GitHub native auto-merge integrates only after `Keiko for Quality` validates the
+exact current head. Auto-merge remains disabled until the independent App and its negative and
+positive live probes are complete. See
+[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Gitar configuration,
+large-PR acceptance, safe commands, and plan boundaries are governed by
+[`docs/qa/gitar-review-policy.md`](docs/qa/gitar-review-policy.md).
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),

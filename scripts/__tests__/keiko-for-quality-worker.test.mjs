@@ -1,4 +1,6 @@
 import { createHmac, webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -6,9 +8,11 @@ import worker, {
   allPages,
   appId,
   appJwt,
+  autoApplyState,
   base64Url,
   bytesFromHex,
   constantTimeEqual,
+  dashboardComment,
   evidence,
   github,
   hardFailure,
@@ -16,15 +20,18 @@ import worker, {
   importWebhookKey,
   isValidHeadSha,
   isOwnCheckEvent,
+  isOwnCommentEvent,
   parseJson,
   parseStabilityMs,
   parseTrackedPull,
   privateKeyBytes,
   publishCheck,
+  publishDashboardComment,
   pullRequestNumbers,
+  socketNoAlertEvidence,
   verifyWebhookSignature,
-} from "../banking-quality-gate-worker.mjs";
-import { requiredChecks } from "../banking-quality-gate-core.mjs";
+} from "../keiko-for-quality-worker.mjs";
+import { requiredChecks } from "../keiko-for-quality-core.mjs";
 
 let signingKey;
 
@@ -100,11 +107,12 @@ function reviewsResponse(url, headSha, options) {
   ]);
 }
 
-function commentsResponse(options) {
+function commentsResponse(options = {}) {
   const comments = [
     {
       author_association: "NONE",
-      body: "0 resolved / 0 findings",
+      body: "0 resolved / 0 findings\n✅ Auto-apply",
+      id: 10,
       performed_via_github_app: { id: 827041 },
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 159877585, login: "gitar-bot[bot]", type: "Bot" },
@@ -112,6 +120,7 @@ function commentsResponse(options) {
     {
       author_association: "NONE",
       body: "[!WARNING] https://socket.dev/npm/package/execa/overview/9.6.1",
+      id: 11,
       performed_via_github_app: { id: 156372 },
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 95510084, login: "socket-security[bot]", type: "Bot" },
@@ -119,6 +128,7 @@ function commentsResponse(options) {
     {
       author_association: "MEMBER",
       body: "@SocketSecurity ignore npm/execa@9.6.1",
+      id: 12,
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 1, login: "oscharko", type: "User" },
     },
@@ -130,18 +140,20 @@ function commentsResponse(options) {
   );
 }
 
-function filesResponse(options) {
-  if (options.invalidFiles) return response([{ filename: "scripts/check.mjs" }, null]);
-  return response((options.changedFiles ?? ["package.json"]).map((filename) => ({ filename })));
-}
-
 function checksResponse(headSha, options) {
   if (options.omitCheckRuns) return response({});
   return response({ check_runs: options.checkRuns ?? checkRuns(headSha) });
 }
 
 function pullResponse(headSha, options) {
-  return response(options.pull ?? { base: { ref: "dev" }, head: { sha: headSha }, state: "open" });
+  return response(
+    options.pull ?? {
+      auto_merge: null,
+      base: { ref: "dev" },
+      head: { sha: headSha },
+      state: "open",
+    },
+  );
 }
 
 function checkWriteResponse(path, method) {
@@ -150,19 +162,38 @@ function checkWriteResponse(path, method) {
   return undefined;
 }
 
+function commentWriteResponse(path, method) {
+  if (/\/issues\/\d+\/comments$/u.test(path) && method === "POST") return response({ id: 100 });
+  if (/\/issues\/comments\/\d+$/u.test(path) && method === "PATCH") return response({ id: 100 });
+  return undefined;
+}
+
+function githubReadResponse(url, path, method, headSha, options) {
+  if (path.includes("/access_tokens")) return response({ token: "installation-token" });
+  if (path.endsWith("/pulls/2329")) return pullResponse(headSha, options);
+  if (path.endsWith("/reviews")) return reviewsResponse(url, headSha, options);
+  if (path.endsWith("/comments") && (method === undefined || method === "GET")) {
+    return commentsResponse();
+  }
+  if (path.includes(`/commits/${headSha}/check-runs`)) return checksResponse(headSha, options);
+  return undefined;
+}
+
+function githubResponse(url, init, headSha, options) {
+  const path = new URL(url).pathname;
+  const readResponse = githubReadResponse(url, path, init?.method, headSha, options);
+  if (readResponse !== undefined) return readResponse;
+  const writeResponse = checkWriteResponse(path, init?.method);
+  if (writeResponse !== undefined) return writeResponse;
+  const commentResponse = commentWriteResponse(path, init?.method);
+  if (commentResponse !== undefined) return commentResponse;
+  throw new Error(`Unexpected GitHub request: ${String(url)}`);
+}
+
 function githubMock(headSha, options = {}) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation((url, init) => {
-    const path = new URL(url).pathname;
-    if (path.includes("/access_tokens")) return response({ token: "installation-token" });
-    if (path.endsWith("/pulls/2329")) return pullResponse(headSha, options);
-    if (path.endsWith("/reviews")) return reviewsResponse(url, headSha, options);
-    if (path.endsWith("/comments")) return commentsResponse(options);
-    if (path.endsWith("/files")) return filesResponse(options);
-    if (path.includes(`/commits/${headSha}/check-runs`)) return checksResponse(headSha, options);
-    const writeResponse = checkWriteResponse(path, init?.method);
-    if (writeResponse !== undefined) return writeResponse;
-    throw new Error(`Unexpected GitHub request: ${String(url)}`);
-  });
+  return vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation((url, init) => githubResponse(url, init, headSha, options));
 }
 
 function stateBinding() {
@@ -177,7 +208,7 @@ function stateBinding() {
 
 function environment(state, secret = "test-secret") {
   return {
-    BANKING_GATE_STATE: state,
+    KEIKO_FOR_QUALITY_STATE: state,
     GITHUB_APP_ID: "999",
     GITHUB_PRIVATE_KEY_PKCS8: signingKey,
     GITHUB_WEBHOOK_SECRET: secret,
@@ -203,7 +234,45 @@ async function signedRequest(payload, secret, delivery = "delivery-1") {
   });
 }
 
-describe("Banking Quality Gate worker trust boundary", () => {
+describe("Keiko for Quality worker trust boundary", () => {
+  it("pins the branded least-privilege App manifest and square Keiko logo", () => {
+    const root = resolve(import.meta.dirname, "../..");
+    const manifest = JSON.parse(
+      readFileSync(
+        resolve(root, "infrastructure/keiko-for-quality/github-app-manifest.json.example"),
+        "utf8",
+      ),
+    );
+    expect(manifest).toMatchObject({
+      default_events: [
+        "check_run",
+        "check_suite",
+        "issue_comment",
+        "pull_request",
+        "pull_request_review",
+      ],
+      default_permissions: {
+        checks: "write",
+        issues: "write",
+        metadata: "read",
+        pull_requests: "write",
+      },
+      name: "Keiko for Quality",
+      public: false,
+    });
+    expect(Object.keys(manifest.default_permissions).toSorted()).toEqual([
+      "checks",
+      "issues",
+      "metadata",
+      "pull_requests",
+    ]);
+
+    const logo = readFileSync(resolve(root, "packages/keiko-ui/public/icon-512.png"));
+    expect(logo.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(logo.readUInt32BE(16)).toBe(512);
+    expect(logo.readUInt32BE(20)).toBe(512);
+  });
+
   it("encodes JWT material and compares signature bytes exactly", async () => {
     expect(base64Url("test?")).toBe("dGVzdD8");
     expect(base64Url(new Uint8Array([251, 255]))).toBe("-_8");
@@ -260,7 +329,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
           Accept: "application/vnd.github+json",
           Authorization: "Bearer token",
           "Content-Type": "application/json",
-          "User-Agent": "keiko-banking-quality-gate",
+          "User-Agent": "keiko-keiko-for-quality",
           "X-GitHub-Api-Version": "2022-11-28",
         }),
         method: "DELETE",
@@ -312,7 +381,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
 
   it("matches only this app's exact check event", () => {
     const env = { GITHUB_APP_ID: "999" };
-    const payload = { check_run: { app: { id: 999 }, name: "Banking Quality Gate" } };
+    const payload = { check_run: { app: { id: 999 }, name: "Keiko for Quality" } };
     expect(isOwnCheckEvent("check_run", payload, env)).toBe(true);
     expect(isOwnCheckEvent("check_suite", payload, env)).toBe(false);
     expect(
@@ -323,24 +392,290 @@ describe("Banking Quality Gate worker trust boundary", () => {
     ).toBe(false);
     expect(isOwnCheckEvent("check_run", {}, env)).toBe(false);
     expect(
-      isOwnCheckEvent("check_run", { check_run: { app: null, name: "Banking Quality Gate" } }, env),
+      isOwnCheckEvent("check_run", { check_run: { app: null, name: "Keiko for Quality" } }, env),
     ).toBe(false);
-    expect(isOwnCheckEvent("check_run", { check_run: { name: "Banking Quality Gate" } }, env)).toBe(
+    expect(isOwnCheckEvent("check_run", { check_run: { name: "Keiko for Quality" } }, env)).toBe(
       false,
     );
     expect(
-      isOwnCheckEvent(
-        "check_run",
-        { check_run: { app: "999", name: "Banking Quality Gate" } },
+      isOwnCheckEvent("check_run", { check_run: { app: "999", name: "Keiko for Quality" } }, env),
+    ).toBe(false);
+  });
+
+  it("ignores only comments created through this exact app", () => {
+    const env = { GITHUB_APP_ID: "999" };
+    const payload = { comment: { performed_via_github_app: { id: 999 } } };
+    expect(isOwnCommentEvent("issue_comment", payload, env)).toBe(true);
+    expect(
+      isOwnCommentEvent(
+        "issue_comment",
+        { comment: { performed_via_github_app: { id: 998 } } },
         env,
       ),
     ).toBe(false);
+    expect(isOwnCommentEvent("pull_request", {}, env)).toBe(false);
+    expect(isOwnCommentEvent("pull_request", payload, env)).toBe(false);
+    expect(isOwnCommentEvent("issue_comment", { comment: null }, env)).toBe(false);
+  });
+
+  it("renders a redacted in-place dashboard for ready, waiting, and blocked states", () => {
+    const headSha = "a".repeat(40);
+    const checks = requiredChecks.map(({ appId: requiredAppId, name }) => ({
+      appId: requiredAppId,
+      conclusion: "success",
+      headSha,
+      name,
+      status: "completed",
+    }));
+    const comments = [
+      {
+        appId: 827041,
+        body: "Options: Auto-apply disabled",
+        updatedAt: "2026-07-13T17:00:00.000Z",
+      },
+      {
+        appId: 827041,
+        body: "0 resolved / 0 findings\n✅\n Auto-apply",
+        updatedAt: "2026-07-13T18:00:00.000Z",
+      },
+      {
+        appId: 999,
+        body: "Options: Auto-apply disabled",
+        updatedAt: "2026-07-13T19:00:00.000Z",
+      },
+    ];
+    expect(autoApplyState(comments)).toBe("enabled");
+    expect(
+      autoApplyState([
+        {
+          appId: 827041,
+          body: "Options: Auto-apply disabled",
+          updatedAt: "2026-07-13T17:00:00.000Z",
+        },
+      ]),
+    ).toBe("disabled");
+    expect(
+      autoApplyState([
+        {
+          appId: 827041,
+          body: "No automation option is present.",
+          updatedAt: "2026-07-13T17:00:00.000Z",
+        },
+      ]),
+    ).toBe("not confirmed");
+    expect(autoApplyState([])).toBe("not confirmed");
+
+    const ready = dashboardComment({
+      checks,
+      comments,
+      headSha,
+      pull: { auto_merge: { enabled_at: "2026-07-13T18:00:00.000Z" } },
+      result: {
+        evaluatedAt: Date.parse("2026-07-13T18:00:00.000Z"),
+        failures: [],
+        passed: true,
+      },
+    });
+    expect(ready).toBe(
+      [
+        "<!-- keiko-for-quality-dashboard:v1 -->",
+        "## Keiko for Quality",
+        "",
+        "✅ **Ready for auto-merge**",
+        "",
+        "`head aaaaaaaaaaaa` · `updated 2026-07-13T18:00:00.000Z`",
+        "",
+        "| Gate group | Evidence |",
+        "| --- | --- |",
+        "| Required checks | 15/15 successful |",
+        "| SonarQube Cloud | ✅ native quality gate passed |",
+        "| Gitar review | ✅ zero unresolved findings |",
+        "| Socket Security | ✅ zero unresolved alerts |",
+        "| Stability window | ✅ settled |",
+        "",
+        "| Automation | State |",
+        "| --- | --- |",
+        "| Gitar Auto-Apply | enabled |",
+        "| GitHub Auto-Merge | armed |",
+        "",
+        "<details>",
+        "<summary>Validated evidence</summary>",
+        "",
+        "All exact-current-head evidence is valid.",
+        "",
+        "</details>",
+        "",
+        "<sub>Exact-head, app-bound, fail-closed aggregate. This redacted status comment updates in place.</sub>",
+      ].join("\n"),
+    );
+    expect(ready).not.toContain(headSha);
+
+    const waiting = dashboardComment({
+      checks: checks.filter(
+        (check) => check.name !== "ci" && check.name !== "SonarCloud Code Analysis",
+      ),
+      comments,
+      headSha,
+      pull: { auto_merge: null },
+      result: {
+        failures: [
+          "Missing current-head check: ci.",
+          "Missing current-head check: SonarCloud Code Analysis.",
+        ],
+        passed: false,
+      },
+    });
+    expect(waiting).toContain("⏳ **Waiting for evidence**");
+    expect(waiting).toContain("| Required checks | 13/15 successful |");
+    expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
+    expect(waiting).toContain("Missing current-head check: ci.");
+    expect(waiting).toContain(
+      "| SonarQube Cloud | ❌ Missing current-head check: SonarCloud Code Analysis. |",
+    );
+    expect(waiting).toContain(
+      "- Missing current-head check: ci.\n- Missing current-head check: SonarCloud Code Analysis.",
+    );
+
+    const blocked = dashboardComment({
+      checks,
+      comments,
+      headSha,
+      pull: { auto_merge: null },
+      result: { failures: ["Gitar has 1 unresolved finding(s)."], passed: false },
+    });
+    expect(blocked).toContain("❌ **Blocked**");
+    expect(blocked).toContain("<details open>");
+    expect(blocked).toContain("<summary>Blocking or waiting evidence (1)</summary>");
+    expect(blocked).not.toContain("secret-value");
+
+    const invalidChecks = [
+      { ...checks[0], appId: -1 },
+      { ...checks[0], conclusion: "failure" },
+      { ...checks[0], headSha: "b".repeat(40) },
+      { ...checks[0], name: "wrong check" },
+      { ...checks[0], status: "in_progress" },
+    ];
+    const invalidCount = dashboardComment({
+      checks: invalidChecks,
+      comments: [],
+      headSha,
+      pull: {},
+      result: { failures: [], passed: false },
+    });
+    expect(invalidCount).toContain("| Required checks | 0/15 successful |");
+    expect(invalidCount).toContain("| GitHub Auto-Merge | not armed |");
+  });
+
+  it("creates one dashboard comment and subsequently updates the app-owned marker", async () => {
+    const headSha = "a".repeat(40);
+    const baseEvidence = { checks: [], comments: [], reviews: [] };
+    const pull = { auto_merge: null, head: { sha: headSha } };
+    const result = { failures: ["Missing current-head check: ci."], passed: false };
+    const createFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 100 }));
+    await publishDashboardComment({
+      owner: "owner",
+      repository: "repo",
+      pullNumber: 42,
+      currentEvidence: baseEvidence,
+      pull,
+      result,
+      token: "token",
+      env: { GITHUB_APP_ID: "999" },
+    });
+    expect(createFetch.mock.calls[0][0]).toBe(
+      "https://api.github.com/repos/owner/repo/issues/42/comments",
+    );
+    expect(createFetch.mock.calls[0][1].method).toBe("POST");
+    expect(JSON.parse(createFetch.mock.calls[0][1].body).body).toContain(
+      "<!-- keiko-for-quality-dashboard:v1 -->",
+    );
+
+    vi.restoreAllMocks();
+    const updateFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 77 }));
+    await publishDashboardComment({
+      owner: "owner",
+      repository: "repo",
+      pullNumber: 42,
+      currentEvidence: {
+        ...baseEvidence,
+        comments: [
+          {
+            appId: 998,
+            body: "<!-- keiko-for-quality-dashboard:v1 -->wrong app",
+            id: 74,
+          },
+          {
+            appId: 999,
+            body: "<!-- keiko-for-quality-dashboard:v1 -->invalid id",
+            id: "75",
+          },
+          { appId: 999, body: "no ownership marker", id: 76 },
+          {
+            appId: 999,
+            body: "<!-- keiko-for-quality-dashboard:v1 -->old",
+            id: 77,
+          },
+        ],
+      },
+      pull,
+      result,
+      token: "token",
+      env: { GITHUB_APP_ID: "999" },
+    });
+    expect(updateFetch.mock.calls[0][0]).toBe(
+      "https://api.github.com/repos/owner/repo/issues/comments/77",
+    );
+    expect(updateFetch.mock.calls[0][1].method).toBe("PATCH");
   });
 
   it("extracts app identity only when present", () => {
     expect(appId({ id: 999 })).toBe(999);
     expect(appId(null)).toBeUndefined();
     expect(appId(undefined)).toBeUndefined();
+  });
+
+  it("derives only an explicit clean Socket PR-alert result without retaining output text", () => {
+    const clean = {
+      app: { id: 156372 },
+      conclusion: "success",
+      name: "Socket Security: Pull Request Alerts",
+      output: {
+        annotations_count: 0,
+        summary: "Pull request contains no net changes to dependencies",
+        text: "No dependency changes detected in pull request",
+        title: "Pull Request Alerts: Skipped",
+      },
+    };
+    expect(socketNoAlertEvidence(clean)).toBe(true);
+    expect(socketNoAlertEvidence({ ...clean, app: { id: 1 } })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, conclusion: "neutral" })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, name: "Project Report" })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, output: undefined })).toBe(false);
+    expect(socketNoAlertEvidence({ ...clean, output: {} })).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { ...clean.output, annotations_count: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, text: ["no new alerts"] },
+      }),
+    ).toBe(false);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, title: "Success: NO NEW ALERTS" },
+      }),
+    ).toBe(true);
+    expect(
+      socketNoAlertEvidence({
+        ...clean,
+        output: { annotations_count: 0, text: "No new alert" },
+      }),
+    ).toBe(true);
   });
 
   it("does not trust absent event collection shapes", () => {
@@ -421,10 +756,10 @@ describe("Banking Quality Gate worker trust boundary", () => {
     expect(JSON.parse(publish[1].body)).toMatchObject({
       conclusion: "success",
       head_sha: headSha,
-      name: "Banking Quality Gate",
+      name: "Keiko for Quality",
       output: {
-        summary: "All current-head Banking Quality Gate evidence is valid.",
-        title: "Banking Quality Gate",
+        summary: "All current-head Keiko for Quality evidence is valid.",
+        title: "Keiko for Quality",
       },
       status: "completed",
     });
@@ -444,10 +779,9 @@ describe("Banking Quality Gate worker trust boundary", () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
   });
 
-  it("publishes success for source-only changes without a Socket comment", async () => {
+  it("publishes success with explicit clean Socket evidence and no Socket comment", async () => {
     const headSha = "6".repeat(40);
     const fetchMock = githubMock(headSha, {
-      changedFiles: ["scripts/check.mjs", "src/index.ts"],
       omitSocketComment: true,
     });
     const waits = [];
@@ -484,8 +818,8 @@ describe("Banking Quality Gate worker trust boundary", () => {
         {
           conclusion: "success",
           output: {
-            summary: "All current-head Banking Quality Gate evidence is valid.",
-            title: "Banking Quality Gate",
+            summary: "All current-head Keiko for Quality evidence is valid.",
+            title: "Keiko for Quality",
           },
           status: "completed",
         },
@@ -496,7 +830,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
           conclusion: "failure",
           output: {
             summary: "Wrong producer for ci.\nsecond failure",
-            title: "Banking Quality Gate",
+            title: "Keiko for Quality",
           },
           status: "completed",
         },
@@ -506,7 +840,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
         {
           output: {
             summary: "Missing current-head check: ci.\nwaiting",
-            title: "Banking Quality Gate",
+            title: "Keiko for Quality",
           },
           status: "in_progress",
         },
@@ -518,7 +852,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
         .mockResolvedValueOnce(
           response({
             check_runs: [
-              { app: { id: 1 }, id: 1, name: "Banking Quality Gate" },
+              { app: { id: 1 }, id: 1, name: "Keiko for Quality" },
               { app: { id: 999 }, id: 2, name: "Other" },
             ],
           }),
@@ -531,7 +865,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
       expect(JSON.parse(init.body)).toEqual({
         ...expected,
         head_sha: headSha,
-        name: "Banking Quality Gate",
+        name: "Keiko for Quality",
       });
     }
   });
@@ -540,7 +874,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ check_runs: [{ app: { id: 999 }, id: 7, name: "Banking Quality Gate" }] }),
+        response({ check_runs: [{ app: { id: 999 }, id: 7, name: "Keiko for Quality" }] }),
       )
       .mockResolvedValueOnce(response({ id: 7 }));
     await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
@@ -556,7 +890,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        response({ check_runs: [{ app: "999", id: 7, name: "Banking Quality Gate" }] }),
+        response({ check_runs: [{ app: "999", id: 7, name: "Keiko for Quality" }] }),
       )
       .mockResolvedValueOnce(response({ id: 8 }));
     await publishCheck("owner", "repo", "a".repeat(40), { failures: [], passed: true }, "token", {
@@ -572,8 +906,8 @@ describe("Banking Quality Gate worker trust boundary", () => {
       .mockResolvedValueOnce(
         response({
           check_runs: [
-            { app: null, id: 6, name: "Banking Quality Gate" },
-            { id: 7, name: "Banking Quality Gate" },
+            { app: null, id: 6, name: "Keiko for Quality" },
+            { id: 7, name: "Keiko for Quality" },
           ],
         }),
       )
@@ -588,7 +922,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
     const headSha = "b".repeat(40);
     const runs = checkRuns(headSha);
     runs[0] = { ...runs[0], conclusion: "failure" };
-    runs.push({ app: { id: 999 }, head_sha: headSha, id: 90, name: "Banking Quality Gate" });
+    runs.push({ app: { id: 999 }, head_sha: headSha, id: 90, name: "Keiko for Quality" });
     const fetchMock = githubMock(headSha, { checkRuns: runs });
     const waits = [];
     const state = stateBinding();
@@ -641,7 +975,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
       {
         check_run: {
           app: { id: 999 },
-          name: "Banking Quality Gate",
+          name: "Keiko for Quality",
           pull_requests: [{ number: 2329 }],
         },
         installation: { id: 42 },
@@ -660,7 +994,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
     const state = stateBinding();
     const secret = "test-secret";
     const env = {
-      BANKING_GATE_STATE: state,
+      KEIKO_FOR_QUALITY_STATE: state,
       GITHUB_WEBHOOK_SECRET: secret,
       TARGET_REPOSITORY: "oscharko-dev/Keiko",
     };
@@ -690,6 +1024,55 @@ describe("Banking Quality Gate worker trust boundary", () => {
     expect(await absent.text()).toBe("unexpected repository");
   });
 
+  it("fails closed when an immediate replay misses the eventual KV read", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const state = stateBinding();
+    state.get.mockResolvedValue(null);
+    state.put
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("sensitive endpoint write conflict"))
+      .mockRejectedValueOnce("opaque sensitive failure");
+    const secret = "test-secret";
+    const env = {
+      KEIKO_FOR_QUALITY_STATE: state,
+      GITHUB_WEBHOOK_SECRET: secret,
+      TARGET_REPOSITORY: "oscharko-dev/Keiko",
+    };
+    const payload = {
+      installation: { id: 42 },
+      repository: { full_name: "attacker/repository" },
+    };
+
+    const unexpected = await worker.fetch(await signedRequest(payload, secret), env, {});
+    const replayed = await worker.fetch(await signedRequest(payload, secret), env, {});
+    const opaqueFailure = await worker.fetch(await signedRequest(payload, secret), env, {});
+
+    expect(unexpected.status).toBe(403);
+    expect(replayed.status).toBe(409);
+    expect(await replayed.text()).toBe("replayed delivery");
+    expect(opaqueFailure.status).toBe(409);
+    expect(errorLog).toHaveBeenCalledWith(
+      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=Error",
+    );
+    expect(errorLog).toHaveBeenCalledWith(
+      "reserveDelivery failed for correlationId=delivery:delivery-1 errorKind=UnknownError",
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("sensitive endpoint");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("opaque sensitive");
+  });
+
+  it("accepts only a signed GitHub webhook verification ping without repository data", async () => {
+    const state = stateBinding();
+    const secret = "test-secret";
+    const ping = await signedRequest({ hook: { type: "App" } }, secret, "delivery-ping");
+    ping.headers.set("X-GitHub-Event", "ping");
+
+    const response = await worker.fetch(ping, environment(state, secret), {});
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("pong");
+  });
+
   it("rejects malformed trust-boundary inputs before evaluation", async () => {
     const state = stateBinding();
     const env = environment(state);
@@ -698,8 +1081,8 @@ describe("Banking Quality Gate worker trust boundary", () => {
     expect(invalidSignature.status).toBe(401);
     expect(await invalidSignature.text()).toBe("invalid signature");
     await expect(
-      worker.fetch(unsigned, { ...env, BANKING_GATE_STATE: undefined }, {}),
-    ).rejects.toThrow("BANKING_GATE_STATE");
+      worker.fetch(unsigned, { ...env, KEIKO_FOR_QUALITY_STATE: undefined }, {}),
+    ).rejects.toThrow("KEIKO_FOR_QUALITY_STATE");
 
     const missingInstallation = await signedRequest(
       { pull_request: { number: 2329 }, repository: { full_name: "oscharko-dev/Keiko" } },
@@ -771,10 +1154,8 @@ describe("Banking Quality Gate worker trust boundary", () => {
             user: null,
           },
         ]),
-      )
-      .mockResolvedValueOnce(response([{ filename: "scripts/check.mjs" }]));
+      );
     await expect(evidence("owner", "repo", 2, headSha, "token")).resolves.toEqual({
-      changedFiles: ["scripts/check.mjs"],
       checks: [
         {
           appId: undefined,
@@ -782,6 +1163,7 @@ describe("Banking Quality Gate worker trust boundary", () => {
           conclusion: null,
           headSha,
           name: "ci",
+          socketNoAlerts: false,
           startedAt: null,
           status: "queued",
         },
@@ -807,33 +1189,10 @@ describe("Banking Quality Gate worker trust boundary", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(null))
       .mockResolvedValueOnce(response([]))
-      .mockResolvedValueOnce(response([]))
       .mockResolvedValueOnce(response([]));
     await expect(evidence("owner", "repo", 2, "a".repeat(40), "token")).rejects.toThrow(
       "omitted check runs",
     );
-  });
-
-  it("rejects changed-file evidence without exact file names", async () => {
-    const headSha = "7".repeat(40);
-    githubMock(headSha, { invalidFiles: true });
-    const state = stateBinding();
-    const waits = [];
-    await worker.fetch(
-      await signedRequest(
-        {
-          installation: { id: 42 },
-          number: 2329,
-          pull_request: { number: 2329 },
-          repository: { full_name: "oscharko-dev/Keiko" },
-        },
-        "test-secret",
-        "invalid-files",
-      ),
-      environment(state),
-      { waitUntil: (promise) => waits.push(promise) },
-    );
-    await expect(waits[0]).rejects.toThrow("omitted a changed file name");
   });
 
   it("uses fail-closed defaults when optional policy environment values are absent", async () => {
