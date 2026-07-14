@@ -189,6 +189,7 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
       completedAt: check.completed_at,
       conclusion: check.conclusion,
       headSha: check.head_sha,
+      id: check.id,
       name: check.name,
       socketNoAlerts: socketNoAlertEvidence(check),
       startedAt: check.started_at,
@@ -213,15 +214,16 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
   };
 }
 
-export function hardFailure(failures) {
-  return failures.some(
-    (failure) =>
-      failure.startsWith("Wrong producer") ||
-      failure.includes("CHANGES_REQUESTED") ||
-      failure.includes("unresolved finding") ||
-      failure.includes("Socket warning") ||
-      failure.includes("Socket reports") ||
-      failure.startsWith("Check is not successful"),
+export function hardFailure(result) {
+  return result.blockingFailures.length > 0;
+}
+
+export function checkMatchesBody(check, body) {
+  return (
+    check.status === body.status &&
+    (check.conclusion ?? null) === (body.conclusion ?? null) &&
+    check.output?.title === body.output.title &&
+    check.output?.summary === body.output.summary
   );
 }
 
@@ -234,6 +236,7 @@ export async function publishCheck(owner, repository, headSha, result, token, en
     (check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID),
   );
   const body = checkBody(result);
+  if (existing !== undefined && checkMatchesBody(existing, body)) return;
   const path =
     existing === undefined
       ? `/repos/${owner}/${repository}/check-runs`
@@ -261,9 +264,7 @@ export function checkBody(result) {
     output: { summary: result.failures.join("\n"), title: checkName },
     status: "in_progress",
   };
-  return hardFailure(result.failures)
-    ? { ...body, conclusion: "failure", status: "completed" }
-    : body;
+  return hardFailure(result) ? { ...body, conclusion: "failure", status: "completed" } : body;
 }
 
 function currentCheckCount(checks, headSha) {
@@ -295,7 +296,7 @@ export function autoApplyState(comments) {
 
 function decision(result) {
   if (result.passed) return { icon: "✅", label: "Ready for auto-merge" };
-  return hardFailure(result.failures)
+  return hardFailure(result)
     ? { icon: "❌", label: "Blocked" }
     : { icon: "⏳", label: "Waiting for evidence" };
 }
@@ -305,9 +306,20 @@ function failureDetails(failures) {
   return failures.map((failure) => `- ${failure}`).join("\n");
 }
 
-function evidenceState(failures, pattern, cleanLabel) {
-  const failure = failures.find((entry) => pattern.test(entry));
-  return failure === undefined ? `✅ ${cleanLabel}` : `❌ ${failure}`;
+function evidenceState(result, pattern, cleanLabel) {
+  const blockingFailure = result.blockingFailures.find((entry) => pattern.test(entry));
+  if (blockingFailure !== undefined) return `❌ ${blockingFailure}`;
+  const waitingFailure = result.waitingFailures.find((entry) => pattern.test(entry));
+  return waitingFailure === undefined ? `✅ ${cleanLabel}` : `⏳ ${waitingFailure}`;
+}
+
+function detailsSummary(result) {
+  if (result.passed) return "Validated evidence";
+  if (result.blockingFailures.length === 0)
+    return `Waiting evidence (${String(result.waitingFailures.length)})`;
+  if (result.waitingFailures.length === 0)
+    return `Blocking evidence (${String(result.blockingFailures.length)})`;
+  return `Blocking or waiting evidence (${String(result.failures.length)})`;
 }
 
 export function dashboardComment({ checks, comments, headSha, pull, result }) {
@@ -315,9 +327,6 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
   const successfulChecks = currentCheckCount(checks, headSha);
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
-  const detailsSummary = result.passed
-    ? "Validated evidence"
-    : `Blocking or waiting evidence (${String(result.failures.length)})`;
   return [
     dashboardMarker,
     "## Keiko for Quality",
@@ -329,10 +338,10 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     "| Gate group | Evidence |",
     "| --- | --- |",
     `| Required checks | ${String(successfulChecks)}/${String(requiredChecks.length)} successful |`,
-    `| SonarQube Cloud | ${evidenceState(result.failures, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
-    `| Gitar review | ${evidenceState(result.failures, /Gitar/iu, "zero unresolved findings")} |`,
-    `| Socket Security | ${evidenceState(result.failures, /Socket/iu, "zero unresolved alerts")} |`,
-    `| Stability window | ${evidenceState(result.failures, /stability/iu, "settled")} |`,
+    `| SonarQube Cloud | ${evidenceState(result, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
+    `| Gitar review | ${evidenceState(result, /Gitar/iu, "zero unresolved findings")} |`,
+    `| Socket Security | ${evidenceState(result, /Socket/iu, "zero unresolved alerts")} |`,
+    `| Stability window | ${evidenceState(result, /stability/iu, "settled")} |`,
     "",
     "| Automation | State |",
     "| --- | --- |",
@@ -340,7 +349,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     `| GitHub Auto-Merge | ${autoMerge} |`,
     "",
     `<details${result.passed ? "" : " open"}>`,
-    `<summary>${detailsSummary}</summary>`,
+    `<summary>${detailsSummary(result)}</summary>`,
     "",
     failureDetails(result.failures),
     "",
@@ -601,7 +610,16 @@ export async function trackedPullRequests(database) {
   return trackedPulls;
 }
 
-async function storeTrackedPull(database, tracked) {
+export async function storeTrackedPull(database, tracked) {
+  const current = await database
+    .prepare(
+      "SELECT installation_id FROM tracked_pulls WHERE owner = ?1 AND repository = ?2 AND pull_number = ?3",
+    )
+    .bind(tracked.owner, tracked.repository, tracked.pullNumber)
+    .all();
+  if (!Array.isArray(current?.results)) throw new Error("D1 omitted tracked pull state.");
+  if (current.results.length > 1) throw new Error("D1 returned duplicate tracked pull state.");
+  if (current.results[0]?.installation_id === tracked.installationId) return;
   await database
     .prepare(
       "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id WHERE installation_id != excluded.installation_id",

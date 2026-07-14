@@ -78,6 +78,12 @@ the exact current head and comes from its allowlisted GitHub App ID. It addition
 current, parseable, zero-finding Gitar and Socket evidence and the complete SonarCloud, mutation,
 coverage, security, dependency, architecture, build, UI, and release evidence contracts.
 
+Queued, in-progress, or not-yet-emitted current-head inputs keep the aggregate check neutral and
+pending. A completed non-success input, wrong producer, active change request, unresolved finding,
+Socket warning/error, or malformed terminal state completes the aggregate as failed. Both states
+block native auto-merge; the distinction prevents normal pipeline execution from appearing as a
+terminal defect without weakening fail-closed enforcement.
+
 Missing, stale, skipped, neutral, cancelled, timed-out, unstable, differently produced,
 unparseable, or non-zero-finding evidence is blocking. A new commit invalidates every prior
 aggregate result.
@@ -119,7 +125,8 @@ Duplicate and replayed webhook deliveries remain rejected. Missing or delayed de
 leave a new pull request permanently without `Keiko for Quality`; the next reconciliation creates
 or updates the app-bound check. Reconciliation must retain the same exact-head, producer-ID,
 pagination, redaction, and fail-closed rules as event-driven evaluation. It must not continuously
-rewrite an unchanged dashboard comment or create a webhook feedback loop.
+rewrite an unchanged check/dashboard decision or create a webhook feedback loop. Persisted pull
+tracking is read before write so an unchanged scheduled evaluation does not consume a D1 row write.
 
 ## Consequences
 

@@ -118,30 +118,45 @@ npm run codex:pre-pr
 ```
 
 This gate runs the local-first sequence in a fixed order: typecheck, lint, format, UI package
-checks, unit tests, coverage quality, LCOV source mapping, architecture checks, ADR/dependency
-hygiene, clean build, UI build, package-surface, editor bundle size, and smoke coverage. It writes a
-machine-readable report to `.codex/pre-pr-report.json` so the exact local outcome is inspectable
-before the first push, a PR update, or a merge.
+checks, the complete instrumented unit-test and coverage suites, LCOV source mapping, architecture
+checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor bundle size, and smoke
+coverage. The coverage configuration is a superset of the uninstrumented root Vitest collection, so
+the final gate does not run that same collection twice. It writes a machine-readable report to
+`.codex/pre-pr-report.json` so the exact local outcome is inspectable before the first push or a
+materially broadened PR update.
 
 ### Local-first gate policy
 
-Never use GitHub Actions as the first test environment for a change. Before pushing,
-force-pushing, updating a pull request, or merging:
+Never use GitHub Actions as the first test environment for a change. Use two bounded local loops:
+fast affected-area gates while implementing, then one complete pre-PR run before the first push.
+
+Before the first push:
 
 1. Identify every GitHub quality gate that the change can affect.
-2. Run `npm run codex:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
-   already covered by that command.
-3. If a GitHub gate is already red, reproduce that exact failure locally, or reduce it to the
-   nearest deterministic local gate, before pushing another fix.
-4. Fix every local finding before pushing; after any fix, rerun the failed targeted gate and then
-   rerun the full `npm run codex:pre-pr` gate before the next push.
-5. Push only after the relevant local gate is green or a documented platform-specific local skip is
+2. Run the narrow affected-area gates while implementing, including any touched-area gate that is
+   not covered by `npm run codex:pre-pr`.
+3. Fix every local finding and rerun the affected gates until they are green.
+4. Run one final `npm run codex:pre-pr` after implementation has settled.
+5. Push only after the final local gate is green or a documented platform-specific local skip is
    unavoidable.
 6. Report the exact local commands and outcomes from the generated pre-PR report.
+
+After that first clean push, if a remote-only product reports one or more findings:
+
+1. Reproduce or approximate each finding locally and add a prevention test, rule, or checklist item.
+2. Rerun the failed targeted gate and every gate directly affected by the repair.
+3. Do not repeat the complete pre-PR run for a narrowly scoped repair whose impact is bounded by
+   those gates. Repeat it when the repair changes dependencies, workflows, shared contracts,
+   coverage baselines, trust boundaries, or otherwise broadens the impact beyond the prior report.
+4. Never use this incremental rule to skip a known affected gate or to push speculative fixes.
 
 If a required gate cannot be run locally, stop and state that before any push. Do not let the
 remote pull request be the first place where format, lint, typecheck, package-surface,
 release-evidence, coverage, architecture, smoke, or UI tests see the change.
+
+`npm run check:sonar-new-code` runs the locally available Sonar parity rules over changed source
+files. It complements, but does not replace, SonarCloud's current-head analysis and leak-period
+metrics.
 
 For UI smoke failures, run the targeted Playwright repro first, then the full affected smoke gate.
 For package export or runtime surface changes, run the package build and package-surface smoke

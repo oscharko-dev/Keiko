@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted (2026-07-13).
+Accepted (2026-07-13), amended (2026-07-14).
+
+The 2026-07-14 amendment supersedes D6's zero-unresolved-issue and `new_violations = 0`
+requirements for pull-request delivery. The repository verifier continues to require the exact PR
+head, native gate `OK`, coverage and duplication limits, and complete security-hotspot review.
+Ordinary maintainability and accessibility findings remain visible remediation input without
+duplicating the native gate as a second zero-finding merge blocker.
 
 ## Context
 
@@ -105,17 +111,17 @@ replaced by these PR gates.
 
 ### D6 — Count-aware Free-plan gate semantics
 
-The repository verifier enforces all of the following on the exact PR head: native gate `OK`, no
-unresolved PR issues, `new_violations = 0`, new-code coverage at least 85 percent, new-code
+The repository verifier enforces all of the following on the exact PR head: native gate `OK`,
+new-code coverage at least 85 percent, new-code
 duplication at most 3 percent, and 100 percent review of both new and overall security hotspots.
 The overall hotspot evidence is read from the current `dev` main analysis. Overall security and
 reliability ratings remain outside this PR gate while legacy debt exists.
 
 A missing rate is acceptable only when Sonar explicitly reports its applicability count as zero.
 A positive count without a rate fails; a missing count also fails. This rule applies independently
-to lines to cover, duplicated lines, new hotspots, and overall hotspots. The verifier also compares
-the publicly readable dormant `Keiko Banking Grade` definition with the repository contract and
-fails on identity or condition drift.
+to lines to cover, duplicated lines, new hotspots, and overall hotspots. The dormant
+`Keiko Banking Grade` definition remains governance evidence, but its unavailable Free-plan
+assignment and zero-finding condition no longer affect pull-request delivery.
 
 ### D7 — The 102 new-code findings are mandatory remediation input
 

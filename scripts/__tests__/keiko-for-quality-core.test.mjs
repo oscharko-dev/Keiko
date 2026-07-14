@@ -219,7 +219,7 @@ describe("Keiko for Quality core", () => {
         status: "in_progress",
       },
     ];
-    expect(checkFailures(checks, headSha)).toContain(`Check is not successful: ${policy.name}.`);
+    expect(checkFailures(checks, headSha)).toContain(`Check is still running: ${policy.name}.`);
     expect(
       checkFailures(
         [
@@ -282,7 +282,71 @@ describe("Keiko for Quality core", () => {
   });
 
   it("accepts only complete current-head evidence after the stability window", () => {
-    expect(evaluate()).toEqual({ failures: [], passed: true });
+    expect(evaluate()).toEqual({
+      blockingFailures: [],
+      failures: [],
+      passed: true,
+      waitingFailures: [],
+    });
+  });
+
+  it("keeps active checks pending and reserves blocking for terminal failures", () => {
+    const input = passingInput();
+    const runningChecks = input.checks.map((check) =>
+      check.name === "ci"
+        ? { ...check, completedAt: undefined, conclusion: null, status: "in_progress" }
+        : check,
+    );
+    const waiting = evaluateKeikoForQuality({ ...input, checks: runningChecks });
+    expect(waiting).toMatchObject({
+      blockingFailures: [],
+      passed: false,
+      waitingFailures: ["Check is still running: ci."],
+    });
+
+    const failedChecks = input.checks.map((check) =>
+      check.name === "ci" ? { ...check, conclusion: "failure" } : check,
+    );
+    const blocked = evaluateKeikoForQuality({ ...input, checks: failedChecks });
+    expect(blocked).toMatchObject({
+      blockingFailures: ["Check failed: ci (failure)."],
+      passed: false,
+      waitingFailures: [],
+    });
+  });
+
+  it("turns missing terminal review evidence red only after its stability grace", () => {
+    const input = passingInput();
+    const comments = input.comments.filter(
+      (comment) => comment.authorId !== 159877585 && comment.authorId !== 95510084,
+    );
+    const checks = input.checks.map((check) =>
+      check.name === "Socket Security: Pull Request Alerts"
+        ? { ...check, socketNoAlerts: false }
+        : check,
+    );
+
+    const settled = evaluateKeikoForQuality({ ...input, checks, comments });
+    expect(settled.blockingFailures).toEqual(
+      expect.arrayContaining([
+        "Current Gitar finding evidence is missing or unparseable.",
+        "Current Socket alert evidence is missing.",
+      ]),
+    );
+
+    const withinGrace = evaluateKeikoForQuality({
+      ...input,
+      checks,
+      comments,
+      now: Date.parse(completedAt) + 30_000,
+    });
+    expect(withinGrace.blockingFailures).toEqual([]);
+    expect(withinGrace.waitingFailures).toEqual(
+      expect.arrayContaining([
+        "Current Gitar finding evidence is missing or unparseable.",
+        "Current Socket alert evidence is missing.",
+      ]),
+    );
   });
 
   it("accepts an explicit clean Socket check when Socket correctly posts no comment", () => {
@@ -295,7 +359,12 @@ describe("Keiko for Quality core", () => {
     );
 
     expect(hasCurrentSocketNoAlertEvidence(input.checks, headSha)).toBe(true);
-    expect(evaluateKeikoForQuality(input)).toEqual({ failures: [], passed: true });
+    expect(evaluateKeikoForQuality(input)).toEqual({
+      blockingFailures: [],
+      failures: [],
+      passed: true,
+      waitingFailures: [],
+    });
   });
 
   it("binds clean Socket output to every exact current-head check attribute", () => {
@@ -371,7 +440,7 @@ describe("Keiko for Quality core", () => {
         input.checks.map((check, index) =>
           index === 0 ? { ...check, conclusion: "failure" } : check,
         ),
-      "not successful",
+      "Check failed",
     ],
     [
       "wrong app",

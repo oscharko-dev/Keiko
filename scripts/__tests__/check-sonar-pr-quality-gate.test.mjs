@@ -8,11 +8,6 @@ import {
   runSonarPullRequestGateCli,
   sonarJson,
 } from "../check-sonar-pr-quality-gate.mjs";
-import {
-  KEIKO_GATE_CONDITIONS,
-  KEIKO_GATE_ID,
-  KEIKO_GATE_NAME,
-} from "../sonar-quality-gate-contract.mjs";
 
 const passingMeasures = {
   new_coverage: 86.5,
@@ -25,18 +20,10 @@ const passingMeasures = {
   new_violations: 0,
 };
 const passingOverallMeasures = { security_hotspots: 0, security_hotspots_reviewed: 100 };
-const passingGate = {
-  conditions: KEIKO_GATE_CONDITIONS,
-  id: Number(KEIKO_GATE_ID),
-  name: KEIKO_GATE_NAME,
-};
-
 function evaluate(overrides = {}) {
   return evaluateSonarPullRequest({
     analysis: { commitSha: "a".repeat(40), qualityGateStatus: "OK" },
-    customGate: passingGate,
     headSha: "a".repeat(40),
-    issuesTotal: 0,
     measures: passingMeasures,
     overallMeasures: passingOverallMeasures,
     ...overrides,
@@ -70,22 +57,16 @@ describe("SonarCloud PR quality gate", () => {
     expect(measuresFromPayload({})).toEqual({});
   });
 
-  it("accepts an exact-head analysis with zero findings and sufficient coverage", () => {
+  it("accepts an exact-head native gate with sufficient coverage and security evidence", () => {
     expect(evaluate()).toEqual([]);
   });
 
-  it("fails closed on stale analyses and unresolved findings", () => {
+  it("fails closed on stale or absent native analyses", () => {
     expect(
       evaluate({
         analysis: { commitSha: "b".repeat(40), qualityGateStatus: "OK" },
-        issuesTotal: 1,
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("current head"),
-        expect.stringContaining("1 unresolved"),
-      ]),
-    );
+    ).toContain("SonarCloud analysis is not bound to the current head commit.");
     expect(evaluate({ analysis: undefined })).toEqual(
       expect.arrayContaining([
         "SonarCloud has no analysis for this pull request.",
@@ -166,24 +147,13 @@ describe("SonarCloud PR quality gate", () => {
     expect(failures).not.toContain(expect.stringContaining("undefined"));
   });
 
-  it("still fails closed on missing violation metric or unresolved issue total regardless of analyzability", () => {
-    const violationFailure = evaluate({
-      measures: { ...passingMeasures, new_violations: undefined },
-    });
-    expect(violationFailure).toContain("New-code violation metric is missing.");
-    expect(violationFailure).not.toContain(expect.stringContaining("undefined"));
-
-    const issuesFailure = evaluate({
-      issuesTotal: undefined,
-      measures: { ...passingMeasures, new_violations: 0 },
-    });
-    expect(issuesFailure).toContain("SonarCloud issue total is missing.");
-  });
-
-  it("reports a missing issue total explicitly", () => {
-    const failures = evaluate({ issuesTotal: undefined });
-    expect(failures).toContain("SonarCloud issue total is missing.");
-    expect(failures).not.toContain(expect.stringContaining("undefined"));
+  it("does not block ordinary Sonar findings outside the native quality gate", () => {
+    expect(
+      evaluate({
+        issuesTotal: 5,
+        measures: { ...passingMeasures, new_violations: 5 },
+      }),
+    ).toEqual([]);
   });
 
   it("rejects violations, duplication, unreviewed hotspots, and a failed native gate", () => {
@@ -198,7 +168,7 @@ describe("SonarCloud PR quality gate", () => {
         new_violations: 2,
       },
     });
-    expect(failures).toHaveLength(4);
+    expect(failures).toHaveLength(3);
   });
 
   it("enforces overall hotspot review against the dev main branch", () => {
@@ -222,8 +192,6 @@ describe("SonarCloud PR quality gate", () => {
             { commit: { sha: headSha }, key: "2316", status: { qualityGateStatus: "OK" } },
           ],
         };
-      if (path.includes("issues/search")) return { total: 0 };
-      if (path.includes("qualitygates/show")) return passingGate;
       if (path.includes("metricKeys=security_hotspots")) {
         return {
           component: {

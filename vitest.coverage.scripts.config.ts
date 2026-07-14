@@ -9,6 +9,7 @@ const packageCoverageGateScripts = [
   "scripts/check-sonar-analysis-log.mjs",
   "scripts/check-sonar-main-quality-gate.mjs",
   "scripts/check-sonar-pr-quality-gate.mjs",
+  "scripts/check-sonar-new-code.mjs",
   "scripts/sonar-analysis-scope.mjs",
   "scripts/sonar-quality-gate-contract.mjs",
 ];

@@ -62,6 +62,13 @@ For a PR against `dev`, the app's check remains pending or failed unless every c
 check is successful and was emitted by its allowlisted App ID. Missing, stale, skipped, neutral,
 cancelled, timed-out, or differently produced evidence is blocking.
 
+Missing, queued, and in-progress inputs are represented as a neutral `Waiting for evidence` check
+while the current-head pipeline is still settling. Completed non-success inputs, wrong producers,
+active change requests, unresolved findings, Socket warnings/errors, and malformed terminal states
+are represented as `Blocked`. Pending and failed are equally merge-blocking; only the operator
+signal differs. The implementation classifies these states structurally rather than inferring them
+from display text.
+
 Processing success alone is insufficient for review products:
 
 - Gitar requires no current `CHANGES_REQUESTED` review and no unresolved finding for the head;
@@ -69,10 +76,10 @@ Processing success alone is insufficient for review products:
   matches an exact owner command, the external deployment allowlist, and the package/version and
   lockfile integrity policy in
   [`supply-chain-risk-acceptances.json`](supply-chain-risk-acceptances.json);
-- SonarCloud requires native gate `OK`, exact current head, zero unresolved issues and new
-  violations, at least 85 percent new-code coverage, at most 3 percent new duplication, and all new
-  and overall security hotspots reviewed. Missing rates require an explicit zero applicability
-  count; the dormant custom-gate definition must match the repository contract;
+- SonarCloud requires native gate `OK`, exact current head, at least 85 percent new-code coverage,
+  at most 3 percent new duplication, and all new and overall security hotspots reviewed. Ordinary
+  maintainability and accessibility findings remain visible review feedback without independently
+  blocking delivery. Missing rates require an explicit zero applicability count;
 - mutation testing requires at least 80 percent with no survivor/no-coverage mutant for changed
   critical code; complete scheduled scans additionally fail on any regression or new fingerprint
   against the documented 61.66-percent historical baseline until that debt reaches 80 percent.
@@ -107,6 +114,15 @@ signature and target validation; ignored event classes do not consume a write. H
 the metadata-only replay set bounded without the Workers KV write ceiling. The dashboard comment
 is updated only when its redacted decision body changes, preventing
 the reconciliation loop from generating a new webhook every minute.
+The app-bound check is likewise updated only when status, conclusion, title, or redacted summary
+changes. Scheduled reconciliation reads an existing tracked-pull row before issuing an insert or
+update, so unchanged pulls consume reads but no recurring D1 row writes.
+
+The local pre-PR gate runs `check:sonar-new-code` over changed source files with the available
+SonarJS and JSX accessibility equivalents, including cognitive complexity, duplicate functions,
+repeated inline unions, and native-element-over-ARIA-role rules. SonarCloud remains authoritative
+for exact current-head analysis, issue inventory, coverage/duplication leak-period metrics, and
+security-hotspot state.
 
 The operational Gitar configuration, large-pull-request acceptance criteria, safe interaction
 commands, and Core/Pro plan boundaries are defined in
@@ -116,7 +132,7 @@ commands, and Core/Pro plan boundaries are defined in
 
 The dedicated app is made required only after its trusted implementation has been deployed from a
 protected revision, emitted the expected check name and App ID, and completed all negative probes:
-missing/red checks, wrong App ID, stale evidence, Sonar 84.9 percent/open issue, Gitar finding,
+missing/red checks, wrong App ID, stale evidence, Sonar 84.9 percent/native gate or hotspot failure,
 Socket warning, mutation score below 80 percent, and a new commit after previous success. The
 positive probe must then allow GitHub native auto-merge without a human review or merge click,
 while every deliberately red or absent technical gate remains unbypassable, including by

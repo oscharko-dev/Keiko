@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 
 import {
-  KEIKO_GATE_ID,
   KEIKO_REPOSITORY_GATE_CONTRACT,
   SONAR_MAIN_BRANCH,
-  SONAR_ORGANIZATION,
   SONAR_PROJECT_KEY,
   countAwareRateFailures,
-  gateContractFailures,
 } from "./sonar-quality-gate-contract.mjs";
 
 const sonarBaseUrl = "https://sonarcloud.io";
@@ -20,20 +17,17 @@ function finiteNumber(value) {
 
 export function evaluateSonarPullRequest({
   analysis,
-  customGate,
   headSha,
-  issuesTotal,
   measures,
   overallMeasures,
 }) {
   return [
     ...analysisFailures(analysis, headSha),
-    ...findingFailures(issuesTotal, measures),
+    ...lineCountFailures(measures),
     ...coverageFailures(measures),
     ...duplicationFailures(measures),
     ...newHotspotFailures(measures),
     ...overallHotspotFailures(overallMeasures),
-    ...gateContractFailures(customGate),
   ];
 }
 
@@ -45,29 +39,6 @@ function analysisFailures(analysis, headSha) {
   if (analysis?.qualityGateStatus !== KEIKO_REPOSITORY_GATE_CONTRACT.nativeGateStatus)
     failures.push(`SonarCloud native quality gate is ${analysis?.qualityGateStatus ?? "missing"}.`);
   return failures;
-}
-
-function findingFailures(issuesTotal, measures) {
-  return [
-    ...issueTotalFailures(issuesTotal),
-    ...violationFailures(measures),
-    ...lineCountFailures(measures),
-  ];
-}
-
-function issueTotalFailures(issuesTotal) {
-  if (issuesTotal === undefined) return ["SonarCloud issue total is missing."];
-  if (issuesTotal !== KEIKO_REPOSITORY_GATE_CONTRACT.unresolvedPullRequestIssuesMaximum) {
-    return [`SonarCloud reports ${String(issuesTotal)} unresolved issue(s).`];
-  }
-  return [];
-}
-
-function violationFailures(measures) {
-  if (measures.new_violations === undefined) return ["New-code violation metric is missing."];
-  if (measures.new_violations !== KEIKO_REPOSITORY_GATE_CONTRACT.newViolationsMaximum)
-    return [`SonarCloud reports ${String(measures.new_violations)} new violation(s).`];
-  return [];
 }
 
 function lineCountFailures(measures) {
@@ -133,16 +104,11 @@ async function fetchEvidence(pullRequest, token, load = sonarJson) {
   const project = encodeURIComponent(SONAR_PROJECT_KEY);
   const pr = encodeURIComponent(pullRequest);
   const metrics =
-    "new_coverage,new_duplicated_lines,new_duplicated_lines_density,new_lines,new_lines_to_cover,new_security_hotspots,new_security_hotspots_reviewed,new_violations";
+    "new_coverage,new_duplicated_lines,new_duplicated_lines_density,new_lines,new_lines_to_cover,new_security_hotspots,new_security_hotspots_reviewed";
   const overallMetrics = "security_hotspots,security_hotspots_reviewed";
-  const organization = encodeURIComponent(SONAR_ORGANIZATION);
   const branch = encodeURIComponent(SONAR_MAIN_BRANCH);
-  const [pullRequests, issues, measures, overall, customGate] = await Promise.all([
+  const [pullRequests, measures, overall] = await Promise.all([
     load(`/api/project_pull_requests/list?project=${project}`, token),
-    load(
-      `/api/issues/search?componentKeys=${project}&pullRequest=${pr}&resolved=false&ps=1`,
-      token,
-    ),
     load(
       `/api/measures/component?component=${project}&pullRequest=${pr}&metricKeys=${metrics}`,
       token,
@@ -151,7 +117,6 @@ async function fetchEvidence(pullRequest, token, load = sonarJson) {
       `/api/measures/component?component=${project}&branch=${branch}&metricKeys=${overallMetrics}`,
       token,
     ),
-    load(`/api/qualitygates/show?organization=${organization}&id=${KEIKO_GATE_ID}`, token),
   ]);
   const entry = pullRequests.pullRequests?.find((candidate) => candidate.key === pullRequest);
   return {
@@ -159,10 +124,8 @@ async function fetchEvidence(pullRequest, token, load = sonarJson) {
       entry === undefined
         ? undefined
         : { commitSha: entry.commit?.sha, qualityGateStatus: entry.status?.qualityGateStatus },
-    issuesTotal: finiteNumber(issues.total),
     measures: measuresFromPayload(measures),
     overallMeasures: measuresFromPayload(overall),
-    customGate,
   };
 }
 
