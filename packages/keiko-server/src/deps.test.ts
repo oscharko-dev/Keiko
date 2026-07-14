@@ -9,6 +9,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -495,6 +496,29 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(mutated).toBe(true);
     expect(qualification()).toBe("notProvisioned");
+  });
+
+  it("rehashes metadata drift once and accepts an unchanged artifact identity", () => {
+    const qualified = qualifiedOperatorDapDocument();
+    let contentReads = 0;
+    const qualification = createOperatorProvisioningQualification(
+      {
+        KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(qualified.document),
+      },
+      (hostPath) => {
+        contentReads += 1;
+        return readFileSync(hostPath);
+      },
+    );
+    const initializationReads = contentReads;
+
+    utimesSync(qualified.nodePath, new Date(1_000), new Date(1_000));
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBeGreaterThan(initializationReads);
+    const refreshReads = contentReads;
+
+    expect(qualification()).toBe("provisioned");
+    expect(contentReads).toBe(refreshReads);
   });
 
   it("does not compose DAP from an invalid operator document", async () => {

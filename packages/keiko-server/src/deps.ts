@@ -1669,7 +1669,7 @@ function qualifiedArtifactFile(
   ) {
     throw new Error("INVALID_DAP_PROVISIONING");
   }
-  const metadata = [
+  const stableMetadata = [
     artifact.hostPath,
     realPath,
     approvedRoot,
@@ -1679,12 +1679,10 @@ function qualifiedArtifactFile(
     stat.size,
     stat.mode,
     stat.uid,
-    change.mtimeNs.toString(),
-    change.ctimeNs.toString(),
   ];
   return contentReader === undefined
-    ? metadata
-    : [...metadata, createHash("sha256").update(contentReader(realPath)).digest("hex")];
+    ? [...stableMetadata, change.mtimeNs.toString(), change.ctimeNs.toString()]
+    : [...stableMetadata, createHash("sha256").update(contentReader(realPath)).digest("hex")];
 }
 
 function qualifiedArtifact(
