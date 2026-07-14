@@ -22,7 +22,7 @@ PID_FILE="$STATE_DIR/ui.pid"
 LOG_FILE="$STATE_DIR/ui.log"
 # Clear-text HTTP is intentionally confined to the validated loopback control plane. HTTPS would
 # add no transport boundary on localhost and would require distributing a local trust root.
-LOOPBACK_ORIGIN="http://${HOST}:${PORT}" # NOSONAR -- loopback host is validated before use.
+LOOPBACK_ORIGIN="http://${HOST}:${PORT}"
 LOOPBACK_DISPLAY="${HOST}:${PORT} (loopback HTTP)"
 HEALTH_URL="${LOOPBACK_ORIGIN}/api/health"
 # Health-poll and graceful-stop budgets in whole seconds, overridable for slow
@@ -140,7 +140,8 @@ cmd_start() {
       rm -f "$PID_FILE"
       return 1
     fi
-    if curl -fsS "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ok"'; then
+    # S5332: HEALTH_URL derives only from the strict loopback allowlist validated before startup.
+    if curl -fsS "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ok"'; then # NOSONAR
       echo "Keiko UI running on ${LOOPBACK_DISPLAY} (pid ${pid})."
       echo "Logs: ${LOG_FILE}"
       return 0
