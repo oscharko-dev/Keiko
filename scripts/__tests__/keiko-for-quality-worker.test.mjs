@@ -567,8 +567,15 @@ describe("Keiko for Quality worker trust boundary", () => {
     const pull = { auto_merge: null, head: { sha: headSha } };
     const result = { failures: ["Missing current-head check: ci."], passed: false };
     const createFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 100 }));
-    await publishDashboardComment("owner", "repo", 42, baseEvidence, pull, result, "token", {
-      GITHUB_APP_ID: "999",
+    await publishDashboardComment({
+      owner: "owner",
+      repository: "repo",
+      pullNumber: 42,
+      currentEvidence: baseEvidence,
+      pull,
+      result,
+      token: "token",
+      env: { GITHUB_APP_ID: "999" },
     });
     expect(createFetch.mock.calls[0][0]).toBe(
       "https://api.github.com/repos/owner/repo/issues/42/comments",
@@ -580,11 +587,11 @@ describe("Keiko for Quality worker trust boundary", () => {
 
     vi.restoreAllMocks();
     const updateFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 77 }));
-    await publishDashboardComment(
-      "owner",
-      "repo",
-      42,
-      {
+    await publishDashboardComment({
+      owner: "owner",
+      repository: "repo",
+      pullNumber: 42,
+      currentEvidence: {
         ...baseEvidence,
         comments: [
           {
@@ -607,9 +614,9 @@ describe("Keiko for Quality worker trust boundary", () => {
       },
       pull,
       result,
-      "token",
-      { GITHUB_APP_ID: "999" },
-    );
+      token: "token",
+      env: { GITHUB_APP_ID: "999" },
+    });
     expect(updateFetch.mock.calls[0][0]).toBe(
       "https://api.github.com/repos/owner/repo/issues/comments/77",
     );

@@ -43,8 +43,11 @@ function parseFrontmatter(source) {
   if (match === null) return undefined;
   const values = new Map();
   for (const line of match[1].split("\n")) {
-    const field = line.match(/^([a-z][a-z-]*):\s*(.+?)\s*$/u);
-    if (field !== null) values.set(field[1], field[2].replace(/^"|"$/gu, ""));
+    const separator = line.indexOf(":");
+    const name = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+    if (separator > 0 && /^[a-z][a-z-]*$/u.test(name) && value !== "")
+      values.set(name, value.replace(/^"|"$/gu, ""));
   }
   return values;
 }
@@ -151,9 +154,8 @@ export function loadGitarSources(root = repoRoot) {
 function main() {
   const failures = validateGitarSources(loadGitarSources());
   if (failures.length > 0) {
-    console.error(
-      `check:gitar-config FAILED\n${failures.map((failure) => `- ${failure}`).join("\n")}`,
-    );
+    const details = failures.map((failure) => `- ${failure}`).join("\n");
+    console.error(`check:gitar-config FAILED\n${details}`);
     process.exitCode = 1;
     return;
   }

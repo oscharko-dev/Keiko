@@ -300,6 +300,9 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
   const evaluatedAt = new Date(result.evaluatedAt ?? 0).toISOString();
+  const detailsSummary = result.passed
+    ? "Validated evidence"
+    : `Blocking or waiting evidence (${String(result.failures.length)})`;
   return [
     dashboardMarker,
     "## Keiko for Quality",
@@ -322,7 +325,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     `| GitHub Auto-Merge | ${autoMerge} |`,
     "",
     `<details${result.passed ? "" : " open"}>`,
-    `<summary>${result.passed ? "Validated evidence" : `Blocking or waiting evidence (${String(result.failures.length)})`}</summary>`,
+    `<summary>${detailsSummary}</summary>`,
     "",
     failureDetails(result.failures),
     "",
@@ -332,7 +335,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
   ].join("\n");
 }
 
-export async function publishDashboardComment(
+export async function publishDashboardComment({
   owner,
   repository,
   pullNumber,
@@ -341,7 +344,7 @@ export async function publishDashboardComment(
   result,
   token,
   env,
-) {
+}) {
   const body = dashboardComment({
     ...currentEvidence,
     headSha: pull.head.sha,
@@ -388,7 +391,7 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
   });
   const result = { ...decisionResult, evaluatedAt };
   await publishCheck(owner, repository, headSha, result, token, env);
-  await publishDashboardComment(
+  await publishDashboardComment({
     owner,
     repository,
     pullNumber,
@@ -397,7 +400,7 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     result,
     token,
     env,
-  );
+  });
   await env.KEIKO_FOR_QUALITY_STATE.put(
     stateKey,
     JSON.stringify({ installationId, owner, pullNumber, repository }),
