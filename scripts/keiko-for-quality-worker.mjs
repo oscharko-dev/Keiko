@@ -1,6 +1,7 @@
-import { evaluateBankingQualityGate } from "./banking-quality-gate-core.mjs";
+import { evaluateKeikoForQuality, requiredChecks } from "./keiko-for-quality-core.mjs";
 
-const checkName = "Banking Quality Gate";
+const checkName = "Keiko for Quality";
+const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
 const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
@@ -76,7 +77,7 @@ export async function github(path, token, init = {}) {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      "User-Agent": "keiko-banking-quality-gate",
+      "User-Agent": "keiko-keiko-for-quality",
       "X-GitHub-Api-Version": "2022-11-28",
       ...init.headers,
     },
@@ -132,29 +133,48 @@ export function isOwnCheckEvent(event, payload, env) {
   );
 }
 
+export function isOwnCommentEvent(event, payload, env) {
+  return (
+    event === "issue_comment" &&
+    appId(payload.comment?.performed_via_github_app) === Number(env.GITHUB_APP_ID)
+  );
+}
+
 export function appId(app) {
   return app?.id;
 }
 
+export function socketNoAlertEvidence(check) {
+  if (
+    appId(check.app) !== 156372 ||
+    check.conclusion !== "success" ||
+    check.name !== "Socket Security: Pull Request Alerts" ||
+    check.output?.annotations_count !== 0
+  )
+    return false;
+  const output = [check.output.title, check.output.summary, check.output.text]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+  return /\b(?:contains no net changes to dependencies|no dependency changes detected|no new alerts?)\b/iu.test(
+    output,
+  );
+}
+
 export async function evidence(owner, repository, pullNumber, headSha, token) {
-  const [checkPayload, reviews, comments, files] = await Promise.all([
+  const [checkPayload, reviews, comments] = await Promise.all([
     github(`/repos/${owner}/${repository}/commits/${headSha}/check-runs?per_page=100`, token),
     allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/reviews`, token),
     allPages(`/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`, token),
-    allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/files`, token),
   ]);
   if (!Array.isArray(checkPayload?.check_runs)) throw new Error("GitHub omitted check runs.");
-  const changedFiles = files.map((file) => file?.filename);
-  if (changedFiles.some((file) => typeof file !== "string"))
-    throw new Error("GitHub omitted a changed file name.");
   return {
-    changedFiles,
     checks: checkPayload.check_runs.map((check) => ({
       appId: check.app?.id,
       completedAt: check.completed_at,
       conclusion: check.conclusion,
       headSha: check.head_sha,
       name: check.name,
+      socketNoAlerts: socketNoAlertEvidence(check),
       startedAt: check.started_at,
       status: check.status,
     })),
@@ -165,6 +185,7 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
       authorId: comment.user?.id,
       authorType: comment.user?.type,
       body: String(comment.body ?? ""),
+      id: comment.id,
       updatedAt: comment.updated_at,
     })),
     reviews: reviews.map((review) => ({
@@ -213,7 +234,7 @@ export function checkBody(result) {
       conclusion: "success",
       name: checkName,
       output: {
-        summary: "All current-head Banking Quality Gate evidence is valid.",
+        summary: "All current-head Keiko for Quality evidence is valid.",
         title: checkName,
       },
       status: "completed",
@@ -229,12 +250,129 @@ export function checkBody(result) {
     : body;
 }
 
+function currentCheckCount(checks, headSha) {
+  return requiredChecks.filter(({ appId: expectedAppId, name }) =>
+    checks.some(
+      (check) =>
+        check.appId === expectedAppId &&
+        check.conclusion === "success" &&
+        check.headSha === headSha &&
+        check.name === name &&
+        check.status === "completed",
+    ),
+  ).length;
+}
+
+function latestGitarComment(comments) {
+  return comments
+    .filter((comment) => comment.appId === 827041)
+    .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
+export function autoApplyState(comments) {
+  const body = latestGitarComment(comments)?.body;
+  if (body === undefined) return "not confirmed";
+  if (body.match(/✅\s*Auto-apply/iu) !== null) return "enabled";
+  if (/Auto-apply/iu.test(body)) return "disabled";
+  return "not confirmed";
+}
+
+function decision(result) {
+  if (result.passed) return { icon: "✅", label: "Ready for auto-merge" };
+  return hardFailure(result.failures)
+    ? { icon: "❌", label: "Blocked" }
+    : { icon: "⏳", label: "Waiting for evidence" };
+}
+
+function failureDetails(failures) {
+  if (failures.length === 0) return "All exact-current-head evidence is valid.";
+  return failures.map((failure) => `- ${failure}`).join("\n");
+}
+
+function evidenceState(failures, pattern, cleanLabel) {
+  const failure = failures.find((entry) => pattern.test(entry));
+  return failure === undefined ? `✅ ${cleanLabel}` : `❌ ${failure}`;
+}
+
+export function dashboardComment({ checks, comments, headSha, pull, result }) {
+  const state = decision(result);
+  const successfulChecks = currentCheckCount(checks, headSha);
+  const autoMerge =
+    pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
+  const evaluatedAt = new Date(result.evaluatedAt ?? 0).toISOString();
+  const detailsSummary = result.passed
+    ? "Validated evidence"
+    : `Blocking or waiting evidence (${String(result.failures.length)})`;
+  return [
+    dashboardMarker,
+    "## Keiko for Quality",
+    "",
+    `${state.icon} **${state.label}**`,
+    "",
+    `\`head ${headSha.slice(0, 12)}\` · \`updated ${evaluatedAt}\``,
+    "",
+    "| Gate group | Evidence |",
+    "| --- | --- |",
+    `| Required checks | ${String(successfulChecks)}/${String(requiredChecks.length)} successful |`,
+    `| SonarQube Cloud | ${evidenceState(result.failures, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
+    `| Gitar review | ${evidenceState(result.failures, /Gitar/iu, "zero unresolved findings")} |`,
+    `| Socket Security | ${evidenceState(result.failures, /Socket/iu, "zero unresolved alerts")} |`,
+    `| Stability window | ${evidenceState(result.failures, /stability/iu, "settled")} |`,
+    "",
+    "| Automation | State |",
+    "| --- | --- |",
+    `| Gitar Auto-Apply | ${autoApplyState(comments)} |`,
+    `| GitHub Auto-Merge | ${autoMerge} |`,
+    "",
+    `<details${result.passed ? "" : " open"}>`,
+    `<summary>${detailsSummary}</summary>`,
+    "",
+    failureDetails(result.failures),
+    "",
+    "</details>",
+    "",
+    "<sub>Exact-head, app-bound, fail-closed aggregate. This redacted status comment updates in place.</sub>",
+  ].join("\n");
+}
+
+export async function publishDashboardComment({
+  owner,
+  repository,
+  pullNumber,
+  currentEvidence,
+  pull,
+  result,
+  token,
+  env,
+}) {
+  const body = dashboardComment({
+    ...currentEvidence,
+    headSha: pull.head.sha,
+    pull,
+    result,
+  });
+  const existing = currentEvidence.comments.find(
+    (comment) =>
+      comment.appId === Number(env.GITHUB_APP_ID) &&
+      Number.isInteger(comment.id) &&
+      comment.body.includes(dashboardMarker),
+  );
+  const path =
+    existing === undefined
+      ? `/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`
+      : `/repos/${owner}/${repository}/issues/comments/${String(existing.id)}`;
+  await github(path, token, {
+    body: JSON.stringify({ body }),
+    method: existing === undefined ? "POST" : "PATCH",
+  });
+}
+
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
   const token = await installationToken(installationId, env);
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
   const stateKey = `pull:${owner}/${repository}/${String(pullNumber)}`;
   if (pull.state !== "open" || pull.base?.ref !== "dev") {
-    await env.BANKING_GATE_STATE.delete(stateKey);
+    await env.KEIKO_FOR_QUALITY_STATE.delete(stateKey);
     return;
   }
   const headSha = pull.head?.sha;
@@ -242,16 +380,28 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     throw new Error("Pull request head SHA is invalid.");
   }
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
-  const result = evaluateBankingQualityGate({
+  const evaluatedAt = Date.now();
+  const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
     headSha,
-    now: Date.now(),
+    now: evaluatedAt,
     socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
     socketRiskActors: JSON.parse(env.SOCKET_RISK_ACTORS_JSON ?? "[]"),
     stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
   });
+  const result = { ...decisionResult, evaluatedAt };
   await publishCheck(owner, repository, headSha, result, token, env);
-  await env.BANKING_GATE_STATE.put(
+  await publishDashboardComment({
+    owner,
+    repository,
+    pullNumber,
+    currentEvidence,
+    pull,
+    result,
+    token,
+    env,
+  });
+  await env.KEIKO_FOR_QUALITY_STATE.put(
     stateKey,
     JSON.stringify({ installationId, owner, pullNumber, repository }),
     { expirationTtl: 2_592_000 },
@@ -270,25 +420,31 @@ async function authenticateWebhook(request, env, body) {
   }
   const delivery = request.headers.get("X-GitHub-Delivery");
   if (delivery === null) return new Response("missing delivery", { status: 409 });
-  if ((await env.BANKING_GATE_STATE.get(`delivery:${delivery}`)) !== null)
+  if (!(await reserveDelivery(env.KEIKO_FOR_QUALITY_STATE, `delivery:${delivery}`)))
     return new Response("replayed delivery", { status: 409 });
-  await env.BANKING_GATE_STATE.put(`delivery:${delivery}`, "1", { expirationTtl: 86_400 });
   return undefined;
 }
 
-async function handleWebhook(request, env, context) {
-  if (env.BANKING_GATE_STATE === undefined)
-    throw new Error("BANKING_GATE_STATE binding is required.");
-  const body = await request.text();
-  const authenticationFailure = await authenticateWebhook(request, env, body);
-  if (authenticationFailure !== undefined) return authenticationFailure;
-  const event = request.headers.get("X-GitHub-Event");
-  if (event === null) return new Response("missing event", { status: 400 });
-  const payload = JSON.parse(body);
+async function reserveDelivery(state, key) {
+  if ((await state.get(key)) !== null) return false;
+  try {
+    await state.put(key, "1", { expirationTtl: 86_400 });
+    return true;
+  } catch (error) {
+    const errorKind = error instanceof Error ? error.name : "UnknownError";
+    console.error(`reserveDelivery failed for correlationId=${key} errorKind=${errorKind}`);
+    return false;
+  }
+}
+
+function dispatchWebhookEvent(event, payload, env, context) {
+  if (event === "ping") return new Response("pong", { status: 202 });
   if (payload.repository?.full_name !== env.TARGET_REPOSITORY) {
     return new Response("unexpected repository", { status: 403 });
   }
-  if (isOwnCheckEvent(event, payload, env)) return new Response("ignored", { status: 202 });
+  if (isOwnCheckEvent(event, payload, env) || isOwnCommentEvent(event, payload, env)) {
+    return new Response("ignored", { status: 202 });
+  }
   const installationId = payload.installation?.id;
   if (!Number.isInteger(installationId))
     return new Response("missing installation", { status: 400 });
@@ -297,6 +453,18 @@ async function handleWebhook(request, env, context) {
     context.waitUntil(evaluatePullRequest(owner, repository, pullNumber, installationId, env));
   }
   return new Response("accepted", { status: 202 });
+}
+
+async function handleWebhook(request, env, context) {
+  if (env.KEIKO_FOR_QUALITY_STATE === undefined)
+    throw new Error("KEIKO_FOR_QUALITY_STATE binding is required.");
+  const body = await request.text();
+  const authenticationFailure = await authenticateWebhook(request, env, body);
+  if (authenticationFailure !== undefined) return authenticationFailure;
+  const event = request.headers.get("X-GitHub-Event");
+  if (event === null) return new Response("missing event", { status: 400 });
+  const payload = JSON.parse(body);
+  return dispatchWebhookEvent(event, payload, env, context);
 }
 
 export function parseTrackedPull(value) {
@@ -335,12 +503,12 @@ export function isValidHeadSha(value) {
 async function handleSchedule(env, context) {
   let cursor;
   do {
-    const page = await env.BANKING_GATE_STATE.list({ cursor, prefix: "pull:" });
+    const page = await env.KEIKO_FOR_QUALITY_STATE.list({ cursor, prefix: "pull:" });
     for (const key of page.keys) {
-      const result = parseTrackedPull(await env.BANKING_GATE_STATE.get(key.name));
+      const result = parseTrackedPull(await env.KEIKO_FOR_QUALITY_STATE.get(key.name));
       if (result.kind === "missing") continue;
       if (result.kind === "invalid") {
-        await env.BANKING_GATE_STATE.delete(key.name);
+        await env.KEIKO_FOR_QUALITY_STATE.delete(key.name);
         continue;
       }
       const { tracked } = result;

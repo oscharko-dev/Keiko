@@ -1,5 +1,5 @@
 {
-  "name": "Keiko Banking Quality Gate",
+  "name": "Keiko for Quality",
   "url": "https://github.com/oscharko-dev/Keiko",
   "hook_attributes": {
     "active": true,
@@ -8,9 +8,9 @@
   "public": false,
   "default_permissions": {
     "checks": "write",
-    "issues": "read",
+    "issues": "write",
     "metadata": "read",
-    "pull_requests": "read"
+    "pull_requests": "write"
   },
   "default_events": [
     "check_run",

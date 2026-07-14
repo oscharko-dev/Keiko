@@ -12,6 +12,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run typecheck",
   "npm run lint",
   "npm run format:check",
+  "npm run check:gitar-config",
   "npm run check:ui-i18n",
   "npm run check:sonar-scope",
   "npm run check:native:macos",
@@ -142,7 +143,7 @@ describe("codex pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ failed: 0, passed: 24, planned: 0, skipped: 1 });
+      expect(report.summary).toEqual({ failed: 0, passed: 25, planned: 0, skipped: 1 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);

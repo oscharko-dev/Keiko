@@ -1,8 +1,8 @@
 import { defineConfig } from "vitest/config";
 
 const packageCoverageGateScripts = [
-  "scripts/banking-quality-gate-core.mjs",
-  "scripts/banking-quality-gate-worker.mjs",
+  "scripts/keiko-for-quality-core.mjs",
+  "scripts/keiko-for-quality-worker.mjs",
   "scripts/check-lcov-source-mapping.mjs",
   "scripts/check-mutation-quality.mjs",
   "scripts/check-mutation-scope.mjs",

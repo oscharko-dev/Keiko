@@ -15,6 +15,10 @@ export default defineConfig({
     ],
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
+    // GEN-TEST-FLAKE-002: coverage instrumentation is substantially more CPU-intensive than the
+    // root suite. Keep the same bounded worker count so performance guardrails and subprocess-heavy
+    // release tests measure the product instead of scheduler contention on high-core hosts.
+    maxWorkers: 2,
     // GEN-TEST-FLAKE-001: keep the CI-gated coverage run's per-test timeout aligned with the root
     // suite (vitest.config.ts) at 15s. v8 instrumentation + forked workers make this the run MOST
     // likely to exceed vitest's 5s default under scheduler load, so a drift here false-REDs the
@@ -32,8 +36,8 @@ export default defineConfig({
       include: [
         "packages/*/src/**/*.{ts,tsx}",
         "src/**/*.{ts,tsx}",
-        "scripts/banking-quality-gate-core.mjs",
-        "scripts/banking-quality-gate-worker.mjs",
+        "scripts/keiko-for-quality-core.mjs",
+        "scripts/keiko-for-quality-worker.mjs",
         "scripts/check-lcov-source-mapping.mjs",
         "scripts/check-mutation-quality.mjs",
         "scripts/check-mutation-scope.mjs",
@@ -57,13 +61,13 @@ export default defineConfig({
       ],
       thresholds: {
         perFile: true,
-        "scripts/banking-quality-gate-core.mjs": {
+        "scripts/keiko-for-quality-core.mjs": {
           branches: 85,
           functions: 90,
           lines: 90,
           statements: 90,
         },
-        "scripts/banking-quality-gate-worker.mjs": {
+        "scripts/keiko-for-quality-worker.mjs": {
           branches: 85,
           functions: 90,
           lines: 90,

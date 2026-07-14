@@ -15,7 +15,7 @@ The workflow never downloads an unpinned package through `npx`.
 The authoritative scope is the `mutate` array in [`stryker.security.conf.json`](../../stryker.security.conf.json).
 It currently covers the security primitives, evidence redaction and integrity checks, memory-vault
 encryption and redaction, model-gateway response redaction, the Figma snapshot host allowlist, and
-the independent Banking Quality Gate's evidence and merge decisions.
+the independent Keiko for Quality's evidence and merge decisions.
 
 ## Execution policy
 

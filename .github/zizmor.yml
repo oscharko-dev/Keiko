@@ -15,7 +15,7 @@ rules:
       # attestations) has package-manager-cache: false instead, same as release.yml and
       # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
       - ci.yml:63
-      - ci.yml:171
+      - ci.yml:172
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
