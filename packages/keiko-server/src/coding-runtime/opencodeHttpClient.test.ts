@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
 import { createOpenCodeHttpClient, parseOpenCodeChildEndpoint } from "./opencodeHttpClient.js";
 
 interface OpenCodeEventClient {
@@ -252,6 +253,33 @@ describe("OpenCode HTTP client", () => {
     );
     await expect(client.rejectQuestion("bad")).rejects.toThrow("question-invalid");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("enforces the question UTF-8 budget before JSON materialization", async () => {
+    const exact = openCodeQuestionBodyAtBytes(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES);
+    const multibyte = exact.replace("xx", "é");
+    expect(encoder.encode(multibyte)).toHaveLength(
+      CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
+    );
+    await expect(questionClientForBody(multibyte).listQuestions()).resolves.toHaveLength(1);
+
+    const body = unreadByteStream();
+    const oversized = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(body.stream, {
+            headers: {
+              "content-length": String(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES + 1),
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    }) as unknown as OpenCodeQuestionHttpClient;
+    await expect(oversized.listQuestions()).rejects.toThrow("question-oversized");
+    expect(body.cancellations).toBe(1);
+    expect(body.pulls).toBe(0);
   });
 
   it("rejects invalid prompt bytes and malformed or oversized status maps", async () => {
@@ -746,4 +774,42 @@ async function settlesWithin(
       }, 40),
     ),
   ]);
+}
+
+function questionClientForBody(body: string): OpenCodeQuestionHttpClient {
+  return createOpenCodeHttpClient({
+    endpoint: "http://127.0.0.1:43123",
+    password: "p".repeat(43),
+    fetch: () =>
+      Promise.resolve(new Response(body, { headers: { "content-type": "application/json" } })),
+  });
+}
+
+function openCodeQuestionBodyAtBytes(targetBytes: number): string {
+  const pending = [
+    {
+      id: "que_1",
+      sessionID: "ses_1",
+      questions: [
+        {
+          question: "Choose one",
+          header: "Decision",
+          options: Array.from({ length: 16 }, (_, index) => ({
+            label: `Option ${String(index)}`,
+            description: "x",
+          })),
+        },
+      ],
+    },
+  ];
+  let remaining = targetBytes - encoder.encode(JSON.stringify(pending)).length;
+  const question = pending[0]?.questions[0];
+  if (question === undefined) throw new Error("missing question fixture");
+  for (const option of question.options) {
+    const added = Math.min(4_095, remaining);
+    option.description += "x".repeat(added);
+    remaining -= added;
+  }
+  expect(remaining).toBe(0);
+  return JSON.stringify(pending);
 }

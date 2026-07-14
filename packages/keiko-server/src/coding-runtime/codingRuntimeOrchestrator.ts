@@ -1,71 +1,39 @@
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
 import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   isLegalCodingWorkbenchRuntimeTransition,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
-  validateCodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
-  type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type {
-  CodingRuntimeApprovalIssueRequest,
   CodingRuntimeApprovalIssueResult,
-  CodingRuntimeLaunchRequest,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
-import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
+import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
+import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
 import type {
-  CodingRuntimeSnapshot,
-  CodingRuntimeSnapshotStore,
-} from "./codingRuntimeSnapshotStore.js";
+  CodingRuntimeLaunchResolver,
+  CodingRuntimeOrchestratorDeps,
+  CodingRuntimeOrchestratorResult,
+  CodingRuntimeQuestionOperationResult,
+} from "./codingRuntimeOrchestratorTypes.js";
 
-export interface CodingRuntimeLaunchResolver {
-  /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
-  resolve(input: {
-    readonly runId: string;
-    readonly taskIntent: string;
-    readonly requestedMode: CodingWorkbenchRuntimeStartRequest["requestedMode"];
-    readonly runtimePreference?: CodingWorkbenchRuntimeStartRequest["runtimePreference"];
-    readonly workspaceId: string;
-    readonly workspaceRoot: string;
-    readonly serverPrincipal: string;
-  }): Omit<CodingRuntimeLaunchRequest, "runId" | "taskRef" | "workspaceRoot" | "requestedMode"> & {
-    readonly taskRef: string;
-  };
-}
-
-export interface CodingRuntimeApprovalAuthority {
-  readonly issue: (request: CodingRuntimeApprovalIssueRequest) => CodingRuntimeApprovalIssueResult;
-}
-
-export interface CodingRuntimeOrchestratorDeps {
-  readonly manager: CodingRuntimeManager;
-  /** Central authority shared with runtime mediation; never a runtime-local approval registry. */
-  readonly approvalAuthority: CodingRuntimeApprovalAuthority;
-  readonly eventHub: CodingRuntimeEventHub;
-  readonly snapshots: CodingRuntimeSnapshotStore;
-  readonly evidence: CodingRuntimeEvidenceAggregator;
-  readonly workspaceLifecycle: WorkspaceLifecycleService;
-  readonly launchResolver: CodingRuntimeLaunchResolver;
-  readonly serverPrincipal: () => string | undefined;
-  readonly now?: () => Date;
-  readonly newRunId?: () => string;
-}
-
-export type CodingRuntimeOrchestratorResult =
-  | { readonly ok: true; readonly snapshot: PublicSnapshot }
-  | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode };
+export type {
+  CodingRuntimeApprovalAuthority,
+  CodingRuntimeLaunchResolver,
+  CodingRuntimeOrchestratorDeps,
+  CodingRuntimeOrchestratorResult,
+  CodingRuntimeQuestionOperationResult,
+} from "./codingRuntimeOrchestratorTypes.js";
 
 interface ApprovalChallenge {
   readonly revision: number;
@@ -90,12 +58,29 @@ export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
   private readonly approvals = new Map<string, ApprovalChallenge>();
+  private readonly operations: CodingRuntimeOperationCoordinator;
+  private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
   private readonly newRunId: () => string;
 
   constructor(private readonly deps: CodingRuntimeOrchestratorDeps) {
     this.now = deps.now ?? ((): Date => new Date());
     this.newRunId = deps.newRunId ?? ((): string => randomUUID());
+    this.projection = new CodingRuntimeOrchestratorState({
+      eventHub: deps.eventHub,
+      now: this.now,
+      pendingPermission: (runId: string): CodingWorkbenchRuntimePendingPermission | undefined =>
+        this.approvals.get(runId)?.permission,
+    });
+    this.operations = new CodingRuntimeOperationCoordinator({
+      current: (): CodingRuntimeSnapshot | undefined => this.current(),
+      serial: <T>(work: () => Promise<T>): Promise<T> => this.serial(work),
+      advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
+        this.advanceRevision(current, eventKind),
+      taskDispatcher: deps.taskDispatcher,
+      questionPort: deps.questionPort,
+      manager: deps.manager,
+    });
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
     this.activeRunId = deps.snapshots.listRecentActive(1)[0]?.runId;
@@ -119,14 +104,32 @@ export class CodingRuntimeOrchestrator {
     });
   }
   snapshot(): PublicSnapshot {
-    return this.activeRunId ? this.public(this.deps.snapshots.get(this.activeRunId)) : this.idle();
+    return this.activeRunId
+      ? this.projection.publicSnapshot(this.deps.snapshots.get(this.activeRunId))
+      : this.projection.idle();
   }
   status(): PublicSnapshot {
     return this.snapshot();
   }
   getSnapshot(runId: string): PublicSnapshot | undefined {
     const snapshot = this.deps.snapshots.get(runId);
-    return snapshot ? this.public(snapshot) : undefined;
+    return snapshot ? this.projection.publicSnapshot(snapshot) : undefined;
+  }
+
+  submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.submitFollowUp(runId, input);
+  }
+
+  listQuestions(runId: string, input: unknown): Promise<CodingRuntimeQuestionOperationResult> {
+    return this.operations.listQuestions(runId, input);
+  }
+
+  answerQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.answerQuestion(runId, input);
+  }
+
+  rejectQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.operations.rejectQuestion(runId, input);
   }
 
   // eslint-disable-next-line max-lines-per-function -- Closed approval state transition.
@@ -203,7 +206,7 @@ export class CodingRuntimeOrchestrator {
       )
         return this.fail("invalid-intent");
       this.deps.snapshots.acknowledgeRecovery(current.runId, this.now().toISOString());
-      return { ok: true, snapshot: this.public(this.current()) };
+      return { ok: true, snapshot: this.projection.publicSnapshot(this.current()) };
     });
   }
 
@@ -228,12 +231,18 @@ export class CodingRuntimeOrchestrator {
         if (!next.ok) this.approvals.delete(current.runId);
         return next;
       }
-      if (event.kind === "task-submitted") return this.transition(current, "running");
+      if (event.kind === "task-submitted") {
+        return current.state === "running"
+          ? this.projection.publish(current, event.kind)
+            ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
+            : this.transition(current, "recovery-required", "recovery-required")
+          : this.transition(current, "running");
+      }
       if (event.kind === "runtime-stopped") return this.transition(current, "cancelled");
       if (event.kind === "failure-redacted")
         return this.transition(current, "failed", "runtime-failed");
-      return this.publish(current, event.kind)
-        ? { ok: true, snapshot: this.public(current) }
+      return this.projection.publish(current, event.kind)
+        ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
         : this.transition(current, "recovery-required", "recovery-required");
     });
   }
@@ -278,7 +287,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     return current
       ? this.end("stop", current.runId, { requestId: current.runId })
-      : Promise.resolve({ ok: true, snapshot: this.idle() });
+      : Promise.resolve({ ok: true, snapshot: this.projection.idle() });
   }
 
   // eslint-disable-next-line complexity, max-lines-per-function -- Closed lifecycle state transition.
@@ -298,6 +307,7 @@ export class CodingRuntimeOrchestrator {
     try {
       launch = this.deps.launchResolver.resolve({
         runId,
+        requestId: parsed.value.requestId,
         taskIntent: parsed.value.taskIntent,
         requestedMode: parsed.value.requestedMode,
         ...(parsed.value.runtimePreference
@@ -333,7 +343,7 @@ export class CodingRuntimeOrchestrator {
     };
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
-    this.publish(snapshot);
+    this.projection.publish(snapshot);
     let result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
     try {
       result = await this.deps.manager.start({
@@ -358,9 +368,34 @@ export class CodingRuntimeOrchestrator {
       }
       return this.transitionActive("recovery-required", "recovery-required");
     }
-    return result.ok
-      ? this.transitionActive("ready")
-      : this.transitionActive("failed", "runtime-failed");
+    if (!result.ok) return this.transitionActive("failed", "runtime-failed");
+    const ready = this.transitionActive("ready");
+    if (!ready.ok) return ready;
+    const initialTurn = await this.operations.startInitialTurn({
+      runId,
+      requestId: parsed.value.requestId,
+      expectedRevision: ready.snapshot.revision,
+      taskIntent: parsed.value.taskIntent,
+    });
+    return initialTurn === "accepted"
+      ? this.transitionActive("running")
+      : initialTurn === "failed"
+        ? this.transitionActive("failed", "runtime-failed")
+        : this.transitionActive("recovery-required", "recovery-required");
+  }
+
+  private advanceRevision(
+    current: CodingRuntimeSnapshot,
+    eventKind?: CodingWorkbenchRuntimeEvent["kind"],
+  ): CodingRuntimeOrchestratorResult {
+    const next = this.deps.snapshots.transition(current.runId, {
+      state: current.state,
+      revision: current.revision + 1,
+      updatedAt: this.now().toISOString(),
+    });
+    return this.projection.publish(next, eventKind)
+      ? { ok: true, snapshot: this.projection.publicSnapshot(next) }
+      : this.transition(next, "recovery-required", "recovery-required");
   }
 
   // eslint-disable-next-line complexity -- Closed stop/takeover state transition.
@@ -375,13 +410,13 @@ export class CodingRuntimeOrchestrator {
         : parseCodingWorkbenchRuntimeTakeoverRequest(input);
     const current = this.current();
     if (!parsed.ok || parsed.value.requestId !== runId) return this.fail("invalid-intent");
-    if (!current) return { ok: true, snapshot: this.idle() };
+    if (!current) return { ok: true, snapshot: this.projection.idle() };
     if (current.runId !== runId) return this.fail("invalid-intent");
     if (current.state === "recovery-required") return this.fail("recovery-required");
     const stopping =
       kind === "stop"
         ? this.transition(current, "stopping")
-        : { ok: true as const, snapshot: this.public(current) };
+        : { ok: true as const, snapshot: this.projection.publicSnapshot(current) };
     if (!stopping.ok) return stopping;
     let result: Awaited<ReturnType<CodingRuntimeManager["stop"]>> | undefined;
     try {
@@ -417,7 +452,7 @@ export class CodingRuntimeOrchestrator {
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
     });
-    const published = this.publish(next);
+    const published = this.projection.publish(next);
     this.deps.evidence.observe(next.runId, {
       kind: "state-transition",
       state,
@@ -442,33 +477,10 @@ export class CodingRuntimeOrchestrator {
       });
       if (terminal.has(state)) this.activeRunId = undefined;
       this.approvals.delete(next.runId);
+      this.operations.clear(next.runId);
       this.pruneSettled();
     }
-    return { ok: true, snapshot: this.public(next) };
-  }
-  private publish(
-    snapshot: CodingRuntimeSnapshot,
-    eventKind?: CodingWorkbenchRuntimeEvent["kind"],
-  ): boolean {
-    return this.deps.eventHub.publish(
-      eventKind
-        ? {
-            schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-            kind: "runtime-event",
-            runId: snapshot.runId,
-            state: snapshot.state,
-            revision: snapshot.revision,
-            eventKind,
-          }
-        : {
-            schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-            kind: "status",
-            runId: snapshot.runId,
-            state: snapshot.state,
-            revision: snapshot.revision,
-            ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-          },
-    ).ok;
+    return { ok: true, snapshot: this.projection.publicSnapshot(next) };
   }
   private pruneSettled(): void {
     const pruned = this.deps.snapshots.listPrunableSettled();
@@ -480,37 +492,6 @@ export class CodingRuntimeOrchestrator {
   }
   private current(): CodingRuntimeSnapshot | undefined {
     return this.activeRunId ? this.deps.snapshots.get(this.activeRunId) : undefined;
-  }
-  private public(snapshot: CodingRuntimeSnapshot | undefined): PublicSnapshot {
-    if (!snapshot) return this.idle();
-    const out: PublicSnapshot = {
-      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-      state: snapshot.state,
-      revision: snapshot.revision,
-      updatedAt: snapshot.updatedAt,
-      runId: snapshot.runId,
-      requestedMode: snapshot.requestedMode,
-      runtimeSource: snapshot.runtimeSource,
-      modelSource: snapshot.modelSource,
-      ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-      ...(snapshot.state === "recovery-required" && snapshot.recoveryAcknowledgedAt
-        ? { recoveryAcknowledged: true as const }
-        : {}),
-      ...(snapshot.state === "awaiting-approval" && this.approvals.get(snapshot.runId)
-        ? { pendingPermission: this.approvals.get(snapshot.runId)?.permission }
-        : {}),
-    };
-    if (!validateCodingWorkbenchRuntimeSnapshot(out).ok)
-      throw new Error("invalid runtime snapshot projection");
-    return out;
-  }
-  private idle(): PublicSnapshot {
-    return {
-      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-      state: "idle",
-      revision: 0,
-      updatedAt: this.now().toISOString(),
-    };
   }
   private fail(failureCode: CodingWorkbenchRuntimeFailureCode): CodingRuntimeOrchestratorResult {
     return { ok: false, failureCode };

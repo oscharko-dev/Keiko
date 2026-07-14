@@ -11,6 +11,8 @@ import {
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
+import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -18,6 +20,8 @@ export interface CodingRuntimeHost {
   ) => CodingRuntimeManager;
   readonly launchResolver: CodingRuntimeLaunchResolver;
   readonly approvalAuthority: CodingRuntimeApprovalAuthority;
+  readonly taskDispatcher?: CodingRuntimeTaskDispatcher | undefined;
+  readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
@@ -65,6 +69,7 @@ interface RuntimeEventReceiver {
  * Constructs exactly one process-lifetime runtime aggregate. An unqualified host still exposes the
  * lifecycle/status API, but start fails before minting launch material or touching a process.
  */
+// eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 export function createCodingRuntimeControlPlane(
   input: CodingRuntimeControlPlaneInput,
 ): CodingRuntimeControlPlane {
@@ -84,6 +89,8 @@ export function createCodingRuntimeControlPlane(
     evidence: input.evidence,
     workspaceLifecycle: input.workspaceLifecycle,
     launchResolver,
+    taskDispatcher: input.runtimeHost?.taskDispatcher ?? unavailableTaskDispatcher(),
+    questionPort: input.runtimeHost?.questionPort ?? unavailableQuestionPort(),
     serverPrincipal: input.serverPrincipal,
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
@@ -95,6 +102,21 @@ export function createCodingRuntimeControlPlane(
     eventHub,
     runtimeHostQualified: input.runtimeHost !== undefined,
     ...runtimeHostCapabilities(input.runtimeHost),
+  };
+}
+
+function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {
+  return {
+    dispatch: () => Promise.resolve({ ok: false }),
+    abort: () => Promise.resolve(false),
+  };
+}
+
+function unavailableQuestionPort(): CodingRuntimeQuestionPort {
+  return {
+    list: () => Promise.resolve(undefined),
+    answer: () => Promise.resolve(false),
+    reject: () => Promise.resolve(false),
   };
 }
 

@@ -5,7 +5,11 @@ import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
-const KEIKO_PRODUCER_TOOLS = ["keiko_workspace_read", "keiko_changeset_edit"] as const;
+const KEIKO_PRODUCER_TOOLS = [
+  "keiko_workspace_read",
+  "keiko_changeset_edit",
+  "keiko_verification",
+] as const;
 const MODEL_VISIBLE_TOOLS = ["question", ...KEIKO_PRODUCER_TOOLS] as const;
 const READY_LINE = "opencode server listening on http://127.0.0.1:43123\n";
 

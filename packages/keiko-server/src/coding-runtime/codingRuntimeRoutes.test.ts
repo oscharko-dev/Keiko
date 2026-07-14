@@ -108,6 +108,12 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
 }
 
 describe("coding runtime routes", () => {
+  it("does not mount content-bearing follow-up or question operations", () => {
+    const patterns = API_ROUTES.map(({ pattern }) => pattern);
+    expect(patterns.some((pattern) => pattern.includes("/questions"))).toBe(false);
+    expect(patterns.some((pattern) => pattern.includes("/follow-up"))).toBe(false);
+  });
+
   it("declares only the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
     expect(CODING_RUNTIME_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`)).toEqual(
       [

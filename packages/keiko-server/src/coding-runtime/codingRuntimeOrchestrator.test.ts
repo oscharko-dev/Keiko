@@ -5,6 +5,8 @@ import type {
   CodingRuntimeSnapshotStore,
 } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
   type CodingRuntimeOrchestratorResult,
@@ -102,6 +104,16 @@ function fixture() {
   const eventHub = { publish: vi.fn(() => ({ ok: true })), deleteRuns: vi.fn() };
   const evidence = { observe: vi.fn(), settle: vi.fn(() => "evidence"), deletePruned: vi.fn() };
   const approvalAuthority = { issue: manager.issueApproval };
+  const dispatch = vi.fn<CodingRuntimeTaskDispatcher["dispatch"]>(() =>
+    Promise.resolve({
+      ok: true as const,
+      completion: Promise.resolve("succeeded" as const),
+    }),
+  );
+  const taskDispatcher = {
+    dispatch,
+    abort: vi.fn(() => Promise.resolve(true)),
+  } satisfies CodingRuntimeTaskDispatcher;
   const launchResolver = {
     resolve: vi.fn(() => ({
       taskRef: "task-1",
@@ -120,6 +132,11 @@ function fixture() {
       startTimeoutMs: 1,
     })),
   };
+  const questionPort = {
+    list: vi.fn<CodingRuntimeQuestionPort["list"]>(() => Promise.resolve({ questions: [] })),
+    answer: vi.fn(() => Promise.resolve(true)),
+    reject: vi.fn(() => Promise.resolve(true)),
+  } satisfies CodingRuntimeQuestionPort;
   const orchestrator = createCodingRuntimeOrchestrator({
     manager: manager,
     approvalAuthority,
@@ -133,6 +150,8 @@ function fixture() {
       }),
     } as never,
     launchResolver: launchResolver as never,
+    taskDispatcher,
+    questionPort,
     serverPrincipal: () => "server",
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     newRunId: () => `run-${String(rows.size + 1)}`,
@@ -145,6 +164,8 @@ function fixture() {
     evidence,
     eventHub,
     launchResolver,
+    taskDispatcher,
+    questionPort,
     listPrunableSettled,
     deletePruned,
   };
@@ -157,6 +178,162 @@ const start = {
 } as const;
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("dispatches transient initial intent after launch and exposes a running run", async () => {
+    const f = fixture();
+
+    const result = await f.orchestrator.start(start);
+
+    expect(successfulSnapshot(result).state).toBe("running");
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: start.requestId,
+      expectedRevision: 2,
+      taskIntent: start.taskIntent,
+    });
+    expect(JSON.stringify([...f.rows.values()])).not.toContain(start.taskIntent);
+  });
+
+  it("serializes follow-ups by run, revision, and one-use request id", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+
+    const request = {
+      requestId: "follow-up-1",
+      expectedRevision: 3,
+      taskIntent: "continue bounded work",
+    };
+    const [first, raced] = await Promise.all([
+      f.orchestrator.submitFollowUp("run-1", request),
+      f.orchestrator.submitFollowUp("run-1", { ...request, requestId: "follow-up-race" }),
+    ]);
+
+    expect(successfulSnapshot(first).revision).toBe(4);
+    expect(raced).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(await f.orchestrator.submitFollowUp("run-1", request)).toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(
+      await f.orchestrator.submitFollowUp("stale-run", {
+        ...request,
+        requestId: "follow-up-stale",
+        expectedRevision: 4,
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  it("allows a new follow-up request at the unchanged revision after adapter refusal", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.taskDispatcher.dispatch
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, completion: Promise.resolve("succeeded") });
+
+    await expect(
+      f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: 3,
+        taskIntent: "first bounded retry",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(f.orchestrator.status().revision).toBe(3);
+    await expect(
+      f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-retry",
+        expectedRevision: 3,
+        taskIntent: "second bounded retry",
+      }),
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 4 } });
+  });
+
+  it("serializes transient questions without retaining their content", async () => {
+    const f = fixture();
+    f.questionPort.list.mockResolvedValueOnce({
+      questions: [
+        {
+          id: "que_1",
+          questions: [{ question: "Private?", header: "Private", options: [] }],
+        },
+      ],
+    });
+    await f.orchestrator.start(start);
+
+    const listed = await f.orchestrator.listQuestions("run-1", {
+      requestId: "question-list-1",
+      expectedRevision: 3,
+    });
+    expect(listed).toMatchObject({ ok: true, snapshot: { revision: 4 } });
+    expect(JSON.stringify([...f.rows.values()])).not.toContain("Private?");
+    expect(
+      await f.orchestrator.answerQuestion("run-1", {
+        requestId: "question-answer-1",
+        expectedRevision: 4,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      }),
+    ).toMatchObject({ ok: true, snapshot: { revision: 5 } });
+    expect(
+      await f.orchestrator.rejectQuestion("run-1", {
+        requestId: "question-answer-1",
+        expectedRevision: 5,
+        questionId: "que_1",
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  it("allows question retries at unchanged revisions after adapter refusal", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.questionPort.list.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ questions: [] });
+
+    await expect(
+      f.orchestrator.listQuestions("run-1", {
+        requestId: "question-list-refused",
+        expectedRevision: 3,
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(f.orchestrator.status().revision).toBe(3);
+    await expect(
+      f.orchestrator.listQuestions("run-1", {
+        requestId: "question-list-retry",
+        expectedRevision: 3,
+      }),
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 4 } });
+
+    f.questionPort.answer.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const answer = (requestId: string) =>
+      f.orchestrator.answerQuestion("run-1", {
+        requestId,
+        expectedRevision: 4,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      });
+    await expect(answer("question-answer-refused")).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(f.orchestrator.status().revision).toBe(4);
+    await expect(answer("question-answer-retry")).resolves.toMatchObject({
+      ok: true,
+      snapshot: { revision: 5 },
+    });
+  });
+
+  it("requires recovery when a rejected first turn cannot prove runtime stop", async () => {
+    const f = fixture();
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false });
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+
+    expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+  });
+
   it("enforces one active slot and never persists task intent", async () => {
     const f = fixture();
     expect((await f.orchestrator.start(start)).ok).toBe(true);

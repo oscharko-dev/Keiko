@@ -727,8 +727,8 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
 
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
 function toolSource(
-  action: "read" | "edit",
-  argument: "relativePath" | "changeset",
+  action: "read" | "edit" | "verification",
+  argument: "relativePath" | "changeset" | "verifierId",
   inputSchema: Readonly<Record<string, unknown>>,
 ): string {
   return [

@@ -34,6 +34,11 @@ export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContex
 
 interface CodingToolAuthorityPortOptions {
   readonly requireProducerBinding?: boolean | undefined;
+  readonly reserveEditDelegation?: boolean | undefined;
+}
+
+interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
+  readonly reserveEditDelegation?: boolean | undefined;
 }
 
 export function createCodingToolAuthorityPort(
@@ -46,7 +51,14 @@ export function createCodingToolAuthorityPort(
 ): CodingToolAuthorityPort {
   return {
     admit: (capability, request): ReturnType<CodingToolAuthorityPort["admit"]> =>
-      admit(authority, context, capability, request, options.requireProducerBinding === true),
+      admit(
+        authority,
+        context,
+        capability,
+        request,
+        options.requireProducerBinding === true,
+        options.reserveEditDelegation === true,
+      ),
   };
 }
 
@@ -59,6 +71,7 @@ function admit(
   capability: string | undefined,
   request: CodingToolActionRequest,
   requireProducerBinding: boolean,
+  reserveEditDelegation: boolean,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   if (capability === undefined) return { ok: false, reason: "capability-missing" };
   const trusted = context();
@@ -76,7 +89,9 @@ function admit(
   });
   if (!preflight.ok || !actionAllowed(preflight.envelope, request))
     return { ok: false, reason: preflight.ok ? "action-not-authorized" : preflight.reason };
-  if (request.action === "edit") return guarded(authority, context, capability, request, binding);
+  if (request.action === "edit" && !reserveEditDelegation) {
+    return guarded(authority, context, capability, request, binding);
+  }
   const resolved = authority.resolveCapabilityForDelegation({
     capability,
     adapterKind: trusted.adapterKind,
@@ -139,12 +154,13 @@ export function createRuntimeCodingToolFacade(
   >,
   context: CodingToolAuthorityContextProvider,
   governedPorts: CodingToolGovernedPorts,
-  options: CodingToolFacadeOptions = {},
+  options: RuntimeCodingToolFacadeOptions = {},
 ): CodingToolFacade {
   return createCodingToolFacade(
     {
       authority: createCodingToolAuthorityPort(authority, context, {
         requireProducerBinding: true,
+        reserveEditDelegation: options.reserveEditDelegation === true,
       }),
       delegate: createCodingToolGovernedDelegate(governedPorts),
     },

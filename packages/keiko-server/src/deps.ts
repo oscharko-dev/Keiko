@@ -189,6 +189,16 @@ import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import {
+  createProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeResolver,
+} from "./coding-runtime/productionCodingRuntimeHost.js";
+import {
+  createProductionCodingRuntimeResolver,
+  type ProductionCodingRuntimeResolverInput,
+} from "./coding-runtime/productionCodingRuntimeResolver.js";
+import type { CodingRuntimeStartConfirmationConsumer } from "./coding-runtime/codingRuntimeStartConfirmation.js";
+import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import {
@@ -602,6 +612,17 @@ export interface BuildHandlerDepsOptions {
   readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
   /** Qualified runtime host injection. Production remains fail-closed until #2258 supplies it. */
   readonly codingRuntimeHost?: CodingRuntimeHost | undefined;
+  /** Server-owned production resolver; a missing or unqualified resolver preserves fail-closed mode. */
+  readonly codingRuntimeResolver?: ProductionCodingRuntimeResolver | undefined;
+  /**
+   * Release-qualified backend and governed tool adapters used by the normal server/CLI composition.
+   * They do not activate a runtime without a central start-confirmation consumer.
+   */
+  readonly codingRuntimeProductionPorts?: ProductionCodingRuntimePorts | undefined;
+  /** Central #2377 adapter. Absence is an intentional fail-closed production posture. */
+  readonly codingRuntimeStartConfirmationConsumer?:
+    CodingRuntimeStartConfirmationConsumer | undefined;
+  readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
@@ -680,6 +701,11 @@ export interface BuildHandlerDepsOptions {
   readonly qiRetentionAuditSink?: QiRetentionAuditSink | undefined;
   readonly qiRetentionNow?: (() => number) | undefined;
 }
+
+export type ProductionCodingRuntimePorts = Pick<
+  ProductionCodingRuntimeResolverInput,
+  "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
+>;
 
 function envModelToken(modelId: string): string {
   return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
@@ -2075,7 +2101,6 @@ function atlassianConnectorCredentialFields(
   };
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralManagers {
   return buildPeripherals({
     options: args.options,
@@ -2089,10 +2114,16 @@ function buildAssemblyPeripherals(args: UiHandlerDepsAssemblyArgs): PeripheralMa
   });
 }
 
+// eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const codingRuntimeEvidenceAggregator = createCodingRuntimeEvidenceAggregator(
     args.codingWorkbenchEvidenceStore,
   );
+  const peripherals = buildAssemblyPeripherals(args);
+  const defaultRuntimeResolver = productionRuntimeResolver(args, peripherals.verificationRunner);
+  const codingRuntimeHost =
+    args.options.codingRuntimeHost ??
+    createProductionCodingRuntimeHost(args.options.codingRuntimeResolver ?? defaultRuntimeResolver);
   const codingRuntimeControlPlane =
     args.bundle.codingRuntimeSnapshotStore && args.bundle.workspaceLifecycle
       ? createCodingRuntimeControlPlane({
@@ -2102,12 +2133,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           serverPrincipal:
             args.options.codingRuntimeServerPrincipal ??
             ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
-          ...(args.options.codingRuntimeHost
-            ? { runtimeHost: args.options.codingRuntimeHost }
-            : {}),
+          ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
-  const peripherals = buildAssemblyPeripherals(args);
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2188,6 +2216,35 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       args.bundle.dispose?.();
     },
   };
+}
+
+function productionRuntimeResolver(
+  args: UiHandlerDepsAssemblyArgs,
+  verificationRunner: PeripheralManagers["verificationRunner"],
+): ProductionCodingRuntimeResolver | undefined {
+  const ports = args.options.codingRuntimeProductionPorts;
+  const workspaceLifecycle = args.bundle.workspaceLifecycle;
+  const managedTaskWorkspaceRoot = args.bundle.managedTaskWorkspaceRoot;
+  if (
+    ports === undefined ||
+    workspaceLifecycle === undefined ||
+    managedTaskWorkspaceRoot === undefined
+  ) {
+    return undefined;
+  }
+  return createProductionCodingRuntimeResolver({
+    workspaceAuthority: {
+      workspaceLifecycle,
+      managedTaskWorkspaceRoot,
+      deploymentCeiling: args.options.codingRuntimeDeploymentCeiling ?? "governed-assist",
+      readWorkspaceHead: readProductionWorkspaceHead,
+    },
+    ...ports,
+    verificationRunner,
+    ...(args.options.codingRuntimeStartConfirmationConsumer
+      ? { confirmationConsumer: args.options.codingRuntimeStartConfirmationConsumer }
+      : {}),
+  });
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {

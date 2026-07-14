@@ -24,6 +24,7 @@ import {
   type CodingRuntimeResolution,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
+import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   createRuntimeProcessSupervisor,
@@ -195,14 +196,25 @@ function facts(
   overrides: Partial<CodingWorkbenchRuntimeAuthorityFacts> = {},
 ): CodingWorkbenchRuntimeAuthorityFacts {
   const trusted = context();
+  const headRef = projectRuntimeAuthorityValue("branch", trusted.branch.headRef);
+  const projectedBranch = {
+    ...trusted.branch,
+    baseRef: projectRuntimeAuthorityValue("branch", trusted.branch.baseRef),
+    headRef,
+    allowedPrefixes: [headRef],
+  };
+  const projectedModelProfile = {
+    ...trusted.modelProfile,
+    profileId: projectRuntimeAuthorityValue("profile", trusted.modelProfile.profileId),
+  };
   return {
     binding: {
-      taskId: trusted.taskId,
-      projectId: trusted.projectId,
+      taskId: projectRuntimeAuthorityValue("task", trusted.taskId),
+      projectId: projectRuntimeAuthorityValue("project", trusted.projectId),
       projectDigest: trusted.projectDigest,
-      workspaceId: trusted.workspaceId,
+      workspaceId: projectRuntimeAuthorityValue("workspace", trusted.workspaceId),
       workspaceRootDigest: createHash("sha256").update(ROOT).digest("hex"),
-      branchRef: trusted.branchRef,
+      branchRef: projectRuntimeAuthorityValue("branch", trusted.branchRef),
       branchHeadDigest: trusted.branchHeadDigest,
     },
     actionClasses: trusted.actionClasses,
@@ -213,8 +225,8 @@ function facts(
     commandPolicyDigest: codingRuntimeFactDigest(trusted.commandPolicy),
     networkPolicyDigest: codingRuntimeFactDigest(trusted.networkPolicy),
     gatesDigest: codingRuntimeFactDigest(trusted.gates),
-    branchConstraintsDigest: codingRuntimeFactDigest(trusted.branch),
-    modelProfileDigest: codingRuntimeFactDigest(trusted.modelProfile),
+    branchConstraintsDigest: codingRuntimeFactDigest(projectedBranch),
+    modelProfileDigest: codingRuntimeFactDigest(projectedModelProfile),
     ...overrides,
   };
 }
@@ -305,7 +317,9 @@ describe("CodingRuntimeAuthorityService", () => {
     authority.transition(minted.authorityRef.runId, "running", NOW);
     expect(resolve(authority, minted.authorityRef)).toMatchObject({
       ok: true,
-      envelope: { authority: { localUser: "operator-1" } },
+      envelope: {
+        authority: { localUser: projectRuntimeAuthorityValue("operator", "operator-1") },
+      },
     });
     expect(resolve(authority, minted.authorityRef, facts(), "delegation-2")).toMatchObject({
       ok: true,

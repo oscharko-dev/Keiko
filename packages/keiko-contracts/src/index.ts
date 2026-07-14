@@ -984,6 +984,26 @@ export {
   validateCodingWorkbenchRuntimeStatus,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CodingWorkbenchRuntimeQuestionAnswerRequest,
+  CodingWorkbenchRuntimeQuestion,
+  CodingWorkbenchRuntimeQuestionOption,
+  CodingWorkbenchRuntimeQuestionRequest,
+  CodingWorkbenchRuntimeQuestionsResponse,
+} from "./coding-workbench-runtime-questions.js";
+export {
+  CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_HEADER_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_QUESTION_OPTION_LABEL_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_QUESTION_OPTIONS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
+  CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT,
+  parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+  validateCodingWorkbenchRuntimeQuestionsResponse,
+} from "./coding-workbench-runtime-questions.js";
+export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchCodexAuthSetupPlan,
