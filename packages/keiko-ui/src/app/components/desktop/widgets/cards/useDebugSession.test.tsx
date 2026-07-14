@@ -168,6 +168,47 @@ describe("useDebugSession", () => {
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
   });
 
+  it("waits for initial instrumentation before persisting an immediate breakpoint", async () => {
+    const initialInstrumentation = deferredResponse();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return initialInstrumentation.promise;
+      }
+      if (url === "/api/editor/debug/breakpoints") {
+        return response(mutationSnapshot());
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("instrumentation")),
+      ).toBe(true),
+    );
+
+    const pending = result.current.actions.saveBreakpoints("src/program.ts", [
+      {
+        id: "line-4",
+        fileId: "src/program.ts",
+        line: 4,
+        enabled: true,
+        kind: "line",
+        verification: "pending",
+      },
+    ]);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([url]) => url === "/api/editor/debug/breakpoints"),
+    ).toBe(false);
+    initialInstrumentation.resolve(instrumentation());
+    await act(async () => pending);
+
+    expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      "/api/editor/debug/breakpoints",
+      expect.objectContaining({ method: "PUT" }),
+    ]);
+  });
+
   it("adds CSRF protection to every client mutation", async () => {
     const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
     await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());

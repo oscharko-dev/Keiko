@@ -819,6 +819,19 @@ export function useDebugSession(
     await refreshInstrumentationAtLeast();
   }, [refreshInstrumentationAtLeast]);
 
+  const mutationInstrumentation = useCallback(async (): Promise<InstrumentationSnapshot | null> => {
+    if (!enabled || stableWorkspaceId.length === 0) return null;
+    const current = debugSessionSnapshot(stableWorkspaceId).instrumentation;
+    if (current !== null) return current;
+    await bootstrap();
+    if (!(await refreshInstrumentationAtLeast())) {
+      throw new Error("Debug instrumentation is unavailable.");
+    }
+    const refreshed = debugSessionSnapshot(stableWorkspaceId).instrumentation;
+    if (refreshed === null) throw new Error("Debug instrumentation is unavailable.");
+    return refreshed;
+  }, [bootstrap, enabled, refreshInstrumentationAtLeast, stableWorkspaceId]);
+
   const refreshSession = useCallback(
     async (sessionId: string): Promise<void> => {
       if (!enabled) return;
@@ -979,8 +992,8 @@ export function useDebugSession(
 
   const saveBreakpoints = useCallback(
     async (fileId: string, breakpoints: readonly SourceBreakpoint[]): Promise<void> => {
-      const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
-      if (!enabled || instrumentation === null) return;
+      const instrumentation = await mutationInstrumentation();
+      if (instrumentation === null) return;
       const response = await trackedRequest(
         "/api/editor/debug/breakpoints",
         debugMutation(
@@ -998,7 +1011,7 @@ export function useDebugSession(
       const result = mutationProjection(response);
       if (result !== null) setDebugInstrumentation(stableWorkspaceId, result.snapshot);
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
   );
 
   const control = useCallback(
@@ -1125,8 +1138,8 @@ export function useDebugSession(
 
   const saveWatches = useCallback(
     async (watches: readonly WatchExpression[]): Promise<void> => {
-      const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
-      if (!enabled || instrumentation === null) return;
+      const instrumentation = await mutationInstrumentation();
+      if (instrumentation === null) return;
       const response = await trackedRequest(
         "/api/editor/debug/watches",
         debugMutation(
@@ -1149,13 +1162,13 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
   );
 
   const saveExceptionFilters = useCallback(
     async (filters: readonly ExceptionBreakpointFilter[]): Promise<void> => {
-      const instrumentation = debugSessionSnapshot(stableWorkspaceId).instrumentation;
-      if (!enabled || instrumentation === null) return;
+      const instrumentation = await mutationInstrumentation();
+      if (instrumentation === null) return;
       const response = await trackedRequest(
         "/api/editor/debug/exception-breakpoints",
         debugMutation(
@@ -1178,7 +1191,7 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
   );
 
   const evaluateWatch = useCallback(
