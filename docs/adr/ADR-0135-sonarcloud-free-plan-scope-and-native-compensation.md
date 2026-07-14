@@ -1,4 +1,4 @@
-# ADR-0134: SonarCloud Free-plan scope, coverage, and native compensation
+# ADR-0135: SonarCloud Free-plan scope, coverage, and native compensation
 
 ## Status
 

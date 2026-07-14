@@ -8,6 +8,7 @@ import { createDapEventBridge, type DapEventBridge } from "./dapEventBridge.js";
 import type { DapAdapterPreflightDeps } from "./dapNodeAdapter.js";
 import {
   createDapProcessManager,
+  DapProcessManagerError,
   type DapProcessManager,
   type DapProcessStartInput,
   type DapSessionConfigurationPort,
@@ -131,7 +132,10 @@ type TestEndpoint = DapPrivateEndpointConnection & {
   }[];
   failWrites: boolean;
   respond: boolean;
+  emitInitialized: boolean;
   holdLaunchResponse: boolean;
+  readonly withheldCommands: Set<string>;
+  initializeResponse: unknown;
   emit(message: Record<string, unknown>): void;
   respondTo(request: { readonly seq: number; readonly command: string }, body?: unknown): void;
   releaseLaunchResponse(): void;
@@ -167,15 +171,22 @@ function endpoint(responsive = true, success = true): TestEndpoint {
     requests,
     failWrites: false,
     respond: responsive,
+    emitInitialized: true,
     holdLaunchResponse: false,
+    withheldCommands: new Set<string>(),
+    initializeResponse: {
+      supportsConfigurationDoneRequest: true,
+      supportsSetVariable: true,
+    },
     sendFrame: (body): void => {
       if (result.failWrites) throw new Error("private");
       const request = JSON.parse(body) as { seq: number; command: string; arguments?: unknown };
       commands.push(request.command);
       requests.push(request);
+      if (result.withheldCommands.has(request.command)) return;
       if (!result.respond) return;
       const respondToRequest = (): void => {
-        if (request.command === "launch") {
+        if (request.command === "launch" && result.emitInitialized) {
           writeDapFrame(
             wire,
             JSON.stringify({ seq: adapterSequence++, type: "event", event: "initialized" }),
@@ -189,10 +200,7 @@ function endpoint(responsive = true, success = true): TestEndpoint {
             request_seq: request.seq,
             success,
             command: request.command,
-            body:
-              request.command === "initialize"
-                ? { supportsConfigurationDoneRequest: true, supportsSetVariable: true }
-                : {},
+            body: request.command === "initialize" ? result.initializeResponse : {},
           }),
         );
       };
@@ -435,7 +443,11 @@ describe("dapProcessManager canonical orchestration", () => {
       home: "/private/home",
       temp: "/private/temp",
     });
-    expect(manager.health("session_a")).toMatchObject({ state: "running", pendingRequestCount: 0 });
+    expect(manager.health("session_a")).toMatchObject({
+      state: "running",
+      pendingRequestCount: 0,
+      supportsSetVariable: true,
+    });
     await expect(manager.request("session_a", "threads", {}, "inspection")).resolves.toStrictEqual(
       {},
     );
@@ -463,6 +475,101 @@ describe("dapProcessManager canonical orchestration", () => {
     ]);
     expect(current.manager.health("session_a")).toMatchObject({ state: "running" });
     await current.manager.stop("session_a");
+  });
+
+  it("bounds configuration requests to the inspection deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const current = setup();
+      current.transport.withheldCommands.add("setBreakpoints");
+      const starting = current.manager.start({
+        ...startInput,
+        configure: async (port): Promise<void> => {
+          try {
+            await port.request("setBreakpoints", {
+              source: { path: "/keiko-execution-root/app.js" },
+              breakpoints: [{ line: 1 }],
+            });
+          } catch {
+            throw new DapProcessManagerError("INVALID_CAPSULE_PLAN");
+          }
+        },
+      });
+      let settled = false;
+      void starting.then(
+        (): void => {
+          settled = true;
+        },
+        (): void => {
+          settled = true;
+        },
+      );
+      const rejection = expect(starting).rejects.toMatchObject({ code: "INVALID_CAPSULE_PLAN" });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.transport.commands).toStrictEqual(["initialize", "launch", "setBreakpoints"]);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(current.transport.commands).toStrictEqual(["initialize", "launch", "setBreakpoints"]);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts only boolean initialize capabilities and omits unsupported configurationDone", async () => {
+    const transport = endpoint();
+    transport.initializeResponse = {
+      supportsConfigurationDoneRequest: false,
+      supportsSetVariable: false,
+    };
+    const current = setup({ endpoint: transport });
+
+    await current.manager.start(startInput);
+
+    expect(transport.commands).toStrictEqual(["initialize", "launch"]);
+    expect(current.manager.health("session_a")).toMatchObject({
+      state: "running",
+      supportsSetVariable: false,
+    });
+    await current.manager.stop("session_a");
+  });
+
+  it("accepts an empty initialize capability object as no optional capabilities", async () => {
+    const transport = endpoint();
+    transport.initializeResponse = {};
+    const current = setup({ endpoint: transport });
+
+    await current.manager.start(startInput);
+
+    expect(transport.commands).toStrictEqual(["initialize", "launch"]);
+    expect(current.manager.health("session_a")).toMatchObject({
+      state: "running",
+      supportsSetVariable: false,
+    });
+    await current.manager.stop("session_a");
+  });
+
+  it.each([
+    null,
+    [],
+    "not-an-object",
+    { supportsConfigurationDoneRequest: "true" },
+    { supportsSetVariable: 1 },
+  ])("fails closed on malformed initialize capabilities %#", async (initializeResponse) => {
+    const transport = endpoint();
+    transport.initializeResponse = initializeResponse;
+    const current = setup({ endpoint: transport });
+
+    await expect(current.manager.start(startInput)).rejects.toMatchObject({
+      code: "STARTUP_THROTTLED",
+    });
+
+    expect(transport.commands).toStrictEqual(["initialize", "initialize"]);
+    expect(current.launch).toHaveBeenCalledTimes(2);
+    expect(current.manager.health("session_a")).toBeUndefined();
   });
 
   it("configures after initialized without waiting for the withheld launch response", async () => {
@@ -496,6 +603,48 @@ describe("dapProcessManager canonical orchestration", () => {
     await starting;
     expect(current.manager.health("session_a")?.state).toBe("running");
     await current.manager.stop("session_a");
+  });
+
+  it("fails closed when launch never signals initialized", async () => {
+    vi.useFakeTimers();
+    const transport = endpoint();
+    transport.emitInitialized = false;
+    const current = setup({ endpoint: transport });
+    const starting = current.manager.start(startInput);
+    const rejection = expect(starting).rejects.toMatchObject({ code: "STARTUP_THROTTLED" });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+
+    expect(transport.commands).toStrictEqual(["initialize", "launch", "initialize"]);
+    vi.useRealTimers();
+  });
+
+  it("does not treat another DAP event as initialized", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = endpoint();
+      transport.emitInitialized = false;
+      const current = setup({ endpoint: transport });
+      const starting = current.manager.start(startInput);
+      const rejection = expect(starting).rejects.toMatchObject({ code: "STARTUP_THROTTLED" });
+
+      await vi.advanceTimersByTimeAsync(0);
+      transport.emit({
+        seq: 701,
+        type: "event",
+        event: "output",
+        body: { output: "must-not-start" },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transport.commands).toStrictEqual(["initialize", "launch"]);
+      expect(current.manager.health("session_a")?.state).toBe("starting");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains the exact partial-thread stopped context", async () => {
@@ -590,7 +739,107 @@ describe("dapProcessManager canonical orchestration", () => {
     ).rejects.toMatchObject({
       code: "CLIENT_DISPOSED",
     });
+    await expect(current.manager.stop("session_a")).rejects.toMatchObject({
+      code: "CLIENT_DISPOSED",
+    });
+    await expect(current.manager.revoke("session_a")).rejects.toMatchObject({
+      code: "CLIENT_DISPOSED",
+    });
+    await expect(current.manager.failMalformed("session_a")).rejects.toMatchObject({
+      code: "CLIENT_DISPOSED",
+    });
+    await expect(current.manager.sweepExpired()).rejects.toMatchObject({
+      code: "CLIENT_DISPOSED",
+    });
+    await expect(current.manager.reconcile()).rejects.toMatchObject({
+      code: "CLIENT_DISPOSED",
+    });
     expect(current.handle.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("publishes the exact terminal state for explicit stop, revocation, and malformed input", async () => {
+    const cases = [
+      {
+        invoke: (manager: DapProcessManager): Promise<void> => manager.stop("session_a"),
+        expected: {
+          kind: "session-stopped",
+          sessionId: "session_a",
+          status: "stopped",
+          reason: "requested",
+        },
+      },
+      {
+        invoke: (manager: DapProcessManager): Promise<void> => manager.revoke("session_a"),
+        expected: {
+          kind: "session-stopped",
+          sessionId: "session_a",
+          status: "revoked",
+          reason: "revoked",
+        },
+      },
+      {
+        invoke: (manager: DapProcessManager): Promise<void> => manager.failMalformed("session_a"),
+        expected: {
+          kind: "session-stopped",
+          sessionId: "session_a",
+          status: "failed",
+          reason: "failed",
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const events = createDapEventBridge();
+      const projected: unknown[] = [];
+      const subscription = events.subscribe({
+        channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+        onEvent: (event): void => void projected.push(event.event),
+      });
+      if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+      const current = setup({ events });
+      await current.manager.start(startInput);
+      await testCase.invoke(current.manager);
+      expect(projected).toStrictEqual([
+        { kind: "session-started", sessionId: "session_a", status: "running" },
+        testCase.expected,
+      ]);
+      expect(current.records.at(-1)).toMatchObject({
+        eventKind: "teardown",
+        reason:
+          testCase.expected.status === "revoked"
+            ? "activationRevoked"
+            : testCase.expected.status === "failed"
+              ? "malformedFrame"
+              : "stopped",
+      });
+      subscription.unsubscribe();
+    }
+  });
+
+  it("fails closed when required startup publication cannot acquire an event channel", async () => {
+    const events = createDapEventBridge();
+    for (let index = 0; index < 64; index += 1) {
+      const subscription = events.subscribe({
+        channel: {
+          workspacePartitionKey: `partition_${String(index)}`,
+          browserSessionBinding: "browser_a",
+        },
+        onEvent: (): void => undefined,
+      });
+      expect(subscription.kind).toBe("ok");
+    }
+    const current = setup({ events });
+
+    await expect(current.manager.start(startInput)).rejects.toMatchObject({
+      code: "INVALID_CAPSULE_PLAN",
+    });
+
+    expect(current.manager.health("session_a")).toBeUndefined();
+    expect(current.handle.terminateScope).toHaveBeenCalledOnce();
+    expect(current.records.at(-1)).toMatchObject({
+      eventKind: "teardown",
+      reason: "malformedFrame",
+    });
   });
 
   it("projects bounded protocol lifecycle through the browser-bound live event bridge", async () => {
@@ -654,6 +903,375 @@ describe("dapProcessManager canonical orchestration", () => {
       ]);
       expect(current.manager.health("session_a")).toBeUndefined();
     });
+    subscription.unsubscribe();
+  });
+
+  it("projects output, all supported stop reasons, and continued generations exactly", async () => {
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events });
+    await current.manager.start(startInput);
+
+    current.transport.emit({
+      seq: 600,
+      type: "event",
+      event: "output",
+      body: { output: "visible", category: "stdout" },
+    });
+    for (const [index, reason] of [
+      "breakpoint",
+      "exception",
+      "step",
+      "entry",
+      "pause",
+      "adapter-private-reason",
+    ].entries()) {
+      current.transport.emit({
+        seq: 601 + index,
+        type: "event",
+        event: "stopped",
+        body: { reason, threadId: index + 1, allThreadsStopped: index % 2 === 0 },
+      });
+    }
+    current.transport.emit({ seq: 610, type: "event", event: "continued", body: {} });
+
+    await vi.waitFor(() => {
+      expect(projected).toContainEqual({
+        kind: "output",
+        sessionId: "session_a",
+        category: "stdout",
+        text: "visible",
+        truncated: false,
+        originalBytes: 7,
+        omittedBytes: 0,
+      });
+      expect(projected.filter((event) => (event as { kind?: string }).kind === "stopped")).toEqual([
+        expect.objectContaining({ reason: "breakpoint", allThreadsStopped: true }),
+        expect.objectContaining({ reason: "exception", allThreadsStopped: false }),
+        expect.objectContaining({ reason: "step", allThreadsStopped: true }),
+        expect.objectContaining({ reason: "entry", allThreadsStopped: false }),
+        expect.objectContaining({ reason: "pause", allThreadsStopped: true }),
+        expect.objectContaining({ reason: "pause", allThreadsStopped: false }),
+      ]);
+      const firstStopped = projected.find(
+        (event) => (event as { kind?: string }).kind === "stopped",
+      );
+      expect(firstStopped).toBeDefined();
+      expect(Object.hasOwn(firstStopped as object, "description")).toBe(false);
+      expect(projected).toContainEqual({
+        kind: "continued",
+        sessionId: "session_a",
+        pauseGeneration: 7,
+      });
+    });
+    subscription.unsubscribe();
+    await current.manager.stop("session_a");
+  });
+
+  it("projects supported output categories and rejects telemetry or malformed bodies", async () => {
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events });
+    await current.manager.start(startInput);
+
+    current.transport.emit({
+      seq: 611,
+      type: "event",
+      event: "output",
+      body: { output: "console" },
+    });
+    current.transport.emit({
+      seq: 612,
+      type: "event",
+      event: "output",
+      body: { output: "error", category: "stderr" },
+    });
+    current.transport.emit({
+      seq: 613,
+      type: "event",
+      event: "output",
+      body: { output: "private", category: "telemetry" },
+    });
+    current.transport.emit({ seq: 614, type: "event", event: "output", body: { output: "" } });
+    current.transport.emit({ seq: 615, type: "event", event: "output", body: null });
+    current.transport.emit({ seq: 616, type: "event", event: "output", body: { output: 1 } });
+
+    await vi.waitFor(() => {
+      expect(projected).toStrictEqual([
+        { kind: "session-started", sessionId: "session_a", status: "running" },
+        {
+          kind: "output",
+          sessionId: "session_a",
+          category: "console",
+          text: "console",
+          truncated: false,
+          originalBytes: 7,
+          omittedBytes: 0,
+        },
+        {
+          kind: "output",
+          sessionId: "session_a",
+          category: "stderr",
+          text: "error",
+          truncated: false,
+          originalBytes: 5,
+          omittedBytes: 0,
+        },
+      ]);
+    });
+    subscription.unsubscribe();
+    await current.manager.stop("session_a");
+  });
+
+  it("marks oversized output as truncated without changing its UTF-8 byte accounting", async () => {
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events });
+    await current.manager.start(startInput);
+    current.transport.emit({
+      seq: 620,
+      type: "event",
+      event: "output",
+      body: { output: "A".repeat(20 * 1024), category: "stderr" },
+    });
+
+    await vi.waitFor(() => {
+      expect(projected).toContainEqual(
+        expect.objectContaining({
+          kind: "output",
+          sessionId: "session_a",
+          category: "stderr",
+          truncated: true,
+          originalBytes: 20 * 1024,
+        }),
+      );
+    });
+    subscription.unsubscribe();
+    await current.manager.stop("session_a");
+  });
+
+  it("publishes validated exit codes before terminal teardown and terminates without an exit code", async () => {
+    const exitedEvents = createDapEventBridge();
+    const exited: unknown[] = [];
+    const exitedSubscription = exitedEvents.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void exited.push(event.event),
+    });
+    if (exitedSubscription.kind !== "ok") throw new Error("invalid test fixture");
+    const exitedCurrent = setup({ events: exitedEvents });
+    await exitedCurrent.manager.start(startInput);
+    exitedCurrent.transport.emit({
+      seq: 630,
+      type: "event",
+      event: "exited",
+      body: { exitCode: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(exitedCurrent.manager.health("session_a")).toBeUndefined();
+    });
+    expect(exitedCurrent.records.at(-1)).toMatchObject({
+      eventKind: "teardown",
+      reason: "debuggeeExit",
+    });
+    exitedCurrent.transport.emit({ seq: 631, type: "event", event: "terminated", body: {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exited).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "exited", sessionId: "session_a", exitCode: 0 },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "exited" },
+    ]);
+    exitedSubscription.unsubscribe();
+
+    const terminatedEvents = createDapEventBridge();
+    const terminated: unknown[] = [];
+    const terminatedSubscription = terminatedEvents.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void terminated.push(event.event),
+    });
+    if (terminatedSubscription.kind !== "ok") throw new Error("invalid test fixture");
+    const terminatedCurrent = setup({ events: terminatedEvents });
+    await terminatedCurrent.manager.start(startInput);
+    terminatedCurrent.transport.emit({ seq: 640, type: "event", event: "terminated", body: {} });
+    await vi.waitFor(() => {
+      expect(terminatedCurrent.manager.health("session_a")).toBeUndefined();
+    });
+    expect(terminatedCurrent.records.at(-1)).toMatchObject({
+      eventKind: "teardown",
+      reason: "debuggeeExit",
+    });
+    terminatedCurrent.transport.emit({ seq: 642, type: "event", event: "terminated", body: {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(terminated).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "exited" },
+    ]);
+    terminatedSubscription.unsubscribe();
+
+    const invalidEvents = createDapEventBridge();
+    const invalid: unknown[] = [];
+    const invalidSubscription = invalidEvents.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void invalid.push(event.event),
+    });
+    if (invalidSubscription.kind !== "ok") throw new Error("invalid test fixture");
+    const invalidCurrent = setup({ events: invalidEvents });
+    await invalidCurrent.manager.start(startInput);
+    invalidCurrent.transport.emit({
+      seq: 641,
+      type: "event",
+      event: "exited",
+      body: { exitCode: "0" },
+    });
+    await vi.waitFor(() => {
+      expect(invalidCurrent.manager.health("session_a")).toBeUndefined();
+    });
+    expect(invalid).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "exited" },
+    ]);
+    invalidSubscription.unsubscribe();
+
+    const fractionalEvents = createDapEventBridge();
+    const fractional: unknown[] = [];
+    const fractionalSubscription = fractionalEvents.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void fractional.push(event.event),
+    });
+    if (fractionalSubscription.kind !== "ok") throw new Error("invalid test fixture");
+    const fractionalCurrent = setup({ events: fractionalEvents });
+    await fractionalCurrent.manager.start(startInput);
+    fractionalCurrent.transport.emit({
+      seq: 642,
+      type: "event",
+      event: "exited",
+      body: { exitCode: 0.5 },
+    });
+    await vi.waitFor(() => {
+      expect(fractionalCurrent.manager.health("session_a")).toBeUndefined();
+    });
+    expect(fractional).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "exited" },
+    ]);
+    fractionalSubscription.unsubscribe();
+
+    const missingBody = setup();
+    await missingBody.manager.start(startInput);
+    missingBody.transport.emit({ seq: 643, type: "event", event: "exited", body: null });
+    await vi.waitFor(() => {
+      expect(missingBody.manager.health("session_a")).toBeUndefined();
+    });
+    expect(missingBody.records.at(-1)).toMatchObject({
+      eventKind: "teardown",
+      reason: "debuggeeExit",
+    });
+  });
+
+  it("classifies an unexpected capsule exit as a failed session", async () => {
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events });
+    await current.manager.start(startInput);
+
+    await current.handle.emitExit();
+
+    expect(projected).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "failed", reason: "failed" },
+    ]);
+    expect(current.manager.health("session_a")).toBeUndefined();
+    await expect(current.handle.emitExit()).resolves.toBeUndefined();
+    subscription.unsubscribe();
+  });
+
+  it("does not duplicate failure projection when a capsule exits during requested teardown", async () => {
+    let releaseTermination: (() => void) | undefined;
+    const handle = capsule();
+    handle.terminateScope.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseTermination = (): void => {
+            resolve({ terminated: true, descendantsRemaining: 0 });
+          };
+        }),
+    );
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events, handles: [handle] });
+    await current.manager.start(startInput);
+
+    const stopping = current.manager.stop("session_a");
+    await vi.waitFor(() => {
+      expect(current.manager.health("session_a")?.state).toBe("stopping");
+    });
+    await handle.emitExit();
+    releaseTermination?.();
+    await stopping;
+
+    expect(projected).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "requested" },
+    ]);
+    subscription.unsubscribe();
+  });
+
+  it("does not classify a capsule exit as a second failure while teardown is pending", async () => {
+    const handle = capsule();
+    let terminated = false;
+    handle.terminateScope.mockImplementation(() =>
+      Promise.resolve({ terminated, descendantsRemaining: terminated ? 0 : 1 }),
+    );
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events, handles: [handle] });
+    await current.manager.start(startInput);
+
+    const stopping = current.manager.stop("session_a");
+    await vi.waitFor(() => {
+      expect(current.manager.health("session_a")?.state).toBe("terminationPending");
+    });
+    await handle.emitExit();
+    expect(projected).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+    ]);
+
+    terminated = true;
+    await current.manager.reconcile();
+    await stopping;
+    expect(projected).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "stopped", reason: "requested" },
+    ]);
     subscription.unsubscribe();
   });
 
@@ -857,7 +1475,14 @@ describe("dapProcessManager canonical orchestration", () => {
   });
 
   it("routes unexpected endpoint EOF through awaited failure teardown without an orphan", async () => {
-    const current = setup();
+    const events = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = events.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const current = setup({ events });
     await current.manager.start(startInput);
     current.transport.end();
     await vi.waitFor(() => {
@@ -866,6 +1491,11 @@ describe("dapProcessManager canonical orchestration", () => {
     expect(current.handle.cleanup).toHaveBeenCalledTimes(1);
     expect(current.records.some((record) => record.reason === "unexpectedEof")).toBe(true);
     expect(current.manager.health("session_a")).toBeUndefined();
+    expect(projected).toStrictEqual([
+      { kind: "session-started", sessionId: "session_a", status: "running" },
+      { kind: "session-stopped", sessionId: "session_a", status: "failed", reason: "failed" },
+    ]);
+    subscription.unsubscribe();
   });
 
   it("routes frame overflow and fatal writes through the same awaited terminal path", async () => {

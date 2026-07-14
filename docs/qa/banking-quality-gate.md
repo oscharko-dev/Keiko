@@ -9,7 +9,7 @@ the previous head's evidence because GitHub evaluates required checks on the cur
 
 GitHub's separate preview Code Quality setup is disabled. It duplicated the repository CodeQL
 workflow and attempted a context-free C# analysis. Keiko does contain one productive C# signing
-source and two productive C sources; ADR-0134 excludes them from Linux Sonar analysis and requires
+source and two productive C sources; ADR-0135 excludes them from Linux Sonar analysis and requires
 build-aware compiler, analyzer, and behavior evidence on Windows/macOS. The required, SHA-pinned
 CodeQL workflow remains authoritative for `actions` and `javascript-typescript`.
 

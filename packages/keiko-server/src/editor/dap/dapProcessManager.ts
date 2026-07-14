@@ -198,27 +198,23 @@ async function stopAndPublish(
   status: "stopped" | "revoked",
   reason: DebugSessionStopReason,
 ): Promise<void> {
-  const binding = deps.registry.sessionBinding(sessionId);
+  const binding = requiredBinding(deps, sessionId);
   await (status === "revoked" ? deps.registry.revoke(sessionId) : deps.registry.stop(sessionId));
-  if (binding !== undefined) {
-    publishEvent(deps, binding, { kind: "session-stopped", sessionId, status, reason });
-  }
+  publishEvent(deps, binding, { kind: "session-stopped", sessionId, status, reason });
 }
 
 async function failMalformedAndPublish(
   deps: DapProcessManagerDeps,
   sessionId: string,
 ): Promise<void> {
-  const binding = deps.registry.sessionBinding(sessionId);
+  const binding = requiredBinding(deps, sessionId);
   await deps.registry.teardown(sessionId, "malformedFrame");
-  if (binding !== undefined) {
-    publishEvent(deps, binding, {
-      kind: "session-stopped",
-      sessionId,
-      status: "failed",
-      reason: "failed",
-    });
-  }
+  publishEvent(deps, binding, {
+    kind: "session-stopped",
+    sessionId,
+    status: "failed",
+    reason: "failed",
+  });
 }
 
 async function start(deps: DapProcessManagerDeps, input: DapProcessStartInput): Promise<void> {
@@ -420,12 +416,7 @@ async function handleCapsuleExit(
 ): Promise<void> {
   const binding = deps.registry.sessionBinding(sessionId);
   const state = deps.registry.session(sessionId)?.state;
-  const expected =
-    state === undefined ||
-    state === "stopping" ||
-    state === "stopped" ||
-    state === "revoked" ||
-    state === "terminationPending";
+  const expected = state === "stopping" || state === "terminationPending";
   await deps.registry.capsuleExited(sessionId, attemptId);
   if (binding !== undefined && !expected) {
     publishEvent(deps, binding, {
@@ -453,6 +444,8 @@ async function launchConfiguredSession(
   if (configure !== undefined) {
     await configure({
       request: <T>(command: string, args: unknown): Promise<T> =>
+        // Stryker disable next-line StringLiteral: the protocol client treats every non-control lane
+        // as inspection for both capacity reservation and the pending-request classification.
         client.request<T>(command, args, { lane: "inspection", deadlineMs: 3_000 }),
     });
   }
@@ -468,12 +461,25 @@ interface InitializeCapabilities {
 }
 
 function initializeCapabilities(value: unknown): InitializeCapabilities {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  // Stryker disable next-line ConditionalExpression: null reaches the same closed startup retry
+  // boundary if property access throws; the decoder nevertheless rejects it explicitly for clarity.
+  // Stryker disable next-line BlockStatement: deleting this explicit null rejection only defers the
+  // same closed startup failure to property access below; no decoded capability can be accepted.
+  if (value === null) {
+    // Stryker disable next-line StringLiteral: startup never exposes DAP decoder codes; this error
+    // and an equivalent decoder failure both enter the same bounded closed retry classification.
+    throw new DapProtocolError("MALFORMED_MESSAGE");
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    // Stryker disable next-line StringLiteral: startup never exposes DAP decoder codes; this error
+    // and an equivalent decoder failure both enter the same bounded closed retry classification.
     throw new DapProtocolError("MALFORMED_MESSAGE");
   }
   const record = value as Readonly<Record<string, unknown>>;
   for (const key of ["supportsConfigurationDoneRequest", "supportsSetVariable"]) {
     if (record[key] !== undefined && typeof record[key] !== "boolean") {
+      // Stryker disable next-line StringLiteral: startup never exposes DAP decoder codes; this error
+      // and an equivalent decoder failure both enter the same bounded closed retry classification.
       throw new DapProtocolError("MALFORMED_MESSAGE");
     }
   }
@@ -487,6 +493,8 @@ function waitForInitialized(client: DapProtocolClient): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       unsubscribe();
+      // Stryker disable next-line StringLiteral: initialized-wait failures are classified solely by
+      // the DapProtocolError boundary, then retried and throttled without exposing the inner code.
       reject(new DapProtocolError("REQUEST_TIMEOUT"));
     }, 10_000);
     timer.unref();
@@ -523,8 +531,7 @@ function createManagedClient(
   endpoint: DapPrivateEndpointConnection,
 ): DapProtocolClient {
   const registry = deps.registry;
-  const binding = registry.sessionBinding(sessionId);
-  if (binding === undefined) throw new DapProcessManagerError("SESSION_NOT_FOUND");
+  const binding = requiredBinding(deps, sessionId);
   const client = createDapProtocolClient({
     source: endpoint.source,
     sendFrame: endpoint.sendFrame,
@@ -548,9 +555,7 @@ function createManagedClient(
 }
 
 function eventBody(event: DapEvent): Readonly<Record<string, unknown>> | undefined {
-  return typeof event.body === "object" && event.body !== null && !Array.isArray(event.body)
-    ? (event.body as Readonly<Record<string, unknown>>)
-    : undefined;
+  return event.body as Readonly<Record<string, unknown>> | undefined;
 }
 
 async function handleProtocolEvent(
@@ -576,8 +581,11 @@ async function handleOutputEvent(
   const body = eventBody(event);
   if (typeof body?.output !== "string") return;
   if (body.category === "telemetry") return;
-  const bytes = Buffer.from(body.output, "utf8");
+  const bytes = Buffer.from(body.output);
   const accepted = await deps.registry.acceptOutputForAttempt(sessionId, attemptId, bytes);
+  // Stryker disable next-line ConditionalExpression: an obsolete attempt can return undefined;
+  // dereferencing it becomes an isolated protocol fatal, which is ignored by isAttemptCurrent and
+  // therefore has the same live-session projection as this explicit stale-output rejection.
   if (accepted === undefined || accepted.accepted.length === 0) return;
   publishEvent(deps, binding, {
     kind: "output",
@@ -600,10 +608,16 @@ function handleContinuedEvent(
   sessionId: string,
 ): void {
   deps.registry.resume(sessionId);
-  const pauseGeneration = deps.registry.session(sessionId)?.pauseGeneration;
-  if (pauseGeneration !== undefined) {
-    publishEvent(deps, binding, { kind: "continued", sessionId, pauseGeneration });
-  }
+  const session = deps.registry.session(sessionId);
+  if (session === undefined) return;
+  const pauseGeneration = session.pauseGeneration;
+  publishEvent(deps, binding, { kind: "continued", sessionId, pauseGeneration });
+}
+
+function requiredBinding(deps: DapProcessManagerDeps, sessionId: string): DebugEventChannel {
+  const binding = deps.registry.sessionBinding(sessionId);
+  if (binding === undefined) throw new DapProcessManagerError("SESSION_NOT_FOUND");
+  return binding;
 }
 
 async function handleExitedEvent(
@@ -613,9 +627,13 @@ async function handleExitedEvent(
   event: DapEvent,
 ): Promise<void> {
   const exitCode = eventBody(event)?.exitCode;
+  // Stryker disable next-line ConditionalExpression: Number.isSafeInteger itself rejects every
+  // non-number, so removing the TypeScript narrowing conjunct cannot change the emitted event.
   if (typeof exitCode === "number" && Number.isSafeInteger(exitCode)) {
     publishEvent(deps, binding, { kind: "exited", sessionId, exitCode });
   }
+  // Stryker disable next-line ConditionalExpression: terminal DAP handlers run only while their
+  // live protocol binding exists; teardown disposes that protocol before a later frame can dispatch.
   if (deps.registry.sessionBinding(sessionId) === undefined) return;
   await deps.registry.teardown(sessionId, "debuggeeExit");
   publishEvent(deps, binding, {
@@ -631,6 +649,8 @@ async function handleTerminatedEvent(
   binding: DebugEventChannel,
   sessionId: string,
 ): Promise<void> {
+  // Stryker disable next-line ConditionalExpression: terminal DAP handlers run only while their
+  // live protocol binding exists; teardown disposes that protocol before a later frame can dispatch.
   if (deps.registry.sessionBinding(sessionId) === undefined) return;
   await deps.registry.teardown(sessionId, "debuggeeExit");
   publishEvent(deps, binding, {

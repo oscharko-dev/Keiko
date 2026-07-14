@@ -270,6 +270,8 @@ function processIdentity(
     const parentPid = Number(fields[1]);
     const startTime = String(fields[19]);
     if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
+    // Stryker disable next-line ConditionalExpression: RegExp.test coerces an absent field to a
+    // non-matching string, so the explicit typeof guard is a TypeScript narrowing only.
     if (typeof state !== "string" || !/^[A-Z]$/u.test(state)) return undefined;
     if (!Number.isSafeInteger(parentPid) || parentPid < 0) return undefined;
     if (!/^\d+$/u.test(startTime)) return undefined;

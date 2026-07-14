@@ -544,6 +544,90 @@ describe("DAP production composition", () => {
     }
   });
 
+  it("reports a failed expiry sweep, skips reconciliation, and resumes the next cadence", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = new Error("EXPIRY_SWEEP_FAILED");
+      const sweepExpired = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValueOnce(undefined);
+      const reconcile = vi.fn(() => Promise.resolve());
+      const onRuntimeFailure = vi.fn();
+      const current = observedFactories();
+      current.createManager.mockReturnValue(inertManager({ sweepExpired, reconcile }));
+      const service = dapProductionServiceTestBoundary.compose(
+        { ...portableDeps(inertEndpoint()), expirySweepIntervalMs: 100, onRuntimeFailure },
+        current.factories,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onRuntimeFailure).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(reconcile).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sweepExpired).toHaveBeenCalledTimes(2);
+      expect(reconcile).toHaveBeenCalledOnce();
+      await service.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one disposer that waits for an active expiry sweep before shutdown", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseSweep: (() => void) | undefined;
+      const sweepExpired = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSweep = resolve;
+          }),
+      );
+      const shutdown = vi.fn(() => Promise.resolve());
+      const current = observedFactories();
+      current.createManager.mockReturnValue(inertManager({ sweepExpired, shutdown }));
+      const service = dapProductionServiceTestBoundary.compose(
+        { ...portableDeps(inertEndpoint()), expirySweepIntervalMs: 100 },
+        current.factories,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+      const first = service.dispose();
+      expect(service.dispose()).toBe(first);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(shutdown).not.toHaveBeenCalled();
+
+      releaseSweep?.();
+      await first;
+      expect(shutdown).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("normalizes a non-Error shutdown rejection and still disposes event state", async () => {
+    const nonErrorFailure = "transport closed" as unknown as Error;
+    const shutdown = vi.fn(() => Promise.reject(nonErrorFailure));
+    const disposeAll = vi.fn();
+    const onRuntimeFailure = vi.fn();
+    const current = observedFactories();
+    current.createManager.mockReturnValue(inertManager({ shutdown }));
+    current.createEventBridge.mockReturnValue(inertEventBridge({ disposeAll }));
+    const service = dapProductionServiceTestBoundary.compose(
+      { ...portableDeps(inertEndpoint()), onRuntimeFailure },
+      current.factories,
+    );
+
+    await service.dispose();
+
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(onRuntimeFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "DAP_SHUTDOWN_FAILED" }),
+    );
+    expect(disposeAll).toHaveBeenCalledOnce();
+  });
+
   it("bounds a hung shutdown and still releases browser event state", async () => {
     vi.useFakeTimers();
     try {

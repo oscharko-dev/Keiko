@@ -218,7 +218,7 @@ jobs:
           echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  $scanner_zip" | sha256sum --check
           unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
           echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
-      - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0134)
+      - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0135)
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-scan
         env:

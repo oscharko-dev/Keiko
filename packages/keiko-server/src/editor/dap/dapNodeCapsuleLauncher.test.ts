@@ -1017,6 +1017,19 @@ describe("production debug capsule launcher", () => {
     });
   });
 
+  it("rejects every non-single-uppercase Linux process state", () => {
+    const procRoot = temporary();
+
+    for (const [pid, state] of [
+      ["16", "SS"],
+      ["17", "s"],
+      ["18", "S1"],
+    ] as const) {
+      writeProcStat(procRoot, pid, "1", "600", state);
+      expect(debugCapsuleLauncherInternals.processIdentity(procRoot, pid)).toBeUndefined();
+    }
+  });
+
   it("preserves observed descendant identities and proves they disappear after wrapper exit", async () => {
     const current = fixture();
     const procRoot = temporary();
@@ -1161,6 +1174,30 @@ describe("production debug capsule launcher", () => {
 
     expect(kill).toHaveBeenCalledTimes(1);
     expect(kill).toHaveBeenCalledWith(42_425, "SIGKILL");
+  });
+
+  it("does not dereference a disappeared observed PID while terminating matching identities", async () => {
+    const current = fixture();
+    const procRoot = temporary();
+    writeProcStat(procRoot, "42424", "1", "100");
+    writeProcStat(procRoot, "42425", "42424", "200");
+    writeProcStat(procRoot, "42426", "42424", "300");
+    const tracker = debugCapsuleLauncherInternals.createLinuxScopeTracker();
+    await debugCapsuleLauncherInternals.inspectLinuxScope(
+      current.envelope,
+      42_424,
+      false,
+      procRoot,
+      tracker,
+    );
+    rmSync(join(procRoot, "42425"), { recursive: true });
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    expect(() => {
+      debugCapsuleLauncherInternals.terminateObservedLinuxDescendants(tracker, procRoot);
+    }).not.toThrow();
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith(42_426, "SIGKILL");
   });
 
   it("rejects root PID reuse and malformed process identities before exit", async () => {

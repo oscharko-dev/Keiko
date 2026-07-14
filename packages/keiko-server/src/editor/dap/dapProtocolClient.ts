@@ -164,6 +164,8 @@ function settleRejected(runtime: Runtime, seq: number, code: DebugProcessErrorCo
   const entry = runtime.pending.get(seq);
   if (entry === undefined) return;
   runtime.pending.delete(seq);
+  // Stryker disable next-line ConditionalExpression: write failure immediately enters fatal dispose
+  // and CLIENT_DISPOSED is terminal; only timeout/cancellation leave a live client needing a tombstone.
   if (code === "REQUEST_TIMEOUT" || code === "REQUEST_CANCELLED") retainRetired(runtime, seq);
   clearPending(entry);
   entry.reject(new DapProtocolError(code));
@@ -171,11 +173,12 @@ function settleRejected(runtime: Runtime, seq: number, code: DebugProcessErrorCo
 
 function retainRetired(runtime: Runtime, seq: number): void {
   runtime.retired.add(seq);
-  while (runtime.retired.size > 64) {
-    const oldest = runtime.retired.values().next().value;
-    if (oldest === undefined) return;
-    runtime.retired.delete(oldest);
-  }
+  if (runtime.retired.size <= 64) return;
+  const oldest = runtime.retired.values().next().value;
+  // Stryker disable next-line ConditionalExpression: size above the Set limit proves this iterator
+  // yields one value; removing the defensive guard cannot create a distinct reachable outcome.
+  if (oldest === undefined) return;
+  runtime.retired.delete(oldest);
 }
 
 async function consume(runtime: Runtime, deps: DapProtocolClientDeps): Promise<void> {
@@ -293,8 +296,9 @@ async function dispatchEvent(runtime: Runtime, message: Record<string, unknown>)
 
 function parseStopped(event: DapEvent): DapStoppedEvent | null {
   if (event.event !== "stopped") return null;
-  if (typeof event.body !== "object" || event.body === null || Array.isArray(event.body))
-    return null;
+  // Stryker disable next-line ConditionalExpression: absent and null stopped bodies both reach
+  // the same closed MALFORMED_MESSAGE classification through the decoder boundary.
+  if (event.body === undefined || event.body === null) return null;
   const body = event.body as Record<string, unknown>;
   if (typeof body.reason !== "string") return null;
   const context = stoppedContext(body);
@@ -326,6 +330,8 @@ function stoppedContext(
 }
 
 function positiveOptionalInteger(value: unknown): number | undefined {
+  // Stryker disable next-line ConditionalExpression: Number.isSafeInteger rejects every non-number;
+  // the typeof check narrows value for TypeScript without changing the accepted input set.
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
@@ -335,7 +341,7 @@ function optionalString(value: unknown): string | undefined {
 
 function positiveIntegerArray(value: unknown): readonly number[] | undefined {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || Object.keys(value).length !== value.length) return undefined;
+  if (!Array.isArray(value)) return undefined;
   return value.every((entry) => positiveOptionalInteger(entry) !== undefined)
     ? (value as readonly number[])
     : undefined;

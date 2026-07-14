@@ -206,6 +206,51 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     expect(registry.session("session_a")).not.toHaveProperty("browserSessionBinding");
   });
 
+  it("stores the current set-variable capability only for the active startup attempt", async () => {
+    const { registry } = setup();
+    await registry.reserve(identity());
+    const attempt = await registry.beginStartupAttempt("session_a");
+    await registry.attachCapsule("session_a", attempt.attemptId, capsule(), {
+      backend: "oci",
+      runtimeIdentityDigest: "b".repeat(64),
+    });
+
+    expect(registry.session("session_a")?.supportsSetVariable).toBe(false);
+    registry.setCapabilities("session_a", attempt.attemptId, { supportsSetVariable: true });
+    expect(registry.session("session_a")?.supportsSetVariable).toBe(true);
+    registry.setCapabilities("session_a", attempt.attemptId, { supportsSetVariable: false });
+    expect(registry.session("session_a")?.supportsSetVariable).toBe(false);
+    expect((): void => {
+      registry.setCapabilities("session_a", attempt.attemptId + 1, {
+        supportsSetVariable: true,
+      });
+    }).toThrow(expect.objectContaining({ code: "SESSION_TERMINATING" }));
+
+    await registry.stop("session_a");
+  });
+
+  it("looks up only the exact browser binding and workspace partition", async () => {
+    const { registry } = setup();
+    await registry.reserve(identity("session_a", "partition_a"));
+    await registry.reserve({
+      ...identity("session_b", "partition_b"),
+      browserSessionBinding: "browser_b",
+      planId: "plan_b",
+    });
+
+    expect(registry.boundSessionId("partition_a", "browser_a")).toBe("session_a");
+    expect(registry.boundSessionId("partition_b", "browser_b")).toBe("session_b");
+    expect(registry.boundSessionId("partition_a", "browser_b")).toBeUndefined();
+    expect(registry.boundSessionId("partition_b", "browser_a")).toBeUndefined();
+    expect(registry.boundSessionId("missing", "browser_a")).toBeUndefined();
+    expect(registry.workspaceSessionId("partition_a")).toBe("session_a");
+    expect(registry.workspaceSessionId("partition_b")).toBe("session_b");
+    expect(registry.workspaceSessionId("missing")).toBeUndefined();
+
+    await registry.stop("session_a");
+    await registry.stop("session_b");
+  });
+
   it("emits stop then teardown durably before releasing capacity", async () => {
     const { records, registry } = setup();
     const handle = await activate(registry);
@@ -560,6 +605,30 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
       startupAttemptCount: 1,
     });
     expect(registry.protocol("session_a")).toBe(currentProtocol);
+    await registry.stop("session_a");
+  });
+
+  it("projects exact paused thread and all-thread flags only while a pause is current", async () => {
+    const { registry } = setup();
+    await activate(registry);
+
+    expect(registry.pauseContext("missing")).toBeUndefined();
+    expect(registry.pauseContext("session_a")).toBeUndefined();
+    const firstGeneration = registry.pause("session_a", 101, true);
+    expect(registry.pauseContext("session_a")).toStrictEqual({
+      pauseGeneration: firstGeneration,
+      threadId: 101,
+      allThreadsStopped: true,
+    });
+    registry.resume("session_a");
+    expect(registry.pauseContext("session_a")).toBeUndefined();
+    const secondGeneration = registry.pause("session_a", undefined, false);
+    expect(registry.pauseContext("session_a")).toStrictEqual({
+      pauseGeneration: secondGeneration,
+      threadId: undefined,
+      allThreadsStopped: false,
+    });
+
     await registry.stop("session_a");
   });
 
@@ -925,6 +994,154 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     expect(records.at(-1)?.evidence.eventKind).toBe("teardown");
   });
 
+  it("reconciles a still-owned pending termination exactly once at the retry deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let failTermination = true;
+      const handle = capsule(() =>
+        failTermination
+          ? Promise.reject(new Error("private"))
+          : Promise.resolve({ terminated: true, descendantsRemaining: 0 }),
+      );
+      const { registry } = setup();
+      await activate(registry, handle);
+
+      const stopping = registry.stop("session_a");
+      await flushMicrotasks();
+      expect(registry.health()).toBe("terminationPending");
+      expect(handle.terminateScope).toHaveBeenCalledTimes(1);
+
+      failTermination = false;
+      await vi.advanceTimersByTimeAsync(249);
+      expect(handle.terminateScope).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await stopping;
+
+      expect(handle.terminateScope).toHaveBeenCalledTimes(2);
+      expect(registry.session("session_a")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("schedules one retry and never reconciles a replacement session", async () => {
+    vi.useFakeTimers();
+    try {
+      let firstFails = true;
+      const firstHandle = capsule(() =>
+        firstFails
+          ? Promise.reject(new Error("private"))
+          : Promise.resolve({ terminated: true, descendantsRemaining: 0 }),
+      );
+      const { registry } = setup();
+      await activate(registry, firstHandle);
+
+      const stopping = registry.stop("session_a");
+      await flushMicrotasks();
+      await registry.reconcile();
+      expect(firstHandle.terminateScope).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(firstHandle.terminateScope).toHaveBeenCalledTimes(3);
+
+      firstFails = false;
+      await registry.reconcile();
+      await stopping;
+      expect(registry.session("session_a")).toBeUndefined();
+
+      const replacement = {
+        ...identity(),
+        activationRevision: 8,
+        planId: "plan_b",
+        provisioningDigest: "c".repeat(64),
+      };
+      const replacementHandle = capsule(undefined, undefined, "plan_b");
+      await registry.reserve(replacement);
+      const replacementAttempt = await registry.beginStartupAttempt("session_a");
+      await registry.attachCapsule("session_a", replacementAttempt.attemptId, replacementHandle, {
+        backend: "oci",
+        runtimeIdentityDigest: "b".repeat(64),
+      });
+      registry.attachProtocol("session_a", replacementAttempt.attemptId, protocol());
+      await registry.markRunning("session_a", replacementAttempt.attemptId);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(replacementHandle.terminateScope).not.toHaveBeenCalled();
+      expect(registry.session("session_a")?.state).toBe("running");
+
+      await registry.stop("session_a");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-destroys a hanging endpoint and completes teardown when close then settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveClose: (() => void) | undefined;
+      const close = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveClose = resolve;
+          }),
+      );
+      const destroy = vi.fn((): void => {
+        resolveClose?.();
+      });
+      const { registry } = setup();
+      await registry.reserve(identity());
+      const attempt = await registry.beginStartupAttempt("session_a");
+      const handle = capsule();
+      await registry.attachCapsule("session_a", attempt.attemptId, handle, {
+        backend: "oci",
+        runtimeIdentityDigest: "b".repeat(64),
+      });
+      await registry.attachEndpoint("session_a", attempt.attemptId, { close, destroy });
+      registry.attachProtocol("session_a", attempt.attemptId, protocol());
+      await registry.markRunning("session_a", attempt.attemptId);
+
+      const stopping = registry.stop("session_a");
+      await vi.advanceTimersByTimeAsync(250);
+      await stopping;
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(destroy).toHaveBeenCalledTimes(1);
+      expect(handle.terminateScope).toHaveBeenCalledTimes(1);
+      expect(registry.session("session_a")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails endpoint closure closed on rejection and preserves the fixed timeout diagnostic", async () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(globalThis, "Error");
+    try {
+      let rejectClose = true;
+      const close = vi.fn(() =>
+        rejectClose ? Promise.reject(new Error("private")) : Promise.resolve(),
+      );
+      const destroy = vi.fn();
+      const { registry } = setup();
+      await registry.reserve(identity());
+      const attempt = await registry.beginStartupAttempt("session_a");
+      await registry.attachEndpoint("session_a", attempt.attemptId, { close, destroy });
+
+      const stopping = registry.stop("session_a");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(destroy).toHaveBeenCalledTimes(3);
+      expect(error).toHaveBeenCalledWith("DEBUG_ENDPOINT_CLOSE_TIMEOUT");
+      expect(registry.session("session_a")?.state).toBe("terminationPending");
+
+      rejectClose = false;
+      await registry.completeLaunchFailure("session_a", attempt.attemptId);
+      await stopping;
+      expect(close).toHaveBeenCalledTimes(4);
+    } finally {
+      error.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not emit the output-limit event before the exact aggregate boundary", async () => {
     const emit = vi.fn();
     const registry = createDebugSessionRegistry({
@@ -1050,7 +1267,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     await activate(registry);
     const accepted = await registry.acceptOutput("session_a", bytes);
     expect(accepted.accepted).toHaveLength(expectedLength);
-    expect(accepted.accepted.toString("utf8")).not.toContain("�");
+    expect(accepted.accepted.toString("utf8")).not.toContain(String.fromCharCode(0xfffd));
     expect(accepted.accepted.toString("utf8")).toMatch(/\[truncated\]$/u);
     await registry.stop("session_a");
   });

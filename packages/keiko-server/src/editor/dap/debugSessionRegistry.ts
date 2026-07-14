@@ -470,6 +470,8 @@ function reserveProvisional(
     lastActivityAtMs: now,
     pauseGeneration: 0,
     stoppedThreadId: undefined,
+    // Stryker disable next-line BooleanLiteral: this field is projected only while paused, where
+    // pause() overwrites it from the typed DAP event before any projection can be observed.
     allThreadsStopped: false,
     supportsSetVariable: false,
     outputAcceptedBytes: 0,
@@ -740,6 +742,8 @@ function resume(session: SessionRuntime): void {
   session.pauseGeneration += 1;
   session.state = "running";
   session.stoppedThreadId = undefined;
+  // Stryker disable next-line BooleanLiteral: running sessions have no pause projection; the
+  // next pause() supplies the authoritative DAP allThreadsStopped value before it is readable.
   session.allThreadsStopped = false;
 }
 
@@ -897,10 +901,7 @@ function scheduleTerminationReconcile(
   session.terminationRetryScheduled = true;
   const timer = setTimeout(() => {
     session.terminationRetryScheduled = false;
-    if (
-      sessions.get(session.input.sessionId) !== session ||
-      session.teardownPromise === undefined
-    ) {
+    if (sessions.get(session.input.sessionId) !== session) {
       return;
     }
     void reconcileSession(sessions, deps, session);

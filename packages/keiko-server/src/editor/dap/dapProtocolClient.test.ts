@@ -417,6 +417,136 @@ describe("dapProtocolClient", () => {
     expect(client.pendingCount()).toBe(0);
   });
 
+  it.each([
+    { request_seq: "1", success: true, command: "threads" },
+    { request_seq: 1, success: "true", command: "threads" },
+    { request_seq: 1, success: true, command: 1 },
+  ])("fails closed before correlating a malformed response field", async (response) => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const client = createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+    const pending = client.request("threads", {}, { lane: "inspection", deadlineMs: 100 });
+    const rejection = expect(pending).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "response", ...response })));
+    await rejection;
+    expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+  });
+
+  it("rejects duplicate inbound message sequences before dispatch", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "event", event: "continued" })));
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "event", event: "continued" })));
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+  });
+
+  it("accepts a late response for a cancelled request but not an ordinary rejected request", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const sent: Record<string, unknown>[] = [];
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: (body) => void sent.push(JSON.parse(body) as Record<string, unknown>),
+      onFatalError: fatal,
+    });
+    const controller = new AbortController();
+    const cancelled = client.request(
+      "threads",
+      {},
+      { lane: "inspection", deadlineMs: 100, signal: controller.signal },
+    );
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ code: "REQUEST_CANCELLED" });
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 1,
+          type: "response",
+          request_seq: sent[0]?.seq,
+          success: true,
+          command: "threads",
+        }),
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fatal).not.toHaveBeenCalled();
+  });
+
+  it("rejects a late response after an adapter rejection", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const sent: Record<string, unknown>[] = [];
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: (body) => void sent.push(JSON.parse(body) as Record<string, unknown>),
+      onFatalError: fatal,
+    });
+    const rejected = client.request("threads", {}, { lane: "inspection", deadlineMs: 100 });
+    const requestSeq = sent[0]?.seq;
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 1,
+          type: "response",
+          request_seq: requestSeq,
+          success: false,
+          command: "threads",
+        }),
+      ),
+    );
+    await expect(rejected).rejects.toMatchObject({ code: "ADAPTER_REJECTED" });
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 2,
+          type: "response",
+          request_seq: requestSeq,
+          success: true,
+          command: "threads",
+        }),
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+  });
+
+  it("rejects a malformed late response before retired correlation", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const sent: Record<string, unknown>[] = [];
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: (body) => void sent.push(JSON.parse(body) as Record<string, unknown>),
+      onFatalError: fatal,
+    });
+    const controller = new AbortController();
+    const cancelled = client.request(
+      "threads",
+      {},
+      { lane: "inspection", deadlineMs: 100, signal: controller.signal },
+    );
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ code: "REQUEST_CANCELLED" });
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 1,
+          type: "response",
+          request_seq: sent[0]?.seq,
+          success: true,
+          command: 1,
+        }),
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+  });
+
   it("rejects failed and mismatched correlated responses", async () => {
     const source = new PassThrough({ objectMode: true });
     const sent: string[] = [];
@@ -537,6 +667,108 @@ describe("dapProtocolClient", () => {
       expect(stopped).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { reason: "pause", threadId: 0, hitBreakpointIds: [] },
+    { reason: "pause", threadId: -1, hitBreakpointIds: [] },
+    { reason: "pause", threadId: 1.5, hitBreakpointIds: [] },
+    { reason: "pause", threadId: 1, hitBreakpointIds: [0] },
+    { reason: "pause", threadId: 1, hitBreakpointIds: [1, -1] },
+    { reason: "pause", threadId: 1, hitBreakpointIds: [1, "2"] },
+    { reason: "pause", threadId: 1, hitBreakpointIds: { 0: 1, length: 1 } },
+    { reason: "pause", allThreadsStopped: false, hitBreakpointIds: [] },
+    { reason: "pause", allThreadsStopped: true, description: { unsafe: true } },
+  ])("fails closed on unsafe stopped-event fields", async (body) => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const stopped = vi.fn();
+    const client = createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+    client.onStopped(stopped);
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "event", event: "stopped", body })));
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+    expect(stopped).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    { threadId: 1, allThreadsStopped: true },
+    { reason: "pause", threadId: 0, allThreadsStopped: true },
+  ])("preserves malformed-message classification for rejected stopped bodies", async (body) => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "event", event: "stopped", body })));
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+  });
+
+  it("accepts only the most recent 64 cancelled or timed-out response correlations", async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn();
+    const sent: Record<string, unknown>[] = [];
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: (body) => void sent.push(JSON.parse(body) as Record<string, unknown>),
+      onFatalError: fatal,
+    });
+
+    for (let index = 0; index < 65; index += 1) {
+      const timed = client.request("threads", {}, { lane: "inspection", deadlineMs: 1 });
+      const assertion = expect(timed).rejects.toMatchObject({ code: "REQUEST_TIMEOUT" });
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+    }
+
+    vi.useRealTimers();
+    const oldestRetained = sent[1]?.seq;
+    const retained = sent.at(-1)?.seq;
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 1,
+          type: "response",
+          request_seq: oldestRetained,
+          success: true,
+          command: "threads",
+        }),
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fatal).not.toHaveBeenCalled();
+
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 2,
+          type: "response",
+          request_seq: retained,
+          success: true,
+          command: "threads",
+        }),
+      ),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fatal).not.toHaveBeenCalled();
+
+    source.write(
+      Buffer.from(
+        JSON.stringify({
+          seq: 3,
+          type: "response",
+          request_seq: sent[0]?.seq,
+          success: true,
+          command: "threads",
+        }),
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledWith(expect.objectContaining({ code: "MALFORMED_MESSAGE" }));
+    });
+  });
 
   it("preserves the exact abort listener contract and ignores a late abort after settlement", async () => {
     const source = new PassThrough({ objectMode: true });
