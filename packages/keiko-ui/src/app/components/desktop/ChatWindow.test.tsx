@@ -865,7 +865,10 @@ describe("ChatWindow repository file focus picker", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
-    await user.type(input, "Explain this @coding");
+    const draft = "Explain this @coding";
+    fireEvent.change(input, {
+      target: { value: draft, selectionStart: draft.length },
+    });
 
     const result = await screen.findByRole("option", {
       name: "Reference src/context/coding-context.ts",

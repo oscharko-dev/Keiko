@@ -30,6 +30,8 @@ const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
+const skipBffWatchForTest =
+  process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1";
 let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
 let server;
 let shuttingDown = false;
@@ -248,7 +250,7 @@ function spawnChild(label, command, args, options) {
   return child;
 }
 
-async function fetchOk(url, validate = () => true) {
+async function fetchOk(url, validate = async () => true) {
   const response = await globalThis.fetch(url, { cache: "no-store" });
   if (!response.ok) return `HTTP ${String(response.status)}`;
   return (await validate(response)) ? "ok" : "unexpected response";
@@ -306,13 +308,17 @@ async function waitForPublicReadiness() {
 }
 
 function startBff() {
-  spawnChild("bff", process.execPath, ["--watch", "--watch-preserve-output", bffScript], {
+  spawnChild("bff", process.execPath, bffProcessArgs(bffScript, !skipBffWatchForTest), {
     cwd: repoRoot,
     env: {
       KEIKO_DEV_BFF_PORT: String(bffPort),
       KEIKO_STATE_DIR: stateDir,
     },
   });
+}
+
+export function bffProcessArgs(scriptPath, watchEnabled) {
+  return watchEnabled ? ["--watch", "--watch-preserve-output", scriptPath] : [scriptPath];
 }
 
 function packageBuildWatchArgs() {

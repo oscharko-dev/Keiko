@@ -11,6 +11,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { ApiError } from "../../../../../lib/api";
 import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
+import {
   cancelContainerRun,
   containerEventsUrl,
   createContainerRun,
@@ -48,20 +52,20 @@ const CONTAINER_EVENT_SOURCE_TYPES = [
 
 // Localized, human-readable label per ContainerEngineState. Exhaustive over the (aliased)
 // RuntimeCapabilityState union so adding a member is a compile error, not a silent fallthrough.
-function engineStateLabel(state: ContainerEngineState): string {
+function engineStateLabel(state: ContainerEngineState, t: OptionalWidgetTranslate): string {
   switch (state) {
     case "available":
-      return "Available";
+      return t("containerStatusWidget.engine.available");
     case "missing":
-      return "Not installed";
+      return t("containerStatusWidget.engine.missing");
     case "unsupported":
-      return "Unsupported version";
+      return t("containerStatusWidget.engine.unsupported");
     case "permission-denied":
-      return "Permission denied";
+      return t("containerStatusWidget.engine.permissionDenied");
     case "not-running":
-      return "Engine not running";
+      return t("containerStatusWidget.engine.notRunning");
     case "policy-blocked":
-      return "Blocked by policy";
+      return t("containerStatusWidget.engine.policyBlocked");
   }
 }
 
@@ -81,10 +85,10 @@ function engineStateTone(state: ContainerEngineState): "ok" | "warn" | "danger" 
   }
 }
 
-function errorFromUnknown(value: unknown): ErrorState {
+function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
-  return { code: "INTERNAL", message: "Unexpected error." };
+  return { code: "INTERNAL", message: t("containerStatusWidget.error.unexpected") };
 }
 
 function createRequestId(): string {
@@ -96,16 +100,16 @@ function taskLabel(task: ContainerTask): string {
   return `${task.kind} · ${task.label}`;
 }
 
-function eventLabel(kind: ContainerRunnerEvent["kind"]): string {
+function eventLabel(kind: ContainerRunnerEvent["kind"], t: OptionalWidgetTranslate): string {
   switch (kind) {
     case "run-started":
-      return "started";
+      return t("containerStatusWidget.event.started");
     case "run-completed":
-      return "completed";
+      return t("containerStatusWidget.event.completed");
     case "run-failed":
-      return "failed";
+      return t("containerStatusWidget.event.failed");
     case "run-cancelled":
-      return "cancelled";
+      return t("containerStatusWidget.event.cancelled");
   }
 }
 
@@ -127,17 +131,25 @@ function isOwnEvent(event: ContainerRunnerEvent, requestId: string | null): bool
   );
 }
 
-function resultSummary(result: ContainerRunResult): string {
+function resultSummary(result: ContainerRunResult, t: OptionalWidgetTranslate): string {
   const parts = [
     result.engine,
-    `exit ${result.exitCode === null ? "n/a" : String(result.exitCode)}`,
-    `${String(result.durationMs)} ms`,
+    t("containerStatusWidget.result.exit", {
+      code:
+        result.exitCode === null
+          ? t("containerStatusWidget.result.notAvailable")
+          : String(result.exitCode),
+    }),
+    t("containerStatusWidget.result.duration", { duration: result.durationMs }),
   ];
-  if (result.truncated) parts.push("output truncated");
-  if (result.timedOut) parts.push("timed out");
-  parts.push(result.failureReason);
-  parts.push(`run ${result.runId}`, `task ${result.taskId}`);
-  return `Run finished: ${parts.join(", ")}`;
+  if (result.truncated) parts.push(t("containerStatusWidget.result.outputTruncated"));
+  if (result.timedOut) parts.push(t("containerStatusWidget.result.timedOut"));
+  parts.push(
+    result.failureReason,
+    t("containerStatusWidget.result.run", { id: result.runId }),
+    t("containerStatusWidget.result.task", { id: result.taskId }),
+  );
+  return t("containerStatusWidget.result.finished", { details: parts.join(", ") });
 }
 
 // The structured unavailable / status panel. ALWAYS rendered for every engine in the capability
@@ -145,11 +157,13 @@ function resultSummary(result: ContainerRunResult): string {
 // the server's single static remediation hint line. No raw error text is ever shown here.
 function EngineStatusList({
   engines,
+  t,
 }: {
   readonly engines: readonly ContainerEngineStatus[];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
-    <ul className="tm-events" aria-label="Container engines">
+    <ul className="tm-events" aria-label={t("containerStatusWidget.engines.ariaLabel")}>
       {engines.map((engine) => {
         const tone = engineStateTone(engine.state);
         const toneVar =
@@ -171,7 +185,7 @@ function EngineStatusList({
               {engine.engine}
             </span>
             <span className="tm-event-detail">
-              {engineStateLabel(engine.state)}
+              {engineStateLabel(engine.state, t)}
               {engine.version !== undefined && engine.version.length > 0
                 ? ` · ${engine.version}`
                 : ""}
@@ -188,7 +202,77 @@ function EngineStatusList({
   );
 }
 
+function ContainerCapabilityStatus({
+  capability,
+  t,
+}: {
+  readonly capability: ContainerCapabilityResponse | null;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  if (capability === null) {
+    return (
+      <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
+        {t("containerStatusWidget.capability.checking")}
+      </p>
+    );
+  }
+  if (capability.engines.length === 0) {
+    return (
+      <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
+        {t("containerStatusWidget.capability.noneDetected")}
+      </p>
+    );
+  }
+  return <EngineStatusList engines={capability.engines} t={t} />;
+}
+
+function ContainerResult({
+  result,
+  t,
+}: {
+  readonly result: ContainerRunResult | null;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  if (result === null) return null;
+  return (
+    <div className="tm-result">
+      <div className="tm-badges">
+        <span className="tm-badge">{result.engine}</span>
+        <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
+          {t("containerStatusWidget.result.exit", {
+            code:
+              result.exitCode === null
+                ? t("containerStatusWidget.result.notAvailable")
+                : String(result.exitCode),
+          })}
+        </span>
+        <span className="tm-badge">{result.durationMs} ms</span>
+        <span className="tm-badge">{result.failureReason}</span>
+        <span className="tm-badge">
+          {t("containerStatusWidget.result.run", { id: result.runId })}
+        </span>
+        <span className="tm-badge">
+          {t("containerStatusWidget.result.task", { id: result.taskId })}
+        </span>
+        {result.truncated ? (
+          <span className="tm-badge tm-badge-warn">
+            {t("containerStatusWidget.result.truncated")}
+          </span>
+        ) : null}
+        {result.timedOut ? (
+          <span className="tm-badge tm-badge-warn">
+            {t("containerStatusWidget.result.timedOut")}
+          </span>
+        ) : null}
+      </div>
+      {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
+      {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
+    </div>
+  );
+}
+
 export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const projectInput = props.projectPath ?? "";
   const [capability, setCapability] = useState<ContainerCapabilityResponse | null>(null);
   const [tasks, setTasks] = useState<readonly ContainerTask[]>([]);
@@ -221,13 +305,13 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       .catch((err: unknown) => {
         if (!cancelled) {
           setCapability(null);
-          setError(errorFromUnknown(err));
+          setError(errorFromUnknown(err, t));
         }
       });
     return (): void => {
       cancelled = true;
     };
-  }, [projectInput]);
+  }, [projectInput, t]);
 
   // Load the allowlisted catalog only when an engine is available AND a project is bound. With no
   // engine the catalog route 503s by contract, so we never call it — the unavailable panel stands
@@ -248,13 +332,13 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       .catch((err: unknown) => {
         if (!cancelled) {
           setTasks([]);
-          setError(errorFromUnknown(err));
+          setError(errorFromUnknown(err, t));
         }
       });
     return (): void => {
       cancelled = true;
     };
-  }, [anyAvailable, projectInput]);
+  }, [anyAvailable, projectInput, t]);
 
   // Subscribe to the shared container run event channel. Ownership is gated on the echoed requestId
   // so a foreign run-started can never arm this card's Cancel.
@@ -309,7 +393,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
         const next = await createContainerRun({ projectId: projectInput, taskId, requestId });
         setResult(next);
       } catch (err: unknown) {
-        setError(errorFromUnknown(err));
+        setError(errorFromUnknown(err, t));
       } finally {
         runningRef.current = false;
         setRunning(false);
@@ -317,7 +401,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
         setInFlightRunId(null);
       }
     },
-    [hasRunControl, projectInput, running, taskId],
+    [hasRunControl, projectInput, running, taskId, t],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
@@ -325,27 +409,20 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
     try {
       await cancelContainerRun(inFlightRunId);
     } catch (err: unknown) {
-      setError(errorFromUnknown(err));
+      setError(errorFromUnknown(err, t));
     }
-  }, [inFlightRunId]);
+  }, [inFlightRunId, t]);
 
   return (
     <div className={`terminal commands ${styles.lazyWidgetScope}`}>
       {/* Graceful-degradation status panel — ALWAYS rendered (never an error boundary, never
           blocks). polite live region carrying the structured engine state + remediation hint. */}
-      <section role="status" aria-live="polite" aria-label="Container engine status">
-        {capability === null ? (
-          <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
-            Checking for a container engine…
-          </p>
-        ) : capability.engines.length === 0 ? (
-          <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
-            No container engine was detected. Container diagnostics are unavailable; the rest of
-            Keiko is unaffected.
-          </p>
-        ) : (
-          <EngineStatusList engines={capability.engines} />
-        )}
+      <section
+        role="status"
+        aria-live="polite"
+        aria-label={t("containerStatusWidget.status.ariaLabel")}
+      >
+        <ContainerCapabilityStatus capability={capability} t={t} />
       </section>
 
       {/* Run control — present ONLY when an engine is available AND the catalog is non-empty (AC2).
@@ -353,12 +430,12 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       {hasRunControl ? (
         <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
           <div className="tm-field">
-            <span>Diagnostic task</span>
+            <span>{t("containerStatusWidget.field.diagnosticTask")}</span>
             <KeikoSelect
               value={taskId}
-              ariaLabel="Diagnostic task"
+              ariaLabel={t("containerStatusWidget.field.diagnosticTask")}
               disabled={tasks.length === 0}
-              menuTitle="Allowlisted tasks"
+              menuTitle={t("containerStatusWidget.field.allowlistedTasks")}
               mono
               sections={[
                 {
@@ -381,7 +458,9 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
               disabled={tasks.length === 0 || taskId.length === 0}
               aria-disabled={running || tasks.length === 0 || taskId.length === 0}
             >
-              {running ? "Running…" : "Run diagnostic"}
+              {running
+                ? t("containerStatusWidget.action.running")
+                : t("containerStatusWidget.action.run")}
             </button>
             {running ? (
               <button
@@ -391,7 +470,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
                 aria-disabled={inFlightRunId === null}
                 onClick={() => void onAbort()}
               >
-                Cancel
+                {t("containerStatusWidget.action.cancel")}
               </button>
             ) : null}
           </div>
@@ -406,7 +485,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
           <button
             type="button"
             className="tm-error-dismiss"
-            aria-label="Dismiss error"
+            aria-label={t("containerStatusWidget.error.dismiss")}
             onClick={() => setError(null)}
           >
             ✕
@@ -415,29 +494,10 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       ) : null}
 
       <p className="sr-only" role="status" aria-live="polite">
-        {result !== null ? resultSummary(result) : ""}
+        {result !== null ? resultSummary(result, t) : ""}
       </p>
 
-      {result !== null ? (
-        <div className="tm-result">
-          <div className="tm-badges">
-            <span className="tm-badge">{result.engine}</span>
-            <span
-              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
-            >
-              exit {result.exitCode === null ? "n/a" : String(result.exitCode)}
-            </span>
-            <span className="tm-badge">{result.durationMs} ms</span>
-            <span className="tm-badge">{result.failureReason}</span>
-            <span className="tm-badge">run {result.runId}</span>
-            <span className="tm-badge">task {result.taskId}</span>
-            {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
-            {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
-          </div>
-          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
-          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
-        </div>
-      ) : null}
+      <ContainerResult result={result} t={t} />
 
       {hasRunControl ? (
         <div
@@ -445,12 +505,12 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
           aria-live="polite"
           aria-relevant="additions text"
           aria-atomic="false"
-          aria-label="Recent container run events"
+          aria-label={t("containerStatusWidget.log.ariaLabel")}
         >
           <ul className="tm-events">
             {events.map((event, idx) => (
               <li key={`${event.runId}-${String(idx)}-${event.kind}`} className="tm-event">
-                <span className="tm-event-kind">{eventLabel(event.kind)}</span>
+                <span className="tm-event-kind">{eventLabel(event.kind, t)}</span>
                 <span className="tm-event-detail">{eventDetail(event)}</span>
               </li>
             ))}

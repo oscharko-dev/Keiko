@@ -515,10 +515,8 @@
             x.setAttribute("aria-selected", "false");
           });
           b.setAttribute("aria-selected", "true");
-          document.documentElement.setAttribute(
-            "data-density",
-            b.dataset.den === "compact" ? "compact" : "comfortable",
-          );
+          document.documentElement.dataset.density =
+            b.dataset.den === "compact" ? "compact" : "comfortable";
         });
       });
       document.getElementById("zebra").addEventListener("change", function () {

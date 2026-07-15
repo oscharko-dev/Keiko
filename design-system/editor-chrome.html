@@ -793,7 +793,7 @@
           if (v === "hc") {
             demo.dataset.hc = "more";
           } else {
-            demo.removeAttribute("data-hc");
+            delete demo.dataset.hc;
           }
         });
       });

@@ -1179,7 +1179,7 @@
     <script>
       // render score dots from data-s
       document.querySelectorAll(".dots").forEach(function (el) {
-        var n = parseInt(el.getAttribute("data-s"), 10) || 0;
+        var n = parseInt(el.dataset.s, 10) || 0;
         var html = "";
         for (var i = 1; i <= 5; i++) html += '<i class="' + (i <= n ? "on" : "") + '"></i>';
         el.innerHTML = html + '<span class="sval">' + n + "/5</span>";

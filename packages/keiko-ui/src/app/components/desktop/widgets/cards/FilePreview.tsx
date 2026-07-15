@@ -193,6 +193,35 @@ function previewLanguageLabel(
   return error === null ? t("filePreview.lang.loading") : t("filePreview.lang.error");
 }
 
+function refreshStatusLabel(status: PreviewRefreshStatus, t: I18nTranslate): string {
+  switch (status) {
+    case "refreshing":
+      return t("filePreview.refreshStatus.refreshing");
+    case "refreshed":
+      return t("filePreview.refreshStatus.reloaded");
+    case "failed":
+      return t("filePreview.refreshStatus.failed");
+    case "idle":
+      return "";
+  }
+}
+
+function previewTokenLines(
+  preview: FilesPreviewResponse | null,
+  shouldHighlight: boolean,
+): readonly (readonly Token[])[] {
+  if (preview?.kind !== "text") return [];
+  if (shouldHighlight) return highlightLines(preview.content, langOf(preview.name));
+  return preview.content.split("\n").map((line): readonly Token[] => [["id", line]]);
+}
+
+function canOpenPreviewInEditor(
+  preview: FilesPreviewResponse | null,
+  onOpenInEditor: FilePreviewProps["onOpenInEditor"],
+): boolean {
+  return onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
+}
+
 function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
   let offset = 0;
   return tokens.map((tok) => {
@@ -204,6 +233,148 @@ function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
       </span>
     );
   });
+}
+
+interface TextFilePreviewProps {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "text" }>;
+  readonly shouldHighlight: boolean;
+  readonly lines: readonly (readonly Token[])[];
+  readonly visibleLineRows: readonly {
+    readonly lineNumber: number;
+    readonly tokens: readonly Token[];
+  }[];
+  readonly hiddenLineCount: number;
+  readonly onShowMore: () => void;
+  readonly t: I18nTranslate;
+}
+
+function TextFilePreview(props: TextFilePreviewProps): ReactNode {
+  return (
+    <>
+      {props.preview.truncated ? (
+        <div className="fpv-banner">
+          {props.t("filePreview.truncatedBanner", {
+            maxBytes: formatBytes(props.preview.maxBytes),
+          })}
+        </div>
+      ) : null}
+      {!props.shouldHighlight ? (
+        <div className="fpv-banner">{props.t("filePreview.syntaxHighlightDisabled")}</div>
+      ) : null}
+      <div
+        className="fpv-code mono"
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+        tabIndex={0}
+        role="region"
+        aria-label={props.t("filePreview.previewRegionLabel", { name: props.preview.name })}
+        style={
+          {
+            "--fpv-gutter-w": `max(44px, calc(${String(String(props.lines.length).length)}ch + 16px))`,
+          } as CSSProperties
+        }
+      >
+        {props.visibleLineRows.map((row) => (
+          <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
+            <span className="fpv-num">{row.lineNumber}</span>
+            <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
+          </div>
+        ))}
+        {props.hiddenLineCount > 0 ? (
+          <button type="button" className="fpv-retry fpv-show-more" onClick={props.onShowMore}>
+            {props.t("filePreview.showMoreLines", {
+              count: Math.min(PREVIEW_LINE_BATCH, props.hiddenLineCount),
+            })}
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function ImageFilePreview({
+  preview,
+  t,
+}: {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "image" }>;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="fpv-image-pane">
+      <div className="fpv-image-card">
+        {/* eslint-disable-next-line @next/next/no-img-element -- local BFF streams a size-capped image preview */}
+        <img className="fpv-image" src={preview.url} alt={preview.name} />
+      </div>
+      <div className="fpv-meta">
+        <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
+        <MetadataRow
+          label={t("filePreview.metadata.size")}
+          value={formatBytes(preview.sizeBytes)}
+        />
+        <MetadataRow
+          label={t("filePreview.metadata.modified")}
+          value={formatDate(preview.modifiedAt)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BinaryFilePreview({
+  preview,
+  t,
+}: {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "binary" }>;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="fpv-meta-pane">
+      <div className="fpv-meta-card">
+        <FileIcon name={preview.name} />
+        <h3>{preview.name}</h3>
+        <p>{binaryPreviewMessage(preview, t)}</p>
+        <div className="fpv-meta">
+          <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
+          <MetadataRow
+            label={t("filePreview.metadata.extension")}
+            value={preview.extension ?? t("filePreview.metadata.extensionNone")}
+          />
+          <MetadataRow
+            label={t("filePreview.metadata.size")}
+            value={formatBytes(preview.sizeBytes)}
+          />
+          <MetadataRow
+            label={t("filePreview.metadata.modified")}
+            value={formatDate(preview.modifiedAt)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface PreviewKindContentProps {
+  readonly preview: FilesPreviewResponse | null;
+  readonly shouldHighlight: boolean;
+  readonly lines: readonly (readonly Token[])[];
+  readonly visibleLineRows: readonly {
+    readonly lineNumber: number;
+    readonly tokens: readonly Token[];
+  }[];
+  readonly hiddenLineCount: number;
+  readonly onShowMore: () => void;
+  readonly t: I18nTranslate;
+}
+
+function PreviewKindContent(props: PreviewKindContentProps): ReactNode {
+  if (props.preview === null) return null;
+  switch (props.preview.kind) {
+    case "text":
+      return <TextFilePreview {...props} preview={props.preview} />;
+    case "image":
+      return <ImageFilePreview preview={props.preview} t={props.t} />;
+    case "binary":
+      return <BinaryFilePreview preview={props.preview} t={props.t} />;
+  }
 }
 
 export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreviewProps): ReactNode {
@@ -289,23 +460,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   const headerName = previewHeaderName(preview, error, t);
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
-  const canOpenInEditor =
-    onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
-  const refreshStatusText =
-    refreshStatus === "refreshing"
-      ? t("filePreview.refreshStatus.refreshing")
-      : refreshStatus === "refreshed"
-        ? t("filePreview.refreshStatus.reloaded")
-        : refreshStatus === "failed"
-          ? t("filePreview.refreshStatus.failed")
-          : "";
+  const canOpenInEditor = canOpenPreviewInEditor(preview, onOpenInEditor);
+  const refreshStatusText = refreshStatusLabel(refreshStatus, t);
   const lines: readonly (readonly Token[])[] = useMemo(
-    () =>
-      preview?.kind === "text"
-        ? shouldHighlight
-          ? highlightLines(preview.content, langOf(preview.name))
-          : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
-        : [],
+    () => previewTokenLines(preview, shouldHighlight),
     [preview, shouldHighlight],
   );
 
@@ -324,6 +482,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     [visibleLines],
   );
   const hiddenLineCount = Math.max(0, lines.length - visibleLineCount);
+  const showMoreLines = (): void => {
+    setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH));
+  };
 
   return (
     // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this
@@ -403,7 +564,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <button
             className="fpv-back"
             type="button"
-            onClick={() => onOpenInEditor(root, path)}
+            onClick={() => onOpenInEditor?.(root, path)}
             title={t("filePreview.openInEditor")}
             aria-label={t("filePreview.openInEditor")}
           >
@@ -438,100 +599,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         </div>
       ) : null}
 
-      {preview?.kind === "text" ? (
-        <>
-          {preview.truncated ? (
-            <div className="fpv-banner">
-              {t("filePreview.truncatedBanner", { maxBytes: formatBytes(preview.maxBytes) })}
-            </div>
-          ) : null}
-          {!shouldHighlight ? (
-            <div className="fpv-banner">{t("filePreview.syntaxHighlightDisabled")}</div>
-          ) : null}
-          <div
-            className="fpv-code mono"
-            // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable
-            // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-            tabIndex={0}
-            role="region"
-            aria-label={t("filePreview.previewRegionLabel", { name: preview.name })}
-            // The 44px default gutter fits 4 digits; previews under MAX_HIGHLIGHT_BYTES can
-            // exceed 9,999 lines, so the gutter grows with the widest line number instead of
-            // overflowing its fixed box (audit F044 C351). 16px = the gutter's padding-right.
-            style={
-              {
-                "--fpv-gutter-w": `max(44px, calc(${String(String(lines.length).length)}ch + 16px))`,
-              } as CSSProperties
-            }
-          >
-            {visibleLineRows.map((row) => (
-              <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
-                <span className="fpv-num">{row.lineNumber}</span>
-                <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
-              </div>
-            ))}
-            {hiddenLineCount > 0 ? (
-              <button
-                type="button"
-                className="fpv-retry fpv-show-more"
-                onClick={() =>
-                  setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH))
-                }
-              >
-                {t("filePreview.showMoreLines", {
-                  count: Math.min(PREVIEW_LINE_BATCH, hiddenLineCount),
-                })}
-              </button>
-            ) : null}
-          </div>
-        </>
-      ) : null}
-
-      {preview?.kind === "image" ? (
-        <div className="fpv-image-pane">
-          <div className="fpv-image-card">
-            {/* eslint-disable-next-line @next/next/no-img-element -- local BFF streams a size-capped image preview */}
-            <img className="fpv-image" src={preview.url} alt={preview.name} />
-          </div>
-          <div className="fpv-meta">
-            <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
-            <MetadataRow
-              label={t("filePreview.metadata.size")}
-              value={formatBytes(preview.sizeBytes)}
-            />
-            <MetadataRow
-              label={t("filePreview.metadata.modified")}
-              value={formatDate(preview.modifiedAt)}
-            />
-          </div>
-        </div>
-      ) : null}
-
-      {preview?.kind === "binary" ? (
-        <div className="fpv-meta-pane">
-          <div className="fpv-meta-card">
-            <FileIcon name={preview.name} />
-            <h3>{preview.name}</h3>
-            <p>{binaryPreviewMessage(preview, t)}</p>
-            <div className="fpv-meta">
-              <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
-              <MetadataRow
-                label={t("filePreview.metadata.extension")}
-                value={preview.extension ?? t("filePreview.metadata.extensionNone")}
-              />
-              <MetadataRow
-                label={t("filePreview.metadata.size")}
-                value={formatBytes(preview.sizeBytes)}
-              />
-              <MetadataRow
-                label={t("filePreview.metadata.modified")}
-                value={formatDate(preview.modifiedAt)}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <PreviewKindContent
+        preview={preview}
+        shouldHighlight={shouldHighlight}
+        lines={lines}
+        visibleLineRows={visibleLineRows}
+        hiddenLineCount={hiddenLineCount}
+        onShowMore={showMoreLines}
+        t={t}
+      />
     </div>
   );
 }

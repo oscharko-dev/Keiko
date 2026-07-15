@@ -13,6 +13,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react";
 import { enhancePrompt, fetchModels } from "@/lib/api";
 import { ApiError } from "@/lib/api";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type {
   ModelCapability,
   PromptEnhancementWireRequest,
@@ -23,21 +27,18 @@ import KeikoSelect from "../../KeikoSelect";
 import { humanizeToken } from "../../GroundedAnswer";
 import { buildConnectedRunSources } from "../quality-intelligence/connectedSources";
 
-const PROFILE_OPTIONS: readonly { readonly value: string; readonly label: string }[] = [
-  { value: "auto", label: "Auto (recommended)" },
-  { value: "fast", label: "Fast" },
-  { value: "precise", label: "Precise" },
-  { value: "research", label: "Research" },
-  { value: "creative", label: "Creative" },
-  { value: "technical", label: "Technical" },
-  { value: "safety-critical", label: "Safety-critical" },
-  { value: "agentic", label: "Agentic" },
-];
+const PROFILE_VALUES = [
+  "auto",
+  "fast",
+  "precise",
+  "research",
+  "creative",
+  "technical",
+  "safety-critical",
+  "agentic",
+] as const;
 
-const STRATEGY_OPTIONS: readonly { readonly value: string; readonly label: string }[] = [
-  { value: "clarify", label: "Ask clarifying questions" },
-  { value: "assume", label: "State explicit assumptions" },
-];
+const STRATEGY_VALUES = ["clarify", "assume"] as const;
 
 const NO_MODEL = "__none__";
 const COPY_SUCCESS_RESET_MS = 3_000;
@@ -66,21 +67,20 @@ interface ConnectedContextInput {
   readonly connectedRoots?: readonly string[] | undefined;
 }
 
-function describeError(error: unknown): string {
+function describeError(error: unknown, t: OptionalWidgetTranslate): string {
   if (error instanceof ApiError) {
     return `${error.message} (${error.code})`;
   }
   if (error instanceof Error && error.name === "AbortError") {
-    return "Request cancelled.";
+    return t("promptEnhancer.error.cancelled");
   }
-  return "Prompt enhancement failed. Please try again.";
+  return t("promptEnhancer.error.failed");
 }
 
-function summarizeConnectedContext({
-  connectedRoot,
-  connectedFilePath,
-  connectedRoots,
-}: ConnectedContextInput): GroundingContextSummary {
+function summarizeConnectedContext(
+  { connectedRoot, connectedFilePath, connectedRoots }: ConnectedContextInput,
+  t: OptionalWidgetTranslate,
+): GroundingContextSummary {
   const sources = buildConnectedRunSources({
     connectedRoot: connectedRoot ?? null,
     connectedFilePath: connectedFilePath ?? null,
@@ -90,15 +90,15 @@ function summarizeConnectedContext({
     return {
       hasConnectedContext: false,
       attachmentCount: 0,
-      label: "No connected Files source",
+      label: t("promptEnhancer.context.noFilesSource"),
       signature: "none",
     };
   }
   const labels = sources.map((source) => source.label);
   const label =
     labels.length === 1
-      ? (labels[0] ?? "Connected source")
-      : `${labels.length.toString()} connected sources`;
+      ? (labels[0] ?? t("promptEnhancer.context.connectedSource"))
+      : t("promptEnhancer.context.connectedSources", { count: labels.length });
   return {
     hasConnectedContext: true,
     attachmentCount: sources.length,
@@ -180,18 +180,23 @@ function Section({
 
 function AnalysisSummary({
   result,
+  t,
 }: {
   readonly result: PromptEnhancementWireResponse;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const items = [
-    ["Task", humanizeToken(result.analysis.taskClass)],
-    ["Domain", humanizeToken(result.analysis.domain)],
-    ["Criticality", humanizeToken(result.analysis.criticality)],
-    ["Profile", humanizeToken(result.analysis.recommendedProfile)],
-    ["Input", `${result.analysis.normalizedInputLength.toLocaleString("en-US")} chars`],
+    [t("promptEnhancer.analysis.task"), humanizeToken(result.analysis.taskClass)],
+    [t("promptEnhancer.analysis.domain"), humanizeToken(result.analysis.domain)],
+    [t("promptEnhancer.analysis.criticality"), humanizeToken(result.analysis.criticality)],
+    [t("promptEnhancer.analysis.profile"), humanizeToken(result.analysis.recommendedProfile)],
+    [
+      t("promptEnhancer.analysis.input"),
+      t("promptEnhancer.analysis.chars", { count: result.analysis.normalizedInputLength }),
+    ],
   ] as const;
   return (
-    <dl className="pe-analysis" aria-label="Prompt enhancement analysis">
+    <dl className="pe-analysis" aria-label={t("promptEnhancer.analysis.ariaLabel")}>
       {items.map(([label, value]) => (
         <div className="pe-analysis-item" key={label}>
           <dt>{label}</dt>
@@ -204,8 +209,10 @@ function AnalysisSummary({
 
 function ModelRoutingBanner({
   routing,
+  t,
 }: {
   readonly routing: PromptEnhancementWireResponse["modelRouting"];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const tone =
     routing.executionStatus === "model-applied"
@@ -213,13 +220,17 @@ function ModelRoutingBanner({
       : routing.availability === "unavailable" || routing.executionStatus === "model-fallback"
         ? "warn"
         : "muted";
-  let label = "Deterministic enhancement";
+  let label = t("promptEnhancer.routing.deterministic");
   if (routing.executionStatus === "model-applied") {
-    label = `Model enhanced: ${routing.resolvedModelId ?? routing.requestedModelId ?? ""}`;
+    label = t("promptEnhancer.routing.modelEnhanced", {
+      model: routing.resolvedModelId ?? routing.requestedModelId ?? "",
+    });
   } else if (routing.executionStatus === "model-fallback") {
-    label = `Model fallback: deterministic output (${routing.fallbackReason ?? routing.reason})`;
+    label = t("promptEnhancer.routing.modelFallback", {
+      reason: routing.fallbackReason ?? routing.reason,
+    });
   } else if (routing.availability === "unavailable") {
-    label = "Selected model unavailable - deterministic output";
+    label = t("promptEnhancer.routing.modelUnavailable");
   }
   return (
     <div
@@ -238,34 +249,40 @@ function ModelRoutingBanner({
 
 function SafetyPanel({
   safety,
+  t,
 }: {
   readonly safety: PromptEnhancementWireResponse["safety"];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const reviewing = safety.requiresHumanReview;
   return (
-    <Section title="Safety">
+    <Section title={t("promptEnhancer.safety.title")}>
       <dl className="pe-safety-summary" data-testid="pe-safety-decision">
         <div>
-          <dt>Decision:</dt>
+          <dt>{t("promptEnhancer.safety.decision")}</dt>
           <dd>{humanizeToken(safety.decision)}</dd>
         </div>
         <div>
-          <dt>Verification:</dt>
+          <dt>{t("promptEnhancer.safety.verification")}</dt>
           <dd>{humanizeToken(safety.verificationStatus)}</dd>
         </div>
         <div>
-          <dt>Human review:</dt>
-          <dd>{reviewing ? "required" : "not required"}</dd>
+          <dt>{t("promptEnhancer.safety.humanReview")}</dt>
+          <dd>
+            {reviewing
+              ? t("promptEnhancer.common.required")
+              : t("promptEnhancer.common.notRequired")}
+          </dd>
         </div>
       </dl>
       {reviewing ? (
         <p className="pe-safety-warning" role="alert">
-          This prompt requires human review before any downstream use.
+          {t("promptEnhancer.safety.reviewWarning")}
         </p>
       ) : null}
       {safety.findings.length > 0 ? (
         <>
-          <h5 className="pe-subhead">Safety findings</h5>
+          <h5 className="pe-subhead">{t("promptEnhancer.safety.findings")}</h5>
           <ul className="pe-list" data-testid="pe-safety-findings">
             {safety.findings.map((finding) => (
               <li key={`${finding.ruleId}:${finding.code}`}>
@@ -278,7 +295,7 @@ function SafetyPanel({
       ) : null}
       {safety.leastPrivilege.length > 0 ? (
         <>
-          <h5 className="pe-subhead">Least-privilege constraints</h5>
+          <h5 className="pe-subhead">{t("promptEnhancer.safety.leastPrivilege")}</h5>
           <StringList items={[...safety.leastPrivilege]} />
         </>
       ) : null}
@@ -289,18 +306,20 @@ function SafetyPanel({
 function GroundingPanel({
   plan,
   readiness,
+  t,
 }: {
   readonly plan: PromptEnhancementWireResponse["enhancedPrompt"]["groundingPlan"];
   readonly readiness: PromptEnhancementWireResponse["groundingReadiness"];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const readinessText =
     readiness.status === "ready"
-      ? "Grounding readiness: connected context available"
+      ? t("promptEnhancer.grounding.ready")
       : readiness.status === "unavailable"
-        ? "Grounding readiness: unavailable - connect a Files window and regenerate to mark this prompt grounding-ready."
-        : "Grounding readiness: not required";
+        ? t("promptEnhancer.grounding.unavailable")
+        : t("promptEnhancer.grounding.notRequired");
   return (
-    <Section title="Grounding plan">
+    <Section title={t("promptEnhancer.grounding.title")}>
       <div
         className={`pe-grounding-readiness pe-grounding-readiness-${readiness.status}`}
         data-testid="pe-grounding-readiness"
@@ -313,18 +332,23 @@ function GroundingPanel({
         <span>{readinessText}</span>
       </div>
       <p className="pe-grounding-meta">
-        Strategy: <strong>{humanizeToken(plan.strategy)}</strong> /{" "}
-        {plan.required ? "required" : "optional"} / citations:{" "}
-        {humanizeToken(plan.citation.discipline)} ({humanizeToken(plan.citation.granularity)})
+        {t("promptEnhancer.grounding.meta", {
+          strategy: humanizeToken(plan.strategy),
+          requirement: plan.required
+            ? t("promptEnhancer.common.required")
+            : t("promptEnhancer.common.optional"),
+          discipline: humanizeToken(plan.citation.discipline),
+          granularity: humanizeToken(plan.citation.granularity),
+        })}
       </p>
       {plan.sourcePriority.length > 0 ? (
         <>
-          <h5 className="pe-subhead">Source priority</h5>
+          <h5 className="pe-subhead">{t("promptEnhancer.grounding.sourcePriority")}</h5>
           <ol className="pe-list">
             {plan.sourcePriority.map((source) => (
               <li key={source.source}>
                 {source.source}
-                {source.required ? " (required)" : ""}
+                {source.required ? t("promptEnhancer.grounding.requiredSuffix") : ""}
               </li>
             ))}
           </ol>
@@ -338,28 +362,30 @@ function GroundingPanel({
 function EvidencePanel({
   evidence,
   fingerprint,
+  t,
 }: {
   readonly evidence: PromptEnhancementWireResponse["evidence"];
   readonly fingerprint: string;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <p className="pe-evidence" data-testid="pe-evidence">
-      Evidence fingerprint: {fingerprint.slice(0, 16)}...
+      {t("promptEnhancer.evidence.fingerprint")} {fingerprint.slice(0, 16)}...
       {evidence.status === "recorded" && evidence.runId !== undefined ? (
         <>
           {" "}
-          Manifest:{" "}
+          {t("promptEnhancer.evidence.manifest")}{" "}
           <a
             href={evidence.manifestUrl ?? "#"}
             target="_blank"
             rel="noreferrer"
-            aria-label={`Prompt enhancement evidence manifest ${evidence.runId}`}
+            aria-label={t("promptEnhancer.evidence.manifestAriaLabel", { id: evidence.runId })}
           >
             {evidence.runId}
           </a>
         </>
       ) : (
-        " Manifest not recorded."
+        t("promptEnhancer.evidence.notRecorded")
       )}
     </p>
   );
@@ -367,24 +393,26 @@ function EvidencePanel({
 
 function CandidateScorecards({
   candidates,
+  t,
 }: {
   readonly candidates: PromptEnhancementWireResponse["candidates"];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
-    <Section title="Candidate scorecards">
+    <Section title={t("promptEnhancer.scorecards.title")}>
       <div className="c-tablewrap">
         <div className="c-tablescroll">
           <table className="c-table responsive pe-scorecards" data-testid="pe-scorecards">
             <thead>
               <tr>
-                <th scope="col">Profile</th>
+                <th scope="col">{t("promptEnhancer.analysis.profile")}</th>
                 <th scope="col" className="num">
-                  Score
+                  {t("promptEnhancer.scorecards.score")}
                 </th>
                 <th scope="col" className="num">
-                  Tokens
+                  {t("promptEnhancer.scorecards.tokens")}
                 </th>
-                <th scope="col">Winner</th>
+                <th scope="col">{t("promptEnhancer.scorecards.winner")}</th>
               </tr>
             </thead>
             <tbody>
@@ -397,15 +425,18 @@ function CandidateScorecards({
                     aria-selected={winner ? "true" : undefined}
                   >
                     <th scope="row">{scorecard.profile}</th>
-                    <td className="num" data-label="Score">
+                    <td className="num" data-label={t("promptEnhancer.scorecards.score")}>
                       {scorecard.aggregateScore.toFixed(3)}
                     </td>
-                    <td className="num" data-label="Tokens">
+                    <td className="num" data-label={t("promptEnhancer.scorecards.tokens")}>
                       {scorecard.estimatedTokens.toLocaleString("en-US")}
                     </td>
-                    <td data-label="Winner">
+                    <td data-label={t("promptEnhancer.scorecards.winner")}>
                       {winner ? (
-                        <span className="pe-winner-mark" aria-label="Winner">
+                        <span
+                          className="pe-winner-mark"
+                          aria-label={t("promptEnhancer.scorecards.winner")}
+                        >
                           ★
                         </span>
                       ) : (
@@ -425,8 +456,10 @@ function CandidateScorecards({
 
 function EnhancedPromptSections({
   result,
+  t,
 }: {
   readonly result: PromptEnhancementWireResponse;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const prompt = result.enhancedPrompt;
   const missing = result.analysis.missingContext.map((item) =>
@@ -434,48 +467,62 @@ function EnhancedPromptSections({
   );
   return (
     <div className="pe-section-grid">
-      <Section title="Role">
+      <Section title={t("promptEnhancer.section.role")}>
         <p>{prompt.role}</p>
       </Section>
-      <Section title="Objective">
+      <Section title={t("promptEnhancer.section.objective")}>
         <p>{prompt.goal}</p>
       </Section>
-      <Section title="Context">
-        <StringList items={[...prompt.context]} empty="No additional context." />
+      <Section title={t("promptEnhancer.section.context")}>
+        <StringList
+          items={[...prompt.context]}
+          empty={t("promptEnhancer.section.noAdditionalContext")}
+        />
       </Section>
       <Section
         title={
           result.analysis.missingContext.some((m) => m.kind === "assumption")
-            ? "Assumptions"
-            : "Clarification questions"
+            ? t("promptEnhancer.section.assumptions")
+            : t("promptEnhancer.section.clarificationQuestions")
         }
       >
-        <StringList items={missing} empty="No clarifications or assumptions needed." />
+        <StringList items={missing} empty={t("promptEnhancer.section.noClarifications")} />
       </Section>
-      <Section title="Steps">
+      <Section title={t("promptEnhancer.section.steps")}>
         <StringList items={[...prompt.taskDecomposition]} />
       </Section>
-      <Section title="Constraints">
+      <Section title={t("promptEnhancer.section.constraints")}>
         <StringList items={[...prompt.constraints]} />
       </Section>
-      <Section title="Output schema">
+      <Section title={t("promptEnhancer.section.outputSchema")}>
         <p>
-          Format: <strong>{prompt.outputSchema.format}</strong>
-          {prompt.outputSchema.structured ? " / structured" : ""}
+          {t("promptEnhancer.section.format")} <strong>{prompt.outputSchema.format}</strong>
+          {prompt.outputSchema.structured ? t("promptEnhancer.section.structuredSuffix") : ""}
         </p>
         <StringList items={[...prompt.outputSchema.hints]} />
       </Section>
-      <Section title="Quality criteria">
+      <Section title={t("promptEnhancer.section.qualityCriteria")}>
         <StringList items={[...prompt.qualityCriteria]} />
       </Section>
-      <Section title="Uncertainty handling">
+      <Section title={t("promptEnhancer.section.uncertaintyHandling")}>
         <StringList items={[...prompt.uncertaintyHandling]} />
       </Section>
-      <Section title="Safety rules">
+      <Section title={t("promptEnhancer.section.safetyRules")}>
         <StringList items={[...prompt.safetyRules]} />
       </Section>
     </div>
   );
+}
+
+function promptEnhancerStatus(
+  loading: boolean,
+  draftLength: number,
+  t: OptionalWidgetTranslate,
+): string {
+  if (loading) return t("promptEnhancer.status.enhancing");
+  return draftLength === 0
+    ? t("promptEnhancer.status.waitingForDraft")
+    : t("promptEnhancer.status.ready");
 }
 
 export function PromptEnhancerPanel({
@@ -485,6 +532,7 @@ export function PromptEnhancerPanel({
   enhanceImpl = enhancePrompt,
   fetchModelsImpl = fetchModels,
 }: PromptEnhancerPanelProps = {}): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const [draft, setDraft] = useState("");
   const [profile, setProfile] = useState("auto");
   const [strategy, setStrategy] = useState("clarify");
@@ -526,8 +574,8 @@ export function PromptEnhancerPanel({
   );
 
   const groundingContext = useMemo(
-    () => summarizeConnectedContext({ connectedRoot, connectedFilePath, connectedRoots }),
-    [connectedRoot, connectedFilePath, connectedRoots],
+    () => summarizeConnectedContext({ connectedRoot, connectedFilePath, connectedRoots }, t),
+    [connectedRoot, connectedFilePath, connectedRoots, t],
   );
 
   useEffect(() => {
@@ -553,7 +601,7 @@ export function PromptEnhancerPanel({
   const handleEnhance = useCallback(async (): Promise<void> => {
     const text = draft.trim();
     if (text.length === 0) {
-      setError("Enter a prompt draft to enhance.");
+      setError(t("promptEnhancer.error.enterDraft"));
       return;
     }
     abortRef.current?.abort();
@@ -588,26 +636,26 @@ export function PromptEnhancerPanel({
         setResultGroundingSignature(groundingContext.signature);
       }
     } catch (caught) {
-      if (!controller.signal.aborted) setError(describeError(caught));
+      if (!controller.signal.aborted) setError(describeError(caught, t));
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [draft, strategy, groundingContext, profile, modelId, enhanceImpl]);
+  }, [draft, strategy, groundingContext, profile, modelId, enhanceImpl, t]);
 
   const handleCopy = useCallback(async (): Promise<void> => {
     if (result === null) return;
     setError(null);
     setCopyState("copying");
-    setCopyStatus("Copying rendered prompt...");
+    setCopyStatus(t("promptEnhancer.copy.copyingStatus"));
     try {
       await writeTextWithFallback(result.renderedPrompt);
       setCopyState("copied");
-      setCopyStatus("Copied to clipboard.");
+      setCopyStatus(t("promptEnhancer.copy.copied"));
     } catch {
       setCopyState("failed");
-      setCopyStatus("Clipboard access failed. Select text manually and use Cmd/Ctrl+C.");
+      setCopyStatus(t("promptEnhancer.copy.failed"));
     }
-  }, [result]);
+  }, [result, t]);
 
   const handleClear = useCallback((): void => {
     abortRef.current?.abort();
@@ -625,7 +673,7 @@ export function PromptEnhancerPanel({
   const modelSections = [
     {
       options: [
-        { value: NO_MODEL, label: "Deterministic only (no model)" },
+        { value: NO_MODEL, label: t("promptEnhancer.model.deterministicOnly") },
         ...models.map((model) => ({ value: model.id, label: model.id })),
       ],
     },
@@ -650,10 +698,10 @@ export function PromptEnhancerPanel({
           <Icons.spark size={18} />
         </span>
         <div className="pe-header-copy">
-          <p className="pe-eyebrow">Governed prompt workspace</p>
-          <h3 className="pe-title">Prompt Enhancer</h3>
+          <p className="pe-eyebrow">{t("promptEnhancer.header.eyebrow")}</p>
+          <h3 className="pe-title">{t("promptEnhancer.header.title")}</h3>
         </div>
-        <span className="pe-header-chip">Review before use</span>
+        <span className="pe-header-chip">{t("promptEnhancer.header.reviewBeforeUse")}</span>
       </div>
 
       <form
@@ -666,10 +714,10 @@ export function PromptEnhancerPanel({
         <div className="pe-draft-card">
           <div className="pe-field-head">
             <label className="pe-label" htmlFor={draftId}>
-              Raw prompt
+              {t("promptEnhancer.field.rawPrompt")}
             </label>
             <span className="pe-counter" id={draftHintId}>
-              {draftLength.toLocaleString("en-US")} chars
+              {t("promptEnhancer.analysis.chars", { count: draftLength })}
             </span>
           </div>
           <textarea
@@ -681,46 +729,60 @@ export function PromptEnhancerPanel({
               setDraft(event.target.value);
             }}
             rows={8}
-            placeholder="Describe the task you want a strong prompt for..."
+            placeholder={t("promptEnhancer.field.draftPlaceholder")}
             aria-describedby={error === null ? draftHintId : `${draftHintId} ${errorId}`}
           />
         </div>
 
-        <aside className="pe-controls-card" aria-label="Enhancement controls">
+        <aside className="pe-controls-card" aria-label={t("promptEnhancer.controls.ariaLabel")}>
           <div className="pe-controls">
             <div className="pe-control">
               <span className="pe-label" aria-hidden="true">
-                Profile
+                {t("promptEnhancer.analysis.profile")}
               </span>
               <KeikoSelect
                 value={profile}
-                ariaLabel="Profile"
+                ariaLabel={t("promptEnhancer.analysis.profile")}
                 onValueChange={setProfile}
-                sections={[{ options: PROFILE_OPTIONS.map((option) => ({ ...option })) }]}
+                sections={[
+                  {
+                    options: PROFILE_VALUES.map((value) => ({
+                      value,
+                      label: t(`promptEnhancer.profile.${value}`),
+                    })),
+                  },
+                ]}
                 triggerClassName="pe-select"
                 menuClassName="pe-select-menu"
               />
             </div>
             <div className="pe-control">
               <span className="pe-label" aria-hidden="true">
-                Missing information
+                {t("promptEnhancer.controls.missingInformation")}
               </span>
               <KeikoSelect
                 value={strategy}
-                ariaLabel="Missing information"
+                ariaLabel={t("promptEnhancer.controls.missingInformation")}
                 onValueChange={setStrategy}
-                sections={[{ options: STRATEGY_OPTIONS.map((option) => ({ ...option })) }]}
+                sections={[
+                  {
+                    options: STRATEGY_VALUES.map((value) => ({
+                      value,
+                      label: t(`promptEnhancer.strategy.${value}`),
+                    })),
+                  },
+                ]}
                 triggerClassName="pe-select"
                 menuClassName="pe-select-menu"
               />
             </div>
             <div className="pe-control">
               <span className="pe-label" aria-hidden="true">
-                Enhancement model
+                {t("promptEnhancer.controls.model")}
               </span>
               <KeikoSelect
                 value={modelId}
-                ariaLabel="Enhancement model"
+                ariaLabel={t("promptEnhancer.controls.model")}
                 onValueChange={setModelId}
                 sections={modelSections}
                 triggerClassName="pe-select"
@@ -738,13 +800,13 @@ export function PromptEnhancerPanel({
               <Icons.layers size={14} />
             </span>
             <span>
-              <span className="pe-context-label">Grounding context</span>
+              <span className="pe-context-label">{t("promptEnhancer.context.title")}</span>
               <strong>{groundingContext.label}</strong>
             </span>
           </div>
           {resultGroundingContextChanged ? (
             <p className="pe-context-stale" role="status" aria-live="polite">
-              Grounding context changed. Regenerate to update this review artifact.
+              {t("promptEnhancer.context.changed")}
             </p>
           ) : null}
 
@@ -755,21 +817,25 @@ export function PromptEnhancerPanel({
               disabled={loading || draftLength === 0}
             >
               <Icons.spark size={15} />
-              <span>{loading ? "Enhancing..." : "Enhance prompt"}</span>
+              <span>
+                {loading
+                  ? t("promptEnhancer.action.enhancing")
+                  : t("promptEnhancer.action.enhance")}
+              </span>
             </button>
             <button
               type="button"
               className="pe-button pe-button-secondary pe-clear"
               onClick={handleClear}
               disabled={!hasWorkspaceContent}
-              aria-label="Clear prompt workspace"
+              aria-label={t("promptEnhancer.action.clearAriaLabel")}
             >
               <Icons.reset size={15} />
-              <span>Clear</span>
+              <span>{t("promptEnhancer.action.clear")}</span>
             </button>
           </div>
           <p className="pe-status" role="status" aria-live="polite">
-            {loading ? "Enhancing prompt..." : draftLength === 0 ? "Waiting for draft" : "Ready"}
+            {promptEnhancerStatus(loading, draftLength, t)}
           </p>
         </aside>
       </form>
@@ -784,19 +850,19 @@ export function PromptEnhancerPanel({
         <div className="pe-result" data-testid="pe-result">
           <div className="pe-result-head">
             <div>
-              <p className="pe-eyebrow">Review artifact</p>
+              <p className="pe-eyebrow">{t("promptEnhancer.result.eyebrow")}</p>
               <h4 className="pe-result-title" ref={resultTitleRef} tabIndex={-1}>
-                Enhanced prompt
+                {t("promptEnhancer.result.title")}
               </h4>
             </div>
-            <ModelRoutingBanner routing={result.modelRouting} />
+            <ModelRoutingBanner routing={result.modelRouting} t={t} />
           </div>
-          <AnalysisSummary result={result} />
+          <AnalysisSummary result={result} t={t} />
 
-          <Section title="Rendered prompt">
+          <Section title={t("promptEnhancer.rendered.title")}>
             <pre
               className="pe-rendered"
-              aria-label="Rendered prompt text"
+              aria-label={t("promptEnhancer.rendered.ariaLabel")}
               data-text-selectable="true"
             >
               {result.renderedPrompt}
@@ -820,26 +886,35 @@ export function PromptEnhancerPanel({
                 }}
               >
                 <Icons.file size={15} />
-                <span>{copyState === "copying" ? "Copying..." : "Copy rendered prompt"}</span>
+                <span>
+                  {copyState === "copying"
+                    ? t("promptEnhancer.action.copying")
+                    : t("promptEnhancer.action.copy")}
+                </span>
               </button>
             </div>
           </Section>
 
           <div className="pe-review-grid">
-            <SafetyPanel safety={result.safety} />
+            <SafetyPanel safety={result.safety} t={t} />
             <GroundingPanel
               plan={result.enhancedPrompt.groundingPlan}
               readiness={result.groundingReadiness}
+              t={t}
             />
           </div>
-          <EnhancedPromptSections result={result} />
-          <CandidateScorecards candidates={result.candidates} />
-          <EvidencePanel evidence={result.evidence} fingerprint={result.inputFingerprintSha256} />
+          <EnhancedPromptSections result={result} t={t} />
+          <CandidateScorecards candidates={result.candidates} t={t} />
+          <EvidencePanel
+            evidence={result.evidence}
+            fingerprint={result.inputFingerprintSha256}
+            t={t}
+          />
         </div>
       ) : (
-        <div className="pe-empty-state" aria-label="Prompt enhancement empty state">
+        <div className="pe-empty-state" aria-label={t("promptEnhancer.empty.ariaLabel")}>
           <Icons.layers size={18} />
-          <span>No enhanced prompt yet.</span>
+          <span>{t("promptEnhancer.empty.message")}</span>
         </div>
       )}
     </div>

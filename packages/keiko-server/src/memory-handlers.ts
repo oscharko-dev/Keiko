@@ -604,7 +604,7 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildPinOperation(record, {
+    buildPinOperation(record, {
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
@@ -640,7 +640,7 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildUnpinOperation(record, {
+    buildUnpinOperation(record, {
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
@@ -684,7 +684,7 @@ export async function handleArchiveMemory(
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildArchiveOperation(
+    buildArchiveOperation(
       record,
       { reviewerId: reviewerIdForMemoryMutation(deps), nowMs: Date.now() },
       reason,

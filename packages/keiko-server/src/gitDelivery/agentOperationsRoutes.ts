@@ -422,12 +422,18 @@ function cacheKey(request: GitRepositoryAgentOperationRequest): string | undefin
   return `${request.projectId}\0${request.idempotencyKey}`;
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function normalizedForDigest(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizedForDigest);
   if (!isPlainObject(value)) return value;
   return Object.fromEntries(
     Object.keys(value)
-      .sort()
+      .sort(compareCodeUnits)
       .map((key) => [key, normalizedForDigest(value[key])]),
   );
 }

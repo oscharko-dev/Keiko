@@ -96,7 +96,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin: 0;
   padding: 8px 10px;
+  border: 0;
   border-bottom: 1px solid var(--line-soft);
 }
 

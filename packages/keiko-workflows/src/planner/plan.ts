@@ -284,8 +284,8 @@ function canonicalize(seed: PlanSeed): string {
     seed.queryKind,
     seed.queryText,
     seed.retrievalIntent,
-    [...seed.anchorTerms].sort(),
-    [...seed.ringKinds].sort(),
+    [...seed.anchorTerms].sort((left, right) => left.localeCompare(right)),
+    [...seed.ringKinds].sort((left, right) => left.localeCompare(right)),
   ]);
 }
 

@@ -24,6 +24,10 @@ function formatTs(epochMs: number): string {
   return new Date(epochMs).toLocaleString();
 }
 
+function unknownScope(_scope: never): string {
+  return "unknown";
+}
+
 function formatScope(scope: MemoryRecord["scope"]): string {
   switch (scope.kind) {
     case "user":
@@ -36,11 +40,8 @@ function formatScope(scope: MemoryRecord["scope"]): string {
       return `workflow:${scope.workflowDefinitionId}`;
     case "global":
       return "global";
-    default: {
-      const _: never = scope;
-      void _;
-      return "unknown";
-    }
+    default:
+      return unknownScope(scope);
   }
 }
 

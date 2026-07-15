@@ -36,6 +36,10 @@ import type {
 // Pure: two scopes match when their discriminator AND coordinate field match exactly.
 // Implemented via a canonical "kind:coordinate" string projection to collapse the
 // per-kind branching (memory pattern from issue #205 scopeCoordinateKey).
+function unsupportedScope(_scope: never): never {
+  throw new GovernanceError("unsupported-selector", "unknown MemoryScope kind");
+}
+
 function scopeCoordinateKey(scope: MemoryScope): string {
   switch (scope.kind) {
     case "user":
@@ -48,11 +52,8 @@ function scopeCoordinateKey(scope: MemoryScope): string {
       return `workflow:${scope.workflowDefinitionId}`;
     case "global":
       return "global:";
-    default: {
-      const _exhaustive: never = scope;
-      void _exhaustive;
-      return "unknown:";
-    }
+    default:
+      return unsupportedScope(scope);
   }
 }
 
@@ -122,13 +123,10 @@ function applySelector(record: MemoryRecord, selector: ForgetSelector, nowMs: nu
       return matchBySourceConversation(record, selector);
     case "by-time-window":
       return matchByTimeWindow(record, selector, nowMs);
-    default: {
+    default:
       // Exhaustiveness gate: a future widening of ForgetSelector surfaces here at
       // compile time and at runtime as an unsupported-selector error.
-      const _exhaustive: never = selector;
-      void _exhaustive;
       throw new GovernanceError("unsupported-selector", "unknown ForgetSelector kind");
-    }
   }
 }
 
@@ -189,7 +187,6 @@ export function buildForgetOperations(
   // future-extension surface and as a forcing function for caller intent — the BFF
   // route handler MUST decide consciously whether the destructive operation is
   // tombstone-yielding.
-  void options.writeTombstone;
   const envelopes: MemoryForget[] = [];
   for (const record of memories) {
     envelopes.push(buildForgetEnvelope(record, context, options));

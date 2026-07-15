@@ -268,9 +268,9 @@ function hashBody(raw: string): string {
   // path executes the mutation normally). Using djb2 over a fixed-length raw string.
   let h = 5381;
   for (let i = 0; i < raw.length; i++) {
-    h = (h * 33 + raw.charCodeAt(i)) | 0;
+    h = (Math.imul(h, 33) + raw.charCodeAt(i)) >>> 0;
   }
-  return (h >>> 0).toString(16);
+  return h.toString(16);
 }
 
 // ─── Body + header helpers ────────────────────────────────────────────────────
@@ -2007,7 +2007,6 @@ import {
   computeImpact as sqlComputeImpact,
   graphHealth as sqlGraphHealth,
   listRelationshipLifecycleHistory as sqlLifecycleHistory,
-  relationshipCardinalitySnapshot as sqlCardinalitySnapshot,
 } from "./store/relationships.js";
 import { insertRelationshipAuditEntry } from "./store/relationship-audit.js";
 
@@ -2201,8 +2200,3 @@ export function createRelationshipStorePort(
     recordAuditEntry: (input) => portRecordAuditEntry(options.db, now, options.redactString, input),
   };
 }
-
-// `sqlCardinalitySnapshot` is exported by the store; reserved for #538 follow-up where the
-// API layer passes counts into the validator context. Kept imported here so the surface is
-// in one place even if the handler chooses not to read it yet.
-void sqlCardinalitySnapshot;

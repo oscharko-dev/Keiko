@@ -278,18 +278,24 @@ function buildFindingRefsByCandidate(
   return refs;
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function integrityPayloadForCandidate(candidate: QI.QualityIntelligenceTestCaseCandidate): unknown {
   return {
     id: candidate.id,
     runId: candidate.runId,
-    derivedFromAtomIds: [...candidate.derivedFromAtomIds].sort(),
+    derivedFromAtomIds: [...candidate.derivedFromAtomIds].sort(compareCodeUnits),
     title: candidate.title,
     preconditions: candidate.preconditions,
     steps: candidate.steps,
     expectedResults: candidate.expectedResults,
     priority: candidate.priority,
     riskClass: candidate.riskClass,
-    tags: [...candidate.tags].sort(),
+    tags: [...candidate.tags].sort(compareCodeUnits),
     status: candidate.status,
   };
 }
@@ -332,7 +338,7 @@ function buildBundle(
     diagnostics.add("export:redaction-attestation-missing");
   }
   const modelProvenance = buildModelProvenance(manifest);
-  const diagnosticsList = [...diagnostics].sort();
+  const diagnosticsList = [...diagnostics].sort(compareCodeUnits);
   const integrity = sha256Hex(
     canonicalise({
       runId,
@@ -344,16 +350,14 @@ function buildBundle(
       contents: contents
         .map((entry) => ({
           candidateId: entry.candidateId,
-          coverageMapRefs: [...entry.coverageMapRefs].sort(),
-          findingRefs: [...entry.findingRefs].sort(),
+          coverageMapRefs: [...entry.coverageMapRefs].sort(compareCodeUnits),
+          findingRefs: [...entry.findingRefs].sort(compareCodeUnits),
         }))
-        .sort((a, b) =>
-          a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0,
-        ),
+        .sort((a, b) => compareCodeUnits(a.candidateId, b.candidateId)),
       candidates: candidates.map(integrityPayloadForCandidate).sort((a, b) => {
         const left = (a as { id: string }).id;
         const right = (b as { id: string }).id;
-        return left < right ? -1 : left > right ? 1 : 0;
+        return compareCodeUnits(left, right);
       }),
     }),
   );

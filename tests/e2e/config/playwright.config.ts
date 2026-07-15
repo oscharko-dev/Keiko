@@ -79,6 +79,10 @@ export default defineConfig({
         // process can rewrite packages/*/dist while the BFF is running under node --watch, producing
         // transient API 502s exactly as browser tests begin. Keep E2E on the hermetic, prebuilt graph.
         KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
+        // Node's internal watch restarts do not emit an exit from the outer watcher process, so the
+        // proxy can retain a stale ready=true state while the BFF port is briefly unavailable.
+        // E2E runs against a prebuilt graph and must keep one stable BFF process for the whole suite.
+        KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1",
         KEIKO_DEV_MAX_RESTARTS: "0",
         KEIKO_DEV_NEXT_BUNDLER: "webpack",
         KEIKO_STATE_DIR: stateDir,

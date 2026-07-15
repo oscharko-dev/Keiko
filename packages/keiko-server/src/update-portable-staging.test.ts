@@ -160,7 +160,7 @@ function sidecarPayloadSha256(
 ): string {
   const hash = createHash("sha256");
   for (const file of [...files].sort((left, right) =>
-    left.relativePath < right.relativePath ? -1 : 1,
+    left.relativePath.localeCompare(right.relativePath),
   )) {
     hash.update(`${file.relativePath}\0${sha256(file.bytes)}\0`);
   }

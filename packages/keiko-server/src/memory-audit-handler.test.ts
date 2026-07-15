@@ -3,7 +3,7 @@
 // MemoryEvent, and asserts the redacted MemoryAuditEvent persisted to the date-bucketed
 // manifest.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createInMemoryEvidenceStore,
   createAuditRedactor,
@@ -147,6 +147,28 @@ describe("createMemoryAuditHandler", () => {
     expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
       ok: true,
     });
+  });
+
+  it("keeps audit hashes independent of runtime locale collation", () => {
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("locale collation must not participate in canonical hashes");
+    });
+    try {
+      const store = createInMemoryEvidenceStore();
+      const handler = createMemoryAuditHandler({
+        evidenceStore: store,
+        redactString: identityRedact,
+        now: () => FIXED_NOW,
+        newEventId: makeIdFactory(),
+      });
+      handler({ kind: "memory:inserted", record: makeRecord({ status: "accepted" }) });
+
+      expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+        ok: true,
+      });
+    } finally {
+      localeCompare.mockRestore();
+    }
   });
 
   it("detects tampering in the persisted audit hash chain", () => {

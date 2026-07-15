@@ -147,7 +147,7 @@ const canonicaliseForHash = (value: unknown): unknown => {
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(record).sort()) {
+    for (const key of Object.keys(record).sort((left, right) => left.localeCompare(right))) {
       const item = record[key];
       if (item !== undefined) out[key] = canonicaliseForHash(item);
     }
@@ -159,8 +159,8 @@ const canonicaliseForHash = (value: unknown): unknown => {
 const auditEntryForHash = (
   entry: QiReviewAuditEntry,
 ): Omit<QiReviewAuditEntry, "entryHashSha256Hex"> => {
-  const { entryHashSha256Hex: _entryHashSha256Hex, ...hashable } = entry;
-  void _entryHashSha256Hex;
+  const hashable = { ...entry };
+  Reflect.deleteProperty(hashable, "entryHashSha256Hex");
   return hashable;
 };
 
@@ -185,9 +185,9 @@ const chainAuditEntry = (
   auditLog: readonly QiReviewAuditEntry[],
   entry: QiReviewAuditEntry,
 ): QiReviewAuditEntry => {
-  const { sequence: _sequence, priorHashSha256Hex: _priorHash, ...unchained } = entry;
-  void _sequence;
-  void _priorHash;
+  const unchained = { ...entry };
+  Reflect.deleteProperty(unchained, "sequence");
+  Reflect.deleteProperty(unchained, "priorHashSha256Hex");
   const linked: QiReviewAuditEntry = {
     ...unchained,
     sequence: nextAuditSequence(auditLog),
@@ -197,15 +197,10 @@ const chainAuditEntry = (
 };
 
 const stripAuditChainFields = (entry: QiReviewAuditEntry): QiReviewAuditEntry => {
-  const {
-    sequence: _sequence,
-    priorHashSha256Hex: _priorHashSha256Hex,
-    entryHashSha256Hex: _entryHashSha256Hex,
-    ...unchained
-  } = entry;
-  void _sequence;
-  void _priorHashSha256Hex;
-  void _entryHashSha256Hex;
+  const unchained = { ...entry };
+  Reflect.deleteProperty(unchained, "sequence");
+  Reflect.deleteProperty(unchained, "priorHashSha256Hex");
+  Reflect.deleteProperty(unchained, "entryHashSha256Hex");
   return unchained;
 };
 

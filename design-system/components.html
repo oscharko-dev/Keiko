@@ -492,7 +492,9 @@
         if (tab) {
           selectTab(
             tab,
-            [].slice.call(tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]')),
+            Array.prototype.slice.call(
+              tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'),
+            ),
           );
           return;
         }
@@ -504,7 +506,7 @@
       // roving-tabindex + arrow / Home / End keyboard support on every tablist
       document.querySelectorAll('[role="tablist"]').forEach(function (tl) {
         tl.setAttribute("aria-orientation", "horizontal");
-        var tabs = [].slice.call(tl.querySelectorAll('[role="tab"]'));
+        var tabs = Array.prototype.slice.call(tl.querySelectorAll('[role="tab"]'));
         tabs.forEach(function (t) {
           t.tabIndex = t.getAttribute("aria-selected") === "true" ? 0 : -1;
         });

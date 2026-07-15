@@ -220,7 +220,7 @@ export function safeReasonSummary(error: unknown): string {
 export async function withStage<T>(
   ctx: RunContext,
   stageName: string,
-  body: () => Promise<T>,
+  body: () => T | Promise<T>,
 ): Promise<T> {
   assertStageRegistered(ctx.descriptor, stageName);
   checkCancelled(ctx);

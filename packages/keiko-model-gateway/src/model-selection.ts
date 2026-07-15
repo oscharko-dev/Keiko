@@ -114,9 +114,13 @@ export function listConfiguredCapabilities(
 function projectSafeTokenAccounting(
   tokenAccounting: ModelTokenAccounting,
 ): Omit<ModelTokenAccounting, "counterId"> {
-  const { counterId, ...safeTokenAccounting } = tokenAccounting;
-  void counterId;
-  return safeTokenAccounting;
+  return {
+    source: tokenAccounting.source,
+    scaleMilli: tokenAccounting.scaleMilli,
+    ...(tokenAccounting.offsetTokens === undefined
+      ? {}
+      : { offsetTokens: tokenAccounting.offsetTokens }),
+  };
 }
 
 export function projectSafeCapabilities(

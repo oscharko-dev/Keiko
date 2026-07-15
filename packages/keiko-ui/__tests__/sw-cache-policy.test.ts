@@ -61,6 +61,7 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
     expect(SW_SOURCE).toContain("KEIKO_ACTIVATE_WAITING_SERVICE_WORKER");
     expect(SW_SOURCE).toMatch(/addEventListener\s*\(\s*"message"/);
     expect(SW_SOURCE).toMatch(/isActivateWaitingMessage\s*\(\s*event\s*\)/);
+    expect(SW_SOURCE).toMatch(/event\.origin\s*!==\s*self\.location\.origin/);
     expect(SW_SOURCE).toMatch(/event\.waitUntil\s*\(\s*self\.skipWaiting\s*\(\s*\)\s*\)/);
     expect(SW_SOURCE).not.toMatch(/clients\.claim\s*\(/);
   });

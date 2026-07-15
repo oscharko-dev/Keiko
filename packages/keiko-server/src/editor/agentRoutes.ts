@@ -253,9 +253,9 @@ function shapeSnapshot(
       ? snapshot
       : { ...snapshot, diagnosticsDetail: shapeDiagnosticsDetail(snapshot.diagnosticsDetail) };
   if (textMode === "none" || shapedSnapshot.text === undefined) {
-    const { text, textTruncated, ...rest } = shapedSnapshot;
-    void text;
-    void textTruncated;
+    const rest = { ...shapedSnapshot };
+    Reflect.deleteProperty(rest, "text");
+    Reflect.deleteProperty(rest, "textTruncated");
     return { ...rest, textMode };
   }
   const bounded = utf8Prefix(shapedSnapshot.text, maxBytes);

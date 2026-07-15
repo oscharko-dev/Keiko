@@ -1685,6 +1685,25 @@ export const EN_MESSAGES = {
   "figmaSnapshotWindow.viewSourceMode.notLoaded": "Selected view preview not loaded.",
   "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
     "The selected screen is not present in this stored snapshot.",
+  "gitClientWindow.sync.aheadSuffix": " (ahead {count})",
+  "gitClientWindow.sync.behindSuffix": " (behind {count})",
+  "gitClientWindow.sync.outcome": "{label} in {seconds}s{delta}",
+  "gitClientWindow.sync.blocked": "Blocked: {reason}",
+  "gitClientWindow.sync.unavailableLower": "sync unavailable",
+  "gitClientWindow.sync.fetch": "Fetch",
+  "gitClientWindow.sync.pull": "Pull",
+  "gitClientWindow.sync.push": "Push",
+  "gitClientWindow.sync.publishUpstream": "Publish upstream",
+  "gitClientWindow.sync.operationStatus": "{label}: {status}",
+  "gitClientWindow.sync.unavailable": "Sync unavailable",
+  "gitClientWindow.panel.pullRequest": "Pull Request",
+  "gitClientWindow.panel.merge": "Merge",
+  "gitClientWindow.action.backToDiff": "Back to diff",
+  "gitClientWindow.history.commitUnavailable":
+    "The requested commit is not available in bounded history.",
+  "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
+  "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
+  "gitClientWindow.panel.diffOpened": "Diff panel opened.",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

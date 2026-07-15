@@ -68,6 +68,9 @@
 .lazyWidgetScope :global(.db-actions) {
   display: flex;
   gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .lazyWidgetScope :global(.db-btn) {
@@ -288,4 +291,6 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+  padding: 0;
+  border: 0;
 }

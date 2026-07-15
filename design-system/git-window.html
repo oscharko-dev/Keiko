@@ -1747,30 +1747,30 @@
       (function () {
         var win = document.getElementById("gwWin");
         function applyWhen() {
-          var state = win.getAttribute("data-state");
+          var state = win.dataset.state;
           win.querySelectorAll("[data-when]").forEach(function (el) {
-            var ok = el.getAttribute("data-when").split(" ").indexOf(state) !== -1;
+            var ok = el.dataset.when.split(" ").indexOf(state) !== -1;
             el.classList.toggle("gw-hide", !ok);
           });
         }
         function setTab(tab) {
-          win.setAttribute("data-state", tab);
+          win.dataset.state = tab;
           win.querySelectorAll(".gw-tab").forEach(function (t) {
-            t.classList.toggle("on", t.getAttribute("data-tab") === tab);
+            t.classList.toggle("on", t.dataset.tab === tab);
           });
           applyWhen();
         }
         // top state switcher (preview affordance only — not a product interaction)
         document.querySelectorAll(".gw-states button").forEach(function (btn) {
           btn.addEventListener("click", function () {
-            var go = btn.getAttribute("data-go");
+            var go = btn.dataset.go;
             document.querySelectorAll(".gw-states button").forEach(function (b) {
               var on = b === btn;
               b.classList.toggle("on", on);
               b.setAttribute("aria-pressed", on ? "true" : "false");
             });
             if (go === "empty") {
-              win.setAttribute("data-state", "empty");
+              win.dataset.state = "empty";
               applyWhen();
             } else {
               setTab(go);
@@ -1780,10 +1780,10 @@
         // in-window tabs
         win.querySelectorAll(".gw-tab").forEach(function (t) {
           t.addEventListener("click", function () {
-            var tab = t.getAttribute("data-tab");
+            var tab = t.dataset.tab;
             setTab(tab);
             document.querySelectorAll(".gw-states button").forEach(function (b) {
-              var on = b.getAttribute("data-go") === tab;
+              var on = b.dataset.go === tab;
               b.classList.toggle("on", on);
               b.setAttribute("aria-pressed", on ? "true" : "false");
             });

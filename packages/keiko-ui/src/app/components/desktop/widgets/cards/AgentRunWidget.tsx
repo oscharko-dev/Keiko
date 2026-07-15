@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import {
   ApiError,
   applyRun,
@@ -476,6 +476,251 @@ function renderHypothesis(report: RunReport, t: I18nTranslate): ReactNode {
   );
 }
 
+function PreformattedResultCard({
+  title,
+  value,
+  applied = false,
+}: {
+  readonly title: string;
+  readonly value: string;
+  readonly applied?: boolean | undefined;
+}): ReactNode {
+  return (
+    <div className={`arun-result-card${applied ? " arun-applied" : ""}`}>
+      <div className="arun-result-title">{title}</div>
+      <pre
+        role="region"
+        aria-label={title}
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+        tabIndex={0}
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+function RunReportResults({
+  report,
+  t,
+}: {
+  readonly report: RunReport;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="arun-results">
+      {renderExplainReport(report, t)}
+      {renderVerifyReport(report, t)}
+      {renderTextCard(t("agentRunWidget.result.failure"), report.failureReason)}
+      {renderTextCard(t("agentRunWidget.result.coveredBehavior"), report.coveredBehavior)}
+      {renderTextCard(t("agentRunWidget.result.knownGaps"), report.knownGaps)}
+      {renderTextCard(t("agentRunWidget.result.verificationNote"), report.verificationSkipReason)}
+      {renderHypothesis(report, t)}
+      {renderListCard(t("agentRunWidget.result.nextActions"), report.nextActions)}
+      {report.dryRunPreview !== undefined ? (
+        <PreformattedResultCard
+          title={t("agentRunWidget.result.dryRunPreview")}
+          value={report.dryRunPreview}
+        />
+      ) : null}
+      {report.proposedDiff !== undefined ? (
+        <PreformattedResultCard
+          title={t("agentRunWidget.result.proposedDiff")}
+          value={report.proposedDiff}
+        />
+      ) : null}
+      {renderVerification(report, t)}
+      {report.applyReport !== undefined ? (
+        <PreformattedResultCard
+          title={t("agentRunWidget.result.applied")}
+          value={JSON.stringify(report.applyReport, null, 2)}
+          applied
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceResults({
+  evidence,
+  t,
+}: {
+  readonly evidence: EvidenceManifest;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="arun-results">
+      <div className="arun-result-card">
+        <div className="arun-result-title">{t("agentRunWidget.evidence.title")}</div>
+        <div className="arun-kv">
+          <span>{t("agentRunWidget.field.outcome")}</span>
+          <strong>{evidence.run.outcome}</strong>
+        </div>
+        <div className="arun-kv">
+          <span>{t("agentRunWidget.field.duration")}</span>
+          <strong>{formatMs(evidence.run.durationMs)}</strong>
+        </div>
+        {evidence.patch !== undefined ? (
+          <>
+            <div className="arun-kv">
+              <span>{t("agentRunWidget.field.changedFiles")}</span>
+              <strong>{evidence.patch.changedFiles.toString()}</strong>
+            </div>
+            <div className="arun-kv">
+              <span>{t("agentRunWidget.field.patchSize")}</span>
+              <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {evidence.patch?.redactedDiff !== undefined ? (
+        <PreformattedResultCard
+          title={t("agentRunWidget.result.proposedDiff")}
+          value={evidence.patch.redactedDiff}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AgentRunResults({
+  report,
+  evidence,
+  t,
+}: {
+  readonly report: RunReport | null;
+  readonly evidence: EvidenceManifest | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (report !== null) return <RunReportResults report={report} t={t} />;
+  return evidence === null ? null : <EvidenceResults evidence={evidence} t={t} />;
+}
+
+function AgentRunLog({
+  sse,
+  events,
+  busy,
+  t,
+}: {
+  readonly sse: ReturnType<typeof useSSE>;
+  readonly events: readonly HarnessEvent[];
+  readonly busy: boolean;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const emptyLogRow =
+    sse.status === "error" ? null : (
+      <div className="arun-log-row">
+        <span className="arun-log-ico">
+          <Icons.reset size={12} />
+        </span>
+        <span className="arun-log-text">
+          {sse.status === "connecting"
+            ? t("agentRunWidget.log.connecting")
+            : t("agentRunWidget.log.waiting")}
+        </span>
+      </div>
+    );
+  return (
+    <div
+      className="arun-log"
+      role="log"
+      aria-live="polite"
+      aria-label={t("agentRunWidget.log.ariaLabel")}
+      aria-busy={busy ? "true" : undefined}
+    >
+      {sse.status === "error" && sse.error !== null ? (
+        <div className="arun-log-row">
+          <span className="arun-log-ico">
+            <Icons.reset size={12} />
+          </span>
+          <span className="arun-log-text">{sse.error}</span>
+        </div>
+      ) : null}
+      {sse.events.length === 0
+        ? emptyLogRow
+        : events.map((event) => (
+            <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+              <span className="arun-log-ico">
+                <Icons.spark size={12} />
+              </span>
+              <span className="arun-log-text">{eventLabel(event, t)}</span>
+              <span className="arun-log-t mono">{eventTime(event)}</span>
+            </div>
+          ))}
+    </div>
+  );
+}
+
+interface AgentRunControlsProps {
+  readonly runId: string;
+  readonly evidenceLinkRef: RefObject<HTMLAnchorElement | null>;
+  readonly showApply: boolean;
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly applyFileCount: number;
+  readonly appliedAt: number | undefined;
+  readonly showCancel: boolean;
+  readonly onApply: () => void;
+  readonly onCancel: () => void;
+  readonly t: I18nTranslate;
+}
+
+interface ApplyControlProps {
+  readonly showApply: boolean;
+  readonly applying: boolean;
+  readonly confirmApply: boolean;
+  readonly applyFileCount: number;
+  readonly appliedAt: number | undefined;
+  readonly onApply: () => void;
+  readonly t: I18nTranslate;
+}
+
+function ApplyControl(props: ApplyControlProps): ReactNode {
+  if (props.showApply) {
+    return (
+      <button
+        type="button"
+        className="arun-btn"
+        aria-disabled={props.applying}
+        onClick={props.onApply}
+      >
+        {applyButtonLabel({
+          applying: props.applying,
+          confirmApply: props.confirmApply,
+          fileCount: props.applyFileCount,
+          t: props.t,
+        })}
+      </button>
+    );
+  }
+  if (props.appliedAt !== undefined) {
+    return <span className="arun-final mono">{props.t("agentRunWidget.result.applied")}</span>;
+  }
+  return null;
+}
+
+function AgentRunControls(props: AgentRunControlsProps): ReactNode {
+  return (
+    <div className="arun-controls">
+      <a
+        className="arun-btn ghost"
+        href={`/api/evidence/${encodeURIComponent(props.runId)}`}
+        target="_blank"
+        rel="noreferrer"
+        ref={props.evidenceLinkRef}
+      >
+        {props.t("agentRunWidget.evidence.title")}
+      </a>
+      <ApplyControl {...props} />
+      {props.showCancel ? (
+        <button type="button" className="arun-btn danger" onClick={props.onCancel}>
+          {props.t("agentRunWidget.controls.cancel")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function AgentRunWidget({
   cfg = {},
   linkedRoot = null,
@@ -745,147 +990,9 @@ export function AgentRunWidget({
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so
           it needs no role of its own. */}
-      <div
-        className="arun-log"
-        role="log"
-        aria-live="polite"
-        aria-label={t("agentRunWidget.log.ariaLabel")}
-        aria-busy={runBusy ? "true" : undefined}
-      >
-        {sse.status === "error" && sse.error !== null ? (
-          // uiux-fix F018 C026: a dropped stream froze the log without any hint;
-          // useSSE clears the error again once the auto-reconnect succeeds.
-          <div className="arun-log-row">
-            <span className="arun-log-ico">
-              <Icons.reset size={12} />
-            </span>
-            <span className="arun-log-text">{sse.error}</span>
-          </div>
-        ) : null}
-        {sse.events.length === 0 ? (
-          sse.status === "error" ? null : (
-            <div className="arun-log-row">
-              <span className="arun-log-ico">
-                <Icons.reset size={12} />
-              </span>
-              <span className="arun-log-text">
-                {sse.status === "connecting"
-                  ? t("agentRunWidget.log.connecting")
-                  : t("agentRunWidget.log.waiting")}
-              </span>
-            </div>
-          )
-        ) : (
-          visibleLogEvents.map((event) => (
-            <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
-              <span className="arun-log-ico">
-                <Icons.spark size={12} />
-              </span>
-              <span className="arun-log-text">{eventLabel(event, t)}</span>
-              <span className="arun-log-t mono">{eventTime(event)}</span>
-            </div>
-          ))
-        )}
-      </div>
+      <AgentRunLog sse={sse} events={visibleLogEvents} busy={runBusy} t={t} />
 
-      {report !== null ? (
-        <div className="arun-results">
-          {renderExplainReport(report, t)}
-          {renderVerifyReport(report, t)}
-          {renderTextCard(t("agentRunWidget.result.failure"), report.failureReason)}
-          {renderTextCard(t("agentRunWidget.result.coveredBehavior"), report.coveredBehavior)}
-          {renderTextCard(t("agentRunWidget.result.knownGaps"), report.knownGaps)}
-          {renderTextCard(
-            t("agentRunWidget.result.verificationNote"),
-            report.verificationSkipReason,
-          )}
-          {renderHypothesis(report, t)}
-          {renderListCard(t("agentRunWidget.result.nextActions"), report.nextActions)}
-          {report.dryRunPreview !== undefined ? (
-            <div className="arun-result-card">
-              <div className="arun-result-title">{t("agentRunWidget.result.dryRunPreview")}</div>
-              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-              <pre
-                role="region"
-                aria-label={t("agentRunWidget.result.dryRunPreview")}
-                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-                tabIndex={0}
-              >
-                {report.dryRunPreview}
-              </pre>
-            </div>
-          ) : null}
-          {report.proposedDiff !== undefined ? (
-            <div className="arun-result-card">
-              <div className="arun-result-title">{t("agentRunWidget.result.proposedDiff")}</div>
-              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-              <pre
-                role="region"
-                aria-label={t("agentRunWidget.result.proposedDiff")}
-                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-                tabIndex={0}
-              >
-                {report.proposedDiff}
-              </pre>
-            </div>
-          ) : null}
-          {renderVerification(report, t)}
-          {report.applyReport !== undefined ? (
-            <div className="arun-result-card arun-applied">
-              <div className="arun-result-title">{t("agentRunWidget.result.applied")}</div>
-              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-              <pre
-                role="region"
-                aria-label={t("agentRunWidget.result.applied")}
-                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-                tabIndex={0}
-              >
-                {JSON.stringify(report.applyReport, null, 2)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : evidence !== null ? (
-        <div className="arun-results">
-          <div className="arun-result-card">
-            <div className="arun-result-title">{t("agentRunWidget.evidence.title")}</div>
-            <div className="arun-kv">
-              <span>{t("agentRunWidget.field.outcome")}</span>
-              <strong>{evidence.run.outcome}</strong>
-            </div>
-            <div className="arun-kv">
-              <span>{t("agentRunWidget.field.duration")}</span>
-              <strong>{formatMs(evidence.run.durationMs)}</strong>
-            </div>
-            {evidence.patch !== undefined ? (
-              <>
-                <div className="arun-kv">
-                  <span>{t("agentRunWidget.field.changedFiles")}</span>
-                  <strong>{evidence.patch.changedFiles.toString()}</strong>
-                </div>
-                <div className="arun-kv">
-                  <span>{t("agentRunWidget.field.patchSize")}</span>
-                  <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
-                </div>
-              </>
-            ) : null}
-          </div>
-          {evidence.patch?.redactedDiff !== undefined ? (
-            <div className="arun-result-card">
-              <div className="arun-result-title">{t("agentRunWidget.result.proposedDiff")}</div>
-              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-              <pre
-                role="region"
-                aria-label={t("agentRunWidget.result.proposedDiff")}
-                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-                tabIndex={0}
-              >
-                {evidence.patch.redactedDiff}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <AgentRunResults report={report} evidence={evidence} t={t} />
 
       {/* uiux-fix F018 C109: async failures must be announced (WCAG 4.1.3) */}
       {error !== null ? (
@@ -899,36 +1006,27 @@ export function AgentRunWidget({
         </div>
       ) : null}
 
-      <div className="arun-controls">
-        <a
-          className="arun-btn ghost"
-          href={`/api/evidence/${encodeURIComponent(runId)}`}
-          target="_blank"
-          rel="noreferrer"
-          ref={evidenceLinkRef}
-        >
-          {t("agentRunWidget.evidence.title")}
-        </a>
-        {showApply ? (
-          // uiux-fix F018 C124: aria-disabled + click guard instead of HTML disabled
-          // so the focused button does not throw focus to <body> while applying.
-          <button
-            type="button"
-            className="arun-btn"
-            aria-disabled={applying}
-            onClick={onApplyClick}
-          >
-            {applyButtonLabel({ applying, confirmApply, fileCount: applyFileCount, t })}
-          </button>
-        ) : report?.appliedAt !== undefined ? (
-          <span className="arun-final mono">{t("agentRunWidget.result.applied")}</span>
-        ) : null}
-        {showCancel ? (
-          <button type="button" className="arun-btn danger" onClick={() => void doCancel()}>
-            {t("agentRunWidget.controls.cancel")}
-          </button>
-        ) : null}
-      </div>
+      <AgentRunControls
+        runId={runId}
+        evidenceLinkRef={evidenceLinkRef}
+        showApply={showApply}
+        applying={applying}
+        confirmApply={confirmApply}
+        applyFileCount={applyFileCount}
+        appliedAt={report?.appliedAt}
+        showCancel={showCancel}
+        onApply={onApplyClick}
+        onCancel={(): void => {
+          doCancel().catch((cancelError: unknown) => {
+            setError(
+              cancelError instanceof Error
+                ? cancelError.message
+                : t("agentRunWidget.error.cancelRun"),
+            );
+          });
+        }}
+        t={t}
+      />
     </div>
   );
 }
