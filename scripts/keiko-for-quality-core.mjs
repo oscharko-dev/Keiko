@@ -3,7 +3,11 @@ const gitarIdentity = { appId: 827041, userId: 159877585 };
 const socketIdentity = { appId: 156372, userId: 95510084 };
 const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
 
-export const requiredChecks = [
+function checks(entries) {
+  return entries.map(([name, appId]) => ({ appId, name }));
+}
+
+export const requiredChecks = checks([
   ["ci", actionsAppId],
   ["actionlint", actionsAppId],
   ["Verify pinned action SHAs", actionsAppId],
@@ -19,7 +23,29 @@ export const requiredChecks = [
   ["Socket Security: Project Report", 156372],
   ["Socket Security: Pull Request Alerts", 156372],
   ["Gitar", 827041],
-].map(([name, appId]) => ({ appId, name }));
+]);
+
+export const nativeRequiredChecks = checks([
+  ["ci", actionsAppId],
+  ["actionlint", actionsAppId],
+  ["Verify pinned action SHAs", actionsAppId],
+  ["zizmor", actionsAppId],
+  ["Analyze (actions)", actionsAppId],
+  ["Analyze (javascript-typescript)", actionsAppId],
+  ["Build, scan, SBOM, smoke", actionsAppId],
+  ["Review dependency diff (main)", actionsAppId],
+  ["native", actionsAppId],
+  ["Scan dependency lockfiles", actionsAppId],
+  ["SonarCloud Code Analysis", 12526],
+  ["Socket Security: Project Report", 156372],
+  ["Socket Security: Pull Request Alerts", 156372],
+]);
+
+export function requiredChecksForProfile(profile) {
+  if (profile === "keiko") return requiredChecks;
+  if (profile === "keiko-native") return nativeRequiredChecks;
+  throw new Error("Unsupported quality-gate profile.");
+}
 
 function completedAt(check) {
   const value = Date.parse(check.completedAt ?? check.completed_at);
@@ -31,9 +57,11 @@ function startedAt(check) {
   return Number.isFinite(value) ? value : undefined;
 }
 
-export function checkFailures(checks, headSha) {
-  return requiredChecks.flatMap(({ appId, name }) => {
-    const candidates = checks.filter((check) => check.name === name && check.headSha === headSha);
+export function checkFailures(checkRuns, headSha, expectedChecks = requiredChecks) {
+  return expectedChecks.flatMap(({ appId, name }) => {
+    const candidates = checkRuns.filter(
+      (check) => check.name === name && check.headSha === headSha,
+    );
     const check = candidates.toSorted(
       (left, right) => (completedAt(right) ?? 0) - (completedAt(left) ?? 0),
     )[0];
@@ -204,7 +232,7 @@ export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
   const failures = [
-    ...checkFailures(input.checks, input.headSha),
+    ...checkFailures(input.checks, input.headSha, input.requiredChecks),
     ...reviewFailures(
       input.checks,
       input.reviews,

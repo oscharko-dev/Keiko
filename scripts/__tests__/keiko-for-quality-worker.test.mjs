@@ -33,6 +33,8 @@ import worker, {
   reconciliationErrorKind,
   reserveDelivery,
   socketNoAlertEvidence,
+  targetForRepository,
+  targetRepositories,
   trackedPullRequests,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
@@ -1697,6 +1699,86 @@ describe("Keiko for Quality worker trust boundary", () => {
         repository: "Keiko",
       },
     ]);
+  });
+
+  it("validates repository-specific base branches and quality profiles", () => {
+    const env = {
+      TARGET_REPOSITORIES_JSON: JSON.stringify([
+        { baseBranch: "dev", profile: "keiko", repository: "oscharko-dev/Keiko" },
+        {
+          baseBranch: "main",
+          profile: "keiko-native",
+          repository: "oscharko-dev/Keiko-Native",
+        },
+      ]),
+    };
+    expect(targetRepositories(env)).toEqual([
+      { baseBranch: "dev", profile: "keiko", repository: "oscharko-dev/Keiko" },
+      {
+        baseBranch: "main",
+        profile: "keiko-native",
+        repository: "oscharko-dev/Keiko-Native",
+      },
+    ]);
+    expect(targetForRepository("oscharko-dev/Keiko-Native", env)).toEqual({
+      baseBranch: "main",
+      profile: "keiko-native",
+      repository: "oscharko-dev/Keiko-Native",
+    });
+    expect(() => targetForRepository("outside/repository", env)).toThrow(
+      "Repository is outside the quality target set.",
+    );
+  });
+
+  it("discovers each configured repository on its own protected base branch", async () => {
+    const fetchMock = githubMock("f".repeat(40), { openPulls: [{ number: 7 }] });
+    const env = {
+      ...environment(stateBinding()),
+      TARGET_REPOSITORIES_JSON: JSON.stringify([
+        { baseBranch: "dev", profile: "keiko", repository: "oscharko-dev/Keiko" },
+        {
+          baseBranch: "main",
+          profile: "keiko-native",
+          repository: "oscharko-dev/Keiko-Native",
+        },
+      ]),
+    };
+    delete env.TARGET_REPOSITORY;
+    await expect(discoverOpenPullRequests(env)).resolves.toEqual([
+      { installationId: 42, owner: "oscharko-dev", pullNumber: 7, repository: "Keiko" },
+      {
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 7,
+        repository: "Keiko-Native",
+      },
+    ]);
+    const pullUrls = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes("/pulls?"));
+    expect(pullUrls).toEqual([
+      expect.stringContaining("/repos/oscharko-dev/Keiko/pulls?state=open&base=dev"),
+      expect.stringContaining("/repos/oscharko-dev/Keiko-Native/pulls?state=open&base=main"),
+    ]);
+  });
+
+  it("fails closed for malformed, duplicate, or unsupported target profiles", () => {
+    for (const value of ["invalid", "[]", '[{"repository":"owner/repo"}]']) {
+      expect(() => targetRepositories({ TARGET_REPOSITORIES_JSON: value })).toThrow();
+    }
+    const duplicate = JSON.stringify([
+      { baseBranch: "dev", profile: "keiko", repository: "owner/repo" },
+      { baseBranch: "main", profile: "keiko-native", repository: "owner/repo" },
+    ]);
+    expect(() => targetRepositories({ TARGET_REPOSITORIES_JSON: duplicate })).toThrow(
+      "Target repositories must be unique.",
+    );
+    const unsupported = JSON.stringify([
+      { baseBranch: "main", profile: "unknown", repository: "owner/repo" },
+    ]);
+    expect(() => targetRepositories({ TARGET_REPOSITORIES_JSON: unsupported })).toThrow(
+      "Unsupported quality-gate profile.",
+    );
   });
 
   it("rejects malformed reconciliation targets and missing installation identity", async () => {
