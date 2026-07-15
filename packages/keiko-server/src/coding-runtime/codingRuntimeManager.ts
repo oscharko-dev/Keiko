@@ -1041,7 +1041,7 @@ function consumePresentedApproval(
 function normalizedConnectorScopes(
   scopes: readonly CodingWorkbenchConnectorScope[] | undefined,
 ): readonly CodingWorkbenchConnectorScope[] {
-  return [...new Set(scopes ?? [])].sort();
+  return [...new Set(scopes ?? [])].sort((left, right) => left.localeCompare(right));
 }
 
 function supervisedEvidenceContext(

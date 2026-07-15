@@ -70,14 +70,13 @@ export interface RelationshipAuditEntryRow {
 // Selects where the row lives. Audit-events.md §5.3: the source endpoint kind decides.
 // For now both branches return "sibling-table"; the workflow-run branch is reserved for
 // #544 wiring EvidenceManifest.relationships?.
-export function resolveAuditPlacement(input: {
+export function resolveAuditPlacement(_input: {
   readonly kind: RelationshipAuditKind;
   readonly sourceKind?: string | undefined;
 }): RelationshipAuditPlacement {
   // TODO(#544): wire EvidenceManifest.relationships? when sourceKind === "workflow-run"
   // and the request handler holds an evidenceRunId. Until then every row lands in the
   // sibling table — this is the documented Issue #539 placement.
-  void input;
   return "sibling-table";
 }
 

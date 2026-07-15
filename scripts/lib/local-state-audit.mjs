@@ -905,7 +905,7 @@ function canonical(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   const entries = Object.keys(value)
-    .sort()
+    .sort((left, right) => left.localeCompare(right))
     .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`);
   return `{${entries.join(",")}}`;
 }

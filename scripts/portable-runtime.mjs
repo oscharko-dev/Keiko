@@ -1317,7 +1317,7 @@ function listFiles(root) {
     if (entry.isDirectory()) out.push(...listFiles(full));
     else if (entry.isFile()) out.push(resolve(full));
   }
-  return out.sort();
+  return out.sort((left, right) => left.localeCompare(right));
 }
 
 export function readPortableManifest(path) {

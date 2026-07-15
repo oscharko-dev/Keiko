@@ -727,7 +727,7 @@ function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeR
 function readinessBlockLifecycle(
   prep: MergePrep,
   approval: GitDeliveryApprovalRequirement,
-  summary: GitMergeReadinessSummary,
+  _summary: GitMergeReadinessSummary,
   providerError: boolean,
 ): GitMutationLifecycleResult {
   if (providerError) {
@@ -748,7 +748,6 @@ function readinessBlockLifecycle(
   }
   // Otherwise the merge is blocked by unmet provider/branch-protection merge requirements; the precise,
   // content-free blocker list is carried on the GitMergeLifecycleResult.readiness for the UI/recovery.
-  void summary;
   return lifecycleFor(
     prep,
     approval,

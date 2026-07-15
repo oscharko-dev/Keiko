@@ -34,96 +34,84 @@ import type {
   GitDeliveryRiskClass,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError, fetchGitDeliveryActionSheet } from "@/lib/api";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
+
+const GitIcon = Icons.git;
 
 // ─── Display label maps (typed codes → human text; never colour-alone) ─────────────────
 
-const STATE_LABEL: Readonly<Record<GitDeliveryActionSheetState, string>> = {
-  "ready-to-execute": "Ready to execute",
-  "waiting-for-approval": "Waiting for approval",
-  blocked: "Blocked",
-};
+function stateLabel(state: GitDeliveryActionSheetState, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.state.${state}`);
+}
 
-const NECESSITY_LABEL: Readonly<Record<GitDeliveryApprovalNecessity, string>> = {
-  "not-required": "Optional",
-  required: "Mandatory",
-  impossible: "Impossible",
-};
+function necessityLabel(value: GitDeliveryApprovalNecessity, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.necessity.${value}`);
+}
 
-const RISK_CLASS_LABEL: Readonly<Record<GitDeliveryRiskClass, string>> = {
-  "local-mutation": "Local mutation",
-  publish: "Publish",
-  "protected-or-merge": "Protected or merge",
-  "recovery-or-rewrite": "Recovery or rewrite",
-};
+function riskClassLabel(value: GitDeliveryRiskClass, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.risk.${value}`);
+}
 
-const BLOCKED_CAUSE_LABEL: Readonly<Record<GitDeliveryBlockedCause, string>> = {
-  policy: "Blocked by policy",
-  preflight: "Blocked by a preflight check",
-  "provider-not-ready": "Provider not ready",
-};
+function blockedCauseLabel(value: GitDeliveryBlockedCause, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.blockedCause.${value}`);
+}
 
-const BLOCKER_SOURCE_LABEL: Readonly<Record<GitDeliveryBlockerSource, string>> = {
-  preflight: "Preflight",
-  policy: "Policy",
-  provider: "Provider",
-};
+function blockerSourceLabel(value: GitDeliveryBlockerSource, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.blockerSource.${value}`);
+}
 
-const BLOCKER_SEVERITY_LABEL: Readonly<Record<GitDeliveryBlockerSeverity, string>> = {
-  blocking: "Blocking",
-  advisory: "Advisory",
-};
+function blockerSeverityLabel(
+  value: GitDeliveryBlockerSeverity,
+  t: OptionalWidgetTranslate,
+): string {
+  return t(`gitDelivery.blockerSeverity.${value}`);
+}
 
-const REMEDIATION_LABEL: Readonly<Record<GitDeliveryRemediationClass, string>> = {
-  "user-actionable": "You can fix this",
-  internal: "Handled internally",
-};
+function remediationLabel(value: GitDeliveryRemediationClass, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.remediation.${value}`);
+}
 
-const BLOCK_REASON_LABEL: Readonly<Record<GitDeliveryBlockReason, string>> = {
-  "policy-pack-blocked": "Denied by the policy pack",
-  "protected-branch": "Target is a protected branch",
-  "provider-capability-absent": "Required provider capability is absent",
-  "approval-expired": "The granted approval has expired",
-  "risk-class-ceiling": "Exceeds the allowed risk-class ceiling",
-  "no-applicable-rule": "No applicable policy rule (fail-closed)",
-};
+function blockReasonLabel(value: GitDeliveryBlockReason, t: OptionalWidgetTranslate): string {
+  return t(`gitDelivery.blockReason.${value}`);
+}
 
-const POLICY_DECISION_LABEL: Readonly<Record<GitDeliveryPolicyExplanation["decision"], string>> = {
-  allowed: "Allowed",
-  blocked: "Blocked",
-  "approval-gated": "Approval required",
-  constrained: "Allowed within constraints",
-};
+function policyDecisionLabel(
+  value: GitDeliveryPolicyExplanation["decision"],
+  t: OptionalWidgetTranslate,
+): string {
+  return t(`gitDelivery.policyDecision.${value}`);
+}
 
-const RECOVERY_HINT_LABEL: Readonly<Record<GitDeliveryRecoveryActionHint, string>> = {
-  retry: "Retry the action",
-  "stage-changes": "Stage your changes",
-  "configure-upstream": "Configure the upstream branch",
-  "resolve-conflicts": "Resolve the conflicts",
-  "abort-in-progress-operation": "Abort the in-progress operation",
-  "request-approval": "Request approval",
-  "adjust-policy-target": "Adjust the policy target",
-  "recover-via-strategy": "Recover via a governed strategy",
-  "wait-for-provider": "Wait for the provider",
-};
+function recoveryHintLabel(
+  value: GitDeliveryRecoveryActionHint,
+  t: OptionalWidgetTranslate,
+): string {
+  return t(`gitDelivery.recoveryHint.${value}`);
+}
 
-const RECOVERY_STRATEGY_LABEL: Readonly<Record<GitDeliveryRecoveryStrategyHint, string>> = {
-  "soft-reset": "soft reset",
-  "mixed-reset": "mixed reset",
-  "stash-and-reset": "stash and reset",
-  "restore-index": "restore index",
-};
+function recoveryStrategyLabel(
+  value: GitDeliveryRecoveryStrategyHint,
+  t: OptionalWidgetTranslate,
+): string {
+  return t(`gitDelivery.recoveryStrategy.${value}`);
+}
 
-function constraintLabel(constraint: GitDeliveryConstraint): string {
+function constraintLabel(constraint: GitDeliveryConstraint, t: OptionalWidgetTranslate): string {
   switch (constraint.kind) {
     case "branch-pattern":
-      return `Branch pattern: ${constraint.patterns
-        .map((p) => `${p.matchKind} "${p.value}"`)
-        .join(", ")}`;
+      return t("gitDelivery.constraint.branchPattern", {
+        patterns: constraint.patterns.map((p) => `${p.matchKind} "${p.value}"`).join(", "),
+      });
     case "provider-capability":
-      return `Requires provider capability: ${constraint.capability}`;
+      return t("gitDelivery.constraint.providerCapability", { capability: constraint.capability });
     case "risk-class-ceiling":
-      return `Risk-class ceiling: ${RISK_CLASS_LABEL[constraint.maxRiskClass]}`;
+      return t("gitDelivery.constraint.riskCeiling", {
+        risk: riskClassLabel(constraint.maxRiskClass, t),
+      });
     default: {
       // Exhaustive: a new GitDeliveryConstraint kind must update this switch (compile-time error).
       const unreachable: never = constraint;
@@ -132,103 +120,163 @@ function constraintLabel(constraint: GitDeliveryConstraint): string {
   }
 }
 
-function formatError(err: unknown): string {
+function formatError(err: unknown, t: OptionalWidgetTranslate): string {
   if (err instanceof ApiError) return `${err.message} (${err.code})`;
   if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
+  return t("gitDelivery.error.unexpected");
 }
 
 // ─── Preview manifest (AC2) ────────────────────────────────────────────────────────────
 
-function PreviewSection({ preview }: { readonly preview: GitDeliveryPreviewManifest }): ReactNode {
-  const remoteImpact: readonly string[] = [
-    preview.touchesRemote ? "Touches the remote" : "Local only",
-    ...(preview.wouldCreateRemoteBranch ? ["Would create a remote branch"] : []),
-    ...(preview.wouldForcePublish ? ["Would force-publish"] : []),
-    ...(preview.wouldTriggerChecks ? ["Would trigger checks"] : []),
+function remoteImpactLabels(
+  preview: GitDeliveryPreviewManifest,
+  t: OptionalWidgetTranslate,
+): readonly string[] {
+  const labels = [
+    preview.touchesRemote
+      ? t("gitDelivery.remote.touchesRemote")
+      : t("gitDelivery.remote.localOnly"),
   ];
+  if (preview.wouldCreateRemoteBranch) labels.push(t("gitDelivery.remote.createBranch"));
+  if (preview.wouldForcePublish) labels.push(t("gitDelivery.remote.forcePublish"));
+  if (preview.wouldTriggerChecks) labels.push(t("gitDelivery.remote.triggerChecks"));
+  return labels;
+}
+
+function PreviewBranchDetails({
+  preview,
+  t,
+}: {
+  readonly preview: GitDeliveryPreviewManifest;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
   return (
-    <section className="gdas-section" aria-label="Action preview">
-      <h4 className="gdas-section-title">Preview</h4>
-      <dl className="gdas-preview">
+    <>
+      {preview.affectedBranchName !== undefined ? (
         <div className="gdas-kv">
-          <dt>Action</dt>
-          <dd>{preview.actionKind}</dd>
+          <dt>{t("gitDelivery.preview.affectedBranch")}</dt>
+          <dd className="gdas-mono">{preview.affectedBranchName}</dd>
         </div>
+      ) : null}
+      {preview.baseBranchName !== undefined ? (
         <div className="gdas-kv">
-          <dt>Risk</dt>
-          <dd>
-            {RISK_CLASS_LABEL[preview.riskClass]} (severity {preview.riskSeverity.toString()})
-          </dd>
+          <dt>{t("gitDelivery.preview.baseBranch")}</dt>
+          <dd className="gdas-mono">{preview.baseBranchName}</dd>
         </div>
-        {preview.affectedBranchName !== undefined ? (
-          <div className="gdas-kv">
-            <dt>Affected branch</dt>
-            <dd className="gdas-mono">{preview.affectedBranchName}</dd>
-          </div>
-        ) : null}
-        {preview.baseBranchName !== undefined ? (
-          <div className="gdas-kv">
-            <dt>Base branch</dt>
-            <dd className="gdas-mono">{preview.baseBranchName}</dd>
-          </div>
-        ) : null}
-        {preview.remoteBranchName !== undefined ? (
-          <div className="gdas-kv">
-            <dt>Remote branch</dt>
-            <dd className="gdas-mono">{preview.remoteBranchName}</dd>
-          </div>
-        ) : null}
-        {preview.estimatedFileCount !== undefined ? (
-          <div className="gdas-kv">
-            <dt>Files affected</dt>
-            <dd>{preview.estimatedFileCount.toString()}</dd>
-          </div>
-        ) : null}
-        {preview.estimatedBytesDelta !== undefined ? (
-          <div className="gdas-kv">
-            <dt>Bytes delta</dt>
-            <dd>{preview.estimatedBytesDelta.toString()}</dd>
-          </div>
-        ) : null}
+      ) : null}
+      {preview.remoteBranchName !== undefined ? (
         <div className="gdas-kv">
-          <dt>Remote impact</dt>
-          <dd>{remoteImpact.join(" · ")}</dd>
+          <dt>{t("gitDelivery.preview.remoteBranch")}</dt>
+          <dd className="gdas-mono">{preview.remoteBranchName}</dd>
         </div>
-      </dl>
+      ) : null}
+      {preview.estimatedFileCount !== undefined ? (
+        <div className="gdas-kv">
+          <dt>{t("gitDelivery.preview.filesAffected")}</dt>
+          <dd>{preview.estimatedFileCount.toString()}</dd>
+        </div>
+      ) : null}
+      {preview.estimatedBytesDelta !== undefined ? (
+        <div className="gdas-kv">
+          <dt>{t("gitDelivery.preview.bytesDelta")}</dt>
+          <dd>{preview.estimatedBytesDelta.toString()}</dd>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function PreviewReadinessDetails({
+  preview,
+  t,
+}: {
+  readonly preview: GitDeliveryPreviewManifest;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  return (
+    <>
       {preview.pullRequest !== undefined ? (
         <p className="gdas-preview-line" data-testid="gdas-preview-pr">
-          Pull request: {preview.pullRequest.status}
-          {preview.pullRequest.isDraft ? " (draft)" : ""} ·{" "}
-          {preview.pullRequest.mergeReadiness.receivedApprovalCount.toString()} of{" "}
-          {preview.pullRequest.mergeReadiness.requiredApprovalCount.toString()} approvals
+          {t("gitDelivery.preview.pullRequest", {
+            status: preview.pullRequest.status,
+            draft: preview.pullRequest.isDraft ? t("gitDelivery.preview.draftSuffix") : "",
+            received: preview.pullRequest.mergeReadiness.receivedApprovalCount,
+            required: preview.pullRequest.mergeReadiness.requiredApprovalCount,
+          })}
         </p>
       ) : null}
       {preview.mergeReadiness !== undefined ? (
         <p className="gdas-preview-line" data-testid="gdas-preview-merge">
-          Merge readiness: {preview.mergeReadiness.ready ? "Ready to merge" : "Not ready to merge"}
+          {t("gitDelivery.preview.mergeReadiness", {
+            state: preview.mergeReadiness.ready
+              ? t("gitDelivery.preview.readyToMerge")
+              : t("gitDelivery.preview.notReadyToMerge"),
+          })}
           {preview.mergeReadiness.blockingReason !== undefined
             ? ` (${preview.mergeReadiness.blockingReason})`
             : ""}{" "}
-          · {preview.mergeReadiness.receivedApprovalCount.toString()} of{" "}
-          {preview.mergeReadiness.requiredApprovalCount.toString()} approvals
+          ·{" "}
+          {t("gitDelivery.preview.approvals", {
+            received: preview.mergeReadiness.receivedApprovalCount,
+            required: preview.mergeReadiness.requiredApprovalCount,
+          })}
         </p>
       ) : null}
       {preview.branchProtection !== undefined ? (
         <p className="gdas-preview-line" data-testid="gdas-preview-protection">
-          Branch protection: {preview.branchProtection.requiredReviewCount.toString()} required
-          review{preview.branchProtection.requiredReviewCount === 1 ? "" : "s"},{" "}
-          {preview.branchProtection.requiredStatusCheckCount.toString()} required check
-          {preview.branchProtection.requiredStatusCheckCount === 1 ? "" : "s"}
+          {t("gitDelivery.preview.branchProtection", {
+            reviews: preview.branchProtection.requiredReviewCount,
+            checks: preview.branchProtection.requiredStatusCheckCount,
+          })}
         </p>
       ) : null}
       {preview.checks !== undefined ? (
         <p className="gdas-preview-line" data-testid="gdas-preview-checks">
-          Checks: {preview.checks.overallStatus} ({preview.checks.passing.toString()} passing,{" "}
-          {preview.checks.failing.toString()} failing, {preview.checks.pending.toString()} pending
-          of {preview.checks.total.toString()})
+          {t("gitDelivery.preview.checks", {
+            status: preview.checks.overallStatus,
+            passing: preview.checks.passing,
+            failing: preview.checks.failing,
+            pending: preview.checks.pending,
+            total: preview.checks.total,
+          })}
         </p>
       ) : null}
+    </>
+  );
+}
+
+function PreviewSection({
+  preview,
+  t,
+}: {
+  readonly preview: GitDeliveryPreviewManifest;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  const remoteImpact = remoteImpactLabels(preview, t);
+  return (
+    <section className="gdas-section" aria-label={t("gitDelivery.preview.ariaLabel")}>
+      <h4 className="gdas-section-title">{t("gitDelivery.preview.title")}</h4>
+      <dl className="gdas-preview">
+        <div className="gdas-kv">
+          <dt>{t("gitDelivery.preview.action")}</dt>
+          <dd>{preview.actionKind}</dd>
+        </div>
+        <div className="gdas-kv">
+          <dt>{t("gitDelivery.preview.risk")}</dt>
+          <dd>
+            {t("gitDelivery.preview.riskValue", {
+              risk: riskClassLabel(preview.riskClass, t),
+              severity: preview.riskSeverity,
+            })}
+          </dd>
+        </div>
+        <PreviewBranchDetails preview={preview} t={t} />
+        <div className="gdas-kv">
+          <dt>{t("gitDelivery.preview.remoteImpact")}</dt>
+          <dd>{remoteImpact.join(" · ")}</dd>
+        </div>
+      </dl>
+      <PreviewReadinessDetails preview={preview} t={t} />
     </section>
   );
 }
@@ -238,44 +286,50 @@ function PreviewSection({ preview }: { readonly preview: GitDeliveryPreviewManif
 function ApprovalSection({
   approval,
   policyExplanation,
+  t,
 }: {
   readonly approval: GitDeliveryApprovalSummary;
   readonly policyExplanation: GitDeliveryPolicyExplanation;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
+  const necessitySuffix = approval.satisfied
+    ? t("gitDelivery.approval.satisfiedSuffix")
+    : t("gitDelivery.approval.unsatisfiedSuffix");
   return (
-    <section className="gdas-section" aria-label="Approval and policy">
-      <h4 className="gdas-section-title">Approval</h4>
+    <section className="gdas-section" aria-label={t("gitDelivery.approval.ariaLabel")}>
+      <h4 className="gdas-section-title">{t("gitDelivery.approval.title")}</h4>
       <dl className="gdas-preview">
         <div className="gdas-kv">
-          <dt>Approval</dt>
+          <dt>{t("gitDelivery.approval.title")}</dt>
           <dd data-testid="gdas-necessity">
-            {NECESSITY_LABEL[approval.necessity]}
-            {approval.necessity === "required"
-              ? approval.satisfied
-                ? " · satisfied"
-                : " · not yet satisfied"
-              : ""}
+            {necessityLabel(approval.necessity, t)}
+            {approval.necessity === "required" ? necessitySuffix : ""}
           </dd>
         </div>
         <div className="gdas-kv">
-          <dt>Policy decision</dt>
+          <dt>{t("gitDelivery.approval.policyDecision")}</dt>
           <dd data-testid="gdas-policy-decision">
-            {POLICY_DECISION_LABEL[policyExplanation.decision]}
+            {policyDecisionLabel(policyExplanation.decision, t)}
           </dd>
         </div>
         {policyExplanation.blockReason !== undefined ? (
           <div className="gdas-kv">
-            <dt>Reason</dt>
+            <dt>{t("gitDelivery.approval.reason")}</dt>
             <dd data-testid="gdas-block-reason">
-              {BLOCK_REASON_LABEL[policyExplanation.blockReason]}
+              {blockReasonLabel(policyExplanation.blockReason, t)}
             </dd>
           </div>
         ) : null}
       </dl>
       {policyExplanation.requiredApprovers.length > 0 ? (
         <div className="gdas-approvers" data-testid="gdas-required-approvers">
-          <span className="gdas-section-subtitle">Required approvers</span>
-          <ul className="gdas-approver-list" aria-label="Required approvers">
+          <span className="gdas-section-subtitle">
+            {t("gitDelivery.approval.requiredApprovers")}
+          </span>
+          <ul
+            className="gdas-approver-list"
+            aria-label={t("gitDelivery.approval.requiredApprovers")}
+          >
             {policyExplanation.requiredApprovers.map((approver) => (
               <li key={approver} className="gdas-mono">
                 {approver}
@@ -286,10 +340,15 @@ function ApprovalSection({
       ) : null}
       {policyExplanation.constraints.length > 0 ? (
         <div className="gdas-constraints">
-          <span className="gdas-section-subtitle">Constraints</span>
-          <ul className="gdas-constraint-list" aria-label="Policy constraints">
+          <span className="gdas-section-subtitle">{t("gitDelivery.approval.constraints")}</span>
+          <ul
+            className="gdas-constraint-list"
+            aria-label={t("gitDelivery.approval.constraintsAriaLabel")}
+          >
             {policyExplanation.constraints.map((constraint, index) => (
-              <li key={`${constraint.kind}-${index.toString()}`}>{constraintLabel(constraint)}</li>
+              <li key={`${constraint.kind}-${index.toString()}`}>
+                {constraintLabel(constraint, t)}
+              </li>
             ))}
           </ul>
         </div>
@@ -303,9 +362,11 @@ function ApprovalSection({
 function ExpectedBlockerList({
   blockers,
   label,
+  t,
 }: {
   readonly blockers: readonly GitDeliveryExpectedBlocker[];
   readonly label: string;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (blockers.length === 0) return null;
   return (
@@ -317,21 +378,26 @@ function ExpectedBlockerList({
           data-severity={blocker.severity}
           // Both the visible badges and this accessible name carry every typed field, so the
           // severity is never conveyed by colour alone (AC5).
-          aria-label={`${BLOCKER_SEVERITY_LABEL[blocker.severity]} ${BLOCKER_SOURCE_LABEL[blocker.source]} blocker: ${blocker.reasonCode}. ${REMEDIATION_LABEL[blocker.remediation]}.`}
+          aria-label={t("gitDelivery.blocker.ariaLabel", {
+            severity: blockerSeverityLabel(blocker.severity, t),
+            source: blockerSourceLabel(blocker.source, t),
+            code: blocker.reasonCode,
+            remediation: remediationLabel(blocker.remediation, t),
+          })}
         >
           <span className="gdas-blocker-badges" aria-hidden="true">
             <span className="gdas-badge gdas-badge-source">
-              {BLOCKER_SOURCE_LABEL[blocker.source]}
+              {blockerSourceLabel(blocker.source, t)}
             </span>
             <span className="gdas-badge" data-severity={blocker.severity}>
-              {BLOCKER_SEVERITY_LABEL[blocker.severity]}
+              {blockerSeverityLabel(blocker.severity, t)}
             </span>
           </span>
           <span className="gdas-mono gdas-blocker-code" aria-hidden="true">
             {blocker.reasonCode}
           </span>
           <span className="gdas-blocker-remediation" aria-hidden="true">
-            {REMEDIATION_LABEL[blocker.remediation]}
+            {remediationLabel(blocker.remediation, t)}
           </span>
         </li>
       ))}
@@ -339,14 +405,24 @@ function ExpectedBlockerList({
   );
 }
 
-function BlockedSection({ blocked }: { readonly blocked: GitDeliveryBlockedDetail }): ReactNode {
+function BlockedSection({
+  blocked,
+  t,
+}: {
+  readonly blocked: GitDeliveryBlockedDetail;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
   return (
-    <section className="gdas-section gdas-blocked" aria-label="Blocked details">
-      <h4 className="gdas-section-title">Blocked</h4>
+    <section className="gdas-section gdas-blocked" aria-label={t("gitDelivery.blocked.ariaLabel")}>
+      <h4 className="gdas-section-title">{t("gitDelivery.blocked.title")}</h4>
       <p className="gdas-blocked-cause" data-testid="gdas-blocked-cause">
-        {BLOCKED_CAUSE_LABEL[blocked.cause]}
+        {blockedCauseLabel(blocked.cause, t)}
       </p>
-      <ExpectedBlockerList blockers={blocked.expectedBlockers} label="Blocking conditions" />
+      <ExpectedBlockerList
+        blockers={blocked.expectedBlockers}
+        label={t("gitDelivery.blocked.conditions")}
+        t={t}
+      />
     </section>
   );
 }
@@ -355,18 +431,25 @@ function BlockedSection({ blocked }: { readonly blocked: GitDeliveryBlockedDetai
 
 function RecoverySection({
   recovery,
+  t,
 }: {
   readonly recovery: readonly GitDeliveryRecoveryHint[];
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (recovery.length === 0) return null;
   return (
-    <section className="gdas-section gdas-recovery" aria-label="Recovery hints">
-      <h4 className="gdas-section-title">Recovery</h4>
-      <ul className="gdas-recovery-list" aria-label="Recovery hints list">
+    <section
+      className="gdas-section gdas-recovery"
+      aria-label={t("gitDelivery.recovery.ariaLabel")}
+    >
+      <h4 className="gdas-section-title">{t("gitDelivery.recovery.title")}</h4>
+      <ul className="gdas-recovery-list" aria-label={t("gitDelivery.recovery.listAriaLabel")}>
         {recovery.map((hint, index) => {
           const strategy =
             hint.suggestedRecoveryStrategy !== undefined
-              ? ` Suggested strategy: ${RECOVERY_STRATEGY_LABEL[hint.suggestedRecoveryStrategy]}.`
+              ? t("gitDelivery.recovery.strategySentence", {
+                  strategy: recoveryStrategyLabel(hint.suggestedRecoveryStrategy, t),
+                })
               : "";
           return (
             <li
@@ -374,19 +457,21 @@ function RecoverySection({
               className="gdas-recovery-item"
               data-testid="gdas-recovery-item"
             >
-              <span className="gdas-recovery-action">{RECOVERY_HINT_LABEL[hint.actionHint]}</span>
+              <span className="gdas-recovery-action">{recoveryHintLabel(hint.actionHint, t)}</span>
               <span className="gdas-recovery-remediation">
-                {REMEDIATION_LABEL[hint.remediation]}
+                {remediationLabel(hint.remediation, t)}
               </span>
               {hint.suggestedRecoveryStrategy !== undefined ? (
                 <span className="gdas-recovery-strategy" data-testid="gdas-recovery-strategy">
-                  Suggested strategy: {RECOVERY_STRATEGY_LABEL[hint.suggestedRecoveryStrategy]}
+                  {t("gitDelivery.recovery.strategy", {
+                    strategy: recoveryStrategyLabel(hint.suggestedRecoveryStrategy, t),
+                  })}
                 </span>
               ) : null}
               {/* Carry the full hint (action + remediation + strategy) in one accessible string so
                   nothing relies on colour or layout alone. */}
               <span className="sr-only">
-                {RECOVERY_HINT_LABEL[hint.actionHint]}. {REMEDIATION_LABEL[hint.remediation]}.
+                {recoveryHintLabel(hint.actionHint, t)}. {remediationLabel(hint.remediation, t)}.
                 {strategy}
               </span>
             </li>
@@ -412,6 +497,7 @@ function GitDeliveryActionSheetView({
   onConfirm,
   onReject,
 }: GitDeliveryActionSheetViewProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const titleId = useId();
   const stateId = useId();
   const waiting = actionSheet.state === "waiting-for-approval";
@@ -444,36 +530,38 @@ function GitDeliveryActionSheetView({
       onKeyDown={handleKeyDown}
     >
       <div className="arun-gate-h">
-        <Icons.git size={13} /> Git delivery
+        <GitIcon size={13} /> {t("gitDelivery.title")}
       </div>
       <div className="arun-gate-t" id={titleId}>
         {actionSheet.actionKind} · {actionSheet.actionId}
       </div>
       {/* The state is named in text — never conveyed by colour alone (AC5). */}
       <p className="gdas-state" id={stateId} data-testid="gdas-state">
-        State: {STATE_LABEL[actionSheet.state]}
+        {t("gitDelivery.state.label", { state: stateLabel(actionSheet.state, t) })}
       </p>
       {/* Live region announces state transitions to assistive tech (AC5), mirroring RunSummaryCard. */}
       <p className="sr-only" role="status" aria-live="polite" data-testid="gdas-live">
-        {`Git delivery action ${actionSheet.actionId} is ${STATE_LABEL[
-          actionSheet.state
-        ].toLowerCase()}.`}
+        {t("gitDelivery.state.announcement", {
+          id: actionSheet.actionId,
+          state: stateLabel(actionSheet.state, t).toLowerCase(),
+        })}
       </p>
 
       <ApprovalSection
         approval={actionSheet.approval}
         policyExplanation={actionSheet.policyExplanation}
+        t={t}
       />
-      <PreviewSection preview={actionSheet.preview} />
+      <PreviewSection preview={actionSheet.preview} t={t} />
       {blocked && actionSheet.blocked !== undefined ? (
-        <BlockedSection blocked={actionSheet.blocked} />
+        <BlockedSection blocked={actionSheet.blocked} t={t} />
       ) : null}
-      <RecoverySection recovery={actionSheet.recovery} />
+      <RecoverySection recovery={actionSheet.recovery} t={t} />
 
       <div className="arun-gate-btns gdas-actions">
         {onReject !== undefined ? (
           <button type="button" className="arun-btn ghost" onClick={onReject}>
-            Reject
+            {t("gitDelivery.action.reject")}
           </button>
         ) : null}
         {waiting ? (
@@ -483,7 +571,7 @@ function GitDeliveryActionSheetView({
             onClick={onApprove}
             data-testid="gdas-approve"
           >
-            Approve
+            {t("gitDelivery.action.approve")}
           </button>
         ) : (
           <button
@@ -493,7 +581,7 @@ function GitDeliveryActionSheetView({
             disabled={!ready}
             data-testid="gdas-confirm"
           >
-            Confirm
+            {t("gitDelivery.action.confirm")}
           </button>
         )}
       </div>
@@ -523,6 +611,7 @@ export function GitDeliveryActionSheetCard({
   onConfirm,
   onReject,
 }: GitDeliveryActionSheetCardProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const [fetched, setFetched] = useState<GitDeliveryActionSheet | null>(null);
   const [loading, setLoading] = useState<boolean>(
     actionSheet === undefined && request !== undefined,
@@ -541,11 +630,11 @@ export function GitDeliveryActionSheetCard({
       const res = await fetchImpl(request);
       if (seqRef.current === seq) setFetched(res);
     } catch (err) {
-      if (seqRef.current === seq) setError(formatError(err));
+      if (seqRef.current === seq) setError(formatError(err, t));
     } finally {
       if (seqRef.current === seq) setLoading(false);
     }
-  }, [fetchImpl, request]);
+  }, [fetchImpl, request, t]);
 
   useEffect(() => {
     // Only fetch when no sheet is supplied directly and a request is present.
@@ -560,7 +649,7 @@ export function GitDeliveryActionSheetCard({
   if (actionSheet === undefined && request === undefined) {
     return (
       <div className="gdas-empty" data-testid="gdas-empty">
-        <p>No Git delivery action to review.</p>
+        <p>{t("gitDelivery.empty")}</p>
       </div>
     );
   }
@@ -571,7 +660,7 @@ export function GitDeliveryActionSheetCard({
         <div role="alert" aria-live="assertive" className="lk-alert" data-testid="gdas-error">
           {error}
           <button type="button" className="lk-alert-retry" onClick={() => void load()}>
-            Retry
+            {t("gitDelivery.action.retry")}
           </button>
         </div>
       );
@@ -579,9 +668,9 @@ export function GitDeliveryActionSheetCard({
     return (
       <div className="gdas-loading" data-testid="gdas-loading" aria-busy={loading}>
         <p className="sr-only" role="status" aria-live="polite">
-          Loading the Git delivery action sheet…
+          {t("gitDelivery.loading.announcement")}
         </p>
-        <span aria-hidden="true">Loading…</span>
+        <span aria-hidden="true">{t("gitDelivery.loading.visible")}</span>
       </div>
     );
   }

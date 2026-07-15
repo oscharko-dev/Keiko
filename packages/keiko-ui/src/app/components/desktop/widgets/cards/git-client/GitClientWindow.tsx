@@ -12,8 +12,9 @@
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
   GitChangedFile,
   GitDiffScope,
@@ -50,6 +51,7 @@ import {
 } from "./git-client-styles";
 
 const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
+const ChevronRightIcon = Icons.chevronR;
 
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
@@ -66,6 +68,7 @@ export interface GitClientWindowProps {
 }
 
 type RightPaneMode = "diff" | "pull-request" | "merge";
+type SyncView = ReturnType<typeof deriveSyncView>;
 
 function preferredDiffScopeForChange(change: GitChangedFile): GitDiffScope {
   return change.staged && !change.unstaged && !change.untracked ? "staged" : "worktree";
@@ -126,6 +129,413 @@ function inferBaseBranch(
   return upstreamBranch ?? currentBranch ?? "main";
 }
 
+function useRightPaneFocus(
+  rightPaneMode: RightPaneMode,
+  rightPaneRef: RefObject<HTMLDivElement | null>,
+): void {
+  useEffect(() => {
+    if (rightPaneMode === "diff") return;
+    const frame = window.requestAnimationFrame(() => {
+      const heading = rightPaneRef.current?.querySelector("h2");
+      if (heading instanceof HTMLElement) {
+        heading.tabIndex = -1;
+        heading.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [rightPaneMode, rightPaneRef]);
+}
+
+interface InitialChangeLandingOptions {
+  readonly selectedPath: string | null;
+  readonly initialPath: string | undefined;
+  readonly activeStatus: GitRepositoryStatusResponse | null;
+  readonly landedPathRef: RefObject<string | null>;
+  readonly setTab: Dispatch<SetStateAction<ChangesTab>>;
+  readonly setSelectedCommitSha: Dispatch<SetStateAction<string | null>>;
+  readonly setSelectedChangePath: Dispatch<SetStateAction<string | null>>;
+  readonly setDiffScope: Dispatch<SetStateAction<GitDiffScope>>;
+}
+
+function useInitialChangeLanding(options: InitialChangeLandingOptions): void {
+  const {
+    selectedPath,
+    initialPath,
+    activeStatus,
+    landedPathRef,
+    setTab,
+    setSelectedCommitSha,
+    setSelectedChangePath,
+    setDiffScope,
+  } = options;
+  useEffect(() => {
+    if (selectedPath === null || initialPath === undefined || activeStatus === null) return;
+    const landingKey = `${selectedPath}\u0000${initialPath}`;
+    if (landedPathRef.current === landingKey) return;
+    const change = activeStatus.changes.find((entry) => entry.path === initialPath);
+    if (change === undefined) return;
+    landedPathRef.current = landingKey;
+    setTab("changes");
+    setSelectedCommitSha(null);
+    setSelectedChangePath(change.path);
+    setDiffScope(preferredDiffScopeForChange(change));
+  }, [
+    activeStatus,
+    initialPath,
+    landedPathRef,
+    selectedPath,
+    setDiffScope,
+    setSelectedChangePath,
+    setSelectedCommitSha,
+    setTab,
+  ]);
+}
+
+interface InitialCommitLandingOptions {
+  readonly selectedPath: string | null;
+  readonly initialCommit: string | undefined;
+  readonly landedCommitRef: RefObject<string | null>;
+  readonly setTab: Dispatch<SetStateAction<ChangesTab>>;
+  readonly setSelectedCommitSha: Dispatch<SetStateAction<string | null>>;
+}
+
+function useInitialCommitLanding(options: InitialCommitLandingOptions): void {
+  const { selectedPath, initialCommit, landedCommitRef, setTab, setSelectedCommitSha } = options;
+  useEffect(() => {
+    if (selectedPath === null || initialCommit === undefined) return;
+    const landingKey = `${selectedPath}\u0000${initialCommit}`;
+    if (landedCommitRef.current === landingKey) return;
+    landedCommitRef.current = landingKey;
+    setTab("history");
+    setSelectedCommitSha(initialCommit);
+  }, [initialCommit, landedCommitRef, selectedPath, setSelectedCommitSha, setTab]);
+}
+
+function selectedHistoryCommitResolver(
+  entries: readonly GitHistoryEntry[],
+  requestedCommit: string | undefined,
+  hasRequestedCommit: boolean,
+): (current: string | null) => string | null {
+  return (current: string | null): string | null => {
+    if (entries.length === 0) return null;
+    if (requestedCommit !== undefined) return hasRequestedCommit ? requestedCommit : null;
+    if (current !== null && entries.some((entry) => entry.sha === current)) return current;
+    return entries[0]?.sha ?? null;
+  };
+}
+
+function diffScopeNormalizer(change: GitChangedFile): (current: GitDiffScope) => GitDiffScope {
+  return (current: GitDiffScope): GitDiffScope => normalizeDiffScopeForChange(current, change);
+}
+
+function selectedChangeResolver(
+  changes: readonly GitChangedFile[],
+  setDiffScope: Dispatch<SetStateAction<GitDiffScope>>,
+): (previous: string | null) => string | null {
+  return (previous: string | null): string | null => {
+    if (previous === null) return null;
+    const selectedChange = changes.find((change) => change.path === previous);
+    if (selectedChange === undefined) return null;
+    setDiffScope(diffScopeNormalizer(selectedChange));
+    return previous;
+  };
+}
+
+interface SyncExecutionContext {
+  readonly sequence: number;
+  readonly startedAt: number;
+  readonly aheadBefore: number;
+  readonly behindBefore: number;
+  readonly sequenceRef: RefObject<number>;
+  readonly setBusy: Dispatch<SetStateAction<boolean>>;
+  readonly setOutcome: Dispatch<SetStateAction<string | null>>;
+  readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly setStatusRevision: Dispatch<SetStateAction<number>>;
+}
+
+function syncOutcomeWithMetrics(
+  context: SyncExecutionContext,
+  label: string,
+  t: I18nTranslate,
+): string {
+  const elapsedSeconds = Math.round((performance.now() - context.startedAt) / 100) / 10;
+  const delta =
+    context.aheadBefore > 0
+      ? t("gitClientWindow.sync.aheadSuffix", { count: context.aheadBefore })
+      : t("gitClientWindow.sync.behindSuffix", { count: context.behindBefore });
+  return t("gitClientWindow.sync.outcome", { label, seconds: elapsedSeconds, delta });
+}
+
+function completeSync(context: SyncExecutionContext, message: string): void {
+  if (context.sequenceRef.current !== context.sequence) return;
+  context.setBusy(false);
+  context.setOutcome(message);
+  context.setStatusRevision((revision) => revision + 1);
+}
+
+function failSync(context: SyncExecutionContext, error: unknown): void {
+  if (context.sequenceRef.current !== context.sequence) return;
+  context.setBusy(false);
+  context.setError(formatGitError(error));
+}
+
+function runFetchOrPullSync(
+  client: GitClientSeam,
+  projectId: string,
+  syncView: SyncView,
+  context: SyncExecutionContext,
+  t: I18nTranslate,
+): void {
+  if (syncView.action !== "fetch" && syncView.action !== "pull") return;
+  const operation = syncView.action;
+  void client
+    .syncPreview({ operation, projectId, remote: syncView.remoteAlias })
+    .then((preview) => {
+      if (!preview.executable) {
+        completeSync(
+          context,
+          t("gitClientWindow.sync.blocked", {
+            reason: preview.blockReason ?? t("gitClientWindow.sync.unavailableLower"),
+          }),
+        );
+        return undefined;
+      }
+      return client.syncExecute({ operation, projectId, remote: syncView.remoteAlias });
+    })
+    .then(
+      (result) => {
+        if (result === undefined) return;
+        const label =
+          operation === "fetch" ? t("gitClientWindow.sync.fetch") : t("gitClientWindow.sync.pull");
+        completeSync(
+          context,
+          syncOutcomeWithMetrics(
+            context,
+            t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
+            t,
+          ),
+        );
+      },
+      (error: unknown) => failSync(context, error),
+    );
+}
+
+type PushInput = Parameters<GitClientSeam["pushPreview"]>[0];
+
+function pushInput(projectId: string, syncView: SyncView): PushInput | null {
+  if (syncView.action !== "push" && syncView.action !== "publish-upstream") return null;
+  if (
+    syncView.remoteAlias === undefined ||
+    syncView.remoteBranchName === undefined ||
+    syncView.sourceBranchName === undefined
+  )
+    return null;
+  return {
+    projectId,
+    remoteAlias: syncView.remoteAlias,
+    remoteBranchName: syncView.remoteBranchName,
+    sourceBranchName: syncView.sourceBranchName,
+    forcePush: false,
+    setUpstreamTracking: syncView.setUpstreamTracking ?? false,
+  };
+}
+
+function runPushSync(
+  client: GitClientSeam,
+  projectId: string,
+  syncView: SyncView,
+  context: SyncExecutionContext,
+  t: I18nTranslate,
+): void {
+  const input = pushInput(projectId, syncView);
+  if (input === null) return;
+  void client
+    .pushPreview(input)
+    .then((preview) => {
+      if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
+        completeSync(
+          context,
+          t("gitClientWindow.sync.blocked", {
+            reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
+          }),
+        );
+        return undefined;
+      }
+      return client.pushExecute(input);
+    })
+    .then(
+      (result) => {
+        if (result === undefined) return;
+        const label =
+          syncView.action === "push"
+            ? t("gitClientWindow.sync.push")
+            : t("gitClientWindow.sync.publishUpstream");
+        completeSync(
+          context,
+          syncOutcomeWithMetrics(
+            context,
+            t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
+            t,
+          ),
+        );
+      },
+      (error: unknown) => failSync(context, error),
+    );
+}
+
+interface GitSyncActionOptions {
+  readonly activeSummary: GitRepositorySummary | null;
+  readonly client: GitClientSeam;
+  readonly selectedPath: string | null;
+  readonly syncView: SyncView;
+  readonly sequenceRef: RefObject<number>;
+  readonly setBusy: Dispatch<SetStateAction<boolean>>;
+  readonly setOutcome: Dispatch<SetStateAction<string | null>>;
+  readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly setStatusRevision: Dispatch<SetStateAction<number>>;
+  readonly t: I18nTranslate;
+}
+
+function useGitSyncAction(options: GitSyncActionOptions): () => void {
+  const {
+    activeSummary,
+    client,
+    selectedPath,
+    syncView,
+    sequenceRef,
+    setBusy,
+    setOutcome,
+    setError,
+    setStatusRevision,
+    t,
+  } = options;
+  return useCallback((): void => {
+    if (selectedPath === null || syncView.disabled || syncView.action === "blocked") return;
+    const sequence = sequenceRef.current + 1;
+    sequenceRef.current = sequence;
+    setBusy(true);
+    setOutcome(null);
+    setError(null);
+    const context: SyncExecutionContext = {
+      sequence,
+      startedAt: performance.now(),
+      aheadBefore: activeSummary?.ahead ?? 0,
+      behindBefore: activeSummary?.behind ?? 0,
+      sequenceRef,
+      setBusy,
+      setOutcome,
+      setError,
+      setStatusRevision,
+    };
+    runFetchOrPullSync(client, selectedPath, syncView, context, t);
+    runPushSync(client, selectedPath, syncView, context, t);
+  }, [
+    activeSummary,
+    client,
+    selectedPath,
+    sequenceRef,
+    setBusy,
+    setError,
+    setOutcome,
+    setStatusRevision,
+    syncView,
+    t,
+  ]);
+}
+
+interface ActiveGitClientState {
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly branches: readonly GitBranchListEntry[];
+  readonly summary: GitRepositorySummary | null;
+  readonly remotes: readonly GitRemoteSummary[];
+  readonly history: GitHistoryResponse | null;
+}
+
+interface ActiveGitClientStateInput {
+  readonly selectedPath: string | null;
+  readonly statusProjectKey: string | null;
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly branchesProjectKey: string | null;
+  readonly branches: readonly GitBranchListEntry[];
+  readonly summaryProjectKey: string | null;
+  readonly summary: GitRepositorySummary | null;
+  readonly remotesProjectKey: string | null;
+  readonly remotes: readonly GitRemoteSummary[];
+  readonly historyProjectKey: string | null;
+  readonly history: GitHistoryResponse | null;
+}
+
+function activeGitClientState(input: ActiveGitClientStateInput): ActiveGitClientState {
+  const path = input.selectedPath;
+  return {
+    status: path !== null && input.statusProjectKey === path ? input.status : null,
+    branches: path !== null && input.branchesProjectKey === path ? input.branches : EMPTY_BRANCHES,
+    summary: path !== null && input.summaryProjectKey === path ? input.summary : null,
+    remotes: path !== null && input.remotesProjectKey === path ? input.remotes : [],
+    history: path !== null && input.historyProjectKey === path ? input.history : null,
+  };
+}
+
+function selectedHistoryEntry(
+  history: GitHistoryResponse | null,
+  selectedCommitSha: string | null,
+): GitHistoryEntry | null {
+  return history?.entries.find((entry) => entry.sha === selectedCommitSha) ?? null;
+}
+
+function syncViewForDisplay(
+  syncView: SyncView,
+  summaryError: string | null,
+  t: I18nTranslate,
+): SyncView {
+  if (summaryError === null) return syncView;
+  return {
+    action: "blocked",
+    label: t("gitClientWindow.sync.unavailable"),
+    description: summaryError,
+    disabled: true,
+  };
+}
+
+interface GitRightPaneContentProps {
+  readonly mode: RightPaneMode;
+  readonly diffPane: ReactNode;
+  readonly pullRequestPane: ReactNode;
+  readonly mergePane: ReactNode;
+  readonly rightPaneRef: RefObject<HTMLDivElement | null>;
+  readonly returnToDiff: () => void;
+  readonly t: I18nTranslate;
+}
+
+function GitRightPaneContent(props: GitRightPaneContentProps): ReactNode {
+  if (props.mode === "diff") return props.diffPane;
+  const label =
+    props.mode === "pull-request"
+      ? props.t("gitClientWindow.panel.pullRequest")
+      : props.t("gitClientWindow.panel.merge");
+  const content = props.mode === "pull-request" ? props.pullRequestPane : props.mergePane;
+  return (
+    <section ref={props.rightPaneRef} style={PANE_STYLE} aria-label={label}>
+      <div style={DIFF_HEADER_STYLE}>
+        <button type="button" style={SECONDARY_BTN} onClick={props.returnToDiff}>
+          <ChevronRightIcon size={12} style={{ transform: "rotate(180deg)" }} />{" "}
+          {props.t("gitClientWindow.action.backToDiff")}
+        </button>
+      </div>
+      {content}
+    </section>
+  );
+}
+
+interface OptionalContentProps {
+  readonly visible: boolean;
+  readonly children: ReactNode;
+}
+
+function OptionalContent({ visible, children }: OptionalContentProps): ReactNode {
+  return visible ? children : null;
+}
+
 export function GitClientWindow({
   projectId,
   initialPath,
@@ -136,6 +546,7 @@ export function GitClientWindow({
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
 }: GitClientWindowProps): ReactNode {
+  const t = useTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
@@ -229,17 +640,7 @@ export function GitClientWindow({
     if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
   }, [projectId]);
 
-  useEffect(() => {
-    if (rightPaneMode === "diff") return;
-    const frame = window.requestAnimationFrame(() => {
-      const heading = rightPaneRef.current?.querySelector("h2");
-      if (heading instanceof HTMLElement) {
-        heading.tabIndex = -1;
-        heading.focus();
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [rightPaneMode]);
+  useRightPaneFocus(rightPaneMode, rightPaneRef);
 
   // Repository change: reset the per-repo view and invalidate any in-flight mutations so a late
   // response from the previous repository cannot surface under the newly selected one.
@@ -379,16 +780,10 @@ export function GitClientWindow({
           requestedCommit === undefined ||
           res.entries.some((entry) => entry.sha === requestedCommit);
         if (commitLandingKey !== null) completedCommitLandingRef.current = commitLandingKey;
-        setHistoryError(
-          hasRequestedCommit ? null : "The requested commit is not available in bounded history.",
+        setHistoryError(hasRequestedCommit ? null : t("gitClientWindow.history.commitUnavailable"));
+        setSelectedCommitSha(
+          selectedHistoryCommitResolver(res.entries, requestedCommit, hasRequestedCommit),
         );
-        setSelectedCommitSha((current) => {
-          if (res.entries.length === 0) return null;
-          if (requestedCommit !== undefined) return hasRequestedCommit ? requestedCommit : null;
-          if (current !== null && res.entries.some((entry) => entry.sha === current))
-            return current;
-          return res.entries[0]?.sha ?? null;
-        });
       },
       (err: unknown) => {
         if (cancelled) return;
@@ -401,7 +796,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, initialCommit, selectedPath, statusRevision, tab]);
+  }, [client, initialCommit, selectedPath, statusRevision, t, tab]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -421,13 +816,7 @@ export function GitClientWindow({
         setStatus(res);
         setStatusProjectKey(selectedPath);
         setStatusLoading(false);
-        setSelectedChangePath((prev) => {
-          if (prev === null) return null;
-          const selectedChange = res.changes.find((c) => c.path === prev);
-          if (selectedChange === undefined) return null;
-          setDiffScope((current) => normalizeDiffScopeForChange(current, selectedChange));
-          return prev;
-        });
+        setSelectedChangePath(selectedChangeResolver(res.changes, setDiffScope));
       },
       (err: unknown) => {
         if (cancelled) return;
@@ -481,38 +870,43 @@ export function GitClientWindow({
     [loadRepositories, selectRepository],
   );
 
-  const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
-  const activeBranches =
-    selectedPath !== null && branchesProjectKey === selectedPath ? branches : EMPTY_BRANCHES;
-  const activeSummary =
-    selectedPath !== null && summaryProjectKey === selectedPath ? summary : null;
-  const activeRemotes = selectedPath !== null && remotesProjectKey === selectedPath ? remotes : [];
-  const activeHistory =
-    selectedPath !== null && historyProjectKey === selectedPath ? history : null;
-  const selectedCommit: GitHistoryEntry | null =
-    activeHistory?.entries.find((entry) => entry.sha === selectedCommitSha) ?? null;
+  const active = activeGitClientState({
+    selectedPath,
+    statusProjectKey,
+    status,
+    branchesProjectKey,
+    branches,
+    summaryProjectKey,
+    summary,
+    remotesProjectKey,
+    remotes,
+    historyProjectKey,
+    history,
+  });
+  const activeStatus = active.status;
+  const activeBranches = active.branches;
+  const activeSummary = active.summary;
+  const activeRemotes = active.remotes;
+  const activeHistory = active.history;
+  const selectedCommit = selectedHistoryEntry(activeHistory, selectedCommitSha);
 
-  useEffect(() => {
-    if (selectedPath === null || initialPath === undefined || activeStatus === null) return;
-    const landingKey = `${selectedPath}\u0000${initialPath}`;
-    if (landedPathRef.current === landingKey) return;
-    const change = activeStatus.changes.find((entry) => entry.path === initialPath);
-    if (change === undefined) return;
-    landedPathRef.current = landingKey;
-    setTab("changes");
-    setSelectedCommitSha(null);
-    setSelectedChangePath(change.path);
-    setDiffScope(preferredDiffScopeForChange(change));
-  }, [activeStatus, initialPath, selectedPath]);
-
-  useEffect(() => {
-    if (selectedPath === null || initialCommit === undefined) return;
-    const landingKey = `${selectedPath}\u0000${initialCommit}`;
-    if (landedCommitRef.current === landingKey) return;
-    landedCommitRef.current = landingKey;
-    setTab("history");
-    setSelectedCommitSha(initialCommit);
-  }, [initialCommit, selectedPath]);
+  useInitialChangeLanding({
+    selectedPath,
+    initialPath,
+    activeStatus,
+    landedPathRef,
+    setTab,
+    setSelectedCommitSha,
+    setSelectedChangePath,
+    setDiffScope,
+  });
+  useInitialCommitLanding({
+    selectedPath,
+    initialCommit,
+    landedCommitRef,
+    setTab,
+    setSelectedCommitSha,
+  });
 
   const selectChange = useCallback(
     (path: string): void => {
@@ -626,119 +1020,40 @@ export function GitClientWindow({
 
   const syncView = deriveSyncView(activeSummary, summaryLoading);
 
-  const runSync = useCallback((): void => {
-    if (selectedPath === null || syncView.disabled || syncView.action === "blocked") return;
-    const seq = syncSeqRef.current + 1;
-    syncSeqRef.current = seq;
-    setSyncBusy(true);
-    setSyncOutcome(null);
-    setSyncError(null);
-    // GEN-PERF-WIDGET-006 — surface sync duration + the ahead/behind repository-state
-    // delta in the outcome so a slow round-trip is observable and the user sees what the
-    // sync accomplished. The pre-sync counts come from the summary the widget already
-    // holds; the post-sync summary refresh (statusRevision bump below) updates the panel.
-    const startedAt = performance.now();
-    const aheadBefore = activeSummary?.ahead ?? 0;
-    const behindBefore = activeSummary?.behind ?? 0;
-    const withMetrics = (label: string): string => {
-      const elapsedSeconds = Math.round((performance.now() - startedAt) / 100) / 10;
-      const delta =
-        aheadBefore > 0
-          ? ` (ahead ${aheadBefore.toString()})`
-          : ` (behind ${behindBefore.toString()})`;
-      return `${label} in ${elapsedSeconds.toString()}s${delta}`;
-    };
-    const done = (message: string): void => {
-      if (syncSeqRef.current !== seq) return;
-      setSyncBusy(false);
-      setSyncOutcome(message);
-      setStatusRevision((r) => r + 1);
-    };
-    const fail = (err: unknown): void => {
-      if (syncSeqRef.current !== seq) return;
-      setSyncBusy(false);
-      setSyncError(formatGitError(err));
-    };
-    if (syncView.action === "fetch" || syncView.action === "pull") {
-      const operation = syncView.action;
-      void client
-        .syncPreview({
-          operation,
-          projectId: selectedPath,
-          remote: syncView.remoteAlias,
-        })
-        .then((preview) => {
-          if (!preview.executable) {
-            done(`Blocked: ${preview.blockReason ?? "sync unavailable"}`);
-            return undefined;
-          }
-          return client.syncExecute({
-            operation,
-            projectId: selectedPath,
-            remote: syncView.remoteAlias,
-          });
-        })
-        .then((res) => {
-          if (res === undefined) return;
-          done(withMetrics(`${operation === "fetch" ? "Fetch" : "Pull"}: ${res.status}`));
-        }, fail);
-      return;
-    }
-    if (
-      (syncView.action === "push" || syncView.action === "publish-upstream") &&
-      syncView.remoteAlias !== undefined &&
-      syncView.remoteBranchName !== undefined &&
-      syncView.sourceBranchName !== undefined
-    ) {
-      const input = {
-        projectId: selectedPath,
-        remoteAlias: syncView.remoteAlias,
-        remoteBranchName: syncView.remoteBranchName,
-        sourceBranchName: syncView.sourceBranchName,
-        forcePush: false,
-        setUpstreamTracking: syncView.setUpstreamTracking ?? false,
-      };
-      void client
-        .pushPreview(input)
-        .then((preview) => {
-          if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
-            done(
-              `Blocked: ${preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", ")}`,
-            );
-            return undefined;
-          }
-          return client.pushExecute(input);
-        })
-        .then((res) => {
-          if (res === undefined) return;
-          done(
-            withMetrics(
-              `${syncView.action === "push" ? "Push" : "Publish upstream"}: ${res.status}`,
-            ),
-          );
-        }, fail);
-    }
-  }, [activeSummary, client, selectedPath, syncView]);
+  const runSync = useGitSyncAction({
+    activeSummary,
+    client,
+    selectedPath,
+    syncView,
+    sequenceRef: syncSeqRef,
+    setBusy: setSyncBusy,
+    setOutcome: setSyncOutcome,
+    setError: setSyncError,
+    setStatusRevision,
+    t,
+  });
 
   const openRightPane = useCallback(
     (mode: Exclude<RightPaneMode, "diff">): void => {
       if (selectedPath === null) return;
       setRightPaneMode(mode);
       setRightPaneAnnouncement(
-        mode === "pull-request" ? "Pull Request panel opened." : "Merge panel opened.",
+        mode === "pull-request"
+          ? t("gitClientWindow.panel.pullRequestOpened")
+          : t("gitClientWindow.panel.mergeOpened"),
       );
     },
-    [selectedPath],
+    [selectedPath, t],
   );
 
   const returnToDiff = useCallback((): void => {
     setRightPaneMode("diff");
-    setRightPaneAnnouncement("Diff panel opened.");
+    setRightPaneAnnouncement(t("gitClientWindow.panel.diffOpened"));
     window.requestAnimationFrame(() => {
       const diffRegion = diffPaneRef.current?.querySelector('[role="region"][aria-label="Diff"]');
       if (diffRegion instanceof HTMLElement) diffRegion.focus();
     });
-  }, []);
+  }, [t]);
 
   const visibleStagingOutcome = staging.flow.outcome;
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
@@ -769,16 +1084,7 @@ export function GitClientWindow({
         status={activeStatus}
         statusLoading={statusLoading}
         branchBusy={branchActions.flow.busy}
-        syncView={
-          summaryError === null
-            ? syncView
-            : {
-                action: "blocked",
-                label: "Sync unavailable",
-                description: summaryError,
-                disabled: true,
-              }
-        }
+        syncView={syncViewForDisplay(syncView, summaryError, t)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
@@ -848,64 +1154,57 @@ export function GitClientWindow({
                 }
               />
             </div>
-            {rightPaneMode === "diff" ? (
-              <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
-                <DiffPane
-                  client={client}
-                  repositoryRoot={selectedPath}
-                  selectedChangePath={selectedChangePath}
-                  selectedCommit={tab === "history" ? selectedCommit : null}
-                  scope={diffScope}
-                  onScopeChange={setDiffScope}
-                  revealRequestId={revealRequestId}
-                  onRevealFile={revealEditorFile}
-                  revision={statusRevision}
-                />
-              </div>
-            ) : (
-              <div
-                ref={rightPaneRef}
-                style={PANE_STYLE}
-                role="region"
-                aria-label={rightPaneMode === "pull-request" ? "Pull Request" : "Merge"}
-              >
-                <div style={DIFF_HEADER_STYLE}>
-                  <button type="button" style={SECONDARY_BTN} onClick={returnToDiff}>
-                    <Icons.chevronR size={12} style={{ transform: "rotate(180deg)" }} /> Back to
-                    diff
-                  </button>
+            <GitRightPaneContent
+              mode={rightPaneMode}
+              rightPaneRef={rightPaneRef}
+              returnToDiff={returnToDiff}
+              t={t}
+              diffPane={
+                <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+                  <DiffPane
+                    client={client}
+                    repositoryRoot={selectedPath}
+                    selectedChangePath={selectedChangePath}
+                    selectedCommit={tab === "history" ? selectedCommit : null}
+                    scope={diffScope}
+                    onScopeChange={setDiffScope}
+                    revealRequestId={revealRequestId}
+                    onRevealFile={revealEditorFile}
+                    revision={statusRevision}
+                  />
                 </div>
-                {rightPaneMode === "pull-request" ? (
-                  <GovernedPullRequestCard
-                    projectId={selectedPath}
-                    headBranchName={currentBranch}
-                    ownerAndRepo={inferredOwnerAndRepo}
-                    baseBranchName={inferredBaseBranch}
-                    client={client}
-                  />
-                ) : (
-                  <GovernedMergeCard
-                    projectId={selectedPath}
-                    headBranchName={currentBranch}
-                    ownerAndRepo={inferredOwnerAndRepo}
-                    baseBranchName={inferredBaseBranch}
-                    client={client}
-                  />
-                )}
-              </div>
-            )}
+              }
+              pullRequestPane={
+                <GovernedPullRequestCard
+                  projectId={selectedPath}
+                  headBranchName={currentBranch}
+                  ownerAndRepo={inferredOwnerAndRepo}
+                  baseBranchName={inferredBaseBranch}
+                  client={client}
+                />
+              }
+              mergePane={
+                <GovernedMergeCard
+                  projectId={selectedPath}
+                  headBranchName={currentBranch}
+                  ownerAndRepo={inferredOwnerAndRepo}
+                  baseBranchName={inferredBaseBranch}
+                  client={client}
+                />
+              }
+            />
           </>
         )}
       </div>
-      {dialogOpen ? (
+      <OptionalContent visible={dialogOpen}>
         <AddRepositoryDialog
           client={client}
           initialMode={dialogMode}
           onAdded={onRepositoryAdded}
           onClose={() => setDialogOpen(false)}
         />
-      ) : null}
-      {newBranchOpen ? (
+      </OptionalContent>
+      <OptionalContent visible={newBranchOpen}>
         <NewBranchDialog
           branches={activeBranches}
           currentBranch={
@@ -916,7 +1215,7 @@ export function GitClientWindow({
           onCreate={createBranch}
           onClose={closeNewBranchDialog}
         />
-      ) : null}
+      </OptionalContent>
     </div>
   );
 }

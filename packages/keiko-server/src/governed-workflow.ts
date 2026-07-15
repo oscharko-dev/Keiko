@@ -75,7 +75,7 @@ export function contextPackStableIdForPacks(packs: readonly ConnectedContextPack
   }
   const joined = packs
     .map((pack) => pack.stableId)
-    .sort()
+    .sort((left, right) => left.localeCompare(right))
     .join("|");
   return `p-${sha256Hex(joined)}`;
 }
@@ -112,12 +112,18 @@ export function approvalTokenInputFor(request: WorkflowHandoffRequest): UserAppr
   return {
     contextPackStableId: request.contextPackStableId,
     workflowKind: request.workflowKind,
-    editablePaths: [...request.patchScope.editablePaths].sort(),
-    readOnlyPaths: [...request.patchScope.readOnlyPaths].sort(),
-    evidenceAtomIds: [...request.patchScope.evidenceAtomIds].sort(),
+    editablePaths: [...request.patchScope.editablePaths].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    readOnlyPaths: [...request.patchScope.readOnlyPaths].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    evidenceAtomIds: [...request.patchScope.evidenceAtomIds].sort((left, right) =>
+      left.localeCompare(right),
+    ),
     limits: request.patchScope.limits,
     expectedChecks: sortChecks(request.patchScope.expectedChecks),
-    unknowns: [...request.patchScope.unknowns].sort(),
+    unknowns: [...request.patchScope.unknowns].sort((left, right) => left.localeCompare(right)),
   };
 }
 

@@ -53,7 +53,6 @@ import {
   describeTestGenerationStatus,
   disposeAllUnattachedEditorModels,
   editorFileModelReducer,
-  editorLanguageLabel,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
@@ -1260,6 +1259,10 @@ type ChangesetSourceResult =
       readonly conflictCode?: AgentConflictCode | undefined;
     };
 
+type ChangesetFileSourceResult =
+  | { readonly status: "ready"; readonly source: PatchPreviewSource }
+  | Exclude<ChangesetSourceResult, { readonly status: "ready" }>;
+
 const AGENT_CHANGESET_ACTION_MEMORY_LIMIT = 128;
 
 function normalizeAgentChangesetPath(path: string): string {
@@ -1413,6 +1416,238 @@ function changesetSourceExceedsLimit(content: string, maxBytes: number | null): 
 // still reclaims abandoned entries the next time any pane attaches or detaches a model.
 let liveEditorRuntimeInstances = 0;
 
+function nonEmptyEditorFile(file: string | undefined): string | null {
+  return file === undefined || file.length === 0 ? null : file;
+}
+
+function definedOr<T>(value: T | undefined, fallback: T): T {
+  return value ?? fallback;
+}
+
+function nullishOr<T>(value: T | null | undefined, fallback: T): T {
+  return value ?? fallback;
+}
+
+function initialEditorLoadState(hasTarget: boolean): KeikoEditorLoadState {
+  return hasTarget ? { status: "loading" } : { status: "ready" };
+}
+
+function activeDigestHash(
+  digest: { readonly content: string; readonly hash: string } | null,
+  content: string,
+): string | null {
+  return digest?.content === content ? digest.hash : null;
+}
+
+function hasEditorTarget(root: string | undefined, file: string | undefined): boolean {
+  return root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
+}
+
+function editorSessionKeyOrNull(root: string | undefined, file: string | undefined): string | null {
+  return hasEditorTarget(root, file) && root !== undefined && file !== undefined
+    ? documentSessionKey(root, file)
+    : null;
+}
+
+function editorDocumentUriOrNull(
+  root: string | undefined,
+  file: string | undefined,
+  scope: string,
+): string | null {
+  if (!hasEditorTarget(root, file) || root === undefined || file === undefined) return null;
+  return documentUri(root, file, scope);
+}
+
+function modelMatchesDocument(
+  model: EditorFileModel | null,
+  uri: string | null,
+): model is EditorFileModel {
+  return model !== null && uri !== null && model.identity.uri === uri;
+}
+
+function modelDirty(model: EditorFileModel | null): boolean {
+  return model !== null && isDocumentDirty(model);
+}
+
+interface LargeFileSettings {
+  readonly degraded: boolean;
+  readonly readOnly: boolean;
+}
+
+function largeFileSettings(
+  automaticMode: ReturnType<typeof deriveLargeFileMode>,
+  preference: ReturnType<typeof useEditorSettings>["applied"]["largeFileMode"],
+): LargeFileSettings {
+  const automatic = automaticMode === "degraded";
+  return {
+    degraded: automatic || preference === "degraded" || preference === "readonly",
+    readOnly: automatic || preference === "readonly",
+  };
+}
+
+type EditorLanguageProvider = ReturnType<typeof providerForLanguage>;
+type EditorProviderOperation = Parameters<typeof providerOperationEnabled>[1];
+
+function editorProviderFeatureEnabled(
+  provider: EditorLanguageProvider,
+  operation: EditorProviderOperation,
+  degraded: boolean,
+): boolean {
+  return !degraded && providerOperationEnabled(provider, operation);
+}
+
+function editorRenameEnabled(provider: EditorLanguageProvider, degraded: boolean): boolean {
+  return (
+    !degraded &&
+    providerOperationEnabled(provider, "renamePrepare") &&
+    providerOperationEnabled(provider, "renameApply")
+  );
+}
+
+function editorSemanticTokensEnabled(
+  language: EditorLanguageId | undefined,
+  provider: EditorLanguageProvider,
+  degraded: boolean,
+): boolean {
+  return language === "rust" && editorProviderFeatureEnabled(provider, "hover", degraded);
+}
+
+interface EditorFormattingSettings {
+  readonly source: ReturnType<typeof editorBuiltinDocumentFormatting>;
+  readonly enabled: boolean;
+}
+
+function editorFormattingSettings(
+  language: EditorLanguageId | undefined,
+  provider: EditorLanguageProvider,
+  degraded: boolean,
+): EditorFormattingSettings {
+  const formatting = editorBuiltinDocumentFormatting(definedOr(language, "plaintext"));
+  const available =
+    formatting === "monaco-builtin" ||
+    (formatting === "keiko-language-service" && providerOperationEnabled(provider, "formatting"));
+  return { source: formatting, enabled: available && !degraded };
+}
+
+function matchingDocumentIdentity(
+  model: EditorFileModel | null,
+  matches: boolean,
+): EditorDocumentIdentity | null {
+  return matches && model !== null ? model.identity : null;
+}
+
+function editorProviderId(provider: EditorLanguageProvider): string {
+  return provider?.id ?? "none";
+}
+
+interface EditorActionAvailability {
+  readonly canSave: boolean;
+  readonly canFormat: boolean;
+  readonly canRename: boolean;
+}
+
+function editorActionAvailability(input: {
+  readonly hasTarget: boolean;
+  readonly dirty: boolean;
+  readonly saveStatus: EditorSaveStatus;
+  readonly loadReady: boolean;
+  readonly formattingEnabled: boolean;
+  readonly renameEnabled: boolean;
+}): EditorActionAvailability {
+  return {
+    canSave: input.hasTarget && input.dirty && input.saveStatus !== "saving" && input.loadReady,
+    canFormat: input.hasTarget && input.loadReady && input.formattingEnabled,
+    canRename: input.hasTarget && input.loadReady && input.renameEnabled,
+  };
+}
+
+function canRunEditorTestGeneration(
+  hasTarget: boolean,
+  completionEnabled: boolean,
+  loadReady: boolean,
+  busy: boolean,
+): boolean {
+  return hasTarget && completionEnabled && loadReady && !busy;
+}
+
+function testGenerationStatusLabel(
+  state: Parameters<typeof describeTestGenerationStatus>[0],
+  statusText: string,
+): string {
+  return state.kind === "disabled" ? "Tests off" : statusText;
+}
+
+function editorModelViewStateKey(
+  hasTarget: boolean,
+  root: string | undefined,
+  file: string | undefined,
+  scope: string,
+  paneId: string | undefined,
+): string | undefined {
+  if (!hasTarget || root === undefined || file === undefined) return undefined;
+  return `${scope}:${definedOr(paneId, "pane")}:${documentSessionKey(root, file)}`;
+}
+
+function paneCanSubscribe(activePaneId: string | undefined, paneId: string | undefined): boolean {
+  return paneId === undefined || activePaneId === undefined || paneId === activePaneId;
+}
+
+function pendingAgentReviewCount(
+  patch: AgentPatchReviewState | null,
+  changeset: AgentChangesetReviewState | null,
+): number {
+  return (
+    Number(patch !== null && !patch.applying) + Number(changeset !== null && !changeset.applying)
+  );
+}
+
+function recoverySnapshotChanged(
+  snapshot: EditorHotExitSnapshotV1 | null,
+  version: EditorDocumentVersion | null,
+): boolean {
+  return (
+    typeof snapshot?.savedContentHash === "string" &&
+    version !== null &&
+    snapshot.savedContentHash !== version.contentHash
+  );
+}
+
+function whenEnabled<T>(enabled: boolean, value: T): T | undefined {
+  return enabled ? value : undefined;
+}
+
+function nullToUndefined<T>(value: T | null): T | undefined {
+  return value ?? undefined;
+}
+
+function activeEditorAriaLabel(
+  root: string | undefined,
+  file: string | undefined,
+): string | undefined {
+  return root === undefined || file === undefined ? undefined : editorAriaLabel(root, file);
+}
+
+function navigationResolverEnabled(
+  definition: boolean,
+  typeDefinition: boolean,
+  implementation: boolean,
+  references: boolean,
+): boolean {
+  return definition || typeDefinition || implementation || references;
+}
+
+function anyTrue(...values: readonly boolean[]): boolean {
+  return values.some(Boolean);
+}
+
+function enabledValueOrNull<T>(enabled: boolean, value: T | null): T | null {
+  return enabled ? value : null;
+}
+
+function editorLoadErrorMessage(hasTarget: boolean, state: KeikoEditorLoadState): string | null {
+  return hasTarget && state.status === "error" ? state.message : null;
+}
+
 function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -1498,12 +1733,12 @@ function EditorRuntimeWidget({
   // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
   // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
   const verification = useEditorVerificationRun({
-    root: root ?? "",
-    activeFile: file !== undefined && file.length > 0 ? file : null,
+    root: definedOr(root, ""),
+    activeFile: nonEmptyEditorFile(file),
   });
   const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
   const generatedId = useId();
-  const diagnosticsProducerId = windowId ?? generatedId;
+  const diagnosticsProducerId = definedOr(windowId, generatedId);
   // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
   // active review surface is actually reviewing, never to the pane's currently active file. This
   // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
@@ -1660,7 +1895,7 @@ function EditorRuntimeWidget({
   const [version, setVersion] = useState<EditorDocumentVersion | null>(null);
   const [maxBytes, setMaxBytes] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<KeikoEditorLoadState>(
-    hasTarget ? { status: "loading" } : { status: "ready" },
+    initialEditorLoadState(hasTarget),
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
@@ -1817,10 +2052,7 @@ function EditorRuntimeWidget({
         (snapshot.fileModel !== null && isDocumentDirty(snapshot.fileModel)),
     ),
   );
-  activeSessionKeyRef.current =
-    root !== undefined && file !== undefined && root.length > 0 && file.length > 0
-      ? documentSessionKey(root, file)
-      : null;
+  activeSessionKeyRef.current = editorSessionKeyOrNull(root, file);
 
   // Refs the imperative save path reads so a Cmd/Ctrl+S immediately after an edit always persists
   // the latest values, independent of React state-batching timing. The version-aware
@@ -1847,8 +2079,7 @@ function EditorRuntimeWidget({
   });
   const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
   const contentSizeBytes = contentBytes.length;
-  const activeContentHash =
-    activeContentDigest?.content === content ? activeContentDigest.hash : null;
+  const activeContentHash = activeDigestHash(activeContentDigest, content);
   const activeContentDigestRef = useRef(activeContentDigest);
   activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
@@ -1907,15 +2138,9 @@ function EditorRuntimeWidget({
     [],
   );
 
-  const currentDocumentUri =
-    hasTarget && root !== undefined && file !== undefined
-      ? documentUri(root, file, editorModelScope)
-      : null;
-  const fileModelMatchesTarget =
-    fileModel !== null &&
-    currentDocumentUri !== null &&
-    fileModel.identity.uri === currentDocumentUri;
-  const dirty = fileModelMatchesTarget && isDocumentDirty(fileModel);
+  const currentDocumentUri = editorDocumentUriOrNull(root, file, editorModelScope);
+  const fileModelMatchesTarget = modelMatchesDocument(fileModel, currentDocumentUri);
+  const dirty = fileModelMatchesTarget && modelDirty(fileModel);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
   const lastDirtyNotificationRef = useRef<{
@@ -2249,21 +2474,114 @@ function EditorRuntimeWidget({
     }
   }, []);
 
+  const markBufferEdited = useCallback((text: string): void => {
+    contentRef.current = text;
+    setContent(text);
+    setFileModel((model: EditorFileModel | null) =>
+      model === null ? model : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+    );
+  }, []);
+
+  const settleInactiveSave = useCallback(
+    async (
+      saveSessionKey: string,
+      textToSave: string,
+      response: Awaited<ReturnType<typeof saveFilesContent>>,
+      targetRoot: string,
+      targetFile: string,
+    ): Promise<void> => {
+      const cached = sessionCacheRef.current.get(saveSessionKey);
+      const cachedContent = cached?.content ?? textToSave;
+      const cachedFileModel = cached?.fileModel ?? null;
+      sessionCacheRef.current.set(saveSessionKey, {
+        content: cachedContent === textToSave ? response.content : cachedContent,
+        fileModel:
+          cachedFileModel === null
+            ? cachedFileModel
+            : editorFileModelReducer(cachedFileModel, {
+                type: cachedContent === textToSave ? "saved" : "edited",
+                origin: "human",
+              }),
+        modifiedAt: response.modifiedAt,
+        version: response.session.version,
+        maxBytes: response.maxBytes,
+        loadState: cached?.loadState ?? { status: "ready" },
+        saveStatus: cachedContent === textToSave ? "saved" : "idle",
+        saveError: undefined,
+        cursor: cached?.cursor ?? null,
+        currentSelection: cached?.currentSelection ?? null,
+        diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+      });
+      await deleteHotExitSnapshotBestEffort(targetRoot, targetFile);
+    },
+    [],
+  );
+
+  const settleActiveSave = useCallback(
+    async (
+      textToSave: string,
+      response: Awaited<ReturnType<typeof saveFilesContent>>,
+      targetRoot: string,
+      targetFile: string,
+    ): Promise<void> => {
+      setModifiedAt(response.modifiedAt);
+      setVersion(response.session.version);
+      setMaxBytes(response.maxBytes);
+      if (contentRef.current === textToSave) {
+        setContent(response.content);
+        setFileModel((model: EditorFileModel | null) =>
+          model === null ? model : editorFileModelReducer(model, { type: "saved" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "succeeded" }));
+      } else {
+        setSaveStatus((status) =>
+          saveStatusReducer(saveStatusReducer(status, { type: "succeeded" }), { type: "edited" }),
+        );
+      }
+      await deleteHotExitSnapshotBestEffort(targetRoot, targetFile);
+      setGitGutterRefreshNonce((value) => value + 1);
+    },
+    [],
+  );
+
+  const recordSaveFailure = useCallback(
+    (error: unknown, saveSessionKey: string, attemptedSaveText: string): false => {
+      if (activeSessionKeyRef.current !== saveSessionKey) {
+        const cached = sessionCacheRef.current.get(saveSessionKey);
+        const conflict = error instanceof ApiError && error.status === 409;
+        sessionCacheRef.current.set(saveSessionKey, {
+          content: cached?.content ?? attemptedSaveText,
+          fileModel: cached?.fileModel ?? fileModel,
+          modifiedAt: cached?.modifiedAt ?? modifiedAt,
+          version: cached?.version ?? versionRef.current,
+          maxBytes: cached?.maxBytes ?? maxBytes,
+          loadState: cached?.loadState ?? { status: "ready" },
+          saveStatus: conflict ? "conflict" : "error",
+          saveError: conflict ? undefined : errorMessage(error),
+          cursor: cached?.cursor ?? null,
+          currentSelection: cached?.currentSelection ?? null,
+          diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+        });
+        return false;
+      }
+      if (error instanceof ApiError && error.status === 409) {
+        setSaveStatus((status) => saveStatusReducer(status, { type: "conflicted" }));
+      } else {
+        setSaveError(errorMessage(error));
+        setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+      }
+      return false;
+    },
+    [fileModel, maxBytes, modifiedAt],
+  );
+
   const persist = useCallback(
     async (text: string): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
       const saveSessionKey = documentSessionKey(root, file);
       const textChangedBeforeReactCommitted = text !== contentRef.current;
       if (!dirtyRef.current && !textChangedBeforeReactCommitted) return true;
-      if (textChangedBeforeReactCommitted) {
-        contentRef.current = text;
-        setContent(text);
-        setFileModel((model: EditorFileModel | null) =>
-          model === null
-            ? model
-            : editorFileModelReducer(model, { type: "edited", origin: "human" }),
-        );
-      }
+      if (textChangedBeforeReactCommitted) markBufferEdited(text);
       savingRef.current = true;
       setSaveStatus((status) => saveStatusReducer(status, { type: "request" }));
       setSaveError(undefined);
@@ -2273,15 +2591,7 @@ function EditorRuntimeWidget({
         if (preparedText === null) return false;
         const textToSave = preparedText;
         attemptedSaveText = textToSave;
-        if (textToSave !== contentRef.current) {
-          contentRef.current = textToSave;
-          setContent(textToSave);
-          setFileModel((model: EditorFileModel | null) =>
-            model === null
-              ? model
-              : editorFileModelReducer(model, { type: "edited", origin: "human" }),
-          );
-        }
+        if (textToSave !== contentRef.current) markBufferEdited(textToSave);
         const response = await saveFilesContent({
           root,
           path: file,
@@ -2296,87 +2606,27 @@ function EditorRuntimeWidget({
           provenance: "local",
         });
         if (activeSessionKeyRef.current !== saveSessionKey) {
-          const cached = sessionCacheRef.current.get(saveSessionKey);
-          const cachedContent = cached?.content ?? textToSave;
-          const cachedFileModel = cached?.fileModel ?? null;
-          sessionCacheRef.current.set(saveSessionKey, {
-            content: cachedContent === textToSave ? response.content : cachedContent,
-            fileModel:
-              cachedFileModel === null
-                ? cachedFileModel
-                : editorFileModelReducer(cachedFileModel, {
-                    type: cachedContent === textToSave ? "saved" : "edited",
-                    origin: "human",
-                  }),
-            modifiedAt: response.modifiedAt,
-            version: response.session.version,
-            maxBytes: response.maxBytes,
-            loadState: cached?.loadState ?? { status: "ready" },
-            saveStatus: cachedContent === textToSave ? "saved" : "idle",
-            saveError: undefined,
-            cursor: cached?.cursor ?? null,
-            currentSelection: cached?.currentSelection ?? null,
-            diagnosticsSummary: cached?.diagnosticsSummary ?? null,
-          });
-          await deleteHotExitSnapshotBestEffort(root, file);
+          await settleInactiveSave(saveSessionKey, textToSave, response, root, file);
           return true;
         }
-        // The persisted file moved on disk regardless of any concurrent edits — always adopt the new
-        // concurrency token so the next save validates against it.
-        setModifiedAt(response.modifiedAt);
-        setVersion(response.session.version);
-        setMaxBytes(response.maxBytes);
-        if (contentRef.current === textToSave) {
-          // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.
-          setContent(response.content);
-          setFileModel((model: EditorFileModel | null) =>
-            model === null ? model : editorFileModelReducer(model, { type: "saved" }),
-          );
-          setSaveStatus((status) => saveStatusReducer(status, { type: "succeeded" }));
-        } else {
-          // The user kept typing while the save was in flight. Keep their newer text and leave the
-          // buffer dirty against the freshly persisted version — never clobber in-flight edits or
-          // report a stale buffer as saved. The next save runs against the updated modifiedAt.
-          setSaveStatus((status) =>
-            saveStatusReducer(saveStatusReducer(status, { type: "succeeded" }), { type: "edited" }),
-          );
-        }
-        await deleteHotExitSnapshotBestEffort(root, file);
-        setGitGutterRefreshNonce((value) => value + 1);
+        await settleActiveSave(textToSave, response, root, file);
         return true;
       } catch (err: unknown) {
-        if (activeSessionKeyRef.current !== saveSessionKey) {
-          const cached = sessionCacheRef.current.get(saveSessionKey);
-          sessionCacheRef.current.set(saveSessionKey, {
-            content: cached?.content ?? attemptedSaveText,
-            fileModel: cached?.fileModel ?? fileModel,
-            modifiedAt: cached?.modifiedAt ?? modifiedAt,
-            version: cached?.version ?? versionRef.current,
-            maxBytes: cached?.maxBytes ?? maxBytes,
-            loadState: cached?.loadState ?? { status: "ready" },
-            saveStatus: err instanceof ApiError && err.status === 409 ? "conflict" : "error",
-            saveError:
-              err instanceof ApiError && err.status === 409 ? undefined : errorMessage(err),
-            cursor: cached?.cursor ?? null,
-            currentSelection: cached?.currentSelection ?? null,
-            diagnosticsSummary: cached?.diagnosticsSummary ?? null,
-          });
-          return false;
-        }
-        if (err instanceof ApiError && err.status === 409) {
-          // The persisted file moved underneath this save (optimistic-concurrency conflict). Keep the
-          // buffer dirty and surface a recoverable conflict — never silently overwrite.
-          setSaveStatus((status) => saveStatusReducer(status, { type: "conflicted" }));
-        } else {
-          setSaveError(errorMessage(err));
-          setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
-        }
-        return false;
+        return recordSaveFailure(err, saveSessionKey, attemptedSaveText);
       } finally {
         savingRef.current = false;
       }
     },
-    [file, fileModel, hasTarget, maxBytes, modifiedAt, prepareFormatOnSave, root],
+    [
+      file,
+      hasTarget,
+      markBufferEdited,
+      prepareFormatOnSave,
+      recordSaveFailure,
+      root,
+      settleActiveSave,
+      settleInactiveSave,
+    ],
   );
 
   const onContentChange = useCallback(
@@ -3111,14 +3361,10 @@ function EditorRuntimeWidget({
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
   );
-  const automaticLargeFileDegraded = largeFileMode === "degraded";
   const preferenceLargeFileMode = editorSettings.applied.largeFileMode;
-  const largeFileDegraded =
-    automaticLargeFileDegraded ||
-    preferenceLargeFileMode === "degraded" ||
-    preferenceLargeFileMode === "readonly";
-  const editorReadOnlyBySettings =
-    automaticLargeFileDegraded || preferenceLargeFileMode === "readonly";
+  const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
+  const largeFileDegraded = largeFilePolicy.degraded;
+  const editorReadOnlyBySettings = largeFilePolicy.readOnly;
   const editorConflicts = useMemo<NonNullable<EditorSurfaceProps["editorConflicts"]>>(
     () => ({
       labels: {
@@ -3255,28 +3501,53 @@ function EditorRuntimeWidget({
 
   const completionLanguage = fileModel?.identity.language;
   const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
-  const completionEnabled =
-    providerOperationEnabled(languageProvider, "completion") && !largeFileDegraded;
+  const completionEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "completion",
+    largeFileDegraded,
+  );
   snippetInsertionSafeRef.current = completionEnabled && !editorReadOnlyBySettings;
-  const diagnosticsEnabled =
-    providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
-  const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
-  const symbolsEnabled =
-    providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
-  const definitionEnabled =
-    providerOperationEnabled(languageProvider, "definition") && !largeFileDegraded;
-  const typeDefinitionEnabled =
-    providerOperationEnabled(languageProvider, "typeDefinition") && !largeFileDegraded;
-  const implementationEnabled =
-    providerOperationEnabled(languageProvider, "implementation") && !largeFileDegraded;
-  const callHierarchyEnabled =
-    providerOperationEnabled(languageProvider, "callHierarchy") && !largeFileDegraded;
-  const inlayHintsEnabled =
-    providerOperationEnabled(languageProvider, "inlayHints") && !largeFileDegraded;
-  const semanticTokensEnabled =
-    completionLanguage === "rust" &&
-    providerOperationEnabled(languageProvider, "hover") &&
-    !largeFileDegraded;
+  const diagnosticsEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "diagnostics",
+    largeFileDegraded,
+  );
+  const hoverEnabled = editorProviderFeatureEnabled(languageProvider, "hover", largeFileDegraded);
+  const symbolsEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "symbols",
+    largeFileDegraded,
+  );
+  const definitionEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "definition",
+    largeFileDegraded,
+  );
+  const typeDefinitionEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "typeDefinition",
+    largeFileDegraded,
+  );
+  const implementationEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "implementation",
+    largeFileDegraded,
+  );
+  const callHierarchyEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "callHierarchy",
+    largeFileDegraded,
+  );
+  const inlayHintsEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "inlayHints",
+    largeFileDegraded,
+  );
+  const semanticTokensEnabled = editorSemanticTokensEnabled(
+    completionLanguage,
+    languageProvider,
+    largeFileDegraded,
+  );
   const semanticTokens = useMemo(
     () =>
       semanticTokensEnabled && currentDocumentUri !== null
@@ -3296,50 +3567,61 @@ function EditorRuntimeWidget({
         : undefined,
     [currentDocumentUri, provideSemanticTokens, semanticTokensEnabled],
   );
-  const referencesEnabled =
-    providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
-  const renameEnabled =
-    providerOperationEnabled(languageProvider, "renamePrepare") &&
-    providerOperationEnabled(languageProvider, "renameApply") &&
-    !largeFileDegraded;
-  const codeActionsEnabled =
-    providerOperationEnabled(languageProvider, "codeActions") && !largeFileDegraded;
-  const signatureHelpEnabled =
-    providerOperationEnabled(languageProvider, "signatureHelp") && !largeFileDegraded;
+  const referencesEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "references",
+    largeFileDegraded,
+  );
+  const renameEnabled = editorRenameEnabled(languageProvider, largeFileDegraded);
+  const codeActionsEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "codeActions",
+    largeFileDegraded,
+  );
+  const signatureHelpEnabled = editorProviderFeatureEnabled(
+    languageProvider,
+    "signatureHelp",
+    largeFileDegraded,
+  );
   // Formatting availability is browser-reachability truth from the editor-tier registry. The release
   // artifact deliberately ships no rich Monaco language workers (ADR-0042 D3.6), so only
   // `keiko-language-service` languages (ts/js) can format, and only when the server provider is up.
-  const builtinFormatting = editorBuiltinDocumentFormatting(completionLanguage ?? "plaintext");
-  const formattingAvailable =
-    builtinFormatting === "monaco-builtin" ||
-    (builtinFormatting === "keiko-language-service" &&
-      providerOperationEnabled(languageProvider, "formatting"));
-  const formattingEnabled = formattingAvailable && !largeFileDegraded;
+  const formatting = editorFormattingSettings(
+    completionLanguage,
+    languageProvider,
+    largeFileDegraded,
+  );
+  const builtinFormatting = formatting.source;
+  const formattingEnabled = formatting.enabled;
   formatOnSaveStateRef.current = {
     enabled: editorSettings.applied.formatOnSave,
     canFormat: formattingEnabled && loadState.status === "ready",
-    document: fileModelMatchesTarget ? (fileModel?.identity ?? null) : null,
+    document: matchingDocumentIdentity(fileModel, fileModelMatchesTarget),
     file,
     root,
     tabSize: editorSettings.applied.tabSize,
     insertSpaces: editorSettings.applied.insertSpaces,
   };
-  // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
-  // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
-  const formattingLanguageLabel =
-    completionLanguage === undefined ? "this file" : editorLanguageLabel(completionLanguage);
   // Issue 2.2: only the language-provider id keys the surface (a change there genuinely needs a
   // remount to re-register providers, and it happens once on load before editing). The theme variant
   // and large-file mode are NO LONGER part of the key — a theme toggle re-themes the live editor via
   // `setTheme` (use-editor-handlers `useThemeReapply`), and crossing the large-file boundary flips the
   // degraded options live via `editor.updateOptions` (the `options` prop), so neither discards the
   // undo stack or scroll/fold/cursor view state.
-  const editorSurfaceKey = languageProvider?.id ?? "none";
+  const editorSurfaceKey = editorProviderId(languageProvider);
 
-  const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
+  const actions = editorActionAvailability({
+    hasTarget,
+    dirty,
+    saveStatus,
+    loadReady: loadState.status === "ready",
+    formattingEnabled,
+    renameEnabled,
+  });
+  const canSave = actions.canSave;
   const saveUnavailable = !canSave;
-  const canFormat = hasTarget && loadState.status === "ready" && formattingEnabled;
-  const canRename = hasTarget && loadState.status === "ready" && renameEnabled;
+  const canFormat = actions.canFormat;
+  const canRename = actions.canRename;
   const outlineTree = useMemo(() => buildEditorOutlineTree(outlineSymbols), [outlineSymbols]);
   const breadcrumbPath = useMemo(
     () => findContainingOutlinePath(outlineTree, cursor),
@@ -3424,10 +3706,14 @@ function EditorRuntimeWidget({
   // authority and returns `disabled` while the wave-2 feature is switched off. The status line reflects
   // the flow reducer (a content-free message); a busy run disables the action.
   const testGenBusy = isTestGenerationBusy(testGenState);
-  const canGenerateTests =
-    hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
+  const canGenerateTests = canRunEditorTestGeneration(
+    hasTarget,
+    completionEnabled,
+    loadState.status === "ready",
+    testGenBusy,
+  );
   const testGenStatusText = describeTestGenerationStatus(testGenState);
-  const testGenStatusLabel = testGenState.kind === "disabled" ? "Tests off" : testGenStatusText;
+  const testGenStatusLabel = testGenerationStatusLabel(testGenState, testGenStatusText);
 
   // GEN-UI-INTERACTION-003: announce why an aria-disabled toolbar action did nothing when activated.
   // A leading zero-width space forces the polite live region's text to differ from any prior identical
@@ -3507,10 +3793,13 @@ function EditorRuntimeWidget({
           },
     [content, contentSizeBytes, editorReadOnlyBySettings, file, fileModel, fileModelMatchesTarget],
   );
-  const modelViewStateKey =
-    hasTarget && root !== undefined && file !== undefined
-      ? `${editorModelScope}:${paneId ?? "pane"}:${documentSessionKey(root, file)}`
-      : undefined;
+  const modelViewStateKey = editorModelViewStateKey(
+    hasTarget,
+    root,
+    file,
+    editorModelScope,
+    paneId,
+  );
 
   const loadRenameSources = useCallback(
     async (changeset: LanguageRenameChangeset): Promise<RenameSourcesResult> => {
@@ -3639,151 +3928,158 @@ function EditorRuntimeWidget({
       }
     })();
   }, [announceToolbarNotice, canRename, cursor, file, fileModel, loadRenameSources, root]);
-  const testGenerationPreview: TestGenerationPreview | null =
-    isTestGenerationPreviewing(testGenState) && buffer !== null
-      ? buildTestGenerationPreview({
-          result: testGenState.result,
-          assurance: testGenState.assurance,
-          sources: { [buffer.content.relativePath]: { content: buffer.content } },
-        })
-      : null;
-  const agentReviewActive =
+  const currentTestGenerationPreview = (): TestGenerationPreview | null => {
+    if (!isTestGenerationPreviewing(testGenState) || buffer === null) return null;
+    return buildTestGenerationPreview({
+      result: testGenState.result,
+      assurance: testGenState.assurance,
+      sources: { [buffer.content.relativePath]: { content: buffer.content } },
+    });
+  };
+  const testGenerationPreview = currentTestGenerationPreview();
+  const hasActiveAgentReview = (): boolean =>
     externalChange.compareOpen ||
     recoveryCompare ||
     agentPatchPending !== null ||
     agentChangesetPending !== null ||
     renameReview !== null ||
     testGenerationPreview !== null;
+  const agentReviewActive = hasActiveAgentReview();
   const agentReviewActiveRef = useRef(agentReviewActive);
   agentReviewActiveRef.current = agentReviewActive;
+
+  const loadAgentChangesetFileSource = useCallback(
+    async (entry: AgentPreparedChangesetFile): Promise<ChangesetFileSourceResult> => {
+      if (entry.kind === "create") {
+        return { status: "ready", source: patchPreviewSourceFromText(entry.file, "") };
+      }
+      if (entry.file === file) {
+        if (dirtyRef.current) {
+          return {
+            status: "conflict",
+            conflictCode: "DIRTY",
+            message: `Changeset target ${entry.file} has unsaved changes.`,
+          };
+        }
+        return {
+          status: "ready",
+          source: patchPreviewSourceFromText(entry.file, contentRef.current),
+        };
+      }
+      if (root === undefined) return { status: "failed", message: "Workspace is unavailable." };
+      const cached = sessionCacheRef.current.get(documentSessionKey(root, entry.file));
+      if (cached?.fileModel !== null && cached?.fileModel !== undefined) {
+        if (isDocumentDirty(cached.fileModel)) {
+          return {
+            status: "conflict",
+            conflictCode: "DIRTY",
+            message: `Changeset target ${entry.file} has unsaved changes.`,
+          };
+        }
+        if (changesetSourceExceedsLimit(cached.content, cached.maxBytes)) {
+          return {
+            status: "failed",
+            message: `Changeset target ${entry.file} is read-only in the editor.`,
+          };
+        }
+        if (cached.loadState.status === "ready") {
+          return {
+            status: "ready",
+            source: patchPreviewSourceFromText(entry.file, cached.content),
+          };
+        }
+      }
+      const response = await fetchFilesContent(root, entry.file);
+      if (normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)) {
+        return { status: "failed", message: "Changeset source did not match its target." };
+      }
+      if (changesetSourceExceedsLimit(response.content, response.maxBytes)) {
+        return {
+          status: "failed",
+          message: `Changeset target ${entry.file} is read-only in the editor.`,
+        };
+      }
+      return {
+        status: "ready",
+        source: patchPreviewSourceFromText(entry.file, response.content),
+      };
+    },
+    [file, root],
+  );
 
   const loadAgentChangesetSources = useCallback(
     async (prepared: AgentPreparedChangeset): Promise<ChangesetSourceResult> => {
       if (root === undefined) return { status: "failed", message: "Workspace is unavailable." };
       const sources: Record<string, PatchPreviewSource> = {};
       for (const entry of prepared.files) {
-        if (entry.kind === "create") {
-          sources[entry.file] = patchPreviewSourceFromText(entry.file, "");
-          continue;
-        }
-        if (entry.file === file) {
-          if (dirtyRef.current) {
-            return {
-              status: "conflict",
-              conflictCode: "DIRTY",
-              message: `Changeset target ${entry.file} has unsaved changes.`,
-            };
-          }
-          sources[entry.file] = patchPreviewSourceFromText(entry.file, contentRef.current);
-          continue;
-        }
-        const cached = sessionCacheRef.current.get(documentSessionKey(root, entry.file));
-        if (cached?.fileModel !== null && cached?.fileModel !== undefined) {
-          if (isDocumentDirty(cached.fileModel)) {
-            return {
-              status: "conflict",
-              conflictCode: "DIRTY",
-              message: `Changeset target ${entry.file} has unsaved changes.`,
-            };
-          }
-          if (changesetSourceExceedsLimit(cached.content, cached.maxBytes)) {
-            return {
-              status: "failed",
-              message: `Changeset target ${entry.file} is read-only in the editor.`,
-            };
-          }
-          if (cached.loadState.status === "ready") {
-            sources[entry.file] = patchPreviewSourceFromText(entry.file, cached.content);
-            continue;
-          }
-        }
-        const response = await fetchFilesContent(root, entry.file);
-        if (
-          normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
-        ) {
-          return { status: "failed", message: "Changeset source did not match its target." };
-        }
-        if (changesetSourceExceedsLimit(response.content, response.maxBytes)) {
-          return {
-            status: "failed",
-            message: `Changeset target ${entry.file} is read-only in the editor.`,
-          };
-        }
-        sources[entry.file] = patchPreviewSourceFromText(entry.file, response.content);
+        const result = await loadAgentChangesetFileSource(entry);
+        if (result.status !== "ready") return result;
+        sources[entry.file] = result.source;
       }
       return { status: "ready", sources };
     },
-    [file, root],
+    [loadAgentChangesetFileSource, root],
   );
 
   // Issue #1205: derive the unified status-bar view model from host state. Diagnostics are surfaced
   // only for governed source files (where the deterministic language service runs); the
   // test-generation flow feeds the compact "run" field. The cursor is rendered but never announced
   // (it changes per keystroke) — only meaningful state (save, problems, run) reaches the live region.
-  const selectedLineCount =
-    currentSelection === null
-      ? undefined
-      : currentSelection.end.line - currentSelection.start.line + 1;
-  // Issue #2212 (ADR-0126) — precedence: while a verification run is active (or has a not-yet-dismissed
-  // terminal result), its content-free {label, busy} owns the single status-bar `run` slot; otherwise
-  // it falls back to the existing test-generation-derived value unchanged.
-  const statusBarRun: EditorStatusRun | undefined =
-    verification.statusBarRun ??
-    (testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined);
-  const statusBarViewModel =
-    fileModel === null
-      ? null
-      : deriveEditorStatusBar({
-          languageId: fileModel.identity.language,
-          cursor,
-          ...(selectedLineCount === undefined ? {} : { selectedLineCount }),
-          saveStatus,
-          dirty,
-          completionsEnabled: completionEnabled,
-          largeFileMode,
-          diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
-          ...(mergeConflicts.count === 0
-            ? {}
-            : {
-                mergeConflicts: {
-                  ...mergeConflicts,
-                  label: sourceControlT("conflicts.status", { count: mergeConflicts.count }),
-                  ariaLabel: sourceControlT("conflicts.statusAria", {
-                    count: mergeConflicts.count,
-                  }),
-                },
-              }),
-          // Issue #1379 (ADR-0067 D4): after the exhaustive registry, providerForLanguage returns a
-          // descriptor for every KNOWN language; we read its id/availability/reason directly. The
-          // null guard is retained ONLY for the genuinely-unknown plaintext/unknown case (plaintext
-          // is intentionally not a registry language, ADR-0067 D5) so the status bar still renders.
-          languageService:
-            languageProvider === null
-              ? { providerId: null, available: false }
-              : {
-                  providerId: languageProvider.id === "none" ? null : languageProvider.id,
-                  available: languageProvider.availability === "available",
-                  ...(languageProvider.unavailableReason === undefined
-                    ? {}
-                    : { unavailableReason: languageProvider.unavailableReason }),
-                },
-          readOnly: largeFileDegraded,
-          // ADR-0068 D4: feed the SAME effective availability that gates the Format button
-          // (`formattingEnabled`, which folds in `!largeFileDegraded`) so the command and status can
-          // never disagree — in degraded mode both read unavailable, and the large-file field explains
-          // why.
-          formatting: { available: formattingEnabled, source: builtinFormatting },
-          ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
-          ...(debugSessionState === null ? {} : { debug: { state: debugSessionState } }),
-        });
-
-  const showUnifiedStatusBar =
+  const buildStatusBarViewModel = (): ReturnType<typeof deriveEditorStatusBar> | null => {
+    if (fileModel === null) return null;
+    const selectedLineCount =
+      currentSelection === null
+        ? undefined
+        : currentSelection.end.line - currentSelection.start.line + 1;
+    const fallbackRun: EditorStatusRun | undefined =
+      testGenStatusLabel.length === 0
+        ? undefined
+        : { label: testGenStatusLabel, busy: testGenBusy };
+    const statusBarRun = verification.statusBarRun ?? fallbackRun;
+    const languageService =
+      languageProvider === null
+        ? { providerId: null, available: false }
+        : {
+            providerId: languageProvider.id === "none" ? null : languageProvider.id,
+            available: languageProvider.availability === "available",
+            ...(languageProvider.unavailableReason === undefined
+              ? {}
+              : { unavailableReason: languageProvider.unavailableReason }),
+          };
+    return deriveEditorStatusBar({
+      languageId: fileModel.identity.language,
+      cursor,
+      ...(selectedLineCount === undefined ? {} : { selectedLineCount }),
+      saveStatus,
+      dirty,
+      completionsEnabled: completionEnabled,
+      largeFileMode,
+      diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
+      ...(mergeConflicts.count === 0
+        ? {}
+        : {
+            mergeConflicts: {
+              ...mergeConflicts,
+              label: sourceControlT("conflicts.status", { count: mergeConflicts.count }),
+              ariaLabel: sourceControlT("conflicts.statusAria", { count: mergeConflicts.count }),
+            },
+          }),
+      languageService,
+      readOnly: largeFileDegraded,
+      formatting: { available: formattingEnabled, source: builtinFormatting },
+      ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
+      ...(debugSessionState === null ? {} : { debug: { state: debugSessionState } }),
+    });
+  };
+  const statusBarViewModel = buildStatusBarViewModel();
+  const shouldShowUnifiedStatusBar = (): boolean =>
     testGenerationPreview === null &&
     hasTarget &&
     loadState.status === "ready" &&
     buffer !== null &&
     fileModel !== null &&
     statusBarViewModel !== null;
+  const showUnifiedStatusBar = shouldShowUnifiedStatusBar();
 
   const effectiveDirtyFiles = useMemo(() => {
     const set = new Set(dirtyFiles ?? []);
@@ -3835,9 +4131,8 @@ function EditorRuntimeWidget({
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
-  const effectiveAgentPaneId = activePaneId ?? paneId ?? "pane-1";
-  const shouldSubscribeToAgentActions =
-    paneId === undefined || activePaneId === undefined || paneId === activePaneId;
+  const effectiveAgentPaneId = definedOr(activePaneId, definedOr(paneId, "pane-1"));
+  const shouldSubscribeToAgentActions = paneCanSubscribe(activePaneId, paneId);
   const agentDocumentVersion = useMemo(
     () =>
       version === null
@@ -4291,9 +4586,7 @@ function EditorRuntimeWidget({
   });
   // Issue #2120 (ADR-0058 through ADR-0062): only staged, undecided reviews are labelled as
   // requiring a human decision. Generic in-flight bridge actions remain ordinary activity.
-  const agentReviewPendingCount =
-    Number(agentPatchPending !== null && !agentPatchPending.applying) +
-    Number(agentChangesetPending !== null && !agentChangesetPending.applying);
+  const agentReviewPendingCount = pendingAgentReviewCount(agentPatchPending, agentChangesetPending);
 
   const adoptActiveChangesetResponse = useCallback(
     (path: string, response: FilesContentResponse): void => {
@@ -4841,10 +5134,7 @@ function EditorRuntimeWidget({
     submitAgentChangesetDecision(review, "reject");
   }, [submitAgentChangesetDecision]);
 
-  const recoveryDiskChanged =
-    typeof recoverySnapshot?.savedContentHash === "string" &&
-    version !== null &&
-    recoverySnapshot.savedContentHash !== version.contentHash;
+  const recoveryDiskChanged = recoverySnapshotChanged(recoverySnapshot, version);
 
   // Issue #1394 (ADR-0058 D3): handlers for the agent-patch review Accept/Reject buttons.
   const handleAgentPatchAccept = useCallback((): void => {
@@ -4929,42 +5219,46 @@ function EditorRuntimeWidget({
   // revealRequest, mapping the contract LanguageRange (0-based, `character`) onto the editor's
   // EditorRange (0-based, `column`). Agent selection takes precedence over the line-based reveal; it
   // is consumed one-shot below so a stale agent selection never fights a later user-driven reveal.
-  const lineRevealRequest =
-    revealLineStart === undefined
-      ? undefined
-      : {
-          id:
-            revealRequestId ??
-            `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
-          range: {
-            start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
-            end: {
-              line: Math.max(
-                Math.max(0, Math.floor(revealLineStart) - 1),
-                Math.floor(revealLineEnd ?? revealLineStart) - 1,
-              ),
-              column: 0,
-            },
-          },
-        };
-  const outlineSelectionRequest =
+  const buildLineRevealRequest = (): EditorSurfaceProps["revealRequest"] => {
+    if (revealLineStart === undefined) return undefined;
+    const end = definedOr(revealLineEnd, revealLineStart);
+    return {
+      id: definedOr(
+        revealRequestId,
+        `${definedOr(file, "file")}:${String(revealLineStart)}:${String(end)}`,
+      ),
+      range: {
+        start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
+        end: {
+          line: Math.max(Math.max(0, Math.floor(revealLineStart) - 1), Math.floor(end) - 1),
+          column: 0,
+        },
+      },
+    };
+  };
+  const lineRevealRequest = buildLineRevealRequest();
+  const chooseOutlineRevealRequest = (): EditorSurfaceProps["revealRequest"] =>
     outlineRevealRequest?.file === file ? outlineRevealRequest : symbolRevealRequest;
-  const surfaceRevealRequest =
-    agentSelectionRequest !== null
-      ? {
-          id: `agentAction:${agentSelectionRequest.actionId}`,
-          range: {
-            start: {
-              line: agentSelectionRequest.selection.start.line,
-              column: agentSelectionRequest.selection.start.character,
-            },
-            end: {
-              line: agentSelectionRequest.selection.end.line,
-              column: agentSelectionRequest.selection.end.character,
-            },
+  const outlineSelectionRequest = chooseOutlineRevealRequest();
+  const buildSurfaceRevealRequest = (): EditorSurfaceProps["revealRequest"] => {
+    if (agentSelectionRequest !== null) {
+      return {
+        id: `agentAction:${agentSelectionRequest.actionId}`,
+        range: {
+          start: {
+            line: agentSelectionRequest.selection.start.line,
+            column: agentSelectionRequest.selection.start.character,
           },
-        }
-      : (callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest);
+          end: {
+            line: agentSelectionRequest.selection.end.line,
+            column: agentSelectionRequest.selection.end.character,
+          },
+        },
+      };
+    }
+    return callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest;
+  };
+  const surfaceRevealRequest = buildSurfaceRevealRequest();
   const callHierarchyLabels = useMemo(
     () => ({
       title: commonT("editor.callHierarchy.title"),
@@ -4981,336 +5275,359 @@ function EditorRuntimeWidget({
     if (agentSelectionRequest !== null) consumeSelectionRequest();
   }, [agentSelectionRequest, consumeSelectionRequest]);
 
-  let panel: ReactNode;
-  if (externalChange.compareOpen && externalCompareBaseline !== null) {
-    const externalDiffModel = buildAgentPatchDiffModel(externalCompareBaseline, content, file);
-    panel = (
-      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <fieldset
-          aria-label={`Compare external changes for ${file ?? "this file"}`}
-          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
-        >
-          <span className="sr-only">
-            Side-by-side comparison of the latest file on disk and the local editor buffer. Keep
-            local preserves your buffer; reload replaces it with the file on disk.
-          </span>
-          <EditorDiffSurface
-            model={externalDiffModel}
-            loadState={{ status: "ready" }}
-            themeVariant={themeVariant}
-          />
-        </fieldset>
-        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
-          <button
-            ref={externalCompareButtonRef}
-            type="button"
-            className="ed-save"
-            onClick={keepExternalLocal}
+  const renderGitGutterPeek = (): ReactNode => {
+    if (gitGutterPeek === null || file === undefined) return null;
+    return (
+      <EditorGitHunkPeek
+        path={file}
+        peek={gitGutterPeek}
+        labels={{
+          close: sourceControlT("gitGutter.closePeek"),
+          staged: sourceControlT("gitGutter.staged"),
+          unstaged: sourceControlT("gitGutter.unstaged"),
+          title: sourceControlT("gitGutter.peekTitle"),
+          truncated: sourceControlT("gitGutter.truncated"),
+          hunkHeader: sourceControlT("gitGutter.hunkHeader"),
+          addedLine: sourceControlT("gitGutter.addedLine"),
+          deletedLine: sourceControlT("gitGutter.deletedLine"),
+          contextLine: sourceControlT("gitGutter.contextLine"),
+          metadataLine: sourceControlT("gitGutter.metadataLine"),
+        }}
+        onClose={() => setGitGutterPeek(null)}
+      />
+    );
+  };
+  const externalCompareContent = enabledValueOrNull(
+    externalChange.compareOpen,
+    externalCompareBaseline,
+  );
+  const activeRecoveryCompare = enabledValueOrNull(recoveryCompare, recoverySnapshot);
+  const editorLoadError = editorLoadErrorMessage(hasTarget, loadState);
+  const debugSessionHost = enabledValueOrNull(
+    debugEnabled,
+    <EditorDebugSessionHost
+      workspaceId={debugWorkspaceId}
+      activationRevision={debugActivation?.revision}
+      enabled={debugEnabled}
+      fileId={file}
+      onOpenDebugPanel={onOpenDebugPanel}
+      onHostChange={setDebugEditorHost}
+      onSessionStateChange={setDebugSessionState}
+    />,
+  );
+
+  const renderEditorPanel = (): ReactNode => {
+    let panel: ReactNode;
+    if (externalCompareContent !== null) {
+      const externalDiffModel = buildAgentPatchDiffModel(externalCompareContent, content, file);
+      panel = (
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          <fieldset
+            aria-label={`Compare external changes for ${definedOr(file, "this file")}`}
+            style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            Keep local
-          </button>
-          <button
-            type="button"
-            className="ed-reload"
-            aria-label="Reload external changes"
-            onClick={reloadExternalChange}
-          >
-            Reload
-          </button>
-          <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
-            Close compare
-          </button>
+            <span className="sr-only">
+              Side-by-side comparison of the latest file on disk and the local editor buffer. Keep
+              local preserves your buffer; reload replaces it with the file on disk.
+            </span>
+            <EditorDiffSurface
+              model={externalDiffModel}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+            />
+          </fieldset>
+          <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
+            <button
+              ref={externalCompareButtonRef}
+              type="button"
+              className="ed-save"
+              onClick={keepExternalLocal}
+            >
+              Keep local
+            </button>
+            <button
+              type="button"
+              className="ed-reload"
+              aria-label="Reload external changes"
+              onClick={reloadExternalChange}
+            >
+              Reload
+            </button>
+            <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
+              Close compare
+            </button>
+          </div>
         </div>
-      </div>
-    );
-  } else if (recoveryCompare && recoverySnapshot !== null) {
-    // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
-    // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
-    // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
-    // even if the buffer was edited before Compare was opened.
-    const recoveryDiffModel = buildAgentPatchDiffModel(
-      recoveryDiskBaseline ?? content,
-      recoverySnapshot.content,
-      file,
-    );
-    panel = (
-      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <fieldset
-          aria-label={`Compare recovered changes for ${file ?? "this file"}`}
-          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
-        >
-          <span className="sr-only">
-            Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
-            local restores the recovered changes; use disk keeps the file on disk.
-          </span>
-          <EditorDiffSurface
-            model={recoveryDiffModel}
-            loadState={{ status: "ready" }}
-            themeVariant={themeVariant}
-          />
-        </fieldset>
-        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
-          <button
-            ref={recoveryCompareButtonRef}
-            type="button"
-            className="ed-save"
-            onClick={restoreRecovery}
+      );
+    } else if (activeRecoveryCompare !== null) {
+      // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
+      // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
+      // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
+      // even if the buffer was edited before Compare was opened.
+      const recoveryDiffModel = buildAgentPatchDiffModel(
+        nullishOr(recoveryDiskBaseline, content),
+        activeRecoveryCompare.content,
+        file,
+      );
+      panel = (
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          <fieldset
+            aria-label={`Compare recovered changes for ${definedOr(file, "this file")}`}
+            style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            Keep local
-          </button>
-          <button type="button" className="ed-reload" onClick={discardRecovery}>
-            Use disk
-          </button>
-          <button type="button" className="ed-icon-action" onClick={closeRecoveryCompare}>
-            Close compare
-          </button>
+            <span className="sr-only">
+              Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
+              local restores the recovered changes; use disk keeps the file on disk.
+            </span>
+            <EditorDiffSurface
+              model={recoveryDiffModel}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+            />
+          </fieldset>
+          <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
+            <button
+              ref={recoveryCompareButtonRef}
+              type="button"
+              className="ed-save"
+              onClick={restoreRecovery}
+            >
+              Keep local
+            </button>
+            <button type="button" className="ed-reload" onClick={discardRecovery}>
+              Use disk
+            </button>
+            <button type="button" className="ed-icon-action" onClick={closeRecoveryCompare}>
+              Close compare
+            </button>
+          </div>
         </div>
-      </div>
-    );
-  } else if (agentChangesetPending !== null) {
-    panel = (
-      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <fieldset
-          aria-label="Agent changeset review"
-          aria-busy={agentChangesetPending.applying}
-          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
-        >
-          <span className="sr-only">
-            Review every changed file before applying this agent changeset to disk.
-          </span>
-          <span className="sr-only" aria-live="polite">
-            {agentChangesetPending.applying
-              ? t("editor.agentReview.applying")
-              : t("editor.agentReview.ready")}
-          </span>
-          <EditorDiffSurface
-            model={agentChangesetPending.model}
-            loadState={{ status: "ready" }}
-            themeVariant={themeVariant}
-            actions={{
-              canApply: !agentChangesetPending.applying,
-              canReject: !agentChangesetPending.applying,
-              canRunVerification: !verification.verificationRunning,
-            }}
-            onApply={handleAgentChangesetAccept}
-            onReject={handleAgentChangesetReject}
-            onRunVerification={runChangesetVerification}
-          />
-        </fieldset>
-      </div>
-    );
-  } else if (agentPatchPending !== null) {
-    const patchDiffModel = buildAgentPatchDiffModel(
-      agentPatchPending.original,
-      agentPatchPending.modified,
-      file,
-    );
-    panel = (
-      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
-        <fieldset
-          aria-label={`Agent patch review for ${agentPatchPending.action.target?.file ?? "this file"}`}
-          aria-busy={agentPatchPending.applying}
-          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
-        >
-          <span className="sr-only">
-            Agent generated a patch. Review the changes and accept to apply or reject to discard.
-          </span>
-          <span className="sr-only" aria-live="polite">
-            {agentPatchPending.applying
-              ? t("editor.agentReview.applying")
-              : t("editor.agentReview.ready")}
-          </span>
-          <EditorDiffSurface
-            model={patchDiffModel}
-            loadState={{ status: "ready" }}
-            themeVariant={themeVariant}
-          />
-        </fieldset>
-        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
-          {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
-          <button
-            ref={patchAcceptButtonRef}
-            type="button"
-            className="ed-save"
-            data-testid="agent-patch-accept"
-            aria-label="Accept agent patch and apply changes"
-            disabled={agentPatchPending.applying}
-            onClick={handleAgentPatchAccept}
+      );
+    } else if (agentChangesetPending !== null) {
+      panel = (
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          <fieldset
+            aria-label="Agent changeset review"
+            aria-busy={agentChangesetPending.applying}
+            style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            Accept
-          </button>
-          <button
-            type="button"
-            className="ed-reload"
-            data-testid="agent-patch-reject"
-            aria-label="Reject agent patch and discard changes"
-            disabled={agentPatchPending.applying}
-            onClick={handleAgentPatchReject}
+            <span className="sr-only">
+              Review every changed file before applying this agent changeset to disk.
+            </span>
+            <span className="sr-only" aria-live="polite">
+              {agentChangesetPending.applying
+                ? t("editor.agentReview.applying")
+                : t("editor.agentReview.ready")}
+            </span>
+            <EditorDiffSurface
+              model={agentChangesetPending.model}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+              actions={{
+                canApply: !agentChangesetPending.applying,
+                canReject: !agentChangesetPending.applying,
+                canRunVerification: !verification.verificationRunning,
+              }}
+              onApply={handleAgentChangesetAccept}
+              onReject={handleAgentChangesetReject}
+              onRunVerification={runChangesetVerification}
+            />
+          </fieldset>
+        </div>
+      );
+    } else if (agentPatchPending !== null) {
+      const patchDiffModel = buildAgentPatchDiffModel(
+        agentPatchPending.original,
+        agentPatchPending.modified,
+        file,
+      );
+      panel = (
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
+          <fieldset
+            aria-label={`Agent patch review for ${definedOr(agentPatchPending.action.target?.file, "this file")}`}
+            aria-busy={agentPatchPending.applying}
+            style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            Reject
-          </button>
-          {/* Issue #2212 (ADR-0126) — activate the run-verification intent on this custom-button
+            <span className="sr-only">
+              Agent generated a patch. Review the changes and accept to apply or reject to discard.
+            </span>
+            <span className="sr-only" aria-live="polite">
+              {agentPatchPending.applying
+                ? t("editor.agentReview.applying")
+                : t("editor.agentReview.ready")}
+            </span>
+            <EditorDiffSurface
+              model={patchDiffModel}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+            />
+          </fieldset>
+          <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
+            {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
+            <button
+              ref={patchAcceptButtonRef}
+              type="button"
+              className="ed-save"
+              data-testid="agent-patch-accept"
+              aria-label="Accept agent patch and apply changes"
+              disabled={agentPatchPending.applying}
+              onClick={handleAgentPatchAccept}
+            >
+              Accept
+            </button>
+            <button
+              type="button"
+              className="ed-reload"
+              data-testid="agent-patch-reject"
+              aria-label="Reject agent patch and discard changes"
+              disabled={agentPatchPending.applying}
+              onClick={handleAgentPatchReject}
+            >
+              Reject
+            </button>
+            {/* Issue #2212 (ADR-0126) — activate the run-verification intent on this custom-button
               review surface (no built-in KeikoDiffEditor action bar here). Idle-gated. */}
-          <button
-            type="button"
-            className="ed-reload"
-            data-testid="agent-patch-run-verification"
-            aria-label={commonT("editor.verification.runReviewedChangeLabel")}
-            disabled={agentPatchPending.applying || verification.verificationRunning}
-            onClick={runPatchVerification}
-          >
-            {commonT("editor.verification.run")}
+            <button
+              type="button"
+              className="ed-reload"
+              data-testid="agent-patch-run-verification"
+              aria-label={commonT("editor.verification.runReviewedChangeLabel")}
+              disabled={anyTrue(agentPatchPending.applying, verification.verificationRunning)}
+              onClick={runPatchVerification}
+            >
+              {commonT("editor.verification.run")}
+            </button>
+          </div>
+        </div>
+      );
+    } else if (renameReview !== null) {
+      panel = (
+        <EditorDiffSurface
+          model={renameReview.model}
+          loadState={{ status: "ready" }}
+          themeVariant={themeVariant}
+          actions={{
+            canApply: true,
+            canReject: true,
+            canRunVerification: !verification.verificationRunning,
+          }}
+          onApply={handleRenameAccept}
+          onReject={handleRenameReject}
+          onRunVerification={runRenameVerification}
+        />
+      );
+    } else if (testGenerationPreview !== null) {
+      panel = (
+        <EditorDiffSurface
+          model={testGenerationPreview.model}
+          loadState={{ status: "ready" }}
+          themeVariant={themeVariant}
+          actions={testGenerationPreview.actions}
+          onReject={() => {
+            dispatchTestGen({ type: "dismiss" });
+          }}
+        />
+      );
+    } else if (editorLoadError !== null) {
+      panel = (
+        <div className="ed-host-loading" role="alert">
+          <span>{`Editor failed to load: ${editorLoadError}`}</span>
+          <button type="button" className="ed-reload" onClick={reload}>
+            Retry
           </button>
         </div>
-      </div>
-    );
-  } else if (renameReview !== null) {
-    panel = (
-      <EditorDiffSurface
-        model={renameReview.model}
-        loadState={{ status: "ready" }}
-        themeVariant={themeVariant}
-        actions={{
-          canApply: true,
-          canReject: true,
-          canRunVerification: !verification.verificationRunning,
-        }}
-        onApply={handleRenameAccept}
-        onReject={handleRenameReject}
-        onRunVerification={runRenameVerification}
-      />
-    );
-  } else if (testGenerationPreview !== null) {
-    panel = (
-      <EditorDiffSurface
-        model={testGenerationPreview.model}
-        loadState={{ status: "ready" }}
-        themeVariant={themeVariant}
-        actions={testGenerationPreview.actions}
-        onReject={() => {
-          dispatchTestGen({ type: "dismiss" });
-        }}
-      />
-    );
-  } else if (hasTarget && loadState.status === "error") {
-    panel = (
-      <div className="ed-host-loading" role="alert">
-        <span>{`Editor failed to load: ${loadState.message}`}</span>
-        <button type="button" className="ed-reload" onClick={reload}>
-          Retry
-        </button>
-      </div>
-    );
-  } else if (hasTarget && buffer !== null && fileModel !== null) {
-    panel = (
-      <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
-        {debugEnabled ? (
-          <EditorDebugSessionHost
-            workspaceId={debugWorkspaceId}
-            activationRevision={debugActivation?.revision}
-            enabled={debugEnabled}
-            fileId={file}
-            onOpenDebugPanel={onOpenDebugPanel}
-            onHostChange={setDebugEditorHost}
-            onSessionStateChange={setDebugSessionState}
-          />
-        ) : null}
-        <EditorSurface
-          key={editorSurfaceKey}
-          buffer={buffer}
-          fileModel={fileModel}
-          fileLoadState={loadState}
-          saveStatus={saveStatus}
-          saveError={saveError}
-          modifiedAt={modifiedAt ?? undefined}
-          maxSizeBytes={maxBytes ?? undefined}
-          themeVariant={themeVariant}
-          editorPreferences={editorSettings.applied}
-          modelViewStateKey={modelViewStateKey}
-          modelRetentionProtection={{
-            hotExitRecovery: recoverySnapshot !== null,
-            agentReview: agentReviewActive,
-          }}
-          ariaLabel={
-            root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
-          }
-          onContentChange={onContentChange}
-          onSaveRequested={onSaveRequested}
-          onRuntimeError={onRuntimeError}
-          provideCompletions={completionEnabled ? provideCompletions : undefined}
-          completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
-          provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
-          onInlineCompletionTelemetry={completionEnabled ? onInlineCompletionTelemetry : undefined}
-          provideDiagnostics={diagnosticsEnabled ? provideDiagnostics : undefined}
-          provideHover={hoverEnabled ? provideHover : undefined}
-          provideSymbols={symbolsEnabled ? provideSymbols : undefined}
-          provideFormatting={formattingEnabled ? provideFormatting : undefined}
-          provideDefinition={definitionEnabled ? provideDefinition : undefined}
-          provideTypeDefinition={typeDefinitionEnabled ? provideTypeDefinition : undefined}
-          provideImplementation={implementationEnabled ? provideImplementation : undefined}
-          provideCallHierarchy={callHierarchyEnabled ? provideCallHierarchy : undefined}
-          callHierarchyLabels={callHierarchyEnabled ? callHierarchyLabels : undefined}
-          onRevealCallHierarchyLocation={
-            callHierarchyEnabled ? revealCallHierarchyLocation : undefined
-          }
-          provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
-          semanticTokens={semanticTokens}
-          uriForPath={
-            definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
-              ? uriForPath
-              : undefined
-          }
-          provideReferences={referencesEnabled ? provideReferences : undefined}
-          provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
-          provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}
-          formatRequestNonce={formatRequestNonce}
-          onSelectionChange={setCurrentSelection}
-          onCursorChange={setCursor}
-          revealRequest={surfaceRevealRequest}
-          hostEditRequest={activeHostEditRequest}
-          onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
-          onDiagnostics={diagnosticsEnabled ? onPaneDiagnostics : undefined}
-          onGenerateTests={completionEnabled ? runTestGeneration : undefined}
-          onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
-          onRenameSymbol={canRename ? runRename : undefined}
-          showStatusFooter={false}
-          editorGitGutter={editorGitGutter}
-          editorBlame={editorBlame}
-          debug={debugEditorHost}
-          gitGutterRefreshNonce={gitGutterRefreshNonce}
-          editorConflicts={editorConflicts}
-        />
-        {gitGutterPeek !== null && file !== undefined ? (
-          <EditorGitHunkPeek
-            path={file}
-            peek={gitGutterPeek}
-            labels={{
-              close: sourceControlT("gitGutter.closePeek"),
-              staged: sourceControlT("gitGutter.staged"),
-              unstaged: sourceControlT("gitGutter.unstaged"),
-              title: sourceControlT("gitGutter.peekTitle"),
-              truncated: sourceControlT("gitGutter.truncated"),
-              hunkHeader: sourceControlT("gitGutter.hunkHeader"),
-              addedLine: sourceControlT("gitGutter.addedLine"),
-              deletedLine: sourceControlT("gitGutter.deletedLine"),
-              contextLine: sourceControlT("gitGutter.contextLine"),
-              metadataLine: sourceControlT("gitGutter.metadataLine"),
+      );
+    } else if (hasTarget && buffer !== null && fileModel !== null) {
+      panel = (
+        <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
+          {debugSessionHost}
+          <EditorSurface
+            key={editorSurfaceKey}
+            buffer={buffer}
+            fileModel={fileModel}
+            fileLoadState={loadState}
+            saveStatus={saveStatus}
+            saveError={saveError}
+            modifiedAt={nullToUndefined(modifiedAt)}
+            maxSizeBytes={nullToUndefined(maxBytes)}
+            themeVariant={themeVariant}
+            editorPreferences={editorSettings.applied}
+            modelViewStateKey={modelViewStateKey}
+            modelRetentionProtection={{
+              hotExitRecovery: recoverySnapshot !== null,
+              agentReview: agentReviewActive,
             }}
-            onClose={() => setGitGutterPeek(null)}
+            ariaLabel={activeEditorAriaLabel(root, file)}
+            onContentChange={onContentChange}
+            onSaveRequested={onSaveRequested}
+            onRuntimeError={onRuntimeError}
+            provideCompletions={whenEnabled(completionEnabled, provideCompletions)}
+            completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
+            provideInlineCompletions={whenEnabled(completionEnabled, provideInlineCompletions)}
+            onInlineCompletionTelemetry={whenEnabled(
+              completionEnabled,
+              onInlineCompletionTelemetry,
+            )}
+            provideDiagnostics={whenEnabled(diagnosticsEnabled, provideDiagnostics)}
+            provideHover={whenEnabled(hoverEnabled, provideHover)}
+            provideSymbols={whenEnabled(symbolsEnabled, provideSymbols)}
+            provideFormatting={whenEnabled(formattingEnabled, provideFormatting)}
+            provideDefinition={whenEnabled(definitionEnabled, provideDefinition)}
+            provideTypeDefinition={whenEnabled(typeDefinitionEnabled, provideTypeDefinition)}
+            provideImplementation={whenEnabled(implementationEnabled, provideImplementation)}
+            provideCallHierarchy={whenEnabled(callHierarchyEnabled, provideCallHierarchy)}
+            callHierarchyLabels={whenEnabled(callHierarchyEnabled, callHierarchyLabels)}
+            onRevealCallHierarchyLocation={whenEnabled(
+              callHierarchyEnabled,
+              revealCallHierarchyLocation,
+            )}
+            provideInlayHints={whenEnabled(inlayHintsEnabled, provideInlayHints)}
+            semanticTokens={semanticTokens}
+            uriForPath={whenEnabled(
+              navigationResolverEnabled(
+                definitionEnabled,
+                typeDefinitionEnabled,
+                implementationEnabled,
+                referencesEnabled,
+              ),
+              uriForPath,
+            )}
+            provideReferences={whenEnabled(referencesEnabled, provideReferences)}
+            provideCodeActions={whenEnabled(codeActionsEnabled, provideCodeActions)}
+            provideSignatureHelp={whenEnabled(signatureHelpEnabled, provideSignatureHelp)}
+            formatRequestNonce={formatRequestNonce}
+            onSelectionChange={setCurrentSelection}
+            onCursorChange={setCursor}
+            revealRequest={surfaceRevealRequest}
+            hostEditRequest={activeHostEditRequest}
+            onDiagnosticsSummary={whenEnabled(diagnosticsEnabled, setDiagnosticsSummary)}
+            onDiagnostics={whenEnabled(diagnosticsEnabled, onPaneDiagnostics)}
+            onGenerateTests={whenEnabled(completionEnabled, runTestGeneration)}
+            onAskKeikoAboutSelection={whenEnabled(onAskSelection !== undefined, handleAskSelection)}
+            onRenameSymbol={whenEnabled(canRename, runRename)}
+            showStatusFooter={false}
+            editorGitGutter={editorGitGutter}
+            editorBlame={editorBlame}
+            debug={debugEditorHost}
+            gitGutterRefreshNonce={gitGutterRefreshNonce}
+            editorConflicts={editorConflicts}
           />
-        ) : null}
-      </div>
-    );
-  } else if (hasTarget) {
-    panel = <output className="ed-host-loading">Loading file…</output>;
-  } else {
-    panel = (
-      <div className="ed-empty" role="note">
-        Choose a file from the project tree to start editing.
-      </div>
-    );
-  }
+          {renderGitGutterPeek()}
+        </div>
+      );
+    } else if (hasTarget) {
+      panel = <output className="ed-host-loading">Loading file…</output>;
+    } else {
+      panel = (
+        <div className="ed-empty" role="note">
+          Choose a file from the project tree to start editing.
+        </div>
+      );
+    }
+    return panel;
+  };
+  const panel = renderEditorPanel();
 
   // ADR-0133 D3: "manual" never proactively offers a reload for a clean external change — the
   // operator discovers and reloads it deliberately (e.g. by reopening the file). Dirty/deleted/
@@ -5323,265 +5640,253 @@ function EditorRuntimeWidget({
   const workspaceWatchNeedsAttention =
     workspaceWatch.health !== "healthy" || workspaceWatch.snapshotRequired;
 
-  return (
-    <div className="editor">
-      <div className="ed-tabs mono">
-        <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
-          {visibleTabs.length > 0 ? (
-            visibleTabs.map((path) => {
-              const active = path === file;
-              const tabDomId = active
-                ? tabId
-                : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
+  const renderOpenDocumentTabs = (): ReactNode => (
+    <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
+      {visibleTabs.length > 0 ? (
+        visibleTabs.map((path) => {
+          const active = path === file;
+          const tabDomId = active ? tabId : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
+          const tabDirty = effectiveDirtyFiles.has(path);
+          const tabConflictCount = active ? mergeConflicts.count : 0;
+          const tabHandle = renderTabHandle?.(path, active, tabDirty, {
+            mergeConflicts: tabConflictCount,
+          });
+          const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
+          return (
+            <span
+              className={`ed-tab${active ? " active" : ""}`}
+              data-dirty={tabDirty ? "true" : "false"}
+              data-pane-id={paneId}
+              data-tab-file={path}
+              data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+              data-tab-held={tabHandle?.["data-tab-held"]}
+              data-merge-conflicts={tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)}
+              data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
+              data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
+              key={path}
+            >
+              <button
+                type="button"
+                className="ed-tab-hit ui-tip"
+                draggable={tabHandle?.draggable}
+                role="tab"
+                id={tabDomId}
+                aria-selected={active ? "true" : "false"}
+                aria-controls={tabpanelId}
+                tabIndex={active ? 0 : -1}
+                data-tip={path}
+                data-pane-id={paneId}
+                data-tab-file={path}
+                data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                data-tab-held={tabHandle?.["data-tab-held"]}
+                data-merge-conflicts={
+                  tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
+                }
+                aria-label={
+                  tabConflictCount > 0
+                    ? `${path}, ${sourceControlT("conflicts.statusAria", { count: tabConflictCount })}`
+                    : path
+                }
+                onClickCapture={tabHandle?.onClickCapture}
+                onDragStart={tabHandle?.onDragStart}
+                onDragEnd={tabHandle?.onDragEnd}
+                onPointerDown={tabHandle?.onPointerDown}
+                onKeyDown={tabHandle?.onKeyDown}
+                onClick={() => handleSelectTab(path)}
+                onAuxClick={(event) => {
+                  // Middle-click closes the tab (VS Code parity), routed through the same
+                  // dirty-close guard as the × button.
+                  if (event.button === 1 && onCloseOpenFile !== undefined) {
+                    event.preventDefault();
+                    void handleCloseTab(path);
+                  }
+                }}
+              >
+                <FileIcon name={path} />
+                <span className="ed-tab-label">{path}</span>
+                {tabConflictCount > 0 ? (
+                  <span className={conflictStyles.badge} aria-hidden="true">
+                    {tabConflictCount}
+                  </span>
+                ) : null}
+                {tabDirty ? (
+                  <span className="ed-dirty" aria-hidden="true">
+                    ●
+                  </span>
+                ) : null}
+              </button>
+              {onCloseOpenFile !== undefined ? (
+                <button
+                  type="button"
+                  className="ed-tab-close ui-tip"
+                  aria-label={`Close ${path}`}
+                  data-tip={`Close ${path}`}
+                  onClick={() => void handleCloseTab(path)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </span>
+          );
+        })
+      ) : (
+        <span className="ed-tab active" data-dirty="false">
+          <span
+            className="ed-tab-hit ui-tip"
+            role="tab"
+            id={tabId}
+            aria-selected="true"
+            aria-controls={tabpanelId}
+            tabIndex={0}
+            data-tip="Editor"
+          >
+            <Icons.editor size={12} />
+            <span className="ed-tab-label">Editor</span>
+          </span>
+        </span>
+      )}
+      {compactTabs && summaryTabs.length > 0 ? (
+        <details
+          ref={summaryMenuRef}
+          className="ed-tab-summary-menu"
+          open={summaryMenuOpen}
+          onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
+        >
+          <summary
+            className="ed-tab-summary"
+            aria-label={`${String(summaryTabs.length)} more open documents`}
+            aria-haspopup="menu"
+            aria-expanded={summaryMenuOpen ? "true" : "false"}
+            aria-controls={summaryMenuId}
+          >
+            +{summaryTabs.length}
+          </summary>
+          <div
+            className="ed-tab-summary-panel"
+            id={summaryMenuId}
+            aria-label="Hidden open documents"
+          >
+            {summaryTabs.map((path) => {
               const tabDirty = effectiveDirtyFiles.has(path);
-              const tabConflictCount = active ? mergeConflicts.count : 0;
-              const tabHandle = renderTabHandle?.(path, active, tabDirty, {
-                mergeConflicts: tabConflictCount,
+              const tabHandle = renderTabHandle?.(path, false, tabDirty, {
+                onDragModeStart: () => setSummaryMenuOpen(false),
               });
-              const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
               return (
-                <span
-                  className={`ed-tab${active ? " active" : ""}`}
-                  data-dirty={tabDirty ? "true" : "false"}
-                  data-pane-id={paneId}
-                  data-tab-file={path}
+                <button
+                  type="button"
+                  key={path}
+                  className="ed-tab-summary-item"
+                  draggable={tabHandle?.draggable}
                   data-tab-draggable={tabHandle?.["data-tab-draggable"]}
                   data-tab-held={tabHandle?.["data-tab-held"]}
-                  data-merge-conflicts={
-                    tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
-                  }
-                  data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
-                  data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
-                  key={path}
+                  onClickCapture={tabHandle?.onClickCapture}
+                  onDragStart={tabHandle?.onDragStart}
+                  onDragEnd={tabHandle?.onDragEnd}
+                  onPointerDown={tabHandle?.onPointerDown}
+                  onKeyDown={tabHandle?.onKeyDown}
+                  onClick={() => handleChooseSummaryTab(path)}
                 >
-                  <button
-                    type="button"
-                    className="ed-tab-hit ui-tip"
-                    draggable={tabHandle?.draggable}
-                    role="tab"
-                    id={tabDomId}
-                    aria-selected={active ? "true" : "false"}
-                    aria-controls={tabpanelId}
-                    tabIndex={active ? 0 : -1}
-                    data-tip={path}
-                    data-pane-id={paneId}
-                    data-tab-file={path}
-                    data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                    data-tab-held={tabHandle?.["data-tab-held"]}
-                    data-merge-conflicts={
-                      tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
-                    }
-                    aria-label={
-                      tabConflictCount > 0
-                        ? `${path}, ${sourceControlT("conflicts.statusAria", { count: tabConflictCount })}`
-                        : path
-                    }
-                    onClickCapture={tabHandle?.onClickCapture}
-                    onDragStart={tabHandle?.onDragStart}
-                    onDragEnd={tabHandle?.onDragEnd}
-                    onPointerDown={tabHandle?.onPointerDown}
-                    onKeyDown={tabHandle?.onKeyDown}
-                    onClick={() => handleSelectTab(path)}
-                    onAuxClick={(event) => {
-                      // Middle-click closes the tab (VS Code parity), routed through the same
-                      // dirty-close guard as the × button.
-                      if (event.button === 1 && onCloseOpenFile !== undefined) {
-                        event.preventDefault();
-                        void handleCloseTab(path);
-                      }
-                    }}
-                  >
-                    <FileIcon name={path} />
-                    <span className="ed-tab-label">{path}</span>
-                    {tabConflictCount > 0 ? (
-                      <span className={conflictStyles.badge} aria-hidden="true">
-                        {tabConflictCount}
-                      </span>
-                    ) : null}
-                    {tabDirty ? (
-                      <span className="ed-dirty" aria-hidden="true">
-                        ●
-                      </span>
-                    ) : null}
-                  </button>
-                  {onCloseOpenFile !== undefined ? (
-                    <button
-                      type="button"
-                      className="ed-tab-close ui-tip"
-                      aria-label={`Close ${path}`}
-                      data-tip={`Close ${path}`}
-                      onClick={() => void handleCloseTab(path)}
-                    >
-                      ×
-                    </button>
+                  <FileIcon name={path} />
+                  <span className="ed-tab-summary-label">{path}</span>
+                  {tabDirty ? (
+                    <span className="ed-dirty" aria-hidden="true">
+                      ●
+                    </span>
                   ) : null}
-                </span>
+                </button>
               );
-            })
-          ) : (
-            <span className="ed-tab active" data-dirty="false">
-              <span
-                className="ed-tab-hit ui-tip"
-                role="tab"
-                id={tabId}
-                aria-selected="true"
-                aria-controls={tabpanelId}
-                tabIndex={0}
-                data-tip="Editor"
-              >
-                <Icons.editor size={12} />
-                <span className="ed-tab-label">Editor</span>
-              </span>
-            </span>
-          )}
-          {compactTabs && summaryTabs.length > 0 ? (
-            <details
-              ref={summaryMenuRef}
-              className="ed-tab-summary-menu"
-              open={summaryMenuOpen}
-              onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
-            >
-              <summary
-                className="ed-tab-summary"
-                aria-label={`${String(summaryTabs.length)} more open documents`}
-                aria-haspopup="menu"
-                aria-expanded={summaryMenuOpen ? "true" : "false"}
-                aria-controls={summaryMenuId}
-              >
-                +{summaryTabs.length}
-              </summary>
-              <div
-                className="ed-tab-summary-panel"
-                id={summaryMenuId}
-                aria-label="Hidden open documents"
-              >
-                {summaryTabs.map((path) => {
-                  const tabDirty = effectiveDirtyFiles.has(path);
-                  const tabHandle = renderTabHandle?.(path, false, tabDirty, {
-                    onDragModeStart: () => setSummaryMenuOpen(false),
-                  });
-                  return (
-                    <button
-                      type="button"
-                      key={path}
-                      className="ed-tab-summary-item"
-                      draggable={tabHandle?.draggable}
-                      data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                      data-tab-held={tabHandle?.["data-tab-held"]}
-                      onClickCapture={tabHandle?.onClickCapture}
-                      onDragStart={tabHandle?.onDragStart}
-                      onDragEnd={tabHandle?.onDragEnd}
-                      onPointerDown={tabHandle?.onPointerDown}
-                      onKeyDown={tabHandle?.onKeyDown}
-                      onClick={() => handleChooseSummaryTab(path)}
-                    >
-                      <FileIcon name={path} />
-                      <span className="ed-tab-summary-label">{path}</span>
-                      {tabDirty ? (
-                        <span className="ed-dirty" aria-hidden="true">
-                          ●
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </details>
-          ) : null}
-        </div>
-        <div className="ed-toolbar-actions">
-          {toolbarExtras}
-          {hasTarget && root !== undefined && file !== undefined && onOpenGitDiff !== undefined ? (
-            <button
-              type="button"
-              className="ed-reload"
-              onClick={() => onOpenGitDiff(root, file)}
-              aria-label={sourceControlT("gitDiff.openLabel")}
-            >
-              {sourceControlT("gitDiff.open")}
-            </button>
-          ) : null}
-          {hasTarget ? (
-            <button
-              type="button"
-              className="ed-reload"
-              onClick={() => {
-                setGitGutterPeek(null);
-                setGitGutterRefreshNonce((value) => value + 1);
-              }}
-              aria-label={sourceControlT("gitGutter.refreshLabel")}
-            >
-              {sourceControlT("gitGutter.refresh")}
-            </button>
-          ) : null}
-          {hasTarget ? (
-            <button
-              type="button"
-              className="ed-save ed-generate-tests"
-              onClick={() => {
-                if (canGenerateTests) runTestGeneration();
-                else
-                  announceToolbarNotice(
-                    testGenBusy
-                      ? "Test generation is already running."
-                      : "Test generation is unavailable for this file.",
-                  );
-              }}
-              aria-disabled={canGenerateTests ? "false" : "true"}
-            >
-              Tests
-            </button>
-          ) : null}
-          {testGenBusy ? (
-            <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
-              Cancel
-            </button>
-          ) : null}
-          {hasTarget ? (
-            <button
-              type="button"
-              className="ed-save"
-              onClick={() => {
-                if (canFormat) setFormatRequestNonce((value) => value + 1);
-                else announceToolbarNotice("Formatting is unavailable for this file.");
-              }}
-              aria-disabled={canFormat ? "false" : "true"}
-            >
-              Format
-            </button>
-          ) : null}
-          {hasTarget && saveStatus === "conflict" ? (
-            <button type="button" className="ed-reload" onClick={requestReload}>
-              Reload
-            </button>
-          ) : null}
-          {hasTarget ? (
-            <button
-              type="button"
-              className="ed-save"
-              onClick={() => {
-                if (canSave) void persist(content);
-                else announceToolbarNotice(saveUnavailableReason());
-              }}
-              aria-disabled={saveUnavailable}
-            >
-              {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
-            </button>
-          ) : null}
-        </div>
-      </div>
-      {/* GEN-UI-INTERACTION-003: polite live region announcing why an aria-disabled toolbar action
-          did nothing when a keyboard/AT user activated it (the buttons stay focusable and no-op). Uses
-          aria-live (not role="status") so it does not collide with the status bar's role=status region
-          for role-based queries; screen readers announce polite live regions regardless of role. */}
-      <div
-        className="sr-only"
-        aria-live="polite"
-        aria-atomic="true"
-        data-testid="editor-toolbar-notice"
-      >
-        {toolbarNotice}
-      </div>
+            })}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+
+  const renderEditorToolbar = (): ReactNode => (
+    <div className="ed-toolbar-actions">
+      {toolbarExtras}
+      {hasTarget && root !== undefined && file !== undefined && onOpenGitDiff !== undefined ? (
+        <button
+          type="button"
+          className="ed-reload"
+          onClick={() => onOpenGitDiff(root, file)}
+          aria-label={sourceControlT("gitDiff.openLabel")}
+        >
+          {sourceControlT("gitDiff.open")}
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-reload"
+          onClick={() => {
+            setGitGutterPeek(null);
+            setGitGutterRefreshNonce((value) => value + 1);
+          }}
+          aria-label={sourceControlT("gitGutter.refreshLabel")}
+        >
+          {sourceControlT("gitGutter.refresh")}
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-save ed-generate-tests"
+          onClick={() => {
+            if (canGenerateTests) runTestGeneration();
+            else
+              announceToolbarNotice(
+                testGenBusy
+                  ? "Test generation is already running."
+                  : "Test generation is unavailable for this file.",
+              );
+          }}
+          aria-disabled={canGenerateTests ? "false" : "true"}
+        >
+          Tests
+        </button>
+      ) : null}
+      {testGenBusy ? (
+        <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
+          Cancel
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-save"
+          onClick={() => {
+            if (canFormat) setFormatRequestNonce((value) => value + 1);
+            else announceToolbarNotice("Formatting is unavailable for this file.");
+          }}
+          aria-disabled={canFormat ? "false" : "true"}
+        >
+          Format
+        </button>
+      ) : null}
+      {hasTarget && saveStatus === "conflict" ? (
+        <button type="button" className="ed-reload" onClick={requestReload}>
+          Reload
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-save"
+          onClick={() => {
+            if (canSave) void persist(content);
+            else announceToolbarNotice(saveUnavailableReason());
+          }}
+          aria-disabled={saveUnavailable}
+        >
+          {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const renderWorkspaceWatchBanner = (): ReactNode => (
+    <>
       {workspaceWatchNeedsAttention ? (
         <output className="ed-recovery" data-testid="editor-workspace-watch-status">
           <span>
@@ -5595,6 +5900,11 @@ function EditorRuntimeWidget({
           </button>
         </output>
       ) : null}
+    </>
+  );
+
+  const renderExternalChangeBanner = (): ReactNode => (
+    <>
       {showExternalChangeBanner ? (
         <output className="ed-recovery" data-testid="editor-external-change-banner">
           <span>{externalChangeMessage(externalChange, file)}</span>
@@ -5617,6 +5927,11 @@ function EditorRuntimeWidget({
           </button>
         </output>
       ) : null}
+    </>
+  );
+
+  const renderRecoveryBanner = (): ReactNode => (
+    <>
       {recoverySnapshot !== null && !recoveryCompare ? (
         <output className="ed-recovery">
           <span>
@@ -5651,6 +5966,11 @@ function EditorRuntimeWidget({
           ) : null}
         </output>
       ) : null}
+    </>
+  );
+
+  const renderReloadConfirmation = (): ReactNode => (
+    <>
       {reloadConfirm ? (
         <div className="ed-dialog-backdrop" role="presentation">
           <div
@@ -5678,6 +5998,11 @@ function EditorRuntimeWidget({
           </div>
         </div>
       ) : null}
+    </>
+  );
+
+  const renderAgentConflictBanner = (): ReactNode => (
+    <>
       {agentConflict !== null ? (
         <AgentConflictBanner
           code={agentConflict.code}
@@ -5706,6 +6031,32 @@ function EditorRuntimeWidget({
           }}
         />
       ) : null}
+    </>
+  );
+
+  const renderEditorChrome = (): ReactNode => (
+    <div className="editor">
+      <div className="ed-tabs mono">
+        {renderOpenDocumentTabs()}
+        {renderEditorToolbar()}
+      </div>
+      {/* GEN-UI-INTERACTION-003: polite live region announcing why an aria-disabled toolbar action
+          did nothing when a keyboard/AT user activated it (the buttons stay focusable and no-op). Uses
+          aria-live (not role="status") so it does not collide with the status bar's role=status region
+          for role-based queries; screen readers announce polite live regions regardless of role. */}
+      <div
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="editor-toolbar-notice"
+      >
+        {toolbarNotice}
+      </div>
+      {renderWorkspaceWatchBanner()}
+      {renderExternalChangeBanner()}
+      {renderRecoveryBanner()}
+      {renderReloadConfirmation()}
+      {renderAgentConflictBanner()}
       <EditorAgentPresenceIndicator
         inFlightActionCount={bridgeState.inFlightActionCount}
         recentlyActive={bridgeState.recentlyAttached}
@@ -5724,6 +6075,8 @@ function EditorRuntimeWidget({
       ) : null}
     </div>
   );
+
+  return renderEditorChrome();
 }
 
 /**

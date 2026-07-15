@@ -110,7 +110,7 @@ export function EmptyWorkspaceBlob({ onNewWindow }: EmptyWorkspaceBlobProps): Re
     const group = groupRef.current;
     if (group !== null) {
       group.classList.remove("is-pulse");
-      void group.getBoundingClientRect();
+      group.getBoundingClientRect();
       group.classList.add("is-pulse");
     }
     onNewWindow();

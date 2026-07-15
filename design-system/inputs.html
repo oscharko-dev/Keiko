@@ -526,7 +526,7 @@
           remove.setAttribute("aria-label", "Remove " + v);
           remove.textContent = "✕";
           t.append(document.createTextNode(v), remove);
-          tf.insertBefore(t, ti);
+          ti.before(t);
           ti.value = "";
         } else if (e.key === "Backspace" && !ti.value) {
           var last = ti.previousElementSibling;

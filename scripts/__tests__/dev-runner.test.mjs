@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  bffProcessArgs,
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
   copyHeadersSafely,
@@ -22,6 +23,22 @@ import {
   publicBrowserUrl,
   readNextLockInfo,
 } from "../dev-runner.mjs";
+
+describe("bffProcessArgs", () => {
+  it("keeps watch mode for interactive development", () => {
+    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", true)).toEqual([
+      "--watch",
+      "--watch-preserve-output",
+      "/repo/scripts/dev-bff.mjs",
+    ]);
+  });
+
+  it("uses a stable one-shot process for hermetic tests", () => {
+    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
+      "/repo/scripts/dev-bff.mjs",
+    ]);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // checkNextPortFree

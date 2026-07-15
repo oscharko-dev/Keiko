@@ -863,15 +863,15 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     const root = document.documentElement;
     const setPointerModality = (): void => {
-      root.setAttribute("data-input-modality", "pointer");
+      root.dataset.inputModality = "pointer";
     };
     const setKeyboardModality = (event: KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key !== "Tab") return;
-      root.setAttribute("data-input-modality", "keyboard");
+      root.dataset.inputModality = "keyboard";
     };
 
-    root.setAttribute("data-input-modality", "pointer");
+    root.dataset.inputModality = "pointer";
     window.addEventListener("pointerdown", setPointerModality, true);
     window.addEventListener("mousedown", setPointerModality, true);
     window.addEventListener("keydown", setKeyboardModality, true);
@@ -879,7 +879,7 @@ function AppShellInner(): ReactNode {
       window.removeEventListener("pointerdown", setPointerModality, true);
       window.removeEventListener("mousedown", setPointerModality, true);
       window.removeEventListener("keydown", setKeyboardModality, true);
-      root.removeAttribute("data-input-modality");
+      delete root.dataset.inputModality;
     };
   }, []);
 

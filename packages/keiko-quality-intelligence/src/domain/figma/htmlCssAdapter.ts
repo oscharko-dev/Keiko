@@ -511,10 +511,18 @@ const fontLine = (token: TypographyToken, index: number): string | undefined => 
 
 function renderTokensCss(tokens: DesignTokens): string {
   const lines: string[] = [
-    ...tokens.colors.map(colorLine).filter((l): l is string => l !== undefined),
-    ...tokens.spacing.map(spaceLine).filter((l): l is string => l !== undefined),
-    ...tokens.radius.map(radiusLine).filter((l): l is string => l !== undefined),
-    ...tokens.typography.map(fontLine).filter((l): l is string => l !== undefined),
+    ...tokens.colors
+      .map((token, index) => colorLine(token, index))
+      .filter((line): line is string => line !== undefined),
+    ...tokens.spacing
+      .map((token, index) => spaceLine(token, index))
+      .filter((line): line is string => line !== undefined),
+    ...tokens.radius
+      .map((token, index) => radiusLine(token, index))
+      .filter((line): line is string => line !== undefined),
+    ...tokens.typography
+      .map((token, index) => fontLine(token, index))
+      .filter((line): line is string => line !== undefined),
   ];
   return [
     "/* Design tokens (deterministic, from the Figma Snapshot Screen-IR). */",

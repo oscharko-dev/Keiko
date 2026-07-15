@@ -348,11 +348,10 @@ export const gitHistoryAdapter: StructuralAdapter = {
   lookup: async (
     scope: SearchScope,
     query: RetrievalQuery,
-    limits: SearchLimits,
+    _limits: SearchLimits,
     fs: WorkspaceFs,
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
-    void limits;
     const nowMs = deps?.nowMs ?? Date.now;
     // Finding 8: early-out when scope has sub-paths (matches isAvailable contract).
     if (scope.relativePaths.length > 0) {

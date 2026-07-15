@@ -63,32 +63,22 @@ type ForbiddenKeyPaths<T> = T extends Primitive
 
 type AssertNoForbiddenKeys<T> = [ForbiddenKeyPaths<T>] extends [never] ? true : false;
 
-const _modelProvenanceIsContentFree: AssertNoForbiddenKeys<EditorModelProvenance> = true;
-const _completionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorCompletionProvenance> = true;
-const _completionRequestIsContentFree: AssertNoForbiddenKeys<EditorCompletionRequest> = true;
-const _inlineCompletionRequestIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionRequest> = true;
-const _inlineCompletionProvenanceIsContentFree: AssertNoForbiddenKeys<EditorInlineCompletionProvenance> = true;
-const _testGenerationRequestIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationRequest> = true;
 // The assured pre-filter funnel is content-free (counts + enum states); the generated patch it
 // accompanies is a reviewable artifact and is intentionally NOT asserted here.
-const _testGenerationFunnelIsContentFree: AssertNoForbiddenKeys<EditorTestGenerationFunnel> = true;
-const _recentEditContextIsContentFree: AssertNoForbiddenKeys<EditorRecentEditContext> = true;
-const _recentEditSummaryIsContentFree: AssertNoForbiddenKeys<EditorRecentEditSummary> = true;
-const _contextRequestIsContentFree: AssertNoForbiddenKeys<EditorContextRequest> = true;
-const _contextEntryIsContentFree: AssertNoForbiddenKeys<EditorContextEntry> = true;
-const _contextPackIsContentFree: AssertNoForbiddenKeys<EditorContextPack> = true;
-const _contextOmissionIsContentFree: AssertNoForbiddenKeys<EditorContextOmission> = true;
+const contentFreeTypeProofs: readonly [
+  AssertNoForbiddenKeys<EditorModelProvenance>,
+  AssertNoForbiddenKeys<EditorCompletionProvenance>,
+  AssertNoForbiddenKeys<EditorCompletionRequest>,
+  AssertNoForbiddenKeys<EditorInlineCompletionRequest>,
+  AssertNoForbiddenKeys<EditorInlineCompletionProvenance>,
+  AssertNoForbiddenKeys<EditorTestGenerationRequest>,
+  AssertNoForbiddenKeys<EditorTestGenerationFunnel>,
+  AssertNoForbiddenKeys<EditorRecentEditContext>,
+  AssertNoForbiddenKeys<EditorRecentEditSummary>,
+  AssertNoForbiddenKeys<EditorContextRequest>,
+  AssertNoForbiddenKeys<EditorContextEntry>,
+  AssertNoForbiddenKeys<EditorContextPack>,
+  AssertNoForbiddenKeys<EditorContextOmission>,
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true];
 
-void _modelProvenanceIsContentFree;
-void _completionProvenanceIsContentFree;
-void _completionRequestIsContentFree;
-void _inlineCompletionRequestIsContentFree;
-void _inlineCompletionProvenanceIsContentFree;
-void _testGenerationRequestIsContentFree;
-void _testGenerationFunnelIsContentFree;
-void _recentEditContextIsContentFree;
-void _recentEditSummaryIsContentFree;
-void _contextRequestIsContentFree;
-void _contextEntryIsContentFree;
-void _contextPackIsContentFree;
-void _contextOmissionIsContentFree;
+Object.freeze(contentFreeTypeProofs);

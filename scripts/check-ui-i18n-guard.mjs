@@ -8,7 +8,13 @@ export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
-const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
+const I18N_USAGE_PATTERNS = [
+  /\buseTranslate\s*\(/,
+  /\buseOptionalWidgetTranslate\s*\(/,
+  /\buseI18n\s*\(/,
+  /<\s*I18nTranslate\b/,
+  /\bOptionalWidgetTranslate\b/,
+];
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
@@ -190,8 +196,14 @@ function collectI18nChangeSignatures(lines) {
     const keyMatches = line.matchAll(/\bt\s*\(\s*(["'`])([^"'`]+)\1/gu);
     for (const match of keyMatches) signatures.add(`key:${match[2]}`);
     if (/\buseTranslate\s*\(/u.test(line)) signatures.add("api:useTranslate");
+    if (/\buseOptionalWidgetTranslate\s*\(/u.test(line)) {
+      signatures.add("api:useOptionalWidgetTranslate");
+    }
     if (/\buseI18n\s*\(/u.test(line)) signatures.add("api:useI18n");
     if (/<\s*I18nTranslate\b/u.test(line)) signatures.add("api:I18nTranslate");
+    if (/\bOptionalWidgetTranslate\b/u.test(line)) {
+      signatures.add("api:OptionalWidgetTranslate");
+    }
   }
   return signatures;
 }

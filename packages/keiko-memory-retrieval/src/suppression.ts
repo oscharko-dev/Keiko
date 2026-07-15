@@ -71,12 +71,13 @@ function statusSuppression(status: MemoryStatus): SuppressionResult | null {
     case "accepted":
     case "superseded":
       return null;
-    default: {
-      const _exhaustive: never = status;
-      void _exhaustive;
-      return null;
-    }
+    default:
+      return unsupportedStatus(status);
   }
+}
+
+function unsupportedStatus(_status: never): never {
+  throw new Error("Unsupported memory status");
 }
 
 function validitySuppression(memory: MemoryRecord, nowMs: number): SuppressionResult | null {

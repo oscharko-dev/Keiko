@@ -38,8 +38,7 @@ export const MONACO_WORKER_MODULES: Readonly<Record<MonacoWorkerEntry, string>> 
  * falls back to the editor worker.
  * @internal Consumed by {@link createMonacoEnvironment}; not part of the package public API.
  */
-export function monacoWorkerEntryForLabel(label: string): MonacoWorkerEntry {
-  void label;
+export function monacoWorkerEntryForLabel(_label: string): MonacoWorkerEntry {
   return "editor";
 }
 

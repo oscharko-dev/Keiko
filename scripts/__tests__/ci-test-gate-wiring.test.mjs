@@ -131,6 +131,8 @@ describe("CI test/gate wiring guard", () => {
       ci.indexOf("      - name: Performance evidence freshness + budget gate"),
     );
     expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
+    expect(performanceStep).toContain("Upload redacted performance evidence");
+    expect(performanceStep).toContain("if-no-files-found: warn");
     expect(performanceStep).toContain("npm run test:e2e:editor-perf");
   });
 

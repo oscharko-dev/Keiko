@@ -702,6 +702,33 @@ function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): 
   return isEmptyLinkedContext(resolved) ? EMPTY_LINKED : resolved;
 }
 
+function accessibleWindowLabel(
+  title: string,
+  subtitle: string | null,
+  selected: boolean,
+  t: I18nTranslate,
+): string {
+  const label = subtitle === null ? title : `${title} — ${subtitle}`;
+  return selected ? t("workspace.window.selectedLabel", { label }) : label;
+}
+
+function portEdgeLabel(port: Port, t: I18nTranslate): string {
+  switch (port) {
+    case "t":
+      return t("window.edge.top");
+    case "r":
+      return t("window.edge.right");
+    case "b":
+      return t("window.edge.bottom");
+    case "l":
+      return t("window.edge.left");
+  }
+}
+
+function booleanDataAttribute(value: boolean): "true" | undefined {
+  return value ? "true" : undefined;
+}
+
 // `linkRevision` only feeds the React.memo comparison and the linked-context
 // useMemo dependency below — it carries the "some other window's connection or
 // cfg changed" signal so this window refreshes its derived cross-window context
@@ -1095,10 +1122,7 @@ function WindowFrameImpl({
   );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
-  const windowLabel = sub !== null ? `${def.title} — ${sub}` : def.title;
-  const accessibleWindowLabel = selected
-    ? t("workspace.window.selectedLabel", { label: windowLabel })
-    : windowLabel;
+  const windowLabel = accessibleWindowLabel(def.title, sub, selected, t);
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
   // scene-zoom relayout or an intra-window reflow does not cascade across all N
@@ -1162,13 +1186,13 @@ function WindowFrameImpl({
       // Audit C408 — a name turns the section into a named region, so AT users
       // can perceive window boundaries and jump between windows; C297 — the sub
       // (path/URL/title) disambiguates multiple windows of the same type.
-      aria-label={accessibleWindowLabel}
+      aria-label={windowLabel}
       aria-roledescription="window"
-      data-top={top ? "true" : "false"}
-      data-max={win.max ? "true" : "false"}
+      data-top={booleanDataAttribute(top) ?? "false"}
+      data-max={booleanDataAttribute(win.max) ?? "false"}
       data-conn={connState ?? undefined}
-      data-selected={selected ? "true" : undefined}
-      data-dragging={draggingWindow ? "true" : undefined}
+      data-selected={booleanDataAttribute(selected)}
+      data-dragging={booleanDataAttribute(draggingWindow)}
       data-window-id={win.id}
       style={sectionStyle}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
@@ -1337,14 +1361,7 @@ function WindowFrameImpl({
               title={t("window.connectPort.title")}
               aria-label={t("window.connectPort.aria", {
                 title: def.title,
-                edge:
-                  d === "t"
-                    ? t("window.edge.top")
-                    : d === "r"
-                      ? t("window.edge.right")
-                      : d === "b"
-                        ? t("window.edge.bottom")
-                        : t("window.edge.left"),
+                edge: portEdgeLabel(d, t),
               })}
               onPointerDown={onPortPointerDown}
               onKeyDown={onPortKeyDown}

@@ -329,7 +329,10 @@ const deriveCandidateId = (
   steps: readonly string[],
   expectedResults: readonly string[],
 ): string => {
-  const atomRefs = [...derivedFromAtomIds].map(String).sort().join("|");
+  const atomRefs = [...derivedFromAtomIds]
+    .map(String)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|");
   const bodyDigest = sha256Hex(
     [...preconditions, ...steps, ...expectedResults]
       .map((part) => normaliseCandidateText(part))

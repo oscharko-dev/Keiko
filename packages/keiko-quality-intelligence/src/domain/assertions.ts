@@ -171,5 +171,5 @@ export const canonicaliseFragmentList = (fragments: readonly string[]): readonly
     }
     seen.add(normalised);
   }
-  return Array.from(seen).sort();
+  return Array.from(seen).sort((left, right) => left.localeCompare(right));
 };

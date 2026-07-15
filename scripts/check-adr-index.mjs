@@ -39,7 +39,7 @@ function duplicateNumberProblems(files) {
     byNumber.set(num, [...(byNumber.get(num) ?? []), name]);
   }
   return [...byNumber.entries()]
-    .sort()
+    .sort(([left], [right]) => left.localeCompare(right))
     .filter(([, names]) => names.length > 1)
     .map(
       ([num, names]) =>

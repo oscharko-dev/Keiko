@@ -1728,4 +1728,23 @@ export const DE_MESSAGES = {
     "Vorschau der ausgewählten Ansicht nicht geladen.",
   "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
     "Der ausgewählte Bildschirm ist in diesem gespeicherten Snapshot nicht vorhanden.",
+  "gitClientWindow.sync.aheadSuffix": " ({count} voraus)",
+  "gitClientWindow.sync.behindSuffix": " ({count} zurück)",
+  "gitClientWindow.sync.outcome": "{label} in {seconds} s{delta}",
+  "gitClientWindow.sync.blocked": "Blockiert: {reason}",
+  "gitClientWindow.sync.unavailableLower": "Synchronisierung nicht verfügbar",
+  "gitClientWindow.sync.fetch": "Abrufen",
+  "gitClientWindow.sync.pull": "Pullen",
+  "gitClientWindow.sync.push": "Pushen",
+  "gitClientWindow.sync.publishUpstream": "Upstream veröffentlichen",
+  "gitClientWindow.sync.operationStatus": "{label}: {status}",
+  "gitClientWindow.sync.unavailable": "Synchronisierung nicht verfügbar",
+  "gitClientWindow.panel.pullRequest": "Pull Request",
+  "gitClientWindow.panel.merge": "Merge",
+  "gitClientWindow.action.backToDiff": "Zurück zum Diff",
+  "gitClientWindow.history.commitUnavailable":
+    "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
+  "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
+  "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
+  "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
 } satisfies MessageCatalog;

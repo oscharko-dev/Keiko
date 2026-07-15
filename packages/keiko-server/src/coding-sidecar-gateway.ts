@@ -426,8 +426,7 @@ async function executeGatewayChat(
     const response = await chat(buildChatRequest(parsed, modelAlias));
     persistRoutingEvidence(ctx, deps, "accepted", modelSource);
     return openAiResponse(modelAlias, response.content, response.usage);
-  } catch (error) {
-    void error;
+  } catch {
     persistRoutingEvidence(ctx, deps, "failed", modelSource);
     emitGatewayFailureDiagnostic(ctx, deps);
     return unavailableError();
