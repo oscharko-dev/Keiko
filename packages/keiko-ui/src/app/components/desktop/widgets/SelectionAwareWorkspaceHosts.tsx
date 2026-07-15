@@ -364,7 +364,12 @@ export function EditorWindowSessionHost({
       ctx.openWindow("problems", { projectPath });
     },
     onOpenDebugPanel: () => {
-      if (root !== undefined) ctx.openWindow("debug", { projectPath: root });
+      if (root !== undefined) {
+        ctx.openWindow("debug", {
+          projectPath: root,
+          ...(file === undefined ? {} : { activeFile: file }),
+        });
+      }
     },
     onAskSelection: (handoff) => {
       if (root === undefined) return false;

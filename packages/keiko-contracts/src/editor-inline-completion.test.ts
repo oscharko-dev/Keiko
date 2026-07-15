@@ -6,6 +6,7 @@ import {
   parseEditorInlineCompletionRequest,
   parseEditorInlineCompletionTelemetry,
 } from "./editor-inline-completion.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 function baseRequest(): Record<string, unknown> {
   return {
@@ -69,6 +70,16 @@ describe("parseEditorInlineCompletionRequest — happy path", () => {
     expect(parsed.value.triggerKind).toBe("explicit");
     expect(parsed.value.maxCostClass).toBe("low");
     expect(parsed.value.maxOutputTokens).toBe(128);
+  });
+
+  it("retains a bounded editor session id when provided", () => {
+    const parsed = parseEditorInlineCompletionRequest({
+      ...baseRequest(),
+      editorSessionId: "editor-session-1",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.editorSessionId).toBe("editor-session-1");
   });
 
   it("retains content selectors when at least one is set", () => {
@@ -144,6 +155,22 @@ describe("parseEditorInlineCompletionRequest — rejections", () => {
     expect(
       parseEditorInlineCompletionRequest({ ...baseRequest(), maxOutputTokens: 0 }),
     ).toMatchObject({ ok: false });
+  });
+
+  it("rejects malformed or oversized editor session ids", () => {
+    for (const editorSessionId of [
+      "",
+      "   ",
+      false,
+      "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1),
+    ]) {
+      const parsed = parseEditorInlineCompletionRequest({ ...baseRequest(), editorSessionId });
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.errors).toContain(
+        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+      );
+    }
   });
 
   it("rejects setting both capsuleId and capsuleSetId", () => {

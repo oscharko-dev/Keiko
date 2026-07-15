@@ -1,8 +1,9 @@
 # Epic 2094 managed language intelligence security and performance review
 
-Review date: 2026-07-11. Scope: managed Python, Go, Shell, Java, and Rust activation, configuration,
-process supervision, language operations, semantic tokens, Settings UI, docked-agent projection,
-evidence, rollback, and release gates.
+Review refreshed: 2026-07-15 against the Foundation-wave audit base
+`8a1d61575123183d6f1227a5fea4c2742320a933`. Scope: managed Python, Go, Shell, Java, and Rust
+activation, configuration, process supervision, language operations, semantic tokens, Settings UI,
+docked-agent projection, evidence, rollback, and release gates.
 
 ## Security conclusion
 
@@ -16,17 +17,17 @@ not an authorization to merge, deliver, close issues, or widen an Authority Enve
 
 ## Trust-boundary findings
 
-| Boundary                 | Disposition                                                                                                                                                                                                                                                     |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Executable discovery     | Exact approved command names are resolved outside the workspace. Workspace-planted and symlinked binaries fail before spawn. Required companion executables are checked as one profile.                                                                         |
-| Spawn and descendants    | `shell: false`; exact argument arrays; closed environment allowlists; unique private descendant `PATH`; no ambient credential, package-manager, toolchain-home, proxy, or startup-file inheritance. Cleanup is attempted for every generation.                  |
-| Egress                   | Provider-owned launch preparation enforces native `network:none`; a platform without the enforcing backend fails closed. Container fallback is not silently enabled.                                                                                            |
-| Filesystem               | Workspace roots are canonical and selected; overlay and result paths must remain contained and root-relative. Provider state uses unique mode-0700 temporary roots outside the workspace and is removed on shutdown, crash, restart, and failed initialization. |
-| Protocol                 | JSON-RPC frames, pending requests, document bytes, item counts, edits, diagnostics, locations, semantic tokens, and display strings are bounded. Malformed, accessor-hostile, overlapping, escaping, command-bearing, and oversized input is rejected.          |
-| Activation/configuration | Default-off, local-human mutation, CSRF, ETag, revision, idempotency, typed schemas, approved runtime identities, atomic persistence, and content-free evidence are all required. Deployment policy and health can only reduce capability.                      |
-| Docked agent             | The existing action route and language route are reused. Dispatch rechecks current workspace activation and negotiation. Failures retain typed provider/capability/timeout/cancel/limit codes. Audit stores status, code, count, and relative path only.        |
-| UI                       | Settings never installs a provider or treats a static candidate as active. Status is text plus semantic styling, keyboard-operable, localized, and axe-tested. Component-scoped CSS avoids the pinned global stylesheet.                                        |
-| Evidence                 | Activation evidence uses fingerprints, revisions, reason codes, outcomes, and counts. It excludes workspace roots, configuration bodies, source, diagnostics, executable paths, environment, stderr, and secrets.                                               |
+| Boundary                 | Disposition                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executable discovery     | Exact approved command names are resolved outside the workspace. Workspace-planted and symlinked binaries fail before spawn. Required companion executables are checked as one profile.                                                                                                                                                                              |
+| Spawn and descendants    | `shell: false`; exact argument arrays; closed environment allowlists; unique private descendant `PATH`; no ambient credential, package-manager, toolchain-home, proxy, or startup-file inheritance. Cleanup is attempted for every generation.                                                                                                                       |
+| Egress                   | Provider-owned launch preparation enforces native `network:none`; a platform without the enforcing backend fails closed. Container fallback is not silently enabled.                                                                                                                                                                                                 |
+| Filesystem               | Workspace roots are canonical and selected; overlay and result paths must remain contained and root-relative. Provider state uses unique mode-0700 generations beneath Keiko's private managed-state root, disjoint from the workspace, and is removed on shutdown, crash, restart, and failed initialization.                                                       |
+| Protocol                 | JSON-RPC frames, pending requests, document bytes, item counts, edits, diagnostics, locations, semantic tokens, and display strings are bounded. Malformed, accessor-hostile, overlapping, escaping, command-bearing, and oversized input is rejected.                                                                                                               |
+| Activation/configuration | Default-off, local-human mutation, CSRF, root-bound strong ETag, monotonic revision, idempotency, contracts-owned strict schemas, approved runtime identities, atomic persistence, and content-free evidence are all required. Deployment policy and health can only reduce capability.                                                                              |
+| Docked agent             | The existing action route and language route are reused. Dispatch rechecks current workspace activation and negotiation. Failures retain typed provider/capability/timeout/cancel/limit codes. Audit stores status, code, count, and relative path only.                                                                                                             |
+| UI                       | Settings never installs a provider or treats a static candidate as active. The capability route initializes only an explicitly activated governed process and advertises the live, current-revision negotiated subset. Status is text plus semantic styling, keyboard-operable, localized, and axe-tested. Component-scoped CSS avoids the pinned global stylesheet. |
+| Evidence                 | Activation evidence uses fingerprints, revisions, reason codes, outcomes, and counts. It excludes workspace roots, configuration bodies, source, diagnostics, executable paths, environment, stderr, and secrets.                                                                                                                                                    |
 
 ## Language-specific no-execution proof
 
@@ -64,8 +65,8 @@ prove descendant, stderr, crash, frame, cleanup, and cancellation behavior. The 
 npm run test:managed-lsp-closeout
 ```
 
-Observed result: 25 files passed, five optional real-provider files skipped, 325 tests passed, five
-optional tests skipped.
+Observed result: 34 files passed, five optional real-provider files skipped, 470 tests passed, five
+optional tests skipped. The focused UI continuation passed 2 files and 102 tests.
 
 ## Performance and resource budgets
 
@@ -84,25 +85,15 @@ Committed hard dispositions:
 | process RSS delta               | 64 MiB |
 | harness-created persistent disk |  1 MiB |
 
-Linux-authoritative measurement, Docker `node:22-bookworm`, Linux arm64, Node `v22.23.1`:
-
-| Metric                      |      p50 |      p95 |             max | Result |
-| --------------------------- | -------: | -------: | --------------: | ------ |
-| cold initialize, 20 samples | 0.202 ms | 1.011 ms |        3.578 ms | Pass   |
-| warm request, 100 samples   | 0.031 ms | 0.069 ms |        0.211 ms | Pass   |
-| disposal, 20 samples        | 0.075 ms | 0.214 ms |        0.505 ms | Pass   |
-| RSS delta                   |        - |        - | 4,456,448 bytes | Pass   |
-| persistent disk             |        - |        - |         0 bytes | Pass   |
-
-Reference macOS arm64 run, Node `v22.22.3`: cold p95 `0.945 ms`, warm p95 `0.034 ms`, disposal p95
-`0.138 ms`, RSS delta `4,702,208 bytes`, disk `0 bytes`; all dispositions passed.
+The earlier Node 22 measurements are historical and are not candidate evidence for this Node 24
+repository. Linux-authoritative values must be regenerated from the final immutable candidate under
+the exact Node 24.18.0/npm 11.16.0 toolchain before #2282/#2094 closeout; this document will record
+those values rather than carrying forward stale numbers.
 
 The measurement is reproducible with:
 
 ```bash
 npm run check:managed-lsp-performance
-docker run --rm -v "$PWD":/workspace -w /workspace \
-  node:22-bookworm node scripts/measure-managed-lsp-closeout.mjs
 ```
 
 ## Additional budget evidence

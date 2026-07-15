@@ -25,6 +25,30 @@ const checks = [
         message:
           "Desktop chat SSE event names must normalize through DESKTOP_CHAT_STREAM_EVENT_TYPES.",
       },
+      {
+        pattern:
+          /export\s+(?:interface\s+ManagedLsp(?:ConfigurationSummary|SettingsResponse|SettingsMutationInput)\b|type\s+ManagedLspSettingsAction\s*=\s*["'])/,
+        message: "Managed LSP UI envelopes must alias contracts-owned route types.",
+      },
+    ],
+  },
+  {
+    file: "packages/keiko-server/src/editor/lsp/managedLspControl.ts",
+    rules: [
+      {
+        pattern:
+          /export\s+(?:interface\s+ManagedLsp(?:ControlMutation|ControlSnapshot|ConfigurationSummary)\b|type\s+ManagedLspControl(?:Action|Result)\s*=)/,
+        message: "Managed LSP server control envelopes must be owned by keiko-contracts.",
+      },
+    ],
+  },
+  {
+    file: "packages/keiko-server/src/editor/lsp/managedLspRoutes.ts",
+    rules: [
+      {
+        pattern: /(?:interface\s+ParsedMutationBody\b|function\s+parseMutationBody\b)/,
+        message: "Managed LSP routes must use the contracts-owned control request parser.",
+      },
     ],
   },
   {

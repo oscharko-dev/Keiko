@@ -61,6 +61,7 @@ export interface EditorSurfaceProps {
   readonly maxSizeBytes?: number | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
   readonly editorPreferences?: KeikoCodeEditorProps["editorPreferences"] | undefined;
+  readonly modelRootKey?: KeikoCodeEditorProps["modelRootKey"] | undefined;
   readonly modelViewStateKey?: KeikoCodeEditorProps["modelViewStateKey"] | undefined;
   readonly modelRetentionProtection?: KeikoCodeEditorProps["modelRetentionProtection"] | undefined;
   readonly ariaLabel?: string | undefined;
@@ -186,6 +187,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         maxSizeBytes={props.maxSizeBytes}
         themeVariant={props.themeVariant}
         editorPreferences={props.editorPreferences}
+        modelRootKey={props.modelRootKey}
         modelViewStateKey={props.modelViewStateKey}
         modelRetentionProtection={props.modelRetentionProtection}
         ariaLabel={props.ariaLabel}

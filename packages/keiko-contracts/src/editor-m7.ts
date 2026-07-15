@@ -1190,43 +1190,71 @@ const RESERVED_BINDINGS = Object.freeze([
   "CtrlOrMeta+T",
   "CtrlOrMeta+Shift+N",
 ]);
-const MODIFIERS = Object.freeze(["Ctrl", "Meta", "CtrlOrMeta", "Alt", "Shift"]);
+const MODIFIERS = Object.freeze(["CtrlOrMeta", "Ctrl", "Meta", "Alt", "Shift"] as const);
 const MAX_KEYBINDING_OVERRIDES = 64;
 const MAX_KEYBINDING_OVERRIDE_BYTES = 192;
 const KEYBINDING_OVERRIDE_SEPARATOR = "|";
+type EditorM7KeybindingModifier = (typeof MODIFIERS)[number];
 
 function commandFor(id: string): EditorM7CommandDefinition | undefined {
   return EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === id);
 }
 
-function normalizeBinding(binding: string): string {
-  return binding
-    .split("+")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .join("+");
+function canonicalBinding(binding: string): string | undefined {
+  const parts = binding.split("+").map((part) => part.trim());
+  if (parts.length === 0 || parts.some((part) => part.length === 0)) return undefined;
+  const key = canonicalKey(parts.at(-1) ?? "");
+  if (key === undefined) return undefined;
+  const modifiers = canonicalModifiers(parts.slice(0, -1));
+  return modifiers === undefined ? undefined : [...modifiers, key].join("+");
 }
 
-// Case and modifier-order neutral comparison key. `normalizeBinding` preserves the caller's
-// casing/order for the stored/returned value, so reserved-chord matching must not rely on exact
-// string equality: "shift+ctrlormeta+n" and "CtrlOrMeta+Shift+N" are the same physical chord.
-function canonicalBindingKey(binding: string): string {
-  const parts = binding.split("+").map((part) => part.trim().toLowerCase());
-  const key = parts.at(-1) ?? "";
-  const modifiers = parts.slice(0, -1).sort((left, right) => left.localeCompare(right));
-  return [...modifiers, key].join("+");
+function canonicalModifiers(
+  parts: readonly string[],
+): readonly EditorM7KeybindingModifier[] | undefined {
+  const modifiers: EditorM7KeybindingModifier[] = [];
+  const seen = new Set<EditorM7KeybindingModifier>();
+  for (const part of parts) {
+    const modifier = canonicalModifier(part);
+    if (modifier === undefined || seen.has(modifier) || modifiersConflict(modifier, seen))
+      return undefined;
+    seen.add(modifier);
+    modifiers.push(modifier);
+  }
+  modifiers.sort((left, right) => MODIFIERS.indexOf(left) - MODIFIERS.indexOf(right));
+  return modifiers;
+}
+
+function modifiersConflict(
+  modifier: EditorM7KeybindingModifier,
+  seen: ReadonlySet<EditorM7KeybindingModifier>,
+): boolean {
+  if (modifier === "CtrlOrMeta") return seen.has("Ctrl") || seen.has("Meta");
+  return (modifier === "Ctrl" || modifier === "Meta") && seen.has("CtrlOrMeta");
 }
 
 function isReservedBinding(binding: string): boolean {
-  const canonical = canonicalBindingKey(binding);
-  return RESERVED_BINDINGS.some((reserved) => canonicalBindingKey(reserved) === canonical);
+  const key = binding.toLowerCase();
+  return RESERVED_BINDINGS.some((reserved) => canonicalBinding(reserved)?.toLowerCase() === key);
 }
 
-function syntacticallyValidBinding(binding: string): boolean {
-  const parts = binding.split("+");
-  const key = parts.at(-1);
-  if (key === undefined || MODIFIERS.includes(key)) return false;
-  return parts.every(isSafeKeybindingPart);
+function canonicalModifier(part: string): EditorM7KeybindingModifier | undefined {
+  const lower = part.toLowerCase();
+  return MODIFIERS.find((modifier) => modifier.toLowerCase() === lower);
+}
+
+function canonicalKey(key: string): string | undefined {
+  if (canonicalModifier(key) !== undefined || !isSafeKeybindingPart(key)) return undefined;
+  if (key.length === 1) return key.toUpperCase();
+  if (key[0]?.toLowerCase() === "f" && key.slice(1).split("").every(isKeybindingDigit)) {
+    return `F${key.slice(1)}`;
+  }
+  const named = ["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "Esc", "Space"];
+  return named.find((candidate) => candidate.toLowerCase() === key.toLowerCase()) ?? key;
+}
+
+function isKeybindingDigit(char: string): boolean {
+  return char >= "0" && char <= "9";
 }
 
 function isSafeKeybindingPart(part: string): boolean {
@@ -1260,7 +1288,7 @@ function normalizedDefaultKeybindings(): readonly EditorM7ActiveKeybinding[] {
   return EDITOR_M7_COMMAND_REGISTRY.flatMap((command) =>
     command.defaultBindings.map((binding) => ({
       commandId: command.id,
-      binding: normalizeBinding(binding),
+      binding: canonicalBinding(binding) ?? "",
     })),
   );
 }
@@ -1273,18 +1301,18 @@ export function validateEditorM7Keybinding(args: {
   try {
     const command = commandFor(args.commandId);
     if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
-    const normalized = normalizeBinding(args.binding);
     if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
-    if (isReservedBinding(normalized)) {
+    const canonical = canonicalBinding(args.binding);
+    if (canonical === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
+    if (isReservedBinding(canonical)) {
       return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
     }
-    if (!syntacticallyValidBinding(normalized)) return { ok: false, reasonCode: "INVALID_INPUT" };
     const active = Array.isArray(args.activeBindings)
       ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
       : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
-    const collision = active.find((entry) => collidesWithCommand(command, normalized, entry));
+    const collision = active.find((entry) => collidesWithCommand(command, canonical, entry));
     return collision === undefined
-      ? { ok: true, value: normalized }
+      ? { ok: true, value: canonical }
       : { ok: false, reasonCode: "KEYBINDING_COLLISION" };
   } catch {
     return { ok: false, reasonCode: "INVALID_INPUT" };
@@ -1296,15 +1324,20 @@ function collidesWithCommand(
   binding: string,
   active: EditorM7ActiveKeybinding,
 ): boolean {
-  if (active.commandId === command.id || normalizeBinding(active.binding) !== binding) return false;
+  const activeBinding = canonicalBinding(active.binding);
+  if (active.commandId === command.id || activeBinding?.toLowerCase() !== binding.toLowerCase()) {
+    return false;
+  }
   const other = commandFor(active.commandId);
   return other !== undefined && commandContextsOverlap(command, other);
 }
 
 export function serializeEditorM7KeybindingOverride(override: EditorM7KeybindingOverride): string {
-  return [override.schemaVersion, override.commandId, normalizeBinding(override.binding)].join(
-    KEYBINDING_OVERRIDE_SEPARATOR,
-  );
+  return [
+    override.schemaVersion,
+    override.commandId,
+    canonicalBinding(override.binding) ?? "",
+  ].join(KEYBINDING_OVERRIDE_SEPARATOR);
 }
 
 export function parseEditorM7KeybindingOverrideRecord(
@@ -1374,7 +1407,7 @@ function parseEditorM7KeybindingOverrideSetting(
 // snippet contract in this module (AGENTS.md §5, ADR-0133 D6).
 
 const SAFE_KEYBINDING_CHARS = new Set(
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,./;'[]`-",
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,./;'[]`-\\",
 );
 
 export type EditorM7AiFeature =

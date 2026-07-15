@@ -5,7 +5,11 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  type EditorAgentSessionSnapshot,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-contracts";
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EditorCompletionWireResponse, LatencyClass } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -21,6 +25,7 @@ import {
   createEditorModelTokenBudget,
   type EditorModelTokenBudget,
 } from "./editorModelTokenBudget.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -111,6 +116,24 @@ function completionBody(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
+function editorSnapshot(): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-1",
+    windowId: "window-1",
+    workspaceRoot: root,
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: [],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1_000,
+  };
+}
+
 function body(result: { status: number; body: unknown }): EditorCompletionWireResponse {
   return result.body as EditorCompletionWireResponse;
 }
@@ -130,6 +153,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  editorAgentRegistry.reset();
   store.close();
   await rm(root, { recursive: true, force: true });
 });
@@ -495,6 +519,24 @@ describe("POST /api/editor/completion — gated model-assisted tier", () => {
       readonly budgetBytes?: number;
     };
     expect(manifest.budgetBytes).toBe(1);
+  });
+
+  it("threads a same-root editor session into the existing context collector", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    editorAgentRegistry.connect("editor-session-1", () => undefined);
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorCompletion(
+      postContext(completionBody({ editorSessionId: "editor-session-1" })),
+      deps(fimConfig("fast"), evidenceStore),
+      routeOptions({ chatFactory: cannedChat }),
+    );
+    expect(result.status).toBe(200);
+    const manifest = evidenceStore
+      .list()
+      .filter((runId) => runId.startsWith("coding-context-"))
+      .map((runId) => evidenceStore.get(runId) ?? "")
+      .join("\n");
+    expect(manifest).toContain('"sourceKind":"editor-state"');
   });
 
   it("never lets a base-FIM model be elected (only aligned models run)", async () => {

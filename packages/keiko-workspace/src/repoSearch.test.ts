@@ -1723,6 +1723,25 @@ describe("readExcerpt (memFs)", () => {
 
 // ─── Copilot review findings on PR #248 (memFs) ───────────────────────────────
 describe("Copilot finding fixes (memFs)", () => {
+  it("filters text-search candidates with include and exclude globs before scanning", async () => {
+    const { scope, fs } = memScope({
+      "allowed/keep.ts": "needle\n",
+      "allowed/skip.js": "needle\n",
+      "excluded/target.ts": "needle\n",
+    });
+    const r = await searchText(scope, rxq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      candidatePathGlobs: {
+        include: ["**/*.ts"],
+        exclude: ["excluded/**/*.ts"],
+      },
+    });
+
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["allowed/keep.ts"]);
+    expect(r.filesScanned).toBe(1);
+  });
+
   it("searchText clamps matches to min(limits.maxMatchesReturned, query.maxResults)", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "match\nmatch\nmatch\nmatch\nmatch\n" });
     const q: RetrievalQuery = nlq("match", { maxResults: 2 });

@@ -219,6 +219,7 @@ function buildDiscoveryRequest(request: EditorTestGenerationWireRequest): Coding
   return {
     schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
     purpose: "test-generation",
+    editorSessionId: request.editorSessionId,
     documentPath: anchorDocumentPath(target),
     symbol: targetSymbolName(target) ?? request.context?.symbol,
     queryText: request.context?.queryText,

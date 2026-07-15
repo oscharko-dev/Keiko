@@ -20,9 +20,11 @@ const suite = provisioned
 
 describe.skipIf(!provisioned)(suite, () => {
   let root = "";
+  let runtimeStateRoot = "";
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "keiko-real-jdtls-"));
+    runtimeStateRoot = mkdtempSync(join(tmpdir(), "keiko-real-jdtls-state-"));
     writeFileSync(
       join(root, "Main.java"),
       "final class Main { static int value() { return 1; } }\n",
@@ -32,6 +34,7 @@ describe.skipIf(!provisioned)(suite, () => {
   afterAll(async () => {
     await shutdownHostLspPool();
     rmSync(root, { recursive: true, force: true });
+    rmSync(runtimeStateRoot, { recursive: true, force: true });
   });
 
   it("uses JDK 21 or newer and serves standalone analysis without project import", async () => {
@@ -56,6 +59,7 @@ describe.skipIf(!provisioned)(suite, () => {
         commandRules: [{ executable: "jdtls" }, { executable: "java" }, { executable: "python3" }],
         overlayAbsolutePath: join(root, "Main.java"),
         signal: new AbortController().signal,
+        privateRuntimeStateRoot: runtimeStateRoot,
         activationAuthorized: true,
         protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
       });

@@ -248,11 +248,18 @@ function shapeSnapshot(
   textMode: EditorAgentSnapshotTextMode,
   maxBytes: number,
 ): EditorAgentSessionSnapshot {
+  if (textMode === "none") {
+    const rest = { ...snapshot };
+    Reflect.deleteProperty(rest, "diagnosticsDetail");
+    Reflect.deleteProperty(rest, "text");
+    Reflect.deleteProperty(rest, "textTruncated");
+    return { ...rest, textMode };
+  }
   const shapedSnapshot =
     snapshot.diagnosticsDetail === undefined
       ? snapshot
       : { ...snapshot, diagnosticsDetail: shapeDiagnosticsDetail(snapshot.diagnosticsDetail) };
-  if (textMode === "none" || shapedSnapshot.text === undefined) {
+  if (shapedSnapshot.text === undefined) {
     const rest = { ...shapedSnapshot };
     Reflect.deleteProperty(rest, "text");
     Reflect.deleteProperty(rest, "textTruncated");
@@ -1390,7 +1397,8 @@ function authorityDenyReason(
 
 // Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
 // the always-on workspace deny-list (a keiko-workspace concern the leaf classifier cannot reach, so
-// the boolean is resolved here). Only meaningful for write actions; navigation/layout always allow.
+// the boolean is resolved here). Pure browser navigation/layout remains exempt; server-resolved
+// repository reads compose and reserve through the same non-null workspace-read class as queryGit.
 function decideActionPolicy(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
@@ -1871,9 +1879,30 @@ type EditorActionRequestPreparation =
   | { readonly ok: true; readonly request: PreparedEditorActionRequest }
   | { readonly ok: false; readonly response: RouteResult };
 
+function navigationTargetMatchesDocument(action: EditorAgentAction): boolean {
+  return (
+    action.type !== "navigateSymbol" || action.target?.file === action.navigateSymbol?.document.path
+  );
+}
+
+function invalidNavigationTargetResponse(): EditorActionRequestPreparation {
+  return {
+    ok: false,
+    response: {
+      status: 400,
+      body: errorBody(
+        "INVALID_REQUEST",
+        "navigateSymbol target.file must equal navigateSymbol.document.path.",
+      ),
+    },
+  };
+}
+
 function prepareEditorActionRequest(
   value: EditorAgentAction | EditorAgentBridgeActionRequest,
 ): EditorActionRequestPreparation {
+  const action = isEditorAgentAction(value) ? value : value.action;
+  if (!navigationTargetMatchesDocument(action)) return invalidNavigationTargetResponse();
   const requestHash = editorActionRequestHash(value);
   if (isEditorAgentAction(value)) {
     return { ok: true, request: { action: value, requestHash } };
@@ -1887,7 +1916,45 @@ function prepareEditorActionRequest(
     : lease;
 }
 
-function replayEditorAction(action: EditorAgentAction, requestHash: string): RouteResult | null {
+function rejectServerResolvedReplay(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+): RouteResult | null {
+  if (!isServerResolvedAction(action)) return null;
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const decision = decideActionPolicy(action, snapshot, deps);
+  const policyConflict = policyAdmissionConflict(action, decision);
+  if (policyConflict !== null) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      decision,
+      policyConflict,
+      requestHash,
+      403,
+      deps?.redactor,
+    );
+  }
+  if (snapshot === undefined || !editorAgentRegistry.hasLiveBridge(action.sessionId)) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      decision,
+      conflict(action, "NO_ACTIVE_SESSION", "No live editor session is connected."),
+      requestHash,
+      409,
+      deps?.redactor,
+    );
+  }
+  return null;
+}
+
+function replayEditorAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+): RouteResult | null {
   const replay = idempotency.get(action.idempotencyKey);
   if (replay === undefined) return null;
   if (replay.requestHash !== requestHash) {
@@ -1899,6 +1966,8 @@ function replayEditorAction(action: EditorAgentAction, requestHash: string): Rou
       ),
     };
   }
+  const rejection = rejectServerResolvedReplay(action, requestHash, deps);
+  if (rejection !== null) return rejection;
   return { status: 200, body: { result: replay.result } };
 }
 
@@ -1978,6 +2047,7 @@ async function runSearchWorkspaceAction(
         includeGlobs: request.includeGlobs ?? [],
         excludeGlobs: request.excludeGlobs ?? [],
         maxResults: request.maxResults ?? 50,
+        ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
       },
       "/api/editor/workspace-search",
     ),
@@ -2711,27 +2781,27 @@ async function resolveServerAction(
   action: EditorAgentAction,
   requestHash: string,
   snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
   deps: EditorAgentActionRouteDeps,
   signal: AbortSignal,
 ): Promise<RouteResult> {
-  const baseline = decideActionPolicy(action, snapshot, deps);
   if (snapshot === undefined) {
     return serverResolvedFailure(
       action,
       snapshot,
-      baseline,
+      decision,
       conflict(action, "NO_ACTIVE_SESSION", "No editor session snapshot is registered."),
       requestHash,
       409,
       deps.redactor,
     );
   }
-  const rejection = rejectServerResolvedPolicy(action, snapshot, baseline, requestHash, deps);
+  const rejection = rejectServerResolvedPolicy(action, snapshot, decision, requestHash, deps);
   if (rejection !== null) return rejection;
   return finishServerResolvedAction(
     action,
     snapshot,
-    baseline,
+    decision,
     requestHash,
     await executeServerResolvedAction(action, snapshot, deps, signal),
     deps,
@@ -2745,22 +2815,8 @@ function rejectServerResolvedPolicy(
   requestHash: string,
   deps: EditorAgentActionRouteDeps,
 ): RouteResult | null {
-  const pathIssue = serverResolvedPathIssues(action, snapshot);
-  if (pathIssue !== null) {
-    return serverResolvedFailure(
-      action,
-      snapshot,
-      denyByAuthority(baseline, pathIssue),
-      conflict(
-        action,
-        "OUT_OF_SCOPE",
-        "The requested editor operation is outside the workspace scope.",
-      ),
-      requestHash,
-      403,
-      deps.redactor,
-    );
-  }
+  const pathRejection = rejectServerResolvedPath(action, snapshot, baseline, requestHash, deps);
+  if (pathRejection !== null) return pathRejection;
   const policyConflict = policyAdmissionConflict(action, baseline);
   if (policyConflict !== null) {
     return serverResolvedFailure(
@@ -2773,6 +2829,14 @@ function rejectServerResolvedPolicy(
       deps.redactor,
     );
   }
+  const livenessRejection = rejectServerResolvedLiveness(
+    action,
+    snapshot,
+    baseline,
+    requestHash,
+    deps,
+  );
+  if (livenessRejection !== null) return livenessRejection;
   const reservationDenial = reserveActionAuthority(action, snapshot, baseline, deps);
   if (reservationDenial !== null) {
     return serverResolvedFailure(
@@ -2786,6 +2850,51 @@ function rejectServerResolvedPolicy(
     );
   }
   return null;
+}
+
+function rejectServerResolvedPath(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult | null {
+  const pathIssue = serverResolvedPathIssues(action, snapshot);
+  return pathIssue === null
+    ? null
+    : serverResolvedFailure(
+        action,
+        snapshot,
+        denyByAuthority(decision, pathIssue),
+        conflict(
+          action,
+          "OUT_OF_SCOPE",
+          "The requested editor operation is outside the workspace scope.",
+        ),
+        requestHash,
+        403,
+        deps.redactor,
+      );
+}
+
+function rejectServerResolvedLiveness(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult | null {
+  return editorAgentRegistry.hasLiveBridge(action.sessionId)
+    ? null
+    : serverResolvedFailure(
+        action,
+        snapshot,
+        decision,
+        conflict(action, "NO_ACTIVE_SESSION", "No live editor session is connected."),
+        requestHash,
+        409,
+        deps.redactor,
+      );
 }
 
 async function admitEditorAction(
@@ -2807,7 +2916,7 @@ async function admitEditorAction(
         200,
       );
     }
-    return resolveServerAction(action, requestHash, snapshot, deps, signal);
+    return resolveServerAction(action, requestHash, snapshot, decision, deps, signal);
   }
   const admission = preflight(action, snapshot);
   if (!admission.ok) {
@@ -2840,7 +2949,11 @@ export async function handleEditorAgentActions(
   }
   const preparation = prepareEditorActionRequest(parsed.value);
   if (!preparation.ok) return preparation.response;
-  const replay = replayEditorAction(preparation.request.action, preparation.request.requestHash);
+  const replay = replayEditorAction(
+    preparation.request.action,
+    preparation.request.requestHash,
+    deps,
+  );
   if (replay !== null) return replay;
   let { action } = preparation.request;
   if (preparation.request.bridgeSnapshot !== undefined) {

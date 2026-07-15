@@ -423,6 +423,42 @@ function setup(options?: SetupOptions): SetupResult {
   };
 }
 
+function subscribeProjected(events: DapEventBridge): {
+  readonly projected: unknown[];
+  readonly unsubscribe: () => void;
+} {
+  const projected: unknown[] = [];
+  const subscription = events.subscribe({
+    channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+    onEvent: (event): void => void projected.push(event.event),
+  });
+  if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+  return { projected, unsubscribe: subscription.unsubscribe };
+}
+
+function terminalProjections(projected: readonly unknown[]): readonly unknown[] {
+  return projected.filter(
+    (event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "kind" in event &&
+      event.kind === "session-stopped",
+  );
+}
+
+function holdTermination(handle: TestCapsule): () => void {
+  let release: (() => void) | undefined;
+  handle.terminateScope.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        release = (): void => {
+          resolve({ terminated: true, descendantsRemaining: 0 });
+        };
+      }),
+  );
+  return (): void => release?.();
+}
+
 describe("dapProcessManager canonical orchestration", () => {
   it("fails closed when a requested session binding does not exist", async () => {
     const current = setup();
@@ -823,6 +859,133 @@ describe("dapProcessManager canonical orchestration", () => {
               ? "malformedFrame"
               : "stopped",
       });
+      subscription.unsubscribe();
+    }
+  });
+
+  it("publishes one terminal event across concurrent Stop/Stop and Stop/revoke calls", async () => {
+    const cases = [
+      {
+        invoke: (manager: DapProcessManager): readonly [Promise<void>, Promise<void>] => [
+          manager.stop("session_a"),
+          manager.stop("session_a"),
+        ],
+        reason: "requested",
+        status: "stopped",
+      },
+      {
+        invoke: (manager: DapProcessManager): readonly [Promise<void>, Promise<void>] => [
+          manager.stop("session_a"),
+          manager.revoke("session_a"),
+        ],
+        reason: "requested",
+        status: "stopped",
+      },
+      {
+        invoke: (manager: DapProcessManager): readonly [Promise<void>, Promise<void>] => [
+          manager.revoke("session_a"),
+          manager.stop("session_a"),
+        ],
+        reason: "revoked",
+        status: "revoked",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const events = createDapEventBridge();
+      const subscription = subscribeProjected(events);
+      const current = setup({ events });
+      const release = holdTermination(current.handle);
+      await current.manager.start(startInput);
+
+      const terminalCalls = testCase.invoke(current.manager);
+      await vi.waitFor(() => {
+        expect(current.handle.terminateScope).toHaveBeenCalledOnce();
+      });
+      release();
+      await Promise.all(terminalCalls);
+
+      expect(terminalProjections(subscription.projected)).toStrictEqual([
+        {
+          kind: "session-stopped",
+          sessionId: "session_a",
+          status: testCase.status,
+          reason: testCase.reason,
+        },
+      ]);
+      subscription.unsubscribe();
+    }
+  });
+
+  it("publishes one terminal event when output limit and protocol fatal race", async () => {
+    const events = createDapEventBridge();
+    const subscription = subscribeProjected(events);
+    const current = setup({ events });
+    const release = holdTermination(current.handle);
+    await current.manager.start(startInput);
+    for (let index = 0; index < 63; index += 1) {
+      current.transport.emit({
+        seq: 700 + index,
+        type: "event",
+        event: "output",
+        body: { output: "A".repeat(16 * 1024) },
+      });
+    }
+    await vi.waitFor(() => {
+      expect(current.manager.health("session_a")?.outputAcceptedBytes).toBe(63 * 16 * 1024);
+    });
+
+    current.transport.emit({
+      seq: 800,
+      type: "event",
+      event: "output",
+      body: { output: "A".repeat(16 * 1024) },
+    });
+    current.transport.fail(new DapFrameRejectError("PAYLOAD_TOO_LARGE"));
+    await vi.waitFor(() => {
+      expect(current.handle.terminateScope).toHaveBeenCalledOnce();
+    });
+    release();
+    await vi.waitFor(() => {
+      expect(current.manager.health("session_a")).toBeUndefined();
+    });
+
+    expect(terminalProjections(subscription.projected)).toHaveLength(1);
+    expect(terminalProjections(subscription.projected)[0]).toMatchObject({
+      kind: "session-stopped",
+      sessionId: "session_a",
+    });
+    subscription.unsubscribe();
+  });
+
+  it("publishes one terminal event when exited and terminated arrive concurrently", async () => {
+    for (const order of ["exited-first", "terminated-first"] as const) {
+      const events = createDapEventBridge();
+      const subscription = subscribeProjected(events);
+      const current = setup({ events });
+      const release = holdTermination(current.handle);
+      await current.manager.start(startInput);
+      const exited = { seq: 810, type: "event", event: "exited", body: { exitCode: 0 } };
+      const terminated = { seq: 811, type: "event", event: "terminated", body: {} };
+
+      current.transport.emit(order === "exited-first" ? exited : terminated);
+      current.transport.emit(order === "exited-first" ? terminated : exited);
+      await vi.waitFor(() => {
+        expect(current.handle.terminateScope).toHaveBeenCalledOnce();
+      });
+      release();
+      await vi.waitFor(() => {
+        expect(current.manager.health("session_a")).toBeUndefined();
+      });
+
+      expect(terminalProjections(subscription.projected)).toStrictEqual([
+        {
+          kind: "session-stopped",
+          sessionId: "session_a",
+          status: "stopped",
+          reason: "exited",
+        },
+      ]);
       subscription.unsubscribe();
     }
   });
@@ -1583,7 +1746,14 @@ describe("dapProcessManager canonical orchestration", () => {
   });
 
   it("awaits output-overflow and revocation teardown through manager entrypoints", async () => {
-    const output = setup();
+    const outputEvents = createDapEventBridge();
+    const projected: unknown[] = [];
+    const subscription = outputEvents.subscribe({
+      channel: { workspacePartitionKey: "partition_a", browserSessionBinding: "browser_a" },
+      onEvent: (event): void => void projected.push(event.event),
+    });
+    if (subscription.kind !== "ok") throw new Error("invalid test fixture");
+    const output = setup({ events: outputEvents });
     await output.manager.start(startInput);
     output.transport.emit({
       seq: 499,
@@ -1618,6 +1788,24 @@ describe("dapProcessManager canonical orchestration", () => {
     expect(output.outputLimits).toStrictEqual([
       { kind: "output-limit", sessionId: "session_a", acceptedBytes: 1024 * 1024 },
     ]);
+    const terminal = projected.filter(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "kind" in event &&
+        event.kind === "session-stopped",
+    );
+    expect(terminal).toStrictEqual([
+      {
+        kind: "session-stopped",
+        sessionId: "session_a",
+        status: "stopped",
+        reason: "limit",
+      },
+    ]);
+    expect(projected.at(-2)).toMatchObject({ kind: "output", sessionId: "session_a" });
+    expect(projected.at(-1)).toStrictEqual(terminal[0]);
+    subscription.unsubscribe();
 
     const revoked = setup();
     await revoked.manager.start(startInput);

@@ -65,6 +65,7 @@ export interface LspSpawnPreparationInput {
   readonly env: Record<string, string>;
   readonly workspace: WorkspaceInfo;
   readonly processEnv: NodeJS.ProcessEnv;
+  readonly privateRuntimeStateRoot?: string | undefined;
   readonly resourceBudget?: LspRuntimeResourceBudget | undefined;
 }
 
@@ -95,6 +96,7 @@ export interface LspProcessManagerDeps {
 
 export interface LspProcessManager {
   getLspProcessStatus(): LspProcessStatus;
+  getChildGeneration(): number;
   getNegotiatedCapabilities(): ManagedLspNegotiatedCapabilitySnapshot | undefined;
   getHealthSnapshot(): ManagedLspProcessHealthSnapshot | undefined;
   getSemanticTokenNegotiation(): LspSemanticTokenNegotiation | undefined;
@@ -281,6 +283,7 @@ export function createLspProcessManager(deps: LspProcessManagerDeps): LspProcess
 
   return {
     getLspProcessStatus: (): LspProcessStatus => state.status,
+    getChildGeneration: (): number => state.childGeneration,
     getNegotiatedCapabilities: (): ManagedLspNegotiatedCapabilitySnapshot | undefined =>
       state.protocol?.snapshot(),
     getHealthSnapshot: (): ManagedLspProcessHealthSnapshot | undefined =>

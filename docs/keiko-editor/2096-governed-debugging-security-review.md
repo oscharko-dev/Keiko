@@ -1,6 +1,6 @@
 # Epic #2096 governed debugging security review
 
-**Status: verification in progress — mutation closeout remains open.**
+**Status: Foundation-wave candidate verification in progress — mutation quality is complete.**
 
 This is the security ledger for the governed Node.js/TypeScript debugging capability introduced by
 Epic #2096. It is paired with the factual command record in
@@ -16,8 +16,9 @@ No delivery action, issue state change, or release closure is implied by this do
   enforcement fails closed.
 - ADR-0042 retains browser use of same-origin BFF paths; no browser-reachable DAP transport or new
   CSP destination is introduced.
-- ADR-0124, ADR-0125, and ADR-0129 retain the authority model: debugging activation does not grant
-  delivery authority, and commit/push/PR/merge stay independently human-approved.
+- ADR-0124, ADR-0125, ADR-0129, and ADR-0135 retain the authority model: debugging activation does
+  not grant delivery authority. Accepted `dev` repository delivery still requires its separately
+  validated Authority Envelope and exact-head direct checks before native auto-merge.
 - ADR-0018 forbids PTY, arbitrary shell, and free-form debug-console evaluation.
 
 ## Trust-boundary verification matrix
@@ -77,10 +78,11 @@ The design and covered regression paths retain the following prohibitions:
 
 ## Remaining condition
 
-The last complete debug-launch report records 3,510 killed and 22 timeout mutants, with zero
-survived and zero no-coverage mutants. A new 100-percent full-suite attempt against the expanded
-uncommitted candidate was stopped once it had interim survivors, so it is not a passing result.
-Security closeout therefore remains open. Because this candidate is uncommitted, the PR-diff scoped
-mutation check cannot identify the candidate's changed lines; it must run after an authorized commit
-against the actual PR head. No policy, mutation threshold, coverage floor, or trust boundary has been
-weakened to avoid either requirement.
+The expanded Foundation-wave candidate completed the full debug-launch mutation command with 4,043
+killed, 49 timeout, zero survived, and zero no-coverage mutants: a 100.00 percent mutation score.
+The first expanded run exposed seven surviving and four uncovered mutants; focused failure-first
+tests closed those exact gaps before the single final full rerun.
+
+Security closeout still requires immutable-head Linux D12 cap/comparison evidence, the final local
+aggregate gate, and the exact pushed PR head's direct required checks. No policy, mutation threshold,
+coverage floor, evidence bound, or trust boundary has been weakened to avoid those requirements.

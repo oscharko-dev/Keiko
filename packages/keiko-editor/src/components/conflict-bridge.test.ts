@@ -9,6 +9,11 @@ import {
 
 const SOURCE = "<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n";
 const DIFF3 = "<<<<<<< local\nleft\n||||||| base\nold\n=======\nright\n>>>>>>> remote\n";
+const ACCEPTANCE_ACTIONS = [
+  ["ours", "keiko.editor.acceptConflictOurs"],
+  ["theirs", "keiko.editor.acceptConflictTheirs"],
+  ["both", "keiko.editor.acceptConflictBoth"],
+] as const;
 
 function model(initialText = SOURCE): ConflictModel & {
   version: number;
@@ -170,6 +175,36 @@ describe("registerConflictBridge", () => {
     expect(next.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 1, column: 1 });
     expect(previous.editor.setPosition).toHaveBeenLastCalledWith({ lineNumber: 6, column: 1 });
   });
+
+  it.each(ACCEPTANCE_ACTIONS)(
+    "does not accept %s when the cursor is before every conflict",
+    async (_choice, action) => {
+      vi.useFakeTimers();
+      const harness = setup(`before\n${SOURCE}`, undefined, 1);
+      await vi.runAllTimersAsync();
+
+      await harness.actions.get(action)?.();
+
+      expect(harness.executeEdits).not.toHaveBeenCalled();
+      expect(harness.pushUndoStop).not.toHaveBeenCalled();
+      harness.bridge.dispose();
+    },
+  );
+
+  it.each(ACCEPTANCE_ACTIONS)(
+    "does not accept %s when the cursor is after every conflict",
+    async (_choice, action) => {
+      vi.useFakeTimers();
+      const harness = setup(`${SOURCE}after\n`, undefined, 6);
+      await vi.runAllTimersAsync();
+
+      await harness.actions.get(action)?.();
+
+      expect(harness.executeEdits).not.toHaveBeenCalled();
+      expect(harness.pushUndoStop).not.toHaveBeenCalled();
+      harness.bridge.dispose();
+    },
+  );
 
   it("uses Web Crypto SHA-256 and tolerates a model removed before the initial scan", async () => {
     vi.useFakeTimers();

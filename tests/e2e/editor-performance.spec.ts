@@ -1,8 +1,9 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
 
@@ -16,15 +17,73 @@ function resolveMeasuredRuns(): number {
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : 3;
 }
 
+const D12_REVISION =
+  process.env.KEIKO_PERF_D12_REVISION ??
+  (process.env.KEIKO_PERF_D12_COMMON === "1" ? "baseline" : undefined);
+if (D12_REVISION !== undefined && D12_REVISION !== "baseline" && D12_REVISION !== "candidate") {
+  throw new Error("KEIKO_PERF_D12_REVISION must be baseline or candidate");
+}
+const D12_COMPARISON = D12_REVISION !== undefined;
+const SHA_256 = /^[0-9a-f]{64}$/u;
+
+function resolveD12Digest(name: string): string | undefined {
+  if (D12_REVISION === undefined) return undefined;
+  const value = process.env[name];
+  if (value === undefined || !SHA_256.test(value)) {
+    throw new Error(`${name} must be a lowercase SHA-256 digest for a D12 run`);
+  }
+  return value;
+}
+
+const D12_SOURCE_TREE_SHA_256 = resolveD12Digest("KEIKO_PERF_SOURCE_TREE_SHA256");
+const D12_MEASUREMENT_HARNESS_SHA_256 = resolveD12Digest("KEIKO_PERF_MEASUREMENT_HARNESS_SHA256");
+
 // Stamp the commit the evidence was measured at for the freshness gate (GEN-PERF-BENCHMARK-001).
 function resolveCommit(): string {
-  const fromEnv = process.env.GITHUB_SHA ?? process.env.KEIKO_PERF_COMMIT;
+  const fromEnv =
+    D12_REVISION === undefined
+      ? (process.env.GITHUB_SHA ?? process.env.KEIKO_PERF_COMMIT)
+      : process.env.KEIKO_PERF_COMMIT;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   } catch {
     return "unknown";
   }
+}
+
+function commandVersion(command: string, args: readonly string[]): string {
+  return execFileSync(command, [...args], { encoding: "utf8" }).trim();
+}
+
+function fileSha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function resolveD12RunProvenance(page: Page): D12RunProvenance | null {
+  if (D12_REVISION === undefined) return null;
+  const browser = page.context().browser();
+  if (browser === null) throw new Error("D12 browser provenance is unavailable");
+  const cpu = cpus();
+  return {
+    architecture: arch(),
+    chromiumVersion: browser.version(),
+    hardware: {
+      cpuModel: cpu[0]?.model ?? "unknown",
+      logicalCores: cpu.length,
+      memoryBytes: totalmem(),
+    },
+    lockfileSha256: fileSha256(join(process.cwd(), "package-lock.json")),
+    nodeVersion: process.version.replace(/^v/u, ""),
+    npmVersion: commandVersion("npm", ["--version"]),
+    osRelease: release(),
+    platform: platform(),
+    playwrightVersion: commandVersion(process.execPath, [
+      "-p",
+      "require('@playwright/test/package.json').version",
+    ]),
+    zlibVersion: process.versions.zlib,
+  };
 }
 
 /**
@@ -56,14 +115,17 @@ const HELPER_TEXT = `export function helper(): boolean {
   return true;
 }
 `;
-const EVIDENCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "docs",
-  "release",
-  "1209-perf-evidence.json",
-);
+const EVIDENCE_PATH =
+  process.env.KEIKO_PERF_EVIDENCE_PATH === undefined
+    ? join(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "..",
+        "docs",
+        "release",
+        "1209-perf-evidence.json",
+      )
+    : resolve(process.env.KEIKO_PERF_EVIDENCE_PATH);
 const tempProjects: string[] = [];
 const IDLE_DEBUG_INTERVAL_MS = 1_100;
 
@@ -102,6 +164,38 @@ interface IdleDebugMetrics {
   readonly session: IdleDebugSessionSnapshot;
   readonly traceCaptured: boolean;
 }
+
+interface D12BaselineMeasuredWork {
+  readonly captured: boolean;
+  readonly expectedSampleCount: number;
+  readonly longTaskCount: number;
+  readonly matchedInputEventCounts: readonly number[];
+  readonly maxLongTaskMs: number;
+  readonly processingSamples: readonly number[];
+  readonly totalMatchedInputEvents: number;
+  readonly traceCaptured: boolean;
+}
+
+let d12BaselineMeasuredWork: D12BaselineMeasuredWork | null = null;
+
+interface D12RunProvenance {
+  readonly architecture: string;
+  readonly chromiumVersion: string;
+  readonly hardware: {
+    readonly cpuModel: string;
+    readonly logicalCores: number;
+    readonly memoryBytes: number;
+  };
+  readonly lockfileSha256: string;
+  readonly nodeVersion: string;
+  readonly npmVersion: string;
+  readonly osRelease: string;
+  readonly platform: string;
+  readonly playwrightVersion: string;
+  readonly zlibVersion: string;
+}
+
+let d12RunProvenance: D12RunProvenance | null = null;
 
 interface TraceEvent {
   readonly args: unknown;
@@ -649,6 +743,13 @@ async function measureNavigationRoundTrips(
   };
 }
 
+function unmeasuredNavigationRoundTrips(): NavigationMetrics {
+  return {
+    definition: { samples: [], resultCounts: [] },
+    references: { samples: [], resultCounts: [] },
+  };
+}
+
 async function readTypingMetrics(page: Page): Promise<TypingMetrics | undefined> {
   return page.evaluate(() => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf);
 }
@@ -1051,6 +1152,35 @@ async function captureInputProcessingSamples(
   }
 }
 
+async function measureD12BaselineWork(
+  page: Page,
+  editorWindow: ReturnType<Page["getByRole"]>,
+): Promise<D12BaselineMeasuredWork> {
+  const editor = editorWindow.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.click({ timeout: 8_000 });
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+KeyA`);
+  expect(await installPerfObservers(page)).toBe(true);
+  const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
+  expect(measurements).toHaveLength(TYPING_CHUNKS.length);
+  expect(measurements.every((measurement) => measurement.durationMs > 0)).toBe(true);
+  const longTasks = await page.evaluate(
+    () => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.longTasks ?? [],
+  );
+  const matchedInputEventCounts = measurements.map((measurement) => measurement.matchedEventCount);
+  return {
+    captured: true,
+    expectedSampleCount: TYPING_CHUNKS.length,
+    longTaskCount: longTasks.length,
+    matchedInputEventCounts,
+    maxLongTaskMs: Math.round(Math.max(0, ...longTasks)),
+    processingSamples: measurements.map((measurement) => measurement.durationMs),
+    totalMatchedInputEvents: matchedInputEventCounts.reduce((total, count) => total + count, 0),
+    traceCaptured: true,
+  };
+}
+
 async function idleDebugLongTasks(page: Page): Promise<readonly number[]> {
   return page.evaluate(
     () =>
@@ -1341,6 +1471,7 @@ function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
     source: typing.events.length > 0 ? "event-timing" : "raf-insert-proxy",
     eventCount: typing.events.length,
     interactionCount: interactionDurations.length,
+    samples: interactionDurations,
     p75: percentile(interactionDurations, 75),
     max: Math.round(Math.max(0, ...interactionDurations)),
   };
@@ -1357,6 +1488,101 @@ function buildNavigationOperationEvidence(
   };
 }
 
+function buildD12ProvenanceEvidence(): Record<string, unknown> {
+  if (D12_REVISION === undefined) return {};
+  if (
+    D12_SOURCE_TREE_SHA_256 === undefined ||
+    D12_MEASUREMENT_HARNESS_SHA_256 === undefined ||
+    d12RunProvenance === null
+  ) {
+    throw new Error("D12 provenance was not initialized before writing browser evidence");
+  }
+  return {
+    sourceTreeSha256: D12_SOURCE_TREE_SHA_256,
+    measurementHarnessSha256: D12_MEASUREMENT_HARNESS_SHA_256,
+    provenance: d12RunProvenance,
+  };
+}
+
+function buildD12KeystrokeEvidence(typing: TypingMetrics): Record<string, unknown> {
+  const samples = typing.keystrokeMainThreadWork;
+  return {
+    budgetMax: 50,
+    captured: typing.landed === true && typing.observerInstalled === true && samples.length > 0,
+    longTaskCount: typing.longTasks.length,
+    maxLongTaskMs: Math.round(Math.max(0, ...typing.longTasks)),
+    samples,
+  };
+}
+
+function buildD12InteractionEvidence(typing: TypingMetrics): Record<string, unknown> {
+  const samples = typing.events.length > 0 ? typing.events : typing.interactionDurations;
+  return {
+    budgetP75: 200,
+    captured: typing.landed === true && samples.length > 0,
+    samples,
+  };
+}
+
+function buildD12WorkerEvidence(workerRequests: readonly WorkerRequest[]): Record<string, unknown> {
+  return {
+    editorWorkerLoaded: workerRequests.some(
+      (request) =>
+        request.workerLabel === "editor" || /editor.*worker|worker.*editor/iu.test(request.url),
+    ),
+    languageWorkerLoaded: workerRequests.some(isLanguageWorkerRequest),
+    totalWorkerRequests: workerRequests.length,
+    tsLanguageWorkerLoaded: workerRequests.some(isTsWorkerRequest),
+  };
+}
+
+function buildD12CandidateWork(idleDebug: IdleDebugEvidence): Record<string, unknown> {
+  return {
+    attempted: idleDebug.attempted,
+    budgetMax: idleDebug.budgetMax,
+    captured: idleDebug.captured,
+    expectedSampleCount: idleDebug.expectedSampleCount,
+    idleIntervalMs: idleDebug.idleIntervalMs,
+    longTaskCount: idleDebug.longTaskCount,
+    matchedInputEventCounts: idleDebug.matchedInputEventCounts,
+    maxLongTaskMs: idleDebug.maxLongTaskMs,
+    outputAcceptedBytes: idleDebug.outputAcceptedBytes,
+    processingSamples: idleDebug.processingSamples,
+    sessionStatus: idleDebug.sessionStatus,
+    totalMatchedInputEvents: idleDebug.totalMatchedInputEvents,
+    traceCaptured: idleDebug.traceCaptured,
+  };
+}
+
+function buildD12Evidence(
+  coldStartsMs: readonly number[],
+  typing: TypingMetrics,
+  memory: MemoryMetrics,
+  workerRequests: readonly WorkerRequest[],
+  idleDebug: IdleDebugEvidence,
+): Record<string, unknown> {
+  if (D12_REVISION === undefined) throw new Error("D12 revision is missing");
+  if (D12_REVISION === "baseline" && d12BaselineMeasuredWork === null) {
+    throw new Error("D12 baseline measured-work evidence is missing");
+  }
+  return {
+    schemaVersion: "1",
+    kind: "common",
+    revision: D12_REVISION,
+    ...buildD12ProvenanceEvidence(),
+    commit: resolveCommit(),
+    measuredAtIso: new Date().toISOString(),
+    b4ColdStartMs: { budgetP50: 1500, budgetP95: 2500, samples: coldStartsMs },
+    b5KeystrokeMs: buildD12KeystrokeEvidence(typing),
+    ...(D12_REVISION === "baseline"
+      ? { d12BaselineMeasuredWork }
+      : { b5IdleDebugSession: buildD12CandidateWork(idleDebug) }),
+    b6InteractionMs: buildD12InteractionEvidence(typing),
+    b11Memory: memory,
+    workerLoadCapture: buildD12WorkerEvidence(workerRequests),
+  };
+}
+
 function buildEvidence(
   coldStartsMs: number[],
   typing: TypingMetrics,
@@ -1366,7 +1592,11 @@ function buildEvidence(
   workspaceCapDegradation: WorkspaceCapDegradationEvidence,
   idleDebug: IdleDebugEvidence,
 ): Record<string, unknown> {
+  if (D12_REVISION !== undefined) {
+    return buildD12Evidence(coldStartsMs, typing, memory, workerRequests, idleDebug);
+  }
   return {
+    ...buildD12ProvenanceEvidence(),
     measuredAtIso: new Date().toISOString(),
     commit: resolveCommit(),
     harness:
@@ -1388,6 +1618,7 @@ function buildEvidence(
     b11Memory: memory,
     workerLoadCapture: buildWorkerLoadCapture(workerRequests),
     workspaceReadCapDegradation: workspaceCapDegradation,
+    ...(d12BaselineMeasuredWork === null ? {} : { d12BaselineMeasuredWork }),
   };
 }
 
@@ -1447,6 +1678,21 @@ interface EvidenceMeasurements {
   readonly navigation: NavigationMetrics;
 }
 
+async function writeCurrentEvidence(
+  measurements: EvidenceMeasurements,
+  capture: WorkerCapture,
+): Promise<void> {
+  await writeEvidence(
+    measurements.coldStartsMs,
+    measurements.typing,
+    measurements.memory,
+    measurements.navigation,
+    capture,
+    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+    UNMEASURED_IDLE_DEBUG_EVIDENCE,
+  );
+}
+
 async function collectEvidenceMeasurements(
   page: Page,
   capture: WorkerCapture,
@@ -1454,7 +1700,9 @@ async function collectEvidenceMeasurements(
 ): Promise<EvidenceMeasurements> {
   const measuredRuns = resolveMeasuredRuns();
   await page.goto("/");
-  const navigation = await measureNavigationRoundTrips(page, projectPath, measuredRuns);
+  const navigation = D12_COMPARISON
+    ? unmeasuredNavigationRoundTrips()
+    : await measureNavigationRoundTrips(page, projectPath, measuredRuns);
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
   let typing: TypingMetrics = {
     longTasks: [],
@@ -1464,39 +1712,15 @@ async function collectEvidenceMeasurements(
     landed: false,
   };
   let memory = await measureMemoryBestEffort(page);
-  await writeEvidence(
-    coldStartsMs,
-    typing,
-    memory,
-    navigation,
-    capture,
-    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
-    UNMEASURED_IDLE_DEBUG_EVIDENCE,
-  );
+  await writeCurrentEvidence({ coldStartsMs, typing, memory, navigation }, capture);
 
   await page.goto("/");
   const editorWindow = await openEditorCard(page);
   typing = await measureTyping(page, editorWindow);
-  await writeEvidence(
-    coldStartsMs,
-    typing,
-    memory,
-    navigation,
-    capture,
-    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
-    UNMEASURED_IDLE_DEBUG_EVIDENCE,
-  );
+  await writeCurrentEvidence({ coldStartsMs, typing, memory, navigation }, capture);
 
   memory = await measureMemoryBestEffort(page);
-  await writeEvidence(
-    coldStartsMs,
-    typing,
-    memory,
-    navigation,
-    capture,
-    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
-    UNMEASURED_IDLE_DEBUG_EVIDENCE,
-  );
+  await writeCurrentEvidence({ coldStartsMs, typing, memory, navigation }, capture);
   return { coldStartsMs, typing, memory, navigation };
 }
 
@@ -1531,6 +1755,7 @@ function assertEvidenceBudgets(
   },
   measuredRuns: number,
   workerRequests: readonly WorkerRequest[],
+  navigationExpected = true,
 ): void {
   expect(evidence.b4ColdStartMs.p50).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP50);
   expect(evidence.b4ColdStartMs.p95).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP95);
@@ -1567,20 +1792,22 @@ function assertEvidenceBudgets(
   ).toBe(true);
   expect(evidence.b6InteractionMs.captured).toBe(true);
   expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
-  expect(evidence.navigationRoundTripMs.definition.p50).toBeGreaterThanOrEqual(0);
-  expect(evidence.navigationRoundTripMs.definition.p95).toBeGreaterThanOrEqual(
-    evidence.navigationRoundTripMs.definition.p50,
-  );
-  expect(evidence.navigationRoundTripMs.definition.resultCounts.every((count) => count > 0)).toBe(
-    true,
-  );
-  expect(evidence.navigationRoundTripMs.references.p50).toBeGreaterThanOrEqual(0);
-  expect(evidence.navigationRoundTripMs.references.p95).toBeGreaterThanOrEqual(
-    evidence.navigationRoundTripMs.references.p50,
-  );
-  expect(evidence.navigationRoundTripMs.references.resultCounts.every((count) => count > 0)).toBe(
-    true,
-  );
+  if (navigationExpected) {
+    expect(evidence.navigationRoundTripMs.definition.p50).toBeGreaterThanOrEqual(0);
+    expect(evidence.navigationRoundTripMs.definition.p95).toBeGreaterThanOrEqual(
+      evidence.navigationRoundTripMs.definition.p50,
+    );
+    expect(evidence.navigationRoundTripMs.definition.resultCounts.every((count) => count > 0)).toBe(
+      true,
+    );
+    expect(evidence.navigationRoundTripMs.references.p50).toBeGreaterThanOrEqual(0);
+    expect(evidence.navigationRoundTripMs.references.p95).toBeGreaterThanOrEqual(
+      evidence.navigationRoundTripMs.references.p50,
+    );
+    expect(evidence.navigationRoundTripMs.references.resultCounts.every((count) => count > 0)).toBe(
+      true,
+    );
+  }
   expect(evidence.workerLoadCapture.totalWorkerRequests).toBeGreaterThan(0);
   expect(evidence.workerLoadCapture.editorWorkerLoaded).toBe(true);
   expect(evidence.workerLoadCapture.languageWorkerLoaded).toBe(false);
@@ -1639,6 +1866,122 @@ interface ReleaseEvidence {
     languageWorkerLoaded: boolean;
   };
   workspaceReadCapDegradation: { attempted: boolean; ok: boolean; truncated: boolean };
+  d12BaselineMeasuredWork?: D12BaselineMeasuredWork;
+}
+
+interface D12RawEvidence {
+  readonly b11Memory: MemoryMetrics;
+  readonly b4ColdStartMs: {
+    readonly budgetP50: number;
+    readonly budgetP95: number;
+    readonly samples: readonly number[];
+  };
+  readonly b5IdleDebugSession?: Omit<IdleDebugEvidence, "p95">;
+  readonly b5KeystrokeMs: {
+    readonly budgetMax: number;
+    readonly captured: boolean;
+    readonly samples: readonly number[];
+  };
+  readonly b6InteractionMs: {
+    readonly budgetP75: number;
+    readonly captured: boolean;
+    readonly samples: readonly number[];
+  };
+  readonly d12BaselineMeasuredWork?: D12BaselineMeasuredWork;
+}
+
+function requireD12BaselineEvidence(evidence: D12RawEvidence): D12BaselineMeasuredWork {
+  const baseline = evidence.d12BaselineMeasuredWork;
+  if (baseline === undefined) throw new Error("D12 baseline measured-work evidence is missing");
+  return baseline;
+}
+
+function assertD12RawBudgets(evidence: D12RawEvidence, measuredRuns: number): void {
+  expect(percentile(evidence.b4ColdStartMs.samples, 50)).toBeLessThanOrEqual(
+    evidence.b4ColdStartMs.budgetP50,
+  );
+  expect(percentile(evidence.b4ColdStartMs.samples, 95)).toBeLessThanOrEqual(
+    evidence.b4ColdStartMs.budgetP95,
+  );
+  expect(evidence.b5KeystrokeMs.captured).toBe(true);
+  expect(percentile(evidence.b5KeystrokeMs.samples, 95)).toBeLessThan(
+    evidence.b5KeystrokeMs.budgetMax,
+  );
+  expect(evidence.b6InteractionMs.captured).toBe(true);
+  expect(percentile(evidence.b6InteractionMs.samples, 75)).toBeLessThanOrEqual(
+    evidence.b6InteractionMs.budgetP75,
+  );
+  expect(measuredRuns).toBe(resolveMeasuredRuns());
+}
+
+function assertD12CommonEvidence(evidence: D12RawEvidence, measuredRuns: number): void {
+  assertD12RawBudgets(evidence, measuredRuns);
+  const baseline = requireD12BaselineEvidence(evidence);
+  expect(baseline.captured).toBe(true);
+  expect(baseline.traceCaptured).toBe(true);
+  expect(baseline.expectedSampleCount).toBe(TYPING_CHUNKS.length);
+  expect(baseline.processingSamples).toHaveLength(TYPING_CHUNKS.length);
+  expect(baseline.matchedInputEventCounts).toHaveLength(TYPING_CHUNKS.length);
+  expect(baseline.totalMatchedInputEvents).toBeGreaterThanOrEqual(TYPING_CHUNKS.length);
+  expect(baseline.longTaskCount).toBe(0);
+  expect(baseline.maxLongTaskMs).toBe(0);
+  if (
+    evidence.b11Memory.supported &&
+    evidence.b11Memory.baselineBytes !== null &&
+    evidence.b11Memory.peakBytes !== null &&
+    evidence.b11Memory.residualBytes !== null
+  ) {
+    expect(evidence.b11Memory.peakBytes - evidence.b11Memory.baselineBytes).toBeLessThanOrEqual(
+      B11_PEAK_GROWTH_BUDGET_BYTES,
+    );
+    expect(evidence.b11Memory.residualBytes - evidence.b11Memory.baselineBytes).toBeLessThanOrEqual(
+      B11_RESIDUAL_GROWTH_BUDGET_BYTES,
+    );
+  }
+}
+
+function assertD12CandidateEvidence(evidence: D12RawEvidence, measuredRuns: number): void {
+  assertD12RawBudgets(evidence, measuredRuns);
+  const candidate = evidence.b5IdleDebugSession;
+  if (candidate === undefined) throw new Error("D12 candidate idle-debug evidence is missing");
+  expect(candidate.attempted).toBe(true);
+  expect(candidate.captured).toBe(true);
+  expect(candidate.traceCaptured).toBe(true);
+  expect(candidate.processingSamples).toHaveLength(TYPING_CHUNKS.length);
+  expect(candidate.processingSamples.every((sample) => sample > 0)).toBe(true);
+  expect(percentile(candidate.processingSamples, 95)).toBeLessThan(candidate.budgetMax);
+  expect(candidate.longTaskCount).toBe(0);
+  expect(candidate.maxLongTaskMs).toBe(0);
+  expect(candidate.outputAcceptedBytes).toBe(0);
+}
+
+async function measureD12CandidateIdleDebug(
+  page: Page,
+  projectPath: string,
+): Promise<IdleDebugEvidence> {
+  const idleSession = await startIdleDebugSession(page, projectPath);
+  try {
+    const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
+    return buildIdleDebugB5Evidence(await measureIdleDebugTyping(page, editorWindow, idleSession));
+  } finally {
+    await stopIdleDebugSession(page, idleSession);
+  }
+}
+
+function assertFinalEvidence(
+  evidence: ReleaseEvidence | D12RawEvidence,
+  measuredRuns: number,
+  workerRequests: readonly WorkerRequest[],
+): void {
+  if (D12_REVISION === "baseline") {
+    assertD12CommonEvidence(evidence as D12RawEvidence, measuredRuns);
+    return;
+  }
+  if (D12_REVISION === "candidate") {
+    assertD12CandidateEvidence(evidence as D12RawEvidence, measuredRuns);
+    return;
+  }
+  assertEvidenceBudgets(evidence as ReleaseEvidence, measuredRuns, workerRequests, true);
 }
 
 test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evidence", async ({
@@ -1647,19 +1990,20 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   // Each editor open exercises the packaged UI and server path; the iteration count is kept modest
   // so this remains a release-evidence smoke, not a benchmark suite.
   test.setTimeout(600_000);
+  d12RunProvenance = resolveD12RunProvenance(page);
+  d12BaselineMeasuredWork = null;
   const projectPath = createProjectFixture();
   await seedFilesWindow(page, projectPath);
   const capture = installWorkerCapture(page);
   const measurements = await collectEvidenceMeasurements(page, capture, projectPath);
   const { coldStartsMs, typing, memory, navigation } = measurements;
-  const idleSession = await startIdleDebugSession(page, projectPath);
-  let idleDebug: IdleDebugEvidence;
-  try {
-    const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
-    const idleMetrics = await measureIdleDebugTyping(page, editorWindow, idleSession);
-    idleDebug = buildIdleDebugB5Evidence(idleMetrics);
-  } finally {
-    await stopIdleDebugSession(page, idleSession);
+  if (D12_REVISION === "baseline") {
+    await page.goto("/");
+    d12BaselineMeasuredWork = await measureD12BaselineWork(page, await openEditorCard(page));
+  }
+  let idleDebug = UNMEASURED_IDLE_DEBUG_EVIDENCE;
+  if (D12_REVISION === "candidate") {
+    idleDebug = await measureD12CandidateIdleDebug(page, projectPath);
   }
 
   // Adversarial near-cap workspace probe (audit defect #2): a single, cheap measurement (no repeated
@@ -1685,12 +2029,12 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
     capture.workerRequests,
     workspaceCapDegradation,
     idleDebug,
-  ) as unknown as ReleaseEvidence;
+  ) as unknown as ReleaseEvidence | D12RawEvidence;
 
   await testInfo.attach("editor-perf-evidence", {
     body: JSON.stringify(evidence, null, 2),
     contentType: "application/json",
   });
 
-  assertEvidenceBudgets(evidence, coldStartsMs.length, capture.workerRequests);
+  assertFinalEvidence(evidence, coldStartsMs.length, capture.workerRequests);
 });

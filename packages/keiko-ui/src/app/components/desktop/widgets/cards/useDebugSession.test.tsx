@@ -146,7 +146,7 @@ describe("useDebugSession", () => {
     const bootstrapPending = new Promise<void>((resolve) => {
       releaseBootstrap = resolve;
     });
-    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url === "/api/editor/debug/bootstrap") await bootstrapPending;
       return response(
@@ -170,7 +170,7 @@ describe("useDebugSession", () => {
 
   it("waits for initial instrumentation before persisting an immediate breakpoint", async () => {
     const initialInstrumentation = deferredResponse();
-    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
         return initialInstrumentation.promise;
@@ -303,13 +303,29 @@ describe("useDebugSession", () => {
   });
 
   it("projects each bounded paused inspection route and preserves the server concurrency token", async () => {
-    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
         return response(instrumentation());
       }
       if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
       if (url === "/api/editor/debug/stack") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { readonly cursor?: unknown };
+        if (body.cursor === "stack-page-2") {
+          return response({
+            frames: [
+              {
+                frameRef: "frame-2",
+                name: bounded("caller"),
+                sourceFileId: "src/program.ts",
+                line: 2,
+                column: 1,
+              },
+            ],
+            truncated: false,
+            omittedCount: 0,
+          });
+        }
         return response({
           frames: [
             {
@@ -321,7 +337,8 @@ describe("useDebugSession", () => {
             },
           ],
           truncated: false,
-          omittedCount: 0,
+          omittedCount: 1,
+          nextCursor: "stack-page-2",
         });
       }
       if (url === "/api/editor/debug/scopes") {
@@ -391,6 +408,11 @@ describe("useDebugSession", () => {
     });
 
     expect(result.current.snapshot.stack?.frames[0]).toMatchObject({ frameRef: "frame-1" });
+    expect(result.current.snapshot.stack?.frames[1]).toMatchObject({ frameRef: "frame-2" });
+    expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      "/api/editor/debug/stack",
+      expect.objectContaining({ body: expect.stringContaining('"cursor":"stack-page-2"') }),
+    ]);
     expect(result.current.snapshot.scopesByFrame.get("frame-1")?.scopes[0]).toMatchObject({
       scopeRef: "scope-1",
     });
@@ -450,6 +472,42 @@ describe("useDebugSession", () => {
     await act(async () => pending);
 
     expect(stackSignal?.aborted).toBe(true);
+    expect(result.current.snapshot.stack).toBeNull();
+  });
+
+  it("fails a stack projection closed when cursors exceed the two governed pages", async () => {
+    let stackPage = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url !== "/api/editor/debug/stack") return response({});
+      stackPage += 1;
+      return response({
+        frames: [
+          {
+            frameRef: `frame-${String(stackPage)}`,
+            name: bounded("frame"),
+            line: 1,
+            column: 1,
+          },
+        ],
+        truncated: true,
+        omittedCount: 128 - stackPage,
+        nextCursor: `cursor-${String(stackPage + 1)}`,
+      });
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+
+    await act(async () => result.current.actions.loadStack(current));
+
+    expect(stackPage).toBe(2);
     expect(result.current.snapshot.stack).toBeNull();
   });
 

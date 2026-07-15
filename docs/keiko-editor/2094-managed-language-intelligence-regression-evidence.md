@@ -1,16 +1,19 @@
 # Epic 2094 managed language intelligence regression evidence
 
-Evidence date: 2026-07-11. Baseline: `origin/dev` at
-`9ca0eca4b5b8fc5ccd59d7759e8624335c6e023d`, plus the reviewed Epic #2094 working-tree changes. The
+Evidence refreshed: 2026-07-15. Foundation-wave audit baseline: `origin/dev` at
+`8a1d61575123183d6f1227a5fea4c2742320a933`, plus the reviewed Epic #2094 working-tree changes. The
 final immutable candidate commit must rerun the same commands before delivery.
 
 ## Focused closeout result
 
 ```text
 $ npm run test:managed-lsp-closeout
-Test Files  25 passed | 5 skipped (30)
-Tests       325 passed | 5 skipped (330)
-Duration    7.99s
+Test Files  34 passed | 5 skipped (39)
+Tests       470 passed | 5 skipped (475)
+Duration    16.18s
+
+UI Test Files  2 passed (2)
+UI Tests       102 passed (102)
 ```
 
 The five skips are the offline real-provider smoke files for Python, Go, Shell, Java, and Rust. No

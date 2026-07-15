@@ -1,33 +1,32 @@
 # Epic #2096 governed debugging regression evidence
 
-**Status: verification in progress — not a release-closure claim.**
+**Status: Foundation-wave candidate verification in progress — not a release-closure claim.**
 
-This ledger records evidence collected for Epic #2096 and children #2342 through #2348. It is
-deliberately explicit about the remaining mutation-quality run: passing unit, browser, performance,
-and release-evidence commands do not turn that remaining gate into an implicit pass. The companion
-trust-boundary assessment is
+This ledger records evidence collected for Epic #2096 and children #2342 through #2348. Passing a
+focused mutation, browser, or performance command is not a substitute for the final immutable-head
+local and remote gates. The companion trust-boundary assessment is
 [`2096-governed-debugging-security-review.md`](2096-governed-debugging-security-review.md).
 
 ## Candidate and architecture
 
 - Governing decision: [ADR-0136](../adr/ADR-0136-governed-debug-adapter-session-management.md).
-- Base Git revision observed during the Linux evidence runs:
-  `a5c7157e5a59e55bb6c9acd98b549f48271a3783`.
+- Foundation-wave audit base: `origin/dev` at
+  `8a1d61575123183d6f1227a5fea4c2742320a933`.
 - The candidate is an uncommitted working tree. That is why the mutation scope command based on
   `origin/dev...HEAD` is not a valid changed-line result yet; it sees no uncommitted diff. A future
   authorized commit must rerun the scope gate against its actual PR head.
 
 ## Child-issue composition audit
 
-| Issue | Delivered composition                                                                                                                                                            | Evidence surface                                                                                                                 | Current disposition                                                      |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| #2342 | ADR-0136 defines the governed Node.js/TypeScript DAP architecture, ownership, limits, failure modes, and non-goals.                                                              | `docs/adr/ADR-0136-governed-debug-adapter-session-management.md`; `npm run check:adr-index`                                      | Implemented; local architecture index passed.                            |
-| #2343 | One canonical server-side DAP manager/registry owns admission, timers, protocol framing, output bounds, lifecycle evidence, and exactly-once teardown.                           | DAP unit suites included in `npm test`; adversarial suite at `packages/keiko-server/src/editor/dap/dapDebuggingSecurity.test.ts` | Implemented; full suite passed.                                          |
-| #2344 | Stateless, closed, operator-provisioned capsule launch planning remains separate from session ownership.                                                                         | ADR-0136 ownership rules; DAP production, launch-plan, and sandbox tests in `npm test`                                           | Implemented; full suite passed.                                          |
-| #2345 | Strict contracts, canonical breakpoint/watch persistence, CSRF/origin/session-bound routes, and bounded HTTP/SSE projections expose only server-owned state.                     | Contracts/server/UI suites; `npm run check:error-observability`; dedicated real-browser E2E                                      | Implemented; route and composed browser evidence passed.                 |
-| #2346 | Gutter/palette controls, exception/conditional/log breakpoints, toolbar, stack/scopes/variables/watches, inline values, bounded output, and accessible status UI are integrated. | UI coverage, `DebugPanel`/editor tests, dedicated E2E, smoke suite                                                               | Implemented; UI coverage and browser evidence passed.                    |
-| #2347 | Revisioned four-factor activation uses the existing durable `debuggingEnabled` opt-in and synchronously revokes a narrowed live session.                                         | Contract/server security tests in `npm test`; adversarial revocation scenario                                                    | Implemented; full suite passed.                                          |
-| #2348 | Closeout adds hostile-path, real-browser, Linux-performance, release-evidence, coverage, and mutation-quality verification.                                                      | Commands below                                                                                                                   | All listed evidence passed except the still-running full mutation suite. |
+| Issue | Delivered composition                                                                                                                                                            | Evidence surface                                                                                                                 | Current disposition                                                          |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| #2342 | ADR-0136 defines the governed Node.js/TypeScript DAP architecture, ownership, limits, failure modes, and non-goals.                                                              | `docs/adr/ADR-0136-governed-debug-adapter-session-management.md`; `npm run check:adr-index`                                      | Implemented; local architecture index passed.                                |
+| #2343 | One canonical server-side DAP manager/registry owns admission, timers, protocol framing, output bounds, lifecycle evidence, and exactly-once teardown.                           | DAP unit suites included in `npm test`; adversarial suite at `packages/keiko-server/src/editor/dap/dapDebuggingSecurity.test.ts` | Implemented; full suite passed.                                              |
+| #2344 | Stateless, closed, operator-provisioned capsule launch planning remains separate from session ownership.                                                                         | ADR-0136 ownership rules; DAP production, launch-plan, and sandbox tests in `npm test`                                           | Implemented; full suite passed.                                              |
+| #2345 | Strict contracts, canonical breakpoint/watch persistence, CSRF/origin/session-bound routes, and bounded HTTP/SSE projections expose only server-owned state.                     | Contracts/server/UI suites; `npm run check:error-observability`; dedicated real-browser E2E                                      | Implemented; route and composed browser evidence passed.                     |
+| #2346 | Gutter/palette controls, exception/conditional/log breakpoints, toolbar, stack/scopes/variables/watches, inline values, bounded output, and accessible status UI are integrated. | UI coverage, `DebugPanel`/editor tests, dedicated E2E, smoke suite                                                               | Implemented; UI coverage and browser evidence passed.                        |
+| #2347 | Revisioned four-factor activation uses the existing durable `debuggingEnabled` opt-in and synchronously revokes a narrowed live session.                                         | Contract/server security tests in `npm test`; adversarial revocation scenario                                                    | Implemented; full suite passed.                                              |
+| #2348 | Closeout adds hostile-path, real-browser, Linux-performance, release-evidence, coverage, and mutation-quality verification.                                                      | Commands below                                                                                                                   | Mutation quality is complete; immutable-head D12 and aggregate gates remain. |
 
 ## Final local quality-gate record
 
@@ -66,6 +65,11 @@ The two assertions cover:
 
 ## Linux performance and release evidence
 
+The values in this section are the last historical Linux record inherited by the Foundation-wave
+candidate. They remain useful regression context, but they do not satisfy the new paired D12
+comparison: that record must be regenerated from the immutable signed candidate head after the
+implementation commit.
+
 The Linux-authoritative performance command completed successfully:
 
 ```text
@@ -94,16 +98,27 @@ npm run check:editor-release-evidence
 ```
 
 All release bounds passed: B1 has zero Monaco/editor markers in 14 first-load scripts; B2 is
-1152.6 KiB of 2560.0 KiB; B3 is a 103.7 KiB editor worker of 750.0 KiB. The committed candidate
+1152.6 KiB of 2560.0 KiB; B3 is a 103.7 KiB editor worker of 750.0 KiB. The historical committed
 artifact is [`1209-bundle-evidence.json`](../release/1209-bundle-evidence.json), measurement
 `ae8a4d826ee39c18777e8d0daf59e02afe182c2afa6c2b236842373bddfe5e8d`.
 
-## Remaining closeout condition
+## Debug-launch mutation quality
 
-The last complete debug-launch mutation report in this worktree records 3,510 killed and 22 timeout
-mutants, with zero survived and zero no-coverage mutants. A new full 100-percent Stryker run was
-started against the expanded uncommitted candidate and deliberately stopped once its interim result
-already contained survivors; it is not represented as a passing result. This ledger remains in
-progress until an authorized commit permits the actual PR head to run
-`node scripts/check-mutation-scope.mjs --base origin/dev --head HEAD` and the resulting scoped
-quality check.
+The Foundation-wave candidate completed the full governed debug-launch mutation command after a
+failure-first repair cycle:
+
+```text
+npm run test:mutation:debug-launch-security
+4,043 killed; 49 timeout; 0 survived; 0 no-coverage
+Mutation score: 100.00%
+```
+
+The first expanded run exposed seven surviving and four uncovered mutants. Focused tests then
+closed the exact protocol-disposal, ancestor-process, sandbox-platform, code-point, and boundary
+export gaps. A targeted 164-mutant rerun reached 100 percent before the single final full rerun
+above. The machine-readable report is
+`reports/mutation/debug-launch-security/mutation-report.json`; generated reports are not committed.
+
+Remaining closeout work is the immutable signed candidate commit, Linux-authoritative paired D12
+comparison and refreshed release evidence, the final `npm run codex:pre-pr`, and required checks on
+the exact pushed PR head.

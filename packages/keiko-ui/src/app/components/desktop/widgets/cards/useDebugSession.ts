@@ -565,11 +565,15 @@ function mutationProjection(value: unknown): MutationProjection | null {
   return snapshot === null ? null : { snapshot };
 }
 
-function parseStack(value: unknown): {
-  readonly frames: readonly StackFrame[];
-  readonly truncated: boolean;
-  readonly omittedCount: number;
-} | null {
+interface DebugStackPage extends DebugStackSnapshot {
+  readonly nextCursor?: string | undefined;
+}
+
+const MAX_DEBUG_STACK_PAGE_REQUESTS = Math.ceil(
+  DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames / DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+);
+
+function parseStack(value: unknown): DebugStackPage | null {
   if (
     !isRecord(value) ||
     !arrayOf(value.frames, stackFrame) ||
@@ -577,9 +581,27 @@ function parseStack(value: unknown): {
   )
     return null;
   const omittedCount = numberValue(value.omittedCount);
+  const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : undefined;
+  if (value.nextCursor !== undefined && nextCursor === undefined) return null;
   return omittedCount === null
     ? null
-    : { frames: value.frames, truncated: value.truncated, omittedCount };
+    : {
+        frames: value.frames,
+        truncated: value.truncated,
+        omittedCount,
+        ...(nextCursor === undefined ? {} : { nextCursor }),
+      };
+}
+
+function appendStackPage(current: DebugStackSnapshot, page: DebugStackPage): DebugStackSnapshot {
+  return {
+    frames: [...current.frames, ...page.frames].slice(
+      0,
+      DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames,
+    ),
+    truncated: page.truncated,
+    omittedCount: page.omittedCount,
+  };
 }
 
 function parseScopes(value: unknown, frameRef: string): DebugScopeSnapshot | null {
@@ -725,7 +747,34 @@ async function requestStackProjection(
     }),
     signal,
   });
-  return parseStack(response);
+  const first = parseStack(response);
+  if (first === null) return null;
+  let stack: DebugStackSnapshot = first;
+  let cursor = first.nextCursor;
+  let pageRequests = 1;
+  while (
+    cursor !== undefined &&
+    stack.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames &&
+    pageRequests < MAX_DEBUG_STACK_PAGE_REQUESTS
+  ) {
+    const next = parseStack(
+      await requestJson("/api/editor/debug/stack", {
+        ...inspectionMutation(identity, {
+          cursor,
+          levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+        }),
+        signal,
+      }),
+    );
+    if (next === null || (next.frames.length === 0 && next.nextCursor !== undefined)) return null;
+    stack = appendStackPage(stack, next);
+    cursor = next.nextCursor;
+    pageRequests += 1;
+  }
+  return cursor === undefined ||
+    stack.frames.length >= DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames
+    ? stack
+    : null;
 }
 
 async function requestScopeProjection(
@@ -1113,8 +1162,44 @@ export function useDebugSession(
           levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
         }),
       );
-      const parsed = parseStack(response);
-      return parsed !== null && setDebugStack(stableWorkspaceId, identity, parsed) ? parsed : null;
+      const first = parseStack(response);
+      if (first === null) return null;
+      let parsed: DebugStackSnapshot = first;
+      let cursor = first.nextCursor;
+      let pageRequests = 1;
+      while (
+        cursor !== undefined &&
+        parsed.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames &&
+        pageRequests < MAX_DEBUG_STACK_PAGE_REQUESTS
+      ) {
+        const next = parseStack(
+          await trackedRequest(
+            "/api/editor/debug/stack",
+            debugMutation({
+              schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+              sessionId: session.sessionId,
+              pauseGeneration: session.pauseGeneration,
+              cursor,
+              levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+            }),
+          ),
+        );
+        if (
+          next === null ||
+          (next.frames.length === 0 && next.nextCursor !== undefined) ||
+          !currentPauseMatches(stableWorkspaceId, identity)
+        )
+          return null;
+        parsed = appendStackPage(parsed, next);
+        cursor = next.nextCursor;
+        pageRequests += 1;
+      }
+      if (
+        cursor !== undefined &&
+        parsed.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames
+      )
+        return null;
+      return setDebugStack(stableWorkspaceId, identity, parsed) ? parsed : null;
     },
     [enabled, stableWorkspaceId, trackedRequest],
   );

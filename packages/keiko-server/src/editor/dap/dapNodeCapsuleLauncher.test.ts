@@ -1004,6 +1004,16 @@ describe("production debug capsule launcher", () => {
     expect(debugCapsuleLauncherInternals.descendantCount(missingParentsRoot, 1)).toBe(0);
   });
 
+  it("fails closed when a process table contains an invalid ancestor identity", () => {
+    const processes = new Map([
+      [Number.NaN, { pid: Number.NaN, parentPid: 1, startTime: "invalid", state: "S" }],
+      [2, { pid: 2, parentPid: 1, startTime: "200", state: "S" }],
+      [1, { pid: 1, parentPid: 0, startTime: "100", state: "S" }],
+    ]);
+
+    expect(debugCapsuleLauncherInternals.descendantIdentities(processes, 1)).toStrictEqual([]);
+  });
+
   it("parses exact Linux PID and start-time boundaries from variable stat whitespace", () => {
     const procRoot = temporary();
     const fieldsBeforeStartTime = Array.from({ length: 17 }, () => "0").join("   ");

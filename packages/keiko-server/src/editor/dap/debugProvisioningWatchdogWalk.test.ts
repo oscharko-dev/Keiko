@@ -7,6 +7,7 @@
 // itself is cached, so they cannot catch a regression here.
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -143,6 +144,28 @@ describe("operator provisioning watchdog walk cost (#2096 performance-sweep audi
     // Pin the new mtime to a value guaranteed to differ from the original so detection never
     // depends on filesystem clock resolution.
     utimesSync(tamperedFile, new Date(2_000), new Date(2_000));
+
+    expect(qualification()).toBe("notProvisioned");
+  });
+
+  it("detects same-size tampering even when the original mtime is restored", () => {
+    const { document, runtimeDir } = fixtureWithRuntimeDirectory(5);
+    const tamperedFile = join(runtimeDir, "module-0.js");
+    const pinnedTime = new Date(2_000);
+    utimesSync(tamperedFile, pinnedTime, pinnedTime);
+    const qualification = createOperatorProvisioningQualification({
+      KEIKO_DAP_OPERATOR_PROVISIONING_JSON: JSON.stringify(document),
+    });
+    expect(qualification()).toBe("provisioned");
+    expect(qualification()).toBe("provisioned");
+
+    const before = lstatSync(tamperedFile);
+    writeFileSync(tamperedFile, "tampered", "utf8");
+    utimesSync(tamperedFile, pinnedTime, pinnedTime);
+    const after = lstatSync(tamperedFile);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.ctimeMs).not.toBe(before.ctimeMs);
 
     expect(qualification()).toBe("notProvisioned");
   });

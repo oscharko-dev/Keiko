@@ -2243,6 +2243,7 @@ export {
   CODING_CONTEXT_OMISSION_REASONS,
   CODING_CONTEXT_BUDGETS,
   isCodingContextPurpose,
+  isBoundedEditorSessionId,
   tierForCodingContextSource,
   embeddingProvidersAllowed,
   isCodingContextCitation,
@@ -3891,6 +3892,30 @@ export {
   MANAGED_LSP_EVIDENCE_OUTCOMES,
   parseManagedLspEvidence,
 } from "./managed-lsp-evidence.js";
+
+export type {
+  ManagedLspControlAction,
+  ManagedLspControlStoreState,
+  ManagedLspProviderConfigurationSource,
+  ManagedLspProviderRuntimeIdentitySource,
+  ManagedLspControlRequest,
+  ManagedLspControlMutation,
+  ManagedLspConfigurationSummary,
+  ManagedLspProviderMetadata,
+  ManagedLspControlSnapshot,
+  ManagedLspControlResponse,
+  ManagedLspControlSuccessResult,
+  ManagedLspControlDeniedResult,
+  ManagedLspControlResult,
+  ManagedLspRouteParseResult,
+} from "./managed-lsp-route.js";
+export {
+  MANAGED_LSP_CONTROL_ACTIONS,
+  parseManagedLspRevisionEtag,
+  parseManagedLspControlRequest,
+  parseManagedLspControlResponse,
+  parseManagedLspControlMutationResponse,
+} from "./managed-lsp-route.js";
 
 // ─── M7 editor personalization and resilience platform (Epic #2095, ADR-0133) ───
 export type {

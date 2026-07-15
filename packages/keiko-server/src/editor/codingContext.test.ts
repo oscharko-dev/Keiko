@@ -15,6 +15,7 @@ import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { assembleCodingContext, type AssembleCodingContextDeps } from "./codingContext.js";
+import { EDITOR_STATE_CONTEXT_LEASE_TTL_MS } from "./codingContextProviders.js";
 
 let root: string;
 
@@ -40,7 +41,15 @@ function ctx(
   signal: AbortSignal,
   overrides: Partial<AssembleCodingContextDeps> = {},
 ): AssembleCodingContextDeps {
-  return { deps: deps(), realRoot: root, signal, nowMs: 1_700_000_000_000, ...overrides };
+  const nowMs = overrides.nowMs ?? 1_700_000_000_000;
+  return {
+    deps: deps(),
+    realRoot: root,
+    signal,
+    nowMs,
+    currentTimeMs: () => nowMs,
+    ...overrides,
+  };
 }
 
 function editorSnapshot(
@@ -162,20 +171,75 @@ describe("assembleCodingContext", () => {
   });
 
   it("packs opted-in editor state with first-party provenance inside both budgets", async () => {
-    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const secret = "editor-diagnostic-secret-123456789";
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({
+        diagnosticsDetail: {
+          items: [
+            {
+              severity: "error",
+              range: {
+                start: { line: 2, character: 3 },
+                end: { line: 2, character: 8 },
+              },
+              message: `Missing value for ${secret}`,
+            },
+          ],
+          truncated: false,
+        },
+      }),
+    );
+    editorAgentRegistry.connect("editor-session-1", () => undefined);
     const pack = await assembleCodingContext(
       request({ editorSessionId: "editor-session-1" }),
-      ctx(new AbortController().signal),
+      ctx(new AbortController().signal, {
+        deps: {
+          ...deps(),
+          redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+        },
+      }),
     );
     const editorState = pack.excerpts.find((entry) => entry.citation.sourceKind === "editor-state");
 
     expect(editorState?.citation.sourceTier).toBe("first-party-workspace");
     expect(editorState?.citation.citationRef).toBe("a.ts");
     expect(editorState?.citation.id).not.toContain("editor-session-1");
+    expect(editorState?.text).toContain("[REDACTED]");
+    expect(editorState?.text).not.toContain(secret);
+    expect(editorState?.text).toContain('"severity": "error"');
     expect(editorState?.citation.byteCount).toBeLessThanOrEqual(
       CODING_CONTEXT_BUDGETS.completion.maxBytesPerSource,
     );
     expect(pack.usedBytes).toBeLessThanOrEqual(pack.budgetBytes);
+  });
+
+  it("expires a disconnected editor-state lease after the preceding repository search", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const disconnect = editorAgentRegistry.connect("editor-session-1", () => undefined);
+    let clockReads = 0;
+    const currentTimeMs = vi.fn(() => {
+      clockReads += 1;
+      if (clockReads === 1) return 100;
+      disconnect();
+      return 100 + EDITOR_STATE_CONTEXT_LEASE_TTL_MS;
+    });
+
+    const pack = await assembleCodingContext(
+      request({ editorSessionId: "editor-session-1" }),
+      ctx(new AbortController().signal, { currentTimeMs }),
+    );
+
+    expect(currentTimeMs).toHaveBeenCalledTimes(3);
+    expect(pack.excerpts.some((entry) => entry.citation.sourceKind === "files-focus")).toBe(true);
+    expect(pack.excerpts.some((entry) => entry.citation.sourceKind === "editor-state")).toBe(false);
+    expect(pack.omissions).toContainEqual({
+      sourceKind: "editor-state",
+      reason: "unavailable",
+    });
+    expect(pack.omissions).toContainEqual({
+      sourceKind: "git-context",
+      reason: "unavailable",
+    });
   });
 
   it("records unavailable and cross-root denied omissions for opted-in editor state", async () => {
@@ -188,7 +252,22 @@ describe("assembleCodingContext", () => {
       reason: "unavailable",
     });
 
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const disconnected = await assembleCodingContext(
+      request({ purpose: "inline", editorSessionId: "editor-session-1" }),
+      ctx(new AbortController().signal),
+    );
+    expect(disconnected.omissions).toContainEqual({
+      sourceKind: "editor-state",
+      reason: "unavailable",
+    });
+    expect(
+      disconnected.excerpts.some((entry) => entry.citation.sourceKind === "editor-state"),
+    ).toBe(false);
+
+    editorAgentRegistry.reset();
     editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: `${root}-other` }));
+    editorAgentRegistry.connect("editor-session-1", () => undefined);
     const crossRoot = await assembleCodingContext(
       request({ purpose: "inline", editorSessionId: "editor-session-1" }),
       ctx(new AbortController().signal),

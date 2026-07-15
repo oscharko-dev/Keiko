@@ -968,6 +968,70 @@ describe("dapProtocolClient", () => {
     });
   });
 
+  it("disposes after both source consumption and the fatal observer fail", async () => {
+    const source: AsyncIterable<Buffer> = {
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new Error("private source")) }),
+    };
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: "UNEXPECTED_EOF" }),
+      );
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    });
+  });
+
+  it("disposes after both request writing and the fatal observer fail", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: () => {
+        throw new Error("private write");
+      },
+      onFatalError: fatal,
+    });
+
+    await expect(
+      client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+    ).rejects.toMatchObject({ code: "WRITE_FAILED" });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    });
+  });
+
+  it("disposes after both reverse-response writing and the fatal observer fail", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: () => {
+        throw new Error("private write");
+      },
+      onFatalError: fatal,
+    });
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "request", command: "unknown" })));
+
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: "WRITE_FAILED" }),
+      );
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    });
+  });
+
   it("rejects invalid UTF-8 even when replacement decoding would produce valid JSON", async () => {
     const source = new PassThrough({ objectMode: true });
     const fatal = vi.fn();

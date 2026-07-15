@@ -973,6 +973,20 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     expect(handle.terminateScope).toHaveBeenCalledTimes(1);
   });
 
+  it("assigns terminal transition ownership to exactly one concurrent caller", async () => {
+    const { registry } = setup();
+    await activate(registry);
+
+    const stopped = registry.transitionTerminal("session_a", "stopped");
+    const revoked = registry.transitionTerminal("session_a", "activationRevoked");
+
+    expect(stopped.owner).toBe(true);
+    expect(revoked.owner).toBe(false);
+    expect(revoked.completion).toBe(stopped.completion);
+    expect(registry.session("session_a")?.terminalReason).toBe("stopped");
+    await Promise.all([stopped.completion, revoked.completion]);
+  });
+
   it("does not project terminal evidence again from a queued reconciliation", async () => {
     const { records, registry } = setup();
     await activate(registry);

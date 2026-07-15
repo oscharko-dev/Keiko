@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
@@ -78,13 +81,44 @@ import {
   type StreamHandlers,
 } from "./api";
 
+const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
+const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), "managed-lsp-response-validators.ts"),
+  "utf8",
+);
+
 describe("managed language settings API", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
+  it("loads managed LSP response validation through its dedicated lazy adapter", () => {
+    const eagerContractsImports = [
+      ...API_SOURCE.matchAll(
+        /import\s*\{([\s\S]*?)\}\s*from\s*["']@oscharko-dev\/keiko-contracts["'];/gu,
+      ),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+
+    expect(eagerContractsImports).not.toContain("parseManagedLspControlResponse");
+    expect(eagerContractsImports).not.toContain("parseManagedLspControlMutationResponse");
+    expect(API_SOURCE).toContain('import("./managed-lsp-response-validators")');
+
+    const adapterImport = MANAGED_LSP_VALIDATORS_SOURCE.match(
+      /import\s*\{([\s\S]*?)\}\s*from\s*"@oscharko-dev\/keiko-contracts";/u,
+    );
+    expect(
+      (adapterImport?.[1] ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0)
+        .sort(),
+    ).toEqual(["parseManagedLspControlMutationResponse", "parseManagedLspControlResponse"]);
+  });
+
   it("encodes the workspace root and forwards abortable no-store reads", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ languages: [] }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(managedLspSettingsResponse()));
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
 
@@ -99,12 +133,17 @@ describe("managed language settings API", () => {
     expect(init.signal?.aborted).toBe(true);
   });
 
+  it("fails closed when the managed language settings envelope is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ languages: [] })));
+
+    await expect(fetchManagedLspSettings("/workspace/a")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
   it("sends revision, CSRF, ETag, idempotency, and cancellation on mutations", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse({ kind: "ok", revision: 4, etag: '"lspcfg-4-abcdefghijklmnop"' }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(managedLspMutationResponse(4)));
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
 
@@ -134,7 +173,80 @@ describe("managed language settings API", () => {
       }),
     );
   });
+
+  it("fails closed when the managed language mutation envelope is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ kind: "ok", revision: 4, etag: '"lspcfg-4-abcdefghijklmnop"' }),
+        ),
+    );
+
+    await expect(
+      mutateManagedLspSettings(
+        { root: "/workspace/a", language: "python", action: "restart", expectedRevision: 3 },
+        '"lspcfg-3-abcdefghijklmnop"',
+        "request-1",
+      ),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
 });
+
+const MANAGED_LSP_TEST_LANGUAGES = ["python", "go", "shell", "java", "rust"] as const;
+
+function managedLspStatus(
+  revision: number,
+  language: (typeof MANAGED_LSP_TEST_LANGUAGES)[number] = "python",
+): Record<string, unknown> {
+  return {
+    ok: true,
+    schemaVersion: "1",
+    language,
+    configurationRevision: revision,
+    state: "disabled",
+    reasonCode: "WORKSPACE_ACTIVATION_UNSET",
+    policyResult: "allowed",
+  };
+}
+
+function managedLspSetting(
+  language: (typeof MANAGED_LSP_TEST_LANGUAGES)[number],
+): Record<string, unknown> {
+  return {
+    language,
+    workspaceActivation: "unset",
+    configured: false,
+    restartRequired: false,
+    restartFields: [],
+    provenance: null,
+  };
+}
+
+function managedLspSettingsResponse(): Record<string, unknown> {
+  return {
+    storeState: "absent",
+    revision: 0,
+    etag: '"lspcfg-0-abcdefghijklmnop"',
+    evidenceCount: 0,
+    languages: MANAGED_LSP_TEST_LANGUAGES.map((language) => managedLspStatus(0, language)),
+    settings: MANAGED_LSP_TEST_LANGUAGES.map(managedLspSetting),
+    configurations: [],
+    health: [],
+    providerMetadata: [],
+  };
+}
+
+function managedLspMutationResponse(revision: number): Record<string, unknown> {
+  return {
+    kind: "ok",
+    changed: true,
+    revision,
+    etag: `"lspcfg-${String(revision)}-abcdefghijklmnop"`,
+    status: managedLspStatus(revision),
+  };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -321,6 +433,7 @@ describe("requestEditorCompletion (Issue #1199)", () => {
       triggerKind: "trigger-character",
       triggerCharacter: ".",
       contextBudgetBytes: 4_096,
+      editorSessionId: "editor-session-1",
     });
 
     expect(response.items[0]?.label).toBe("alpha");
@@ -345,6 +458,7 @@ describe("requestEditorCompletion (Issue #1199)", () => {
           triggerKind: "trigger-character",
           triggerCharacter: ".",
           contextBudgetBytes: 4_096,
+          editorSessionId: "editor-session-1",
         }),
       }),
     );

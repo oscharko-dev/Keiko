@@ -122,6 +122,7 @@ export function createPrePrSteps(options = {}) {
     npmStep("prepare-bin", ["run", "prepare:bin"], { platform }),
     npmStep("build-ui", ["run", "build:ui"], { platform }),
     editorReleaseEvidenceStep(platform),
+    npmStep("editor-performance-evidence", ["run", "check:perf-evidence:editor"], { platform }),
     npmStep("prune-package-build-artifacts", ["run", "prune:package-build-artifacts"], {
       platform,
     }),

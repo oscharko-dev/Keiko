@@ -130,6 +130,8 @@ export interface KeikoCodeEditorProps {
   readonly themeVariant?: EditorThemeVariant | undefined;
   /** Server-resolved M7 editor options; live-updated through Monaco updateOptions. */
   readonly editorPreferences?: KeikoEditorPreferenceOptions | undefined;
+  /** Canonical host workspace ownership key, independent from the document/model identity. */
+  readonly modelRootKey?: string | undefined;
   /** Stable per-pane key for retained Monaco view state; content-free and host-defined. */
   readonly modelViewStateKey?: string | undefined;
   /** Extra model-retention protection flags for host review/recovery states. */

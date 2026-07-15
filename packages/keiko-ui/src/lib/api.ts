@@ -133,10 +133,12 @@ import type {
   WorkspaceSymbolSearchResponse,
   LanguageCallHierarchyResult,
   LanguageInlayHintsResult,
-  ManagedLspActivationResolution,
+  ManagedLspConfigurationSummary as ManagedLspConfigurationSummaryContract,
+  ManagedLspControlAction,
+  ManagedLspControlRequest,
+  ManagedLspControlResponse,
+  ManagedLspControlSuccessResult,
   ManagedLspLanguage,
-  ManagedLspProcessHealthSnapshot,
-  ManagedLspRuntimeConfiguration,
   ManagedLspSemanticTokenResponse,
   EditorM7SettingsMutation,
   EditorM7SettingsMutationOk,
@@ -1768,6 +1770,7 @@ export async function fetchGitDiff(input: {
 // editor cancel a superseded request.
 export interface EditorCompletionRequestInput {
   readonly root: string;
+  readonly editorSessionId?: string | undefined;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
@@ -1791,6 +1794,7 @@ export async function requestEditorCompletion(
     triggerKind: input.triggerKind,
     ...(input.triggerCharacter === undefined ? {} : { triggerCharacter: input.triggerCharacter }),
     contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.editorSessionId === undefined ? {} : { editorSessionId: input.editorSessionId }),
     ...(input.context === undefined ? {} : { context: input.context }),
     ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
   };
@@ -1807,6 +1811,7 @@ export async function requestEditorCompletion(
 // never reaches a model directly. `signal` lets the editor cancel a superseded request.
 export interface EditorInlineCompletionRequestInput {
   readonly root: string;
+  readonly editorSessionId?: string | undefined;
   readonly path: string;
   readonly languageId: string;
   readonly text: string;
@@ -1829,6 +1834,7 @@ export async function requestEditorInlineCompletion(
     position: input.position,
     triggerKind: input.triggerKind,
     contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.editorSessionId === undefined ? {} : { editorSessionId: input.editorSessionId }),
     ...(input.context === undefined ? {} : { context: input.context }),
     ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
     ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
@@ -1883,6 +1889,7 @@ export async function reportEditorInlineCompletionTelemetry(
 // a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
 export interface EditorTestGenerationRequestInput {
   readonly root: string;
+  readonly editorSessionId?: string | undefined;
   readonly target: EditorTestGenerationWireTarget;
   readonly contextBudgetBytes: number;
   readonly context?: EditorCompletionContextSelectors | undefined;
@@ -1897,6 +1904,7 @@ export async function requestEditorTestGeneration(
     root: input.root,
     target: input.target,
     contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.editorSessionId === undefined ? {} : { editorSessionId: input.editorSessionId }),
     ...(input.context === undefined ? {} : { context: input.context }),
   };
   return fetchJson("/api/editor/test-generation", {
@@ -1969,64 +1977,33 @@ export async function fetchEditorLanguageCapabilities(
   return fetchJson(`/api/editor/language/capabilities${query}`);
 }
 
-export interface ManagedLspConfigurationSummary {
-  readonly language: ManagedLspLanguage;
-  readonly workspaceActivation: "enabled" | "disabled" | "unset";
-  readonly configured: boolean;
-  readonly restartRequired: boolean;
-  readonly restartFields: readonly ("runtime" | "settings")[];
-  readonly provenance: ManagedLspRuntimeConfiguration["provenance"] | null;
-}
+export type ManagedLspConfigurationSummary = ManagedLspConfigurationSummaryContract;
+export type ManagedLspSettingsResponse = ManagedLspControlResponse;
+export type ManagedLspSettingsAction = ManagedLspControlAction;
+export type ManagedLspSettingsMutationInput = ManagedLspControlRequest;
 
-export interface ManagedLspSettingsResponse {
-  readonly storeState: "absent" | "ready" | "unavailable";
-  readonly revision: number;
-  readonly etag: string;
-  readonly evidenceCount: number;
-  readonly languages: readonly ManagedLspActivationResolution[];
-  readonly settings: readonly ManagedLspConfigurationSummary[];
-  readonly configurations: readonly ManagedLspRuntimeConfiguration[];
-  readonly health: readonly ManagedLspProcessHealthSnapshot[];
-  readonly providerMetadata?:
-    | readonly {
-        readonly language: ManagedLspLanguage;
-        readonly configurationSource: string;
-      }[]
-    | undefined;
-}
-
-export type ManagedLspSettingsAction =
-  "activate" | "deactivate" | "configure" | "reset" | "rollback" | "restart";
-
-export interface ManagedLspSettingsMutationInput {
-  readonly root: string;
-  readonly language: ManagedLspLanguage;
-  readonly action: ManagedLspSettingsAction;
-  readonly expectedRevision: number;
-  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
-}
-
-export function fetchManagedLspSettings(
+export async function fetchManagedLspSettings(
   root: string,
   signal?: AbortSignal,
 ): Promise<ManagedLspSettingsResponse> {
-  return fetchJson(`/api/editor/lsp/settings?root=${encodeURIComponent(root)}`, {
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const adapter = await import("./managed-lsp-response-validators");
+  return adapter.managedLspApi.settings<ManagedLspSettingsResponse>(fetchJson, root, signal);
 }
 
-export function mutateManagedLspSettings(
+export async function mutateManagedLspSettings(
   input: ManagedLspSettingsMutationInput,
   etag: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<{ readonly kind: "ok"; readonly revision: number; readonly etag: string }> {
-  return fetchJson("/api/editor/lsp/settings", {
-    method: "PUT",
-    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
-    body: JSON.stringify(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+): Promise<ManagedLspControlSuccessResult> {
+  const adapter = await import("./managed-lsp-response-validators");
+  return adapter.managedLspApi.mutation<ManagedLspControlSuccessResult>(
+    fetchJson,
+    input,
+    etag,
+    idempotencyKey,
+    signal,
+  );
 }
 
 export function fetchEditorSettings(

@@ -39,7 +39,7 @@ describe("dev quality workflows", () => {
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
     const performanceStep = uiJob?.match(
-      /- name: Release performance E2E evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
+      /- name: Refresh workspace performance evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
     )?.[0];
     const freshnessStep = uiJob?.match(
       /- name: Performance evidence freshness \+ budget gate\n[\s\S]*?(?=\n\s+- name: Build package and UI assets)/u,
@@ -49,14 +49,22 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("UI coverage ratchet");
     expect(uiJob).toContain("Release smoke E2E");
     expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
-    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
-    expect(performanceStep).toContain("rm -f docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("Upload redacted performance evidence");
-    expect(performanceStep).toContain("if: ${{ always() && github.event_name != 'pull_request' }}");
-    expect(performanceStep).toContain("docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("docs/release/1580-workspace-perf-evidence.json");
-    expect(performanceStep).toContain("if-no-files-found: warn");
+    expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
+    expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
+    expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
+    expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
+    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
+    expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
     expect(freshnessStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    expect(freshnessStep).toContain("Upload redacted performance evidence");
+    expect(freshnessStep).not.toContain("always()");
+    expect(freshnessStep).toContain("docs/release/1209-perf-evidence.json");
+    expect(freshnessStep).toContain("docs/release/1580-workspace-perf-evidence.json");
+    expect(freshnessStep).toContain("if-no-files-found: warn");
+    expect(freshnessStep.indexOf("npm run check:perf-evidence")).toBeLessThan(
+      freshnessStep.indexOf("Upload redacted performance evidence"),
+    );
   });
 
   it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {

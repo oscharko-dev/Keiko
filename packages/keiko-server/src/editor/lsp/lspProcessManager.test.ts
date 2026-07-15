@@ -435,11 +435,13 @@ describe("createLspProcessManager", () => {
     );
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(manager.getChildGeneration()).toBe(1);
 
     controllers[0]?.crash(1);
     await settle();
 
     expect(manager.getLspProcessStatus()).toBe("READY");
+    expect(manager.getChildGeneration()).toBe(2);
     const crashed = events.find((event) => event.status === "CRASHED");
     expect(crashed).toBeDefined();
     expect(events.some((event) => event.status === "READY" && event.restartCount === 1)).toBe(true);

@@ -25,8 +25,9 @@ import type {
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import {
   buildEditorProblemsSnapshot,
-  getEditorProblems,
+  getEditorProblemsStoreSnapshot,
   subscribeEditorProblems,
+  type EditorProblemsSourceHealth,
 } from "../cards/editorProblemsStore";
 import {
   useProblemsTranslate,
@@ -77,6 +78,42 @@ const ROW_BASE: CSSProperties = {
   alignItems: "baseline",
 };
 const FILTER_ROW_STYLE: CSSProperties = { display: "flex", gap: "8px", flexWrap: "wrap" };
+const SOURCE_HEALTH_STYLE: CSSProperties = {
+  display: "flex",
+  gap: "6px",
+  margin: 0,
+  padding: "6px 8px",
+  border: "1px solid var(--border-subtle)",
+  borderRadius: "4px",
+};
+
+const SOURCE_HEALTH_MESSAGE: Record<
+  Exclude<EditorProblemsSourceHealth, "healthy">,
+  ProblemsMessageKey
+> = {
+  reconnecting: "problems.sourceHealth.reconnecting",
+  failed: "problems.sourceHealth.failed",
+};
+
+function VerificationSourceHealth(props: {
+  readonly health: EditorProblemsSourceHealth;
+  readonly t: ProblemsTranslate;
+}): ReactNode {
+  if (props.health === "healthy") return null;
+  const symbol = props.health === "reconnecting" ? "↻" : "!";
+  return (
+    <p
+      role="status"
+      aria-live="polite"
+      data-testid="problems-source-health"
+      data-source-health={props.health}
+      style={SOURCE_HEALTH_STYLE}
+    >
+      <span aria-hidden="true">{symbol}</span>
+      <span>{props.t(SOURCE_HEALTH_MESSAGE[props.health])}</span>
+    </p>
+  );
+}
 
 function matchesFilters(
   problem: EditorProblem,
@@ -208,8 +245,9 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
     (listener: () => void) => subscribeEditorProblems(root, listener),
     [root],
   );
-  const getSnapshot = useCallback(() => getEditorProblems(root), [root]);
-  const allProblems = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const getSnapshot = useCallback(() => getEditorProblemsStoreSnapshot(root), [root]);
+  const storeSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const { problems: allProblems, verificationSourceHealth } = storeSnapshot;
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [source, setSource] = useState<SourceFilter>("all");
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -261,8 +299,11 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
       <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.85em" }}>
         {t("problems.openFilesOnly")}
       </p>
+      <VerificationSourceHealth health={verificationSourceHealth} t={t} />
       {allProblems.length === 0 ? (
-        <p data-testid="problems-empty">{t("problems.empty")}</p>
+        verificationSourceHealth === "healthy" ? (
+          <p data-testid="problems-empty">{t("problems.empty")}</p>
+        ) : null
       ) : snapshot.problems.length === 0 ? (
         <p data-testid="problems-no-match">{t("problems.noMatch")}</p>
       ) : (

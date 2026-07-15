@@ -255,7 +255,7 @@ export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFree
   {
     name: "editor_navigate_symbol",
     description:
-      "Resolve a TypeScript/JavaScript definition, references, rename candidates, code actions, or signature help through the governed editor action queue.",
+      "Resolve negotiated language diagnostics, navigation, hierarchy, inlay hints, rename candidates, code actions, or signature help through the governed editor action queue. Availability is determined at dispatch by the active provider capabilities.",
     parameters: NAVIGATE_SYMBOL_PARAMETERS,
   },
   {

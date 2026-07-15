@@ -26,7 +26,12 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import { resolveVerificationTarget } from "./editorCommands";
-import { setVerificationReport } from "./editorProblemsStore";
+import {
+  getEditorProblemsSourceHealth,
+  setVerificationReport,
+  setVerificationSourceHealth,
+  type EditorProblemsSourceHealth,
+} from "./editorProblemsStore";
 
 const RUNS_URL = "/api/editor/verification/runs";
 const EVENTS_URL = "/api/editor/verification/events";
@@ -71,6 +76,10 @@ interface SharedRunState {
 // mask every later status update for the rest of the session.
 const VERIFICATION_STATUS_DISMISS_DELAY_MS = 4_000;
 const EVENT_SOURCE_READY_TIMEOUT_MS = 10_000;
+const EVENT_SOURCE_RECONNECT_INITIAL_DELAY_MS = 1_000;
+const EVENT_SOURCE_RECONNECT_MAX_DELAY_MS = 4_000;
+const EVENT_SOURCE_MAX_RECONNECT_ATTEMPTS = 3;
+const TERMINAL_EVENT_RECONCILIATION_TIMEOUT_MS = 10_000;
 const IDLE: SharedRunState = { running: false, label: "" };
 
 interface ProjectRunState {
@@ -79,6 +88,8 @@ interface ProjectRunState {
   pendingState: SharedRunState | null;
   flushScheduled: boolean;
   dismissTimer: ReturnType<typeof setTimeout> | null;
+  needsTerminalReconciliation: boolean;
+  terminalReconciliationTimer: ReturnType<typeof setTimeout> | null;
   startToken: number | null;
   startSequence: number;
   cancelRequested: boolean;
@@ -91,11 +102,17 @@ const projectStates = new Map<string, ProjectRunState>();
 // Populated from a run-started event's projectId (the only event carrying it) so later step/terminal
 // events — which only carry runId — still route to the correct project's state.
 const projectIdByRunId = new Map<string, string>();
+// The verification stream has no replay/snapshot protocol. A root that had an admitted or active run
+// when a live stream dropped cannot call its cached report fresh merely because HTTP reconnected; a
+// terminal event must re-establish report completeness for that root.
+const rootsAwaitingFreshTerminal = new Set<string>();
 let sharedSource: EventSource | null = null;
 let sharedSourceOpen = false;
 let sharedSourceReadyPromise: Promise<boolean> | null = null;
 let resolveSharedSourceReady: ((ready: boolean) => void) | null = null;
 let sharedSourceReadyTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedSourceReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedSourceReconnectAttempts = 0;
 let totalListenerCount = 0;
 
 function projectState(root: string): ProjectRunState {
@@ -107,6 +124,8 @@ function projectState(root: string): ProjectRunState {
       pendingState: null,
       flushScheduled: false,
       dismissTimer: null,
+      needsTerminalReconciliation: false,
+      terminalReconciliationTimer: null,
       startToken: null,
       startSequence: 0,
       cancelRequested: false,
@@ -127,7 +146,8 @@ function pruneIfIdle(root: string): void {
     entry.listeners.size === 0 &&
     entry.activeRunId === null &&
     entry.startToken === null &&
-    entry.dismissTimer === null
+    entry.dismissTimer === null &&
+    entry.terminalReconciliationTimer === null
   ) {
     projectStates.delete(root);
   }
@@ -138,6 +158,12 @@ function clearDismissTimer(entry: ProjectRunState): void {
     clearTimeout(entry.dismissTimer);
     entry.dismissTimer = null;
   }
+}
+
+function clearTerminalReconciliationTimer(entry: ProjectRunState): void {
+  if (entry.terminalReconciliationTimer === null) return;
+  clearTimeout(entry.terminalReconciliationTimer);
+  entry.terminalReconciliationTimer = null;
 }
 
 function scheduleDismiss(root: string, entry: ProjectRunState): void {
@@ -212,6 +238,8 @@ function adoptStartedRun(event: Extract<EditorVerificationEvent, { kind: "run-st
   // A fresh run supersedes any pending dismiss from a PREVIOUS run's terminal label.
   clearDismissTimer(entry);
   if (entry.activeRunId !== null && entry.activeRunId !== event.runId) {
+    clearTerminalReconciliationTimer(entry);
+    entry.needsTerminalReconciliation = false;
     projectIdByRunId.delete(entry.activeRunId);
   }
   entry.activeRunId = event.runId;
@@ -234,6 +262,8 @@ function rootForEvent(event: EditorVerificationEvent): string | null {
 }
 
 function settleTerminalRun(root: string, entry: ProjectRunState, runId: string): void {
+  clearTerminalReconciliationTimer(entry);
+  entry.needsTerminalReconciliation = false;
   entry.activeRunId = null;
   entry.startToken = null;
   entry.cancelRequested = false;
@@ -253,7 +283,13 @@ function onEvent(event: EditorVerificationEvent): void {
   // authoritative source of the report, so the problems store never opens a second stream.
   if (event.kind === "run-completed") setVerificationReport(root, event.report);
   const view = labelFor(event);
-  if (view.terminal) settleTerminalRun(root, entry, event.runId);
+  if (view.terminal) {
+    rootsAwaitingFreshTerminal.delete(root);
+    setVerificationSourceHealth(root, "healthy");
+    settleTerminalRun(root, entry, event.runId);
+  } else {
+    scheduleTerminalReconciliation(root, entry);
+  }
   emit(root, entry, { running: view.running, label: view.label });
 }
 
@@ -275,52 +311,167 @@ function settleSharedSourceReady(ready: boolean): void {
   resolve?.(ready);
 }
 
-function waitForSharedSource(source: EventSource): Promise<boolean> {
+function sourceDependentRoots(): readonly string[] {
+  return [...projectStates.entries()]
+    .filter(([, entry]) => entry.activeRunId !== null || entry.startToken !== null)
+    .map(([root]) => root);
+}
+
+function setDependentSourceHealth(health: EditorProblemsSourceHealth): void {
+  for (const root of sourceDependentRoots()) setVerificationSourceHealth(root, health);
+}
+
+function reconcileActiveRunAfterSourceFailure(root: string, entry: ProjectRunState): void {
+  const runId = entry.activeRunId;
+  if (runId === null) return;
+  clearTerminalReconciliationTimer(entry);
+  entry.needsTerminalReconciliation = false;
+  projectIdByRunId.delete(runId);
+  rootsAwaitingFreshTerminal.add(root);
+  entry.activeRunId = null;
+  entry.startToken = null;
+  entry.cancelRequested = false;
+  entry.cancelInFlightRunId = null;
+  clearDismissTimer(entry);
+  emit(root, entry, { running: false, label: "Verification: status unknown" });
+  scheduleDismiss(root, entry);
+  if (!hasActiveRun()) closeSharedSource();
+}
+
+function scheduleTerminalReconciliation(root: string, entry: ProjectRunState): void {
+  const runId = entry.activeRunId;
+  if (runId === null || !entry.needsTerminalReconciliation) return;
+  // This is an inactivity deadline, not a fixed post-reconnect lifetime. Every legitimate
+  // nonterminal frame proves the recovered stream is still making progress and re-arms the bound.
+  clearTerminalReconciliationTimer(entry);
+  entry.terminalReconciliationTimer = setTimeout(() => {
+    entry.terminalReconciliationTimer = null;
+    if (entry.activeRunId !== runId || !entry.needsTerminalReconciliation) return;
+    setVerificationSourceHealth(root, "failed");
+    reconcileActiveRunAfterSourceFailure(root, entry);
+  }, TERMINAL_EVENT_RECONCILIATION_TIMEOUT_MS);
+}
+
+function terminallyReconcileSourceFailure(): void {
+  for (const root of sourceDependentRoots()) {
+    const entry = projectStates.get(root);
+    setVerificationSourceHealth(root, "failed");
+    if (entry !== undefined) reconcileActiveRunAfterSourceFailure(root, entry);
+  }
+  closeSharedSource();
+}
+
+function rememberUncertainRoots(): void {
+  for (const root of sourceDependentRoots()) {
+    rootsAwaitingFreshTerminal.add(root);
+    const entry = projectStates.get(root);
+    if (entry !== undefined) entry.needsTerminalReconciliation = true;
+  }
+}
+
+function settleConnectedSourceHealth(): void {
+  for (const root of sourceDependentRoots()) {
+    const entry = projectStates.get(root);
+    const awaitingTerminal = rootsAwaitingFreshTerminal.has(root);
+    setVerificationSourceHealth(root, awaitingTerminal ? "failed" : "healthy");
+    if (awaitingTerminal && entry !== undefined) scheduleTerminalReconciliation(root, entry);
+  }
+}
+
+function clearSharedSourceReconnectTimer(): void {
+  if (sharedSourceReconnectTimer === null) return;
+  clearTimeout(sharedSourceReconnectTimer);
+  sharedSourceReconnectTimer = null;
+}
+
+function waitForSharedSource(): Promise<boolean> {
   if (sharedSourceOpen) return Promise.resolve(true);
   if (sharedSourceReadyPromise !== null) return sharedSourceReadyPromise;
   sharedSourceReadyPromise = new Promise<boolean>((resolve) => {
     resolveSharedSourceReady = resolve;
   });
   sharedSourceReadyTimer = setTimeout(() => {
-    if (sharedSource !== source || sharedSourceOpen) return;
-    // A reconnect waiter must fail closed without tearing down the one stream that an already
-    // adopted run still needs for its terminal event. A stream with only pending starts is safe to
-    // close, preserving the ordinary never-open handshake behavior.
-    if (projectIdByRunId.size > 0) settleSharedSourceReady(false);
-    else closeSharedSource();
+    if (sharedSourceOpen) return;
+    // Neither an initial handshake nor a replacement connection may remain "reconnecting"
+    // forever. Preserve cached Problems rows, surface failed health, and stop this bounded cycle.
+    terminallyReconcileSourceFailure();
   }, EVENT_SOURCE_READY_TIMEOUT_MS);
   return sharedSourceReadyPromise;
 }
 
-function openSharedSource(): Promise<boolean> {
-  if (sharedSource !== null) return waitForSharedSource(sharedSource);
+function reconnectDelay(): number {
+  return Math.min(
+    EVENT_SOURCE_RECONNECT_MAX_DELAY_MS,
+    EVENT_SOURCE_RECONNECT_INITIAL_DELAY_MS * 2 ** sharedSourceReconnectAttempts,
+  );
+}
+
+function scheduleSharedSourceReconnect(): void {
+  if (!hasActiveRun() || sharedSourceReconnectTimer !== null) return;
+  if (sharedSourceReconnectAttempts >= EVENT_SOURCE_MAX_RECONNECT_ATTEMPTS) {
+    terminallyReconcileSourceFailure();
+    return;
+  }
+  const delay = reconnectDelay();
+  sharedSourceReconnectAttempts += 1;
+  sharedSourceReconnectTimer = setTimeout(() => {
+    sharedSourceReconnectTimer = null;
+    createSharedSource();
+  }, delay);
+}
+
+function handleSharedSourceLoss(source: EventSource): void {
+  if (sharedSource !== source) return;
+  if (sharedSourceOpen) rememberUncertainRoots();
+  sharedSource = null;
+  sharedSourceOpen = false;
+  source.close();
+  setDependentSourceHealth("reconnecting");
+  scheduleSharedSourceReconnect();
+}
+
+function createSharedSource(): void {
+  if (sharedSource !== null || !hasActiveRun()) return;
   let source: EventSource | null;
   try {
     source = createSameOriginApiEventSource(EVENTS_URL);
   } catch {
     source = null;
   }
-  if (source === null) return Promise.resolve(false);
+  if (source === null) {
+    setDependentSourceHealth("reconnecting");
+    scheduleSharedSourceReconnect();
+    return;
+  }
   sharedSource = source;
   sharedSourceOpen = false;
   source.addEventListener("open", () => {
     if (sharedSource !== source) return;
     sharedSourceOpen = true;
+    sharedSourceReconnectAttempts = 0;
+    settleConnectedSourceHealth();
     settleSharedSourceReady(true);
   });
-  source.addEventListener("error", () => {
-    if (sharedSource === source) sharedSourceOpen = false;
-  });
+  source.addEventListener("error", () => handleSharedSourceLoss(source));
   for (const kind of EDITOR_VERIFICATION_EVENT_KINDS) {
     source.addEventListener(`verification:${kind}`, onMessage as EventListener);
   }
-  return waitForSharedSource(source);
+  // Reconnects are opened by a timer rather than a caller awaiting openSharedSource(), so the
+  // recovery cycle keeps a bounded handshake timeout even when a run is already active.
+  void waitForSharedSource();
+}
+
+function openSharedSource(): Promise<boolean> {
+  if (sharedSource === null && sharedSourceReconnectTimer === null) createSharedSource();
+  return waitForSharedSource();
 }
 
 function closeSharedSource(): void {
   const source = sharedSource;
   sharedSource = null;
   sharedSourceOpen = false;
+  clearSharedSourceReconnectTimer();
+  sharedSourceReconnectAttempts = 0;
   source?.close();
   settleSharedSourceReady(false);
 }
@@ -339,6 +490,8 @@ function showTransientStatus(root: string, label: string): void {
 
 function failStart(root: string, entry: ProjectRunState, token: number): void {
   if (entry.startToken !== token) return;
+  clearTerminalReconciliationTimer(entry);
+  entry.needsTerminalReconciliation = false;
   entry.startToken = null;
   entry.activeRunId = null;
   entry.cancelRequested = false;
@@ -372,6 +525,7 @@ async function postRun(
     entry.startToken = null;
     entry.activeRunId = payload.runId;
     projectIdByRunId.set(payload.runId, root);
+    scheduleTerminalReconciliation(root, entry);
     if (entry.cancelRequested) void requestCancel(root, payload.runId);
   } catch {
     failStart(root, entry, token);
@@ -386,21 +540,27 @@ async function startAfterStreamReady(
   targetPath?: string,
 ): Promise<void> {
   if (!(await openSharedSource())) {
+    setVerificationSourceHealth(root, "failed");
     failStart(root, entry, token);
     return;
   }
   if (entry.startToken !== token) return;
+  setVerificationSourceHealth(root, rootsAwaitingFreshTerminal.has(root) ? "failed" : "healthy");
   await postRun(root, kinds, token, targetPath);
 }
 
 function startRun(root: string, kinds: readonly VerificationKind[], targetPath?: string): void {
   if (root.length === 0) return;
+  if (rootsAwaitingFreshTerminal.has(root) && getEditorProblemsSourceHealth(root) === "healthy") {
+    rootsAwaitingFreshTerminal.delete(root);
+  }
   const entry = projectState(root);
   if (entry.startToken !== null || entry.activeRunId !== null || entry.state.running) return;
   clearDismissTimer(entry);
   entry.startSequence += 1;
   entry.startToken = entry.startSequence;
   entry.cancelRequested = false;
+  if (sharedSourceReconnectAttempts > 0) setVerificationSourceHealth(root, "reconnecting");
   emit(root, entry, { running: true, label: "Verification: starting…" });
   void startAfterStreamReady(root, kinds, entry, entry.startToken, targetPath);
 }
@@ -418,6 +578,10 @@ function acknowledgeCancel(root: string, entry: ProjectRunState, runId: string):
     if (!hasActiveRun()) closeSharedSource();
   }
   entry.cancelRequested = false;
+  clearTerminalReconciliationTimer(entry);
+  entry.needsTerminalReconciliation = false;
+  rootsAwaitingFreshTerminal.delete(root);
+  setVerificationSourceHealth(root, "healthy");
   if (entry.cancelInFlightRunId === runId) entry.cancelInFlightRunId = null;
   clearDismissTimer(entry);
   emit(root, entry, { running: false, label: "Verification: cancelled" });
@@ -460,9 +624,13 @@ function cancelRun(root: string): void {
 // Exposed for hermetic tests to reset the module singleton between cases.
 export function resetEditorVerificationRunStateForTests(): void {
   closeSharedSource();
-  for (const entry of projectStates.values()) clearDismissTimer(entry);
+  for (const entry of projectStates.values()) {
+    clearDismissTimer(entry);
+    clearTerminalReconciliationTimer(entry);
+  }
   projectStates.clear();
   projectIdByRunId.clear();
+  rootsAwaitingFreshTerminal.clear();
   totalListenerCount = 0;
 }
 

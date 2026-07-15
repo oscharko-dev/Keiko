@@ -18,6 +18,7 @@ import {
   type LanguageServiceRequest,
   type ManagedLspEffectiveState,
   type ManagedLspLanguage,
+  type ManagedLspProcessHealthSnapshot,
   type ManagedLspRuntimeConfiguration,
   type ManagedLspSemanticTokenResponse,
 } from "@oscharko-dev/keiko-contracts";
@@ -37,6 +38,8 @@ import {
   HOST_LSP_DISABLED_REASON,
 } from "./lsp/hostLanguageProviders.js";
 import {
+  initializeHostLanguageProvider,
+  listHostLspHealthSnapshotsForRoot,
   runHostLanguageOperation,
   runHostLanguageSemanticTokens,
   type HostLanguageOperationOptions,
@@ -61,6 +64,16 @@ export interface EditorLanguageRouteOptions {
   readonly hostLanguageSpawn?: LspSpawnFn | undefined;
   /** Test-only LSP process timeout/config seam for host-provider operation coverage. */
   readonly hostLanguageProcessConfig?: HostLanguageOperationOptions["lspProcessConfig"] | undefined;
+  /** Test-only live negotiated-capability seam; production reads the canonical pooled managers. */
+  readonly listManagedHealthSnapshots?:
+    ((root: string) => readonly ManagedLspProcessHealthSnapshot[]) | undefined;
+  /** Test-only initialization seam; production initializes the canonical governed pool. */
+  readonly initializeManagedProvider?:
+    | ((
+        languageId: string,
+        options: HostLanguageOperationOptions,
+      ) => Promise<ManagedLspProcessHealthSnapshot | undefined>)
+    | undefined;
 }
 
 // Exported for reuse by the completion route (#1199), which maps the same deterministic
@@ -306,7 +319,6 @@ const SPAWNABLE_MANAGED_STATES: ReadonlySet<ManagedLspEffectiveState> = new Set(
   "starting",
   "active",
   "degraded",
-  "restartRequired",
 ]);
 
 function snapshotAuthorizesLanguage(
@@ -314,7 +326,12 @@ function snapshotAuthorizesLanguage(
   languageId: string,
 ): boolean {
   const status = snapshot.languages.find((entry) => entry.ok && entry.language === languageId);
-  return status?.ok === true && SPAWNABLE_MANAGED_STATES.has(status.state);
+  const settings = snapshot.settings.find((entry) => entry.language === languageId);
+  return (
+    status?.ok === true &&
+    settings?.restartRequired === false &&
+    SPAWNABLE_MANAGED_STATES.has(status.state)
+  );
 }
 
 // Exported so tests can prove authorization is genuinely evaluated per languageId, independent
@@ -331,36 +348,42 @@ export async function managedActivationAuthorization(
   if (deps.managedLspControl === undefined) return undefined;
   const language = managedLanguage(languageId);
   if (language === undefined) return { authorized: false };
-  const [snapshot, configuration] = await Promise.all([
-    deps.managedLspControl.read(realRoot),
-    deps.managedLspControl.readConfiguration(realRoot, language),
-  ]);
+  const snapshot = await deps.managedLspControl.read(realRoot);
+  const authorized = snapshotAuthorizesLanguage(snapshot, languageId);
+  if (!authorized) return { authorized: false };
+  const configuration = snapshot.configurations.find((entry) => entry.language === language);
   return {
-    authorized: snapshotAuthorizesLanguage(snapshot, languageId),
+    authorized: true,
+    revision: snapshot.revision,
+    privateRuntimeStateRoot: deps.managedLspControl.stateDir,
     ...(configuration === undefined ? {} : { configuration }),
   };
 }
 
 interface ManagedActivationAuthorization {
   readonly authorized: boolean;
+  readonly revision?: number | undefined;
   readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
+  readonly privateRuntimeStateRoot?: string | undefined;
 }
 
 function managedHostOptions(
   authorization: ManagedActivationAuthorization | undefined,
   realRoot: string,
-): Pick<HostLanguageOperationOptions, "activationAuthorized" | "protocolConfiguration"> {
+): Pick<
+  HostLanguageOperationOptions,
+  "activationAuthorized" | "privateRuntimeStateRoot" | "protocolConfiguration"
+> {
   if (authorization?.authorized !== true) return {};
+  const revision = authorization.configuration?.revision ?? authorization.revision ?? 0;
+  const configuration =
+    authorization.configuration === undefined
+      ? { revision, settings: {} }
+      : managedProviderProtocolConfiguration(authorization.configuration, realRoot);
   return {
     activationAuthorized: true,
-    ...(authorization.configuration === undefined
-      ? {}
-      : {
-          protocolConfiguration: managedProviderProtocolConfiguration(
-            authorization.configuration,
-            realRoot,
-          ),
-        }),
+    privateRuntimeStateRoot: authorization.privateRuntimeStateRoot,
+    protocolConfiguration: configuration,
   };
 }
 
@@ -374,33 +397,158 @@ function disabledDescriptor(
   return {
     id: spec.id,
     languages: spec.languages,
-    operations: spec.operations,
+    operations: [],
     availability: "unavailable",
     unavailableReason: HOST_LSP_DISABLED_REASON,
   };
 }
 
-function controlledDescriptors(
+const HOST_LSP_NEGOTIATION_PENDING_REASON =
+  "Managed language capabilities have not been negotiated." as const;
+
+function negotiatedOperations(
+  spec: (typeof HOST_LANGUAGE_PROVIDER_SPECS)[number],
+  revision: number,
+  health: readonly ManagedLspProcessHealthSnapshot[],
+): LanguageProviderDescriptor["operations"] {
+  const negotiated = new Set(
+    health
+      .filter(
+        (entry) =>
+          entry.status === "READY" &&
+          entry.configurationRevision === revision &&
+          spec.languages.includes(entry.language),
+      )
+      .flatMap((entry) => entry.negotiatedOperations),
+  );
+  return spec.operations.filter((operation) => negotiated.has(operation));
+}
+
+function negotiatedDescriptor(
+  descriptor: LanguageProviderDescriptor,
+  spec: (typeof HOST_LANGUAGE_PROVIDER_SPECS)[number],
+  revision: number,
+  health: readonly ManagedLspProcessHealthSnapshot[],
+): LanguageProviderDescriptor {
+  if (descriptor.availability === "unavailable") return { ...descriptor, operations: [] };
+  const operations = negotiatedOperations(spec, revision, health);
+  return operations.length === 0
+    ? {
+        ...descriptor,
+        operations,
+        availability: "unavailable",
+        unavailableReason: HOST_LSP_NEGOTIATION_PENDING_REASON,
+      }
+    : { ...descriptor, operations };
+}
+
+function currentSpecHealth(
+  spec: (typeof HOST_LANGUAGE_PROVIDER_SPECS)[number],
+  snapshot: ManagedLspControlSnapshot,
+  health: readonly ManagedLspProcessHealthSnapshot[],
+): ManagedLspProcessHealthSnapshot | undefined {
+  return health.find(
+    (entry) =>
+      entry.configurationRevision === snapshot.revision && spec.languages.includes(entry.language),
+  );
+}
+
+function initializationOptions(
+  language: ManagedLspLanguage,
   snapshot: ManagedLspControlSnapshot,
   realRoot: string,
   deps: UiHandlerDeps,
   options: EditorLanguageRouteOptions,
-): readonly LanguageProviderDescriptor[] {
+  signal: AbortSignal,
+): HostLanguageOperationOptions {
+  const configuration = snapshot.configurations.find((entry) => entry.language === language);
+  return {
+    workspace: workspaceForRoot(realRoot),
+    processEnv: deps.env,
+    commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+    overlayAbsolutePath: realRoot,
+    signal,
+    lspProcessConfig: options.hostLanguageProcessConfig,
+    ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
+    ...managedHostOptions(
+      {
+        authorized: true,
+        revision: snapshot.revision,
+        privateRuntimeStateRoot: deps.managedLspControl?.stateDir,
+        ...(configuration === undefined ? {} : { configuration }),
+      },
+      realRoot,
+    ),
+  };
+}
+
+async function controlledDescriptor(
+  spec: (typeof HOST_LANGUAGE_PROVIDER_SPECS)[number],
+  snapshot: ManagedLspControlSnapshot,
+  health: readonly ManagedLspProcessHealthSnapshot[],
+  realRoot: string,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions,
+  signal: AbortSignal,
+): Promise<LanguageProviderDescriptor> {
+  const language = spec.languages.find((entry) => snapshotAuthorizesLanguage(snapshot, entry));
+  if (language === undefined) return disabledDescriptor(spec);
   const commandRules = options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules();
-  return HOST_LANGUAGE_PROVIDER_SPECS.map((spec) => {
-    if (!spec.languages.some((language) => snapshotAuthorizesLanguage(snapshot, language))) {
-      return disabledDescriptor(spec);
-    }
-    return (
-      detectHostLanguageProviderDescriptors({
-        workspace: workspaceForRoot(realRoot),
-        processEnv: deps.env,
-        commandRules,
-        specs: [spec],
-        ignoreActivationFlag: true,
-      })[0] ?? disabledDescriptor(spec)
-    );
-  });
+  const descriptor =
+    detectHostLanguageProviderDescriptors({
+      workspace: workspaceForRoot(realRoot),
+      processEnv: deps.env,
+      commandRules,
+      specs: [spec],
+      ignoreActivationFlag: true,
+    })[0] ?? disabledDescriptor(spec);
+  if (descriptor.availability === "unavailable") return { ...descriptor, operations: [] };
+  let current = currentSpecHealth(spec, snapshot, health);
+  if (current?.status !== "READY") {
+    const initialize = options.initializeManagedProvider ?? initializeHostLanguageProvider;
+    const managed = managedLanguage(language);
+    current =
+      managed === undefined
+        ? undefined
+        : await initialize(
+            managed,
+            initializationOptions(managed, snapshot, realRoot, deps, options, signal),
+          );
+  }
+  return negotiatedDescriptor(
+    descriptor,
+    spec,
+    snapshot.revision,
+    current === undefined ? [] : [current],
+  );
+}
+
+function controlledDescriptors(
+  snapshot: ManagedLspControlSnapshot,
+  health: readonly ManagedLspProcessHealthSnapshot[],
+  realRoot: string,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions,
+  signal: AbortSignal,
+): Promise<readonly LanguageProviderDescriptor[]> {
+  return Promise.all(
+    HOST_LANGUAGE_PROVIDER_SPECS.map((spec) =>
+      controlledDescriptor(spec, snapshot, health, realRoot, deps, options, signal),
+    ),
+  );
+}
+
+async function managedDescriptorsForRoute(
+  realRoot: string,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions,
+  signal: AbortSignal,
+): Promise<readonly LanguageProviderDescriptor[]> {
+  const snapshot = await deps.managedLspControl?.read(realRoot);
+  if (snapshot === undefined) return [];
+  const health =
+    options.listManagedHealthSnapshots?.(realRoot) ?? listHostLspHealthSnapshotsForRoot(realRoot);
+  return controlledDescriptors(snapshot, health, realRoot, deps, options, signal);
 }
 
 export async function handleEditorLanguageCapabilitiesForRoute(
@@ -424,11 +572,11 @@ export async function handleEditorLanguageCapabilitiesForRoute(
             processEnv: deps.env,
             commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
           })
-        : controlledDescriptors(
-            await deps.managedLspControl.read(resolved.realRoot),
+        : await managedDescriptorsForRoute(
             resolved.realRoot,
             deps,
             options,
+            clientAbortSignal(ctx),
           );
     return {
       status: 200,
