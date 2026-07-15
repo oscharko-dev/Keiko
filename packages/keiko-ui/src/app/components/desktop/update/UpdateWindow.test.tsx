@@ -1121,16 +1121,16 @@ describe("UpdateWindow", () => {
     fireEvent.click(npmCopyButton);
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(npmTargetCommand);
+      expect(npmCopyButton).toHaveAttribute("data-copied", "true");
     });
-    expect(npmCopyButton).toHaveAttribute("data-copied", "true");
     expect(npmCopyButton).toHaveAttribute("title", "Copied");
 
     const yarnCopyButton = screen.getByRole("button", { name: "Copy Yarn command" });
     fireEvent.click(yarnCopyButton);
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(yarnTargetCommand);
+      expect(yarnCopyButton).toHaveAttribute("data-copied", "true");
     });
-    expect(yarnCopyButton).toHaveAttribute("data-copied", "true");
     for (const copiedFeedback of screen.getAllByText("Copied")) {
       expect(copiedFeedback).toHaveClass("sr-only");
       expect(copiedFeedback).toHaveAttribute("role", "status");
