@@ -93,13 +93,24 @@ function contextInput(
   context: DebugActivationContext & { readonly realRoot: string },
   options: DebugActivationControlOptions,
 ): Parameters<DebugCapabilityGate["resolve"]>[0] {
+  const productSupport = options.productSupport(context.realRoot);
+  const deploymentPolicy = options.deploymentPolicy(context.realRoot);
+  const provisioningCanAffectDecision =
+    productSupport === "supported" &&
+    deploymentPolicy === "allowed" &&
+    context.workspaceActivation === "enabled";
   return {
     schemaVersion: DEBUG_ACTIVATION_SCHEMA_VERSION,
     adapterId: "node-typescript",
     revision: context.revision,
-    productSupport: options.productSupport(context.realRoot),
-    deploymentPolicy: options.deploymentPolicy(context.realRoot),
-    provisioning: options.provisioning(context.realRoot),
+    productSupport,
+    deploymentPolicy,
+    // Provisioning may inspect a large, operator-pinned runtime closure. Preserve the ordered
+    // fail-closed policy result while avoiding that trust-boundary traversal when an earlier gate
+    // already makes `available` impossible. Every potentially allowed decision still revalidates it.
+    provisioning: provisioningCanAffectDecision
+      ? options.provisioning(context.realRoot)
+      : "notProvisioned",
     workspaceActivation: context.workspaceActivation,
   };
 }

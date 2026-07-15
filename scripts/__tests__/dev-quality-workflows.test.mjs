@@ -50,6 +50,12 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("Release smoke E2E");
     expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
     expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
+    expect(performanceStep).toContain("rm -f docs/release/1209-perf-evidence.json");
+    expect(performanceStep).toContain("Upload redacted performance evidence");
+    expect(performanceStep).toContain("if: ${{ always() && github.event_name != 'pull_request' }}");
+    expect(performanceStep).toContain("docs/release/1209-perf-evidence.json");
+    expect(performanceStep).toContain("docs/release/1580-workspace-perf-evidence.json");
+    expect(performanceStep).toContain("if-no-files-found: warn");
     expect(freshnessStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
 
