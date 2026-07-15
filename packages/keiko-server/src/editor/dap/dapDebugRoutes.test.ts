@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts";
 
 import { buildCspHeader } from "../../csp.js";
+import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";
 import { SSE_HEADERS } from "../../sse.js";
@@ -295,6 +296,7 @@ let rejectEventPublication = false;
 let activationRevision = ACTIVATION_REVISION;
 let activationState: "available" | "notProvisioned" = "available";
 let activationFailure = false;
+let diagnosticRecords: ServerDiagnosticRecord[] = [];
 const env: Record<string, string | undefined> = {};
 
 function newBrowserSessions(): DebugBrowserSessionRegistry {
@@ -334,6 +336,11 @@ function debugService(): DapDebugRouteService {
         reasonCode: activationState === "available" ? "AVAILABLE" : "NOT_PROVISIONED",
         policyResult: "allowed",
       });
+    },
+    diagnosticSink: {
+      record: (record): void => {
+        diagnosticRecords.push(record);
+      },
     },
   };
 }
@@ -578,6 +585,7 @@ beforeEach(async () => {
   activationRevision = ACTIVATION_REVISION;
   activationState = "available";
   activationFailure = false;
+  diagnosticRecords = [];
   browserSessions = newBrowserSessions();
   delete env.KEIKO_EDITOR_DEBUG;
   await startServer();
@@ -1175,6 +1183,57 @@ describe("governed DAP debug routes", () => {
     expect(response.status).toBe(403);
     expect(manager.revocations).toStrictEqual([session.sessionId]);
     expect(manager.requests).toHaveLength(before);
+  });
+
+  it("emits a redacted operator diagnostic when the activation resolver throws before dispatch", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    const session = (await started.json()) as { readonly sessionId: string };
+    manager.setPaused(session.sessionId);
+    activationFailure = true;
+
+    const response = await debugJson("/api/editor/debug/stack", cookie, {
+      schemaVersion: "1",
+      sessionId: session.sessionId,
+      pauseGeneration: 1,
+      startFrame: 0,
+      levels: 1,
+    });
+
+    expect(response.status).toBe(403);
+    expect(diagnosticRecords).toHaveLength(1);
+    expect(diagnosticRecords[0]).toMatchObject({
+      correlationId: workspaceId,
+      operation: "dap.activation.revalidate",
+      source: "dap.debug-routes.activation-resolver",
+      message: "Debug activation resolver failed.",
+    });
+    expect(JSON.stringify(diagnosticRecords)).not.toContain("activation unavailable");
+    expect(JSON.stringify(diagnosticRecords)).not.toContain(workspaceRoot);
+  });
+
+  it("emits a redacted operator diagnostic when the activation resolver throws during bootstrap", async () => {
+    enableDebug();
+    activationFailure = true;
+
+    const response = await bootstrap();
+
+    expect(response.status).toBe(403);
+    expect(diagnosticRecords).toHaveLength(1);
+    expect(diagnosticRecords[0]).toMatchObject({
+      correlationId: workspaceId,
+      operation: "dap.activation.resolve",
+      source: "dap.debug-routes.activation-resolver",
+      message: "Debug activation resolver failed.",
+    });
+    expect(JSON.stringify(diagnosticRecords)).not.toContain("activation unavailable");
+    expect(JSON.stringify(diagnosticRecords)).not.toContain(workspaceRoot);
   });
 
   it("revalidates activation before active instrumentation dispatch", async () => {

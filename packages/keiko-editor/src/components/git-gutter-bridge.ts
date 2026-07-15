@@ -1,6 +1,7 @@
 import type { GitEditorDiffHunk } from "@oscharko-dev/keiko-contracts";
 
 import type { MonacoDisposable, MonacoRange } from "./completion-bridge.js";
+import { GIT_GUTTER_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
 
 export type EditorGitGutterLayer = "staged" | "unstaged";
 
@@ -41,6 +42,7 @@ interface MonacoGutterDecoration {
     readonly description: string;
     readonly glyphMarginClassName: string;
     readonly glyphMarginHoverMessage: MonacoMarkdownStringLike;
+    readonly glyphMargin: { readonly position: number };
     readonly isWholeLine: true;
   };
 }
@@ -104,6 +106,7 @@ function decoration(
       description,
       glyphMarginClassName: `keiko-git-gutter keiko-git-gutter-${layer} keiko-git-gutter-${kind}`,
       glyphMarginHoverMessage: { value: description },
+      glyphMargin: { position: GIT_GUTTER_GLYPH_MARGIN_LANE },
       isWholeLine: true,
     },
   };

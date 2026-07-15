@@ -45,6 +45,7 @@ import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import type { ServerDiagnosticSink } from "./diagnostics-log.js";
@@ -1685,32 +1686,157 @@ function qualifiedArtifactFile(
     : [...stableMetadata, createHash("sha256").update(contentReader(realPath)).digest("hex")];
 }
 
+interface StatSignature {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mtimeNs: bigint;
+}
+
+interface ArtifactWalkCacheEntry extends StatSignature {
+  readonly kind: "file" | "directory";
+  readonly identity: readonly (readonly unknown[])[];
+  readonly children: readonly DapOperatorProvisionedArtifact[];
+}
+
+/**
+ * `artifacts` holds one entry per `hostPath` already fully validated, populated only by the
+ * metadata-only ("signal") walk -- never by the content-hashing identity walk (contentReader is
+ * always defined there, so `qualifiedArtifact` never consults or populates this cache in that
+ * mode; that expensive path keeps running in full every time it is invoked, unchanged).
+ *
+ * A hit means this exact filesystem object (same dev/ino/mtimeNs) was already fully validated on
+ * a prior call. Reusing it lets an unchanged directory skip `realpathSync` and `readdirSync`
+ * entirely and an unchanged file skip re-deriving its identity -- but every cached node is still
+ * freshly `lstat`ed on every call, and every cached directory still recurses into its (cached)
+ * children so their own mtimes are re-checked. `approvedRoots` mirrors the same freshness check
+ * for each distinct approved-root path, because the original (uncached) walk also re-resolves
+ * `realpathSync(approvedRoot)` on every call; a cache hit is only safe when *both* the artifact
+ * and the approved root it was validated against are still unchanged. Nothing is ever assumed
+ * unchanged without a fresh, cheap stat confirming it, so any real content or structure change is
+ * still caught on the very next call. This turns the steady-state cost of the per-second watchdog
+ * signal from O(files) full validations (readdir + up to 5 stat-family syscalls each) into
+ * O(files) single-`lstat` checks with no directory enumeration at all when nothing has changed.
+ */
+interface ArtifactWalkCache {
+  readonly artifacts: Map<string, ArtifactWalkCacheEntry>;
+  readonly approvedRoots: Map<string, StatSignature>;
+}
+
+function approvedRootUnchanged(cache: ArtifactWalkCache, approvedRoot: string): boolean {
+  const current = lstatSync(approvedRoot, { bigint: true });
+  const cached = cache.approvedRoots.get(approvedRoot);
+  const unchanged =
+    cached?.dev === current.dev && cached.ino === current.ino && cached.mtimeNs === current.mtimeNs;
+  if (!unchanged) {
+    cache.approvedRoots.set(approvedRoot, {
+      dev: current.dev,
+      ino: current.ino,
+      mtimeNs: current.mtimeNs,
+    });
+  }
+  return unchanged;
+}
+
+function freshCacheEntry(
+  cache: ArtifactWalkCache | undefined,
+  artifact: DapOperatorProvisionedArtifact,
+  supplied: BigIntStats,
+): ArtifactWalkCacheEntry | undefined {
+  const cached = cache?.artifacts.get(artifact.hostPath);
+  if (cached === undefined || cache === undefined) return undefined;
+  const unchanged =
+    cached.dev === supplied.dev &&
+    cached.ino === supplied.ino &&
+    cached.mtimeNs === supplied.mtimeNs &&
+    approvedRootUnchanged(cache, artifact.approvedRoot);
+  return unchanged ? cached : undefined;
+}
+
+function directoryChildren(
+  artifact: DapOperatorProvisionedArtifact,
+  realPath: string,
+): readonly DapOperatorProvisionedArtifact[] {
+  return readdirSync(realPath, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => ({
+      hostPath: join(realPath, entry.name),
+      approvedRoot: artifact.approvedRoot,
+      capsulePath: join(artifact.capsulePath, entry.name),
+    }));
+}
+
+function rememberArtifact(
+  cache: ArtifactWalkCache | undefined,
+  hostPath: string,
+  supplied: BigIntStats,
+  kind: "file" | "directory",
+  identity: readonly (readonly unknown[])[],
+  children: readonly DapOperatorProvisionedArtifact[],
+): void {
+  cache?.artifacts.set(hostPath, {
+    dev: supplied.dev,
+    ino: supplied.ino,
+    mtimeNs: supplied.mtimeNs,
+    kind,
+    identity,
+    children,
+  });
+}
+
+function qualifiedArtifactFresh(
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+  contentReader: DapArtifactContentReader | undefined,
+  cache: ArtifactWalkCache | undefined,
+  supplied: BigIntStats,
+): readonly (readonly unknown[])[] {
+  const realPath = realpathSync(artifact.hostPath);
+  const stat = lstatSync(realPath);
+  if (stat.isFile()) {
+    const identity = [qualifiedArtifactFile(artifact, qualification, contentReader)];
+    rememberArtifact(cache, artifact.hostPath, supplied, "file", identity, []);
+    return identity;
+  }
+  if (!qualification.allowDirectory || !stat.isDirectory()) {
+    throw new Error("INVALID_DAP_PROVISIONING");
+  }
+  const children = directoryChildren(artifact, realPath);
+  const identity = children.flatMap((child) =>
+    qualifiedArtifact(child, qualification, contentReader, cache),
+  );
+  rememberArtifact(cache, artifact.hostPath, supplied, "directory", identity, children);
+  return identity;
+}
+
+function qualifiedArtifactCached(
+  cached: ArtifactWalkCacheEntry,
+  artifact: DapOperatorProvisionedArtifact,
+  qualification: DapArtifactQualification,
+  contentReader: DapArtifactContentReader | undefined,
+  cache: ArtifactWalkCache | undefined,
+  supplied: BigIntStats,
+): readonly (readonly unknown[])[] {
+  if (cached.kind === "file") return cached.identity;
+  const identity = cached.children.flatMap((child) =>
+    qualifiedArtifact(child, qualification, contentReader, cache),
+  );
+  rememberArtifact(cache, artifact.hostPath, supplied, "directory", identity, cached.children);
+  return identity;
+}
+
 function qualifiedArtifact(
   artifact: DapOperatorProvisionedArtifact,
   qualification: DapArtifactQualification,
   contentReader?: DapArtifactContentReader,
+  cache?: ArtifactWalkCache,
 ): readonly (readonly unknown[])[] {
-  const supplied = lstatSync(artifact.hostPath);
+  const supplied = lstatSync(artifact.hostPath, { bigint: true });
   if (supplied.isSymbolicLink()) throw new Error("INVALID_DAP_PROVISIONING");
-  const realPath = realpathSync(artifact.hostPath);
-  const stat = lstatSync(realPath);
-  if (stat.isFile()) return [qualifiedArtifactFile(artifact, qualification, contentReader)];
-  if (!qualification.allowDirectory || !stat.isDirectory()) {
-    throw new Error("INVALID_DAP_PROVISIONING");
-  }
-  return readdirSync(realPath, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .flatMap((entry) =>
-      qualifiedArtifact(
-        {
-          hostPath: join(realPath, entry.name),
-          approvedRoot: artifact.approvedRoot,
-          capsulePath: join(artifact.capsulePath, entry.name),
-        },
-        qualification,
-        contentReader,
-      ),
-    );
+  const useCache = contentReader === undefined && cache !== undefined;
+  const cached = useCache ? freshCacheEntry(cache, artifact, supplied) : undefined;
+  return cached === undefined
+    ? qualifiedArtifactFresh(artifact, qualification, contentReader, cache, supplied)
+    : qualifiedArtifactCached(cached, artifact, qualification, contentReader, cache, supplied);
 }
 
 function qualifiedAdapterIdentity(
@@ -1744,6 +1870,7 @@ function qualifiedAdapterIdentity(
 function operatorProvisioningIdentity(
   document: DapOperatorProvisioningDocument,
   contentReader?: DapArtifactContentReader,
+  cache?: ArtifactWalkCache,
 ): string | undefined {
   try {
     const launch = document.launch;
@@ -1753,14 +1880,14 @@ function operatorProvisioningIdentity(
     const identities = [
       document,
       qualifiedAdapterIdentity(document, contentReader),
-      ...qualifiedArtifact(launch.node, executable, contentReader),
-      ...qualifiedArtifact(launch.npm, executable, contentReader),
-      ...qualifiedArtifact(launch.shell, executable, contentReader),
-      ...qualifiedArtifact(launch.backend, executable, contentReader),
-      ...qualifiedArtifact(launch.npmUserConfig, empty, contentReader),
-      ...qualifiedArtifact(launch.npmGlobalConfig, empty, contentReader),
+      ...qualifiedArtifact(launch.node, executable, contentReader, cache),
+      ...qualifiedArtifact(launch.npm, executable, contentReader, cache),
+      ...qualifiedArtifact(launch.shell, executable, contentReader, cache),
+      ...qualifiedArtifact(launch.backend, executable, contentReader, cache),
+      ...qualifiedArtifact(launch.npmUserConfig, empty, contentReader, cache),
+      ...qualifiedArtifact(launch.npmGlobalConfig, empty, contentReader, cache),
       ...launch.runtimeClosure.flatMap((artifact) =>
-        qualifiedArtifact(artifact, data, contentReader),
+        qualifiedArtifact(artifact, data, contentReader, cache),
       ),
     ];
     return createHash("sha256").update(JSON.stringify(identities)).digest("hex");
@@ -1778,11 +1905,15 @@ function operatorProvisioningSnapshot(
   document: DapOperatorProvisioningDocument,
   contentReader: DapArtifactContentReader,
   expectedSignal?: string,
+  cache?: ArtifactWalkCache,
 ): OperatorProvisioningSnapshot | undefined {
-  const signal = expectedSignal ?? operatorProvisioningIdentity(document);
+  const signal = expectedSignal ?? operatorProvisioningIdentity(document, undefined, cache);
   if (signal === undefined) return undefined;
+  // The content-hashing identity computation never reads from or writes to `cache` -- it is only
+  // ever consulted when `contentReader` is undefined (see `qualifiedArtifact`) -- so this always
+  // re-derives the full, uncached, content-verified identity, exactly as before this fix.
   const identity = operatorProvisioningIdentity(document, contentReader);
-  const confirmedSignal = operatorProvisioningIdentity(document);
+  const confirmedSignal = operatorProvisioningIdentity(document, undefined, cache);
   if (identity === undefined || confirmedSignal !== signal) return undefined;
   return { signal: confirmedSignal, identity };
 }
@@ -1792,19 +1923,26 @@ export function createOperatorProvisioningQualification(
   env: NodeJS.ProcessEnv,
   contentReader: DapArtifactContentReader = readFileSync,
 ): () => DebugProvisioning {
+  // Persists for the lifetime of the returned closure (one per BFF process), so the per-second
+  // watchdog signal check (issue: audit finding, full recursive walk every tick) amortizes to a
+  // single `lstat` per known artifact once the tree has been walked once, instead of a fresh
+  // `readdirSync` + multi-`stat` walk of the entire operator-configured runtimeClosure every call.
+  const cache: ArtifactWalkCache = { artifacts: new Map(), approvedRoots: new Map() };
   const initial = operatorDapDocument(env);
   const approved =
-    initial === undefined ? undefined : operatorProvisioningSnapshot(initial, contentReader);
+    initial === undefined
+      ? undefined
+      : operatorProvisioningSnapshot(initial, contentReader, undefined, cache);
   const approvedIdentity = approved?.identity;
   let cachedSignal = approved?.signal;
   let cachedIdentity = approvedIdentity;
   return (): DebugProvisioning => {
     const current = operatorDapDocument(env);
     if (approvedIdentity === undefined || current === undefined) return "notProvisioned";
-    const signal = operatorProvisioningIdentity(current);
+    const signal = operatorProvisioningIdentity(current, undefined, cache);
     if (signal === undefined) return "notProvisioned";
     if (signal !== cachedSignal) {
-      const snapshot = operatorProvisioningSnapshot(current, contentReader, signal);
+      const snapshot = operatorProvisioningSnapshot(current, contentReader, signal, cache);
       if (snapshot === undefined) return "notProvisioned";
       cachedSignal = snapshot.signal;
       cachedIdentity = snapshot.identity;
@@ -2410,6 +2548,12 @@ function createQualifiedDapProductionService(
         args.evidenceStore.put(
           `debug-runtime-failure-${randomUUID()}`,
           JSON.stringify({ schemaVersion: "1", kind: "debugRuntimeFailure" }),
+        );
+      },
+      onProjectionFailure: (): void => {
+        args.evidenceStore.put(
+          `debug-projection-failure-${randomUUID()}`,
+          JSON.stringify({ schemaVersion: "1", kind: "debugProjectionFailure" }),
         );
       },
     });

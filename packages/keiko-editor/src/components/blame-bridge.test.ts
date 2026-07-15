@@ -2,6 +2,7 @@ import type { GitEditorBlameResponse } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { registerEditorBlame, type MonacoBlameEditor } from "./blame-bridge.js";
+import { BLAME_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
 
 const RESPONSE: GitEditorBlameResponse = {
   schemaVersion: "1",
@@ -112,6 +113,33 @@ describe("registerEditorBlame", () => {
     bridge.toggle();
     expect(view.calls.at(-2)?.[1]).toEqual([]);
     expect(view.calls.at(-1)?.[1]).toEqual([]);
+  });
+
+  it("assigns its own glyph-margin lane so it never shares a DOM node with a breakpoint decoration on the same line (Epic #2096, ADR-0136 Target Outcome 5)", async () => {
+    const view = fixture();
+    registerEditorBlame({
+      editor: view.editor,
+      resolve: () => Promise.resolve(RESPONSE),
+      degraded: false,
+      glyphMarginTargetType: 7,
+      dirty: () => false,
+      describe: (line, age) => `${line.author} · ${age}`,
+      formatAge: () => "1 month ago",
+      labels: {
+        toggle: "Toggle blame",
+        openCommit: "Open commit",
+        dirtyNotice: "Blame reflects HEAD.",
+        truncated: "Blame was truncated.",
+      },
+      onCommit: vi.fn(),
+    });
+
+    view.run("keiko.editor.toggleBlame");
+    await flush();
+
+    expect(view.calls[0]?.[1][0]?.options.glyphMargin).toEqual({
+      position: BLAME_GLYPH_MARGIN_LANE,
+    });
   });
 
   it("opens a bounded commit by mouse and keyboard and ignores uncommitted lines", async () => {

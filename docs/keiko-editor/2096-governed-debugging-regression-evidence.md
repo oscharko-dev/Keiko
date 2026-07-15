@@ -78,12 +78,12 @@ The recorded artifact is
 
 | Budget                        | Result                                                              |
 | ----------------------------- | ------------------------------------------------------------------- |
-| B4 cold start                 | p50 893 ms; p95 894 ms (budgets 1500/2500 ms)                       |
+| B4 cold start                 | p50 1434 ms; p95 1604 ms (budgets 1500/2500 ms)                     |
 | B5 ordinary keystroke         | p95 0 ms; zero long tasks                                           |
-| B5 idle active DAP session    | p95 0 ms; zero long tasks; paused session; trace captured           |
-| B6 interaction                | p75 24 ms; max 32 ms (budget p75 200 ms)                            |
-| B11 memory                    | baseline, peak, and residual all 37,300,000 bytes across two cycles |
-| bounded workspace degradation | explicit `DOCUMENT_TOO_LARGE`, 413, truncated, 152 ms               |
+| B5 idle active DAP session    | p95 3 ms; zero long tasks; paused session; trace captured           |
+| B6 interaction                | p75 40 ms; max 40 ms (budget p75 200 ms)                            |
+| B11 memory                    | baseline, peak, and residual all 50,400,000 bytes across two cycles |
+| bounded workspace degradation | explicit `DOCUMENT_TOO_LARGE`, 413, truncated, 179 ms               |
 
 The Linux production static-export evidence was regenerated and immediately rechecked:
 

@@ -50,6 +50,24 @@ describe("createLspFrameReader", () => {
     expect(bodies.map((b) => b.toString("utf8"))).toEqual(['{"id":1}', '{"id":2}', '{"id":3}']);
   });
 
+  it("coalesces a frame-count-independent number of times when many frames arrive in one read (#2096 performance-sweep audit finding)", async () => {
+    // Before the fix, `drainFrames` re-coalesced the shrinking remainder (an O(remaining-bytes)
+    // `Buffer.concat`) once per *extracted* frame, so a batch of K frames coalesced into one
+    // physical read cost O(K x bytes) instead of the O(bytes) this codec is required to
+    // guarantee -- directly threatening ADR-0136 D12's output-flood responsiveness budget. A
+    // single physical chunk containing many small frames must still only concat a small, constant
+    // number of times, not once per frame.
+    const frameCount = 500;
+    const merged = Buffer.concat(
+      Array.from({ length: frameCount }, (_, index) => frame(`{"id":${String(index)}}`)),
+    );
+    const concatSpy = vi.spyOn(Buffer, "concat");
+    const bodies = await collect(createLspFrameReader(fromChunks([merged]), 1024));
+    expect(bodies).toHaveLength(frameCount);
+    expect(concatSpy.mock.calls.length).toBeLessThan(10);
+    concatSpy.mockRestore();
+  });
+
   it("reassembles a frame delivered across split chunks", async () => {
     const whole = frame('{"hello":"world"}');
     const mid = Math.floor(whole.length / 2);

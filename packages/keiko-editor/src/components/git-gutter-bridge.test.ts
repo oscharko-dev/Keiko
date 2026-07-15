@@ -7,6 +7,7 @@ import {
   type EditorGitGutterChanges,
   type MonacoGitGutterEditor,
 } from "./git-gutter-bridge.js";
+import { GIT_GUTTER_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
 
 const LABELS = {
   staged: "Staged change",
@@ -139,6 +140,25 @@ describe("registerEditorGitGutter", () => {
     });
     expect(unstaged?.options.description).toBe("Unstaged change: Deleted");
     expect(unstaged?.options.glyphMarginClassName).toContain("keiko-git-gutter-deleted");
+  });
+
+  it("assigns its own glyph-margin lane so it never shares a DOM node with a breakpoint decoration on the same line (Epic #2096, ADR-0136 Target Outcome 5)", async () => {
+    const fixture = editorFixture();
+    const resolve = vi
+      .fn<() => Promise<EditorGitGutterChanges>>()
+      .mockResolvedValue({ staged: [hunk("add", 2)], unstaged: [] });
+    registerEditorGitGutter({
+      editor: fixture.editor,
+      resolve,
+      labels: LABELS,
+      glyphMarginTargetType: 7,
+      degraded: false,
+      onPeek: vi.fn(),
+    });
+    await flush();
+
+    const staged = fixture.decorationCalls[0]?.[1][0];
+    expect(staged?.options.glyphMargin).toEqual({ position: GIT_GUTTER_GLYPH_MARGIN_LANE });
   });
 
   it("refreshes only on mount, focus, and explicit refresh and discards stale responses", async () => {

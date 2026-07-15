@@ -57,7 +57,7 @@
     "packages/keiko-server/src/editor/dap/debugLaunchCatalog.ts",
     "packages/keiko-server/src/editor/dap/debugLaunchContext.ts",
     "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts",
-    "packages/keiko-server/src/editor/dap/debugLaunchTopology.ts",
+    "packages/keiko-server/src/editor/dap/testing/debugLaunchTopology.ts",
     "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts",
     "packages/keiko-server/src/editor/dap/providers/dapAdapterProviders.ts",
     "packages/keiko-server/src/editor/dap/providers/nodeDebugAdapter.ts",

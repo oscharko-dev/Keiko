@@ -1697,6 +1697,10 @@ function EditorRuntimeWidget({
   const [debugSessionState, setDebugSessionState] = useState<
     import("./EditorDebugSessionHost").DebugSessionState | null
   >(null);
+  // Distinguishes an exception pause from an ordinary breakpoint/step pause for the shared status
+  // bar live region (status-bar.ts's isExceptionPause); DebugPanel renders the same distinction
+  // visually but deliberately never announces it (see its no-duplicate-live-region rationale).
+  const [debugPauseIsException, setDebugPauseIsException] = useState(false);
   const workspaceSnippets = useWorkspaceSnippets(root);
   // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
   // Monaco model registry. Every mounted editor surface renders this component, so the registry
@@ -4068,7 +4072,9 @@ function EditorRuntimeWidget({
       readOnly: largeFileDegraded,
       formatting: { available: formattingEnabled, source: builtinFormatting },
       ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
-      ...(debugSessionState === null ? {} : { debug: { state: debugSessionState } }),
+      ...(debugSessionState === null
+        ? {}
+        : { debug: { state: debugSessionState, isExceptionPause: debugPauseIsException } }),
     });
   };
   const statusBarViewModel = buildStatusBarViewModel();
@@ -5306,6 +5312,7 @@ function EditorRuntimeWidget({
   const debugSessionHost = enabledValueOrNull(
     debugEnabled,
     <EditorDebugSessionHost
+      root={root ?? ""}
       workspaceId={debugWorkspaceId}
       activationRevision={debugActivation?.revision}
       enabled={debugEnabled}
@@ -5313,6 +5320,7 @@ function EditorRuntimeWidget({
       onOpenDebugPanel={onOpenDebugPanel}
       onHostChange={setDebugEditorHost}
       onSessionStateChange={setDebugSessionState}
+      onExceptionPauseChange={setDebugPauseIsException}
     />,
   );
 

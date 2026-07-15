@@ -18,6 +18,7 @@ import {
   type InstrumentationSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
+import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import { savePrivateJson } from "../../private-json.js";
 import {
   BREAKPOINT_STORE_LIMITS,
@@ -642,6 +643,43 @@ describe("canonical breakpoint and watch persistence", () => {
     const rejected = setWatches(store, root, [watch(1)]);
     expect(rejected).toMatchObject({ ok: false, reason: "state_unavailable", snapshot: before });
     expect(currentSnapshot(createBreakpointStore({ stateDir }), root)).toEqual(before);
+  });
+
+  it("emits a redacted operator diagnostic when persisting instrumentation state throws", () => {
+    const stateDir = temporaryDirectory("debug-state-save-diagnostic");
+    const root = temporaryDirectory("debug-workspace-save-diagnostic");
+    const secret = "SENTINEL_DISK_FAULT_ENOSPC";
+    const records: ServerDiagnosticRecord[] = [];
+    let fail = false;
+    let id = 0;
+    const store = createBreakpointStore({
+      stateDir,
+      idFactory: () => `diag_${String(id++)}`,
+      save: (path, value): void => {
+        if (fail) throw new Error(secret);
+        savePrivateJson(path, value);
+      },
+      diagnosticSink: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    expect(setBreakpoints(store, root, "a.ts", [breakpoint(1)]).ok).toBe(true);
+    fail = true;
+
+    const rejected = setWatches(store, root, [watch(1)]);
+
+    expect(rejected).toMatchObject({ ok: false, reason: "state_unavailable" });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: breakpointStoreWorkspaceFingerprint(root),
+      operation: "dap.breakpoint-store.commit",
+      source: "breakpointStore.commitRecord",
+      message: "Persisting debug instrumentation state failed.",
+    });
+    expect(JSON.stringify(records)).not.toContain(secret);
+    expect(JSON.stringify(records)).not.toContain(root);
   });
 
   it("clears atomically and increments revision only when canonical state changes", () => {

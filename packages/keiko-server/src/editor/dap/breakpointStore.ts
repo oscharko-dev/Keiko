@@ -12,6 +12,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
 
 const MAX_RECORD_BYTES = 512 * 1024;
@@ -139,6 +144,7 @@ export interface BreakpointStoreOptions {
   readonly read?: ((path: string) => string) | undefined;
   readonly size?: ((path: string) => number) | undefined;
   readonly idFactory?: (() => string) | undefined;
+  readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -714,6 +720,13 @@ function serializedRecordFits(record: InstrumentationRecord): boolean {
   return utf8Bytes(JSON.stringify(recordForWrite(record))) <= MAX_RECORD_BYTES;
 }
 
+// A blanket catch here is deliberate: the client-visible contract is fail-closed regardless of
+// *why* the write failed (prior atomic state stays authoritative — see breakpointStore.test.ts).
+// But an operator otherwise has no way to tell a genuine disk fault (permission revoked, ENOSPC,
+// filesystem gone read-only) apart from a routine "state not found" condition, since every later
+// mutation for this workspace would silently repeat the same rejection. Emit a redacted diagnostic
+// so the failure is diagnosable without ever surfacing raw content to the caller (mirrors the
+// managed-LSP evidence-projection precedent in managedLspControlFactory.ts).
 function commitRecord(
   realRoot: string,
   record: InstrumentationRecord,
@@ -725,7 +738,17 @@ function commitRecord(
   try {
     (options.save ?? savePrivateJson)(path, recordForWrite(record));
     return true;
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      options.diagnosticSink,
+      serverDiagnosticFromError({
+        correlationId: record.workspaceFingerprint,
+        operation: "dap.breakpoint-store.commit",
+        source: "breakpointStore.commitRecord",
+        error,
+        redact: () => "Persisting debug instrumentation state failed.",
+      }),
+    );
     return false;
   }
 }

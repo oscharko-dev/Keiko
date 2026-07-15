@@ -163,6 +163,51 @@ describe("DebuggingSettings", () => {
     await waitFor(() => expect(debuggingView.current.setEnabled).toHaveBeenCalledWith(false));
   });
 
+  it("closes the confirm dialog on Escape and restores focus to the toggle", async () => {
+    // Epic #2096 a11y-sweep finding 2: this dialog had aria-modal="true" but no Escape handler,
+    // unlike this repo's other confirm-a-destructive-toggle dialogs (e.g. ForgetConfirmDialog).
+    debuggingView.current = view({
+      summary: summary("available", "AVAILABLE"),
+      enabled: true,
+      canEnable: false,
+      canDisable: true,
+    });
+    renderPanel();
+    const toggle = screen.getByRole("switch", { name: "Enable debugging for this workspace" });
+    toggle.focus();
+    fireEvent.click(toggle);
+
+    const cancelButton = await screen.findByRole("button", { name: "Cancel" });
+    expect(cancelButton).toHaveFocus();
+    fireEvent.keyDown(cancelButton, { key: "Escape" });
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(toggle).toHaveFocus());
+    expect(debuggingView.current.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it("traps Tab focus inside the confirm dialog instead of leaking to the page behind it", async () => {
+    debuggingView.current = view({
+      summary: summary("available", "AVAILABLE"),
+      enabled: true,
+      canEnable: false,
+      canDisable: true,
+    });
+    renderPanel();
+    fireEvent.click(screen.getByRole("switch", { name: "Enable debugging for this workspace" }));
+
+    await screen.findByRole("alertdialog");
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    const confirmButton = screen.getByRole("button", { name: "Disable debugging" });
+    expect(cancelButton).toHaveFocus();
+
+    fireEvent.keyDown(cancelButton, { key: "Tab", shiftKey: true });
+    expect(confirmButton).toHaveFocus();
+
+    fireEvent.keyDown(confirmButton, { key: "Tab" });
+    expect(cancelButton).toHaveFocus();
+  });
+
   it("does not show a workspace control before a workspace is selected", () => {
     render(
       <I18nProvider>
