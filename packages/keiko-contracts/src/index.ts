@@ -684,6 +684,50 @@ export {
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 
+// ─── Managed isolated worker host (Issue #2443, Epic #2384, ADR-0137) ─────────────────────────
+export type {
+  ManagedRuntimePlatformTarget,
+  ManagedRuntimeControllerKind,
+  ManagedRuntimeBundleDescriptor,
+  ManagedRuntimeUnavailableReason,
+  ManagedRuntimeRemediation,
+  ManagedRuntimeRecoveryState,
+  ManagedRuntimeRecoveryTrigger,
+  ManagedRuntimeLifecycleKind,
+  ManagedRuntimeLifecycleReason,
+  ManagedRuntimeAvailableObservation,
+  ManagedRuntimeUnavailableObservation,
+  ManagedRuntimeCapabilityObservation,
+  ManagedRuntimeLifecycleObservation,
+  ManagedRuntimeRecoveryObservation,
+  ManagedRuntimeLaunchRequest,
+  ManagedRuntimeParse,
+} from "./managed-runtime-host.js";
+export {
+  MANAGED_RUNTIME_HOST_SCHEMA_VERSION,
+  MANAGED_RUNTIME_HOST_DEADLINE_MS,
+  MANAGED_RUNTIME_RUNTIME_ENV_NAMES,
+  MANAGED_RUNTIME_ISOLATION_PROFILE,
+  MANAGED_RUNTIME_ISOLATION_PROFILE_CANONICAL_JSON,
+  MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
+  MANAGED_RUNTIME_PLATFORM_TARGETS,
+  MANAGED_RUNTIME_CONTROLLER_KINDS,
+  MANAGED_RUNTIME_CAPABILITY_STATES,
+  MANAGED_RUNTIME_UNAVAILABLE_REASONS,
+  MANAGED_RUNTIME_REMEDIATIONS,
+  MANAGED_RUNTIME_RECOVERY_STATES,
+  MANAGED_RUNTIME_RECOVERY_TRIGGERS,
+  MANAGED_RUNTIME_EMPTY_INVENTORY_DIGEST,
+  MANAGED_RUNTIME_DIGEST_DOMAINS,
+  MANAGED_RUNTIME_LIFECYCLE_KINDS,
+  MANAGED_RUNTIME_LIFECYCLE_REASONS,
+  parseManagedRuntimeBundleDescriptor,
+  parseManagedRuntimeCapabilityObservation,
+  parseManagedRuntimeLifecycleObservation,
+  parseManagedRuntimeRecoveryObservation,
+  parseManagedRuntimeLaunchRequest,
+} from "./managed-runtime-host.js";
+
 // ─── Governed debug browser wire contracts (Issue #2345, Epic #2096, ADR-0136) ───────────────
 export type {
   DebugSessionStatus,
