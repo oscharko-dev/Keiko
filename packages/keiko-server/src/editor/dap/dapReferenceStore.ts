@@ -2,6 +2,16 @@ import { randomBytes } from "node:crypto";
 
 import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts";
 
+// Ownership note (ADR-0136 "Child ownership and implementation order"): the ADR's child-ownership
+// table lists "pause references" under #2345 (contracts and routes), while this module lives in
+// #2343's candidate-file scope. That is intentional, not an oversight: pause-reference minting is
+// bound one-to-one to the session's pauseGeneration counter that #2343's debugSessionRegistry.ts
+// owns (D6 -- references invalidate on every pause-generation change), so it is co-located here
+// with the state it is derived from rather than re-derived at a distance. This module is the sole
+// canonical authority for stack/scope/variable/cursor reference minting and resolution; the routes
+// layer (dapDebugRoutes.ts, #2345's surface) already composes it via createDebugReferenceStore()
+// instead of tracking its own references. Any future #2345/#2346/#2347 work must keep reusing this
+// store -- do not add a second reference-minting mechanism elsewhere.
 export const DEBUG_REFERENCE_CAP = 1_000;
 const TOKEN_BYTES = 24;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/u;

@@ -1,4 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { DebugLifecycleEvidence, EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import { createDapEvidenceProjector } from "./dapEvidenceProjector.js";
 import { createDapEventBridge, type DapEventBridge } from "./dapEventBridge.js";
 import { createDapLifecycleLedger, type DapLifecycleLedger } from "./dapLifecycleLedger.js";
@@ -73,10 +79,20 @@ export interface DapProductionServiceDeps {
   readonly emitOutputLimit: (event: DebugOutputLimitEvent) => Promise<void> | void;
   readonly endpoint?: DapPrivateEndpointDeps | undefined;
   readonly platform?: NodeJS.Platform | undefined;
+  // Optional secondary observer invoked after the live-evidence-projection failure diagnostic has
+  // already been emitted (see `reportProjectionFailure`) -- a composition may leave this unset and
+  // still get the automatic diagnostic trail; supply it only to also react to the failure (e.g.
+  // recording a redacted evidence entry, as `deps.ts` does for parity with `onRuntimeFailure`).
   readonly onProjectionFailure?: ((error: unknown) => void) | undefined;
   readonly onRuntimeFailure: (error: unknown) => void;
   readonly expirySweepIntervalMs?: number | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
+  // Optional operator diagnostic sink (defaults to the redaction-safe stderr sink in
+  // diagnostics-log.ts). Background runtime failures and live-evidence-projection failures always
+  // route through it -- see `reportRuntimeFailure` / `reportProjectionFailure` -- so every
+  // composition of this service gets a diagnosable trail without having to reimplement the pattern
+  // in its own `onRuntimeFailure` / `onProjectionFailure` callback.
+  readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
 export interface DapProductionService {
@@ -170,7 +186,9 @@ function composeDapProductionService(
   const lifecycleLedger = factories.createLifecycleLedger({
     appendJournal: deps.appendJournal,
     projectLive: (partition, projection) => projector.project(partition, projection),
-    onProjectionFailure: deps.onProjectionFailure,
+    onProjectionFailure: (error) => {
+      reportProjectionFailure(deps, "dapProductionService.projectLive", error);
+    },
   });
   const registry = factories.createRegistry({
     appendEvidence: (partition, evidence) =>
@@ -203,6 +221,55 @@ function composeDapProductionService(
   return Object.freeze({ manager, registry, lifecycleLedger, eventBridge, dispose });
 }
 
+// The DAP-hardening invariant is that a background runtime failure must never vanish silently
+// (AGENTS.md "no silent failures"): every caller of `onRuntimeFailure` -- the periodic
+// sweep/reconcile cadence and the disposer's bounded shutdown -- is fixed at this one owning layer
+// rather than trusting each composition of this service to reimplement the diagnostic separately.
+// The message is a fixed, generic string (never the raw error text) so this stays content-free even
+// though no live redactor is threaded through the production wiring; errorClass/code still surface.
+function reportRuntimeFailure(
+  deps: DapProductionServiceDeps,
+  source: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: `dap-runtime-failure-${randomUUID()}`,
+      operation: "dap.production.runtime-failure",
+      source,
+      error,
+      redact: () => "DAP production background operation failed.",
+    }),
+  );
+  deps.onRuntimeFailure(error);
+}
+
+// Same "never vanish silently" invariant as `reportRuntimeFailure`, applied to the live-evidence
+// projection path: `dapLifecycleLedger.ts` treats `onProjectionFailure` as a best-effort, optional
+// observer (the durable canonical journal write already succeeded and is unaffected), so a
+// composition that leaves it unset must not go completely silent. Emitting the diagnostic here --
+// unconditionally, before the optional `deps.onProjectionFailure` hook -- means every composition of
+// this service gets an operator-visible correlation-id'd trail by default, exactly like runtime
+// failures, without requiring each call site to reimplement it.
+function reportProjectionFailure(
+  deps: DapProductionServiceDeps,
+  source: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: `dap-projection-failure-${randomUUID()}`,
+      operation: "dap.production.projection-failure",
+      source,
+      error,
+      redact: () => "DAP live-evidence projection failed.",
+    }),
+  );
+  deps.onProjectionFailure?.(error);
+}
+
 function createDapServiceDisposer(
   manager: DapProcessManager,
   eventBridge: DapEventBridge,
@@ -216,7 +283,7 @@ function createDapServiceDisposer(
       .sweepExpired()
       .then(() => manager.reconcile())
       .catch((error: unknown) => {
-        deps.onRuntimeFailure(error);
+        reportRuntimeFailure(deps, "dapProductionService.sweep", error);
       })
       .finally(() => {
         sweep = undefined;
@@ -265,7 +332,7 @@ async function disposeDapService(
       deps.shutdownTimeoutMs ?? 5_000,
     );
   } catch (error: unknown) {
-    deps.onRuntimeFailure(error);
+    reportRuntimeFailure(deps, "dapProductionService.dispose", error);
   } finally {
     eventBridge.disposeAll();
   }

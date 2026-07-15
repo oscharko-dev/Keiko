@@ -1,16 +1,88 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { createDapFrameReader, writeDapFrame } from "../dapFrameCodec.js";
 import { superviseCapsuleTermination } from "../dapCapsuleSupervisor.js";
+import type { Layer2DebugCapsulePlan } from "../debugCapsulePlan.js";
+import {
+  connectPrivateDapEndpoint,
+  createNodeDapPrivateEndpointDeps,
+} from "../dapPrivateEndpoint.js";
+import { createDapProtocolClient } from "../dapProtocolClient.js";
 import { fakeDapAdapterScriptPath, fakeNodeAdapterProvider } from "./adapterConformanceFixture.js";
 
 function request(seq: number, command: string, args: object = {}): string {
   return JSON.stringify({ seq, type: "request", command, arguments: args });
+}
+
+function fixtureEndpointPlan(
+  runtimeDirectory: string,
+  socketPath: string,
+  identity: {
+    readonly device: number;
+    readonly inode: number;
+    readonly mode: number;
+    readonly ownerUid: number;
+  },
+): Layer2DebugCapsulePlan {
+  return {
+    schemaVersion: "1",
+    planId: "plan_fixture",
+    workspacePartitionKey: "partition_a",
+    activationRevision: 1,
+    targetKind: "file",
+    provisioningDigest: "a".repeat(64),
+    backend: "oci",
+    runtimeIdentityDigest: "b".repeat(64),
+    spawnEnvelope: {
+      runtimeDirectoryIdentity: {
+        realPath: runtimeDirectory,
+        identityDigest: "runtime_fixture",
+        device: identity.device,
+        inode: identity.inode,
+        mode: identity.mode,
+        ownerUid: identity.ownerUid,
+      },
+    },
+    endpoint: {
+      kind: "posixSocket",
+      hostRuntimeDirectory: runtimeDirectory,
+      hostSocketPath: socketPath,
+      capsuleRuntimeDirectory: "/run/keiko-debug",
+      capsuleSocketPath: "/run/keiko-debug/dap.sock",
+      runtimeIdentity: "runtime_fixture",
+    },
+    capsule: {
+      runtimeMount: {
+        hostPath: runtimeDirectory,
+        capsulePath: "/run/keiko-debug",
+        mode: "0700",
+        writable: true,
+      },
+      runtimeIdentityDigest: "b".repeat(64),
+    },
+    attestation: {
+      filesystem: "executionRoot",
+      network: "none",
+      processScope: "capsule",
+      runtimeDirectoryMode: "0700",
+      endpointOwnership: "currentUser",
+    },
+    launchRequest: { command: "launch", arguments: { request: "launch" } },
+  } as unknown as Layer2DebugCapsulePlan;
 }
 
 describe("fake DAP adapter conformance", () => {
@@ -34,6 +106,59 @@ describe("fake DAP adapter conformance", () => {
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "completes a real DAP handshake with the fixture adapter over the private Unix-domain-socket transport",
+    async () => {
+      const runtime = realpathSync(mkdtempSync(join(tmpdir(), "keiko-dap-fake-socket-")));
+      chmodSync(runtime, 0o700);
+      const socketPath = join(runtime, "dap.sock");
+      const child = spawn(
+        process.execPath,
+        [fakeDapAdapterScriptPath(), `--socket=${socketPath}`],
+        {
+          stdio: "ignore",
+        },
+      );
+      try {
+        const stats = lstatSync(runtime);
+        const plan = fixtureEndpointPlan(runtime, socketPath, {
+          device: stats.dev,
+          inode: stats.ino,
+          mode: stats.mode,
+          ownerUid: stats.uid,
+        });
+        const connection = await connectPrivateDapEndpoint(
+          plan,
+          createNodeDapPrivateEndpointDeps(),
+        );
+        const client = createDapProtocolClient({
+          source: connection.source,
+          sendFrame: connection.sendFrame,
+        });
+        try {
+          await expect(client.controlRequest("initialize", {}, 5_000)).resolves.toMatchObject({
+            supportsSetVariable: true,
+          });
+          await client.controlRequest("launch", { request: "launch" }, 5_000);
+          const stopped = new Promise((resolve) => {
+            client.onStopped((event) => {
+              resolve(event);
+            });
+          });
+          await client.controlRequest("configurationDone", {}, 5_000);
+          await expect(stopped).resolves.toMatchObject({ reason: "breakpoint" });
+        } finally {
+          client.dispose();
+          await connection.close();
+        }
+      } finally {
+        child.kill("SIGKILL");
+        await once(child, "exit");
+        rmSync(runtime, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("pins the provider to the hermetic fixture", () => {
     expect(fakeNodeAdapterProvider().executableArgs).toStrictEqual([fakeDapAdapterScriptPath()]);

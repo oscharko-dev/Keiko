@@ -1,6 +1,7 @@
 import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 
 import type { MonacoDisposable, MonacoRange } from "./completion-bridge.js";
+import { DEBUG_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
 
 export type EditorDebugBreakpointAction =
   "toggle" | "toggleConditional" | "editLogpoint" | "toggleEnabled";
@@ -11,6 +12,14 @@ export interface EditorDebugBreakpointLabels {
   readonly logpoint: string;
   readonly enable: string;
   readonly disable: string;
+  /**
+   * Hover/description text for the current-execution-line marker (see {@link DEFAULT_CURRENT_LINE_LABEL}
+   * for the fallback). Shown when the session is paused on a line with no breakpoint at all — after
+   * Step Over/Into/Out, or an uncaught exception on an unbroken line — so the paused location always
+   * has a gutter affordance, not only the (possibly closed) Call Stack panel. Optional so existing
+   * label sets built before this marker existed remain valid.
+   */
+  readonly currentLine?: string | undefined;
 }
 
 export interface EditorDebugBreakpointContext {
@@ -37,6 +46,7 @@ interface MonacoGutterDecoration {
     readonly description: string;
     readonly glyphMarginClassName: string;
     readonly glyphMarginHoverMessage: { readonly value: string };
+    readonly glyphMargin: { readonly position: number };
     readonly isWholeLine: true;
   };
 }
@@ -111,6 +121,26 @@ function decoration(
       description: label,
       glyphMarginClassName: classes.join(" "),
       glyphMarginHoverMessage: { value: label },
+      glyphMargin: { position: DEBUG_GLYPH_MARGIN_LANE },
+      isWholeLine: true,
+    },
+  };
+}
+
+const DEFAULT_CURRENT_LINE_LABEL = "Current execution line";
+
+// A shape-distinct marker (not merely the -hit ring color; see debug-monaco-styles.ts) for the
+// paused execution point. Emitted only when no breakpoint decoration already occupies that line, so
+// a step (Step Over/Into/Out) or an uncaught exception on an unbroken line still leaves a gutter
+// affordance at the paused location instead of no marker at all (Epic #2096 a11y-sweep finding 4).
+function currentLineDecoration(line: number, label: string): MonacoGutterDecoration {
+  return {
+    range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+    options: {
+      description: label,
+      glyphMarginClassName: "keiko-debug-current-line",
+      glyphMarginHoverMessage: { value: label },
+      glyphMargin: { position: DEBUG_GLYPH_MARGIN_LANE },
       isWholeLine: true,
     },
   };
@@ -135,6 +165,8 @@ function actionForLine(
   if (action === "toggleEnabled" && breakpoint !== undefined)
     host.onToggleBreakpointEnabled(breakpoint);
 }
+
+const TOGGLE_ENABLED_ACTION_ID = "keiko.editor.debugToggleBreakpointEnabled";
 
 function gutterActionDescriptors(
   host: EditorDebugBreakpointHost,
@@ -162,23 +194,59 @@ function gutterActionDescriptors(
       host.labels.conditional,
     ),
     entry("editLogpoint", "keiko.editor.debugEditLogpoint", host.labels.logpoint),
-    entry("toggleEnabled", "keiko.editor.debugToggleBreakpointEnabled", host.labels.disable),
   ];
+}
+
+// Monaco's editor.addAction() descriptor takes a fixed label string; there is no live-relabel
+// primitive for an already-registered action. A static "Disable Breakpoint" label would misreport
+// the command's actual effect whenever the cursor sits on a currently-disabled breakpoint (it would
+// enable it, not disable it) — unlike the right-click context menu, which recomputes its label from
+// live state on every open. This action is therefore disposed and re-added (with a freshly computed
+// label for the current cursor line) every time the gutter refreshes, which is the same cadence the
+// glyph decorations already use to stay in sync with the live breakpoint set.
+function toggleEnabledLabel(
+  host: EditorDebugBreakpointHost,
+  editor: MonacoBreakpointGutterEditor,
+): string {
+  const line = editor.getPosition()?.lineNumber;
+  const breakpoint =
+    line === undefined ? undefined : breakpointAtLine(host.resolveBreakpoints(), line);
+  return breakpoint?.enabled === false ? host.labels.enable : host.labels.disable;
+}
+
+function registerToggleEnabledAction(
+  host: EditorDebugBreakpointHost,
+  editor: MonacoBreakpointGutterEditor,
+): MonacoDisposable {
+  return editor.addAction({
+    id: TOGGLE_ENABLED_ACTION_ID,
+    label: toggleEnabledLabel(host, editor),
+    run: (): void => {
+      const line = editor.getPosition()?.lineNumber;
+      if (line !== undefined) actionForLine(host, line, "toggleEnabled");
+    },
+  });
 }
 
 export function registerEditorBreakpointGutter(
   args: RegisterEditorBreakpointGutterArgs,
 ): EditorBreakpointGutterBridge {
   let decorationIds: string[] = [];
+  let toggleEnabledAction: MonacoDisposable | null = null;
   const refresh = (): void => {
-    decorationIds = args.editor.deltaDecorations(
-      decorationIds,
-      args
-        .resolveBreakpoints()
-        .map((breakpoint) =>
-          decoration(breakpoint, args.resolvePausedLine?.() ?? args.pausedLine, args.labels),
-        ),
+    const breakpoints = args.resolveBreakpoints();
+    const pausedLine = args.resolvePausedLine?.() ?? args.pausedLine;
+    const decorations = breakpoints.map((breakpoint) =>
+      decoration(breakpoint, pausedLine, args.labels),
     );
+    if (pausedLine !== undefined && breakpointAtLine(breakpoints, pausedLine) === undefined) {
+      decorations.push(
+        currentLineDecoration(pausedLine, args.labels.currentLine ?? DEFAULT_CURRENT_LINE_LABEL),
+      );
+    }
+    decorationIds = args.editor.deltaDecorations(decorationIds, decorations);
+    toggleEnabledAction?.dispose();
+    toggleEnabledAction = registerToggleEnabledAction(args, args.editor);
   };
   const mouse = args.editor.onMouseDown((event) => {
     const line = event.target.position?.lineNumber;
@@ -200,6 +268,7 @@ export function registerEditorBreakpointGutter(
     dispose(): void {
       mouse.dispose();
       for (const action of actions) action.dispose();
+      toggleEnabledAction?.dispose();
       decorationIds = args.editor.deltaDecorations(decorationIds, []);
     },
   };

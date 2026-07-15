@@ -1,6 +1,7 @@
 import type { GitEditorBlameLine, GitEditorBlameResponse } from "@oscharko-dev/keiko-contracts";
 
 import type { MonacoDisposable, MonacoRange } from "./completion-bridge.js";
+import { BLAME_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
 
 export interface EditorBlameLabels {
   readonly toggle: string;
@@ -23,6 +24,7 @@ interface MonacoBlameDecoration {
     readonly description: string;
     readonly glyphMarginClassName?: string;
     readonly glyphMarginHoverMessage?: { readonly value: string };
+    readonly glyphMargin?: { readonly position: number };
     readonly after?: { readonly content: string };
     readonly isWholeLine: true;
   };
@@ -81,6 +83,7 @@ function lineDecoration(
       description,
       glyphMarginClassName: "keiko-blame-gutter",
       glyphMarginHoverMessage: { value: description },
+      glyphMargin: { position: BLAME_GLYPH_MARGIN_LANE },
       after: { content: `  ${args.describe(line, args.formatAge(line.authorTime))}` },
       isWholeLine: true,
     },

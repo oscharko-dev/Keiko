@@ -196,12 +196,42 @@ describe("deriveEditorStatusBar debug field", () => {
     expect(view.alertSummary).toContain("Debug session paused");
   });
 
+  it("distinguishes an exception pause from an ordinary breakpoint pause in the assertive summary", () => {
+    // Without this distinction a screen-reader user hears the identical "Debug session paused" for
+    // an uncaught exception and for a routine breakpoint hit — the one moment sighted users can tell
+    // apart via DebugPanel's visible "Exception: ..." text becomes indistinguishable by ear.
+    const exceptionView = deriveEditorStatusBar(
+      input({ debug: { state: "paused", isExceptionPause: true } }),
+    );
+    expect(field(exceptionView, "debug")).toMatchObject({ tone: "error", assertive: true });
+    expect(field(exceptionView, "debug")?.ariaLabel).toContain("exception");
+    expect(exceptionView.alertSummary).toContain("exception");
+
+    const ordinaryView = deriveEditorStatusBar(input({ debug: { state: "paused" } }));
+    expect(field(ordinaryView, "debug")?.ariaLabel).not.toContain("exception");
+    expect(ordinaryView.alertSummary).not.toContain("exception");
+
+    const explicitlyNotException = deriveEditorStatusBar(
+      input({ debug: { state: "paused", isExceptionPause: false } }),
+    );
+    expect(field(explicitlyNotException, "debug")?.ariaLabel).not.toContain("exception");
+  });
+
   it("announces running and stopped state politely without a second live surface", () => {
     const running = deriveEditorStatusBar(input({ debug: { state: "running" } }));
     const stopped = deriveEditorStatusBar(input({ debug: { state: "stopped" } }));
     expect(running.liveSummary).toContain("Debug running");
     expect(stopped.liveSummary).toContain("Debug session stopped");
     expect(running.alertSummary).toBe("");
+  });
+
+  it("labels an in-flight stop distinctly from a session that is still starting", () => {
+    const view = deriveEditorStatusBar(input({ debug: { state: "stopping" } }));
+    expect(field(view, "debug")).toMatchObject({ id: "debug", tone: "accent", live: true });
+    expect(field(view, "debug")?.label).toBe("Debug stopping");
+    expect(view.liveSummary).toContain("Debug session stopping");
+    expect(view.liveSummary).not.toContain("Debug starting");
+    expect(view.alertSummary).toBe("");
   });
 });
 

@@ -1,3 +1,22 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const fsOverrides = vi.hoisted(() => ({
+  inaccessiblePath: undefined as string | undefined,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    accessSync: (...args: Parameters<typeof actual.accessSync>): void => {
+      if (String(args[0]) === fsOverrides.inaccessiblePath) {
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      }
+      actual.accessSync(...args);
+    },
+  };
+});
+
 import {
   chmodSync,
   existsSync,
@@ -9,7 +28,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   EditorProcessHardeningError,
@@ -148,6 +166,30 @@ describe("editor process executable resolution", () => {
         "linux",
       ),
     ).toBe(realpathSync(expected));
+  });
+
+  it("skips a candidate whose execute bit is set but is not executable by this uid", () => {
+    const first = temporary("keiko-shared-noaccess-");
+    const second = temporary("keiko-shared-exec-");
+    const root = temporary("keiko-shared-ws-");
+    // The mode bits report an execute bit for owner/group/other, but the OS-level
+    // accessSync(X_OK) check is what actually governs this uid's ability to execute it
+    // (ownership, ACLs, and noexec mounts all live outside the raw mode bitmask).
+    const blocked = executable(first, "adapter");
+    const expected = executable(second, "adapter");
+    fsOverrides.inaccessiblePath = blocked;
+    try {
+      expect(
+        resolveExecutableOutsideWorkspace(
+          "adapter",
+          workspace(root),
+          { PATH: [first, second].join(delimiter) },
+          "linux",
+        ),
+      ).toBe(realpathSync(expected));
+    } finally {
+      fsOverrides.inaccessiblePath = undefined;
+    }
   });
 
   it("rejects lexical and symlink-resolved workspace candidates", () => {

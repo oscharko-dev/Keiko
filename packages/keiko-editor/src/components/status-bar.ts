@@ -74,6 +74,15 @@ export interface EditorStatusRun {
 export interface EditorStatusDebug {
   readonly state:
     "reserved" | "starting" | "running" | "paused" | "stopping" | "stopped" | "failed" | "revoked";
+  /**
+   * True when a `paused` state was reached because of an uncaught/thrown exception rather than an
+   * ordinary breakpoint, step, or explicit pause request. This is a categorical flag, not the
+   * exception's message or value, so it keeps the projection content-free while letting the single
+   * shared live region distinguish the one highest-signal debugging moment from a routine pause —
+   * the same distinction DebugPanel already renders visually (its "Exception: ..." paragraph) but,
+   * by design, never announces itself (see DebugPanel.tsx's no-duplicate-live-region rationale).
+   */
+  readonly isExceptionPause?: boolean | undefined;
 }
 
 export interface EditorStatusLanguageService {
@@ -265,18 +274,33 @@ function runField(run: EditorStatusRun | undefined): EditorStatusField | null {
   };
 }
 
-export function debugField(debug: EditorStatusDebug | undefined): EditorStatusField | null {
-  if (debug === undefined) return null;
-  if (debug.state === "paused") {
+// A paused session is announced distinctly when the pause was caused by an uncaught exception —
+// otherwise a screen-reader user hears the identical "Debug session paused" for that highest-signal
+// moment and for a routine breakpoint hit (Epic #2096 a11y-sweep finding 3).
+function pausedDebugField(isExceptionPause: boolean | undefined): EditorStatusField {
+  if (isExceptionPause === true) {
     return {
       id: "debug",
-      label: "Debug paused",
-      ariaLabel: "Debug session paused",
-      tone: "accent",
+      label: "Debug paused: exception",
+      ariaLabel: "Debug session paused by an uncaught exception",
+      tone: "error",
       live: true,
       assertive: true,
     };
   }
+  return {
+    id: "debug",
+    label: "Debug paused",
+    ariaLabel: "Debug session paused",
+    tone: "accent",
+    live: true,
+    assertive: true,
+  };
+}
+
+export function debugField(debug: EditorStatusDebug | undefined): EditorStatusField | null {
+  if (debug === undefined) return null;
+  if (debug.state === "paused") return pausedDebugField(debug.isExceptionPause);
   if (debug.state === "failed" || debug.state === "revoked") {
     return {
       id: "debug",
@@ -293,6 +317,16 @@ export function debugField(debug: EditorStatusDebug | undefined): EditorStatusFi
       label: "Debug stopped",
       ariaLabel: "Debug session stopped",
       tone: "default",
+      live: true,
+      assertive: false,
+    };
+  }
+  if (debug.state === "stopping") {
+    return {
+      id: "debug",
+      label: "Debug stopping",
+      ariaLabel: "Debug session stopping",
+      tone: "accent",
       live: true,
       assertive: false,
     };

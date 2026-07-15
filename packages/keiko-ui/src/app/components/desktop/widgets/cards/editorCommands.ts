@@ -217,9 +217,16 @@ const VERIFICATION_CODE_EXTENSIONS: readonly string[] = [
   ".cjs",
 ];
 
+// Shared with the debug-launch seam (`debugLaunchTarget.ts`, epic #2096/ADR-0136 D4): a recognized
+// test file prefers the discovered npm test script over a bare file launch, reusing this exact rule
+// rather than growing a second test-file heuristic.
+export function isTestFilePath(path: string): boolean {
+  return VERIFICATION_TEST_MARKER.test(path);
+}
+
 export function resolveVerificationTarget(activeFile: string | null): string | null {
   if (activeFile === null || activeFile.length === 0) return null;
-  if (VERIFICATION_TEST_MARKER.test(activeFile)) return activeFile;
+  if (isTestFilePath(activeFile)) return activeFile;
   const dot = activeFile.lastIndexOf(".");
   if (dot <= 0) return null;
   const ext = activeFile.slice(dot);
