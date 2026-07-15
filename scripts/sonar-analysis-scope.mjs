@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -329,7 +329,7 @@ export function sourceEncodingFailures({ files, nativeEntries, readText }) {
   });
 }
 
-function trackedFiles(root, execute = execFileSync) {
+function trackedFiles(root, execute = execFileSync, fileExists = existsSync) {
   return execute(
     systemGitExecutable(),
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -339,14 +339,15 @@ function trackedFiles(root, execute = execFileSync) {
     },
   )
     .split("\0")
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((path) => fileExists(resolve(root, path)));
 }
 
 function resolveScopeInputs(input) {
   const root = input.root ?? process.cwd();
   const read = input.read ?? readFileSync;
   return {
-    files: input.files ?? trackedFiles(root, input.execute),
+    files: input.files ?? trackedFiles(root, input.execute, input.fileExists),
     nativeEntries: input.nativeEntries ?? readNativeScope(root, read),
     properties: input.properties ?? read(resolve(root, "sonar-project.properties"), "utf8"),
     root,

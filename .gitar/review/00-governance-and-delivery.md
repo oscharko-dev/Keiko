@@ -16,7 +16,7 @@ invariants:
 - A local human selects or accepts the task, mode, Authority Envelope, and deployment ceiling.
 - Invalid, expired, missing, exhausted, unsupported, workspace-escaping, sensitive-path, secret-
   exfiltrating, or platform-restricted authority fails closed in every mode.
-- Accepted `dev` work may commit and push its feature branch, maintain the PR, and run Auto-Apply
+- Accepted `dev` work may commit and push its feature branch, maintain the PR, and repair findings
   without per-action human approval. Direct `dev` pushes and force pushes remain denied.
 - A raw bot approval or processing check is not final merge authority. Only the direct app-bound
   required checks on the exact current head authorize GitHub native auto-merge.
@@ -30,6 +30,17 @@ Apply owning-layer fixes to the PR branch, add deterministic negative or boundar
 the complete review after each push. Never force-push, push directly to `dev`, use `gitar unblock`,
 dismiss findings to obtain green status, arm auto-merge before direct required checks settle, or
 weaken a gate.
+
+Gitar is advisory and operates within the Core plan. Do not block merges, auto-approve, apply an
+approval label, arm auto-merge, or assume Auto-Apply is available. When automatic processing is
+paused, an accepted delivery agent may invoke `gitar review` once on the final candidate head; this
+does not require a human handoff. Any later commit invalidates that review and requires a fresh
+current-head run.
+
+A clean verdict requires every finding at every severity to be resolved. It also requires review
+evidence for the exact current head. All direct app-bound required checks remain with GitHub branch
+protection. Every behavioral finding requires an owning-layer fix and a failure-first regression or
+boundary test.
 
 Assume every pull request targeting `dev` is a large, completed-epic integration PR. Review all
 changed production source, tests for critical behavior, workflows, migrations, manifests, public
