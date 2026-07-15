@@ -65,7 +65,6 @@ describe("useSSE", () => {
 
   it("opens encoded run streams, recovers after transient errors, ignores malformed frames, and closes on terminal events", async () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.stubGlobal("EventSource", FakeEventSource);
     const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
       initialProps: { runId: "run 1" },

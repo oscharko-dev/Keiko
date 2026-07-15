@@ -217,7 +217,7 @@ function startInstalledUi(tmp, configPath, uiDbPath, evidenceDir, memoryDir) {
       portServer.close((error) => (error ? reject(error) : resolvePromise())),
     );
     const child = spawn(
-      "node",
+      process.execPath,
       [
         bin,
         "ui",

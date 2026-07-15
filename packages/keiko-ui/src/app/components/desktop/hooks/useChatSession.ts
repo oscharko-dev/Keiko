@@ -38,6 +38,7 @@ import {
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
+import { secureRandomId } from "@/lib/secure-random";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -231,10 +232,7 @@ function shouldRetryVoiceTurnAppend(error: unknown): boolean {
 }
 
 function makeVoiceTurnIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return secureRandomId("voice-turn");
 }
 
 async function appendDesktopChatVoiceTurnWithRetry(
