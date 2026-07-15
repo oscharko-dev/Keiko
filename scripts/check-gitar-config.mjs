@@ -1,17 +1,10 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const requiredRuleFiles = [
-  "architecture-and-public-surface.md",
-  "governance-and-delivery.md",
-  "security-boundary-review.md",
-  "ui-and-release-evidence.md",
-  "verification-and-coverage.md",
-];
 const requiredReviewFiles = [
   "00-governance-and-delivery.md",
   "10-security-and-trust-boundaries.md",
@@ -24,11 +17,22 @@ const requiredIncludes = [
   "@docs/qa/gitar-review-policy.md",
   "@docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md",
 ];
-const requiredFrontmatter = ["title", "description", "when", "actions"];
-const devIntegrationInvariant =
-  "Assume every pull request targeting `dev` is a large, completed-epic integration PR";
+const requiredCoreInstructions = [
+  "Assume every pull request targeting `dev` is a large, completed-epic integration PR",
+  "exact current head",
+  "direct app-bound required checks",
+  "unreviewed files",
+  "every finding at every severity",
+  "failure-first regression",
+  "package-surface",
+  "Linux-authoritative release evidence",
+  "gitar review",
+  "Do not block merges, auto-approve",
+  "Never force-push, push directly to `dev`, use `gitar unblock`",
+];
 
 function markdownFiles(directory) {
+  if (!existsSync(directory)) return [];
   return readdirSync(directory, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
     .map((entry) => ({
@@ -36,20 +40,6 @@ function markdownFiles(directory) {
       source: readFileSync(join(directory, entry.name), "utf8"),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function parseFrontmatter(source) {
-  const match = source.match(/^---\n([\s\S]*?)\n---(?:\n|$)/u);
-  if (match === null) return undefined;
-  const values = new Map();
-  for (const line of match[1].split("\n")) {
-    const separator = line.indexOf(":");
-    const name = line.slice(0, separator);
-    const value = line.slice(separator + 1).trim();
-    if (separator > 0 && /^[a-z][a-z-]*$/u.test(name) && value !== "")
-      values.set(name, value.replace(/^"|"$/gu, ""));
-  }
-  return values;
 }
 
 function fileSetFailures(actual, expected, label) {
@@ -64,79 +54,28 @@ function fileSetFailures(actual, expected, label) {
   return failures;
 }
 
-function frontmatterFailures(rule, frontmatter) {
-  const failures = [];
-  for (const field of requiredFrontmatter) {
-    if (!frontmatter.get(field))
-      failures.push(`${rule.name} is missing frontmatter field ${field}`);
-  }
-  return failures;
-}
-
-function expectedActionPrefix(name) {
-  if (name === "governance-and-delivery.md") return "Enable Auto-Apply";
-  return name === "verification-and-coverage.md" ? "Auto-apply" : "Post a comment";
-}
-
-function actionFailures(rule, action) {
-  if (action === undefined) return [];
-  const failures = [];
-  const prefix = expectedActionPrefix(rule.name);
-  if (!action.startsWith(prefix)) {
-    failures.push(`${rule.name} must start its action with ${prefix}`);
-  }
-  const guards = ["never unblock", "force-push", "push to dev", "bypass direct required checks"];
-  if (
-    rule.name === "governance-and-delivery.md" &&
-    !guards.every((guard) => action.includes(guard))
-  ) {
-    failures.push(`${rule.name} must preserve autonomous-delivery hard denials`);
-  }
-  return failures;
-}
-
-function ruleFailures(rule) {
-  const frontmatter = parseFrontmatter(rule.source);
-  if (frontmatter === undefined) return [`${rule.name} has no valid YAML frontmatter`];
-  const failures = [
-    ...frontmatterFailures(rule, frontmatter),
-    ...actionFailures(rule, frontmatter.get("actions")),
-  ];
-  if (frontmatter.has("integrations"))
-    failures.push(`${rule.name} must not require an integration`);
-  return failures;
-}
-
 export function validateGitarSources(sources) {
-  const failures = [
-    ...fileSetFailures(sources.rules, requiredRuleFiles, "Gitar rules"),
-    ...fileSetFailures(sources.reviews, requiredReviewFiles, "Gitar review instructions"),
-  ];
-  if (sources.rules.length > 5) failures.push("Gitar Pro supports at most five custom rules");
-  for (const rule of sources.rules) failures.push(...ruleFailures(rule));
+  const failures = fileSetFailures(
+    sources.reviews,
+    requiredReviewFiles,
+    "Gitar review instructions",
+  );
+  if (sources.approvalExists) {
+    failures.push("Gitar Core configuration must not include Pro Auto-Approve criteria");
+  }
+  for (const rule of sources.rules) {
+    failures.push(`Gitar Core configuration must not include Pro rule ${rule.name}`);
+  }
+
   const reviewSource = sources.reviews.map((entry) => entry.source).join("\n");
   for (const include of requiredIncludes) {
-    if (!reviewSource.includes(include))
+    if (!reviewSource.includes(include)) {
       failures.push(`Gitar review instructions must include ${include}`);
+    }
   }
-  if (!reviewSource.includes(devIntegrationInvariant)) {
-    failures.push(
-      "Gitar review instructions must treat every dev PR as a large completed-epic integration PR",
-    );
-  }
-  if (!sources.approval.includes("Only auto-approve")) {
-    failures.push("Gitar auto-approve criteria must define a positive allowlist");
-  }
-  if (!sources.approval.includes("Never auto-approve")) {
-    failures.push("Gitar auto-approve criteria must define explicit exclusions");
-  }
-  for (const criterion of [
-    "exact current head",
-    "every finding at every severity",
-    "direct app-bound required checks",
-  ]) {
-    if (!sources.approval.includes(criterion)) {
-      failures.push(`Gitar auto-approve criteria must require ${criterion}`);
+  for (const instruction of requiredCoreInstructions) {
+    if (!reviewSource.includes(instruction)) {
+      failures.push(`Gitar Core review instructions must include: ${instruction}`);
     }
   }
   return failures;
@@ -145,7 +84,7 @@ export function validateGitarSources(sources) {
 export function loadGitarSources(root = repoRoot) {
   const gitarRoot = join(root, ".gitar");
   return {
-    approval: readFileSync(join(gitarRoot, "config", "approve.md"), "utf8"),
+    approvalExists: existsSync(join(gitarRoot, "config", "approve.md")),
     reviews: markdownFiles(join(gitarRoot, "review")),
     rules: markdownFiles(join(gitarRoot, "rules")),
   };
@@ -160,9 +99,10 @@ function main() {
     return;
   }
   console.log(
-    "check:gitar-config PASS - 5 bounded Pro rules and 3 review instruction files validated.",
+    "check:gitar-config PASS - Core-only configuration and 3 review instruction files validated.",
   );
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href)
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
+}

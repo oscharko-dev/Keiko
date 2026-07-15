@@ -1005,6 +1005,7 @@ function inputDispatchMeasurements(events: readonly TraceEvent[]): InputProcessi
 async function captureInputProcessingSamples(
   page: Page,
   chunks: readonly string[],
+  prepareMeasurementWindow?: () => Promise<void>,
 ): Promise<readonly InputProcessingMeasurement[]> {
   const client = await page.context().newCDPSession(page);
   const events: TraceEvent[] = [];
@@ -1019,6 +1020,9 @@ async function captureInputProcessingSamples(
     transferMode: "ReportEvents",
   });
   try {
+    // Start CDP tracing before the Long Task observer used by the idle-debug probe. Tracing startup
+    // is harness instrumentation, not editor work, and must stay outside the B5 measurement window.
+    await prepareMeasurementWindow?.();
     await awaitNextPaint(page);
     for (const chunk of chunks) {
       await page.keyboard.type(chunk);
@@ -1062,14 +1066,16 @@ async function measureIdleDebugTyping(
 ): Promise<IdleDebugMetrics> {
   const editor = editorWindow.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 10_000 });
-  const observerInstalled = await installIdleDebugLongTaskObserver(page);
-  await waitForIdleDebugObservationWindow(page);
   await editor.click({ timeout: 8_000 });
   await expect(editorWindow.getByRole("textbox", { name: /Editor:/u })).toBeFocused();
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.press(`${modifier}+KeyA`);
   const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).catch(() => undefined);
-  const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS);
+  let observerInstalled = false;
+  const measurements = await captureInputProcessingSamples(page, TYPING_CHUNKS, async () => {
+    observerInstalled = await installIdleDebugLongTaskObserver(page);
+    await waitForIdleDebugObservationWindow(page);
+  });
   const matchedInputEventCounts = measurements.map((measurement) => measurement.matchedEventCount);
   const processingSamples = measurements.map((measurement) => measurement.durationMs);
   await diagnosticsRecomputed;
