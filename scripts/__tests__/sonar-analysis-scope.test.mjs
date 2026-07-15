@@ -244,6 +244,23 @@ describe("Sonar analysis scope", () => {
     ]);
   });
 
+  it("ignores cached paths deleted from the working tree", () => {
+    const readText = vi.fn(() => "valid");
+    const result = runAnalysisScopeCheck({
+      execute: () => "src/live.ts\0src/deleted.ts\0",
+      fileExists: (path) => !path.endsWith("/src/deleted.ts"),
+      log: () => undefined,
+      nativeEntries: [],
+      properties: validProperties,
+      readText,
+      root: "/repo",
+    });
+
+    expect(result.files).toEqual(["src/live.ts"]);
+    expect(readText).toHaveBeenCalledOnce();
+    expect(readText).toHaveBeenCalledWith("src/live.ts");
+  });
+
   it("reads and validates the native manifest shape", () => {
     expect(
       readNativeScope("/repo", () => JSON.stringify({ sources: nativeEntries, version: 1 })),
