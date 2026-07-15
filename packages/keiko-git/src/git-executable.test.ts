@@ -48,6 +48,15 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     expect(resolveGitExecutable({ PATH: bin }, workspace)).toBeUndefined();
   });
 
+  it("accepts a group-writable toolcache owned by a group unavailable to the caller", () => {
+    const bin = temporary("keiko-git-executable-bin-");
+    const executable = writeGit(bin);
+    chmodSync(bin, 0o775);
+    expect(resolveGitExecutable({ PATH: bin }, workspace, process.platform, new Set())).toBe(
+      executable,
+    );
+  });
+
   it("ignores relative and missing PATH entries", () => {
     expect(resolveGitExecutable({ PATH: "relative-bin" }, workspace)).toBeUndefined();
     expect(resolveGitExecutable({ PATH: join(workspace, "missing") }, workspace)).toBeUndefined();

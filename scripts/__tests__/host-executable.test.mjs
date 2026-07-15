@@ -54,6 +54,24 @@ describe("resolveHostExecutable", () => {
     ).toThrow("trusted host executable is unavailable");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "accepts a group-writable toolcache owned by a group unavailable to the caller",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const bin = temporary("keiko-host-executable-bin-");
+      const executable = join(bin, "keiko-test-tool");
+      writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(bin, 0o775);
+      expect(
+        resolveHostExecutable("keiko-test-tool", {
+          env: { PATH: bin },
+          groupIds: [],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(executable));
+    },
+  );
+
   it("ignores relative PATH entries and rejects path-bearing command names", () => {
     const workspace = temporary("keiko-host-executable-workspace-");
     expect(() =>

@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BARE_EXECUTABLE = /^[A-Za-z0-9._-]+$/u;
-const UNTRUSTED_WRITE_BITS = 0o022;
+const GROUP_WRITE_BIT = 0o020;
+const WORLD_WRITE_BIT = 0o002;
 
 function executableNames(command, env, platform) {
   if (platform !== "win32") return [command];
@@ -17,20 +18,33 @@ function isContained(root, candidate) {
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
-function hasTrustedPermissions(candidate, platform) {
-  if (platform === "win32") return true;
+function activeGroupIds() {
+  if (typeof process.getgroups !== "function" || typeof process.getgid !== "function") {
+    return undefined;
+  }
+  return [...new Set([process.getgid(), ...process.getgroups()])];
+}
+
+function isWritableByCaller(path, groupIds) {
+  const stats = statSync(path);
+  if ((stats.mode & WORLD_WRITE_BIT) !== 0) return true;
   return (
-    (statSync(candidate).mode & UNTRUSTED_WRITE_BITS) === 0 &&
-    (statSync(dirname(candidate)).mode & UNTRUSTED_WRITE_BITS) === 0
+    (stats.mode & GROUP_WRITE_BIT) !== 0 && (groupIds === undefined || groupIds.includes(stats.gid))
   );
 }
 
-function trustedCandidate(candidate, workspaceRoot, platform) {
+function hasTrustedPermissions(candidate, real, platform, groupIds) {
+  if (platform === "win32") return true;
+  const protectedPaths = [dirname(candidate), real, dirname(real)];
+  return protectedPaths.every((path) => !isWritableByCaller(path, groupIds));
+}
+
+function trustedCandidate(candidate, workspaceRoot, platform, groupIds) {
   try {
     accessSync(candidate, constants.X_OK);
     const real = realpathSync(candidate);
     if (isContained(realpathSync(workspaceRoot), real)) return undefined;
-    return hasTrustedPermissions(real, platform) ? real : undefined;
+    return hasTrustedPermissions(candidate, real, platform, groupIds) ? real : undefined;
   } catch {
     return undefined;
   }
@@ -38,23 +52,28 @@ function trustedCandidate(candidate, workspaceRoot, platform) {
 
 export function resolveHostExecutable(
   command,
-  { env = process.env, platform = process.platform, workspaceRoot = repoRoot } = {},
+  {
+    env = process.env,
+    groupIds = activeGroupIds(),
+    platform = process.platform,
+    workspaceRoot = repoRoot,
+  } = {},
 ) {
   if (!BARE_EXECUTABLE.test(command)) {
     throw new Error(`host executable name must be bare: ${command}`);
   }
   const names = executableNames(command, env, platform);
   for (const entry of (env.PATH ?? "").split(delimiter)) {
-    const resolved = resolveFromEntry(entry, names, workspaceRoot, platform);
+    const resolved = resolveFromEntry(entry, names, workspaceRoot, platform, groupIds);
     if (resolved !== undefined) return resolved;
   }
   throw new Error(`trusted host executable is unavailable: ${command}`);
 }
 
-function resolveFromEntry(entry, names, workspaceRoot, platform) {
+function resolveFromEntry(entry, names, workspaceRoot, platform, groupIds) {
   if (!isAbsolute(entry)) return undefined;
   for (const name of names) {
-    const resolved = trustedCandidate(join(entry, name), workspaceRoot, platform);
+    const resolved = trustedCandidate(join(entry, name), workspaceRoot, platform, groupIds);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
