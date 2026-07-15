@@ -269,11 +269,11 @@ function BreakpointTextDialog(props: {
   const [value, setValue] = useState("");
   const titleId = "keiko-debug-text-prompt-title";
   const inputId = "keiko-debug-text-prompt-input";
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     dialogRef.current?.focus();
     return () => {
-      if (props.returnFocus !== null && props.returnFocus.isConnected) props.returnFocus.focus();
+      if (props.returnFocus?.isConnected) props.returnFocus.focus();
     };
   }, [props.returnFocus]);
   useDialogTabTrap(dialogRef);
@@ -292,7 +292,7 @@ function BreakpointTextDialog(props: {
       : props.t("logpointMessagePrompt");
   return (
     <div style={{ position: "absolute", zIndex: 20, insetInlineStart: "12px", top: "12px" }}>
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <dialog ref={dialogRef} open aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <h4 id={titleId}>{textPromptTitle(props.request, props.labels)}</h4>
         <label htmlFor={inputId}>{inputLabel}</label>
         <input id={inputId} value={value} onChange={(event) => setValue(event.target.value)} />
@@ -302,7 +302,7 @@ function BreakpointTextDialog(props: {
         <button type="button" onClick={props.onCancel}>
           {props.t("cancel")}
         </button>
-      </div>
+      </dialog>
     </div>
   );
 }
