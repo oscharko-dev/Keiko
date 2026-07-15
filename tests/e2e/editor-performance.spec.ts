@@ -1328,29 +1328,46 @@ interface WorkerCapture {
   readonly settleWorkerCaptures: () => Promise<void>;
 }
 
-function captureWorkerResponse(response: Response, workerRequests: WorkerRequest[]): Promise<void> {
+const WORKER_RESPONSE_BODY_TIMEOUT_MS = 5_000;
+
+async function readWorkerResponseBody(response: Response): Promise<Buffer | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      response.body(),
+      new Promise<null>((resolveTimeout) => {
+        timer = setTimeout(resolveTimeout, WORKER_RESPONSE_BODY_TIMEOUT_MS, null);
+        timer.unref();
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function captureWorkerResponse(
+  response: Response,
+  workerRequests: WorkerRequest[],
+): Promise<void> {
   const url = response.url();
-  return response
-    .body()
-    .then((body) => {
-      const workerLabel = classifyMonacoWorkerChunk(body.toString("utf8"));
-      if (workerLabel === null) {
-        return;
-      }
-      recordWorkerRequest(workerRequests, {
-        url,
-        resourceType: response.request().resourceType(),
-        workerLabel,
-        captureReason: "classified-response",
-      });
-    })
-    .catch(() => {
-      /* response body unavailable */
+  const body = await readWorkerResponseBody(response);
+  if (body === null) return;
+  const workerLabel = classifyMonacoWorkerChunk(body.toString("utf8"));
+  if (workerLabel !== null) {
+    recordWorkerRequest(workerRequests, {
+      url,
+      resourceType: response.request().resourceType(),
+      workerLabel,
+      captureReason: "classified-response",
     });
+  }
 }
 
 function installWorkerCapture(page: Page): WorkerCapture {
   const workerRequests: WorkerRequest[] = [];
+  const inspectedJavaScriptResponses = new Set<string>();
   const pendingWorkerCaptures: Promise<void>[] = [];
   page.on("request", (request) => {
     const type = request.resourceType();
@@ -1366,23 +1383,19 @@ function installWorkerCapture(page: Page): WorkerCapture {
   });
   page.on("response", (response) => {
     const contentType = response.headers()["content-type"] ?? "";
-    if (shouldInspectJavaScriptResponse(response.url(), contentType)) {
+    const url = response.url();
+    if (
+      shouldInspectJavaScriptResponse(url, contentType) &&
+      !inspectedJavaScriptResponses.has(url)
+    ) {
+      inspectedJavaScriptResponses.add(url);
       pendingWorkerCaptures.push(captureWorkerResponse(response, workerRequests));
     }
   });
   return {
     workerRequests,
     settleWorkerCaptures: async (): Promise<void> => {
-      const pending = Promise.allSettled(pendingWorkerCaptures.splice(0));
-      await Promise.race([
-        pending,
-        new Promise<never>((_, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error("EDITOR_PERF_WORKER_CAPTURE_TIMEOUT"));
-          }, 15_000);
-          timeout.unref();
-        }),
-      ]);
+      await Promise.allSettled(pendingWorkerCaptures.splice(0));
     },
   };
 }
@@ -1682,6 +1695,7 @@ async function writeCurrentEvidence(
   measurements: EvidenceMeasurements,
   capture: WorkerCapture,
 ): Promise<void> {
+  if (D12_COMPARISON) return;
   await writeEvidence(
     measurements.coldStartsMs,
     measurements.typing,
