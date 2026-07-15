@@ -34,6 +34,49 @@ function context(
 }
 
 describe("debug activation control", () => {
+  it.each([
+    ["unsupported product", "unsupported", "allowed", "enabled", "PRODUCT_UNSUPPORTED"],
+    ["denied deployment", "supported", "denied", "enabled", "POLICY_DENIED"],
+    ["disabled workspace", "supported", "allowed", "disabled", "WORKSPACE_DISABLED"],
+    ["unset workspace", "supported", "allowed", "unset", "WORKSPACE_ACTIVATION_UNSET"],
+  ] as const)(
+    "skips runtime-closure inspection for an already closed %s gate",
+    (_name, productSupport, deploymentPolicy, workspaceActivation, reasonCode) => {
+      const root = temporaryDirectory("debug-closed-gate");
+      const provisioning = vi.fn(() => "provisioned" as const);
+      const control = createDebugActivationControlService({
+        mutex: createWorkspaceMutexRegistry(),
+        productSupport: () => productSupport,
+        deploymentPolicy: () => deploymentPolicy,
+        provisioning,
+        disposeActiveSession: () => Promise.resolve(),
+      });
+
+      expect(control.resolve({ realRoot: root, revision: 7, workspaceActivation })).toMatchObject({
+        reasonCode,
+      });
+      expect(provisioning).not.toHaveBeenCalled();
+      control.dispose();
+    },
+  );
+
+  it("revalidates provisioning for every decision that can become available", () => {
+    const root = temporaryDirectory("debug-open-gate");
+    const provisioning = vi.fn(() => "provisioned" as const);
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning,
+      disposeActiveSession: () => Promise.resolve(),
+    });
+
+    expect(control.resolve(context(root, "enabled"))).toMatchObject({ state: "available" });
+    expect(control.resolve(context(root, "enabled"))).toMatchObject({ state: "available" });
+    expect(provisioning).toHaveBeenCalledTimes(2);
+    control.dispose();
+  });
+
   it("awaits session disposal before acknowledging deactivation and projects content-free evidence", async () => {
     const root = temporaryDirectory("debug-control-workspace");
     let releaseDispose: (() => void) | undefined;
