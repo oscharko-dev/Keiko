@@ -9,7 +9,11 @@ import { parse } from "acorn";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { rejectUiStaticSymlink, resolveUiStaticRoot } from "./lib/ui-static-root-boundary.mjs";
+import {
+  rejectUiStaticRootCliOverride,
+  rejectUiStaticSymlink,
+  resolveUiStaticRoot,
+} from "./lib/ui-static-root-boundary.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
@@ -151,5 +155,6 @@ export async function checkUiStaticJavaScriptCompatibility(staticRoot = DEFAULT_
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await checkUiStaticJavaScriptCompatibility(process.argv[2] ?? DEFAULT_STATIC_ROOT);
+  rejectUiStaticRootCliOverride(process.argv[2]);
+  await checkUiStaticJavaScriptCompatibility();
 }

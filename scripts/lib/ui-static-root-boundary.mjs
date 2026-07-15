@@ -28,6 +28,12 @@ export async function resolveUiStaticRoot(repoRoot, candidate) {
   return canonicalCandidate;
 }
 
+export function rejectUiStaticRootCliOverride(override) {
+  if (override !== undefined) {
+    throw new Error("UI static root CLI overrides are not supported");
+  }
+}
+
 export function rejectUiStaticSymlink(entry) {
   if (entry.isSymbolicLink()) {
     throw new Error("UI static trees must not contain symbolic links");

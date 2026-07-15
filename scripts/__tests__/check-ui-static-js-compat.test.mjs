@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { checkUiStaticJavaScriptCompatibility } from "../check-ui-static-js-compat.mjs";
+import { rejectUiStaticRootCliOverride } from "../lib/ui-static-root-boundary.mjs";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -72,6 +73,13 @@ describe("checkUiStaticJavaScriptCompatibility", () => {
 
     await expect(checkUiStaticJavaScriptCompatibility(outsideRoot)).rejects.toThrow(
       "must stay inside the repository",
+    );
+  });
+
+  it("rejects CLI static-root overrides before they can reach filesystem operations", () => {
+    expect(() => rejectUiStaticRootCliOverride(undefined)).not.toThrow();
+    expect(() => rejectUiStaticRootCliOverride("../../outside")).toThrow(
+      "CLI overrides are not supported",
     );
   });
 

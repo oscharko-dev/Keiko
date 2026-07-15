@@ -265,8 +265,7 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
         if (w.id !== id) return w;
         if (w.max) {
           const restore = w.prev ?? fallbackRestoreGeometry(w.type, vp);
-          const { prev: _prev, ...rest } = w;
-          void _prev;
+          const rest = stripPrev(w);
           const restored: AppWindow = {
             ...rest,
             x: restore.x,
@@ -663,8 +662,8 @@ interface LayoutArgs {
 }
 
 function stripPrev(w: AppWindow): Omit<AppWindow, "prev"> {
-  const { prev: _, ...rest } = w;
-  void _;
+  const rest = { ...w };
+  Reflect.deleteProperty(rest, "prev");
   return rest;
 }
 
