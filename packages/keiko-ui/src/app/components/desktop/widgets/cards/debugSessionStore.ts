@@ -203,6 +203,24 @@ interface DebugSessionUpdateOptions {
   readonly allowSameGenerationResume?: boolean | undefined;
 }
 
+function sameDebugSession(current: DebugSession | null, next: DebugSession): boolean {
+  return (
+    current !== null &&
+    current.schemaVersion === next.schemaVersion &&
+    current.sessionId === next.sessionId &&
+    current.workspaceId === next.workspaceId &&
+    current.status === next.status &&
+    current.targetKind === next.targetKind &&
+    current.activationRevision === next.activationRevision &&
+    current.pauseGeneration === next.pauseGeneration &&
+    current.startedAtMs === next.startedAtMs &&
+    current.wallDeadlineMs === next.wallDeadlineMs &&
+    current.inactivityDeadlineMs === next.inactivityDeadlineMs &&
+    current.output.acceptedBytes === next.output.acceptedBytes &&
+    current.output.truncated === next.output.truncated
+  );
+}
+
 function stalePauseProjection(
   current: DebugSession | null,
   next: DebugSession | null,
@@ -262,6 +280,7 @@ export function setDebugSession(
   ) {
     return;
   }
+  if (session !== null && sameDebugSession(state.snapshot.session, session)) return;
   const progressed = progressedBeyondPause(
     state.snapshot.session,
     session,

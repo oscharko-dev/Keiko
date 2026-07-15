@@ -92,6 +92,7 @@ const DEBUG_EVENTS = Object.freeze([
 
 const bootstrapRequests = new Map<string, Promise<void>>();
 const instrumentationRequests = new Map<string, Promise<InstrumentationSnapshot | null>>();
+const sessionRequests = new Map<string, Promise<DebugSession | null>>();
 
 function debugUrl(workspaceId: string, suffix: string): string {
   return `/api/editor/debug/${suffix}?workspaceId=${encodeURIComponent(workspaceId)}`;
@@ -119,6 +120,7 @@ function sharedBootstrap(workspaceId: string): Promise<void> {
 export function resetDebugBootstrapRequestsForTests(): void {
   bootstrapRequests.clear();
   instrumentationRequests.clear();
+  sessionRequests.clear();
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -305,6 +307,21 @@ function parseSession(value: unknown): DebugSession | null {
     inactivityDeadlineMs,
     output: { acceptedBytes: output.acceptedBytes as number, truncated: output.truncated },
   };
+}
+
+function sharedSession(workspaceId: string, sessionId: string): Promise<DebugSession | null> {
+  const key = `${workspaceId}\u0000${sessionId}`;
+  const pending = sessionRequests.get(key);
+  if (pending !== undefined) return pending;
+  const request = requestJson(`/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: { "x-keiko-csrf": "1" },
+  })
+    .then(parseSession)
+    .finally(() => {
+      if (sessionRequests.get(key) === request) sessionRequests.delete(key);
+    });
+  sessionRequests.set(key, request);
+  return request;
 }
 
 function parseOutputEvent(
@@ -955,11 +972,7 @@ export function useDebugSession(
   const refreshSession = useCallback(
     async (sessionId: string): Promise<void> => {
       if (!enabled) return;
-      const response = await trackedRequest(
-        `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
-        { headers: { "x-keiko-csrf": "1" } },
-      );
-      const session = parseSession(response);
+      const session = await sharedSession(stableWorkspaceId, sessionId);
       const current = debugSessionSnapshot(stableWorkspaceId).session;
       if (
         session !== null &&
@@ -970,7 +983,7 @@ export function useDebugSession(
         setDebugSession(stableWorkspaceId, session);
       }
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [enabled, stableWorkspaceId],
   );
 
   useEffect(() => (): void => abortPendingRequests(), [abortPendingRequests, stableWorkspaceId]);

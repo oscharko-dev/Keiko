@@ -146,6 +146,20 @@ describe("debugSessionStore", () => {
     resetDebugSessionStoreForTests();
   });
 
+  it("does not republish a structurally identical canonical session refresh", () => {
+    const workspaceId = "canonical-workspace-id";
+    setDebugSession(workspaceId, session("paused", 2));
+    const initial = debugSessionSnapshot(workspaceId);
+
+    setDebugSession(workspaceId, {
+      ...session("paused", 2),
+      output: { acceptedBytes: 0, truncated: false },
+    });
+
+    expect(debugSessionSnapshot(workspaceId)).toBe(initial);
+    resetDebugSessionStoreForTests();
+  });
+
   it("does not let an older instrumentation response replace a newer revision", () => {
     const workspaceId = "canonical-workspace-id";
     const snapshot = {

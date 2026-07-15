@@ -168,6 +168,52 @@ describe("useDebugSession", () => {
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
   });
 
+  it("coalesces duplicate stopped-event session refreshes across hook consumers", async () => {
+    let sessionRequestCount = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url.includes("/api/editor/debug/sessions/session-1")) {
+        sessionRequestCount += 1;
+        return response(session("paused"));
+      }
+      return response({});
+    });
+    renderHook(() => useDebugSession("canonical-workspace-id", true));
+    renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const stopped = FakeEventSource.instances[0]?.listeners.get("editor-debug:stopped");
+    if (stopped === undefined) throw new Error("Expected stopped listener.");
+    const message = new MessageEvent("editor-debug:stopped", {
+      data: JSON.stringify({
+        sequence: 1,
+        event: {
+          kind: "stopped",
+          sessionId: "session-1",
+          pauseGeneration: 2,
+          reason: "breakpoint",
+          allThreadsStopped: true,
+        },
+      }),
+      lastEventId: "1",
+    });
+
+    act(() => {
+      for (const listener of stopped) listener(message);
+    });
+    await waitFor(() =>
+      expect(debugSessionSnapshot("canonical-workspace-id").session).not.toBeNull(),
+    );
+    expect(sessionRequestCount).toBe(1);
+
+    act(() => {
+      for (const listener of stopped) listener(message);
+    });
+    await waitFor(() => expect(sessionRequestCount).toBe(1));
+  });
+
   it("waits for initial instrumentation before persisting an immediate breakpoint", async () => {
     const initialInstrumentation = deferredResponse();
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -617,16 +663,16 @@ describe("useDebugSession", () => {
     expect(result.current.snapshot.variablesByParent).toHaveLength(0);
   });
 
-  it("does not let a late session refresh replace a newly started session", async () => {
+  it("does not let a late shared session refresh replace a newly started session", async () => {
     const oldSession = deferredResponse();
-    let oldSignal: AbortSignal | undefined;
-    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    let oldRequestCount = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
         return response(instrumentation());
       }
       if (url === "/api/editor/debug/sessions/session-1") {
-        oldSignal = init?.signal ?? undefined;
+        oldRequestCount += 1;
         return oldSession.promise;
       }
       if (url === "/api/editor/debug/sessions/session-2") {
@@ -637,7 +683,7 @@ describe("useDebugSession", () => {
     const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const staleRefresh = result.current.actions.refreshSession("session-1");
-    await waitFor(() => expect(oldSignal).toBeDefined());
+    await waitFor(() => expect(oldRequestCount).toBe(1));
     const started = FakeEventSource.instances[0]?.listeners.get("editor-debug:session-started");
     if (started === undefined) throw new Error("Expected session-started listener.");
 
@@ -654,7 +700,6 @@ describe("useDebugSession", () => {
       }
     });
     await waitFor(() => expect(result.current.snapshot.session?.sessionId).toBe("session-2"));
-    expect(oldSignal?.aborted).toBe(true);
     oldSession.resolve(pausedSession());
     await act(async () => staleRefresh);
 

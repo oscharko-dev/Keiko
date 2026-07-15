@@ -1232,6 +1232,37 @@ describe("production debug capsule launcher", () => {
     expect(kill).toHaveBeenCalledWith(42_425, "SIGKILL");
   });
 
+  it("bounds the settle wait when a killed descendant remains visible", async () => {
+    vi.useFakeTimers();
+    try {
+      const current = fixture();
+      const child = fakeChild();
+      const procRoot = temporary();
+      writeProcStat(procRoot, "42424", "1", "100");
+      writeProcStat(procRoot, "42425", "42424", "200");
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const launcher = createProductionDebugCapsuleLauncher(
+        dependencies({ procRoot, spawnProcess: spawnReturning(child.child) }),
+      );
+      const handle = await launcher(current.envelope, new AbortController().signal);
+      let settled = false;
+      const terminating = handle.terminateContainment("SIGKILL").then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await terminating;
+
+      expect(settled).toBe(true);
+      expect(kill).toHaveBeenCalledWith(-42_424, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(42_425, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not dereference a disappeared observed PID while terminating matching identities", async () => {
     const current = fixture();
     const procRoot = temporary();

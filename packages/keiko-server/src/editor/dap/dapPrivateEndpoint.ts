@@ -120,7 +120,7 @@ function nodeSocketConnection(socket: Socket): DapPrivateEndpointConnection {
 export function closeDapPrivateEndpointSocket(socket: Socket): Promise<void> {
   if (socket.destroyed) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => socket.destroy(), 250);
+    const timer = setTimeout(() => socket.destroy(), 50);
     timer.unref();
     socket.once("close", () => {
       clearTimeout(timer);

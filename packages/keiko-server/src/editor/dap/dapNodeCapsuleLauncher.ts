@@ -372,6 +372,26 @@ function terminateObservedLinuxDescendants(tracker: LinuxScopeTracker, procRoot:
   }
 }
 
+const DESCENDANT_SETTLE_ATTEMPTS = 10;
+const DESCENDANT_SETTLE_INTERVAL_MS = 5;
+
+function waitForDescendantSettleInterval(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, DESCENDANT_SETTLE_INTERVAL_MS).unref();
+  });
+}
+
+async function awaitObservedLinuxDescendants(
+  tracker: LinuxScopeTracker,
+  procRoot: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < DESCENDANT_SETTLE_ATTEMPTS; attempt += 1) {
+    const remaining = remainingObservedDescendants(tracker, readProcessTable(procRoot));
+    if (remaining === 0) return;
+    await waitForDescendantSettleInterval();
+  }
+}
+
 function inspectLinuxScope(
   envelope: DebugSpawnEnvelope,
   pid: number,
@@ -467,10 +487,10 @@ function wrapChild(
       } else child.once("exit", callback);
     },
     inspectScope: () => inspectLinuxScope(envelope, pid, exited, procRoot, scopeTracker),
-    terminateContainment: (): Promise<void> => {
+    terminateContainment: async (): Promise<void> => {
       groupKill(child, "SIGKILL");
       terminateObservedLinuxDescendants(scopeTracker, procRoot);
-      return Promise.resolve();
+      await awaitObservedLinuxDescendants(scopeTracker, procRoot);
     },
     cleanup: () => cleanupEndpoint(endpoint),
     onExit: (callback): void => {
