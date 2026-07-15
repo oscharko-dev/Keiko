@@ -8,7 +8,11 @@ import presetEnv from "@babel/preset-env";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { rejectUiStaticSymlink, resolveUiStaticRoot } from "./lib/ui-static-root-boundary.mjs";
+import {
+  rejectUiStaticRootCliOverride,
+  rejectUiStaticSymlink,
+  resolveUiStaticRoot,
+} from "./lib/ui-static-root-boundary.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
@@ -85,6 +89,14 @@ export async function transpileUiStaticJavaScript(staticRoot = DEFAULT_STATIC_RO
   );
 }
 
+export async function runTranspileUiStaticJavaScriptCli(
+  args,
+  operation = transpileUiStaticJavaScript,
+) {
+  rejectUiStaticRootCliOverride(args[0]);
+  await operation();
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await transpileUiStaticJavaScript(process.argv[2] ?? DEFAULT_STATIC_ROOT);
+  await runTranspileUiStaticJavaScriptCli(process.argv.slice(2));
 }
