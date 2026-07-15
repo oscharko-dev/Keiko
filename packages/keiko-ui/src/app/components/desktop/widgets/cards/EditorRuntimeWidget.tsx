@@ -5303,6 +5303,18 @@ function EditorRuntimeWidget({
   );
   const activeRecoveryCompare = enabledValueOrNull(recoveryCompare, recoverySnapshot);
   const editorLoadError = editorLoadErrorMessage(hasTarget, loadState);
+  const debugSessionHost = enabledValueOrNull(
+    debugEnabled,
+    <EditorDebugSessionHost
+      workspaceId={debugWorkspaceId}
+      activationRevision={debugActivation?.revision}
+      enabled={debugEnabled}
+      fileId={file}
+      onOpenDebugPanel={onOpenDebugPanel}
+      onHostChange={setDebugEditorHost}
+      onSessionStateChange={setDebugSessionState}
+    />,
+  );
 
   const renderEditorPanel = (): ReactNode => {
     let panel: ReactNode;
@@ -5529,17 +5541,7 @@ function EditorRuntimeWidget({
     } else if (hasTarget && buffer !== null && fileModel !== null) {
       panel = (
         <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
-          {debugEnabled ? (
-            <EditorDebugSessionHost
-              workspaceId={debugWorkspaceId}
-              activationRevision={debugActivation?.revision}
-              enabled={debugEnabled}
-              fileId={file}
-              onOpenDebugPanel={onOpenDebugPanel}
-              onHostChange={setDebugEditorHost}
-              onSessionStateChange={setDebugSessionState}
-            />
-          ) : null}
+          {debugSessionHost}
           <EditorSurface
             key={editorSurfaceKey}
             buffer={buffer}
