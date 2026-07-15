@@ -6,16 +6,27 @@
 //   - keiko-ui (Next.js) emits to .next/ and out/
 
 import { lstat, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const ROOT_TARGETS = ["dist", "coverage"];
 const UI_TARGETS = [".next", "out"];
+export const CLEAN_RM_OPTIONS = Object.freeze({
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 100,
+});
 
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 function isWithin(rootPath, candidatePath) {
   const relativePath = relative(rootPath, candidatePath);
-  return relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  );
 }
 
 function parseArgs(argv) {
@@ -40,18 +51,33 @@ export async function planCleanTargets(root) {
   return targets;
 }
 
-export async function rmIfExistsSafe(rootReal, targetPath) {
-  const stats = await lstat(targetPath).catch(() => null);
+export async function lstatIfExists(targetPath, inspect = lstat) {
+  try {
+    return await inspect(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function rmIfExistsSafe(rootReal, targetPath, remove = rm) {
+  const stats = await lstatIfExists(targetPath);
   if (!stats) {
     return false;
   }
-  const resolvedTarget = stats.isSymbolicLink() ? await realpath(targetPath) : resolve(targetPath);
-  if (!isWithin(rootReal, resolvedTarget)) {
+  if (stats.isSymbolicLink()) {
+    throw new Error(`refusing to delete symbolic-link target: ${targetPath}`);
+  }
+  const canonicalParent = await realpath(dirname(targetPath));
+  const canonicalTarget = join(canonicalParent, basename(targetPath));
+  if (!isWithin(rootReal, canonicalTarget)) {
     throw new Error(
-      `refusing to delete path outside repository: ${targetPath} -> ${resolvedTarget}`,
+      `refusing to delete path outside repository: ${targetPath} -> ${canonicalTarget}`,
     );
   }
-  await rm(targetPath, { recursive: true, force: true });
+  await remove(canonicalTarget, CLEAN_RM_OPTIONS);
   console.log(`removed ${targetPath}`);
   return true;
 }
