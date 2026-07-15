@@ -254,6 +254,28 @@ without trusting Keiko's own manifest-validation code. Attestations are suppleme
 only: they do not gate `verified-production` promotion, and the existing signing/notarization
 acceptance criteria are unchanged.
 
+### D9 — Managed Code-task isolation is a separate machine prerequisite
+
+[ADR-0137](ADR-0137-managed-runtime-isolated-worker.md) adds a machine-managed isolated-runtime host
+as a prerequisite for managed Code tasks only. This is a deliberate exception to this ADR's
+user-local, no-service base portable product boundary; it is not part of first-run portable setup,
+the user-owned managed install root, one-click portable update, or runtime self-repair.
+
+Enterprise/OS administration separately installs and maintains the signed macOS controller or signed
+Windows SCM service and enables required Windows virtualization features. Keiko's launcher, BFF,
+portable updater, coding runtime, and browser never elevate, prompt for administrator authority,
+enable Hyper-V, write machine-wide service/socket registration, install or update the controller,
+or convert an unavailable prerequisite into a weaker process/container fallback. The base portable
+product remains installable, launchable, and updateable as a user-local product when this prerequisite
+is absent; only managed Code-task capability reports a typed content-free unavailable/remediation
+state.
+
+The isolated-runtime worker/controller bundle extends the existing protected signing, digest,
+provenance, and release-impact authority. It does not create a second update channel. Controller or
+guest replacement follows reviewed release production and machine administration; the runtime path
+may verify exact identities but cannot mutate the machine prerequisite. This amendment does not
+authorize organization-managed self-update of the base portable install or otherwise relax D1–D8.
+
 ## Security and threat model
 
 Security review for implementation under this ADR must cover:
@@ -365,3 +387,6 @@ Security review for implementation under this ADR must cover:
   consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
 - **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance
   and SBOM) for the three portable release archives and the `ci` workflow's SBOMs.
+- **2026-07-15 — Issue #2443:** Added D9 to permit the separately installed, machine-managed
+  isolated-runtime prerequisite for managed Code tasks while preserving the user-local base product,
+  existing signing/update authority, and no runtime self-elevation.
