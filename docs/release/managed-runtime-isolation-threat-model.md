@@ -48,25 +48,25 @@ records, and evidence are outside the enforcement authority boundary.
 Every row is release-blocking for the owning implementation. A structural validator test is useful
 input hardening but cannot replace the named live/native proof.
 
-| Threat or attempted bypass                | Required control                                                                                                        | Required negative proof                                                                                                                        | Owner                                |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| Add or hot-plug a network path            | Empty vNIC configuration and device inventory revalidation before start                                                 | Guest TCP/UDP/DNS egress and host-LAN reachability fail; inventory contains no network device                                                  | platform controllers / #2396         |
-| Reach arbitrary host services through IPC | One VM-bound socket, closed authenticated broker protocol, no proxy/CONNECT                                             | Unknown method, arbitrary bytes, arbitrary destination, wildcard VM identity, and wrong audience fail                                          | broker/shim                          |
-| Replay or detach a launch                 | Controller-owned nonce/sequence ledger plus run, audience, platform, bundle, VM/boot, epoch, policy, and expiry binding | Duplicate nonce/sequence, cross-run, cross-VM, cross-boot, old timestamp, wrong audience, and revoked epoch fail before productive broker work | platform controllers                 |
-| Forge structural qualification            | Structural objects are untrusted data; controller returns only an opaque live lease                                     | Reconstructed JSON, TypeScript cast/brand, copied observation, and caller Boolean never admit control or broker work                           | native host / #2442                  |
-| Replace/downgrade controller or guest     | Existing protected signing authority plus exact final bundle digests and profile digest                                 | Old, unsigned, wrong-platform, rebuilt, post-verification-modified, or unknown bundle fails                                                    | release/platform children            |
-| Expose host workspace                     | No mount/share; filtered immutable snapshot only                                                                        | Guest mount table/device inventory has no host share; host workspace is unchanged by direct guest writes                                       | worker bundle / #2396                |
-| Escape snapshot revision                  | Host re-resolves workspace and compares source/tree SHA before applying normalized effects                              | Host revision change converts result to conflict/recovery; stale result cannot apply                                                           | #2442                                |
-| Inherit credentials or configuration      | Minimal exact environment; synthetic guest identity/configuration                                                       | Provider tokens, host home, Git config, npm config, proxy variables, and credential stores are absent                                          | worker bundle                        |
-| Exceed memory                             | Exact VM memory, no balloon, no guest swap, cgroup hard limit and group OOM                                             | Balloon absent; swap remains zero; over-limit workload is contained/terminated without host fallback                                           | worker bundle / platform controllers |
-| Exceed tasks                              | `pids.max=32`, which counts Linux tasks/threads                                                                         | 33rd task/thread fails; runtime cannot move itself to another cgroup                                                                           | worker bundle                        |
-| Exceed lifetime                           | Host monotonic 900,000 ms watchdog independent of guest time                                                            | Guest clock changes, shim silence, busy loop, and paused protocol traffic cannot extend the deadline                                           | platform controllers                 |
-| Leave descendants after stop              | Whole-VM termination is the kill boundary                                                                               | Fork, `setsid`, daemonization, shim/runtime crash, and hostile shutdown leave no VM or worker task                                             | platform controllers                 |
-| Continue after BFF/lease loss             | Broker denies first; service/controller expires opaque lease and tears down VM                                          | BFF disconnect, lease expiry, BFF crash, and controller-channel replacement stop productive work                                               | native host / #2442                  |
-| Survive Windows restart/crash             | SCM automatic start, durable content-free lease ledger, HCS enumeration, stale termination before ready                 | Service crash, controller crash, and machine restart enumerate and remove stale/unrecognized VMs                                               | Windows controller                   |
-| Reuse state across runs                   | No warm pool; fresh boot, storage, nonce, capability, and lease                                                         | Second run cannot read first-run memory, disk, capability, broker state, or snapshot                                                           | platform controllers / worker bundle |
-| Leak content through evidence             | Closed validators and allowlisted projection                                                                            | Paths, endpoints, VM/socket ids, env values, capabilities, lease, output, prompts, diffs, source, tool bodies, and logs are rejected           | contracts / evidence consumer        |
-| Weaken unsupported platform               | Closed capability state and typed remediation; no fallback                                                              | Windows Home/arm64, disabled Hyper-V, unsupported macOS/API/hardware, missing entitlement/signature all remain unavailable                     | platform controllers / #2396         |
+| Threat or attempted bypass                | Required control                                                                                                 | Required negative proof                                                                                                                                                  | Owner                                |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| Add or hot-plug a network path            | Empty vNIC configuration and device inventory revalidation before start                                          | Guest TCP/UDP/DNS egress and host-LAN reachability fail; inventory contains no network device                                                                            | platform controllers / #2396         |
+| Reach arbitrary host services through IPC | One VM-bound socket, closed authenticated broker protocol, no proxy/CONNECT                                      | Unknown method, arbitrary bytes, arbitrary destination, wildcard VM identity, and wrong audience fail                                                                    | broker/shim                          |
+| Replay or detach a launch                 | One-use challenge bound to the live controller instance, sequence ledger, UTC freshness, and full launch binding | Duplicate/foreign nonce, sequence replay, restarted-instance digest, cross-run/VM/boot, old/future UTC window, wrong audience, and revoked epoch fail before VM creation | platform controllers                 |
+| Forge structural qualification            | Structural objects are untrusted data; controller returns only an opaque live lease                              | Reconstructed JSON, TypeScript cast/brand, copied observation, and caller Boolean never admit control or broker work                                                     | native host / #2442                  |
+| Replace/downgrade controller or guest     | Existing protected signing authority plus exact final bundle digests and profile digest                          | Old, unsigned, wrong-platform, rebuilt, post-verification-modified, or unknown bundle fails                                                                              | release/platform children            |
+| Expose host workspace                     | No mount/share; filtered immutable snapshot only                                                                 | Guest mount table/device inventory has no host share; host workspace is unchanged by direct guest writes                                                                 | worker bundle / #2396                |
+| Escape snapshot revision                  | Host re-resolves workspace and compares source/tree SHA before applying normalized effects                       | Host revision change converts result to conflict/recovery; stale result cannot apply                                                                                     | #2442                                |
+| Inherit credentials or configuration      | Minimal exact environment; synthetic guest identity/configuration                                                | Provider tokens, host home, Git config, npm config, proxy variables, and credential stores are absent                                                                    | worker bundle                        |
+| Exceed memory                             | Exact VM memory, no balloon, no guest swap, cgroup hard limit and group OOM                                      | Balloon absent; swap remains zero; over-limit workload is contained/terminated without host fallback                                                                     | worker bundle / platform controllers |
+| Exceed tasks                              | `pids.max=32`, which counts Linux tasks/threads                                                                  | 33rd task/thread fails; runtime cannot move itself to another cgroup                                                                                                     | worker bundle                        |
+| Exceed lifetime                           | Private exact 900,000 ms watchdog using `mach_continuous_time()` / `GetTickCount64()` after admission            | Guest/wall-clock changes, shim silence, busy loop, paused traffic, and serialized timestamp edits cannot extend the deadline; reboot enters cleanup                      | platform controllers                 |
+| Leave descendants after stop              | Whole-VM termination is the kill boundary                                                                        | Fork, `setsid`, daemonization, shim/runtime crash, and hostile shutdown leave no VM or worker task                                                                       | platform controllers                 |
+| Continue after BFF/lease loss             | Broker denies first; service/controller expires opaque lease and tears down VM                                   | BFF disconnect, lease expiry, BFF crash, and controller-channel replacement stop productive work                                                                         | native host / #2442                  |
+| Survive Windows restart/crash             | SCM automatic start, durable content-free lease ledger, separate recovery scan, stale termination before ready   | Startup/restart clears challenges; coherent pending/completed/failed counts and canonical inventory digest prove stale/unrecognized VMs are settled before ready         | Windows controller                   |
+| Reuse state across runs                   | No warm pool; fresh boot, storage, nonce, capability, and lease                                                  | Second run cannot read first-run memory, disk, capability, broker state, or snapshot                                                                                     | platform controllers / worker bundle |
+| Leak content through evidence             | Closed validators and allowlisted projection                                                                     | Paths, endpoints, VM/socket ids, env values, capabilities, lease, output, prompts, diffs, source, tool bodies, and logs are rejected                                     | contracts / evidence consumer        |
+| Weaken unsupported platform               | Closed capability state and typed remediation; no fallback                                                       | Windows Home/arm64, disabled Hyper-V, unsupported macOS/API/hardware, missing entitlement/signature all remain unavailable                                               | platform controllers / #2396         |
 
 ## Platform qualification matrix
 
@@ -90,18 +90,26 @@ than all HCS-capable releases.
 For each request, the native controller/service must perform these operations against current state:
 
 1. Verify the signed controller identity, exact controller and guest digests, platform/architecture,
-   canonical profile digest, policy version, and revocation epoch.
-2. Compare issue/expiry fields with the current host monotonic clock. A structurally valid old request
-   is rejected live.
-3. Atomically reserve the nonce and monotonically advancing sequence in a controller-owned bounded
-   replay ledger. Replay or ambiguity denies before VM creation.
-4. Create a fresh VM, obtain controller-observed VM and boot identities, validate the exact device
+   canonical profile digest, policy version, revocation epoch, and `controllerInstanceDigest`.
+2. Compare `issuedAtUnixMs <= now <= expiresAtUnixMs` against the current UTC Unix-epoch-millisecond
+   wall clock. Structural parsing proves only a positive window of at most 900,000 ms and never calls
+   `Date.now()` or admits authority.
+3. Require a nonce minted by this live controller instance, held only as a one-use outstanding
+   challenge in controller-private monotonic state. Atomically consume it with the advancing sequence;
+   another/restarted instance, replay, ambiguity, or consumption race denies before VM creation.
+4. Start a separate exact 900,000 ms private watchdog after admission using
+   `mach_continuous_time()` on macOS or `GetTickCount64()` on Windows. No monotonic value is serialized.
+5. Create a fresh VM, obtain controller-observed VM and boot identities, validate the exact device
    inventory, and bind them to a new opaque lease.
-5. Authenticate the broker session to that VM/boot/run/audience binding before productive operations.
-6. Recheck lease liveness, deadline, revocation epoch, and broker/channel identity before every control
+6. Authenticate the broker session to that VM/boot/run/audience binding before productive operations.
+7. Recheck lease liveness, watchdog, revocation epoch, and broker/channel identity before every control
    or productive broker operation.
-7. Deny new work first on expiry, revocation, disconnect, shutdown, or recovery; terminate the whole
+8. Deny new work first on expiry, revocation, disconnect, shutdown, or recovery; terminate the whole
    VM; durably record the content-free terminal state; and retire replay/lease state only when safe.
+
+Restart or reboot invalidates all outstanding challenges and private watchdog state. The controller
+must enumerate and settle stale/unrecognized VMs through the recovery state machine before reporting
+capability `available`; private monotonic state is never reconstructed from UTC evidence.
 
 The TypeScript contract intentionally contains no qualification, enforcement receipt, public handle,
 or serializable lease. Native implementation children own the opaque lease type and state machine
@@ -114,15 +122,25 @@ port but may not inspect, persist, reconstruct, or expose it.
   failed admission.
 - Bundle/signing identity change requires reviewed release authority and renewed qualification.
 - Policy or signing revocation prevents new launches and tears down affected live leases.
-- Windows startup recovery finishes stale enumeration and termination before capability becomes
-  `available`. Recovery observations contain aggregate counts and identity digests only.
+- Startup/restart recovery uses a separate `pending | completed | failed` observation. Enumerated
+  count equals stale plus unrecognized; terminated plus failures never exceeds enumerated; terminal
+  states fully account for the inventory; completed requires zero failures and permits an all-zero
+  scan only with the canonical empty-inventory digest.
+- Capability becomes `available` only when current native recovery state for the exact
+  platform/controller-bundle/profile/policy tuple is completed with zero failures. A structurally
+  valid capability observation is non-authoritative and carries no replayable recovery receipt.
 - Cleanup failure stays unavailable and operator-remediated. It never authorizes continued work.
 
 ## Evidence allowlist
 
-Allowed durable fields are schema version; closed platform, controller, lifecycle, capability, reason,
-and remediation values; content-free run/task/workspace ids; source/tree and bundle/profile/VM/boot/
-nonce digests; policy version; sequence and revocation epoch; timestamps; and aggregate counts.
+Allowed durable fields are schema version; closed platform, controller, lifecycle, recovery,
+capability, trigger, reason, and remediation values; domain-separated run/task/workspace/policy and
+controller-instance digests; source/tree, bundle/profile/VM/boot/nonce/inventory digests; sequence and
+revocation epoch; explicit Unix-epoch-millisecond timestamps; and coherent aggregate counts.
+
+Deterministic hashes of guessable identifiers are dictionary-confirmable even with field-domain
+separation. They are content-free projections, not anonymization; evidence access and retention remain
+restricted accordingly.
 
 Forbidden durable fields include the run capability value, opaque lease, broker endpoint, VM/socket
 identifier, environment value, absolute or relative path, source, prompt, diff, tool body, output,

@@ -6,8 +6,6 @@ import {
   MANAGED_RUNTIME_ISOLATION_PROFILE_CANONICAL_JSON,
   MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
   MANAGED_RUNTIME_CAPABILITY_STATES,
-  MANAGED_RUNTIME_LIFECYCLE_KINDS,
-  MANAGED_RUNTIME_LIFECYCLE_REASONS,
   MANAGED_RUNTIME_CONTROLLER_KINDS,
   MANAGED_RUNTIME_PLATFORM_TARGETS,
   MANAGED_RUNTIME_REMEDIATIONS,
@@ -15,7 +13,6 @@ import {
   MANAGED_RUNTIME_RUNTIME_ENV_NAMES,
   parseManagedRuntimeBundleDescriptor,
   parseManagedRuntimeCapabilityObservation,
-  parseManagedRuntimeLifecycleObservation,
   parseManagedRuntimeLaunchRequest,
 } from "./index.js";
 
@@ -32,31 +29,17 @@ function launchRequest(): Record<string, unknown> {
     platformTarget: "macos-arm64",
     controllerKind: "apple-virtualization",
     controllerBundleDigest: DIGEST,
+    controllerInstanceDigest: "4".repeat(64),
     guestBundleDigest: "d".repeat(64),
     profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
     ipcAudience: "keiko-managed-runtime-broker-v1",
     nonce: "e".repeat(64),
     sequence: 1,
-    issuedAtMs: 1_000,
-    expiresAtMs: 901_000,
+    issuedAtUnixMs: 1_000,
+    expiresAtUnixMs: 901_000,
     revocationEpoch: 3,
     policyVersion: "policy-v1",
   };
-}
-
-function lifecycleObservation(): Record<string, unknown> {
-  const observation: Record<string, unknown> = {
-    ...launchRequest(),
-    kind: "running-observed",
-    reason: "broker-authenticated",
-    vmIdentityDigest: "f".repeat(64),
-    bootIdentityDigest: "0".repeat(64),
-    nonceDigest: "1".repeat(64),
-    observedAtMs: 2_000,
-    recoveredVmCount: 0,
-  };
-  delete observation.nonce;
-  return observation;
 }
 
 describe("managed runtime launch request", () => {
@@ -118,8 +101,8 @@ describe("managed runtime launch request", () => {
     ["wrong audience", { ipcAudience: "caller-selected" }],
     ["missing nonce entropy", { nonce: "e".repeat(63) }],
     ["zero sequence", { sequence: 0 }],
-    ["expired at issue", { expiresAtMs: 1_000 }],
-    ["beyond host deadline", { expiresAtMs: 901_001 }],
+    ["expired at issue", { expiresAtUnixMs: 1_000 }],
+    ["beyond host deadline", { expiresAtUnixMs: 901_001 }],
     ["negative revocation epoch", { revocationEpoch: -1 }],
     ["unsafe policy version", { policyVersion: "../../policy" }],
   ])("rejects %s", (_label, replacement) => {
@@ -154,100 +137,12 @@ describe("managed runtime launch request", () => {
 
   it("treats old timestamps as structural data, never live admission", () => {
     expect(
-      parseManagedRuntimeLaunchRequest({ ...launchRequest(), issuedAtMs: 1, expiresAtMs: 2 }).ok,
+      parseManagedRuntimeLaunchRequest({
+        ...launchRequest(),
+        issuedAtUnixMs: 1,
+        expiresAtUnixMs: 2,
+      }).ok,
     ).toBe(true);
-  });
-});
-
-describe("managed runtime lifecycle observation", () => {
-  const observation = lifecycleObservation();
-
-  it("validates immutable content-free status without creating authority", () => {
-    expect(MANAGED_RUNTIME_LIFECYCLE_KINDS).toStrictEqual([
-      "launch-observed",
-      "running-observed",
-      "stop-observed",
-      "termination-observed",
-      "revocation-observed",
-      "recovery-observed",
-      "failure-observed",
-    ]);
-    expect(MANAGED_RUNTIME_LIFECYCLE_REASONS).toContain("stale-vm-terminated");
-    const parsed = parseManagedRuntimeLifecycleObservation(observation);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) expect(Object.isFrozen(parsed.value)).toBe(true);
-    for (const forbidden of [
-      "endpoint",
-      "runCapability",
-      "lease",
-      "receipt",
-      "workspacePath",
-      "output",
-      "prompt",
-      "diff",
-    ]) {
-      expect(
-        parseManagedRuntimeLifecycleObservation({ ...observation, [forbidden]: "secret" }).ok,
-      ).toBe(false);
-    }
-  });
-
-  it("closes lifecycle kind/reason pairs and rejects replay, timing, and identity drift", () => {
-    const acceptedPairs = [
-      ["launch-observed", "launch-accepted", 0],
-      ["running-observed", "broker-authenticated", 0],
-      ["stop-observed", "requested", 0],
-      ["stop-observed", "deadline-expired", 0],
-      ["stop-observed", "lease-expired", 0],
-      ["stop-observed", "lease-revoked", 0],
-      ["stop-observed", "bff-disconnected", 0],
-      ["stop-observed", "policy-revoked", 0],
-      ["termination-observed", "requested", 0],
-      ["termination-observed", "deadline-expired", 0],
-      ["termination-observed", "lease-expired", 0],
-      ["termination-observed", "lease-revoked", 0],
-      ["termination-observed", "bff-disconnected", 0],
-      ["termination-observed", "controller-crashed", 0],
-      ["termination-observed", "machine-restarted", 0],
-      ["termination-observed", "stale-vm-terminated", 0],
-      ["termination-observed", "guest-failed", 0],
-      ["termination-observed", "policy-revoked", 0],
-      ["revocation-observed", "lease-revoked", 0],
-      ["revocation-observed", "policy-revoked", 0],
-      ["recovery-observed", "controller-crashed", 1],
-      ["recovery-observed", "machine-restarted", 1],
-      ["recovery-observed", "stale-vm-terminated", 1],
-      ["recovery-observed", "bff-disconnected", 1],
-      ["failure-observed", "controller-crashed", 0],
-      ["failure-observed", "guest-failed", 0],
-    ] as const;
-    for (const [kind, reason, recoveredVmCount] of acceptedPairs) {
-      expect(
-        parseManagedRuntimeLifecycleObservation({
-          ...observation,
-          kind,
-          reason,
-          recoveredVmCount,
-        }).ok,
-      ).toBe(true);
-    }
-    for (const replacement of [
-      { kind: "enforced" },
-      { reason: "caller-asserted" },
-      { kind: "launch-observed", reason: "guest-failed" },
-      { kind: "recovery-observed", reason: "stale-vm-terminated", recoveredVmCount: 0 },
-      { recoveredVmCount: 1 },
-      { nonceDigest: "1".repeat(63) },
-      { vmIdentityDigest: "F".repeat(64) },
-      { observedAtMs: 999 },
-      { recoveredVmCount: -1 },
-      { sequence: 0 },
-      { ipcAudience: "other" },
-    ]) {
-      expect(parseManagedRuntimeLifecycleObservation({ ...observation, ...replacement }).ok).toBe(
-        false,
-      );
-    }
   });
 });
 
@@ -258,11 +153,11 @@ describe("managed runtime capability observation", () => {
     state: "available",
     reason: "ready",
     remediation: "none",
-    observedAtMs: 2_000,
+    observedAtUnixMs: 2_000,
     controllerBundleDigest: DIGEST,
     guestBundleDigest: "d".repeat(64),
     profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
-    policyVersion: "policy-v1",
+    policyVersionDigest: "5".repeat(64),
     revocationEpoch: 3,
   };
 
@@ -278,14 +173,17 @@ describe("managed runtime capability observation", () => {
         state: "unavailable",
         reason: "virtualization-disabled",
         remediation: "enable-virtualization",
-        observedAtMs: 2_000,
+        observedAtUnixMs: 2_000,
       }).ok,
     ).toBe(true);
     for (const replacement of [
       { state: "unknown" },
       { reason: "caller-says-enforced" },
       { remediation: "none", state: "unavailable" },
-      { observedAtMs: -1 },
+      { observedAtUnixMs: -1 },
+      { policyVersionDigest: "A".repeat(64) },
+      { policyVersion: "policy-v1" },
+      { recoveryObservationDigest: "7".repeat(64) },
       { receipt: true },
       { controllerBundleDigest: "A".repeat(64) },
     ]) {
@@ -304,7 +202,7 @@ describe("managed runtime capability observation", () => {
           state: "unavailable",
           reason,
           remediation: "contact-enterprise-administrator",
-          observedAtMs: 1,
+          observedAtUnixMs: 1,
         }).ok,
       ).toBe(true);
     }
@@ -316,7 +214,7 @@ describe("managed runtime capability observation", () => {
           state: "unavailable",
           reason: "host-not-installed",
           remediation,
-          observedAtMs: 1,
+          observedAtUnixMs: 1,
         }).ok,
       ).toBe(true);
     }

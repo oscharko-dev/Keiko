@@ -80,13 +80,28 @@ export const MANAGED_RUNTIME_REMEDIATIONS = Object.freeze([
   "wait-for-stale-vm-recovery",
   "update-keiko",
 ] as const);
+export const MANAGED_RUNTIME_RECOVERY_STATES = Object.freeze([
+  "pending",
+  "completed",
+  "failed",
+] as const);
+export const MANAGED_RUNTIME_RECOVERY_TRIGGERS = Object.freeze(["startup", "restart"] as const);
+export const MANAGED_RUNTIME_EMPTY_INVENTORY_DIGEST =
+  "09afa09dee23dfb20231fc07a957346d65300283bb0bdf22dfdd69ce7ed054ca" as const;
+export const MANAGED_RUNTIME_DIGEST_DOMAINS = Object.freeze({
+  runIdDigest: "keiko-managed-runtime-v1:run-id\0",
+  taskIdDigest: "keiko-managed-runtime-v1:task-id\0",
+  workspaceIdDigest: "keiko-managed-runtime-v1:workspace-id\0",
+  policyVersionDigest: "keiko-managed-runtime-v1:policy-version\0",
+  controllerInstanceDigest: "keiko-managed-runtime-v1:controller-instance\0",
+  inventoryDigest: "keiko-managed-runtime-recovery-inventory-v1\0",
+} as const);
 export const MANAGED_RUNTIME_LIFECYCLE_KINDS = Object.freeze([
   "launch-observed",
   "running-observed",
   "stop-observed",
   "termination-observed",
   "revocation-observed",
-  "recovery-observed",
   "failure-observed",
 ] as const);
 export const MANAGED_RUNTIME_LIFECYCLE_REASONS = Object.freeze([
@@ -98,8 +113,6 @@ export const MANAGED_RUNTIME_LIFECYCLE_REASONS = Object.freeze([
   "lease-revoked",
   "bff-disconnected",
   "controller-crashed",
-  "machine-restarted",
-  "stale-vm-terminated",
   "guest-failed",
   "policy-revoked",
 ] as const);
@@ -108,6 +121,8 @@ export type ManagedRuntimePlatformTarget = (typeof MANAGED_RUNTIME_PLATFORM_TARG
 export type ManagedRuntimeControllerKind = (typeof MANAGED_RUNTIME_CONTROLLER_KINDS)[number];
 export type ManagedRuntimeUnavailableReason = (typeof MANAGED_RUNTIME_UNAVAILABLE_REASONS)[number];
 export type ManagedRuntimeRemediation = (typeof MANAGED_RUNTIME_REMEDIATIONS)[number];
+export type ManagedRuntimeRecoveryState = (typeof MANAGED_RUNTIME_RECOVERY_STATES)[number];
+export type ManagedRuntimeRecoveryTrigger = (typeof MANAGED_RUNTIME_RECOVERY_TRIGGERS)[number];
 export type ManagedRuntimeLifecycleKind = (typeof MANAGED_RUNTIME_LIFECYCLE_KINDS)[number];
 export type ManagedRuntimeLifecycleReason = (typeof MANAGED_RUNTIME_LIFECYCLE_REASONS)[number];
 export type ManagedRuntimeParse<T> =

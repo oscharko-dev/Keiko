@@ -6,6 +6,7 @@ import {
   parseManagedRuntimeCapabilityObservation,
   parseManagedRuntimeLaunchRequest,
   parseManagedRuntimeLifecycleObservation,
+  parseManagedRuntimeRecoveryObservation,
 } from "./index.js";
 
 const DIGEST = "a".repeat(64);
@@ -19,28 +20,42 @@ const launch = {
   platformTarget: "macos-arm64",
   controllerKind: "apple-virtualization",
   controllerBundleDigest: DIGEST,
+  controllerInstanceDigest: "4".repeat(64),
   guestBundleDigest: "d".repeat(64),
   profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
   ipcAudience: "keiko-managed-runtime-broker-v1",
   nonce: "e".repeat(64),
   sequence: 1,
-  issuedAtMs: 1_000,
-  expiresAtMs: 901_000,
+  issuedAtUnixMs: 1_000,
+  expiresAtUnixMs: 901_000,
   revocationEpoch: 3,
   policyVersion: "policy-v1",
 };
 const lifecycle: Record<string, unknown> = {
-  ...launch,
-  nonce: undefined,
+  schemaVersion: "1",
+  runIdDigest: "1".repeat(64),
+  taskIdDigest: "2".repeat(64),
+  workspaceIdDigest: "3".repeat(64),
+  sourceSha: "b".repeat(40),
+  treeSha: "c".repeat(40),
+  platformTarget: "macos-arm64",
+  controllerKind: "apple-virtualization",
+  controllerBundleDigest: DIGEST,
+  controllerInstanceDigest: "4".repeat(64),
+  guestBundleDigest: "d".repeat(64),
+  profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
+  sequence: 1,
+  issuedAtUnixMs: 1_000,
+  expiresAtUnixMs: 901_000,
+  revocationEpoch: 3,
+  policyVersionDigest: "5".repeat(64),
   kind: "running-observed",
   reason: "broker-authenticated",
   vmIdentityDigest: "f".repeat(64),
   bootIdentityDigest: "0".repeat(64),
   nonceDigest: "1".repeat(64),
-  observedAtMs: 2_000,
-  recoveredVmCount: 0,
+  observedAtUnixMs: 2_000,
 };
-delete lifecycle.nonce;
 const descriptor = {
   schemaVersion: "1",
   platformTarget: "macos-arm64",
@@ -56,11 +71,11 @@ const available = {
   state: "available",
   reason: "ready",
   remediation: "none",
-  observedAtMs: 2_000,
+  observedAtUnixMs: 2_000,
   controllerBundleDigest: DIGEST,
   guestBundleDigest: "d".repeat(64),
   profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
-  policyVersion: "policy-v1",
+  policyVersionDigest: "5".repeat(64),
   revocationEpoch: 3,
 };
 const unavailable = {
@@ -69,7 +84,24 @@ const unavailable = {
   state: "unavailable",
   reason: "host-not-installed",
   remediation: "install-machine-managed-host",
-  observedAtMs: 1,
+  observedAtUnixMs: 1,
+};
+const recovery = {
+  schemaVersion: "1",
+  state: "completed",
+  trigger: "startup",
+  platformTarget: "windows-x64",
+  controllerKind: "windows-hcs-hyper-v-service",
+  controllerBundleDigest: DIGEST,
+  profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
+  policyVersionDigest: "5".repeat(64),
+  observedAtUnixMs: 2_000,
+  enumeratedVmCount: 1,
+  staleVmCount: 1,
+  unrecognizedVmCount: 0,
+  terminatedVmCount: 1,
+  failureCount: 0,
+  inventoryDigest: "7".repeat(64),
 };
 
 describe("managed runtime plain-data boundary", () => {
@@ -79,6 +111,7 @@ describe("managed runtime plain-data boundary", () => {
       [parseManagedRuntimeLifecycleObservation, lifecycle],
       [parseManagedRuntimeBundleDescriptor, descriptor],
       [parseManagedRuntimeCapabilityObservation, unavailable],
+      [parseManagedRuntimeRecoveryObservation, recovery],
     ] as const;
     for (const [parser, input] of cases) {
       const accessor = { ...input };
@@ -103,8 +136,8 @@ describe("managed runtime plain-data boundary", () => {
       { sourceSha: shaLike },
       { controllerBundleDigest: digestLike },
       { nonce: digestLike },
-      { issuedAtMs: "1000" },
-      { expiresAtMs: Number.MAX_SAFE_INTEGER + 1 },
+      { issuedAtUnixMs: "1000" },
+      { expiresAtUnixMs: Number.MAX_SAFE_INTEGER + 1 },
       { sequence: Number.NaN },
     ]) {
       expect(parseManagedRuntimeLaunchRequest({ ...launch, ...replacement }).ok).toBe(false);
@@ -139,8 +172,8 @@ describe("managed runtime plain-data boundary", () => {
       { remediation: "repair-machine-managed-host" },
       { controllerBundleDigest: digestLike },
       { profileDigest: "f".repeat(64) },
-      { policyVersion: { toString: (): string => "policy-v1" } },
-      { observedAtMs: "2000" },
+      { policyVersionDigest: { toString: (): string => "5".repeat(64) } },
+      { observedAtUnixMs: "2000" },
     ]) {
       expect(parseManagedRuntimeCapabilityObservation({ ...available, ...replacement }).ok).toBe(
         false,
@@ -157,8 +190,8 @@ describe("managed runtime plain-data boundary", () => {
     }
     for (const replacement of [
       { vmIdentityDigest: digestLike },
-      { recoveredVmCount: "0" },
-      { observedAtMs: Number.POSITIVE_INFINITY },
+      { runIdDigest: digestLike },
+      { observedAtUnixMs: Number.POSITIVE_INFINITY },
     ]) {
       expect(parseManagedRuntimeLifecycleObservation({ ...lifecycle, ...replacement }).ok).toBe(
         false,
@@ -206,6 +239,10 @@ describe("managed runtime plain-data boundary", () => {
     expect(parseManagedRuntimeLifecycleObservation(null)).toEqual({
       ok: false,
       errors: ["invalid runtime lifecycle observation"],
+    });
+    expect(parseManagedRuntimeRecoveryObservation(null)).toEqual({
+      ok: false,
+      errors: ["invalid runtime recovery observation"],
     });
   });
 });

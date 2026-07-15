@@ -72,8 +72,12 @@ OpenCode qualification at 2 GiB and 32 tasks belongs to the downstream platform 
 failure there blocks support instead of changing this profile.
 
 Polling, exit notifications, memory-pressure events, and guest self-reporting are observations, not
-enforcement. The controller configures the VM boundary, the guest image configures cgroup v2 before
-the runtime starts, and the controller owns whole-VM termination when the monotonic deadline expires.
+enforcement. After live admission succeeds, the controller starts a private exact 900,000 ms watchdog
+using `mach_continuous_time()` on macOS or `GetTickCount64()` on Windows. That watchdog is independent
+of serialized UTC fields and guest time. The controller configures the VM boundary, the guest image
+configures cgroup v2 before the runtime starts, and the controller owns whole-VM termination when the
+watchdog expires. A machine reboot invalidates private watchdog/challenge state and startup recovery
+removes any surviving VM before availability can return.
 
 ### D3 — Bundles and launches are bound to reviewed identities
 
@@ -83,9 +87,19 @@ digest, Linux guest bundle digest, isolation-profile digest, and exact runtime e
 Replaced, stale, downgraded, mismatched, replayed, expired, or unknown values fail before launch.
 
 A versioned launch request binds run, task, and workspace ids; source commit and tree SHA; platform
-and architecture; controller and guest bundle digests; profile digest; fixed IPC audience; nonce;
-monotonic sequence; issue and expiry times; revocation epoch; and policy version. Its validity window
-is positive and at most 900,000 ms. Validation is structural and cannot qualify a launch by itself.
+and architecture; controller bundle, live controller-instance, guest bundle, and profile digests;
+fixed IPC audience; nonce; monotonic sequence; `issuedAtUnixMs` and `expiresAtUnixMs`; revocation
+epoch; and policy version. The UTC Unix-epoch-millisecond validity window is positive and at most
+900,000 ms. Structural parsing checks only shape and the window; it deliberately does not call
+`Date.now()` or admit authority. The live native controller compares both fields with its current UTC
+wall clock immediately before admission.
+
+The nonce is a controller-minted, one-use challenge. It is outstanding only in controller-private
+monotonic state and is bound to the exact `controllerInstanceDigest`. Admission requires the current
+instance, exact challenge, and sequence to match and consumes the challenge atomically. Controller
+restart destroys outstanding challenges, so a structurally valid request from another or restarted
+instance cannot cross a reboot boundary. No public challenge, launch-authority, or serialized
+monotonic-timestamp type exists.
 
 ### D4 — Only the controller channel and opaque lease carry authority
 
@@ -96,9 +110,11 @@ or accepted from a browser, caller, TypeScript brand, evidence record, or observ
 operation requires both the live authenticated channel and the current opaque lease.
 
 The controller binds that lease to the request plus the created VM identity, boot identity, broker
-session, and current revocation epoch. It rejects nonce/sequence replay, audience detachment,
-downgrade, expiry, replaced bundles, and policy revocation. Serialized lifecycle observations contain
-only hashes and closed status data. They are evidence and diagnostics, never an enforcement receipt.
+session, and current revocation epoch. It rejects nonce/sequence replay, controller-instance mismatch,
+audience detachment, downgrade, wall-clock expiry, replaced bundles, and policy revocation. The exact
+900,000 ms private monotonic VM watchdog begins separately after admission. Serialized lifecycle
+observations contain only hashes and closed status data. They are evidence and diagnostics, never an
+enforcement receipt.
 
 ### D5 — Broker authentication is VM- and run-bound
 
@@ -150,14 +166,45 @@ work first and converge on whole-VM termination. A guest never continues product
 lease expires. Cleanup failure reports typed unavailable/recovery state; it never falls back to a
 process sandbox, container, host runtime, or caller assertion.
 
+Machine recovery is not a per-run lifecycle event. `ManagedRuntimeRecoveryObservation` is a separate
+closed `pending | completed | failed` projection with `startup | restart` trigger, concrete platform
+and controller kind, controller-bundle/profile/policy-version digests, `observedAtUnixMs`, canonical
+inventory digest, and enumerated/stale/unrecognized/terminated/failure counts. Every enumerated VM is
+classified as stale or unrecognized. Pending evidence may be empty or partially settled; completed
+evidence requires every enumerated VM terminated and zero failures (including a valid all-zero scan);
+failed evidence requires at least one failure and complete terminal accounting.
+
+`inventoryDigest` is SHA-256 over the UTF-8 bytes of
+`keiko-managed-runtime-recovery-inventory-v1\0` followed by compact JSON for a list sorted by VM
+identity digest. Each private list entry has exact property order `vmIdentityDigest`,
+`classification`, `outcome`; classifications are `stale | unrecognized`, and outcomes are
+`pending | terminated | failed`. The empty list is exactly `[]` and has the exported
+`MANAGED_RUNTIME_EMPTY_INVENTORY_DIGEST`. The list itself is never durable evidence.
+
 ### D9 — Evidence is content-free and non-authoritative
 
-Capability and lifecycle observations use closed versions, platforms, states, reasons, remediation
-codes, timestamps, counts, sequence/epoch values, and cryptographic digests. They exclude capabilities,
-leases, receipts, endpoints, VM/socket identifiers, paths, environment values, output, prompts, diffs,
-source, tool bodies, credentials, private logs, and customer data. VM and boot identities appear only
-as SHA-256 digests. Observations may prove that a controller reported an event; they cannot authorize
-work or substitute for the live channel and opaque lease.
+Capability, lifecycle, and recovery observations use closed versions, platforms, states, reasons,
+remediation codes, explicit Unix-epoch-millisecond timestamps, counts, sequence/epoch values, and
+lowercase SHA-256 digests. Lifecycle evidence contains `runIdDigest`, `taskIdDigest`,
+`workspaceIdDigest`, and `policyVersionDigest`, never the raw values or IPC audience. The digest is
+SHA-256 over the UTF-8 domain prefix plus raw value, using the exported exact prefixes
+`keiko-managed-runtime-v1:run-id\0`, `keiko-managed-runtime-v1:task-id\0`,
+`keiko-managed-runtime-v1:workspace-id\0`, and
+`keiko-managed-runtime-v1:policy-version\0`.
+Controller-instance digests use `keiko-managed-runtime-v1:controller-instance\0`. Domain separation
+prevents cross-field substitution, but deterministic digests of guessable identifiers remain
+dictionary-confirmable; evidence access control and retention therefore remain mandatory, and these
+digests must not be described as anonymous.
+
+The observations exclude capabilities, leases, receipts, endpoints, VM/socket identifiers, paths,
+environment values, output, prompts, diffs, source, tool bodies, credentials, private logs, and
+customer data. VM, boot, and nonce identities appear only as digests. A capability observation may
+be structurally valid without proving recovery readiness: the native controller may report
+`available` only when its current in-process recovery state for the exact
+platform/controller-bundle/profile/policy tuple is `completed` with zero failures. The capability
+schema intentionally has no replayable `recoveryObservationDigest`. Observations may prove that a
+controller reported an event; they cannot authorize work or substitute for the live channel and
+opaque lease.
 
 ### D10 — Downstream ownership is disjoint
 

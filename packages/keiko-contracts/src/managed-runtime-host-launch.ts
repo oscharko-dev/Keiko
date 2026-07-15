@@ -36,19 +36,20 @@ export interface ManagedRuntimeLaunchRequest {
   readonly platformTarget: ManagedRuntimePlatformTarget;
   readonly controllerKind: ManagedRuntimeControllerKind;
   readonly controllerBundleDigest: string;
+  readonly controllerInstanceDigest: string;
   readonly guestBundleDigest: string;
   readonly profileDigest: typeof MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST;
   readonly ipcAudience: "keiko-managed-runtime-broker-v1";
   readonly nonce: string;
   readonly sequence: number;
-  readonly issuedAtMs: number;
-  readonly expiresAtMs: number;
+  readonly issuedAtUnixMs: number;
+  readonly expiresAtUnixMs: number;
   readonly revocationEpoch: number;
   readonly policyVersion: string;
 }
 
 const LAUNCH_KEYS = Object.freeze(
-  "schemaVersion runId taskId workspaceId sourceSha treeSha platformTarget controllerKind controllerBundleDigest guestBundleDigest profileDigest ipcAudience nonce sequence issuedAtMs expiresAtMs revocationEpoch policyVersion".split(
+  "schemaVersion runId taskId workspaceId sourceSha treeSha platformTarget controllerKind controllerBundleDigest controllerInstanceDigest guestBundleDigest profileDigest ipcAudience nonce sequence issuedAtUnixMs expiresAtUnixMs revocationEpoch policyVersion".split(
     " ",
   ),
 );
@@ -90,6 +91,8 @@ function hasLaunchBinding(value: ManagedRuntimeUnknownRecord): boolean {
   return (
     isManagedRuntimeMember(value.platformTarget, MANAGED_RUNTIME_PLATFORM_TARGETS) &&
     controllerMatchesPlatform(value) &&
+    typeof value.controllerInstanceDigest === "string" &&
+    SHA256.test(value.controllerInstanceDigest) &&
     value.ipcAudience === "keiko-managed-runtime-broker-v1" &&
     typeof value.nonce === "string" &&
     SHA256.test(value.nonce) &&
@@ -100,11 +103,11 @@ function hasLaunchBinding(value: ManagedRuntimeUnknownRecord): boolean {
 
 function hasLaunchTiming(value: ManagedRuntimeUnknownRecord): boolean {
   return (
-    isManagedRuntimeSafeInteger(value.issuedAtMs) &&
-    isManagedRuntimeSafeInteger(value.expiresAtMs) &&
+    isManagedRuntimeSafeInteger(value.issuedAtUnixMs) &&
+    isManagedRuntimeSafeInteger(value.expiresAtUnixMs) &&
     isManagedRuntimeSafeInteger(value.revocationEpoch) &&
-    value.expiresAtMs > value.issuedAtMs &&
-    value.expiresAtMs - value.issuedAtMs <= MANAGED_RUNTIME_HOST_DEADLINE_MS
+    value.expiresAtUnixMs > value.issuedAtUnixMs &&
+    value.expiresAtUnixMs - value.issuedAtUnixMs <= MANAGED_RUNTIME_HOST_DEADLINE_MS
   );
 }
 
@@ -151,9 +154,30 @@ export function parseManagedRuntimeLaunchRequest(
   ) {
     return managedRuntimeFailure("invalid managed runtime launch");
   }
+  const request: ManagedRuntimeLaunchRequest = {
+    schemaVersion: MANAGED_RUNTIME_HOST_SCHEMA_VERSION,
+    runId: record.runId as string,
+    taskId: record.taskId as string,
+    workspaceId: record.workspaceId as string,
+    sourceSha: record.sourceSha as string,
+    treeSha: record.treeSha as string,
+    platformTarget: record.platformTarget as ManagedRuntimePlatformTarget,
+    controllerKind: record.controllerKind as ManagedRuntimeControllerKind,
+    controllerBundleDigest: record.controllerBundleDigest as string,
+    controllerInstanceDigest: record.controllerInstanceDigest as string,
+    guestBundleDigest: record.guestBundleDigest as string,
+    profileDigest: MANAGED_RUNTIME_ISOLATION_PROFILE_DIGEST,
+    ipcAudience: "keiko-managed-runtime-broker-v1",
+    nonce: record.nonce as string,
+    sequence: record.sequence as number,
+    issuedAtUnixMs: record.issuedAtUnixMs as number,
+    expiresAtUnixMs: record.expiresAtUnixMs as number,
+    revocationEpoch: record.revocationEpoch as number,
+    policyVersion: record.policyVersion as string,
+  };
   return Object.freeze({
     ok: true,
-    value: record as unknown as ManagedRuntimeLaunchRequest,
+    value: Object.freeze(request),
   });
 }
 
