@@ -1,7 +1,7 @@
 // GEN-PERF-PERSISTENCE-009 regression: handleListQiRuns re-parses + SHA-256-re-hashes up to 100
-// manifests per request. QI manifests are write-once, so a positive verification is memoised by
-// metadata plus a raw-content digest. Writes prime the same cache with the already-built manifest,
-// so immediate post-write lists avoid JSON parsing and per-group re-hashing. This proves:
+// manifests per request. QI manifests are write-once (only an export append bumps mtime+size), so
+// a positive verification is memoised keyed by path + mtimeMs + size. Writes prime the same cache
+// with the already-built manifest, so immediate post-write lists do not re-read/re-hash. This proves:
 //   - unchanged manifests perform ZERO additional parse+verify passes after write-cache priming;
 //   - modifying a manifest on disk (export append / tamper) forces a re-verify (cache miss);
 //   - cache hits preserve tamper-evidence while avoiding redundant parse+integrity work.
