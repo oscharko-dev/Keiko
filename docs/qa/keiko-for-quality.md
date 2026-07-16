@@ -35,10 +35,12 @@ The following analysis remains valuable but is not merge-critical:
 
 - `Gitar` review may be absent when automatic processing is paused by plan pacing. Its comments and
   fixes remain advisory until the service proves current-head check emission within a bounded SLO.
-- `Keiko for Quality` is dormant and non-required. The external aggregate cannot safely control the
-  same protection path needed to repair its own evaluator.
+- `Keiko for Quality` is advisory and non-required. The external aggregate cannot safely control
+  the same protection path needed to repair its own evaluator.
 - Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
   remains required engineering evidence for tractable trust-boundary changes.
+- The per-pull aggregate mirrors the protected direct checks plus Gitar. It does not wait for the
+  scheduled/manual full mutation lane, which does not emit a pull-request check.
 - Hosted-runner performance evidence uses ten samples after merge or on a release lane. Functional
   UI build, lint, typecheck, coverage, accessibility, smoke, editor E2E, and package checks remain in
   the required `ui` job.
@@ -55,13 +57,17 @@ Treat these states differently:
   must not convert missing or in-progress evidence into terminal failure.
 - A new commit invalidates all prior head-bound results; stale success is never reused.
 
-## Dormant aggregate implementation
+## Advisory aggregate implementation
 
 The repository retains the open implementation under
 [`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/) and its
-redacted evaluator tests for audit and possible redesign. The GitHub App receives no Contents,
-Actions, Administration, or repository-secret access. Its historical check and dashboard comment
-are not merge authority.
+redacted evaluator tests. The GitHub App receives no Contents, Actions, Administration, or
+repository-secret access. Its check and dashboard comment are not merge authority.
+
+The scheduled reconciliation sweep retains a merged pull request for up to one hour. This bounded
+post-merge lane lets the 60-second review-product stability window finish and updates the exact-head
+advisory check before deleting persisted tracking. Closed, unmerged, wrong-base, expired, and
+successfully reconciled pull requests are removed from tracking.
 
 The aggregate may be reconsidered only after live probes prove all of the following:
 

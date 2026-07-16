@@ -532,6 +532,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     }
     expect(hardFailure([])).toBe(false);
     expect(hardFailure(["Missing current-head check: ci."])).toBe(false);
+    expect(hardFailure(["Check is pending: ci."])).toBe(false);
   });
 
   it("matches only this app's exact check event", () => {
@@ -642,7 +643,7 @@ describe("Keiko for Quality worker trust boundary", () => {
         "",
         "| Gate group | Evidence |",
         "| --- | --- |",
-        "| Required checks | 15/15 successful |",
+        "| Required checks | 14/14 successful |",
         "| SonarQube Cloud | ✅ native quality gate passed |",
         "| Gitar review | ✅ zero unresolved findings |",
         "| Socket Security | ✅ zero unresolved alerts |",
@@ -681,11 +682,13 @@ describe("Keiko for Quality worker trust boundary", () => {
       },
     });
     expect(waiting).toContain("⏳ **Waiting for evidence**");
-    expect(waiting).toContain("| Required checks | 13/15 successful |");
+    expect(waiting).toContain("<details>");
+    expect(waiting).not.toContain("<details open>");
+    expect(waiting).toContain("| Required checks | 12/14 successful |");
     expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
     expect(waiting).toContain("Missing current-head check: ci.");
     expect(waiting).toContain(
-      "| SonarQube Cloud | ❌ Missing current-head check: SonarCloud Code Analysis. |",
+      "| SonarQube Cloud | ⏳ Missing current-head check: SonarCloud Code Analysis. |",
     );
     expect(waiting).toContain(
       "- Missing current-head check: ci.\n- Missing current-head check: SonarCloud Code Analysis.",
@@ -700,7 +703,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     });
     expect(blocked).toContain("❌ **Blocked**");
     expect(blocked).toContain("<details open>");
-    expect(blocked).toContain("<summary>Blocking or waiting evidence (1)</summary>");
+    expect(blocked).toContain("<summary>Blocking evidence (1)</summary>");
     expect(blocked).not.toContain("secret-value");
 
     const invalidChecks = [
@@ -717,7 +720,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       pull: {},
       result: { failures: [], passed: false },
     });
-    expect(invalidCount).toContain("| Required checks | 0/15 successful |");
+    expect(invalidCount).toContain("| Required checks | 0/14 successful |");
     expect(invalidCount).toContain("| GitHub Auto-Merge | not armed |");
   });
 
@@ -1579,7 +1582,7 @@ describe("Keiko for Quality worker trust boundary", () => {
     }
   });
 
-  it("does not evaluate closed pull requests or pull requests targeting another branch", async () => {
+  it("does not evaluate ineligible, unmerged, or expired pull requests", async () => {
     const headSha = "f".repeat(40);
     const payload = {
       installation: { id: 42 },
@@ -1589,6 +1592,16 @@ describe("Keiko for Quality worker trust boundary", () => {
     };
     for (const [delivery, pull] of [
       ["closed", { base: { ref: "dev" }, head: { sha: headSha }, state: "closed" }],
+      [
+        "expired-merged",
+        {
+          base: { ref: "dev" },
+          head: { sha: headSha },
+          merged: true,
+          merged_at: "2026-07-11T09:00:00.000Z",
+          state: "closed",
+        },
+      ],
       ["wrong-base", { base: { ref: "main" }, head: { sha: headSha }, state: "open" }],
       ["missing-base", { head: { sha: headSha }, state: "open" }],
     ]) {
@@ -1609,6 +1622,56 @@ describe("Keiko for Quality worker trust boundary", () => {
       ).toBe(true);
       expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(false);
     }
+  });
+
+  it("reconciles a merged pull through the stability window before deleting tracking", async () => {
+    const headSha = "a".repeat(40);
+    const mergedAt = "2026-07-11T09:00:20.000Z";
+    const pull = {
+      base: { ref: "dev" },
+      head: { sha: headSha },
+      merged: true,
+      merged_at: mergedAt,
+      state: "closed",
+    };
+    const fetchMock = githubMock(headSha, { openPulls: [], pull });
+    const state = stateBinding();
+    trackPull(state, 2329);
+    const env = { ...environment(state), STABILITY_WINDOW_MS: "60000" };
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse(mergedAt) + 10_000);
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merged-stability",
+      ),
+      env,
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(true);
+    expect(
+      fetchMock.mock.calls
+        .filter(([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST")
+        .map(([, init]) => JSON.parse(init.body)),
+    ).toContainEqual(expect.objectContaining({ status: "in_progress" }));
+
+    now.mockReturnValue(Date.parse(mergedAt) + 120_000);
+    const scheduled = [];
+    await worker.scheduled({}, env, { waitUntil: (promise) => scheduled.push(promise) });
+    await Promise.all(scheduled);
+    expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(false);
+    expect(
+      fetchMock.mock.calls
+        .filter(([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST")
+        .map(([, init]) => JSON.parse(init.body)),
+    ).toContainEqual(expect.objectContaining({ conclusion: "success", status: "completed" }));
   });
 
   it("rejects malformed paginated evidence", async () => {
