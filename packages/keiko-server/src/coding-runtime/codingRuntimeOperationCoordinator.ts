@@ -196,9 +196,10 @@ export class CodingRuntimeOperationCoordinator {
     keys: readonly string[],
   ): PreparedRuntimeOperation {
     const current = this.deps.current();
-    // A required question halts the run; a paused run is likewise still admitting inline
-    // human-interaction (answer/reject/follow-up). Both accept these operations; every other
-    // lifecycle state fails closed.
+    // Inline human-interaction (answer/reject/follow-up) is admitted while the run is running or
+    // paused; every other lifecycle state fails closed. No hidden prompt queue is possible: the
+    // one-use request id plus monotonic revision reservation admit exactly one turn per revision,
+    // so a second concurrent follow-up fails closed rather than queueing behind the active one.
     if (
       !isExactRecord(input, keys) ||
       current?.runId !== runId ||

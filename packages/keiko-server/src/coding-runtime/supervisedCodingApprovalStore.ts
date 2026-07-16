@@ -121,7 +121,9 @@ interface StoredApprovalRecord {
 }
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_INACTIVITY_MS = 5 * 60 * 1000;
+// Strictly below the absolute TTL so the sliding idle window can actually invalidate an unused
+// task grant before its hard expiry; equal values would make the inactivity trigger dead.
+const DEFAULT_INACTIVITY_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_RECORDS = 512;
 const OPAQUE_CLAIM_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/u;

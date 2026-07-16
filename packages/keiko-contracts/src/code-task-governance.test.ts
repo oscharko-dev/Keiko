@@ -150,3 +150,68 @@ describe("validateCodeTaskExecutionV1", () => {
     expect(validateCodeTaskExecutionV1({ ...execution(), state: "sleeping" }).ok).toBe(false);
   });
 });
+
+describe("governed action review-defect regressions (#2386)", () => {
+  it("rejects an allowed decision carrying a grant on a structurally ungrantable action kind", () => {
+    for (const actionKind of [
+      "delivery",
+      "authority-widening",
+      "dependency-operation",
+      "external-file-apply-back",
+    ] as const) {
+      const result = validateGovernedActionV1({ ...allowedAction(), actionKind });
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("accepts an allowed decision on a grantable action kind", () => {
+    expect(validateGovernedActionV1({ ...allowedAction(), actionKind: "workspace-edit" }).ok).toBe(
+      true,
+    );
+  });
+
+  it("rejects a smuggled extra key inside grant.value and question.value", () => {
+    const smuggledGrant = validateGovernedActionV1({
+      ...allowedAction(),
+      grant: {
+        outcome: "known",
+        value: { grantId: "grt-1", grantScope: "task", leaked: "payload" },
+      },
+    });
+    expect(smuggledGrant.ok).toBe(false);
+    const smuggledQuestion = validateGovernedActionV1({
+      ...allowedAction(),
+      decision: "approval-required",
+      grant: { outcome: "absent" },
+      question: {
+        outcome: "known",
+        value: { questionId: "que_1", expectedRevision: 1, leaked: "payload" },
+      },
+    });
+    expect(smuggledQuestion.ok).toBe(false);
+  });
+
+  it("rejects a secret-shaped or free-text failure reason and accepts a bounded reason code", () => {
+    expect(
+      validateCodeTaskExecutionV1({
+        ...execution(),
+        state: "failed",
+        failure: { outcome: "known", value: "ghp_AbCdEf0123456789AbCdEf0123456789AbCd" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskExecutionV1({
+        ...execution(),
+        state: "failed",
+        failure: { outcome: "known", value: "Some free text with spaces." },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskExecutionV1({
+        ...execution(),
+        state: "failed",
+        failure: { outcome: "known", value: "verification-command-failed" },
+      }).ok,
+    ).toBe(true);
+  });
+});

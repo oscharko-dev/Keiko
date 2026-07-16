@@ -149,11 +149,21 @@ export class CodingRuntimeOrchestrator {
    * stop; it never accepts a widening mode change. Resume returns a paused run to running.
    */
   pause(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => this.transitionLifecycle(runId, input, "running", "paused"));
+    return this.serialValue(() => {
+      const result = this.transitionLifecycle(runId, input, "running", "paused");
+      // Make pause load-bearing: quiesce the manager's mutation admission. A run-mismatch here
+      // means no active runtime remains, so nothing can be admitted anyway; the paused state stands.
+      if (result.ok) this.deps.manager.pause(runId);
+      return result;
+    });
   }
 
   resume(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => this.transitionLifecycle(runId, input, "paused", "running"));
+    return this.serialValue(() => {
+      const result = this.transitionLifecycle(runId, input, "paused", "running");
+      if (result.ok) this.deps.manager.resume(runId);
+      return result;
+    });
   }
 
   private transitionLifecycle(
@@ -298,6 +308,15 @@ export class CodingRuntimeOrchestrator {
     return this.serialValue(() => {
       const current = this.current();
       if (event.runId !== current?.runId) return this.fail("invalid-intent");
+      // A paused run is sticky: adapter events never auto-resume it or open a new approval. Only an
+      // explicit resume/answer/stop, or a terminal runtime outcome, leaves the paused state.
+      if (
+        current.state === "paused" &&
+        event.kind !== "runtime-stopped" &&
+        event.kind !== "failure-redacted"
+      ) {
+        return { ok: true, snapshot: this.projection.publicSnapshot(current) };
+      }
       if (event.kind === "permission-requested") {
         return this.ingestPermissionRequested(current, event);
       }

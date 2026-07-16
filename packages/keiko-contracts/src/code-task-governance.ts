@@ -70,6 +70,24 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+function unknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): string[] {
+  return Object.keys(value)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${path}.${key} is not allowed`);
+}
+
+// A content-free failure reason: a bounded lower-kebab reason code that cannot smuggle secrets or
+// free text across the acceptance boundary (mirrors the code-task-acceptance content-free rule).
+const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
+
+function isContentFreeReasonCode(value: unknown): value is string {
+  return typeof value === "string" && REASON_CODE_PATTERN.test(value);
+}
+
 // ─── Task-grant scope (#2386) ──────────────────────────────────────────────────────
 // "Run once" is single-use; "Allow for this task" survives consume but revalidates every binding
 // dimension on each reuse. An absent scope defaults to the safest posture ("once"); a present but
@@ -208,7 +226,7 @@ function grantRefFactErrors(value: unknown): string[] {
   if (value.outcome !== "known") return ["grant.outcome must be known or absent"];
   const grant = value.value;
   if (!isRecord(grant)) return ["grant.value must be an object"];
-  const errors: string[] = [];
+  const errors = unknownKeys(grant, ["grantId", "grantScope"], "grant.value");
   if (!isCodeTaskGrantId(grant.grantId)) errors.push("grant.value.grantId is invalid");
   if (!isCodeTaskGrantScope(grant.grantScope)) errors.push("grant.value.grantScope is invalid");
   return errors;
@@ -222,7 +240,7 @@ function questionRefFactErrors(value: unknown): string[] {
   if (value.outcome !== "known") return ["question.outcome must be known or absent"];
   const question = value.value;
   if (!isRecord(question)) return ["question.value must be an object"];
-  const errors: string[] = [];
+  const errors = unknownKeys(question, ["questionId", "expectedRevision"], "question.value");
   if (!isCodeTaskQuestionId(question.questionId))
     errors.push("question.value.questionId is invalid");
   if (!isNonNegativeInteger(question.expectedRevision)) {
@@ -231,9 +249,28 @@ function questionRefFactErrors(value: unknown): string[] {
   return errors;
 }
 
+// A "known" grant on an ungrantable action kind (delivery, authority-widening, dependency-operation,
+// external-file-apply-back) is rejected: those actions can never be covered by a stored grant and
+// require separate explicit approval every time (the structural exclusion invariant).
+function allowedGrantExclusionErrors(value: Record<string, unknown>): string[] {
+  const grant = value.grant;
+  if (!isRecord(grant) || grant.outcome !== "known") return [];
+  if (
+    isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS) &&
+    isGovernedActionGrantable(value.actionKind)
+  ) {
+    return [];
+  }
+  return ["grant is not permitted on a structurally ungrantable action kind"];
+}
+
 function governedActionRefErrors(value: Record<string, unknown>): string[] {
   if (value.decision === "allowed") {
-    return [...grantRefFactErrors(value.grant), ...absentErrors(value.question, "question")];
+    return [
+      ...grantRefFactErrors(value.grant),
+      ...allowedGrantExclusionErrors(value),
+      ...absentErrors(value.question, "question"),
+    ];
   }
   if (value.decision === "approval-required") {
     return [...absentErrors(value.grant, "grant"), ...questionRefFactErrors(value.question)];
@@ -354,7 +391,7 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
 function executionFailureFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["failure must be a tagged fact object"];
   if (value.outcome === "known") {
-    return typeof value.value === "string" && value.value.length > 0 && value.value.length <= 64
+    return isContentFreeReasonCode(value.value)
       ? []
       : ["failure.value must be a bounded content-free reason code"];
   }

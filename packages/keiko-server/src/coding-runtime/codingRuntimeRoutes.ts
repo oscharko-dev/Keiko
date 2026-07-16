@@ -261,9 +261,9 @@ export function handleCodingRuntimeResume(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
 }
 
-// Inline follow-up: a drafted message may only be admitted while the run is paused (or already
-// halted for a question); the orchestrator's operation coordinator enforces the revision and
-// serial admission, so no hidden prompt queue is possible.
+// Inline follow-up: a drafted message is admitted while the run is running or paused; the
+// orchestrator's operation coordinator enforces the revision and one-use request-id serial
+// admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
 export function handleCodingRuntimeFollowUp(
   ctx: RouteContext,
   deps: UiHandlerDeps,

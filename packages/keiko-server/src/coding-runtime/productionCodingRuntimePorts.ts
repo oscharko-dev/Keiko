@@ -137,6 +137,18 @@ export function createProductionRuntimeManager(
         failureCode: "runtime-stopped",
         retryable: false,
       },
+    pause: (runId) =>
+      active()?.pause(runId) ?? {
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      },
+    resume: (runId) =>
+      active()?.resume(runId) ?? {
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      },
     stop: (runId) => settle(runId, "stop"),
     takeover: (runId) => settle(runId, "takeover"),
     reconcile: (runId) => settle(runId, "reconcile"),

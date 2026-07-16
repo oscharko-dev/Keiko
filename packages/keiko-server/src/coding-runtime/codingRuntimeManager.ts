@@ -160,6 +160,10 @@ export type CodingRuntimeStopResult =
       readonly retryable: false;
     };
 
+export type CodingRuntimePauseResult =
+  | { readonly ok: true; readonly paused: boolean }
+  | { readonly ok: false; readonly failureCode: "runtime-run-mismatch"; readonly retryable: false };
+
 export interface CodingRuntimeApprovalIssueRequest {
   readonly runId: string;
   readonly requestId: string;
@@ -348,6 +352,8 @@ export interface CodingRuntimeManager {
     request: CodingRuntimeLaunchRequest,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult>;
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
+  pause(runId: string): CodingRuntimePauseResult;
+  resume(runId: string): CodingRuntimePauseResult;
   stop(runId: string): Promise<CodingRuntimeStopResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
@@ -393,6 +399,7 @@ interface ActiveRuntime {
   stderrDrainer: CodingRuntimeStderrDrainer | undefined;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
+  paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
 }
@@ -608,6 +615,25 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.stop(runId);
   }
 
+  // Pause is load-bearing: while paused, issueApproval is refused so no new tool mutation can be
+  // admitted, without terminating the run. Resume clears the flag; stop still supersedes both.
+  public pause(runId: string): CodingRuntimePauseResult {
+    return this.setPaused(runId, true);
+  }
+
+  public resume(runId: string): CodingRuntimePauseResult {
+    return this.setPaused(runId, false);
+  }
+
+  private setPaused(runId: string, paused: boolean): CodingRuntimePauseResult {
+    const active = this.active;
+    if (active === undefined || active.context.runId !== runId) {
+      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+    }
+    active.paused = paused;
+    return { ok: true, paused };
+  }
+
   public async reconcile(runId: string): Promise<CodingRuntimeStopResult> {
     const active = this.active;
     if (active === undefined) return { ok: true, status: "stopped" };
@@ -642,7 +668,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== request.runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
-    if (active.stopRequested || active.status !== "ready") {
+    if (active.stopRequested || active.paused || active.status !== "ready") {
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
     const binding = approvalBindingForIssue(active, request);
@@ -1536,6 +1562,7 @@ function createActiveRuntime(
     stderrDrainer: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
+    paused: false,
     status: "starting",
     sequence: 0,
   };
@@ -1563,6 +1590,7 @@ function createInactiveRuntime(
     stderrDrainer: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
+    paused: false,
     status: "stopped",
     sequence: 0,
   };
