@@ -101,7 +101,7 @@ describe("Keiko for Quality core", () => {
       { appId: 15368, name: "Analyze (actions)" },
       { appId: 15368, name: "Analyze (javascript-typescript)" },
       { appId: 15368, name: "Build, scan, SBOM, smoke" },
-      { appId: 15368, name: "Review dependency diff (main)" },
+      { appId: 15368, name: "Review dependency diff (dev/main)" },
       { appId: 15368, name: "native" },
       { appId: 15368, name: "Scan dependency lockfiles" },
       { appId: 12526, name: "SonarCloud Code Analysis" },

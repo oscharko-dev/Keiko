@@ -32,7 +32,7 @@ export const nativeRequiredChecks = checks([
   ["Analyze (actions)", actionsAppId],
   ["Analyze (javascript-typescript)", actionsAppId],
   ["Build, scan, SBOM, smoke", actionsAppId],
-  ["Review dependency diff (main)", actionsAppId],
+  ["Review dependency diff (dev/main)", actionsAppId],
   ["native", actionsAppId],
   ["Scan dependency lockfiles", actionsAppId],
   ["SonarCloud Code Analysis", 12526],
