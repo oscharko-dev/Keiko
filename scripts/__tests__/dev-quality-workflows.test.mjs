@@ -48,15 +48,24 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("Test UI with coverage (jsdom + axe a11y)");
     expect(uiJob).toContain("UI coverage ratchet");
     expect(uiJob).toContain("Release smoke E2E");
-    expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    // ADR-0137 D7: hosted workspace-perf refresh and the freshness gate run post-merge only
+    // (push/dispatch), while the immutable editor D12 evidence is validated on PRs and merge groups.
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
+    );
     expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
     expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
     expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
     expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
+    );
     expect(performanceStep).toContain("npm run check:perf-evidence:editor");
-    expect(freshnessStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    expect(freshnessStep).toContain(
+      "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
+    );
     expect(freshnessStep).toContain("Upload redacted performance evidence");
     expect(freshnessStep).not.toContain("always()");
     expect(freshnessStep).toContain("docs/release/1209-perf-evidence.json");

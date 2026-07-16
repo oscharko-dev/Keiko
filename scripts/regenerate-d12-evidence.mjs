@@ -34,15 +34,27 @@ export const CONTAINER_REMEDIATION = [
   "(A bind mount installs Linux binaries into node_modules; re-run `npm install` on the host afterwards.)",
 ].join("\n");
 
-function run(command, args, options = {}) {
-  execFileSync(resolveHostExecutable(command), args, { stdio: "inherit", ...options });
+function makeRun(exec) {
+  return (command, args, options = {}) =>
+    exec(resolveHostExecutable(command), args, { stdio: "inherit", ...options });
 }
 
-function capture(command, args, options = {}) {
-  return execFileSync(resolveHostExecutable(command), args, {
-    encoding: "utf8",
-    ...options,
-  }).trim();
+function makeCapture(exec) {
+  return (command, args, options = {}) =>
+    exec(resolveHostExecutable(command), args, { encoding: "utf8", ...options }).trim();
+}
+
+function resolveDependencies(overrides) {
+  const exec = overrides.exec ?? execFileSync;
+  return {
+    capture: makeCapture(exec),
+    copyFile: copyFileSync,
+    log: (message) => console.log(message),
+    makeWorkdir: () => mkdtempSync(join(tmpdir(), "keiko-d12-regen-")),
+    platform: process.platform,
+    run: makeRun(exec),
+    ...overrides,
+  };
 }
 
 function bundleInputCommand(root, output, candidate) {
@@ -89,34 +101,39 @@ export function buildRegenerationPlan({ headCommit, workdir }) {
   };
 }
 
-function provisionCheckout(root, commit) {
-  run("git", ["clone", "--quiet", "--no-checkout", repoRoot, root]);
+function provisionCheckout(deps, root, commit) {
+  deps.run("git", ["clone", "--quiet", "--no-checkout", repoRoot, root]);
   // Local clones of a shallow repository stay shallow; complete the history from origin so the
   // pinned baseline commit and the ancestry checks are always resolvable.
-  const shallow = capture("git", ["rev-parse", "--is-shallow-repository"], { cwd: root });
-  if (shallow === "true") run("git", ["fetch", "--quiet", "--unshallow", "origin"], { cwd: root });
-  run("git", ["checkout", "--quiet", commit], { cwd: root });
+  const shallow = deps.capture("git", ["rev-parse", "--is-shallow-repository"], { cwd: root });
+  if (shallow === "true") {
+    deps.run("git", ["fetch", "--quiet", "--unshallow", "origin"], { cwd: root });
+  }
+  deps.run("git", ["checkout", "--quiet", commit], { cwd: root });
 }
 
-async function main() {
-  if (process.platform !== "linux") {
-    console.error(CONTAINER_REMEDIATION);
-    process.exitCode = 1;
-    return;
+export function regenerateEvidence(overrides = {}) {
+  const deps = resolveDependencies(overrides);
+  if (deps.platform !== "linux") {
+    return { ok: false, remediation: CONTAINER_REMEDIATION };
   }
-  const headCommit = capture("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
-  const workdir = mkdtempSync(join(tmpdir(), "keiko-d12-regen-"));
-  const plan = buildRegenerationPlan({ headCommit, workdir });
-  console.log(`Regenerating editor evidence for ${headCommit} (baseline ${BASELINE_COMMIT}).`);
-  for (const checkout of plan.checkouts) provisionCheckout(checkout.root, checkout.commit);
-  for (const step of plan.commands) run("node", step.args, { cwd: step.cwd });
+  const headCommit = deps.capture("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+  const plan = buildRegenerationPlan({ headCommit, workdir: deps.makeWorkdir() });
+  deps.log(`Regenerating editor evidence for ${headCommit} (baseline ${BASELINE_COMMIT}).`);
+  for (const checkout of plan.checkouts) provisionCheckout(deps, checkout.root, checkout.commit);
+  for (const step of plan.commands) deps.run("node", step.args, { cwd: step.cwd });
   for (const file of EVIDENCE_FILES) {
-    copyFileSync(join(plan.candidate, file), join(repoRoot, file));
+    deps.copyFile(join(plan.candidate, file), join(repoRoot, file));
   }
-  console.log(`Refreshed ${EVIDENCE_FILES.join(" and ")} — review and commit them.`);
+  deps.log(`Refreshed ${EVIDENCE_FILES.join(" and ")} — review and commit them.`);
+  return { ok: true, headCommit };
 }
 
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  await main();
+  const result = regenerateEvidence();
+  if (!result.ok) {
+    console.error(result.remediation);
+    process.exitCode = 1;
+  }
 }

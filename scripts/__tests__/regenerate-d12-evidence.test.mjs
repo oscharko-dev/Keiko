@@ -1,7 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildRegenerationPlan, CONTAINER_REMEDIATION } from "../regenerate-d12-evidence.mjs";
+import {
+  buildRegenerationPlan,
+  CONTAINER_REMEDIATION,
+  regenerateEvidence,
+} from "../regenerate-d12-evidence.mjs";
 import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
+
+function injectedDeps(overrides = {}) {
+  return {
+    capture: vi.fn(() => "false"),
+    copyFile: vi.fn(),
+    log: vi.fn(),
+    makeWorkdir: vi.fn(() => "/work"),
+    platform: "linux",
+    run: vi.fn(),
+    ...overrides,
+  };
+}
 
 describe("D12 evidence regeneration plan", () => {
   const plan = buildRegenerationPlan({
@@ -49,5 +65,74 @@ describe("D12 evidence regeneration plan", () => {
     expect(CONTAINER_REMEDIATION).toContain("node:24.18.0-bookworm");
     expect(CONTAINER_REMEDIATION).toContain("bubblewrap");
     expect(CONTAINER_REMEDIATION).toContain("scripts/regenerate-d12-evidence.mjs");
+  });
+});
+
+describe("regenerateEvidence orchestration", () => {
+  it("fails closed with the container remediation on non-Linux hosts", () => {
+    const deps = injectedDeps({ platform: "darwin" });
+    const result = regenerateEvidence(deps);
+
+    expect(result).toEqual({ ok: false, remediation: CONTAINER_REMEDIATION });
+    expect(deps.run).not.toHaveBeenCalled();
+    expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("provisions both checkouts, runs every step, and copies both documents back", () => {
+    const deps = injectedDeps({
+      capture: vi.fn((_command, args) =>
+        args.includes("--is-shallow-repository")
+          ? "false"
+          : "cafebabecafebabecafebabecafebabecafebabe",
+      ),
+    });
+
+    const result = regenerateEvidence(deps);
+
+    expect(result.ok).toBe(true);
+    expect(result.headCommit).toBe("cafebabecafebabecafebabecafebabecafebabe");
+    const checkouts = deps.run.mock.calls.filter((call) => call[1].includes("checkout"));
+    expect(checkouts).toHaveLength(2);
+    const nodeSteps = deps.run.mock.calls.filter((call) => call[0] === "node");
+    expect(nodeSteps).toHaveLength(6);
+    expect(deps.copyFile).toHaveBeenCalledTimes(2);
+    // Shallow probe returned "false", so no unshallow fetch is issued.
+    expect(deps.run.mock.calls.some((call) => call[1].includes("--unshallow"))).toBe(false);
+  });
+
+  it("completes the history when a checkout is shallow", () => {
+    const deps = injectedDeps({
+      capture: vi.fn((_command, args) =>
+        args.includes("--is-shallow-repository")
+          ? "true"
+          : "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      ),
+    });
+
+    regenerateEvidence(deps);
+
+    const unshallowFetches = deps.run.mock.calls.filter((call) => call[1].includes("--unshallow"));
+    expect(unshallowFetches).toHaveLength(2);
+  });
+
+  it("routes the default run/capture boundary through an injected executor", () => {
+    const exec = vi.fn(() => "  abcabcabcabcabcabcabcabcabcabcabcabcabca  \n");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      // Only the executor and copy sink are injected, so the default log and workdir factory
+      // run (covering the boundary defaults) without touching real subprocesses or git.
+      regenerateEvidence({ copyFile: vi.fn(), exec, platform: "linux" });
+      expect(logSpy).toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+
+    // Every boundary call resolves its host executable and inherits stdio for `run` (no
+    // encoding) while `capture` requests utf8 and trims; a git checkout is a `run`.
+    const captureCall = exec.mock.calls.find((call) => call[2]?.encoding === "utf8");
+    const runCall = exec.mock.calls.find((call) => call[2]?.stdio === "inherit");
+    expect(captureCall).toBeDefined();
+    expect(runCall).toBeDefined();
+    expect(exec.mock.calls.every((call) => typeof call[0] === "string")).toBe(true);
   });
 });

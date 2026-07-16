@@ -134,7 +134,11 @@ describe("CI test/gate wiring guard", () => {
     expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
     expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
-    expect(performanceStep).toContain("if: ${{ github.event_name == 'pull_request' }}");
+    // ADR-0137 D7: the immutable editor evidence is validated on pull requests and merge groups;
+    // the workspace refresh and freshness gate stay on push/dispatch (post-merge) only.
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
+    );
     expect(performanceStep).toContain("npm run check:perf-evidence:editor");
     expect(performanceStep).toContain("Upload redacted performance evidence");
     expect(performanceStep).toContain("if-no-files-found: warn");
