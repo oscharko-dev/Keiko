@@ -627,7 +627,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   private setPaused(runId: string, paused: boolean): CodingRuntimePauseResult {
     const active = this.active;
-    if (active === undefined || active.context.runId !== runId) {
+    if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
     active.paused = paused;
