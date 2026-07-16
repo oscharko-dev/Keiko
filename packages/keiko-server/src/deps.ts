@@ -223,6 +223,9 @@ import {
   type ProductionCodingRuntimeResolverInput,
 } from "./coding-runtime/productionCodingRuntimeResolver.js";
 import type { CodingRuntimeStartConfirmationConsumer } from "./coding-runtime/codingRuntimeStartConfirmation.js";
+import { createAuthenticatedSessionStartConfirmationPlane } from "./coding-runtime/codingRuntimeStartConfirmationPlane.js";
+import { createOpenCodeGatewayReadinessRegistry } from "./coding-sidecar-gateway.js";
+import { resolveProductionOpenCodePorts } from "./coding-runtime/productionOpenCodeActivation.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
@@ -2715,7 +2718,11 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   );
   const peripherals = buildAssemblyPeripherals(args, dapRuntime);
   const dapProduction = composeDapRuntime(args, peripherals, dapRuntime);
-  const defaultRuntimeResolver = productionRuntimeResolver(args, peripherals.verificationRunner);
+  const defaultRuntimeResolver = productionRuntimeResolver(
+    args,
+    peripherals.verificationRunner,
+    codingRuntimeEvidenceAggregator,
+  );
   const codingRuntimeHost =
     args.options.codingRuntimeHost ??
     createProductionCodingRuntimeHost(args.options.codingRuntimeResolver ?? defaultRuntimeResolver);
@@ -2819,18 +2826,32 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
+  runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
 ): ProductionCodingRuntimeResolver | undefined {
-  const ports = args.options.codingRuntimeProductionPorts;
   const workspaceLifecycle = args.bundle.workspaceLifecycle;
   const managedTaskWorkspaceRoot = args.bundle.managedTaskWorkspaceRoot;
-  if (
-    ports === undefined ||
-    workspaceLifecycle === undefined ||
-    managedTaskWorkspaceRoot === undefined
-  ) {
+  if (workspaceLifecycle === undefined || managedTaskWorkspaceRoot === undefined) {
     return undefined;
   }
-  return createProductionCodingRuntimeResolver({
+  const injectedPorts = args.options.codingRuntimeProductionPorts;
+  const readiness = createOpenCodeGatewayReadinessRegistry();
+  // The attested-portable activation path supplies Keiko's own confirmation plane; injected
+  // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
+  const activatedPorts =
+    injectedPorts === undefined
+      ? resolveProductionOpenCodePorts({
+          env: args.options.env,
+          runtimeStateDir: dirname(args.resolvedUiDbPath),
+          runtimeEvidence,
+          gatewayReadiness: readiness,
+        })
+      : undefined;
+  const ports = injectedPorts ?? activatedPorts;
+  if (ports === undefined) return undefined;
+  const confirmationConsumer =
+    args.options.codingRuntimeStartConfirmationConsumer ??
+    (activatedPorts === undefined ? undefined : createAuthenticatedSessionStartConfirmationPlane());
+  const resolver = createProductionCodingRuntimeResolver({
     workspaceAuthority: {
       workspaceLifecycle,
       managedTaskWorkspaceRoot,
@@ -2839,10 +2860,16 @@ function productionRuntimeResolver(
     },
     ...ports,
     verificationRunner,
-    ...(args.options.codingRuntimeStartConfirmationConsumer
-      ? { confirmationConsumer: args.options.codingRuntimeStartConfirmationConsumer }
-      : {}),
+    ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+  return {
+    resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
+      const qualified = resolver.resolve();
+      return qualified === undefined
+        ? undefined
+        : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+    },
+  };
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
