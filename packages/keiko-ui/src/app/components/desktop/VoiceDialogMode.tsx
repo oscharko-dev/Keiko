@@ -248,7 +248,10 @@ export function VoiceDialogControls({
             onInterrupt();
           }}
         >
-          Interrupt
+          {/* Two self-contained inline elements, not a running text sentence — matches the sibling
+              Interrupt+hint pattern in VoiceDialogTurnControls below, so no space is ever implied
+              between them (S6772). aria-label already names the button; this span is decorative. */}
+          <span aria-hidden="true">Interrupt</span>
           <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
             {INTERRUPT_UNAVAILABLE_HINT}
           </span>

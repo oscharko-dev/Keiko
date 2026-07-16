@@ -215,6 +215,8 @@ export function AddRepositoryDialog({
           <>
             <label style={FIELD_LABEL_STYLE}>
               Repository URL
+              {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
+                  CSS column layout, not inline text flow. */}
               <input
                 ref={firstFieldRef}
                 style={INPUT_STYLE}
@@ -226,6 +228,8 @@ export function AddRepositoryDialog({
             </label>
             <label style={FIELD_LABEL_STYLE}>
               Clone to folder
+              {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
+                  CSS column layout, not inline text flow. */}
               <input
                 style={INPUT_STYLE}
                 value={destinationPath}
@@ -238,6 +242,8 @@ export function AddRepositoryDialog({
         ) : (
           <label style={FIELD_LABEL_STYLE}>
             Local repository path
+            {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
+                CSS column layout, not inline text flow. */}
             <input
               ref={firstFieldRef}
               style={INPUT_STYLE}

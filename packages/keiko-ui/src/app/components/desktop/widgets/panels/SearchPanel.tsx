@@ -437,7 +437,7 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
               type="checkbox"
               checked={caseSensitive}
               onChange={(event) => setCaseSensitive(event.target.checked)}
-            />
+            />{" "}
             Case sensitive
           </label>
           <label className={styles.checkLabel}>
@@ -445,13 +445,15 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
               type="checkbox"
               checked={wholeWord}
               onChange={(event) => setWholeWord(event.target.checked)}
-            />
+            />{" "}
             Match whole word
           </label>
         </div>
         <div className={styles.globGrid}>
           <label className={styles.fieldLabel}>
             Include glob
+            {/* No inline space here: fieldLabel stacks label text above the input via CSS
+                (flex-direction: column), not as an adjoining text run. */}
             <input
               className={`${styles.globInput} mono`}
               value={includeText}
@@ -461,6 +463,8 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
           </label>
           <label className={styles.fieldLabel}>
             Exclude glob
+            {/* No inline space here: fieldLabel stacks label text above the input via CSS
+                (flex-direction: column), not as an adjoining text run. */}
             <input
               className={`${styles.globInput} mono`}
               value={excludeText}
@@ -471,6 +475,8 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
         </div>
         <label className={styles.fieldLabel}>
           Replacement
+          {/* No inline space here: fieldLabel stacks label text above the input via CSS
+              (flex-direction: column), not as an adjoining text run. */}
           <input
             className={`${styles.globInput} mono`}
             value={replacement}

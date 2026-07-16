@@ -303,7 +303,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
               checked={form.kind === "pr-create"}
               disabled={busy}
               onChange={() => onChange("kind", "pr-create")}
-            />
+            />{" "}
             Create
           </label>
           <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
@@ -313,7 +313,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
               checked={form.kind === "pr-update"}
               disabled={busy}
               onChange={() => onChange("kind", "pr-update")}
-            />
+            />{" "}
             Update
           </label>
         </div>
@@ -398,7 +398,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
           disabled={busy || form.kind !== "pr-create"}
           onChange={(e) => onChange("isDraft", e.target.checked)}
           aria-label="Open as draft"
-        />
+        />{" "}
         Open as draft
       </label>
     </section>
