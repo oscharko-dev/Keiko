@@ -75,6 +75,14 @@ export interface DebugSessionSnapshot {
 interface DebugProjectState {
   snapshot: DebugSessionSnapshot;
   latestPause: DebugPauseIdentity | null;
+  sessionLifecycleFence: symbol;
+  streamGeneration: number;
+  latestStreamResync: {
+    readonly generation: number;
+    readonly sequence: number;
+    readonly status: "active" | "exhausted" | "failed" | "succeeded";
+    readonly token: symbol | null;
+  } | null;
   readonly listeners: Set<() => void>;
 }
 
@@ -109,10 +117,18 @@ function stateFor(workspaceId: string): DebugProjectState {
   const state: DebugProjectState = {
     snapshot: EMPTY_SNAPSHOT,
     latestPause: null,
+    sessionLifecycleFence: Symbol("debug-session-lifecycle"),
+    streamGeneration: 0,
+    latestStreamResync: null,
     listeners: new Set(),
   };
   states.set(workspaceId, state);
   return state;
+}
+
+function hasUnresolvedStreamResync(state: DebugProjectState, generation: number): boolean {
+  const latest = state.latestStreamResync;
+  return latest !== null && latest.status !== "succeeded" && generation >= latest.generation;
 }
 
 function publish(state: DebugProjectState, snapshot: DebugSessionSnapshot): void {
@@ -171,6 +187,14 @@ function resetPausedProjections(snapshot: DebugSessionSnapshot): DebugSessionSna
 
 export function debugSessionSnapshot(workspaceId: string): DebugSessionSnapshot {
   return states.get(workspaceId)?.snapshot ?? EMPTY_SNAPSHOT;
+}
+
+export function captureDebugSessionLifecycleFence(workspaceId: string): symbol {
+  return stateFor(workspaceId).sessionLifecycleFence;
+}
+
+function advanceDebugSessionLifecycle(state: DebugProjectState): void {
+  state.sessionLifecycleFence = Symbol("debug-session-lifecycle");
 }
 
 export function subscribeDebugSession(workspaceId: string, listener: () => void): () => void {
@@ -300,11 +324,23 @@ export function setDebugSession(
   ) {
     state.latestPause = null;
   }
+  advanceDebugSessionLifecycle(state);
   publish(state, {
     ...next,
     session,
     ...(session === null || progressed ? { stopDescription: null } : {}),
   });
+}
+
+export function setDebugSessionIfLifecycleCurrent(
+  workspaceId: string,
+  lifecycleFence: symbol,
+  session: DebugSession,
+): boolean {
+  const state = stateFor(workspaceId);
+  if (state.sessionLifecycleFence !== lifecycleFence) return false;
+  setDebugSession(workspaceId, session);
+  return sameDebugSession(state.snapshot.session, session);
 }
 
 export function setDebugStack(
@@ -410,21 +446,128 @@ export function replaceDebugPausedProjections(
   return true;
 }
 
-export function beginDebugStreamResync(workspaceId: string): void {
+export function beginDebugStreamResync(
+  workspaceId: string,
+  generation: number,
+  sequence: number,
+): symbol | null {
   const state = stateFor(workspaceId);
+  if (!Number.isSafeInteger(generation) || generation < state.streamGeneration) return null;
+  if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
+  const latest = state.latestStreamResync;
+  if (
+    latest !== null &&
+    (generation < latest.generation ||
+      (generation === latest.generation &&
+        (sequence < latest.sequence ||
+          (sequence === latest.sequence && latest.status !== "failed"))))
+  ) {
+    return null;
+  }
+  const token = Symbol("debug-stream-resync");
+  state.streamGeneration = generation;
+  state.latestStreamResync = { generation, sequence, status: "active", token };
   state.latestPause = null;
+  advanceDebugSessionLifecycle(state);
   publish(state, {
     ...resetPausedProjections(state.snapshot),
     console: EMPTY_CONSOLE,
     stopDescription: null,
     streamReady: false,
   });
+  return token;
 }
 
-export function synchronizeDebugSequence(workspaceId: string, sequence: number): void {
+export function synchronizeDebugSequence(
+  workspaceId: string,
+  sequence: number,
+  resyncToken?: symbol,
+  generation?: number,
+): boolean {
   const state = stateFor(workspaceId);
-  if (sequence === state.snapshot.sequence) return;
+  if (resyncToken !== undefined) {
+    const latest = state.latestStreamResync;
+    if (
+      latest === null ||
+      latest.token !== resyncToken ||
+      latest.sequence !== sequence ||
+      latest.generation !== generation ||
+      state.streamGeneration !== generation
+    ) {
+      return false;
+    }
+    state.latestStreamResync = { ...latest, status: "succeeded", token: null };
+    publish(state, { ...state.snapshot, sequence });
+    return true;
+  }
+  if (sequence <= state.snapshot.sequence) return false;
   publish(state, { ...state.snapshot, sequence });
+  return true;
+}
+
+export function abandonDebugStreamResync(
+  workspaceId: string,
+  sequence: number,
+  resyncToken: symbol,
+  generation: number,
+): boolean {
+  const state = stateFor(workspaceId);
+  const latest = state.latestStreamResync;
+  if (
+    latest === null ||
+    latest.token !== resyncToken ||
+    latest.sequence !== sequence ||
+    latest.generation !== generation
+  ) {
+    return false;
+  }
+  state.latestStreamResync = { ...latest, status: "failed", token: null };
+  return true;
+}
+
+export function exhaustDebugStreamResync(
+  workspaceId: string,
+  generation: number,
+  sequence: number,
+): boolean {
+  const state = stateFor(workspaceId);
+  const latest = state.latestStreamResync;
+  if (
+    latest === null ||
+    latest.generation !== generation ||
+    latest.sequence !== sequence ||
+    latest.status !== "failed"
+  ) {
+    return false;
+  }
+  state.latestStreamResync = { ...latest, status: "exhausted" };
+  return true;
+}
+
+export function debugStreamSnapshotRequiresCanonicalResync(
+  workspaceId: string,
+  generation: number,
+  sequence: number,
+  required: boolean,
+): boolean {
+  const state = stateFor(workspaceId);
+  if (
+    !Number.isSafeInteger(generation) ||
+    !Number.isSafeInteger(sequence) ||
+    generation < state.streamGeneration
+  ) {
+    return false;
+  }
+  const latest = state.latestStreamResync;
+  if (
+    latest?.status === "exhausted" &&
+    latest.generation === generation &&
+    latest.sequence === sequence
+  ) {
+    return false;
+  }
+  if (required || sequence < state.snapshot.sequence) return true;
+  return hasUnresolvedStreamResync(state, generation);
 }
 
 function applySessionStarted(
@@ -494,9 +637,29 @@ function applyTerminalEvent(
   };
 }
 
-export function applyDebugEvent(workspaceId: string, sequence: number, event: DebugEvent): void {
+export function applyDebugEvent(
+  workspaceId: string,
+  sequence: number,
+  event: DebugEvent,
+  generation?: number,
+): boolean {
   const state = stateFor(workspaceId);
-  if (sequence <= state.snapshot.sequence) return;
+  const eventGeneration = generation ?? state.streamGeneration;
+  if (!Number.isSafeInteger(eventGeneration) || eventGeneration < state.streamGeneration) {
+    return false;
+  }
+  if (hasUnresolvedStreamResync(state, eventGeneration)) return false;
+  if (eventGeneration > state.streamGeneration) state.streamGeneration = eventGeneration;
+  if (sequence <= state.snapshot.sequence) return false;
+  if (
+    event.kind === "session-started" ||
+    event.kind === "continued" ||
+    event.kind === "stopped" ||
+    event.kind === "session-stopped" ||
+    event.kind === "exited"
+  ) {
+    advanceDebugSessionLifecycle(state);
+  }
   let next: DebugSessionSnapshot = { ...state.snapshot, sequence };
   if (event.kind === "output") {
     next = {
@@ -513,12 +676,22 @@ export function applyDebugEvent(workspaceId: string, sequence: number, event: De
     next = applyTerminalEvent(state, next, event);
   }
   publish(state, next);
+  return true;
 }
 
-export function markDebugStreamReady(workspaceId: string): void {
+export function markDebugStreamReady(workspaceId: string, generation: number): boolean {
   const state = stateFor(workspaceId);
-  if (state.snapshot.streamReady) return;
+  if (
+    !Number.isSafeInteger(generation) ||
+    generation < state.streamGeneration ||
+    hasUnresolvedStreamResync(state, generation)
+  ) {
+    return false;
+  }
+  state.streamGeneration = generation;
+  if (state.snapshot.streamReady) return true;
   publish(state, { ...state.snapshot, streamReady: true });
+  return true;
 }
 
 export function replaceDebugWatches(

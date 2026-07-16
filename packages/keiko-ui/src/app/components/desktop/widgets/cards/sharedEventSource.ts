@@ -13,13 +13,16 @@ interface SharedEventSourceEntry {
   lastEventId: number | undefined;
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
+  sourceGeneration: number;
 }
 
 const sourcesByUrl = new Map<string, SharedEventSourceEntry>();
+const sourceGenerationByEvent = new WeakMap<Event, number>();
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
+let nextSourceGeneration = 0;
 
 function removeSourceListener(source: EventSource, type: string, dispatcher: EventListener): void {
   const removable = source as EventSource & {
@@ -70,6 +73,7 @@ function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListen
   let dispatcher = entry.dispatchersByType.get(type);
   if (dispatcher !== undefined) return dispatcher;
   dispatcher = (event: Event): void => {
+    sourceGenerationByEvent.set(event, entry.sourceGeneration);
     recordLastEventId(entry, event, type === "editor-debug:snapshot-required");
     const subscribers = entry.subscribersByType.get(type);
     if (subscribers === undefined || subscribers.size === 0) return;
@@ -117,6 +121,8 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   }
   const source = createSameOriginApiEventSource(resumeUrl(entry));
   if (source === null) return;
+  nextSourceGeneration += 1;
+  entry.sourceGeneration = nextSourceGeneration;
   entry.source = source;
   source.onopen = () => {
     entry.reconnectAttempts = 0;
@@ -169,6 +175,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     lastEventId: undefined,
     reconnectAttempts: 0,
     reconnectTimer: undefined,
+    sourceGeneration: 0,
   };
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();
@@ -210,11 +217,16 @@ export function subscribeSharedEventSource(
   };
 }
 
+export function sharedEventSourceGeneration(event: MessageEvent<string>): number {
+  return sourceGenerationByEvent.get(event) ?? 0;
+}
+
 export function resetSharedEventSourcesForTests(): void {
   for (const entry of sourcesByUrl.values()) {
     clearReconnectTimer(entry);
     closeEntrySource(entry);
   }
   sourcesByUrl.clear();
+  nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }
