@@ -41,6 +41,10 @@ const CAP_OUTPUT = "src/cap-output.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
 const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const CAP_SAMPLE_COUNT = 10;
+// ADR-0137 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
+// assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
+// the budgets; required-runner executions still record the measured values into the evidence.
+const ENFORCE_WALL_CLOCK_BUDGETS = process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";
 const CAP_STACK_FRAMES = 128;
 const CAP_SCOPES = 32;
 const CAP_VARIABLES = 200;
@@ -1247,8 +1251,10 @@ function expectOutputFloodEvidence(evidence: OutputFloodEvidence): void {
   expect(evidence.renderedRows).toBeLessThanOrEqual(CAP_RENDERED_ROWS);
   expect(evidence.stopSamples).toHaveLength(CAP_SAMPLE_COUNT);
   expect(evidence.stopSamples.every((sample) => sample > 0)).toBe(true);
-  expect(evidence.stopP75).toBeLessThanOrEqual(200);
-  expect(evidence.maxLongTaskMs).toBeLessThanOrEqual(50);
+  if (ENFORCE_WALL_CLOCK_BUDGETS) {
+    expect(evidence.stopP75).toBeLessThanOrEqual(200);
+    expect(evidence.maxLongTaskMs).toBeLessThanOrEqual(50);
+  }
   expect(evidence.residualHeapBytes).toBeLessThanOrEqual(CAP_RESIDUAL_HEAP_BYTES);
 }
 
@@ -1516,8 +1522,10 @@ test("#2348 D12 composes exact stopped-projection caps through the real BFF and 
   expect(samples.length).toBeGreaterThanOrEqual(CAP_SAMPLE_COUNT);
   expect(samples.every((sample) => sample > 0)).toBe(true);
   expect(observedLongTasks.installed).toBe(true);
-  expect(p75).toBeLessThanOrEqual(200);
-  expect(maxLongTaskMs).toBeLessThanOrEqual(50);
+  if (ENFORCE_WALL_CLOCK_BUDGETS) {
+    expect(p75).toBeLessThanOrEqual(200);
+    expect(maxLongTaskMs).toBeLessThanOrEqual(50);
+  }
   stoppedProjectionEvidence = observedEvidence;
   await reopenAndStopDebug(page, panel);
 });

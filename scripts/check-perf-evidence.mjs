@@ -31,27 +31,21 @@ const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.js
 
 const PERFORMANCE_SUBJECT_DOMAIN = "keiko-performance-measurement-subject-v1\0";
 const SOURCE_TREE_FRESHNESS_BINDING = "source-tree-v1";
+// ADR-0137 D2: the evidence binds the measured product, not the repository. Only surfaces that
+// can alter what the D12 suites load or exercise belong to the subject — the editor and UI
+// packages, the server editor subsystem, the shared contracts, the runtime entry wiring, and the
+// root build/dependency manifests. Repository tooling, workflows, docs, and test-only files are
+// corrected by the scheduled evidence refresh instead of invalidating committed evidence; the
+// measurement toolchain keeps its own dedicated digest (measurementHarnessSha256).
 const PERFORMANCE_SUBJECT_PREFIXES = [
-  ".github/workflows/",
-  "design-system/",
-  "packages/",
-  "scripts/",
+  "packages/keiko-contracts/",
+  "packages/keiko-editor/",
+  "packages/keiko-server/src/editor/",
+  "packages/keiko-ui/",
   "src/",
-  "tests/",
 ];
-const NON_SUBJECT_PATHS = new Set([
-  "scripts/build-d12-bundle-input.mjs",
-  "scripts/build-d12-perf-comparison.mjs",
-  "scripts/check-perf-evidence.mjs",
-  "scripts/d12-measurement-toolchain.mjs",
-  "scripts/d12-runtime-environment.mjs",
-  "scripts/run-d12-perf-comparison.mjs",
-  "scripts/__tests__/build-d12-bundle-input.test.mjs",
-  "scripts/__tests__/build-d12-perf-comparison.test.mjs",
-  "scripts/__tests__/check-perf-evidence.test.mjs",
-  "scripts/__tests__/d12-measurement-toolchain.test.mjs",
-  "scripts/__tests__/run-d12-perf-comparison.test.mjs",
-]);
+const NON_SUBJECT_TEST_FILES =
+  /(?:^|\/)__tests__\/|\.test\.|\.spec\.|(?:^|\/)vitest(?:\.[a-z-]+)?\.config\./u;
 const NON_SUBJECT_ROOT_PREFIXES = [
   ".codex/",
   ".next/",
@@ -119,17 +113,14 @@ function isNonSubjectTree(path) {
 }
 
 function isRootMeasurementConfig(path) {
-  return (
-    /^package(?:-lock)?\.json$/u.test(path) ||
-    /^tsconfig(?:\.[a-z-]+)?\.json$/u.test(path) ||
-    /^vitest(?:\.[a-z-]+)?\.config\.ts$/u.test(path)
-  );
+  return /^package(?:-lock)?\.json$/u.test(path) || /^tsconfig(?:\.[a-z-]+)?\.json$/u.test(path);
 }
 
 export function isPerformanceSubjectPath(path) {
   const normalized = normalizeTrackedPath(path);
-  if (normalized === undefined || NON_SUBJECT_PATHS.has(normalized)) return false;
+  if (normalized === undefined) return false;
   if (isNonSubjectTree(normalized) || normalized.endsWith(".md")) return false;
+  if (NON_SUBJECT_TEST_FILES.test(normalized)) return false;
   return (
     isRootMeasurementConfig(normalized) ||
     PERFORMANCE_SUBJECT_PREFIXES.some((prefix) => normalized.startsWith(prefix))

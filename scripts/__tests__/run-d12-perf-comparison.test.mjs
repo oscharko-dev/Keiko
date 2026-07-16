@@ -114,6 +114,7 @@ describe("D12 performance comparison runner", () => {
       ),
     ).toEqual({
       HOME: "/home/keiko",
+      KEIKO_ENFORCE_WALL_CLOCK_BUDGETS: "1",
       KEIKO_PERF_RUNS: "10",
       LANG: "C.UTF-8",
       LC_ALL: "C.UTF-8",

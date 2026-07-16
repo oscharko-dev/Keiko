@@ -1611,35 +1611,38 @@ describe("performance measurement subject", () => {
 
   it.each([
     "package-lock.json",
+    "package.json",
     "tsconfig.build.json",
-    ".github/workflows/e2e-extended.yml",
+    "packages/keiko-contracts/src/dap-debug.ts",
+    "packages/keiko-editor/src/components/editor-model-registry.ts",
+    "packages/keiko-server/src/editor/dap/dapDebugRoutes.ts",
     "packages/keiko-ui/src/app.tsx",
-    "packages/keiko-ui/vitest.config.ts",
-    "scripts/build-ui.mjs",
-    "tests/e2e/editor-performance.spec.ts",
-    "tests/fixtures/project/dist/input.js",
-  ])("includes tracked source, config, lock, and test input %s", (path) => {
+    "src/cli/index.ts",
+  ])("includes measured product surface %s", (path) => {
     expect(isPerformanceSubjectPath(path)).toBe(true);
   });
 
+  // ADR-0137 D2: repository tooling, workflows, docs, and test-only files cannot alter the
+  // measured product and no longer invalidate committed evidence; the measurement toolchain is
+  // bound separately through measurementHarnessSha256.
   it.each([
+    ".github/workflows/e2e-extended.yml",
     "docs/release/1209-perf-evidence.json",
     "docs/release/keiko-editor-1209-closure-evidence.md",
+    "packages/keiko-server/src/memory-handlers.ts",
     "packages/keiko-ui/dist/index.js",
+    "packages/keiko-ui/src/app/components/desktop/AppShell.test.tsx",
+    "packages/keiko-ui/src/lib/__tests__/api.test.ts",
+    "packages/keiko-ui/vitest.config.ts",
     "playwright-report/results.json",
     "reports/performance.json",
-    "scripts/build-d12-bundle-input.mjs",
-    "scripts/build-d12-perf-comparison.mjs",
+    "scripts/build-ui.mjs",
     "scripts/check-perf-evidence.mjs",
-    "scripts/d12-measurement-toolchain.mjs",
-    "scripts/d12-runtime-environment.mjs",
     "scripts/run-d12-perf-comparison.mjs",
-    "scripts/__tests__/build-d12-bundle-input.test.mjs",
-    "scripts/__tests__/build-d12-perf-comparison.test.mjs",
-    "scripts/__tests__/check-perf-evidence.test.mjs",
-    "scripts/__tests__/d12-measurement-toolchain.test.mjs",
-    "scripts/__tests__/run-d12-perf-comparison.test.mjs",
-  ])("excludes generated evidence, closure, report, build, and checker artifact %s", (path) => {
+    "tests/e2e/editor-performance.spec.ts",
+    "tests/fixtures/project/dist/input.js",
+    "vitest.config.ts",
+  ])("excludes tooling, workflow, doc, output, and test-only path %s", (path) => {
     expect(isPerformanceSubjectPath(path)).toBe(false);
   });
 

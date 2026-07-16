@@ -1073,10 +1073,21 @@ describe("D12 performance comparison builder", () => {
       ],
       { cwd: root },
     );
-    mkdirSync(join(root, "tests"));
-    writeFileSync(join(root, "tests", "untracked.spec.ts"), "export {};\n", "utf8");
+    mkdirSync(join(root, "packages", "keiko-ui", "src"), { recursive: true });
+    writeFileSync(
+      join(root, "packages", "keiko-ui", "src", "untracked.ts"),
+      "export {};\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "packages", "keiko-ui", "src", "untracked.spec.ts"),
+      "export {};\n",
+      "utf8",
+    );
 
-    expect(listExactDirtyPerformanceSubjectPaths(root)).toEqual(["tests/untracked.spec.ts"]);
+    expect(listExactDirtyPerformanceSubjectPaths(root)).toEqual([
+      "packages/keiko-ui/src/untracked.ts",
+    ]);
   });
 
   it("rejects validator self-check failures before writing", () => {
