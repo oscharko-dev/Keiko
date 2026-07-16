@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { assertD12BundleMeasurementFingerprint } from "./build-d12-bundle-input.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
   canonicalD12ArtifactBytes,
@@ -67,7 +68,7 @@ export function listExactDirtyPerformanceSubjectPaths(root) {
       },
     ),
   ).filter((path) => isPerformanceSubjectPath(path));
-  return [...new Set([...tracked, ...untracked])].sort();
+  return [...new Set([...tracked, ...untracked])].sort(compareStrings);
 }
 
 function checkoutHead(root) {
@@ -106,8 +107,8 @@ function object(value, label) {
 
 function assertExactKeys(value, expectedKeys, label) {
   const record = object(value, label);
-  const actual = Object.keys(record).sort();
-  const expected = [...expectedKeys].sort();
+  const actual = Object.keys(record).sort(compareStrings);
+  const expected = [...expectedKeys].sort(compareStrings);
   if (!isDeepStrictEqual(actual, expected)) {
     fail(`${label} contains a non-canonical or unknown field`);
   }
@@ -730,7 +731,10 @@ function validateCandidateCapOrder(run, label) {
 function validateManifestRepetition(entryValue, index, state) {
   const entry = object(entryValue, `order manifest repetition ${index + 1}`);
   const order = entry.order;
-  if (!Array.isArray(order) || !isDeepStrictEqual([...order].sort(), [...REVISIONS])) {
+  if (
+    !Array.isArray(order) ||
+    !isDeepStrictEqual([...order].sort(compareStrings), [...REVISIONS])
+  ) {
     fail(`order manifest repetition ${index + 1} must order baseline and candidate exactly once`);
   }
   if (order[0] === state.priorFirst) {

@@ -23,6 +23,7 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -668,8 +669,8 @@ function evaluateD12ExactKeys(value, expectedKeys, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return [`${label}: record is missing`];
   }
-  const actual = Object.keys(value).sort();
-  const expected = [...expectedKeys].sort();
+  const actual = Object.keys(value).sort(compareStrings);
+  const expected = [...expectedKeys].sort(compareStrings);
   return isDeepStrictEqual(actual, expected)
     ? []
     : [`${label}: non-canonical or unknown field (expected ${expected.join(", ")})`];

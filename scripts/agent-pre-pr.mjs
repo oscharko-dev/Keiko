@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -178,7 +179,7 @@ export function computeStepInputDigest(step, { cwd = repoRoot, fileDigest } = {}
   digest.update(`node:${process.version.split(".")[0] ?? ""}\0`);
   digest.update(`command:${commandText(step)}\0`);
   const resolveDigest = fileDigest ?? ((path) => hashWorkingFile(cwd, path));
-  for (const path of listScopedFiles(cwd, step.cacheScope).sort()) {
+  for (const path of listScopedFiles(cwd, step.cacheScope).sort(compareStrings)) {
     digest.update(`${path}\0${resolveDigest(path)}\0`);
   }
   return digest.digest("hex");

@@ -18,6 +18,7 @@ import {
   computeD12MeasurementToolchainDigest,
   D12_MEASUREMENT_TOOLCHAIN_PATHS,
 } from "./d12-measurement-toolchain.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
 
@@ -74,7 +75,7 @@ function normalizeBundleRuntime(value) {
   if (
     typeof value !== "object" ||
     value === null ||
-    !isDeepStrictEqual(Object.keys(value).sort(), expectedKeys)
+    !isDeepStrictEqual(Object.keys(value).sort(compareStrings), expectedKeys)
   ) {
     fail("runtime must contain only the canonical bundle-runtime fields");
   }
