@@ -748,14 +748,29 @@ async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSes
   return debugSession(await projection.json());
 }
 
+async function expectServerStopped(page: Page, sessionId: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const value = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/editor/debug/sessions/${encodeURIComponent(id)}`, {
+          headers: { "x-keiko-csrf": "1" },
+        });
+        // A terminated session reports "stopped"; an evicted one is gone. Both are terminal.
+        return response.ok ? ((await response.json()) as unknown) : { status: "gone" };
+      }, sessionId);
+      const record = value as { readonly status?: unknown };
+      return String(record.status);
+    })
+    .toMatch(/^(?:stopped|gone)$/u);
+}
+
 async function stopFromDebugPanel(page: Page, panel: Locator): Promise<void> {
-  const stopped = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/editor/debug/control") &&
-      response.request().method() === "POST",
-  );
+  // Wait on the concrete terminal state the stop actually produces — the server session reaching
+  // "stopped" and the panel clearing — instead of racing the single control-POST response, whose
+  // wall-clock budget flaked under CI load.
+  const sessionId = activeSessionId;
   await panel.getByRole("button", { name: "Stop debugging" }).click();
-  expect((await stopped).status()).toBe(200);
+  if (sessionId !== undefined) await expectServerStopped(page, sessionId);
   activeSessionId = undefined;
   await expect(panel.getByText("No active debug session.")).toBeVisible();
 }
