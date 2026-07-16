@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void write_u32(unsigned char *value, uint32_t number) {
@@ -14,20 +15,36 @@ static void write_u32(unsigned char *value, uint32_t number) {
 int wmain(int argc, wchar_t **argv) {
   PROCESS_INFORMATION child;
   STARTUPINFOW startup;
-  wchar_t executable[32768], command[32780];
+  /* Wide path buffers are heap-allocated: ~130 KiB of stack trips analyzer budgets (C6262). */
+  wchar_t *executable, *command;
   unsigned char observation[12] = {'K', 'R', 'Q', '1', 0, 0, 0, 0, 0, 0, 0, 0};
   DWORD length;
+  BOOL created;
   if (argc == 2 && wcscmp(argv[1], L"--descendant") == 0) {
     Sleep(INFINITE);
     return 0;
   }
+  executable = calloc(32768, sizeof(*executable));
+  command = calloc(32780, sizeof(*command));
+  if (executable == NULL || command == NULL) {
+    free(executable);
+    free(command);
+    return 2;
+  }
   length = GetModuleFileNameW(NULL, executable, 32768);
-  if (length == 0 || length >= 32768) return 2;
-  if (_snwprintf_s(command, 32780, _TRUNCATE, L"\"%ls\" --descendant", executable) < 0) return 2;
+  if (length == 0 || length >= 32768 ||
+      _snwprintf_s(command, 32780, _TRUNCATE, L"\"%ls\" --descendant", executable) < 0) {
+    free(executable);
+    free(command);
+    return 2;
+  }
   memset(&startup, 0, sizeof(startup));
   memset(&child, 0, sizeof(child));
   startup.cb = sizeof(startup);
-  if (!CreateProcessW(executable, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child)) {
+  created = CreateProcessW(executable, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child);
+  free(executable);
+  free(command);
+  if (!created) {
     return 3;
   }
   CloseHandle(child.hThread);

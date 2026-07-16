@@ -236,11 +236,11 @@ static void pause_after_final_open(void) {
 }
 #endif
 
-static int canonical_path_matches(HANDLE root, HANDLE file, const wchar_t *requested) {
-  wchar_t root_path[KSR_MAX_ROOT + 8], file_path[KSR_MAX_ROOT + KSR_MAX_PATH + 8], expected[KSR_MAX_PATH + 1]; DWORD root_length, file_length; size_t expected_length, prefix_length; const wchar_t *suffix;
-  root_length = GetFinalPathNameByHandleW(root, root_path, (DWORD)(sizeof(root_path) / sizeof(root_path[0])), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  file_length = GetFinalPathNameByHandleW(file, file_path, (DWORD)(sizeof(file_path) / sizeof(file_path[0])), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (root_length == 0 || root_length >= sizeof(root_path) / sizeof(root_path[0]) || file_length == 0 || file_length >= sizeof(file_path) / sizeof(file_path[0])) return 0;
+static int canonical_path_matches_resolved(HANDLE root, HANDLE file, const wchar_t *requested, wchar_t *root_path, wchar_t *file_path, wchar_t *expected) {
+  DWORD root_length, file_length; size_t expected_length, prefix_length; const wchar_t *suffix;
+  root_length = GetFinalPathNameByHandleW(root, root_path, (DWORD)(KSR_MAX_ROOT + 8u), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  file_length = GetFinalPathNameByHandleW(file, file_path, (DWORD)(KSR_MAX_ROOT + KSR_MAX_PATH + 8u), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (root_length == 0 || root_length >= KSR_MAX_ROOT + 8u || file_length == 0 || file_length >= KSR_MAX_ROOT + KSR_MAX_PATH + 8u) return 0;
   prefix_length = (size_t)root_length;
   if (_wcsnicmp(root_path, file_path, prefix_length) != 0) return 0;
   if (root_path[prefix_length - 1] == L'\\') suffix = file_path + prefix_length;
@@ -249,6 +249,18 @@ static int canonical_path_matches(HANDLE root, HANDLE file, const wchar_t *reque
   if (expected_length == 0 || expected_length > KSR_MAX_PATH) return 0;
   for (size_t i = 0; i <= expected_length; ++i) expected[i] = requested[i] == L'/' ? L'\\' : requested[i];
   return _wcsicmp(suffix, expected) == 0;
+}
+
+/* Canonical-path buffers live on the heap: the three wide-path scratch areas total ~144 KiB,
+ * which overflows analyzer stack budgets (MSVC C6262). Allocation failure denies the match. */
+static int canonical_path_matches(HANDLE root, HANDLE file, const wchar_t *requested) {
+  wchar_t *root_path = calloc(KSR_MAX_ROOT + 8u, sizeof(*root_path));
+  wchar_t *file_path = calloc(KSR_MAX_ROOT + KSR_MAX_PATH + 8u, sizeof(*file_path));
+  wchar_t *expected = calloc(KSR_MAX_PATH + 1u, sizeof(*expected));
+  int matches = root_path != NULL && file_path != NULL && expected != NULL &&
+    canonical_path_matches_resolved(root, file, requested, root_path, file_path, expected);
+  free(root_path); free(file_path); free(expected);
+  return matches;
 }
 
 static HANDLE open_component(nt_create_file_fn nt_create, HANDLE parent, const wchar_t *name, USHORT length, int directory) {

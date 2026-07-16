@@ -108,6 +108,7 @@ test("requires catalog review only for i18n-relevant added lines", () => {
   expect(hasI18nRelevantAddedLine("return <p>{t(`feature.title`)}</p>;")).toBe(true);
   expect(hasI18nRelevantAddedLine("const t = useTranslate();")).toBe(true);
   expect(hasI18nRelevantAddedLine("const t = useOptionalWidgetTranslate();")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const t = useCodingWorkbenchTranslate();")).toBe(true);
   expect(hasI18nRelevantAddedLine("const i18n = useI18n();")).toBe(true);
   expect(hasI18nRelevantAddedLine('<I18nTranslate id="feature.title" />')).toBe(true);
   expect(hasI18nRelevantAddedLine("type T = OptionalWidgetTranslate;")).toBe(true);

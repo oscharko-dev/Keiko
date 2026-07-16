@@ -12,6 +12,8 @@ const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [
   /\buseTranslate\s*\(/,
   /\buseOptionalWidgetTranslate\s*\(/,
+  // Feature-scoped catalog hook for the dynamically loaded Coding Workbench (#2257 boundary).
+  /\buseCodingWorkbenchTranslate\s*\(/,
   /\buseI18n\s*\(/,
   /<\s*I18nTranslate\b/,
   /\bOptionalWidgetTranslate\b/,
