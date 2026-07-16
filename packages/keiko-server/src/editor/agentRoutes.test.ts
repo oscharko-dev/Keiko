@@ -611,7 +611,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
     await registerLiveSnapshot();
-    const expiring = authorityEnvelope("/repo");
+    const expiring = authorityEnvelope("/repo", "governed-assist", "governed-assist");
     const registered = editorAgentAuthorityRegistry.register(
       { ...expiring, runId: "run-3001", expiresAt: "2030-01-01T00:00:01.000Z" },
       "governed-assist",
@@ -695,7 +695,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
     await registerLiveSnapshot();
-    const limited = authorityEnvelope("/repo");
+    const limited = authorityEnvelope("/repo", "governed-assist", "governed-assist");
     const registered = editorAgentAuthorityRegistry.register(
       {
         ...limited,
@@ -747,7 +747,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
         runId: "run-3002",
         budget: { ...limited.budget, maxToolCalls: 2 },
       },
-      "governed-assist",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!registered.ok) throw new Error("expected bounded read authority registration");

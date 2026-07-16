@@ -2074,10 +2074,14 @@ function prepareEditorActionRequest(
     : lease;
 }
 
+// The replay path only consumes the governance pick plus the optional metadata redactor, so it
+// accepts both the full handler deps and the narrow reported-result deps after the dev merge.
+type EditorAgentReplayDeps = EditorAgentRouteDeps & Partial<Pick<UiHandlerDeps, "redactor">>;
+
 function rejectServerResolvedReplay(
   action: EditorAgentAction,
   requestHash: string,
-  deps: EditorAgentActionRouteDeps | undefined,
+  deps: EditorAgentReplayDeps | undefined,
 ): RouteResult | null {
   if (!isServerResolvedAction(action)) return null;
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
@@ -2111,7 +2115,7 @@ function rejectServerResolvedReplay(
 function replayEditorAction(
   action: EditorAgentAction,
   requestHash: string,
-  deps: EditorAgentActionRouteDeps | undefined,
+  deps: EditorAgentReplayDeps | undefined,
 ): RouteResult | null {
   const replay = idempotency.get(action.idempotencyKey);
   if (replay === undefined) return null;
