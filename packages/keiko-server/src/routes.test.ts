@@ -26,6 +26,17 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
+  it("does not mount deprecated browser-owned runtime authority routes", () => {
+    for (const pattern of [
+      "/api/editor/agent/authority",
+      "/api/coding-workbench/autonomous-delivery/confirm",
+      "/api/coding-workbench/autonomous-delivery/execute",
+    ]) {
+      expect(matchRoute("POST", pattern)).toBeUndefined();
+      expect(matchRoute("GET", pattern)).toBeUndefined();
+    }
+  });
+
   it("declares the additive route contract while keeping workflow launches outside chat routes", () => {
     expect(API_ROUTES.length).toBeGreaterThanOrEqual(99);
     expect(

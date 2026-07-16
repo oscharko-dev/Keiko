@@ -286,6 +286,57 @@ describe("debug launch Layer-2 policy", () => {
     expect(layer1Allowed).toHaveBeenCalledOnce();
   });
 
+  it("passes the execution's own executable and args tuple to layer1Allowed, unmodified", () => {
+    const layer1Allowed = vi.fn(() => true);
+    validateDebugLaunchPolicy(
+      {
+        kind: "catalog",
+        executable: policy.nodeExecutable,
+        args: catalogArgs,
+        scriptName: "start",
+        shell: policy.shellExecutable,
+        cwd: policy.cwd,
+        env: policy.env,
+      },
+      { ...policy, layer1Allowed },
+    );
+    expect(layer1Allowed).toHaveBeenCalledExactlyOnceWith(policy.nodeExecutable, catalogArgs);
+  });
+
+  it("lets layer1Allowed independently veto a structurally-valid execution by inspecting args", () => {
+    // Layer 2 (structureAllowed) is necessarily satisfied here — this proves layer1Allowed is a
+    // genuine second, content-inspecting opinion rather than an unreachable dead branch.
+    const layer1Allowed = (_executable: string, args: readonly string[]): boolean =>
+      !args.includes("--require");
+    expect(
+      validateDebugLaunchPolicy(
+        {
+          kind: "file",
+          executable: policy.nodeExecutable,
+          args: ["/keiko-execution-root/app.js"],
+          target: "/keiko-execution-root/app.js",
+          cwd: policy.cwd,
+          env: policy.env,
+        },
+        { ...policy, layer1Allowed },
+      ),
+    ).toEqual({ allowed: true });
+    expect(
+      validateDebugLaunchPolicy(
+        {
+          kind: "catalog",
+          executable: policy.nodeExecutable,
+          args: catalogArgs,
+          scriptName: "start",
+          shell: policy.shellExecutable,
+          cwd: policy.cwd,
+          env: policy.env,
+        },
+        { ...policy, layer1Allowed: (): boolean => false },
+      ),
+    ).toEqual({ allowed: false, reason: "LAYER1_DENIED" });
+  });
+
   it("runs every independent policy denial in one mutation-complete test", () => {
     const catalog = {
       kind: "catalog" as const,

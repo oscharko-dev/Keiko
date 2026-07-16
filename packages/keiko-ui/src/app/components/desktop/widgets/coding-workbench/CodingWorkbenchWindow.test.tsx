@@ -1,358 +1,236 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  validateCodingWorkbenchAuthorityEnvelope,
-  validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchSidecarGatewayResult,
+import type {
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
-import { CodingWorkbenchWindow, type CodingWorkbenchWindowApi } from "./CodingWorkbenchWindow";
-import { CODING_WORKBENCH_PROJECTIONS } from "./codingWorkbenchProjection";
+import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
+import {
+  createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
+import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
-function sidecarProfile(): CodingWorkbenchSidecarGatewayResult {
+const runtimeHookMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
+  useCodingWorkbenchRuntime: runtimeHookMock,
+}));
+
+const AT = "2026-07-13T12:00:00.000Z";
+
+function actions(): CodingWorkbenchRuntimeActions {
   return {
-    status: "available",
-    profileId: "gateway-redacted",
-    modelAlias: "model-redacted",
-    localEndpointPath: "/api/coding-sidecar/gateway/chat/completions",
-    supportsStreaming: true,
-    supportsToolCalling: true,
-    runMetadata: {
-      maxPromptTokens: 200_000,
-      maxOutputTokens: 16_000,
-      maxInputMessages: 64,
-      maxRequestBytes: 1_000_000,
+    setRequestedMode: vi.fn(),
+    setRuntimePreference: vi.fn(),
+    refreshProfile: vi.fn(() => Promise.resolve()),
+    refreshSource: vi.fn(() => Promise.resolve()),
+    refreshRuntime: vi.fn(() => Promise.resolve()),
+    refreshRun: vi.fn(() => Promise.resolve()),
+    start: vi.fn(() => Promise.resolve()),
+    decideApproval: vi.fn(() => Promise.resolve()),
+    stop: vi.fn(() => Promise.resolve()),
+    takeover: vi.fn(() => Promise.resolve()),
+    retry: vi.fn(() => Promise.resolve()),
+    acknowledgeRecovery: vi.fn(() => Promise.resolve()),
+  };
+}
+
+function snapshot(
+  overrides: Partial<CodingWorkbenchRuntimeSnapshot> = {},
+): CodingWorkbenchRuntimeSnapshot {
+  return {
+    schemaVersion: "1",
+    state: "idle",
+    revision: 1,
+    updatedAt: AT,
+    ...overrides,
+  } as CodingWorkbenchRuntimeSnapshot;
+}
+
+function event(sequence: number): CodingWorkbenchRuntimeSseEvent {
+  return {
+    schemaVersion: "1",
+    cursor: `cursor-${String(sequence)}`,
+    sequence,
+    occurredAt: AT,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: sequence,
+    eventKind: "observation-streamed",
+  };
+}
+
+function liveState(
+  overrides: Partial<CodingWorkbenchRuntimeState> = {},
+): CodingWorkbenchRuntimeState {
+  return {
+    ...createInitialCodingWorkbenchRuntimeState(),
+    source: {
+      status: "ready",
+      value: {
+        runtimePreference: "managed-gateway",
+        modelSource: "keiko-model-gateway",
+        runtimeSource: "keiko-sidecar",
+        available: true,
+      },
+      error: null,
     },
+    workspace: {
+      status: "ready",
+      value: {
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        taskBranch: "issue/2257",
+        health: "healthy",
+        switching: false,
+      },
+      error: null,
+    },
+    runtime: {
+      status: "ready",
+      value: {
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "supervised-coding",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: true,
+      },
+      error: null,
+    },
+    run: { status: "ready", value: snapshot(), error: null },
+    canStart: true,
+    ...overrides,
   };
 }
 
-function codexProfile(): CodingWorkbenchCodexSubscriptionProfile {
-  return {
-    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    profileId: "codex-subscription",
-    modelSource: "chatgpt-codex-subscription-profile",
-    runtimeSource: "codex-cli-adapter",
-    status: "connected",
-    authMethod: "codex-access-token",
-    credentialStore: "file",
-    stateScope: "keiko-owned-state",
-    stateRoot: "keiko-codex-runtime-state",
-    usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime"],
-    supportsBrowserLogin: true,
-    supportsDeviceCode: true,
-    supportsAccessToken: true,
-    deploymentPolicyDisabled: false,
-    headless: false,
-  };
-}
-
-function api(): CodingWorkbenchWindowApi {
-  return {
-    fetchSidecarGatewayProfile: vi.fn(async () => sidecarProfile()),
-    fetchCodexSubscriptionProfile: vi.fn(async () => codexProfile()),
-  };
+function renderWorkbench(
+  state: CodingWorkbenchRuntimeState = liveState(),
+  liveActions: CodingWorkbenchRuntimeActions = actions(),
+): CodingWorkbenchRuntimeActions {
+  runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+  render(<CodingWorkbenchWindow />);
+  return liveActions;
 }
 
 describe("CodingWorkbenchWindow", () => {
-  it("keeps every preview Authority Envelope aligned with the shared contract", () => {
-    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
-      const validation = validateCodingWorkbenchAuthorityEnvelope(projection.authority);
-      expect(validation.ok ? [] : validation.errors, name).toEqual([]);
-      expect(validation, name).toMatchObject({ ok: true });
-    }
-  });
-
-  it("keeps every preview runtime event aligned with the shared contract", () => {
-    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
-      for (const event of projection.timeline) {
-        const validation = validateCodingWorkbenchRuntimeEvent(event);
-        expect(validation.ok ? [] : validation.errors, `${name}:${event.eventId}`).toEqual([]);
-        expect(validation, `${name}:${event.eventId}`).toMatchObject({ ok: true });
-      }
-    }
-  });
-
-  it("keeps preview task events inside the Authority Envelope scope", () => {
-    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
-      for (const event of projection.timeline) {
-        if (event.kind === "task-submitted") {
-          expect(projection.authority.taskRefs, `${name}:${event.eventId}`).toContain(
-            event.taskRef,
-          );
-        }
-      }
-    }
-  });
-
-  it("renders a usable empty workbench surface with visible mode authority", async () => {
-    render(<CodingWorkbenchWindow api={api()} />);
-
-    expect(screen.getByRole("region", { name: "Coding Workbench" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Ready for a coding run" })).toBeInTheDocument();
-    expect(screen.getByRole("radiogroup", { name: "Coding autonomy mode" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Ask for approval/u })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: /Approve for me/u })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: /Full access/u })).toBeDisabled();
-    expect(screen.getByText("No runtime events yet.")).toBeInTheDocument();
-    expect(screen.queryByText(/marketing|documentation card/iu)).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText("Available").length).toBeGreaterThanOrEqual(1));
-  });
-
-  it("announces pending mode changes before server confirmation", async () => {
+  it("renders only live server-confirmed readiness and starts with transient task intent", async () => {
     const user = userEvent.setup();
-    render(<CodingWorkbenchWindow api={api()} />);
+    const liveActions = renderWorkbench();
 
-    const modeGroup = screen.getByRole("radiogroup", { name: "Coding autonomy mode" });
-    expect(modeGroup).toHaveAttribute("aria-busy", "false");
-
-    await user.click(screen.getByRole("radio", { name: /Ask for approval/u }));
-
-    expect(modeGroup).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByText("Mode change pending server confirmation.")).toHaveAttribute(
-      "role",
-      "status",
+    expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
+    expect(screen.getByText(/Server effective mode:/u)).toHaveTextContent(
+      "Server effective mode: Ask for approval.",
     );
+    expect(screen.getByText(/Deployment ceiling:/u)).toHaveTextContent(
+      "Deployment ceiling: Approve for me.",
+    );
+    expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
+    expect(screen.queryByText(/Issue #1990|marketing|preview/u)).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
   });
 
-  it("keeps mode authority visible while running and exposes active Stop and Take Over controls", async () => {
-    const onStopRun = vi.fn();
-    const onTakeOver = vi.fn();
+  it("binds one-time approval controls to live pending permission truth", async () => {
     const user = userEvent.setup();
-    render(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.running}
-        onStopRun={onStopRun}
-        onTakeOver={onTakeOver}
-      />,
+    const liveActions = renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "awaiting-approval",
+            runId: "run-1",
+            pendingPermission: {
+              requestId: "permission-1",
+              kind: "delivery-substrate",
+              actionClass: "delivery-substrate",
+              reasonCode: "approval-required",
+              actionKind: "push",
+              scopeLabel: "workspace-scope",
+              risk: "high",
+              policyReason: "approval-required",
+              expiresAt: "2026-07-13T12:05:00.000Z",
+            },
+          }),
+        },
+      }),
     );
 
-    expect(screen.getByRole("radio", { name: /Approve for me/u })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
-    expect(onStopRun).toHaveBeenCalledWith("run-1990");
-    expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
-    await user.click(screen.getByRole("button", { name: "Take over manually" }));
-    expect(onTakeOver).toHaveBeenCalledWith("run-1990");
-    expect(screen.getByRole("status")).toHaveTextContent("Manual takeover requested");
-  });
-
-  it.each([
-    ["running", CODING_WORKBENCH_PROJECTIONS.running],
-    ["approval-required", CODING_WORKBENCH_PROJECTIONS.approvalRequired],
-    ["blocked", CODING_WORKBENCH_PROJECTIONS.blocked],
-  ])("keeps operator controls available in the %s active state", (_name, projection) => {
-    render(<CodingWorkbenchWindow api={api()} projection={projection} />);
-
-    expect(screen.getByRole("button", { name: "Stop sidecar" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Take over manually" })).toBeEnabled();
-  });
-
-  it("renders supervised permission prompts without raw command or diff content", async () => {
-    const user = userEvent.setup();
-    render(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.approvalRequired}
-      />,
-    );
-
-    expect(screen.getByRole("heading", { name: "Just-in-time approval" })).toBeInTheDocument();
-    expect(screen.getByText(/workspace write requested/iu)).toBeInTheDocument();
-    expect(screen.getByText("Action kind")).toBeInTheDocument();
-    expect(screen.getByText("file-edit")).toBeInTheDocument();
-    expect(screen.getByText("workspace-scope")).toBeInTheDocument();
-    expect(screen.getByText("approval-required")).toBeInTheDocument();
-    expect(screen.queryByText(/diff --git|access token|refresh token/iu)).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Review the bounded action" })).toBeInTheDocument();
+    expect(screen.queryByText(/diff --git|Bearer|\/Users\//u)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
-    expect(screen.getByRole("status")).toHaveTextContent("One-time approval recorded");
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Permission request denied");
+    expect(liveActions.decideApproval).toHaveBeenNthCalledWith(1, "approved");
+    expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
   });
 
-  it("renders blocked, failed, and completed run summaries distinctly", () => {
-    const { rerender } = render(
-      <CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.blocked} />,
-    );
-    expect(screen.getByText("Governance holds")).toBeInTheDocument();
-    expect(screen.getByText(/network-egress denied/iu)).toBeInTheDocument();
-
-    rerender(
-      <CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.failed} />,
-    );
-    expect(screen.getByText("One verification gate failed")).toBeInTheDocument();
-
-    rerender(
-      <CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.completed} />,
-    );
-    expect(screen.getByText("Ready for issue PR handoff")).toBeInTheDocument();
-  });
-
-  it("renders Governed Assist proposed diffs as review-only and blocked actions distinctly", () => {
-    const { rerender } = render(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.governedAssist}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Issue #1991 Governed Assist proposal" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Ask for approval/u })).toBeDisabled();
-    expect(screen.getByText("Proposed diff only")).toBeInTheDocument();
-    expect(screen.getByText("120 added, 14 deleted")).toBeInTheDocument();
-    expect(
-      screen.getByText("No file, Git, PR, merge, or external write authority"),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Issue #1991 Governed Assist blocked action" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Governance holds")).toBeInTheDocument();
-    expect(screen.getByText(/workspace-write denied in Governed Assist/iu)).toBeInTheDocument();
-    expect(
-      screen.getByText(/connector-write denied; external systems stay read-only/iu),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
-  });
-
-  it("renders the Supervised Coding approval lifecycle without raw evidence bodies", async () => {
-    const onStopRun = vi.fn();
+  it("renders recovery acknowledgement before allowing a fresh retry", async () => {
     const user = userEvent.setup();
-    const { rerender } = render(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.supervisedApprovalRequired}
-        onStopRun={onStopRun}
-      />,
+    const liveActions = renderWorkbench(
+      liveState({
+        canStart: false,
+        canRetry: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "recovery-required",
+            runId: "run-1",
+            failureCode: "recovery-required",
+          }),
+        },
+      }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Issue #1992 Supervised Coding approval" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Push requires one-time approval")).toBeInTheDocument();
-    expect(screen.getByText("push")).toBeInTheDocument();
-    expect(screen.getByText("high")).toBeInTheDocument();
-    expect(
-      screen.queryByText(/stdout|stderr|diff --git|Bearer|\/Users\//u),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
-    expect(onStopRun).toHaveBeenCalledWith("run-1992");
-    expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.supervisedApproved}
-      />,
-    );
-    expect(screen.getByText("Approved once for this scope")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("No operator override requested");
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.supervisedDenied}
-      />,
-    );
-    expect(screen.getByText("Denied before mutation")).toBeInTheDocument();
-    expect(screen.getAllByText("operator-denied").length).toBeGreaterThanOrEqual(1);
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.supervisedStopped}
-      />,
-    );
-    expect(screen.getByText("Stopped before mutation")).toBeInTheDocument();
-    expect(screen.getAllByText("operator-stopped").length).toBeGreaterThanOrEqual(1);
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.supervisedFailed}
-      />,
-    );
-    expect(screen.getByText("Verification failed with redacted output")).toBeInTheDocument();
-    expect(screen.getAllByText("redacted-failure").length).toBeGreaterThanOrEqual(1);
+    await user.click(screen.getByRole("button", { name: "Acknowledge recovery" }));
+    expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
   });
 
-  it("renders Autonomous Delivery closeout states without exposing raw provider material", () => {
-    const { rerender } = render(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.autonomousConfirmed}
-      />,
+  it("announces an unavailable authentication setup plan in the single live status", () => {
+    renderWorkbench(
+      liveState({
+        codexSetup: {
+          status: "unavailable",
+          value: null,
+          error: {
+            code: "CODEX_SETUP_UNAVAILABLE",
+            message: "Setup is unavailable.",
+            retryable: true,
+          },
+        },
+      }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Issue #1994 Autonomous Delivery confirmed envelope" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Full access/u })).toBeChecked();
-    expect(screen.getByText("Governed PR gateway handoff pending")).toBeInTheDocument();
-    expect(screen.getByText("Delivery runner")).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Authorization|Bearer|ghp_|diff --git|\/Users\//u),
-    ).not.toBeInTheDocument();
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.autonomousPolicyBlocked}
-      />,
-    );
-    expect(screen.getByText("No provider write executed")).toBeInTheDocument();
-    expect(screen.getAllByText("authority-expired").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("connector-scope-missing")).toBeInTheDocument();
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.autonomousVerificationFailed}
-      />,
-    );
-    expect(screen.getByText("PR creation blocked by verification")).toBeInTheDocument();
-    expect(screen.getAllByText("verification-failed").length).toBeGreaterThanOrEqual(1);
-
-    rerender(
-      <CodingWorkbenchWindow
-        api={api()}
-        projection={CODING_WORKBENCH_PROJECTIONS.autonomousCompleted}
-      />,
-    );
-    expect(screen.getByText("Draft PR created through governed PR gateway")).toBeInTheDocument();
-    expect(screen.getByText("pull")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Authentication setup plan unavailable.");
   });
 
-  it("distinguishes managed gateway, OpenAI-through-gateway, and Codex subscription sources", async () => {
-    render(<CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.running} />);
+  it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", () => {
+    const events = Array.from({ length: 1_000 }, (_, index) => event(index + 1));
+    runtimeHookMock.mockReturnValue({ state: liveState({ events }), actions: actions() });
+    const { container } = render(<CodingWorkbenchWindow />);
 
-    expect(screen.getByText("Keiko Gateway providers")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI API key through Gateway")).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT/Codex subscription profile")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+    expect(
+      container.querySelectorAll(
+        'ol[aria-label="Coding run event timeline"] > li:not([aria-hidden])',
+      ),
+    ).toHaveLength(96);
   });
 
-  it("passes axe for the running workbench surface", async () => {
-    const { container } = render(
-      <CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.running} />,
-    );
+  it("has no serious or critical axe violations in the live ready state", async () => {
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    const { container } = render(<CodingWorkbenchWindow />);
 
-    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
-    expect(await axe(container)).toHaveNoViolations();
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
   });
 });

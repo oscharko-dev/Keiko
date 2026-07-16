@@ -16,6 +16,11 @@ import {
 import { createDebugCapabilityGate, type DebugCapabilityGate } from "./debugActivationPolicy.js";
 
 const WATCHDOG_INTERVAL_MS = 1_000;
+// Bounds how long a resolved-but-idle workspace is kept in `tracked`/watched by the per-second
+// sweep. Idle means no external resolve()/synchronize() touch, not sweep activity itself -- the
+// sweep must never refresh its own idle clock, or a permanently tracked workspace could never age
+// out (issue #2347 audit finding: unbounded per-process watch list).
+const DEFAULT_TRACKED_IDLE_TTL_MS = 30 * 60_000;
 
 export interface DebugActivationContext {
   readonly realRoot?: string | undefined;
@@ -53,12 +58,14 @@ export interface DebugActivationControlOptions {
   readonly gate?: DebugCapabilityGate | undefined;
   readonly now?: (() => number) | undefined;
   readonly watchdogIntervalMs?: number | undefined;
+  readonly trackedIdleTtlMs?: number | undefined;
   readonly onSweepFailure?: ((failure: DebugActivationSweepFailure) => void) | undefined;
 }
 
 interface TrackedActivation {
   readonly context: DebugActivationContext & { readonly realRoot: string };
   readonly summary: DebugActivationSummary;
+  readonly lastTouchedMs: number;
 }
 
 function workspaceFingerprintKey(realRoot: string): string {
@@ -132,6 +139,11 @@ function summaryFor(
   return unavailableSummary(context.revision);
 }
 
+// Narrowing is a state transition away from "available", never a bare revision-counter mismatch.
+// `context.revision` is the caller-supplied M7 snapshot revision, which for a workspace-scoped
+// caller is the *combined* per-scope revision (bumped by every workspace-scoped setting, not only
+// `debuggingEnabled`); comparing it here would revoke a live session on an unrelated settings edit
+// (issue #2347 audit finding). Explicit user deactivation is handled by the caller-asserted action.
 function revocationRequired(
   action: DebugActivationSynchronization["action"],
   changed: boolean,
@@ -139,21 +151,21 @@ function revocationRequired(
   next: DebugActivationSummary,
 ): boolean {
   if (action === "deactivate" && changed) return true;
-  return (
-    prior?.state === "available" && (next.state !== "available" || prior.revision !== next.revision)
-  );
+  return prior?.state === "available" && next.state !== "available";
 }
 
 function trackResolution(
   context: DebugActivationContext & { readonly realRoot: string },
   next: DebugActivationSummary,
   tracked: Map<string, TrackedActivation>,
+  now: () => number,
 ): void {
   const prior = tracked.get(context.realRoot);
   const preservePrior = revocationRequired("settingsChange", false, prior?.summary, next);
   tracked.set(context.realRoot, {
     context,
     summary: preservePrior && prior !== undefined ? prior.summary : next,
+    lastTouchedMs: now(),
   });
 }
 
@@ -183,6 +195,12 @@ function writeEvidence(
 ): Promise<void> {
   const realRoot = input.context.realRoot;
   if (realRoot === undefined) return Promise.resolve();
+  // The watchdog/subscription sweep runs every tick as `settingsChange` with `changed: false`
+  // purely to re-check narrowing; when it does not revoke, nothing durable happened. Writing
+  // evidence anyway collides on the `{fingerprint}-{revision}-{action}` evidence key with a real
+  // user-initiated `deactivate` at the same revision and silently overwrites it a second later
+  // (issue #2347 audit finding). Only an explicit user action or an actual revocation is evidenced.
+  if (input.action === "settingsChange" && !revoked) return Promise.resolve();
   const evidence = {
     schemaVersion: "1" as const,
     action: evidenceAction(input.action, revoked),
@@ -199,6 +217,20 @@ function writeEvidence(
   ).then(() => undefined);
 }
 
+// A sweep-driven call (`action: "settingsChange"`, exclusively originated by `sweepWorkspace`)
+// must not refresh the idle clock itself -- otherwise a workspace nobody reads or mutates anymore
+// would still count as "active" forever purely because the watchdog keeps visiting it, and the
+// idle-eviction in `pruneIdleTracked` could never trigger (issue #2347 audit finding).
+function nextTouchMs(
+  input: DebugActivationSynchronization,
+  tracked: Map<string, TrackedActivation>,
+  realRoot: string,
+  now: () => number,
+): number {
+  if (input.action === "settingsChange") return tracked.get(realRoot)?.lastTouchedMs ?? now();
+  return now();
+}
+
 async function synchronizeTracked(
   input: DebugActivationSynchronization,
   tracked: Map<string, TrackedActivation>,
@@ -212,7 +244,12 @@ async function synchronizeTracked(
   const revoke = revocationRequired(input.action, input.changed, prior, next);
   if (revoke) await options.disposeActiveSession(realRoot);
   await writeEvidence(options, input, prior, next, revoke);
-  tracked.set(realRoot, { context: { ...input.context, realRoot }, summary: next });
+  const now = options.now ?? Date.now;
+  tracked.set(realRoot, {
+    context: { ...input.context, realRoot },
+    summary: next,
+    lastTouchedMs: nextTouchMs(input, tracked, realRoot, now),
+  });
   return next;
 }
 
@@ -251,6 +288,22 @@ function sweepWorkspace(
     });
 }
 
+// Bounds the watchdog's per-tick and per-process cost to workspaces someone actually reads or
+// mutates. A workspace that is never touched again (closed project, stale tab) ages out instead of
+// being watched -- and having its evidence/provisioning re-derived every second -- for the
+// remaining lifetime of the BFF process (issue #2347 audit finding).
+function pruneIdleTracked(
+  tracked: Map<string, TrackedActivation>,
+  options: DebugActivationControlOptions,
+): void {
+  const now = options.now ?? Date.now;
+  const idleTtlMs = options.trackedIdleTtlMs ?? DEFAULT_TRACKED_IDLE_TTL_MS;
+  const cutoffMs = now() - idleTtlMs;
+  for (const [realRoot, entry] of tracked) {
+    if (entry.lastTouchedMs < cutoffMs) tracked.delete(realRoot);
+  }
+}
+
 function scheduleSweep(
   source: DebugActivationSweepFailure["source"],
   tracked: Map<string, TrackedActivation>,
@@ -258,6 +311,7 @@ function scheduleSweep(
   options: DebugActivationControlOptions,
   gate: DebugCapabilityGate,
 ): void {
+  pruneIdleTracked(tracked, options);
   for (const { context } of tracked.values()) {
     sweepWorkspace(source, tracked, pending, options, gate, context);
   }
@@ -286,7 +340,12 @@ export function createDebugActivationControlService(
     resolve: (context): DebugActivationSummary => {
       const summary = summaryFor(context, options, gate);
       if (context.realRoot !== undefined) {
-        trackResolution({ ...context, realRoot: context.realRoot }, summary, tracked);
+        trackResolution(
+          { ...context, realRoot: context.realRoot },
+          summary,
+          tracked,
+          options.now ?? Date.now,
+        );
       }
       return summary;
     },

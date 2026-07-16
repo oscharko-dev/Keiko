@@ -25,7 +25,7 @@ digest-pinned container backend.
 Run the hermetic planner tests. They disclose capability classes only and never endpoint paths.
 
 ```bash
-npm exec vitest -- run packages/keiko-sandbox/src/debug-capsule.test.ts packages/keiko-server/src/editor/dap/debugLaunchReachability.spike.test.ts
+npm exec vitest -- run packages/keiko-sandbox/src/debug-capsule.test.ts packages/keiko-server/src/editor/dap/testing/debugLaunchReachability.spike.test.ts
 ```
 
 A passing fail-closed case confirms an unavailable or unqualified backend. A planner assertion

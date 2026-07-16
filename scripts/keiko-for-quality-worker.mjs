@@ -1,4 +1,8 @@
-import { evaluateKeikoForQuality, requiredChecks } from "./keiko-for-quality-core.mjs";
+import {
+  evaluateKeikoForQuality,
+  requiredChecks,
+  requiredChecksForProfile,
+} from "./keiko-for-quality-core.mjs";
 
 const checkName = "Keiko for Quality";
 const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
@@ -6,6 +10,7 @@ const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
 const deliveryRetentionMs = 86_400_000;
+const postMergeReconciliationMs = 3_600_000;
 const persistedPullPageSize = 100;
 const persistedPullPageLimit = 10;
 
@@ -266,8 +271,8 @@ export function checkBody(result) {
     : body;
 }
 
-function currentCheckCount(checks, headSha) {
-  return requiredChecks.filter(({ appId: expectedAppId, name }) =>
+function currentCheckCount(checks, headSha, expectedChecks) {
+  return expectedChecks.filter(({ appId: expectedAppId, name }) =>
     checks.some(
       (check) =>
         check.appId === expectedAppId &&
@@ -307,17 +312,27 @@ function failureDetails(failures) {
 
 function evidenceState(failures, pattern, cleanLabel) {
   const failure = failures.find((entry) => pattern.test(entry));
-  return failure === undefined ? `✅ ${cleanLabel}` : `❌ ${failure}`;
+  if (failure === undefined) return `✅ ${cleanLabel}`;
+  return `${hardFailure([failure]) ? "❌" : "⏳"} ${failure}`;
 }
 
-export function dashboardComment({ checks, comments, headSha, pull, result }) {
+export function dashboardComment({
+  checks,
+  comments,
+  expectedChecks = requiredChecks,
+  headSha,
+  pull,
+  result,
+}) {
   const state = decision(result);
-  const successfulChecks = currentCheckCount(checks, headSha);
+  const successfulChecks = currentCheckCount(checks, headSha, expectedChecks);
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
+  const blocked = hardFailure(result.failures);
+  const incompleteEvidenceLabel = blocked ? "Blocking" : "Waiting";
   const detailsSummary = result.passed
     ? "Validated evidence"
-    : `Blocking or waiting evidence (${String(result.failures.length)})`;
+    : `${incompleteEvidenceLabel} evidence (${String(result.failures.length)})`;
   return [
     dashboardMarker,
     "## Keiko for Quality",
@@ -328,7 +343,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     "",
     "| Gate group | Evidence |",
     "| --- | --- |",
-    `| Required checks | ${String(successfulChecks)}/${String(requiredChecks.length)} successful |`,
+    `| Required checks | ${String(successfulChecks)}/${String(expectedChecks.length)} successful |`,
     `| SonarQube Cloud | ${evidenceState(result.failures, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
     `| Gitar review | ${evidenceState(result.failures, /Gitar/iu, "zero unresolved findings")} |`,
     `| Socket Security | ${evidenceState(result.failures, /Socket/iu, "zero unresolved alerts")} |`,
@@ -339,7 +354,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
     `| Gitar Auto-Apply | ${autoApplyState(comments)} |`,
     `| GitHub Auto-Merge | ${autoMerge} |`,
     "",
-    `<details${result.passed ? "" : " open"}>`,
+    `<details${blocked ? " open" : ""}>`,
     `<summary>${detailsSummary}</summary>`,
     "",
     failureDetails(result.failures),
@@ -351,6 +366,7 @@ export function dashboardComment({ checks, comments, headSha, pull, result }) {
 }
 
 export async function publishDashboardComment({
+  expectedChecks,
   owner,
   repository,
   pullNumber,
@@ -362,6 +378,7 @@ export async function publishDashboardComment({
 }) {
   const body = dashboardComment({
     ...currentEvidence,
+    expectedChecks,
     headSha: pull.head.sha,
     pull,
     result,
@@ -383,10 +400,34 @@ export async function publishDashboardComment({
   });
 }
 
+function postMergeReconciliation(pull, evaluatedAt) {
+  const mergedAt = Date.parse(pull.merged_at);
+  return (
+    pull.state === "closed" &&
+    pull.merged === true &&
+    Number.isFinite(mergedAt) &&
+    mergedAt + postMergeReconciliationMs >= evaluatedAt
+  );
+}
+
+function pullNeedsEvaluation(pull, baseBranch, evaluatedAt) {
+  return (
+    pull.base?.ref === baseBranch &&
+    (pull.state === "open" || postMergeReconciliation(pull, evaluatedAt))
+  );
+}
+
+async function persistEvaluatedPull(database, tracked, pull, result) {
+  if (pull.state === "open" || !result.passed) await storeTrackedPull(database, tracked);
+  else await deleteTrackedPull(database, tracked);
+}
+
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
+  const target = targetForRepository(`${owner}/${repository}`, env);
   const token = await installationToken(installationId, env);
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
-  if (pull.state !== "open" || pull.base?.ref !== "dev") {
+  const evaluatedAt = Date.now();
+  if (!pullNeedsEvaluation(pull, target.baseBranch, evaluatedAt)) {
     await deleteTrackedPull(env.KEIKO_FOR_QUALITY_DB, { owner, pullNumber, repository });
     return;
   }
@@ -395,9 +436,10 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     throw new Error("Pull request head SHA is invalid.");
   }
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
-  const evaluatedAt = Date.now();
+  const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
+    requiredChecks: expectedChecks,
     headSha,
     now: evaluatedAt,
     socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
@@ -407,6 +449,7 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
   const result = { ...decisionResult, evaluatedAt };
   await publishCheck(owner, repository, headSha, result, token, env);
   await publishDashboardComment({
+    expectedChecks,
     owner,
     repository,
     pullNumber,
@@ -416,12 +459,13 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     token,
     env,
   });
-  await storeTrackedPull(env.KEIKO_FOR_QUALITY_DB, {
+  const tracked = {
     installationId,
     owner,
     pullNumber,
     repository,
-  });
+  };
+  await persistEvaluatedPull(env.KEIKO_FOR_QUALITY_DB, tracked, pull, result);
 }
 
 async function authenticateWebhook(request, env, body) {
@@ -467,7 +511,9 @@ export async function reserveDelivery(database, delivery, now = Date.now()) {
 
 function preflightWebhookResponse(event, payload, env) {
   if (event === "ping") return new Response("pong", { status: 202 });
-  if (payload.repository?.full_name !== env.TARGET_REPOSITORY)
+  if (
+    !targetRepositories(env).some(({ repository }) => repository === payload.repository?.full_name)
+  )
     return new Response("unexpected repository", { status: 403 });
   if (isOwnCheckEvent(event, payload, env) || isOwnCommentEvent(event, payload, env))
     return new Response("ignored", { status: 202 });
@@ -480,7 +526,8 @@ async function dispatchWebhookEvent(event, payload, request, env, context) {
   const installationId = payload.installation?.id;
   if (!Number.isInteger(installationId))
     return new Response("missing installation", { status: 400 });
-  const [owner, repository] = env.TARGET_REPOSITORY.split("/");
+  const target = targetForRepository(payload.repository.full_name, env);
+  const [owner, repository] = target.repository.split("/");
   const pullNumbers = new Set(pullRequestNumbers(event, payload));
   if (pullNumbers.size === 0) return new Response("accepted", { status: 202 });
   const reservationFailure = await reserveWebhookDelivery(request, env.KEIKO_FOR_QUALITY_DB);
@@ -536,11 +583,45 @@ export function isValidHeadSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 
-function targetRepository(env) {
-  const parts = env.TARGET_REPOSITORY.split("/");
-  if (parts.length !== 2 || parts.some((part) => part.length === 0))
-    throw new Error("TARGET_REPOSITORY must be owner/repository.");
-  return { owner: parts[0], repository: parts[1] };
+function validatedRepository(value, legacy) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(value)) {
+    throw new Error(
+      legacy ? "TARGET_REPOSITORY must be owner/repository." : "Invalid target repository.",
+    );
+  }
+  return value;
+}
+
+function validatedBaseBranch(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._/-]{1,128}$/u.test(value))
+    throw new Error("Invalid target base branch.");
+  return value;
+}
+
+function validatedTarget(value, legacy = false) {
+  const repository = validatedRepository(legacy ? value : value?.repository, legacy);
+  const baseBranch = validatedBaseBranch(legacy ? "dev" : value?.baseBranch);
+  const profile = legacy ? "keiko" : value?.profile;
+  requiredChecksForProfile(profile);
+  return { baseBranch, profile, repository };
+}
+
+export function targetRepositories(env) {
+  if (env.TARGET_REPOSITORIES_JSON === undefined)
+    return [validatedTarget(env.TARGET_REPOSITORY, true)];
+  const values = parseJson(env.TARGET_REPOSITORIES_JSON);
+  if (!Array.isArray(values) || values.length === 0)
+    throw new Error("TARGET_REPOSITORIES_JSON must contain target profiles.");
+  const targets = values.map((value) => validatedTarget(value));
+  if (new Set(targets.map(({ repository }) => repository)).size !== targets.length)
+    throw new Error("Target repositories must be unique.");
+  return targets;
+}
+
+export function targetForRepository(repository, env) {
+  const target = targetRepositories(env).find((candidate) => candidate.repository === repository);
+  if (target === undefined) throw new Error("Repository is outside the quality target set.");
+  return target;
 }
 
 async function repositoryInstallation(owner, repository, env) {
@@ -551,15 +632,24 @@ async function repositoryInstallation(owner, repository, env) {
 }
 
 export async function discoverOpenPullRequests(env) {
-  const { owner, repository } = targetRepository(env);
-  const installationId = await repositoryInstallation(owner, repository, env);
-  const token = await installationToken(installationId, env);
-  const pulls = await allPages(`/repos/${owner}/${repository}/pulls?state=open&base=dev`, token);
-  return pulls.flatMap((pull) =>
-    Number.isInteger(pull.number)
-      ? [{ installationId, owner, pullNumber: pull.number, repository }]
-      : [],
-  );
+  const discovered = [];
+  for (const target of targetRepositories(env)) {
+    const [owner, repository] = target.repository.split("/");
+    const installationId = await repositoryInstallation(owner, repository, env);
+    const token = await installationToken(installationId, env);
+    const pulls = await allPages(
+      `/repos/${owner}/${repository}/pulls?state=open&base=${encodeURIComponent(target.baseBranch)}`,
+      token,
+    );
+    discovered.push(
+      ...pulls.flatMap((pull) =>
+        Number.isInteger(pull.number)
+          ? [{ installationId, owner, pullNumber: pull.number, repository }]
+          : [],
+      ),
+    );
+  }
+  return discovered;
 }
 
 function trackedPullKey(tracked) {

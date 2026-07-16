@@ -687,6 +687,11 @@ describe("production debug launch context resolution", () => {
     ).toThrow("INVALID_DEBUG_BACKEND");
   });
 
+  // This test performs 6 real spawnSync subprocess invocations plus repeated mkdtemp/chmod/rm
+  // cycles (fixture() x6, qualifyProductionDebugBackend x5). That is legitimately slower than the
+  // vitest.config.ts default (15s) under CI/concurrent-suite load even though it is not otherwise
+  // flaky (~1.8s in isolation) — an explicit ceiling avoids a spurious timeout, matching the same
+  // pattern used for other subprocess-heavy tests in this repo (e.g. egress.test.ts, evaluate.test.ts).
   it("rejects bwrap on a non-Linux platform and malformed version evidence", () => {
     const nonLinux = fixture();
     expect(() =>
@@ -713,7 +718,7 @@ describe("production debug launch context resolution", () => {
         }),
       ).toThrow("INVALID_DEBUG_BACKEND");
     }
-  });
+  }, 30_000);
 
   it("rejects backend execution errors, non-zero probes, and missing probe markers", () => {
     const missingInterpreter = executable(

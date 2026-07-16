@@ -178,6 +178,16 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain("package.json is missing");
   });
 
+  it("fails closed when published-catalog discovery cannot resolve trusted git", () => {
+    tempRoot = mkdtempSync(join(tmpdir(), "keiko-release-impact-"));
+    writeJson(tempRoot, "package.json", rootManifest());
+    writeJson(tempRoot, "release-impact.catalog.json", catalog());
+
+    expect(() =>
+      withEnv("PATH", "relative-bin", () => validateReleaseImpactRoot(tempRoot)),
+    ).toThrow("trusted host executable is unavailable: git");
+  });
+
   it("blocks publish when the current package version has no catalog entry", () => {
     const result = validateReleaseImpactCatalog(catalog(), rootManifest({ version: "0.2.12" }));
 

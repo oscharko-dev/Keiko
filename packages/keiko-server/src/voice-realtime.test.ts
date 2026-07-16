@@ -502,7 +502,8 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     conn.start(false);
     socket.sent.length = 0;
     // A bidi-override + zero-width injection in the transcript text.
-    await conn.receive(clientMessage("transcript.committed", 1, { text: "ok‮text​ done" }));
+    const hostileText = `ok${String.fromCodePoint(0x202e)}text${String.fromCodePoint(0x200b)} done`;
+    await conn.receive(clientMessage("transcript.committed", 1, { text: hostileText }));
     // Not echoed back to the connected client...
     expect(socket.sent).toHaveLength(0);
     // ...but recorded (sanitised) into the reconnect replay buffer.

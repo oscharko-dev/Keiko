@@ -8,9 +8,11 @@ import {
   evaluateKeikoForQuality,
   hasCurrentSocketNoAlertEvidence,
   isBotEvidence,
+  nativeRequiredChecks,
   packageAlerts,
   parseGitarFindings,
   requiredChecks,
+  requiredChecksForProfile,
   stabilityFailures,
   validatedSet,
   validatedRiskAllowlist,
@@ -83,12 +85,75 @@ describe("Keiko for Quality core", () => {
       { appId: 15368, name: "Review dependency diff (dev/main)" },
       { appId: 15368, name: "ui" },
       { appId: 15368, name: "Scan dependency lockfiles" },
-      { appId: 15368, name: "Mutation quality gate" },
       { appId: 12526, name: "SonarCloud Code Analysis" },
       { appId: 156372, name: "Socket Security: Project Report" },
       { appId: 156372, name: "Socket Security: Pull Request Alerts" },
       { appId: 827041, name: "Gitar" },
     ]);
+  });
+
+  it("pins the Keiko Native profile without Keiko-specific UI or mutation contexts", () => {
+    expect(nativeRequiredChecks).toEqual([
+      { appId: 15368, name: "ci" },
+      { appId: 15368, name: "actionlint" },
+      { appId: 15368, name: "Verify pinned action SHAs" },
+      { appId: 15368, name: "zizmor" },
+      { appId: 15368, name: "Analyze (actions)" },
+      { appId: 15368, name: "Analyze (javascript-typescript)" },
+      { appId: 15368, name: "Build, scan, SBOM, smoke" },
+      { appId: 15368, name: "Review dependency diff (dev/main)" },
+      { appId: 15368, name: "native" },
+      { appId: 15368, name: "Scan dependency lockfiles" },
+      { appId: 12526, name: "SonarCloud Code Analysis" },
+      { appId: 156372, name: "Socket Security: Project Report" },
+      { appId: 156372, name: "Socket Security: Pull Request Alerts" },
+    ]);
+    expect(requiredChecksForProfile("keiko")).toBe(requiredChecks);
+    expect(requiredChecksForProfile("keiko-native")).toBe(nativeRequiredChecks);
+    expect(() => requiredChecksForProfile("unknown")).toThrow("Unsupported quality-gate profile.");
+  });
+
+  it("evaluates the explicitly selected required-check profile", () => {
+    const input = passingInput();
+    input.requiredChecks = nativeRequiredChecks;
+    input.checks = [
+      ...input.checks.filter(({ name }) =>
+        [
+          "Gitar",
+          "Socket Security: Project Report",
+          "Socket Security: Pull Request Alerts",
+        ].includes(name),
+      ),
+      ...nativeRequiredChecks.map(({ appId, name }) => ({
+        appId,
+        completedAt,
+        conclusion: "success",
+        headSha,
+        name,
+        startedAt: "2026-07-11T08:59:00.000Z",
+        status: "completed",
+      })),
+    ];
+    expect(evaluateKeikoForQuality(input)).toEqual({ failures: [], passed: true });
+  });
+
+  it("keeps running checks pending and reserves failure for terminal conclusions", () => {
+    const [expected] = requiredChecks;
+    const running = {
+      appId: expected.appId,
+      conclusion: null,
+      headSha,
+      name: expected.name,
+      status: "in_progress",
+    };
+    expect(checkFailures([running], headSha, [expected])).toEqual([
+      `Check is pending: ${expected.name}.`,
+    ]);
+    expect(
+      checkFailures([{ ...running, conclusion: "failure", status: "completed" }], headSha, [
+        expected,
+      ]),
+    ).toEqual([`Check is not successful: ${expected.name}.`]);
   });
 
   it("binds bot evidence to immutable user, type, and app identities", () => {
@@ -199,7 +264,7 @@ describe("Keiko for Quality core", () => {
     expect(commentIsCurrent({ updatedAt: completedAt }, Number.NEGATIVE_INFINITY)).toBe(false);
   });
 
-  it("uses the newest duplicate check and rejects incomplete terminal state", () => {
+  it("uses the newest duplicate check and keeps an incomplete state pending", () => {
     const policy = requiredChecks[0];
     const checks = [
       {
@@ -219,7 +284,7 @@ describe("Keiko for Quality core", () => {
         status: "in_progress",
       },
     ];
-    expect(checkFailures(checks, headSha)).toContain(`Check is not successful: ${policy.name}.`);
+    expect(checkFailures(checks, headSha)).toContain(`Check is pending: ${policy.name}.`);
     expect(
       checkFailures(
         [

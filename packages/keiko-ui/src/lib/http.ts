@@ -32,6 +32,7 @@
  */
 
 import { ApiError } from "./api";
+import { secureRandomId } from "./secure-random";
 
 // The `{ error: { code, message, … } }` envelope every BFF route returns on a non-2xx. Extra
 // fields (e.g. task-workspace `failureClass`) are surfaced to `opts.enrichError`.
@@ -72,12 +73,7 @@ function defaultParseFailureMessage(status: number): string {
 const CORRELATION_HEADER = "X-Keiko-Correlation-Id";
 
 function newClientCorrelationId(): string {
-  const cryptoRef = globalThis.crypto;
-  if (cryptoRef !== undefined && typeof cryptoRef.randomUUID === "function") {
-    return cryptoRef.randomUUID();
-  }
-  // Fallback for non-secure/legacy contexts: still a header-safe id in the [8,128] range.
-  return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return secureRandomId("ui");
 }
 
 // Builds the request headers as the union of both historical styles. `init.headers` win last so a

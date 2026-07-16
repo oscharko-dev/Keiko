@@ -1,0 +1,333 @@
+import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
+import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
+import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
+import type {
+  CodingRuntimeTaskDispatchResult,
+  CodingRuntimeTaskDispatchRequest,
+  CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskOutcome,
+  CodingRuntimeRunOperation,
+} from "./productionCodingRuntimeHost.js";
+import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+
+const CODEX_CONTROL_TIMEOUT_MS = 30_000;
+const CODEX_TERMINAL_POLL_MS = 25;
+
+export interface ProductionRuntimeTurnPort {
+  readonly submitTurn: (runId: string, text: string) => Promise<boolean>;
+  readonly abortTurn: (runId: string) => Promise<boolean>;
+  readonly waitForTerminal: (
+    runId: string,
+    signal: AbortSignal,
+  ) => Promise<CodingRuntimeTaskOutcome>;
+}
+
+export interface ProductionRuntimeRunRecord {
+  readonly manager?: CodingRuntimeManager | undefined;
+  readonly turnPort: ProductionRuntimeTurnPort;
+  readonly controller: AbortController;
+  readonly operationGuard: ProductionRuntimeOperationGuard;
+  readonly dispose?: (() => void | Promise<void>) | undefined;
+}
+
+export interface ProductionRuntimeOperationGuard {
+  readonly reserve: (
+    request: CodingRuntimeRunOperation,
+  ) => ProductionRuntimeOperationReservation | undefined;
+}
+
+export interface ProductionRuntimeOperationReservation {
+  /** Commits replay identity only after the productive adapter accepted the operation. */
+  readonly commit: () => boolean;
+  /** Releases a failed/non-productive attempt so the unchanged revision can be retried. */
+  readonly release: () => void;
+}
+
+export function createProductionRuntimeOperationGuard(
+  runId: string,
+  live: () => boolean,
+): ProductionRuntimeOperationGuard {
+  const usedRequestIds = new Set<string>();
+  let lastRevision = -1;
+  let pending:
+    { readonly requestId: string; readonly expectedRevision: number; active: boolean } | undefined;
+  return {
+    reserve: (request): ProductionRuntimeOperationReservation | undefined => {
+      if (
+        request.runId !== runId ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.requestId) ||
+        !Number.isSafeInteger(request.expectedRevision) ||
+        request.expectedRevision < 0 ||
+        request.expectedRevision <= lastRevision ||
+        usedRequestIds.has(request.requestId) ||
+        pending !== undefined
+      ) {
+        return undefined;
+      }
+      try {
+        if (!live()) return undefined;
+      } catch {
+        return undefined;
+      }
+      const reservation = {
+        requestId: request.requestId,
+        expectedRevision: request.expectedRevision,
+        active: true,
+      };
+      pending = reservation;
+      const release = (): void => {
+        if (!reservation.active) return;
+        reservation.active = false;
+        if (pending === reservation) pending = undefined;
+      };
+      return {
+        commit: (): boolean => {
+          if (!reservation.active || pending !== reservation) return false;
+          usedRequestIds.add(reservation.requestId);
+          lastRevision = reservation.expectedRevision;
+          release();
+          return true;
+        },
+        release,
+      };
+    },
+  };
+}
+
+export function createProductionRuntimeManager(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  authority: CodingRuntimeAuthorityService,
+  now: () => Date = () => new Date(),
+): CodingRuntimeManager {
+  let activeRunId: string | undefined;
+  const active = (): CodingRuntimeManager | undefined =>
+    activeRunId === undefined ? undefined : runs.get(activeRunId)?.manager;
+  const settle = async (
+    runId: string,
+    action: "stop" | "takeover" | "reconcile",
+  ): ReturnType<CodingRuntimeManager["stop"]> => {
+    const manager = active();
+    if (manager === undefined || activeRunId !== runId) return stoppedRun();
+    const result = await manager[action](runId);
+    if (result.ok) {
+      await cleanupRun(runs, runId);
+      activeRunId = undefined;
+    }
+    return result;
+  };
+  return {
+    start: async (request): Promise<CodingRuntimeStartResult> => {
+      const record = runs.get(request.runId);
+      if (record?.manager === undefined || activeRunId !== undefined) return startMismatch();
+      activeRunId = request.runId;
+      const result = await record.manager.start(request);
+      if (result.ok) {
+        authority.transition(request.runId, "ready", now().toISOString());
+        authority.transition(request.runId, "running", now().toISOString());
+      } else if (record.manager.health().status === "stopped") {
+        authority.abandonUnlaunched(request.runId, now().toISOString());
+        await cleanupRun(runs, request.runId);
+        activeRunId = undefined;
+      }
+      return result;
+    },
+    issueApproval: (request) =>
+      active()?.issueApproval(request) ?? {
+        ok: false,
+        failureCode: "runtime-stopped",
+        retryable: false,
+      },
+    stop: (runId) => settle(runId, "stop"),
+    takeover: (runId) => settle(runId, "takeover"),
+    reconcile: (runId) => settle(runId, "reconcile"),
+    health: () => active()?.health() ?? { status: "stopped" },
+  };
+}
+
+async function cleanupRun(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  runId: string,
+): Promise<void> {
+  const record = runs.get(runId);
+  record?.controller.abort();
+  await record?.dispose?.();
+  runs.delete(runId);
+}
+
+function startMismatch(): CodingRuntimeStartResult {
+  return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+}
+
+function stoppedRun(): ReturnType<CodingRuntimeManager["stop"]> {
+  return Promise.resolve({
+    ok: false,
+    failureCode: "runtime-run-mismatch",
+    retryable: false,
+  });
+}
+
+export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): ProductionRuntimeTurnPort {
+  return {
+    submitTurn: (runId, text) => runPort.submitTask(runId, text),
+    abortTurn: (runId) => runPort.abortTask(runId),
+    waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> =>
+      (await runPort.waitForTerminal(runId, signal))
+        ? "succeeded"
+        : signal.aborted
+          ? "cancelled"
+          : "failed",
+  };
+}
+
+interface CodexRunTurnState {
+  threadId?: string | undefined;
+  turnId?: string | undefined;
+}
+
+export function createCodexRuntimeTurnPort(
+  control: CodexRuntimeControl,
+): ProductionRuntimeTurnPort {
+  const runs = new Map<string, CodexRunTurnState>();
+  return {
+    submitTurn: (runId, text) => submitCodexTurn(control, runs, runId, text),
+    abortTurn: (runId) => abortCodexTurn(control, runs, runId),
+    waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
+      const state = runs.get(runId);
+      if (state?.turnId === undefined) return "failed";
+      const turnId = state.turnId;
+      const outcome = await waitForCodexTerminal(control, runId, turnId, signal);
+      if (runs.get(runId)?.turnId === turnId) state.turnId = undefined;
+      return outcome;
+    },
+  };
+}
+
+async function submitCodexTurn(
+  control: CodexRuntimeControl,
+  runs: Map<string, CodexRunTurnState>,
+  runId: string,
+  text: string,
+): Promise<boolean> {
+  const state = runs.get(runId) ?? {};
+  if (state.turnId !== undefined) return false;
+  const options = { timeoutMs: CODEX_CONTROL_TIMEOUT_MS };
+  if (state.threadId === undefined) {
+    const thread = await control.startThread(runId, options);
+    if (!thread.ok) return false;
+    state.threadId = thread.threadId;
+    runs.set(runId, state);
+  }
+  const turn = await control.startTurn(runId, state.threadId, text, options);
+  if (!turn.ok) return false;
+  state.turnId = turn.turnId;
+  return true;
+}
+
+async function abortCodexTurn(
+  control: CodexRuntimeControl,
+  runs: ReadonlyMap<string, CodexRunTurnState>,
+  runId: string,
+): Promise<boolean> {
+  const state = runs.get(runId);
+  if (state?.threadId === undefined || state.turnId === undefined) return false;
+  return (
+    await control.interruptTurn(runId, state.threadId, state.turnId, {
+      timeoutMs: CODEX_CONTROL_TIMEOUT_MS,
+    })
+  ).ok;
+}
+
+async function waitForCodexTerminal(
+  control: CodexRuntimeControl,
+  runId: string,
+  turnId: string,
+  signal: AbortSignal,
+): Promise<CodingRuntimeTaskOutcome> {
+  while (!signal.aborted) {
+    const status = control.terminalStatus(runId, turnId);
+    if (status !== undefined) {
+      return status === "completed"
+        ? "succeeded"
+        : status === "interrupted"
+          ? "cancelled"
+          : "failed";
+    }
+    await pollDelay(signal);
+  }
+  return "cancelled";
+}
+
+function pollDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, CODEX_TERMINAL_POLL_MS);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+export function createProductionRuntimeTaskDispatcher(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+): CodingRuntimeTaskDispatcher {
+  return {
+    dispatch: (request) => dispatchRuntimeTask(runs, request),
+    abort: (request) => abortRuntimeTask(runs, request),
+  };
+}
+
+async function dispatchRuntimeTask(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeTaskDispatchRequest,
+): Promise<CodingRuntimeTaskDispatchResult> {
+  const record = runs.get(request.runId);
+  if (record === undefined || record.controller.signal.aborted) return { ok: false };
+  const reservation = record.operationGuard.reserve(request);
+  if (reservation === undefined) return { ok: false };
+  try {
+    if (!(await record.turnPort.submitTurn(request.runId, request.taskIntent))) {
+      reservation.release();
+      return { ok: false };
+    }
+    if (!reservation.commit()) return { ok: false };
+    return { ok: true, completion: terminalCompletion(record, request.runId) };
+  } catch {
+    reservation.release();
+    return { ok: false };
+  }
+}
+
+function terminalCompletion(
+  record: ProductionRuntimeRunRecord,
+  runId: string,
+): Promise<CodingRuntimeTaskOutcome> {
+  try {
+    return record.turnPort.waitForTerminal(runId, record.controller.signal);
+  } catch {
+    return Promise.resolve("failed");
+  }
+}
+
+async function abortRuntimeTask(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+  request: CodingRuntimeRunOperation,
+): Promise<boolean> {
+  const record = runs.get(request.runId);
+  const reservation = record?.operationGuard.reserve(request);
+  if (record === undefined || reservation === undefined) return false;
+  try {
+    const accepted = await record.turnPort.abortTurn(request.runId);
+    if (!accepted) {
+      reservation.release();
+      return false;
+    }
+    return reservation.commit();
+  } catch {
+    reservation.release();
+    return false;
+  } finally {
+    record.controller.abort();
+  }
+}

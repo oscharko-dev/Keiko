@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import type { DebugVariableNode, SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { resolveDebugLaunchTarget } from "./debugLaunchTarget";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { useDebugSession } from "./useDebugSession";
 import {
@@ -18,6 +20,7 @@ import {
 } from "../panels/debugging-i18n";
 
 export interface EditorDebugSessionHostProps {
+  readonly root: string;
   readonly workspaceId: string | undefined;
   readonly activationRevision: number | undefined;
   readonly enabled: boolean;
@@ -25,6 +28,13 @@ export interface EditorDebugSessionHostProps {
   readonly onOpenDebugPanel: (() => void) | undefined;
   readonly onHostChange: (host: EditorSurfaceProps["debug"]) => void;
   readonly onSessionStateChange: (state: DebugSessionState | null) => void;
+  /**
+   * Reports whether the current pause (if any) was reached via an uncaught exception rather than an
+   * ordinary breakpoint/step/explicit pause — the same signal DebugPanel already renders visually as
+   * "Exception: ...". Optional and additive so hosts that only need the coarse session state are
+   * unaffected; feeds the status bar's distinct exception-pause announcement (status-bar.ts).
+   */
+  readonly onExceptionPauseChange?: ((isException: boolean) => void) | undefined;
 }
 
 export type DebugSessionState =
@@ -70,10 +80,9 @@ function replaceBreakpoint(
   return next === undefined ? withoutLine : [...withoutLine, next];
 }
 
-function promptDebugText(message: string): string | undefined {
-  const value = window.prompt(message);
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+export interface TextPromptRequest {
+  readonly kind: "condition" | "logpoint";
+  readonly line: number;
 }
 
 function variableValues(nodes: readonly DebugVariableNode[]): readonly string[] {
@@ -153,6 +162,7 @@ export function debugEditorLabels(t: DebuggingTranslate): {
       logpoint: t("gutterLogpoint"),
       enable: t("gutterEnable"),
       disable: t("gutterDisable"),
+      currentLine: t("gutterCurrentLine"),
     },
     commands: {
       continue: t("commandStartContinue"),
@@ -235,11 +245,74 @@ export function BreakpointContextMenu(props: {
   );
 }
 
+function textPromptTitle(
+  request: TextPromptRequest,
+  labels: DebugHost["gutter"]["labels"],
+): string {
+  return request.kind === "condition" ? labels.conditional : labels.logpoint;
+}
+
+// Replaces window.prompt() for conditional-breakpoint conditions and logpoint messages (WCAG 2.2
+// AA: a native browser prompt is not reliably keyboard/screen-reader operable, is unstylable, and
+// traps focus outside the app's control) — the same rationale, and the same accessible-dialog
+// pattern (focus capture/restore, Tab containment via useDialogTabTrap, Escape-to-close), already
+// established by EditorSettingsPanel's AiActivationConfirmDialog and EditorWidget's dirty-close
+// dialog.
+function BreakpointTextDialog(props: {
+  readonly request: TextPromptRequest;
+  readonly labels: DebugHost["gutter"]["labels"];
+  readonly t: DebuggingTranslate;
+  readonly returnFocus: HTMLElement | null;
+  readonly onCancel: () => void;
+  readonly onSave: (value: string) => void;
+}): ReactNode {
+  const [value, setValue] = useState("");
+  const titleId = "keiko-debug-text-prompt-title";
+  const inputId = "keiko-debug-text-prompt-input";
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+    return () => {
+      if (props.returnFocus?.isConnected) props.returnFocus.focus();
+    };
+  }, [props.returnFocus]);
+  useDialogTabTrap(dialogRef);
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") props.onCancel();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [props]);
+  const inputLabel =
+    props.request.kind === "condition"
+      ? props.t("breakpointConditionPrompt")
+      : props.t("logpointMessagePrompt");
+  return (
+    <div style={{ position: "absolute", zIndex: 20, insetInlineStart: "12px", top: "12px" }}>
+      <dialog ref={dialogRef} open aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+        <h4 id={titleId}>{textPromptTitle(props.request, props.labels)}</h4>
+        <label htmlFor={inputId}>{inputLabel}</label>
+        <input id={inputId} value={value} onChange={(event) => setValue(event.target.value)} />
+        <button type="button" onClick={() => props.onSave(value)}>
+          {props.t("save")}
+        </button>
+        <button type="button" onClick={props.onCancel}>
+          {props.t("cancel")}
+        </button>
+      </dialog>
+    </div>
+  );
+}
+
 /**
  * Isolates DAP I/O from the editor's first-load chunk. This component only mounts after the server
  * projects an available activation capability; it never derives workspace authority in the browser.
  */
 export function EditorDebugSessionHost({
+  root,
   workspaceId,
   activationRevision,
   enabled,
@@ -247,12 +320,17 @@ export function EditorDebugSessionHost({
   onOpenDebugPanel,
   onHostChange,
   onSessionStateChange,
+  onExceptionPauseChange,
 }: EditorDebugSessionHostProps): ReactNode {
   const t = useTranslate();
   const { snapshot, actions } = useDebugSession(workspaceId, enabled);
   const [contextMenu, setContextMenu] = useState<BreakpointContext | null>(null);
+  const [textPrompt, setTextPrompt] = useState<TextPromptRequest | null>(null);
   const [actionError, setActionError] = useState(false);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const beginTextPrompt = useCallback((kind: TextPromptRequest["kind"], line: number): void => {
+    setTextPrompt({ kind, line });
+  }, []);
   const { loadScopes, loadStack, loadVariables } = actions;
   const pausedSession = snapshot.session?.status === "paused" ? snapshot.session : null;
   const pausedFrame = snapshot.stack?.frames[0];
@@ -307,26 +385,14 @@ export function EditorDebugSessionHost({
           existing === undefined ? debugBreakpoint(fileId, context.line) : undefined,
         );
       } else if (action === "toggleConditional") {
-        const condition = promptDebugText(t("breakpointConditionPrompt"));
-        if (condition !== undefined)
-          saveBreakpoint(context.line, {
-            ...debugBreakpoint(fileId, context.line),
-            kind: "conditional",
-            condition,
-          });
+        beginTextPrompt("condition", context.line);
       } else if (action === "editLogpoint") {
-        const logMessage = promptDebugText(t("logpointMessagePrompt"));
-        if (logMessage !== undefined)
-          saveBreakpoint(context.line, {
-            ...debugBreakpoint(fileId, context.line),
-            kind: "logpoint",
-            logMessage,
-          });
+        beginTextPrompt("logpoint", context.line);
       } else if (existing !== undefined) {
         saveBreakpoint(existing.line, { ...existing, enabled: !existing.enabled });
       }
     },
-    [fileId, saveBreakpoint, t],
+    [beginTextPrompt, fileId, saveBreakpoint],
   );
   const host = useMemo<EditorSurfaceProps["debug"]>(() => {
     if (!enabled || fileId === undefined || activationRevision === undefined) return undefined;
@@ -341,22 +407,14 @@ export function EditorDebugSessionHost({
           saveBreakpoint(line, existing === undefined ? debugBreakpoint(fileId, line) : undefined);
         },
         onToggleConditionalBreakpoint: (line): void => {
-          const expression = promptDebugText(t("breakpointConditionPrompt"));
-          if (expression === undefined) return;
-          saveBreakpoint(line, {
-            ...debugBreakpoint(fileId, line),
-            kind: "conditional",
-            condition: expression,
-          });
+          returnFocus.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          beginTextPrompt("condition", line);
         },
         onEditLogpoint: (line): void => {
-          const message = promptDebugText(t("logpointMessagePrompt"));
-          if (message === undefined) return;
-          saveBreakpoint(line, {
-            ...debugBreakpoint(fileId, line),
-            kind: "logpoint",
-            logMessage: message,
-          });
+          returnFocus.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          beginTextPrompt("logpoint", line);
         },
         onToggleBreakpointEnabled: (breakpoint): void => {
           saveBreakpoint(breakpoint.line, { ...breakpoint, enabled: !breakpoint.enabled });
@@ -379,7 +437,11 @@ export function EditorDebugSessionHost({
         continue: (): void => {
           if (session === null) {
             onOpenDebugPanel?.();
-            perform(actions.start({ kind: "file", fileId }, activationRevision));
+            perform(
+              resolveDebugLaunchTarget(root, fileId).then((target) =>
+                actions.start(target, activationRevision),
+              ),
+            );
           } else if (session.status === "paused") perform(actions.control(session, "continue"));
         },
         pause: (): void => {
@@ -408,6 +470,7 @@ export function EditorDebugSessionHost({
   }, [
     activationRevision,
     actions,
+    beginTextPrompt,
     breakpoints,
     enabled,
     fileId,
@@ -415,6 +478,7 @@ export function EditorDebugSessionHost({
     onOpenDebugPanel,
     pausedFrame,
     perform,
+    root,
     saveBreakpoint,
     snapshot,
     t,
@@ -431,6 +495,33 @@ export function EditorDebugSessionHost({
     onSessionStateChange(sessionState);
     return () => onSessionStateChange(null);
   }, [onSessionStateChange, sessionState]);
+  const isExceptionPause = pausedSession !== null && snapshot.stopDescription !== null;
+  useEffect(() => {
+    onExceptionPauseChange?.(isExceptionPause);
+    return () => onExceptionPauseChange?.(false);
+  }, [isExceptionPause, onExceptionPauseChange]);
+  if (textPrompt !== null) {
+    return (
+      <BreakpointTextDialog
+        request={textPrompt}
+        labels={labels.gutter}
+        t={t}
+        returnFocus={returnFocus.current}
+        onCancel={() => setTextPrompt(null)}
+        onSave={(value) => {
+          const trimmed = value.trim();
+          const request = textPrompt;
+          setTextPrompt(null);
+          if (trimmed.length === 0 || fileId === undefined) return;
+          const patch =
+            request.kind === "condition"
+              ? { kind: "conditional" as const, condition: trimmed }
+              : { kind: "logpoint" as const, logMessage: trimmed };
+          saveBreakpoint(request.line, { ...debugBreakpoint(fileId, request.line), ...patch });
+        }}
+      />
+    );
+  }
   if (contextMenu !== null) {
     return (
       <BreakpointContextMenu
@@ -443,8 +534,14 @@ export function EditorDebugSessionHost({
       />
     );
   }
+  // Deliberately NOT role="alert" (or any other implicit aria-live region): the editor's
+  // EditorStatusBar already owns the single polite/assertive live-announcement split for debug
+  // state (status-bar.ts's liveSummary/alertSummary). A second, independently-live surface here
+  // could fire an assertive announcement at the same moment the status bar announces a
+  // session-state transition, competing for the screen reader's attention. The failure is still
+  // visibly rendered and reachable on the accessibility tree; it is simply not announced twice.
   return actionError ? (
-    <p role="alert" style={{ position: "absolute", insetInlineStart: "12px", top: "12px" }}>
+    <p style={{ position: "absolute", insetInlineStart: "12px", top: "12px" }}>
       {t("actionFailed")}
     </p>
   ) : null;

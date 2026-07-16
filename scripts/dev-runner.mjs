@@ -430,13 +430,19 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   return safe;
 }
 
-function proxyHttp(req, res, targetPort) {
+export function proxyHttp(req, res, targetPort) {
+  const path = req.url;
+  if (typeof path !== "string" || !/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/u.test(path)) {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Invalid development proxy request path.");
+    return;
+  }
   const headers = proxiedHeaders(req, targetPort);
   const upstream = request(
     {
       hostname: host,
       port: targetPort,
-      path: req.url,
+      path,
       method: req.method,
       headers,
     },

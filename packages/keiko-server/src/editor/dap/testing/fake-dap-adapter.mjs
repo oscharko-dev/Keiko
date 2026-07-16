@@ -1,5 +1,6 @@
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 
 const delimiter = Buffer.from("\r\n\r\n", "ascii");
 let pending = Buffer.alloc(0);
@@ -16,9 +17,47 @@ const descendant = process.argv.includes("--with-descendant")
     )
   : undefined;
 
+// ADR-0136 D2 designates a private Unix-domain socket (the real production adapter creates the
+// socket inode; the manager's dapPrivateEndpoint.ts connects to it) as the actual production wire
+// transport. When invoked with --socket=<path> this fixture creates that socket inode itself,
+// exactly the way the real adapter would, so tests can prove a real DAP handshake over the real
+// chosen transport end-to-end instead of only over stdio.
+const socketArg = process.argv.find((arg) => arg.startsWith("--socket="));
+const socketPath = socketArg === undefined ? undefined : socketArg.slice("--socket=".length);
+
+let writeFrame = (frame) => {
+  process.stdout.write(frame);
+};
+let endTransport = () => {
+  process.stdin.pause();
+};
+
+function attachTransport(source) {
+  source.on("data", (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    drain();
+  });
+}
+
+if (socketPath === undefined) {
+  attachTransport(process.stdin);
+} else {
+  const server = createServer((socket) => {
+    writeFrame = (frame) => {
+      socket.write(frame);
+    };
+    endTransport = () => {
+      socket.end();
+    };
+    attachTransport(socket);
+    server.close();
+  });
+  server.listen(socketPath);
+}
+
 function send(message) {
   const body = Buffer.from(JSON.stringify({ seq: sequence++, ...message }), "utf8");
-  process.stdout.write(
+  writeFrame(
     Buffer.concat([Buffer.from(`Content-Length: ${String(body.length)}\r\n\r\n`, "ascii"), body]),
   );
 }
@@ -147,7 +186,7 @@ function dispatch(request) {
   }
   if (request.command === "disconnect") {
     response(request);
-    process.stdin.pause();
+    endTransport();
     setImmediate(() => process.exit(0));
     return;
   }
@@ -180,8 +219,3 @@ function drain() {
     }
   }
 }
-
-process.stdin.on("data", (chunk) => {
-  pending = Buffer.concat([pending, chunk]);
-  drain();
-});

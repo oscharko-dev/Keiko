@@ -13,11 +13,13 @@ import type {
   DebugSession,
   DebugVariableNode,
   ExceptionBreakpointFilter,
+  SourceBreakpoint,
   StackFrame,
   WatchEvaluationResult,
   WatchExpression,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
+import { resolveDebugLaunchTarget } from "../cards/debugLaunchTarget";
 import { useDebugSession } from "../cards/useDebugSession";
 import {
   debugSessionStatus,
@@ -178,6 +180,114 @@ function toggleExceptionFilter(
 ): readonly ExceptionBreakpointFilter[] {
   return filters.map((filter) =>
     filter.filterId === filterId ? { ...filter, enabled: !filter.enabled } : filter,
+  );
+}
+
+function sortedBreakpoints(breakpoints: readonly SourceBreakpoint[]): readonly SourceBreakpoint[] {
+  return breakpoints
+    .slice()
+    .sort((a, b) => (a.fileId === b.fileId ? a.line - b.line : a.fileId.localeCompare(b.fileId)));
+}
+
+function breakpointsInFile(
+  breakpoints: readonly SourceBreakpoint[],
+  fileId: string,
+): readonly SourceBreakpoint[] {
+  return breakpoints.filter((breakpoint) => breakpoint.fileId === fileId);
+}
+
+function withBreakpointToggled(
+  breakpoints: readonly SourceBreakpoint[],
+  target: SourceBreakpoint,
+): readonly SourceBreakpoint[] {
+  return breakpointsInFile(breakpoints, target.fileId).map((breakpoint) =>
+    breakpoint.id === target.id ? { ...breakpoint, enabled: !breakpoint.enabled } : breakpoint,
+  );
+}
+
+function withBreakpointRemoved(
+  breakpoints: readonly SourceBreakpoint[],
+  target: SourceBreakpoint,
+): readonly SourceBreakpoint[] {
+  return breakpointsInFile(breakpoints, target.fileId).filter(
+    (breakpoint) => breakpoint.id !== target.id,
+  );
+}
+
+function breakpointKindLabel(t: DebuggingTranslate, kind: SourceBreakpoint["kind"]): string {
+  if (kind === "conditional") return t("breakpointKindConditional");
+  if (kind === "logpoint") return t("breakpointKindLogpoint");
+  return t("breakpointKindLine");
+}
+
+function BreakpointRow(props: {
+  readonly breakpoint: SourceBreakpoint;
+  readonly t: DebuggingTranslate;
+  readonly onReveal: (breakpoint: SourceBreakpoint) => void;
+  readonly onToggleEnabled: (breakpoint: SourceBreakpoint) => void;
+  readonly onRemove: (breakpoint: SourceBreakpoint) => void;
+}): ReactNode {
+  const { breakpoint, t } = props;
+  const detail = breakpoint.condition ?? breakpoint.logMessage;
+  return (
+    <li style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+      <button type="button" onClick={() => props.onReveal(breakpoint)}>
+        {t("breakpointLocation", { fileId: breakpoint.fileId, line: breakpoint.line })}
+      </button>
+      <span>{breakpointKindLabel(t, breakpoint.kind)}</span>
+      {detail === undefined ? null : <code>{detail}</code>}
+      <label>
+        <input
+          type="checkbox"
+          checked={breakpoint.enabled}
+          onChange={() => props.onToggleEnabled(breakpoint)}
+        />
+        {breakpoint.enabled ? t("gutterDisable") : t("gutterEnable")}
+      </label>
+      <button type="button" onClick={() => props.onRemove(breakpoint)}>
+        {t("breakpointRemove")}
+      </button>
+    </li>
+  );
+}
+
+function BreakpointsSection(props: {
+  readonly root: string;
+  readonly breakpoints: readonly SourceBreakpoint[];
+  readonly t: DebuggingTranslate;
+  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
+  readonly onToggleEnabled: (breakpoint: SourceBreakpoint) => void;
+  readonly onRemove: (breakpoint: SourceBreakpoint) => void;
+}): ReactNode {
+  const { t } = props;
+  const reveal = (breakpoint: SourceBreakpoint): void => {
+    props.openEditorFile?.({
+      root: props.root,
+      path: breakpoint.fileId,
+      lineStart: breakpoint.line,
+      lineEnd: breakpoint.line,
+    });
+  };
+  return (
+    <section aria-labelledby="debug-breakpoints-heading" style={SECTION_STYLE}>
+      <h2 id="debug-breakpoints-heading">{t("breakpointsHeading")}</h2>
+      {props.breakpoints.length === 0 ? (
+        <p>{t("noBreakpoints")}</p>
+      ) : (
+        <ul aria-label={t("breakpointsHeading")} style={CALL_STACK_STYLE}>
+          {sortedBreakpoints(props.breakpoints).map((breakpoint) => (
+            <BreakpointRow
+              key={breakpoint.id}
+              breakpoint={breakpoint}
+              t={t}
+              onReveal={reveal}
+              onToggleEnabled={props.onToggleEnabled}
+              onRemove={props.onRemove}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -457,9 +567,17 @@ export function DebugPanel({
     void operation.then(onSuccess).catch(() => setActionError(true));
   };
 
+  // A frame already open in the active editor only needs to be revealed (scrolled/highlighted) via
+  // the lightweight onRevealFrame path; routing it through openEditorFile as well would re-run a
+  // full window layout patch and un-minimize/z-bump the editor window on every single step, even
+  // though neither the open file nor the window needs to change. Only a frame in a DIFFERENT file
+  // needs the heavier open-a-file path, which already reveals the target line via lineStart/lineEnd.
   const selectFrame = (frame: StackFrame): void => {
     setSelectedFrameRef(frame.frameRef);
-    onRevealFrame?.(frame);
+    if (frame.sourceFileId !== undefined && frame.sourceFileId === activeFile) {
+      onRevealFrame?.(frame);
+      return;
+    }
     const request = frameRequest(root, frame);
     if (request !== null) openEditorFile?.(request);
   };
@@ -492,6 +610,17 @@ export function DebugPanel({
 
   const filters = snapshot.instrumentation?.exceptionFilters ?? [];
   const watches = snapshot.instrumentation?.watches ?? [];
+  const breakpoints = snapshot.instrumentation?.breakpoints ?? [];
+  const toggleBreakpointEnabled = (breakpoint: SourceBreakpoint): void => {
+    perform(
+      actions.saveBreakpoints(breakpoint.fileId, withBreakpointToggled(breakpoints, breakpoint)),
+    );
+  };
+  const removeBreakpoint = (breakpoint: SourceBreakpoint): void => {
+    perform(
+      actions.saveBreakpoints(breakpoint.fileId, withBreakpointRemoved(breakpoints, breakpoint)),
+    );
+  };
   const start = (): void => {
     if (
       session !== null ||
@@ -500,7 +629,11 @@ export function DebugPanel({
       activationRevision === undefined
     )
       return;
-    perform(actions.start({ kind: "file", fileId: activeFile }, activationRevision));
+    perform(
+      resolveDebugLaunchTarget(root, activeFile).then((target) =>
+        actions.start(target, activationRevision),
+      ),
+    );
   };
   const control = (action: DebugControlAction): void => {
     if (session === null || !canControl(session, action)) return;
@@ -529,7 +662,16 @@ export function DebugPanel({
         {session?.status === "paused" && snapshot.stopDescription !== null ? (
           <p>{t("exceptionDescription", { description: snapshot.stopDescription.value })}</p>
         ) : null}
-        {actionError ? <p role="alert">{t("actionFailed")}</p> : null}
+        {/*
+         * Deliberately NOT role="alert" (or any other implicit aria-live region): the editor's
+         * EditorStatusBar already owns the single polite/assertive live-announcement split for
+         * debug state (status-bar.ts's liveSummary/alertSummary). A second, independently-live
+         * surface here could fire an assertive announcement at the same moment the status bar
+         * announces a session-state transition (e.g. a failed Stop racing a pause), competing for
+         * the screen reader's attention. The failure is still visibly rendered for sighted users
+         * and reachable on the accessibility tree; it is simply not proactively announced twice.
+         */}
+        {actionError ? <p>{t("actionFailed")}</p> : null}
         {session === null ? (
           <button
             type="button"
@@ -589,6 +731,14 @@ export function DebugPanel({
           </fieldset>
         )}
       </header>
+      <BreakpointsSection
+        root={root}
+        breakpoints={breakpoints}
+        t={t}
+        openEditorFile={openEditorFile}
+        onToggleEnabled={toggleBreakpointEnabled}
+        onRemove={removeBreakpoint}
+      />
       <section aria-labelledby="debug-exception-heading" style={SECTION_STYLE}>
         <h2 id="debug-exception-heading">{t("exceptionBreakpoints")}</h2>
         {filters.length === 0 ? (
@@ -643,6 +793,7 @@ export function DebugPanel({
         )}
         {editingVariable === null ? null : (
           <fieldset aria-label={t("pausedVariableEditor")} style={GROUP_STYLE}>
+            <p>{t("setVariableHelp")}</p>
             <label htmlFor="debug-variable-value">{t("newVariableValue")}</label>
             <input
               id="debug-variable-value"

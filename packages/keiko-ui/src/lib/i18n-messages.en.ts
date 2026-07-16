@@ -88,13 +88,6 @@ export const EN_MESSAGES = {
     "{verified}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…{skipped}",
   "gatewaySetup.voice.success.verifiedAudio":
     "{verified} and updated audio and Digital Voice settings. Reloading Keiko…{skipped}",
-  "codingWorkbench.status.checking": "Checking",
-  "codingWorkbench.status.available": "Available",
-  "codingWorkbench.status.unavailable": "Unavailable",
-  "codingWorkbench.runtime.gatewayManagedDetail": "Managed provider through Keiko Gateway",
-  "codingWorkbench.runtime.gatewayApiKeyDetail": "API key routed through Keiko Gateway",
-  "codingWorkbench.runtime.codexDetail":
-    "Subscription profile executes through the Codex runtime adapter",
   "newWindow.chat.title": "New Chat window",
   "newWindow.chat.description": "Talk to Keiko",
   "newWindow.chat.fieldTitle": "Title",
@@ -144,6 +137,10 @@ export const EN_MESSAGES = {
   // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
   // Governed-debug panel, gutter, prompt, command, status, and accessibility text lives in the
   // existing lazy `debugging-i18n.ts` EN/DE catalog so dormant debugging stays out of the shell.
+  // The Epic #2096 audit follow-up added the accessible breakpoint-text dialog, the keyboard-
+  // reachable breakpoint inventory, the current-execution-line gutter marker, the exception-pause
+  // announcement, and the setVariable side-effect disclosure to that same lazy `debugging-i18n.ts`
+  // namespace, so no new shell-catalog keys are introduced here either.
   // The Epic #2093 audit follow-up (unavailable-repository contract-shape fix in gitRoutes.ts,
   // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
   // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the

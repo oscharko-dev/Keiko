@@ -536,7 +536,7 @@ async function assertPackagedUi(tmp) {
   const baseUrl = `http://127.0.0.1:${String(port)}`;
   const stdoutChunks = [];
   const stderrChunks = [];
-  const child = spawn("node", [bin, "ui", "--port", String(port)], {
+  const child = spawn(process.execPath, [bin, "ui", "--port", String(port)], {
     cwd: tmp,
     stdio: ["ignore", "pipe", "pipe"],
   });

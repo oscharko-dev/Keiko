@@ -55,7 +55,7 @@ is committed.
 The Linux DAP E2E passed both the complete breakpoint flow and a separate uncaught-exception flow.
 The exception proof verifies a bounded, user-visible description without treating it as an evidence
 payload. The Linux performance run passed B4/B5/B6/B11, including an active-but-idle paused DAP
-session with B5 p95 0 ms and zero long tasks. Release measurements are stored as bounded numeric
+session with B5 p95 3 ms and zero long tasks. Release measurements are stored as bounded numeric
 artifacts in `docs/release/1209-perf-evidence.json` and
 `docs/release/1209-bundle-evidence.json`; they contain no source, variable value, console text,
 endpoint credential, or reusable browser capability.

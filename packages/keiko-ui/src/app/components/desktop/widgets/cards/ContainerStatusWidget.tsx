@@ -29,6 +29,7 @@ import type {
   ContainerRunResult,
   ContainerTask,
 } from "../../../../../lib/types";
+import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 import styles from "./TerminalWidget.module.css";
@@ -92,8 +93,7 @@ function errorFromUnknown(value: unknown, t: OptionalWidgetTranslate): ErrorStat
 }
 
 function createRequestId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `container-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return secureRandomId("container");
 }
 
 function taskLabel(task: ContainerTask): string {

@@ -189,6 +189,7 @@ function renderHost(): {
   let current: EditorSurfaceProps["debug"];
   render(
     createElement(EditorDebugSessionHost, {
+      root: "/workspace",
       workspaceId: "workspace-1",
       activationRevision: 1,
       enabled: true,
@@ -275,6 +276,58 @@ describe("EditorDebugSessionHost", () => {
     expect(rendered.host().commands.isAvailable?.("continue")).toBe(true);
   });
 
+  it("reports an exception pause distinctly from an ordinary pause via onExceptionPauseChange", async () => {
+    // Feeds status-bar.ts's isExceptionPause so the shared live region can distinguish an uncaught
+    // exception from a routine breakpoint hit (Epic #2096 a11y-sweep finding 3). Without this signal
+    // reaching the host, the status bar cannot announce anything beyond the generic "paused" state.
+    const onExceptionPauseChange = vi.fn();
+    render(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel: vi.fn(),
+        onHostChange: vi.fn(),
+        onSessionStateChange: vi.fn(),
+        onExceptionPauseChange,
+      }),
+    );
+
+    await waitFor(() => expect(onExceptionPauseChange).toHaveBeenCalledWith(false));
+
+    onExceptionPauseChange.mockClear();
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: {
+        ...snapshot(),
+        stopDescription: {
+          value: "boom",
+          truncated: false,
+          originalBytes: 4,
+          retainedBytes: 4,
+          omittedBytes: 0,
+        },
+      },
+      actions,
+    });
+    render(
+      createElement(EditorDebugSessionHost, {
+        root: "/workspace",
+        workspaceId: "workspace-1",
+        activationRevision: 1,
+        enabled: true,
+        fileId: "src/program.ts",
+        onOpenDebugPanel: vi.fn(),
+        onHostChange: vi.fn(),
+        onSessionStateChange: vi.fn(),
+        onExceptionPauseChange,
+      }),
+    );
+
+    await waitFor(() => expect(onExceptionPauseChange).toHaveBeenCalledWith(true));
+  });
+
   it("allows only Pause and Stop while running and sends no paused-only requests", async () => {
     const running = snapshot();
     if (running.session === null) throw new Error("Expected fixture session");
@@ -308,7 +361,9 @@ describe("EditorDebugSessionHost", () => {
     const withoutSession = renderHost();
     await waitFor(() => expect(withoutSession.host()).toBeDefined());
     act(() => withoutSession.host().commands.continue());
-    expect(actions.start).toHaveBeenCalledOnce();
+    // The launch target now resolves asynchronously (`resolveDebugLaunchTarget`) before `start` is
+    // invoked, even for a non-test file that never reaches the catalog-discovery branch.
+    await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
 
     vi.clearAllMocks();
     const failed = snapshot();
@@ -326,23 +381,28 @@ describe("EditorDebugSessionHost", () => {
     expect(terminalSession.host().commands.isAvailable?.("continue")).toBe(false);
   });
 
-  it("surfaces a redacted visible error when an editor command fails", async () => {
+  it("surfaces a redacted visible error when an editor command fails, without a second live region", async () => {
     actions.control.mockRejectedValueOnce(new Error("private adapter details"));
     const rendered = renderHost();
     await waitFor(() => expect(rendered.host()).toBeDefined());
 
     act(() => rendered.host().commands.continue());
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The debug action failed. The server state remains authoritative.",
-    );
+    expect(
+      await screen.findByText("The debug action failed. The server state remains authoritative."),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/private adapter details/u)).toBeNull();
+    // The editor's status bar owns the single aria-live announcement surface for debug state; this
+    // panel must never introduce a second one (role="alert" or any other implicit live region).
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("executes the localized gutter menu action and returns focus", async () => {
+  it("never uses window.prompt for conditional-breakpoint text entry and stays axe-clean", async () => {
     const user = userEvent.setup();
-    vi.spyOn(window, "prompt").mockReturnValue("count > 1");
+    const promptSpy = vi.spyOn(window, "prompt");
     const trigger = document.createElement("button");
+    trigger.textContent = "Open breakpoint menu";
     document.body.append(trigger);
     trigger.focus();
     const rendered = renderHost();
@@ -357,6 +417,17 @@ describe("EditorDebugSessionHost", () => {
     });
     await user.click(screen.getByRole("menuitem", { name: "Set conditional breakpoint" }));
 
+    // This exercises the REAL action path (context-menu click -> runBreakpointAction), not a mock
+    // standing in for it, so it actually proves the prompt-triggering flow never calls
+    // window.prompt() and renders an accessible, axe-clean dialog instead.
+    const dialog = await screen.findByRole("dialog", { name: "Set conditional breakpoint" });
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(dialog).toHaveFocus();
+    expect(await axe(document.body)).toHaveNoViolations();
+
+    await user.type(screen.getByLabelText("Breakpoint condition"), "count > 1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
     expect(actions.saveBreakpoints).toHaveBeenCalledWith(
       "src/program.ts",
       expect.arrayContaining([
@@ -365,6 +436,48 @@ describe("EditorDebugSessionHost", () => {
     );
     expect(trigger).toHaveFocus();
     trigger.remove();
+  });
+
+  it("never uses window.prompt for a logpoint message triggered directly from the gutter", async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, "prompt");
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => rendered.host().gutter.onEditLogpoint(9));
+
+    expect(await screen.findByRole("dialog", { name: "Set logpoint" })).toBeInTheDocument();
+    expect(promptSpy).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("Logpoint message"), "hit line 9");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(actions.saveBreakpoints).toHaveBeenCalledWith(
+      "src/program.ts",
+      expect.arrayContaining([
+        expect.objectContaining({ line: 9, kind: "logpoint", logMessage: "hit line 9" }),
+      ]),
+    );
+  });
+
+  it("discards a blank conditional-breakpoint entry and closes on Escape without saving", async () => {
+    const user = userEvent.setup();
+    const rendered = renderHost();
+    await waitFor(() => expect(rendered.host()).toBeDefined());
+
+    act(() => rendered.host().gutter.onToggleConditionalBreakpoint(3));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(actions.saveBreakpoints).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    act(() => rendered.host().gutter.onToggleConditionalBreakpoint(3));
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(actions.saveBreakpoints).not.toHaveBeenCalled();
   });
 });
 

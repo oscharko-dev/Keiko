@@ -17,6 +17,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
@@ -383,7 +384,7 @@ export function evaluateEditorEvidence(evidence) {
 
 function defaultIsAncestor(sha) {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+    execFileSync(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", sha, "HEAD"], {
       cwd: repoRoot,
       stdio: "ignore",
     });

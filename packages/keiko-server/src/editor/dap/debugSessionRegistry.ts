@@ -213,6 +213,11 @@ interface SessionRuntime {
   readonly restartThrottle: DapRestartThrottle;
   readonly capsules: CapsuleResource[];
   state: DebugSessionState;
+  // Set once markRunning() commits the "active"/"running" lifecycle evidence and never cleared
+  // afterward. Feeds DapRestartThrottle.mayStart's debuggeeLaunched guard so ADR-0136 D5 ("no
+  // adapter or debuggee restart after launch") is enforced by real launched-state, not by the
+  // incidental shape of who currently calls beginStartupAttempt.
+  hasLaunched: boolean;
   terminalReason: DebugLifecycleReason | undefined;
   projectTerminal: (now: number) => void;
   lastActivityAtMs: number;
@@ -465,6 +470,7 @@ function reserveProvisional(
     restartThrottle: createDapRestartThrottle(),
     capsules: [],
     state: "reserved",
+    hasLaunched: false,
     terminalReason: undefined,
     projectTerminal: noopTerminalProjector,
     lastActivityAtMs: now,
@@ -557,7 +563,7 @@ function beginStartupAttempt(
       "INVALID_CAPSULE_PLAN",
     );
   }
-  if (!session.restartThrottle.mayStart(now, false)) {
+  if (!session.restartThrottle.mayStart(now, session.hasLaunched)) {
     return teardownThenReject(
       sessions,
       deps,
@@ -714,6 +720,7 @@ async function markRunning(
   // A compliant adapter can stop immediately after configuration. Preserve that observed pause if
   // it arrived while durable activation evidence was being appended.
   if (session.state !== "paused") session.state = "running";
+  session.hasLaunched = true;
   session.activeAttempt = undefined;
 }
 

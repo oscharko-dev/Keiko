@@ -1,0 +1,201 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  CODING_RUNTIME_EVENT_HUB_MAX_BYTES,
+  CodingRuntimeEventHub,
+  type CodingRuntimeEventHubInput,
+} from "./codingRuntimeEventHub.js";
+
+const status = (runId: string, revision: number): CodingRuntimeEventHubInput => ({
+  schemaVersion: "1",
+  kind: "status",
+  runId,
+  state: "running",
+  revision,
+});
+
+const approval = (runId: string, revision: number): CodingRuntimeEventHubInput => ({
+  schemaVersion: "1",
+  kind: "runtime-event",
+  runId,
+  state: "awaiting-approval",
+  revision,
+  eventKind: "permission-requested",
+});
+
+const terminal = (runId: string, revision: number): CodingRuntimeEventHubInput => ({
+  schemaVersion: "1",
+  kind: "runtime-event",
+  runId,
+  state: "succeeded",
+  revision,
+  eventKind: "runtime-stopped",
+});
+
+const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput => ({
+  schemaVersion: "1",
+  kind: "status",
+  runId,
+  state: "recovery-required",
+  revision,
+  failureCode: "recovery-required",
+});
+
+describe("CodingRuntimeEventHub", () => {
+  it("replays approval and terminal facts exactly once across three forced reconnects", () => {
+    const hub = new CodingRuntimeEventHub();
+    const first = hub.publish(approval("run-a", 1));
+    const end = hub.publish(terminal("run-a", 2));
+    expect(first.ok && end.ok).toBe(true);
+    if (!first.ok || !end.ok) return;
+
+    let cursor: string | undefined;
+    const received: string[] = [];
+    for (let reconnect = 0; reconnect < 3; reconnect += 1) {
+      const replay = hub.replay("run-a", cursor);
+      expect(replay.ok).toBe(true);
+      if (!replay.ok) return;
+      received.push(...replay.events.map((event) => event.cursor));
+      cursor = replay.events.at(-1)?.cursor ?? cursor;
+    }
+    expect(received).toEqual([first.event.cursor, end.event.cursor]);
+  });
+
+  it("does not replay a stale permission-requested fact after restart", () => {
+    const hub = new CodingRuntimeEventHub();
+    const requested = hub.publish(approval("run-a", 1));
+    const awaiting = hub.publish({
+      schemaVersion: "1",
+      kind: "status",
+      runId: "run-a",
+      state: "awaiting-approval",
+      revision: 2,
+    });
+    expect(requested.ok && awaiting.ok).toBe(true);
+    if (!awaiting.ok) return;
+
+    hub.restart("run-a");
+
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events).toEqual([awaiting.event]);
+  });
+
+  it("keeps a 1,000-event burst inside both replay bounds", () => {
+    const hub = new CodingRuntimeEventHub();
+    for (let index = 0; index < 1_000; index += 1)
+      expect(hub.publish(status("run-a", index)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events).toHaveLength(256);
+    expect(Buffer.byteLength(JSON.stringify(replay.events), "utf8")).toBeLessThanOrEqual(
+      CODING_RUNTIME_EVENT_HUB_MAX_BYTES,
+    );
+  });
+
+  it("returns deterministic reset results for malformed, future, evicted, and foreign cursors", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 2 });
+    const one = hub.publish(status("run-a", 1));
+    hub.publish(status("run-a", 2));
+    hub.publish(status("run-a", 3));
+    expect(one.ok).toBe(true);
+    if (!one.ok) return;
+    expect(hub.replay("run-a", "not-a-cursor")).toMatchObject({
+      ok: false,
+      reason: "cursor-malformed",
+      snapshotNeeded: true,
+    });
+    expect(hub.replay("run-a", "run-a:99")).toMatchObject({ ok: false, reason: "cursor-future" });
+    expect(hub.replay("run-a", one.event.cursor)).toMatchObject({
+      ok: false,
+      reason: "cursor-evicted",
+    });
+    expect(hub.replay("run-b", one.event.cursor)).toMatchObject({
+      ok: false,
+      reason: "cursor-foreign",
+    });
+  });
+
+  it("closes slow subscribers and reserves critical capacity for the terminal fact", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 2 });
+    let closes = 0;
+    expect(
+      hub.subscribe("run-a", undefined, {
+        write: () => false,
+        close: () => {
+          closes += 1;
+        },
+      }).ok,
+    ).toBe(true);
+    hub.publish(status("run-a", 1));
+    expect(closes).toBe(1);
+    expect(hub.publish(approval("run-a", 2)).ok).toBe(true);
+    expect(
+      hub.publish({ ...approval("run-a", 3), failureCode: "recovery-required" }),
+    ).toMatchObject({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+    expect(hub.publish(terminal("run-a", 4)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events.some((event) => event.state === "succeeded")).toBe(true);
+  });
+
+  it("admits recovery-required containment after critical capacity saturation", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 2 });
+    expect(hub.publish(approval("run-a", 1)).ok).toBe(true);
+    expect(hub.publish(approval("run-a", 2))).toMatchObject({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+    expect(hub.publish(recovery("run-a", 3)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(
+      replay.events.some(
+        (event) => event.state === "recovery-required" && event.failureCode === "recovery-required",
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed before sequence overflow and isolates cursors by run", () => {
+    const hub = new CodingRuntimeEventHub();
+    const event = hub.publish(status("run-a", 1));
+    expect(event.ok).toBe(true);
+    if (!event.ok) return;
+    expect(hub.replay("run-b", event.event.cursor)).toMatchObject({
+      ok: false,
+      reason: "cursor-foreign",
+    });
+    const internals = hub as unknown as { runs: Map<string, { nextSequence: number }> };
+    const run = internals.runs.get("run-a");
+    if (run === undefined) throw new Error("test setup failed to create run");
+    run.nextSequence = Number.MAX_SAFE_INTEGER;
+    expect(hub.publish(status("run-a", 2))).toMatchObject({
+      ok: false,
+      reason: "sequence-exhausted",
+    });
+  });
+
+  it("deletes pruned run replay buffers and closes their subscribers", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publish(status("run-a", 1));
+    let closed = false;
+    hub.subscribe("run-a", undefined, {
+      write: () => true,
+      close: () => {
+        closed = true;
+      },
+    });
+
+    hub.deleteRuns(["run-a"]);
+
+    expect(closed).toBe(true);
+    expect(hub.replay("run-a")).toEqual({ ok: true, events: [] });
+  });
+});

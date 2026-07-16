@@ -47,7 +47,8 @@ export function AnnouncerProvider({ children }: AnnouncerProviderProps): ReactNo
 
   const announce = useCallback((message: string, opts?: AnnounceOptions): void => {
     nonceRef.current += 1;
-    const withNonce = nonceRef.current % 2 === 0 ? message : `${message}​`;
+    const withNonce =
+      nonceRef.current % 2 === 0 ? message : `${message}${String.fromCodePoint(0x200b)}`;
     if (opts?.assertive === true) {
       setAssertiveMessage(withNonce);
     } else {

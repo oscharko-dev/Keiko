@@ -29,6 +29,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import { secureRandomInt } from "../../../../../lib/secure-random";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -441,7 +442,7 @@ export function useRelationshipActivityStream(
         RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempts,
       );
       reconnectAttempts += 1;
-      const delay = base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
+      const delay = base + secureRandomInt(RECONNECT_JITTER_MS);
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         startSSE();

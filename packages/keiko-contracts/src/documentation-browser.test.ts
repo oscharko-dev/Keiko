@@ -301,15 +301,16 @@ describe("buildDocumentationNavigationResult", () => {
   });
 
   it("redacts a path-shaped origin summary and strips format-spoofing code points", () => {
+    const rightToLeftOverride = String.fromCodePoint(0x202e);
     const result = buildDocumentationNavigationResult({
       targetClass: "local-file",
-      originSummary: "leak /etc/secret/passwd‮control",
+      originSummary: `leak /etc/secret/passwd${rightToLeftOverride}control`,
       pathSummary: null,
       reason: "rendering-deferred",
       backendAvailable: false,
     });
     expect(result.originSummary).toContain("[REDACTED_PATH]");
     expect(result.originSummary).not.toContain("passwd");
-    expect(result.originSummary).not.toContain("‮");
+    expect(result.originSummary).not.toContain(rightToLeftOverride);
   });
 });

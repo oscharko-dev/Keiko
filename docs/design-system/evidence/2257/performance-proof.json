@@ -1,0 +1,38 @@
+{
+  "issue": 2257,
+  "surface": "live-coding-workbench-timeline",
+  "status": "verified",
+  "verified": true,
+  "seedEventCount": 1000,
+  "maximumRetainedEvents": 500,
+  "maximumRenderedRows": 96,
+  "maximumInteractionP95Ms": 200,
+  "maximumLongTaskMs": 50,
+  "measurements": {
+    "interactionP95Ms": 12.5,
+    "maxLongTaskMs": 0,
+    "samples": [
+      9.099999904632568,
+      12.400000095367432,
+      12.399999856948853,
+      11.900000095367432,
+      10.700000047683716,
+      11.800000190734863,
+      12.400000095367432,
+      11.799999952316284,
+      12.299999952316284,
+      11.799999952316284,
+      12.5,
+      11.099999904632568,
+      11.700000047683716,
+      11.100000143051147,
+      12.200000047683716,
+      12.899999856948853,
+      12.200000047683716,
+      10.899999856948853,
+      12,
+      11.200000047683716
+    ]
+  },
+  "command": "npx playwright test --config tests/e2e/config/playwright.issue-2257-coding-workbench.config.ts --project=chromium --grep 1,000-event"
+}

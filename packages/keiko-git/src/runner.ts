@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { gitEnv, networkGitEnv } from "./env.js";
+import { resolveGitExecutable } from "./git-executable.js";
 import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
 
 // Grace period between SIGTERM and SIGKILL: a git process that ignores SIGTERM (stuck on a dead
@@ -176,9 +177,15 @@ function createGitProcessRunnerWithFixedArgs(
         resolveResult(preflight);
         return;
       }
-      const child = spawn("git", [...fixedArgs, ...args], {
+      const env = buildEnv();
+      const executable = resolveGitExecutable(env, options.cwd);
+      if (executable === undefined) {
+        resolveResult({ ...SPAWN_ERROR_RESULT, truncated: false, timedOut: false });
+        return;
+      }
+      const child = spawn(executable, [...fixedArgs, ...args], {
         cwd: options.cwd,
-        env: buildEnv(),
+        env,
         shell: false,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],

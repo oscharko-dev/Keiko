@@ -111,6 +111,8 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
   GitDeliveryActionSheet,
@@ -139,6 +141,7 @@ import type {
   ManagedLspRuntimeConfiguration,
   ManagedLspSemanticTokenResponse,
   EditorM7SettingsMutation,
+  EditorM7SettingsMutationOk,
   EditorM7SettingsMutationResult,
   EditorM7SettingsSnapshot,
   EditorM7WorkspaceSnippetMutation,
@@ -156,6 +159,7 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -216,6 +220,11 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
 
 function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
   const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
+  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
+}
+
+function validateCodexAuthSetupPlanResponse(value: unknown): GitRepositoryValidation {
+  const result = validateCodingWorkbenchCodexAuthSetupPlan(value);
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
@@ -401,6 +410,20 @@ export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<Co
     "/api/coding-workbench/codex-subscription/profile",
     { cache: "no-store" },
     validateCodexSubscriptionProfileResponse,
+  );
+}
+
+export async function prepareCodingWorkbenchCodexSubscriptionSetup(
+  method: CodingWorkbenchCodexAuthMethod,
+): Promise<CodingWorkbenchCodexAuthSetupPlan> {
+  return fetchJson(
+    "/api/coding-workbench/codex-subscription/setup",
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ method }),
+    },
+    validateCodexAuthSetupPlanResponse,
   );
 }
 
@@ -2046,6 +2069,28 @@ export function mutateEditorSettings(
 ): Promise<EditorM7SettingsMutationResult> {
   return fetchJson("/api/editor/settings", {
     method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export type DebugActivationAction = "activate" | "deactivate";
+
+export interface DebugActivationMutationInput {
+  readonly root: string;
+  readonly expectedRevision: number;
+}
+
+export function mutateDebugActivation(
+  action: DebugActivationAction,
+  input: DebugActivationMutationInput,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsMutationOk> {
+  return fetchJson(`/api/editor/settings/debug/${action}`, {
+    method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),

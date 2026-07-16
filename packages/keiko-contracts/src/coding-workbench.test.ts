@@ -166,16 +166,13 @@ describe("coding-workbench constants", () => {
       "chatgpt-device-code",
       "codex-access-token",
     ]);
-    expect(CODING_WORKBENCH_CODEX_AUTH_STATUSES).toContain("disabled-by-deployment");
+    expect(CODING_WORKBENCH_CODEX_AUTH_STATUSES).toContain("redistribution-unapproved");
     expect(CODING_WORKBENCH_CODEX_CREDENTIAL_STORES).toEqual(["file", "keyring", "auto"]);
     expect(CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS).toEqual([
       "keiko-codex-runtime-state",
       "os-credential-store",
     ]);
-    expect(CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES).toEqual([
-      "managed-sidecar-runtime",
-      "policy-allowed-local-install",
-    ]);
+    expect(CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES).toEqual(["managed-sidecar-runtime"]);
     expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
@@ -291,7 +288,7 @@ function codexSubscriptionProfile(): CodingWorkbenchCodexSubscriptionProfile {
     stateScope: "os-credential-store",
     stateRoot: "os-credential-store",
     usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+    runtimeBinarySources: ["managed-sidecar-runtime"],
     supportsBrowserLogin: true,
     supportsDeviceCode: true,
     supportsAccessToken: true,
@@ -346,6 +343,35 @@ describe("coding workbench Codex subscription profile", () => {
     }
   });
 
+  it("makes an unapproved Codex redistribution profile unavailable without a runtime or setup", () => {
+    const profile = {
+      ...codexSubscriptionProfile(),
+      status: "redistribution-unapproved" as const,
+      runtimeBinarySources: [],
+      supportsBrowserLogin: false,
+      supportsDeviceCode: false,
+      supportsAccessToken: false,
+    };
+
+    expect(validateCodingWorkbenchCodexSubscriptionProfile(profile)).toEqual({
+      ok: true,
+      value: profile,
+    });
+    expect(
+      validateCodingWorkbenchCodexSubscriptionProfile({
+        ...profile,
+        runtimeBinarySources: ["managed-sidecar-runtime"],
+        supportsDeviceCode: true,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "profile.runtimeBinarySources must be empty when redistribution is unapproved",
+        "supportsDeviceCode must be false when redistribution is unapproved",
+      ],
+    });
+  });
+
   it("selects the Codex adapter for subscription profiles and the sidecar for gateway profiles", () => {
     expect(selectCodingWorkbenchRuntimeProfile("chatgpt-codex-subscription-profile")).toEqual({
       schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
@@ -353,8 +379,8 @@ describe("coding workbench Codex subscription profile", () => {
       runtimeSource: "codex-cli-adapter",
       adapterKind: "codex-cli-adapter",
       sidecarGatewayAllowed: false,
-      codexSubscriptionAllowed: true,
-      runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+      codexSubscriptionAllowed: false,
+      runtimeBinarySources: [],
     });
     expect(selectCodingWorkbenchRuntimeProfile("openai-api-key-through-gateway")).toMatchObject({
       modelSource: "openai-api-key-through-gateway",
@@ -565,6 +591,7 @@ describe("isCodingWorkbenchEvidenceSafeText", () => {
     { label: "url-like scheme", value: "ssh://corp-host/repo" },
     { label: "natural-language slug", value: "please-fix-login-bug" },
     { label: "fine-grained PAT", value: "github_pat_1234567890" },
+    { label: "retired local runtime source", value: "policy-allowed-local-install" },
   ])("rejects unsafe evidence text: $label", ({ value }) => {
     expect(isCodingWorkbenchEvidenceSafeText(value)).toBe(false);
   });

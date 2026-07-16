@@ -10,7 +10,9 @@
 // region is itself capped at `MAX_HEADER_BYTES` so a server that floods bytes WITHOUT ever sending a
 // `\r\n\r\n` terminator cannot grow the accumulation buffer unbounded (OOM); such a stream is rejected
 // as MALFORMED_HEADER. Incoming chunks accumulate in a list and are concatenated at most once per
-// yielded frame, so a large body arriving in many small chunks costs O(n) total copy, not O(n^2).
+// drained batch -- not once per yielded frame -- so a large body arriving in many small chunks, or
+// several complete frames arriving coalesced into one physical read, costs O(n) total copy, not
+// O(n^2) or O(frames x n).
 
 import { parseLspFrameHeader } from "@oscharko-dev/keiko-contracts";
 import type { LspFrameRejectReason } from "@oscharko-dev/keiko-contracts";
@@ -92,9 +94,12 @@ function readContentLength(headerBlock: string, rejectDuplicate: boolean): numbe
 //
 // Accumulation is a list of chunks plus a running byte total; the list is concatenated into a single
 // contiguous buffer only when a header terminator is present (so a complete header+body frame can be
-// sliced). A large body delivered in many small chunks therefore incurs one O(n) concat at yield time
-// rather than an O(n^2) concat-on-every-chunk. Before any terminator arrives, the accumulated size is
-// bounded by `MAX_HEADER_BYTES`; exceeding it without a terminator is a MALFORMED_HEADER reject.
+// sliced), and at most once per drained batch regardless of how many complete frames that batch
+// contains -- every frame after the first is sliced (zero-copy) off the same coalesced buffer. A
+// large body delivered in many small chunks, or several small frames arriving in one physical read,
+// therefore incurs one O(n) concat per batch rather than an O(n^2) or O(frames x n) repeat concat.
+// Before any terminator arrives, the accumulated size is bounded by `MAX_HEADER_BYTES`; exceeding it
+// without a terminator is a MALFORMED_HEADER reject.
 export async function* createLspFrameReader(
   source: LspByteSource,
   maxFrameBytes: number,
@@ -116,7 +121,8 @@ const EMPTY = Buffer.alloc(0);
 // incremental scan offset for the `\r\n\r\n` terminator: each push scans only the freshly-arrived
 // region (plus a 3-byte overlap so a terminator straddling two chunks is still found), never rescanning
 // settled bytes. The contiguous buffer is materialized lazily via `coalesce()` only when a terminator
-// is known to be present, so the single concat cost is O(total) once per frame, not O(n^2).
+// is known to be present, so the single concat cost is O(total) once per drain pass over the current
+// batch -- not once per frame that batch contains -- not O(n^2) or O(frames x n).
 interface PendingBuffer {
   push(chunk: LspBytes): void;
   // The total accumulated, not-yet-yielded byte count across all buffered chunks.
@@ -124,7 +130,9 @@ interface PendingBuffer {
   // True once a `\r\n\r\n` terminator is present anywhere in the accumulated bytes.
   hasHeaderDelimiter(): boolean;
   // Concatenates the buffered chunks into one contiguous buffer and returns it. O(total bytes);
-  // called at most once per frame slice, only after `hasHeaderDelimiter()` is true.
+  // called at most once per drain pass (`drainFrames` slices every further frame in the same batch
+  // off that one coalesced buffer instead of calling this again), only after `hasHeaderDelimiter()`
+  // is true.
   coalesce(): LspBytes;
   // Replaces the buffered chunks with a single trailing remainder (the bytes after a sliced frame).
   reset(rest: LspBytes): void;
@@ -169,10 +177,14 @@ function createPendingBuffer(): PendingBuffer {
 
 // Rejects a delimiter-less accumulation that has grown past the header cap (ADR-0069 I3): a server
 // that floods bytes without ever sending `\r\n\r\n` would otherwise grow the buffer unbounded.
-function guardHeaderBound(pending: PendingBuffer): void {
-  if (!pending.hasHeaderDelimiter() && pending.byteLength() > MAX_HEADER_BYTES) {
+function guardHeaderBoundBytes(hasDelimiter: boolean, length: number): void {
+  if (!hasDelimiter && length > MAX_HEADER_BYTES) {
     throw new LspFrameRejectError("MALFORMED_HEADER");
   }
+}
+
+function guardHeaderBound(pending: PendingBuffer): void {
+  guardHeaderBoundBytes(pending.hasHeaderDelimiter(), pending.byteLength());
 }
 
 interface TakenFrame {
@@ -206,6 +218,14 @@ function takeFrame(
 // Slices every complete frame currently buffered, yielding each body. Enforces the header cap on the
 // no-terminator path before coalescing, so a delimiter-less flood is rejected without an unbounded
 // concat. Stops when neither a full header nor a full body is yet available (awaiting more chunks).
+//
+// The whole batch is coalesced exactly once, up front. When several complete frames arrive
+// coalesced into one physical read, every subsequent frame is sliced (zero-copy `subarray`) off a
+// local `cursor` that only ever shrinks -- `pending` is not re-coalesced or re-scanned per frame,
+// only synchronized once at the end via `pending.reset(cursor)`. Before this, `pending.coalesce()`
+// (an O(remaining-bytes) `Buffer.concat`) and `pending.reset()` (an O(remaining-bytes) delimiter
+// re-scan) ran once per extracted frame, making a K-frame batch cost O(K x bytes) instead of the
+// O(bytes) this codec is required to guarantee (issue: audit finding, output-flood regression).
 function* drainFrames(
   pending: PendingBuffer,
   maxFrameBytes: number,
@@ -213,19 +233,27 @@ function* drainFrames(
 ): Generator<LspBytes, void, void> {
   const frameBudget = coalesceFramedBytes(pending);
   if (frameBudget === undefined) return;
-  // Iterate an immutable view of bytes already required for frame parsing. Each frame consumes at
-  // least one header byte, so this bounds malformed reset behavior without an input-sized control
-  // array or a mutable loop counter that can be mutation-corrupted into an infinite loop.
-  for (const byte of frameBudget) {
-    if (!Number.isSafeInteger(byte)) return;
-    if (!pending.hasHeaderDelimiter()) {
-      guardHeaderBound(pending);
-      return;
+  let cursor: LspBytes = frameBudget;
+  try {
+    // Iterate an immutable view of bytes already required for frame parsing. Each frame consumes
+    // at least one header byte, so this bounds malformed reset behavior without an input-sized
+    // control array or a mutable loop counter that can be mutation-corrupted into an infinite loop.
+    for (const byte of frameBudget) {
+      if (!Number.isSafeInteger(byte)) return;
+      const hasDelimiter = cursor.includes(HEADER_DELIMITER);
+      if (!hasDelimiter) {
+        guardHeaderBoundBytes(hasDelimiter, cursor.length);
+        return;
+      }
+      const frame = takeFrame(cursor, maxFrameBytes, options);
+      if (frame === null) return;
+      cursor = frame.rest;
+      yield frame.body;
     }
-    const frame = takeFrame(pending.coalesce(), maxFrameBytes, options);
-    if (frame === null) return;
-    pending.reset(frame.rest);
-    yield frame.body;
+  } finally {
+    // Runs on every exit path (return, throw, or an early `.return()`/`.throw()` on the delegating
+    // generator), so `pending` always ends up holding exactly the true unconsumed leftover.
+    pending.reset(cursor);
   }
 }
 

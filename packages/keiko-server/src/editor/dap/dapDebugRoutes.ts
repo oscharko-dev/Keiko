@@ -35,6 +35,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "../../files-deny.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import {
@@ -115,6 +120,7 @@ export interface DapDebugRouteService {
   readonly references: DebugReferenceStore;
   readonly events: DapEventBridge;
   readonly activation: (realRoot: string) => Promise<DebugActivationSummary>;
+  readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
 export interface DapDebugRouteServiceOptions {
@@ -122,6 +128,7 @@ export interface DapDebugRouteServiceOptions {
   readonly stateDir: string;
   readonly now: () => number;
   readonly activation: (realRoot: string) => Promise<DebugActivationSummary>;
+  readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
 export function createDapDebugRouteService(
@@ -129,11 +136,15 @@ export function createDapDebugRouteService(
 ): DapDebugRouteService {
   return Object.freeze({
     manager: options.production.manager,
-    breakpoints: createBreakpointStore({ stateDir: options.stateDir }),
+    breakpoints: createBreakpointStore({
+      stateDir: options.stateDir,
+      ...(options.diagnosticSink === undefined ? {} : { diagnosticSink: options.diagnosticSink }),
+    }),
     browserSessions: createDebugBrowserSessionRegistry({ now: options.now }),
     references: createDebugReferenceStore(),
     events: options.production.eventBridge,
     activation: options.activation,
+    ...(options.diagnosticSink === undefined ? {} : { diagnosticSink: options.diagnosticSink }),
   });
 }
 
@@ -237,6 +248,31 @@ function deniedActivation(): RouteResult {
   };
 }
 
+// D7 requires that a resolver failure be treated as revocation, not a stale-allow — that security
+// decision is intentional and stays in place below. But collapsing every exception from the
+// injected activation resolver (deploymentPolicy/provisioning/productSupport) into a bare denial
+// leaves an operator unable to tell a genuine bug in that callback apart from a legitimate policy
+// denial, since both look identical from the outside. Emit a redacted diagnostic on the resolver's
+// failure path so the two remain distinguishable without ever weakening the fail-closed outcome
+// (mirrors the ADR-0132 LSP-activation precedent in managedLspControlFactory.ts).
+function emitActivationResolverFailure(
+  service: DapDebugRouteService,
+  realRoot: string,
+  operation: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation,
+      source: "dap.debug-routes.activation-resolver",
+      error,
+      redact: () => "Debug activation resolver failed.",
+    }),
+  );
+}
+
 async function activeActivationRevision(
   service: DapDebugRouteService,
   realRoot: string,
@@ -244,7 +280,8 @@ async function activeActivationRevision(
   try {
     const activation = await service.activation(realRoot);
     return activation.state === "available" ? activation.revision : undefined;
-  } catch {
+  } catch (error) {
+    emitActivationResolverFailure(service, realRoot, "dap.activation.resolve", error);
     return undefined;
   }
 }
@@ -262,7 +299,8 @@ async function revalidateSessionActivation(
   let current: DebugActivationSummary | undefined;
   try {
     current = await service.activation(realRoot);
-  } catch {
+  } catch (error) {
+    emitActivationResolverFailure(service, realRoot, "dap.activation.revalidate", error);
     current = undefined;
   }
   if (current?.state === "available" && current.revision === expectedRevision) return undefined;
