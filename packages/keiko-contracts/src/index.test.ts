@@ -761,6 +761,43 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodingWorkbenchModeEffectMatrix>();
   });
 
+  it("code task acceptance contracts are reachable through the barrel (#2385)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.CODE_TASK_ACCEPTANCE_SCHEMA_VERSION).toBe(1);
+    expect(mod.CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND).toBe("code-task-acceptance-contribution");
+    expect(mod.CODE_TASK_EVIDENCE_CLASSES.length).toBe(5);
+    expect(mod.CODE_TASK_EVIDENCE_PLATFORMS.length).toBe(4);
+    expect(mod.CODE_TASK_SCENARIO_OUTCOMES).toEqual(["passed", "failed", "blocked"]);
+    expect(mod.CODE_TASK_SALVAGE_DISPOSITIONS).toEqual(["taken-verbatim", "reshaped", "rejected"]);
+    expect(mod.validateCodeTaskAcceptanceContribution({}).ok).toBe(false);
+    expect(mod.codeTaskAcceptanceQualificationFailures).toBeDefined();
+    expect(mod.isCodeTaskGitCommitSha("a".repeat(40))).toBe(true);
+    expect(mod.isCodeTaskGitTreeSha("b".repeat(40))).toBe(true);
+    expect(mod.isCodeTaskSha256Digest("c".repeat(64))).toBe(true);
+    expect(mod.isCodeTaskScenarioId("tracer-journey")).toBe(true);
+    expect(mod.isCodeTaskIsoInstant("2026-07-16T12:00:00Z")).toBe(true);
+    expect(mod.isCodeTaskRepoRelativePath("packages/keiko-contracts/src/index.ts")).toBe(true);
+    expect(mod.isCodeTaskContentFreeNote("bounded note")).toBe(true);
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").CodeTaskAcceptanceContributionV1>();
+    pin<import("./index.js").CodeTaskAcceptanceScenarioV1>();
+    pin<import("./index.js").CodeTaskAcceptanceBinding>();
+    pin<import("./index.js").CodeTaskSalvageRowV1>();
+    pin<import("./index.js").CodeTaskCleanupResultV1>();
+    pin<import("./index.js").CodeTaskFact<string>>();
+    pin<import("./index.js").CodeTaskBranded<"Example", string>>();
+    pin<import("./index.js").CodeTaskEvidenceClass>();
+    pin<import("./index.js").CodeTaskEvidencePlatform>();
+    pin<import("./index.js").CodeTaskScenarioOutcome>();
+    pin<import("./index.js").CodeTaskSalvageDisposition>();
+    pin<import("./index.js").CodeTaskScenarioId>();
+    pin<import("./index.js").CodeTaskGitCommitSha>();
+    pin<import("./index.js").CodeTaskGitTreeSha>();
+    pin<import("./index.js").CodeTaskSha256Digest>();
+    pin<import("./index.js").CodeTaskIsoInstant>();
+  });
+
   it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
     // Schema versions.
     expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");
