@@ -137,8 +137,9 @@ function applyArg(argv, index, options) {
 function parseArgs(argv) {
   const options = defaultOptions();
 
-  for (let index = 0; index < argv.length; index += 1) {
-    index = applyArg(argv, index, options);
+  let index = 0;
+  while (index < argv.length) {
+    index = applyArg(argv, index, options) + 1;
   }
 
   validateDistTag(options);

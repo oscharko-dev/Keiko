@@ -181,7 +181,8 @@ function canonicalWorkspacePath(root: string, candidate: string | undefined): st
   if (candidate === undefined || utf8Bytes(candidate) > EDITOR_AGENT_TARGET_PATH_MAX_BYTES) {
     return null;
   }
-  if (/[\u0000\t\r\n]/u.test(candidate)) return null;
+  // Reject control characters (NUL, TAB, CR, LF, etc.) to block path/log injection via the candidate path.
+  if (/\p{Cc}/u.test(candidate)) return null;
   const resolution = resolveWorkspaceFileIdentifier(root, candidate);
   if (resolution.kind !== "relative") return null;
   const path = resolution.path

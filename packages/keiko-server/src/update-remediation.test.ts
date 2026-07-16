@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { UPDATE_LOCAL_STATE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
-import type { UpdateReleaseImpactInput } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdateRemediationAction,
+  UpdateReleaseImpactInput,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   LocalKnowledgeRemediationPort,
   LocalKnowledgeRemediationRunResult,
@@ -20,6 +23,7 @@ import type {
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import {
   createUpdateRemediationManager,
+  overallStatus,
   UpdateRemediationError,
   type UpdateRemediationManager,
 } from "./update-remediation.js";
@@ -145,6 +149,23 @@ const localKnowledgeImpact: UpdateReleaseImpactInput = {
   userActionRequired: true,
 };
 
+function completedAction(): UpdateRemediationAction {
+  return {
+    actionId: "local-knowledge-reindex:local-knowledge",
+    kind: "local-knowledge-reindex",
+    store: "local-knowledge",
+    remediation: "local-knowledge-reindex-required",
+    status: "completed",
+    required: true,
+    canRun: true,
+    canDefer: true,
+    userApprovalRequired: true,
+    featureIds: ["local-knowledge"],
+    scopeCounts: { stores: 1, artifacts: 0, retainedEntries: 0 },
+    message: "Local Knowledge reindexed.",
+  };
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -158,6 +179,14 @@ describe("update remediation manager", () => {
     expect(status.overallStatus).toBe("not-required");
     expect(status.updateCanComplete).toBe(true);
     expect(status.actions).toHaveLength(0);
+  });
+
+  it("computes not-required for an empty action list via the early-return guard", () => {
+    expect(overallStatus([])).toBe("not-required");
+  });
+
+  it("does not throw and reports the single action's status for a single completed action", () => {
+    expect(overallStatus([completedAction()])).toBe("completed");
   });
 
   it("requires user-approved Local Knowledge reindex with scope counts and completion status", async () => {

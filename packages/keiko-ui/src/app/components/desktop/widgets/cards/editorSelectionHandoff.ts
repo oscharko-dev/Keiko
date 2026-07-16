@@ -232,7 +232,8 @@ function isValidWorkspaceRoot(workspaceRoot: unknown): workspaceRoot is string {
     typeof workspaceRoot === "string" &&
     workspaceRoot.trim().length > 0 &&
     isUtf8WithinBound(workspaceRoot, EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES) &&
-    !/[\u0000\r\n]/u.test(workspaceRoot)
+    // Reject control characters (NUL, CR, LF, etc.) to block path/log injection via the workspace root.
+    !/\p{Cc}/u.test(workspaceRoot)
   );
 }
 

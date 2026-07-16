@@ -377,6 +377,33 @@ describe("queueChatEditorApply", () => {
   });
 
   it.each([
+    ["NUL", "\u0000"],
+    ["TAB", "\t"],
+    ["CR", "\r"],
+    ["LF", "\n"],
+    ["SOH, outside the original NUL/TAB/CR/LF set", "\u0001"],
+    ["DEL, outside the original NUL/TAB/CR/LF set", "\u007f"],
+  ])("rejects an active-file path containing a %s control character", async (_label, control) => {
+    const environment = fakeEnvironment();
+
+    await expect(
+      queueChatEditorApply(
+        input("replacement", undefined, {
+          workspaceRoot: ROOT,
+          activeFile: `src/${control}a.ts`,
+        }),
+        environment.dependencies,
+      ),
+    ).resolves.toEqual({
+      kind: "rejected",
+      code: "AMBIGUOUS_TARGET",
+      message: "Active-file context is invalid.",
+    });
+    expect(environment.fileCalls()).toBe(0);
+    expect(environment.queueCalls()).toBe(0);
+  });
+
+  it.each([
     ["sessionId", EDITOR_AGENT_SESSION_ID_MAX_BYTES],
     ["windowId", EDITOR_AGENT_WINDOW_ID_MAX_BYTES],
   ] as const)(

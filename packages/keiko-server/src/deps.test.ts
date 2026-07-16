@@ -44,7 +44,10 @@ import {
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
+  reconcileTaskWorkspacesAtStartup,
 } from "./deps.js";
+import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
+import type { WorkspaceReconciliationReport } from "@oscharko-dev/keiko-contracts";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
@@ -1278,5 +1281,81 @@ describe("currentGatewayEgressConfig — fault-tolerant env egress parsing", () 
     expect(egress?.noProxy).toEqual(["localhost", "127.0.0.1"]);
     expect(warn).toHaveBeenCalled();
     store.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reconcileTaskWorkspacesAtStartup — synchronous-throw guard (Issue #447 / S4822 fix)
+// ---------------------------------------------------------------------------
+
+describe("reconcileTaskWorkspacesAtStartup", () => {
+  function fakeReconciliationService(
+    reconcile: WorkspaceReconciliationService["reconcile"],
+  ): WorkspaceReconciliationService {
+    return {
+      report: (): WorkspaceReconciliationReport => {
+        throw new Error("report() must never be called by startup reconciliation");
+      },
+      reconcile,
+    };
+  }
+
+  it("is a no-op when no reconciliation service was composed", () => {
+    expect(() => {
+      reconcileTaskWorkspacesAtStartup(undefined);
+    }).not.toThrow();
+  });
+
+  it("does not throw when reconcile() rejects (failure is silent)", async () => {
+    const rejection = Promise.reject(new Error("reconciliation IO failed"));
+    const service = fakeReconciliationService(() => rejection);
+
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    expect(() => {
+      reconcileTaskWorkspacesAtStartup(service);
+    }).not.toThrow();
+
+    // Flush microtasks so the `.catch` on the detached promise has a chance to settle before
+    // asserting no unhandled rejection leaked to the process.
+    await rejection.catch(() => undefined);
+    await Promise.resolve();
+
+    process.off("unhandledRejection", unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it("does not throw if reconcile() itself throws synchronously (construction must never fail)", () => {
+    // A non-conforming implementation (e.g. a test double, or a degraded environment) could throw
+    // synchronously instead of returning a rejected Promise. Startup construction must still
+    // degrade silently — the persisted classification simply stays untouched until the next pass.
+    const service = fakeReconciliationService(() => {
+      throw new Error("synchronous reconciliation failure");
+    });
+
+    expect(() => {
+      reconcileTaskWorkspacesAtStartup(service);
+    }).not.toThrow();
+  });
+
+  it("does not throw when reconcile() resolves normally", async () => {
+    let called = false;
+    const report = {
+      schemaVersion: 1,
+      generatedAt: new Date(0).toISOString(),
+      entries: [],
+      activeRestoration: { kind: "none" },
+    } as unknown as WorkspaceReconciliationReport;
+    const service = fakeReconciliationService(() => {
+      called = true;
+      return Promise.resolve(report);
+    });
+
+    expect(() => {
+      reconcileTaskWorkspacesAtStartup(service);
+    }).not.toThrow();
+    await Promise.resolve();
+    expect(called).toBe(true);
   });
 });

@@ -101,8 +101,9 @@ function parseArgs(argv) {
     workflowRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
     workflowRunId: Number(process.env.GITHUB_RUN_ID ?? 0),
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    index = applyArg(argv, index, options);
+  let index = 0;
+  while (index < argv.length) {
+    index = applyArg(argv, index, options) + 1;
   }
   if (options.target === undefined) fail(`pass --target ${PORTABLE_TARGET_NAMES.join("|")}`);
   const target = portableTargetByName(options.target);
