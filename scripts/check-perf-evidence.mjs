@@ -773,6 +773,18 @@ function evaluateD12Samples(samples, perfRuns, label) {
   return [];
 }
 
+function evaluateD12NonNegativeSamples(samples, perfRuns, label) {
+  // B5 keystroke samples are observed long-task durations. Zero means no long task; the separate
+  // baseline/candidate CDP processing samples retain the strictly-positive measured-work proof.
+  if (!Array.isArray(samples) || samples.length < perfRuns) {
+    return [`${label}: raw samples are missing or fewer than KEIKO_PERF_RUNS (${perfRuns})`];
+  }
+  if (samples.some((sample) => !isFiniteNumber(sample) || sample < 0)) {
+    return [`${label}: raw samples contain a negative or invalid measurement`];
+  }
+  return [];
+}
+
 function evaluateD12Percentile(metric, perfRuns, label, key, percentileValue) {
   if (typeof metric !== "object" || metric === null) return [`${label}: metric is missing`];
   const failures = evaluateD12Samples(metric.samples, perfRuns, label);
@@ -1072,7 +1084,9 @@ function deriveD12RawKeystroke(value, perfRuns, label) {
   if (!isFiniteNumber(metric.maxLongTaskMs) || metric.maxLongTaskMs < 0) {
     failures.push(`${label}: B5 maxLongTaskMs is invalid`);
   }
-  failures.push(...evaluateD12Samples(metric.samples, perfRuns, `${label}: B5 keystroke`));
+  failures.push(
+    ...evaluateD12NonNegativeSamples(metric.samples, perfRuns, `${label}: B5 keystroke`),
+  );
   return {
     failures,
     raw: { ...metric, samples: Array.isArray(metric.samples) ? [...metric.samples] : [] },

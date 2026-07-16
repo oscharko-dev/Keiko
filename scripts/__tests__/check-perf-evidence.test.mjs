@@ -286,7 +286,7 @@ function d12CommonKeystroke(prior) {
       captured: true,
       longTaskCount: 0,
       maxLongTaskMs: 0,
-      samples: Array(10).fill(8),
+      samples: Array(10).fill(0),
     },
   );
 }
@@ -917,6 +917,17 @@ describe("evaluateD12Comparison", () => {
     const failures = evaluateD12Comparison(evidence).join("\n");
     expect(failures).toMatch(/B6: raw samples are missing or fewer than KEIKO_PERF_RUNS/u);
     expect(failures).toMatch(/B4: p95 999ms != measured 1250ms/u);
+  });
+
+  it("rejects a negative raw B5 keystroke long-task sample", () => {
+    const evidence = editorEvidence();
+    const baseline = evidence.d12Comparison.repetitions[0].baseline;
+    baseline.rawInput.artifact.b5KeystrokeMs.samples[0] = -1;
+    refreshD12RawInput(baseline);
+
+    expect(evaluateD12Comparison(evidence).join("\n")).toMatch(
+      /B5 keystroke: raw samples contain a negative or invalid measurement/u,
+    );
   });
 
   it("accepts fractional cap percentiles under the shared nearest-rank convention", () => {

@@ -60,7 +60,7 @@ function rawEvidence(revision, index, sequence) {
     b5KeystrokeMs: {
       budgetMax: 50,
       captured: true,
-      samples: repeatedSamples(8 + index),
+      samples: repeatedSamples(0),
       longTaskCount: 0,
       maxLongTaskMs: 0,
     },
@@ -765,10 +765,22 @@ describe("D12 performance comparison builder", () => {
       /at least 10 raw samples/u,
     ],
     [
+      "zero-valued B4 duration",
+      "baseline-1.json",
+      (value) => (value.b4ColdStartMs.samples[0] = 0),
+      /B4 contains a non-positive or invalid sample/u,
+    ],
+    [
       "missing baseline measured work",
       "baseline-2.json",
       (value) => (value.d12BaselineMeasuredWork.processingSamples = []),
       /baseline measured-work B5 requires/u,
+    ],
+    [
+      "zero-valued baseline measured work",
+      "baseline-2.json",
+      (value) => (value.d12BaselineMeasuredWork.processingSamples[0] = 0),
+      /baseline measured-work B5 contains a non-positive or invalid sample/u,
     ],
     [
       "missing candidate idle-debug samples",
@@ -777,10 +789,28 @@ describe("D12 performance comparison builder", () => {
       /candidate idle-debug B5 requires/u,
     ],
     [
+      "zero-valued candidate idle-debug work",
+      "candidate-3.json",
+      (value) => (value.b5IdleDebugSession.processingSamples[0] = 0),
+      /candidate idle-debug B5 contains a non-positive or invalid sample/u,
+    ],
+    [
       "missing B6 raw samples",
       "candidate-1.json",
       (value) => delete value.b6InteractionMs.samples,
       /B6 requires/u,
+    ],
+    [
+      "zero-valued B6 duration",
+      "candidate-1.json",
+      (value) => (value.b6InteractionMs.samples[0] = 0),
+      /B6 contains a non-positive or invalid sample/u,
+    ],
+    [
+      "negative B5 keystroke long-task sample",
+      "candidate-1.json",
+      (value) => (value.b5KeystrokeMs.samples[0] = -1),
+      /B5 keystroke: raw samples contain a negative or invalid measurement/u,
     ],
   ])("rejects %s", (_name, file, mutate, expected) => {
     const { root } = createFixture();
