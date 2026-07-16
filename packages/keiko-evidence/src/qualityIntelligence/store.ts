@@ -211,11 +211,11 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
 }
 
 // GEN-PERF-PERSISTENCE-009 — the QI list endpoint parses + SHA-256-re-hashes up to 100 manifests
-// per request, and callers often re-list within seconds. QI manifests are write-once by contract
-// (only an export append rewrites the file, which bumps mtime+size), so a positive verification
-// result is safe to memoise keyed by absolute path + mtimeMs + size: any at-rest tamper changes the
-// content (and therefore, on a real filesystem, the size and/or mtime), forcing a cache miss and a
-// full re-verify on the next read. Tamper-evidence is preserved — we cache ONLY verified manifests.
+// per request, and callers often re-list within seconds. QI manifests are write-once by contract,
+// so a positive verification result is safe to memoise. A cache hit still requires a SHA-256 of
+// the raw file bytes: mtime+size alone cannot distinguish a same-size rewrite on a coarse-clock
+// filesystem. This skips JSON parsing and all per-group integrity hashes without weakening the
+// at-rest tamper boundary. We cache ONLY verified manifests.
 //
 // Correctness guards: (1) if the filesystem cannot report mtimeMs (e.g. the in-memory test fs) we
 // never cache, so those callers always re-verify; (2) the cache is bounded (LRU) and in-process
@@ -223,6 +223,7 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
 interface QiVerificationCacheEntry {
   readonly mtimeMs: number;
   readonly size: number;
+  readonly contentSha256Hex: string;
   readonly manifest: QualityIntelligenceEvidenceManifest;
 }
 
@@ -233,9 +234,14 @@ function qiVerificationCacheGet(
   absolutePath: string,
   mtimeMs: number,
   size: number,
+  contentSha256Hex: string,
 ): QualityIntelligenceEvidenceManifest | undefined {
   const entry = qiVerificationCache.get(absolutePath);
-  if (entry?.mtimeMs !== mtimeMs || entry.size !== size) {
+  if (
+    entry?.mtimeMs !== mtimeMs ||
+    entry.size !== size ||
+    entry.contentSha256Hex !== contentSha256Hex
+  ) {
     return undefined;
   }
   // Refresh LRU recency: re-insert so the most-recently-used key is last.
@@ -248,15 +254,20 @@ function qiVerificationCacheSet(
   absolutePath: string,
   mtimeMs: number,
   size: number,
+  contentSha256Hex: string,
   manifest: QualityIntelligenceEvidenceManifest,
 ): void {
   qiVerificationCache.delete(absolutePath);
-  qiVerificationCache.set(absolutePath, { mtimeMs, size, manifest });
+  qiVerificationCache.set(absolutePath, { mtimeMs, size, contentSha256Hex, manifest });
   while (qiVerificationCache.size > QI_VERIFICATION_CACHE_MAX_ENTRIES) {
     const oldest = qiVerificationCache.keys().next().value;
     if (oldest === undefined) break;
     qiVerificationCache.delete(oldest);
   }
+}
+
+function sha256OfContent(content: string | Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 // Test-only: reset the module-level verification cache so a suite gets a clean slate.
@@ -352,21 +363,23 @@ function loadQiManifest(
     if (!isSingleLinkRegularFile(target, fs)) {
       return undefined;
     }
-    // GEN-PERF-PERSISTENCE-009 — reuse a previously verified manifest when the file's mtime+size is
-    // unchanged, so a repeated list does not re-parse + re-hash unmodified write-once manifests.
-    // Only cache when the fs reports mtimeMs (real node fs does; the in-memory test fs does not).
+    // GEN-PERF-PERSISTENCE-009 — the raw-content digest preserves tamper detection while a cache
+    // hit skips JSON parsing and all per-group integrity hashes. Only cache when the fs reports
+    // mtimeMs (real node fs does; the in-memory test fs does not).
     const stat = fs.stat(target);
     const mtimeMs = stat.mtimeMs;
+    const bytes = readFileSync(target);
+    const contentSha256Hex = sha256OfContent(bytes);
     if (mtimeMs !== undefined) {
-      const cached = qiVerificationCacheGet(target, mtimeMs, stat.size);
+      const cached = qiVerificationCacheGet(target, mtimeMs, stat.size, contentSha256Hex);
       if (cached !== undefined) {
         return cached;
       }
     }
-    const json = readFileSync(target, "utf8");
+    const json = bytes.toString("utf8");
     const manifest = parseAndValidateManifest(json);
     if (mtimeMs !== undefined) {
-      qiVerificationCacheSet(target, mtimeMs, stat.size, manifest);
+      qiVerificationCacheSet(target, mtimeMs, stat.size, contentSha256Hex, manifest);
     }
     return manifest;
   } catch (error) {
@@ -389,10 +402,11 @@ function recordQiManifest(
   const realBase = prepareQiBaseDir(baseDir, fs);
   const target = lexicalQiManifestPath(manifest.runId, realBase);
   assertWritableQiManifestEntry(target, fs);
-  atomicWriteQiManifest(target, JSON.stringify(manifest), randomSuffix);
+  const json = JSON.stringify(manifest);
+  atomicWriteQiManifest(target, json, randomSuffix);
   const stat = fs.stat(target);
   if (stat.mtimeMs !== undefined) {
-    qiVerificationCacheSet(target, stat.mtimeMs, stat.size, manifest);
+    qiVerificationCacheSet(target, stat.mtimeMs, stat.size, sha256OfContent(json), manifest);
   }
   return target;
 }
