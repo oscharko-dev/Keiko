@@ -11,13 +11,18 @@ connector writes, and evidence stores remain separated by Keiko-owned contracts.
 
 ## Operating Modes
 
-The machine values remain stable for wire compatibility. Operators use the three display labels:
+The machine values remain stable for wire compatibility. Operators use the three display labels
+(semantics per
+[ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md)):
 
-| Display mode         | Machine value         | Allowed without another prompt                                                         | Approval required                                                   |
-| -------------------- | --------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| **Ask for approval** | `governed-assist`     | Workspace-contained actions at every risk                                              | External files, internet, and delivery at every risk                |
-| **Approve for me**   | `supervised-coding`   | Low/medium-risk workspace, external-file, and internet actions                         | High/critical-risk file or internet actions; delivery at every risk |
-| **Full access**      | `autonomous-delivery` | Workspace, external-file, and internet actions inside the validated Authority Envelope | Delivery at every risk                                              |
+<!-- The first table row below is byte-pinned by codingAutonomyQaMatrix.test.ts; keep its exact
+     single-space cell padding, so the table is excluded from Prettier's column alignment. -->
+<!-- prettier-ignore -->
+| Display mode | Machine value | Allowed without another prompt | Approval required |
+| --- | --- | --- | --- |
+| **Ask for approval** | `governed-assist` | Reads and planning | Workspace edits and commands, external files, internet, and delivery at every risk |
+| **Supervised workspace** | `supervised-coding` | Low/medium-risk workspace-contained edits, vetted commands, and verification | High/critical-risk workspace-contained actions; external files, internet, and delivery at every risk |
+| **Full access** | `autonomous-delivery` | Workspace, external-file, and internet actions inside the validated Authority Envelope | Delivery at every risk |
 
 Mode selection never overrides the effective-mode deployment ceiling, Authority Envelope,
 workspace and branch scope, deny lists, secret-exfiltration checks, platform restrictions, expiry,

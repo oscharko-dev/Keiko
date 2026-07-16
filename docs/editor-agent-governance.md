@@ -12,7 +12,9 @@ browser panel
 ([`EditorAgentActionsPanel.tsx`](../packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorAgentActionsPanel.tsx)).
 The governing decision records are
 [ADR-0062](./adr/ADR-0062-agent-editor-action-governance-and-audit.md) and its current authority
-amendment, [ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md). They build on
+amendments, [ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md) and
+[ADR-0138](./adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).
+They build on
 the action contract ([ADR-0059](./adr/ADR-0059-agent-editor-public-contracts.md)), the safe
 apply-edits gates ([ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow.md)), the session
 registry/queue ([ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md)), and the
@@ -55,11 +57,11 @@ mode-independent security baseline and a content-free reason:
 `composeEditorAgentActionPolicyDecision` then maps the concrete action to the shared Coding Workbench
 resource/risk matrix and chooses the stricter result (`denied` > `approval-required` > `allowed`):
 
-| Mode                 | Workspace-contained                                 | External file / internet                            | Delivery                    |
-| -------------------- | --------------------------------------------------- | --------------------------------------------------- | --------------------------- |
-| **Ask for approval** | all risks allowed                                   | all risks approval-required                         | all risks approval-required |
-| **Approve for me**   | low/medium allowed; high/critical approval-required | low/medium allowed; high/critical approval-required | all risks approval-required |
-| **Full access**      | all risks allowed                                   | all risks allowed inside the validated envelope     | all risks approval-required |
+| Mode                     | Workspace-contained                                 | External file / internet                        | Delivery                    |
+| ------------------------ | --------------------------------------------------- | ----------------------------------------------- | --------------------------- |
+| **Ask for approval**     | all risks approval-required                         | all risks approval-required                     | all risks approval-required |
+| **Supervised workspace** | low/medium allowed; high/critical approval-required | all risks approval-required                     | all risks approval-required |
+| **Full access**          | all risks allowed                                   | all risks allowed inside the validated envelope | all risks approval-required |
 
 For editor actions, `format` and `save` are low risk, `applyTextEdits` and `applyPatch` are medium
 risk, and `applyChangeset` is high risk. Structural preconditions (version/hash/overlap/dirty), live

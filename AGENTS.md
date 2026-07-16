@@ -32,12 +32,15 @@ autonomy-capable surface, anchored by
 delivery by [ADR-0135](docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md), and
 governed in detail by
 [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
-[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md):
+[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md), with the corrected
+monotonic semantics fixed by
+[ADR-0138](docs/adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md):
 
-- **Ask for approval** (`governed-assist`) allows workspace-contained work and asks before external
-  files, internet use, or delivery.
-- **Approve for me** (`supervised-coding`) allows low/medium-risk file and internet work and asks
-  before high/critical-risk work or delivery.
+- **Ask for approval** (`governed-assist`) allows reads and planning and asks before workspace
+  edits, commands, external files, internet use, or delivery.
+- **Supervised workspace** (`supervised-coding`) allows routine workspace-contained edits, vetted
+  commands, and verification and asks before risky contained work, external files, internet use,
+  or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
   integrated automatically only after the direct required checks succeed.

@@ -7,7 +7,8 @@ This script uses a disposable repository containing no secrets or private data.
 1. Run `npm install` from the repository root.
 2. Run `npm run dev:start` and open the loopback URL printed by the command.
 3. Open a disposable workspace with at least two small source files.
-4. Select one of the three agent modes: **Ask for approval**, **Approve for me**, or **Full access**.
+4. Select one of the three agent modes: **Ask for approval**, **Supervised workspace** (labelled
+   **Approve for me** before ADR-0138), or **Full access**.
 
 ## Selection-grounded chat and single-file apply
 
@@ -25,8 +26,8 @@ This script uses a disposable repository containing no secrets or private data.
 ## Multi-file changeset
 
 1. Dock an agent run that proposes one changeset touching the open file and a closed second file.
-2. In **Approve for me**, use a high-risk changeset and confirm the agent-presence indicator enters
-   review state.
+2. In **Supervised workspace**, use a high-risk changeset and confirm the agent-presence indicator
+   enters review state.
 3. Inspect the changed-file list and select each file. Confirm each original/modified Monaco diff is
    accurate.
 4. Before Accept, confirm both disk files are byte-identical to their starting content.
