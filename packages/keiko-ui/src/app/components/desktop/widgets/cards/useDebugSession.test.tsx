@@ -1119,7 +1119,7 @@ describe("useDebugSession", () => {
     expect(result.current.snapshot.stack).toBeNull();
   });
 
-  it("fails a stack projection closed when cursors exceed the two governed pages", async () => {
+  it("fills the retained stack from byte-truncated single-frame pages", async () => {
     let stackPage = 0;
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
@@ -1140,6 +1140,38 @@ describe("useDebugSession", () => {
         ],
         truncated: true,
         omittedCount: 128 - stackPage,
+        nextCursor: `cursor-${String(stackPage + 1)}`,
+      });
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+    await act(async () => result.current.actions.refreshSession("session-1"));
+    const current = result.current.snapshot.session;
+    if (current === null) throw new Error("Expected paused session.");
+
+    await act(async () => result.current.actions.loadStack(current));
+
+    expect(stackPage).toBe(128);
+    expect(result.current.snapshot.stack?.frames).toHaveLength(128);
+  });
+
+  it("fails a stack projection closed when a cursor page carries no frames", async () => {
+    let stackPage = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/sessions/session-1") return response(pausedSession());
+      if (url !== "/api/editor/debug/stack") return response({});
+      stackPage += 1;
+      return response({
+        frames:
+          stackPage === 1
+            ? [{ frameRef: "frame-1", name: bounded("frame"), line: 1, column: 1 }]
+            : [],
+        truncated: true,
+        omittedCount: 127,
         nextCursor: `cursor-${String(stackPage + 1)}`,
       });
     });

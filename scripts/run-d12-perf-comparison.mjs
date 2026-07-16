@@ -342,6 +342,7 @@ function webServerLauncherSource(plan) {
     "mkdirSync(plan.stateDir, { recursive: true, mode: 0o700 });",
     "copyFileSync(plan.fixtureConfigPath, plan.runtimeConfigPath);",
     'for (const script of ["build", "prepare:bin", "build:ui"]) {',
+    // SECURITY-SHELL-OK: generated launcher source text; the emitted spawn pins shell:false.
     '  execFileSync("npm", ["run", script], {',
     "    cwd: plan.root,",
     "    env: process.env,",
@@ -361,6 +362,7 @@ function webServerLauncherSource(plan) {
     '    "--ui-db",',
     "    plan.uiDbPath,",
     "  ],",
+    // SECURITY-SHELL-OK: generated launcher source text; the emitted spawn pins shell:false.
     '  { cwd: plan.root, env: process.env, shell: false, stdio: "inherit" },',
     ");",
     'for (const signal of ["SIGINT", "SIGTERM"]) {',

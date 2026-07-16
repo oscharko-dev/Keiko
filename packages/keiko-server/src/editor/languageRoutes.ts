@@ -503,6 +503,9 @@ async function controlledDescriptor(
       ignoreActivationFlag: true,
     })[0] ?? disabledDescriptor(spec);
   if (descriptor.availability === "unavailable") return { ...descriptor, operations: [] };
+  // Reading capabilities intentionally warms the managed pool: a language the operator has
+  // explicitly activated must report negotiated operations and observed process health
+  // (#2094 status surface). The per-root provider pool deduplicates concurrent cold starts.
   let current = currentSpecHealth(spec, snapshot, health);
   if (current?.status !== "READY") {
     const initialize = options.initializeManagedProvider ?? initializeHostLanguageProvider;

@@ -759,9 +759,10 @@ interface DebugStackPage extends DebugStackSnapshot {
   readonly nextCursor?: string | undefined;
 }
 
-const MAX_DEBUG_STACK_PAGE_REQUESTS = Math.ceil(
-  DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames / DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
-);
+// The BFF shrinks each stack page until it fits maxHttpResponseBytes, so a page can carry
+// fewer than maxFramesPerPage frames while still advancing a cursor. Bound the paging loop
+// by the worst case of one frame per page; zero-frame pages with a cursor fail closed below.
+const MAX_DEBUG_STACK_PAGE_REQUESTS = DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames;
 
 function parseStack(value: unknown): DebugStackPage | null {
   if (
