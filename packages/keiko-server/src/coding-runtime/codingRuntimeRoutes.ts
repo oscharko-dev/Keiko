@@ -241,6 +241,79 @@ export function handleCodingRuntimeRecoveryAcknowledgement(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.acknowledgeRecovery(runId, body));
 }
 
+export function handleCodingRuntimePause(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.pause(runId, body));
+}
+
+export function handleCodingRuntimeResume(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
+}
+
+// Inline follow-up: a drafted message may only be admitted while the run is paused (or already
+// halted for a question); the orchestrator's operation coordinator enforces the revision and
+// serial admission, so no hidden prompt queue is possible.
+export function handleCodingRuntimeFollowUp(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.submitFollowUp(runId, body));
+}
+
+// Required-question surface. Question text is browser-rendered untrusted content: it never enters
+// snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
+// server-owned revision through the same serialized coordinator as every other mutation.
+export function handleCodingRuntimeQuestionAnswer(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.answerQuestion(runId, body));
+}
+
+export function handleCodingRuntimeQuestionReject(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.rejectQuestion(runId, body));
+}
+
+export function handleCodingRuntimeQuestionList(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  if (runId === undefined) return Promise.resolve(notFound());
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return Promise.resolve(required);
+  if (!required.orchestrator.getSnapshot(runId)) return Promise.resolve(notFound());
+  return withBody(async () => {
+    const body = await readBody(ctx.req);
+    if (body === undefined) return failureResult("invalid-intent");
+    const result = await required.orchestrator.listQuestions(runId, body);
+    return result.ok ? { status: 200, body: result.questions } : failureResult(result.failureCode);
+  });
+}
+
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
   return `id: ${event.cursor}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -339,6 +412,36 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/recovery-ack",
     handler: handleCodingRuntimeRecoveryAcknowledgement,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/pause",
+    handler: handleCodingRuntimePause,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/resume",
+    handler: handleCodingRuntimeResume,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
+    handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions",
+    handler: handleCodingRuntimeQuestionList,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions/answer",
+    handler: handleCodingRuntimeQuestionAnswer,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions/reject",
+    handler: handleCodingRuntimeQuestionReject,
   },
   {
     method: "GET",

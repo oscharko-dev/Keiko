@@ -38,6 +38,7 @@ import {
   createInMemorySupervisedCodingApprovalStore,
   supervisedCodingApprovalScopeDigest,
   type SupervisedCodingApprovalBinding,
+  type SupervisedCodingApprovalBindingOnce,
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalStore,
   type SupervisedCodingConsumedApproval,
@@ -2127,7 +2128,7 @@ function supervisedMutationEvent(
 function approvalBindingForIssue(
   active: ActiveRuntime,
   request: CodingRuntimeApprovalIssueRequest,
-): SupervisedCodingApprovalBinding {
+): SupervisedCodingApprovalBindingOnce {
   return approvalBinding({
     runId: active.context.runId,
     requestId: request.requestId,
@@ -2140,7 +2141,7 @@ function approvalBindingForEvent(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind,
-): SupervisedCodingApprovalBinding {
+): SupervisedCodingApprovalBindingOnce {
   return approvalBinding({
     runId: active.context.runId,
     requestId: event.requestId,
@@ -2154,10 +2155,11 @@ function approvalBinding(input: {
   readonly requestId: string;
   readonly actionKind: CodingWorkbenchSupervisedActionKind;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
-}): SupervisedCodingApprovalBinding {
+}): SupervisedCodingApprovalBindingOnce {
   const connectorScopes = normalizedConnectorScopes(input.connectorScopes);
   const scopeDigest = supervisedCodingApprovalScopeDigest({ ...input, connectorScopes });
   return {
+    grantScope: "once",
     runId: input.runId,
     requestId: input.requestId,
     actionKind: input.actionKind,

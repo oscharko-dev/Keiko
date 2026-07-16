@@ -143,6 +143,32 @@ export class CodingRuntimeOrchestrator {
     return this.operations.rejectQuestion(runId, input);
   }
 
+  /**
+   * Pause halts admission of new tool mutations without terminating the run: it is serialized like
+   * stop, and only a running run may be paused. A paused run still accepts inline answer/reject and
+   * stop; it never accepts a widening mode change. Resume returns a paused run to running.
+   */
+  pause(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.serialValue(() => this.transitionLifecycle(runId, input, "running", "paused"));
+  }
+
+  resume(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+    return this.serialValue(() => this.transitionLifecycle(runId, input, "paused", "running"));
+  }
+
+  private transitionLifecycle(
+    runId: string,
+    input: unknown,
+    from: CodingWorkbenchRuntimeStateName,
+    to: CodingWorkbenchRuntimeStateName,
+  ): CodingRuntimeOrchestratorResult {
+    const parsed = parseCodingWorkbenchRuntimeStopRequest(input);
+    const current = this.current();
+    if (!parsed.ok || parsed.value.requestId !== runId) return this.fail("invalid-intent");
+    if (current?.runId !== runId || current.state !== from) return this.fail("invalid-intent");
+    return this.transition(current, to);
+  }
+
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(async () => {
       const admitted = this.validateApprovalDecision(runId, input);

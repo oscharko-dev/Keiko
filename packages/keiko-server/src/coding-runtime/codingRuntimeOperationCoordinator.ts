@@ -196,7 +196,14 @@ export class CodingRuntimeOperationCoordinator {
     keys: readonly string[],
   ): PreparedRuntimeOperation {
     const current = this.deps.current();
-    if (!isExactRecord(input, keys) || current?.runId !== runId || current.state !== "running") {
+    // A required question halts the run; a paused run is likewise still admitting inline
+    // human-interaction (answer/reject/follow-up). Both accept these operations; every other
+    // lifecycle state fails closed.
+    if (
+      !isExactRecord(input, keys) ||
+      current?.runId !== runId ||
+      !(current.state === "running" || current.state === "paused")
+    ) {
       return { ok: false };
     }
     if (

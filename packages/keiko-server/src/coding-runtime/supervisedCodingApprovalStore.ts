@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
 import type {
+  CodeTaskGrantScope,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchSupervisedActionKind,
 } from "@oscharko-dev/keiko-contracts";
@@ -11,7 +12,7 @@ export interface SupervisedCodingApprovalClaim {
   readonly approvalToken: string;
 }
 
-export interface SupervisedCodingApprovalBinding {
+interface SupervisedCodingApprovalBindingBase {
   readonly runId: string;
   readonly requestId: string;
   readonly actionKind: CodingWorkbenchSupervisedActionKind;
@@ -19,8 +20,53 @@ export interface SupervisedCodingApprovalBinding {
   readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
 }
 
+/** A single-use ("Run once") approval bound to one action; deleted the moment it is consumed. */
+export type SupervisedCodingApprovalBindingOnce = SupervisedCodingApprovalBindingBase & {
+  readonly grantScope: "once";
+};
+
+/**
+ * A reusable ("Allow for this task") grant. Every dimension is load-bearing: a task grant survives
+ * consumption but its full binding — command template, safe-argument classes, workspace, source,
+ * and policy version — is revalidated on every reuse, so any drift on any dimension (or an expiry
+ * or inactivity lapse) forces a fresh human approval rather than an implicit auto-approval.
+ */
+export type SupervisedCodingApprovalBindingTask = SupervisedCodingApprovalBindingBase & {
+  readonly grantScope: "task";
+  readonly commandTemplateId: string;
+  readonly safeArgumentClasses: readonly string[];
+  readonly workspaceDigest: string;
+  readonly sourceDigest: string;
+  readonly policyVersion: string;
+};
+
+export type SupervisedCodingApprovalBinding =
+  SupervisedCodingApprovalBindingOnce | SupervisedCodingApprovalBindingTask;
+
+/**
+ * Supervised action kinds a task grant may auto-approve: only routine contained edits and vetted
+ * verification commands. Dependency operations, delivery (commit/push/PR/merge), credential and
+ * connector writes, external-file apply-back, and authority-widening system mutations are
+ * structurally excluded — they can never be covered by a reusable task grant (Issue #2386, AC6).
+ */
+const SUPERVISED_TASK_GRANTABLE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> =
+  new Set<CodingWorkbenchSupervisedActionKind>(["file-edit", "verification-command"]);
+
+export function isSupervisedActionTaskGrantable(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): boolean {
+  return SUPERVISED_TASK_GRANTABLE_ACTION_KINDS.has(actionKind);
+}
+
 export interface SupervisedCodingApprovalIssueInput {
-  readonly binding: SupervisedCodingApprovalBinding;
+  readonly binding: SupervisedCodingApprovalBindingOnce;
+  readonly approvedByUserId: string;
+  readonly nowMs?: number | undefined;
+  readonly ttlMs?: number | undefined;
+}
+
+export interface SupervisedCodingTaskGrantIssueInput {
+  readonly binding: SupervisedCodingApprovalBindingTask;
   readonly approvedByUserId: string;
   readonly nowMs?: number | undefined;
   readonly ttlMs?: number | undefined;
@@ -45,14 +91,21 @@ export interface SupervisedCodingConsumedApproval {
   readonly approvedByUserId: string;
   readonly approvedAtMs: number;
   readonly expiresAtMs: number;
+  readonly grantScope: CodeTaskGrantScope;
 }
 
 export interface SupervisedCodingApprovalStore {
   issue(input: SupervisedCodingApprovalIssueInput): SupervisedCodingIssuedApproval;
+  /** Returns undefined when the action kind is structurally excluded from task grants. */
+  issueTaskGrant(
+    input: SupervisedCodingTaskGrantIssueInput,
+  ): SupervisedCodingIssuedApproval | undefined;
   consume(
     input: SupervisedCodingApprovalConsumeInput,
   ): SupervisedCodingConsumedApproval | undefined;
   invalidateRun(runId: string): void;
+  /** Drops every task grant whose bound policy version is not the supplied current version. */
+  invalidateStaleByPolicyVersion(currentPolicyVersion: string): void;
 }
 
 interface StoredApprovalRecord {
@@ -62,9 +115,13 @@ interface StoredApprovalRecord {
   readonly approvedByUserId: string;
   readonly approvedAtMs: number;
   readonly expiresAtMs: number;
+  readonly grantScope: CodeTaskGrantScope;
+  readonly policyVersion: string | undefined;
+  lastActivityMs: number;
 }
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_INACTIVITY_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RECORDS = 512;
 const OPAQUE_CLAIM_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
 const HEX_64_PATTERN = /^[0-9a-f]{64}$/u;
@@ -100,60 +157,103 @@ export function createInMemorySupervisedCodingApprovalStore(
   options: {
     readonly maxRecords?: number | undefined;
     readonly ttlMs?: number | undefined;
+    readonly inactivityMs?: number | undefined;
   } = {},
 ): SupervisedCodingApprovalStore {
   const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+  const inactivityMs = options.inactivityMs ?? DEFAULT_INACTIVITY_MS;
   const records = new Map<string, StoredApprovalRecord>();
+  const store = (
+    binding: SupervisedCodingApprovalBinding,
+    input: {
+      readonly approvedByUserId: string;
+      readonly nowMs?: number | undefined;
+      readonly ttlMs?: number | undefined;
+    },
+  ): SupervisedCodingIssuedApproval => persistApproval(records, maxRecords, binding, input, ttlMs);
   return {
-    issue(input): SupervisedCodingIssuedApproval {
-      const nowMs = input.nowMs ?? Date.now();
-      pruneExpired(records, nowMs, maxRecords);
-      const approvalId = `sca_${randomBytes(16).toString("hex")}`;
-      const approvalToken = randomBytes(32).toString("hex");
-      const tokenHash = hashToken(approvalToken);
-      const expiresAtMs = nowMs + (input.ttlMs ?? ttlMs);
-      records.set(approvalId, {
-        runId: input.binding.runId,
-        bindingHash: supervisedCodingApprovalBindingHash(input.binding),
-        tokenHash,
-        approvedByUserId: input.approvedByUserId,
-        approvedAtMs: nowMs,
-        expiresAtMs,
-      });
-      return {
-        approval: { approvalId, approvalToken },
-        approvalDigest: approvalDigest(input.binding, tokenHash),
-        approvedByUserId: input.approvedByUserId,
-        approvedAtMs: nowMs,
-        expiresAtMs,
-      };
+    issue: (input): SupervisedCodingIssuedApproval => store(input.binding, input),
+    issueTaskGrant: (input): SupervisedCodingIssuedApproval | undefined =>
+      isSupervisedActionTaskGrantable(input.binding.actionKind)
+        ? store(input.binding, input)
+        : undefined,
+    consume: (input): SupervisedCodingConsumedApproval | undefined =>
+      consumeApprovalRecord(records, maxRecords, inactivityMs, input),
+    invalidateRun: (runId): void => {
+      invalidateRun(records, runId);
     },
-    consume(input): SupervisedCodingConsumedApproval | undefined {
-      pruneExpired(records, input.nowMs, maxRecords);
-      return consumeApprovalRecord(records, input);
+    invalidateStaleByPolicyVersion: (version): void => {
+      invalidatePolicy(records, version);
     },
-    invalidateRun(runId: string): void {
-      for (const [approvalId, record] of records) {
-        if (record.runId === runId) records.delete(approvalId);
-      }
-    },
+  };
+}
+
+function persistApproval(
+  records: Map<string, StoredApprovalRecord>,
+  maxRecords: number,
+  binding: SupervisedCodingApprovalBinding,
+  input: {
+    readonly approvedByUserId: string;
+    readonly nowMs?: number | undefined;
+    readonly ttlMs?: number | undefined;
+  },
+  ttlMs: number,
+): SupervisedCodingIssuedApproval {
+  const nowMs = input.nowMs ?? Date.now();
+  pruneExpired(records, nowMs, maxRecords);
+  const approvalId = `sca_${randomBytes(16).toString("hex")}`;
+  const approvalToken = randomBytes(32).toString("hex");
+  const tokenHash = hashToken(approvalToken);
+  const expiresAtMs = nowMs + (input.ttlMs ?? ttlMs);
+  records.set(approvalId, {
+    runId: binding.runId,
+    bindingHash: supervisedCodingApprovalBindingHash(binding),
+    tokenHash,
+    approvedByUserId: input.approvedByUserId,
+    approvedAtMs: nowMs,
+    expiresAtMs,
+    grantScope: binding.grantScope,
+    policyVersion: binding.grantScope === "task" ? binding.policyVersion : undefined,
+    lastActivityMs: nowMs,
+  });
+  return {
+    approval: { approvalId, approvalToken },
+    approvalDigest: approvalDigest(binding, tokenHash),
+    approvedByUserId: input.approvedByUserId,
+    approvedAtMs: nowMs,
+    expiresAtMs,
   };
 }
 
 function consumeApprovalRecord(
   records: Map<string, StoredApprovalRecord>,
+  maxRecords: number,
+  inactivityMs: number,
   input: SupervisedCodingApprovalConsumeInput,
 ): SupervisedCodingConsumedApproval | undefined {
+  pruneExpired(records, input.nowMs, maxRecords);
   const record = records.get(input.approval.approvalId);
-  if (record === undefined) return undefined;
-  if (!approvalRecordMatches(record, input)) return undefined;
-  records.delete(input.approval.approvalId);
+  if (record === undefined || !approvalRecordMatches(record, input)) return undefined;
+  if (input.nowMs - record.lastActivityMs > inactivityMs) {
+    records.delete(input.approval.approvalId);
+    return undefined;
+  }
+  // A task grant may only ever cover a task-grantable action, revalidated on every reuse.
+  if (record.grantScope === "task" && !isSupervisedActionTaskGrantable(input.binding.actionKind)) {
+    records.delete(input.approval.approvalId);
+    return undefined;
+  }
+  // Fail closed to single-use: only an explicit reusable task grant survives a consume; a "once"
+  // grant, an absent scope, or any unexpected value is deleted on first use.
+  if (record.grantScope !== "task") records.delete(input.approval.approvalId);
+  else record.lastActivityMs = input.nowMs;
   return {
     approvalDigest: approvalDigest(input.binding, record.tokenHash),
     approvedByUserId: record.approvedByUserId,
     approvedAtMs: record.approvedAtMs,
     expiresAtMs: record.expiresAtMs,
+    grantScope: record.grantScope,
   };
 }
 
@@ -163,9 +263,27 @@ function approvalRecordMatches(
 ): boolean {
   return (
     record.expiresAtMs > input.nowMs &&
+    record.grantScope === input.binding.grantScope &&
     record.bindingHash === supervisedCodingApprovalBindingHash(input.binding) &&
     constantTimeHexEqual(record.tokenHash, hashToken(input.approval.approvalToken))
   );
+}
+
+function invalidateRun(records: Map<string, StoredApprovalRecord>, runId: string): void {
+  for (const [approvalId, record] of records) {
+    if (record.runId === runId) records.delete(approvalId);
+  }
+}
+
+function invalidatePolicy(
+  records: Map<string, StoredApprovalRecord>,
+  currentPolicyVersion: string,
+): void {
+  for (const [approvalId, record] of records) {
+    if (record.grantScope === "task" && record.policyVersion !== currentPolicyVersion) {
+      records.delete(approvalId);
+    }
+  }
 }
 
 function approvalDigest(binding: SupervisedCodingApprovalBinding, tokenHash: string): string {
