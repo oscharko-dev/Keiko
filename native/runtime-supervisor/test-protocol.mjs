@@ -23,6 +23,8 @@ function launchPacket(executable, cwd) {
   const environment = [
     ["KEIKO_ALPHA", "one"],
     ["KEIKO_BETA", "two"],
+    // Win32/CRT plumbing in the supervised child needs SystemRoot; nothing else leaks through.
+    ["SystemRoot", process.env.SystemRoot ?? "C:\\Windows"],
   ];
   const strings = [
     "0123456789abcdef0123456789abcdef",
@@ -110,8 +112,16 @@ async function response(stream) {
   };
 }
 
+/* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
+function hermeticWindowsEnv() {
+  return { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" };
+}
+
 async function qualifyWindows(helper, runtime, root) {
-  const child = spawn(helper, [], { env: {}, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"] });
+  const child = spawn(helper, [], {
+    env: hermeticWindowsEnv(),
+    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+  });
   const exited = new Promise((resolveExit, reject) => {
     child.once("error", reject);
     child.once("close", resolveExit);
@@ -120,7 +130,17 @@ async function qualifyWindows(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   child.stdio[3].write(launchPacket(runtime, root));
-  assert.deepEqual(await response(child.stdio[4]), { kind: 1, payload: Buffer.alloc(0) });
+  const acknowledgement = await Promise.race([
+    response(child.stdio[4]),
+    exited.then((code) => {
+      throw new Error(
+        `supervisor exited before launch acknowledgement: exit=${String(code)} stderrBytes=${String(
+          Buffer.concat(stderr).length,
+        )}`,
+      );
+    }),
+  ]);
+  assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
   const observation = await readBytes(child.stdout, 12);
   assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
   const rootProcess = processHandle(observation.readUInt32LE(4));
@@ -144,7 +164,10 @@ function processHandle(pid) {
 }
 
 async function assertControlEofFailsClosed(helper, runtime, root) {
-  const child = spawn(helper, [], { env: {}, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"] });
+  const child = spawn(helper, [], {
+    env: hermeticWindowsEnv(),
+    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+  });
   child.stdio[3].write(launchPacket(runtime, root));
   assert.equal((await response(child.stdio[4])).kind, 1);
   const observation = await readBytes(child.stdout, 12);
