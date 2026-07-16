@@ -226,6 +226,8 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   const closure = await explained("eof-probe closure", response(responses), exited, stderr);
   assert.equal(closure.kind, 3);
   await Promise.all(pids.map(waitForExit));
+  // The supervisor must have fully exited before cleanup unlinks its executable (Windows lock).
+  await exited;
 }
 
 async function waitForExit(pid) {
