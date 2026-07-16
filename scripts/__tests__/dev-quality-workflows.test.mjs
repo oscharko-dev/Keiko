@@ -36,6 +36,16 @@ describe("dev quality workflows", () => {
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
   });
 
+  it("checks out complete history before validating immutable editor evidence", () => {
+    const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const checkoutStep = uiJob?.match(
+      /- uses: actions\/checkout@[^\n]+\n[\s\S]*?(?=\n\s+- uses: actions\/setup-node)/u,
+    )?.[0];
+    expect(checkoutStep).toBeDefined();
+    expect(checkoutStep).toContain("fetch-depth: 0");
+    expect(uiJob).toContain("npm run check:perf-evidence:editor");
+  });
+
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
     const performanceStep = uiJob?.match(

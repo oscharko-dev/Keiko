@@ -263,7 +263,7 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
   it.each<[string, unknown]>([
     ["absolute-rooted glob", ["/etc/hosts"]],
     ["backslash in glob", ["src\\bad.ts"]],
-    ["null byte in glob", ["src/bad .ts"]],
+    ["null byte in glob", ["src/bad\0.ts"]],
     ["current-directory segment", ["src/./file.ts"]],
     ["include is not an array", "src/**/*.ts"],
   ])("rejects unsafe include pattern: %s", (_label, include) => {
