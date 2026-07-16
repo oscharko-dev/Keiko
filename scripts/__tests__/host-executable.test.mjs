@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveHostExecutable } from "../lib/host-executable.mjs";
+import {
+  resolveHostExecutable,
+  shellCommandForTrustedExecutable,
+} from "../lib/host-executable.mjs";
 
 const roots = [];
 
@@ -25,6 +28,15 @@ afterEach(() => {
 });
 
 describe("resolveHostExecutable", () => {
+  it("quotes a trusted Windows shell executable without changing POSIX commands", () => {
+    expect(shellCommandForTrustedExecutable("C:\\Program Files\\nodejs\\npm.cmd", "win32")).toBe(
+      '"C:\\Program Files\\nodejs\\npm.cmd"',
+    );
+    expect(shellCommandForTrustedExecutable("/usr/local/bin/npm", "linux")).toBe(
+      "/usr/local/bin/npm",
+    );
+  });
+
   it.skipIf(process.platform === "win32")(
     "returns the real absolute path from a trusted directory outside the workspace",
     () => {

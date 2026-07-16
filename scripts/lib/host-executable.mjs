@@ -97,6 +97,10 @@ export function resolveHostExecutable(
   throw new Error(`trusted host executable is unavailable: ${command}`);
 }
 
+export function shellCommandForTrustedExecutable(executable, platform = process.platform) {
+  return platform === "win32" ? `"${executable}"` : executable;
+}
+
 function resolveFromPath(path, names, workspaceRoot, platform, groupIds, trustedRoots) {
   for (const entry of (path ?? "").split(delimiter)) {
     const resolved = resolveFromEntry(

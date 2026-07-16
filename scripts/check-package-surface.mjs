@@ -12,7 +12,7 @@ import ts from "typescript";
 // (@oscharko-dev/keiko-server) — the BFF folds the hashes into script-src at request time, and
 // this script audits the packed UI bundle against the same set.
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { findForbiddenPaths } from "./package-surface-rules.mjs";
 // Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). The editor package is bundle-excluded
 // from this published tarball (see EXPECTED_BUNDLE_EXCLUSIONS below), so its footprint is enforced
@@ -40,17 +40,15 @@ function packFiles() {
   delete env.npm_package_json;
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
   // prepack on `npm pack`); the build steps already ran before this check in the prepack chain.
-  // SECURITY-SHELL-OK: on Windows npm is npm.cmd, which spawnSync only launches through a shell;
-  // the argv is entirely static literals (no user/network input), so there is no injection surface.
-  const result = spawnSync(
-    resolveHostExecutable("npm"),
-    ["pack", "--dry-run", "--json", "--ignore-scripts"],
-    {
-      encoding: "utf8",
-      env,
-      shell: process.platform === "win32",
-    },
-  );
+  // SECURITY-SHELL-OK: on Windows npm is npm.cmd, which spawnSync only launches through a shell.
+  // Node requires a quoted command when that trusted absolute path contains spaces; argv remains
+  // entirely static literals (no user/network input), so there is no injection surface.
+  const npmExecutable = shellCommandForTrustedExecutable(resolveHostExecutable("npm"));
+  const result = spawnSync(npmExecutable, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    encoding: "utf8",
+    env,
+    shell: process.platform === "win32",
+  });
   if (result.status !== 0) {
     throw new Error(`npm pack --dry-run failed: ${result.stderr}`);
   }
