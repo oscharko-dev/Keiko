@@ -30,7 +30,7 @@ import {
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
-const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
+export const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
 const SHA_256 = /^[0-9a-f]{64}$/u;
 const REVISIONS = ["baseline", "candidate"];
@@ -342,7 +342,6 @@ function webServerLauncherSource(plan) {
     "mkdirSync(plan.stateDir, { recursive: true, mode: 0o700 });",
     "copyFileSync(plan.fixtureConfigPath, plan.runtimeConfigPath);",
     'for (const script of ["build", "prepare:bin", "build:ui"]) {',
-    // SECURITY-SHELL-OK: generated launcher source text; the emitted spawn pins shell:false.
     '  execFileSync("npm", ["run", script], {',
     "    cwd: plan.root,",
     "    env: process.env,",
@@ -362,7 +361,6 @@ function webServerLauncherSource(plan) {
     '    "--ui-db",',
     "    plan.uiDbPath,",
     "  ],",
-    // SECURITY-SHELL-OK: generated launcher source text; the emitted spawn pins shell:false.
     '  { cwd: plan.root, env: process.env, shell: false, stdio: "inherit" },',
     ");",
     'for (const signal of ["SIGINT", "SIGTERM"]) {',

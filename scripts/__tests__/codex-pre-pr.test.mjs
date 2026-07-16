@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -15,6 +15,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run check:gitar-config",
   "npm run check:ui-i18n",
   "npm run check:sonar-scope",
+  "npm run check:shell-spawn-guardrails",
   "npm run check:native:macos",
   "npm run typecheck --workspace @oscharko-dev/keiko-ui",
   "npm run lint --workspace @oscharko-dev/keiko-ui",
@@ -36,6 +37,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run check:package-surface",
   "npm run check:editor-bundle-size -- --require-static-export",
   "npm run test:e2e:editor-debugging-2348",
+  "npm run smoke:install",
   "npm run test:e2e:smoke",
 ];
 
@@ -128,7 +130,7 @@ describe("codex pre-PR gate", () => {
 
       expect(report.summary.failed).toBe(0);
       expect(report.summary.planned).toBeGreaterThan(0);
-      expect(report.summary.skipped).toBe(2);
+      expect(report.summary.skipped).toBe(3);
       expect(persisted.results.map((result) => result.id)).toEqual(
         createPrePrSteps({ env: {}, platform: "darwin" }).map((step) => step.id),
       );
@@ -154,12 +156,74 @@ describe("codex pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ failed: 0, passed: 26, planned: 0, skipped: 2 });
+      expect(report.summary).toEqual({ cached: 0, failed: 0, passed: 27, planned: 0, skipped: 3 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);
     } finally {
       await rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("caches unchanged scoped steps and reruns them when their inputs change", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-cache-"));
+    const repo = join(workspace, "repo");
+    const binDir = join(workspace, "bin");
+    const reportPath = join(workspace, "report.json");
+    const logPath = join(workspace, "npm.log");
+    const gitEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+    };
+    const git = (...args) => spawnSync("git", args, { cwd: repo, env: gitEnv, stdio: "ignore" });
+
+    try {
+      await installFakeNpm(binDir);
+      await mkdir(join(repo, "packages"), { recursive: true });
+      await mkdir(join(repo, "dist", "ui", "static"), { recursive: true });
+      await writeFile(join(repo, "packages", "module.ts"), "export const value = 1;\n", "utf8");
+      git("init", "--quiet");
+      git("add", "packages/module.ts");
+      git(
+        "-c",
+        "user.name=Keiko Test",
+        "-c",
+        "user.email=test@invalid",
+        "commit",
+        "-m",
+        "f",
+        "--quiet",
+      );
+      const env = { KEIKO_FAKE_NPM_LOG: logPath, PATH: pathWithFakeNpm(binDir) };
+
+      const first = await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      expect(first.summary.cached).toBe(0);
+
+      const second = await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      const statusOf = (id) => second.results.find((result) => result.id === id)?.status;
+      expect(statusOf("typecheck")).toBe("cached");
+      expect(statusOf("unit-tests")).toBe("cached");
+      expect(statusOf("e2e-smoke")).toBe("cached");
+      expect(second.summary.cached).toBeGreaterThan(0);
+
+      await writeFile(join(repo, "packages", "module.ts"), "export const value = 2;\n", "utf8");
+      const third = await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      const thirdStatus = (id) => third.results.find((result) => result.id === id)?.status;
+      expect(thirdStatus("typecheck")).toBe("passed");
+      expect(thirdStatus("build")).toBe("passed");
+      expect(thirdStatus("adr-index")).toBe("cached");
+
+      const fourth = await runPrePrGate({
+        cwd: repo,
+        env,
+        noCache: true,
+        platform: "darwin",
+        reportPath,
+      });
+      expect(fourth.summary.cached).toBe(0);
+    } finally {
+      await rm(workspace, { force: true, recursive: true });
     }
   });
 
@@ -182,7 +246,7 @@ describe("codex pre-PR gate", () => {
         reportPath,
       });
 
-      expect(report.summary).toEqual({ failed: 1, passed: 1, planned: 0, skipped: 0 });
+      expect(report.summary).toEqual({ cached: 0, failed: 1, passed: 1, planned: 0, skipped: 0 });
       expect(report.results.map((result) => result.id)).toEqual(["typecheck", "lint"]);
       expect(report.results.at(-1)?.exitCode).toBe(23);
     } finally {
