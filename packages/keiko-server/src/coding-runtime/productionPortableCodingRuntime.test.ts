@@ -133,8 +133,10 @@ function sidecarFixture(): {
     "opencode.cmd": "@echo off\r\n",
   } as const;
   const payload = createHash("sha256");
+  // The staged-payload inspector orders files with localeCompare; the fixture digest must use the
+  // same comparator or ICU hosts order "evidence/…" before "LICENSE.txt" and the digest drifts.
   for (const [path, bytes] of Object.entries(files).sort(([left], [right]) =>
-    left < right ? -1 : left > right ? 1 : 0,
+    left.localeCompare(right),
   )) {
     payload.update(`${path}\0${sha256(bytes)}\0`);
   }

@@ -59,6 +59,7 @@ async function reapReceipt(runId: string, treeBindingId: string): Promise<Runtim
   });
   const launched = supervisor.spawnOwnedTree({
     runId,
+    recoveryHandle: "f".repeat(32),
     treeBindingId,
     executable: "/managed/runtime",
     args: [],
@@ -343,7 +344,7 @@ describe("CodingRuntimeAuthorityService", () => {
 
     expect(
       capabilities.resolve({
-        capability: minted.runtimeCapability,
+        capability: minted.toolFacadeCapability,
         ...capabilityBinding(minted.authorityRef),
         nowMs: Date.parse(NOW),
       }),
@@ -351,7 +352,7 @@ describe("CodingRuntimeAuthorityService", () => {
     const delegated = resolve(authority, minted.authorityRef, facts(), "private-capability");
     expect(minted.treeBindingId).toMatch(/^[0-9a-f]{64}$/u);
     expect(JSON.stringify({ state: authority.state(), delegated })).not.toContain(
-      minted.runtimeCapability,
+      minted.toolFacadeCapability,
     );
     expect(JSON.stringify({ state: authority.state(), delegated })).not.toContain(
       minted.treeBindingId,
@@ -426,7 +427,7 @@ describe("CodingRuntimeAuthorityService", () => {
 
     expect(
       capabilities.resolve({
-        capability: minted.runtimeCapability,
+        capability: minted.toolFacadeCapability,
         ...capabilityBinding(minted.authorityRef),
         adapterKind: "codex-cli-adapter",
         nowMs: Date.parse(NOW),
@@ -450,7 +451,7 @@ describe("CodingRuntimeAuthorityService", () => {
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
     const input = {
-      capability: minted.runtimeCapability,
+      capability: minted.toolFacadeCapability,
       adapterKind: "model-gateway-sidecar" as const,
       liveFacts: facts(),
       delegationId: "capability-action-1",
@@ -524,7 +525,7 @@ describe("CodingRuntimeAuthorityService", () => {
 
     expect(
       authority.revalidateCapabilityForMutation({
-        capability: minted.runtimeCapability,
+        capability: minted.toolFacadeCapability,
         adapterKind: "model-gateway-sidecar",
         liveFacts: facts(),
         workspaceRoot: ROOT,

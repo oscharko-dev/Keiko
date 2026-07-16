@@ -21,9 +21,10 @@ const FACTS = {
   modelProfileId: "profile-1",
 } as const;
 
-function claimAt(nowMs: number, requestId = FACTS.requestId): ReturnType<
-  typeof codingRuntimeStartConfirmationClaim
-> {
+function claimAt(
+  nowMs: number,
+  requestId: string = FACTS.requestId,
+): ReturnType<typeof codingRuntimeStartConfirmationClaim> {
   return codingRuntimeStartConfirmationClaim({ ...FACTS, requestId }, nowMs);
 }
 

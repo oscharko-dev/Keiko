@@ -13,6 +13,7 @@ import {
 function launchRequest(platform: "darwin" | "win32" = "win32"): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-1",
+    recoveryHandle: "d".repeat(32),
     treeBindingId: "c".repeat(64),
     executable: "/managed/runtime",
     args: ["--stdio"],

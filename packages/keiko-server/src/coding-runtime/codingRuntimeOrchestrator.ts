@@ -65,7 +65,12 @@ export class CodingRuntimeOrchestrator {
 
   constructor(private readonly deps: CodingRuntimeOrchestratorDeps) {
     this.now = deps.now ?? ((): Date => new Date());
-    this.newRunId = deps.newRunId ?? ((): string => randomUUID());
+    // The run id becomes `authority.runId` inside the minted Authority Envelope, whose contract
+    // admits only content-free evidence-safe labels; a raw UUID's hex segments are rejected there,
+    // so the default identity is the approved `run-<decimal>` projection of the UUID's 128 bits.
+    this.newRunId =
+      deps.newRunId ??
+      ((): string => `run-${BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString(10)}`);
     this.projection = new CodingRuntimeOrchestratorState({
       eventHub: deps.eventHub,
       now: this.now,
@@ -427,9 +432,17 @@ export class CodingRuntimeOrchestrator {
     } catch {
       result = undefined;
     }
-    return result?.ok
-      ? this.transitionActive(kind === "stop" ? "cancelled" : "taken-over")
-      : this.transitionActive("recovery-required", "recovery-required");
+    if (result?.ok) {
+      // The manager emits `runtime-stopped` while its stop settles; when that ingest already
+      // completed the terminal transition, report the settled snapshot instead of failing a stop
+      // that provably succeeded. Any non-terminal outcome still falls through fail-closed.
+      const settled = this.deps.snapshots.get(runId);
+      if (this.activeRunId === undefined && settled !== undefined && terminal.has(settled.state)) {
+        return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
+      }
+      return this.transitionActive(kind === "stop" ? "cancelled" : "taken-over");
+    }
+    return this.transitionActive("recovery-required", "recovery-required");
   }
   private transitionActive(
     state: CodingWorkbenchRuntimeStateName,

@@ -76,8 +76,6 @@ export type CodingRuntimeMintResult =
   | {
       readonly ok: true;
       readonly authorityRef: CodingRuntimeAuthorityRef;
-      /** Server-private runtime-to-BFF secret; never forward to browser-safe contracts or evidence. */
-      readonly runtimeCapability: string;
       /** Server-private audience-separated Model Gateway secret. */
       readonly modelGatewayCapability: string;
       /** Server-private audience-separated governed-tool secret. */
@@ -221,7 +219,6 @@ export class CodingRuntimeAuthorityService {
     return {
       ok: true,
       authorityRef: registered.authorityRef,
-      runtimeCapability: capabilities.toolFacadeCapability,
       modelGatewayCapability: capabilities.modelGatewayCapability,
       toolFacadeCapability: capabilities.toolFacadeCapability,
       effectiveMode: envelope.authority.effectiveMode,
