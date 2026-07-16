@@ -11,7 +11,7 @@ import { createServer } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   bffProcessArgs,
@@ -21,6 +21,7 @@ import {
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
   normalizeProxyRequestPath,
+  proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
 } from "../dev-runner.mjs";
@@ -47,6 +48,15 @@ describe("normalizeProxyRequestPath", () => {
     expect(normalizeProxyRequestPath(undefined)).toBeUndefined();
     expect(normalizeProxyRequestPath(null)).toBeUndefined();
     expect(normalizeProxyRequestPath(42)).toBeUndefined();
+  });
+
+  it("returns a bounded 400 before contacting an upstream for an invalid request target", () => {
+    const response = { end: vi.fn(), writeHead: vi.fn() };
+    proxyHttp({ url: "*" }, response, 3000);
+    expect(response.writeHead).toHaveBeenCalledWith(400, {
+      "content-type": "text/plain; charset=utf-8",
+    });
+    expect(response.end).toHaveBeenCalledWith("Invalid development proxy request path.");
   });
 });
 

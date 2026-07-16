@@ -34,6 +34,16 @@ describe.skipIf(process.platform === "win32")("resolveGitExecutable", () => {
     expect(resolveGitExecutable({ PATH: bin }, workspace)).toBe(executable);
   });
 
+  it("resolves a PATHEXT executable under simulated Windows trust semantics", () => {
+    const bin = temporary("keiko-git-executable-bin-");
+    const executable = join(bin, "git.exe");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    chmodSync(bin, 0o777);
+    expect(resolveGitExecutable({ PATH: bin, PATHEXT: ".EXE" }, workspace, "win32")).toBe(
+      executable,
+    );
+  });
+
   it("rejects a workspace-contained executable", () => {
     const bin = join(workspace, "bin");
     mkdirSync(bin);

@@ -38,7 +38,13 @@ describe("secure browser randomness", () => {
 
   it("fails closed when secure browser randomness is unavailable", () => {
     vi.stubGlobal("crypto", undefined);
-    expect(() => secureRandomId("request")).toThrow("secure browser randomness is unavailable");
+    expect(() => secureRandomId("request")).toThrow(TypeError);
+  });
+
+  it("fails closed when browser crypto lacks getRandomValues", () => {
+    vi.stubGlobal("crypto", {});
+    expect(() => secureRandomId("request")).toThrow(TypeError);
+    expect(() => secureRandomInt(10)).toThrow(TypeError);
   });
 
   it.each([0, -1, 1.5, 0x1_0000_0001])("rejects invalid upper bound %s", (maximum) => {

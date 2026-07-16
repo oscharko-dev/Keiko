@@ -1,15 +1,15 @@
-const UINT32_RANGE = 0x1_0000_0000;
+const UINT32_RANGE = 2 ** 32;
 const RANDOM_ID_BYTES = 16;
 
 function secureCrypto(): Crypto {
   const source = globalThis.crypto;
-  if (source === undefined) throw new Error("secure browser randomness is unavailable");
+  if (source === undefined) throw new TypeError("secure browser randomness is unavailable");
   return source;
 }
 
 function randomHex(source: Crypto): string {
   if (typeof source.getRandomValues !== "function") {
-    throw new Error("secure browser randomness is unavailable");
+    throw new TypeError("secure browser randomness is unavailable");
   }
   const bytes = new Uint8Array(RANDOM_ID_BYTES);
   source.getRandomValues(bytes);
@@ -28,7 +28,7 @@ export function secureRandomInt(maxExclusive: number): number {
   }
   const source = secureCrypto();
   if (typeof source.getRandomValues !== "function") {
-    throw new Error("secure browser randomness is unavailable");
+    throw new TypeError("secure browser randomness is unavailable");
   }
   const unbiasedLimit = Math.floor(UINT32_RANGE / maxExclusive) * maxExclusive;
   const values = new Uint32Array(1);
