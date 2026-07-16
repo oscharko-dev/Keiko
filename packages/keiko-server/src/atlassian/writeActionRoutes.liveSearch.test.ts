@@ -70,7 +70,7 @@ const MODES: readonly CodingWorkbenchMode[] = [
 // The ADR-0128 D4 search-issues-live row, copied verbatim (scope present).
 const D4_LIVE_ROW: Readonly<Record<CodingWorkbenchMode, "allowed" | "review-required">> = {
   "governed-assist": "review-required",
-  "supervised-coding": "allowed",
+  "supervised-coding": "review-required",
   "autonomous-delivery": "allowed",
 };
 

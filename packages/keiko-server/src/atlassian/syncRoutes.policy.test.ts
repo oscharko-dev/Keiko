@@ -313,46 +313,48 @@ describe("sync start — human-triggered path (ADR-0128 D5)", () => {
 });
 
 describe("sync start — agent-initiated envelope path (D4 rows 1-2 at route level)", () => {
-  it("parks a pending approval in Ask for approval: the job does NOT start and zero fetches happen", async () => {
-    const { deps, credential, counter } = harnessFor("confluence", confluencePort());
-    const authority = registerEnvelope("governed-assist", READ_SCOPES);
-    const result = await handleStartAtlassianConnectorSync(
-      ctxFor({ authRef: credential.authRef }, { spaceKeys: ["ENG"], authority }),
-      withCeiling(deps, "governed-assist"),
-    );
-    expect(result.status).toBe(202);
-    const body = result.body as {
-      disposition: string;
-      approval: AtlassianConnectorPendingApproval;
-    };
-    expect(body.disposition).toBe("review-required");
-    expect(body.approval.actionType).toBe("sync-space");
-    expect(body.approval.reviewReason).toBe("mode-approval-required");
-    expect(counter.count).toBe(0);
-    expect(atlassianSyncJobRegistry.listActivity(body.approval.connectorId)).toHaveLength(1);
-  });
-
+  // Epic #2384: supervised-coding internet actions are approval-required at every risk, so the
+  // low-risk sync now parks in BOTH sub-Full-access modes instead of starting under supervised.
   it.each<{ mode: CodingWorkbenchMode }>([
+    { mode: "governed-assist" },
     { mode: "supervised-coding" },
-    { mode: "autonomous-delivery" },
   ])(
-    "starts the confluence job under $mode and records the envelope-allowed disposition",
+    "parks a pending approval under $mode: the job does NOT start and zero fetches happen",
     async ({ mode }) => {
-      const { deps, credential } = harnessFor("confluence", confluencePort());
+      const { deps, credential, counter } = harnessFor("confluence", confluencePort());
       const authority = registerEnvelope(mode, READ_SCOPES);
       const result = await handleStartAtlassianConnectorSync(
         ctxFor({ authRef: credential.authRef }, { spaceKeys: ["ENG"], authority }),
         withCeiling(deps, mode),
       );
       expect(result.status).toBe(202);
-      const { job } = result.body as { job: AtlassianSyncJobState };
-      const terminal = await awaitTerminal(job.jobId);
-      expect(terminal.status).toBe("succeeded");
-      const activity = atlassianSyncJobRegistry.listActivity(job.connectorId);
-      expect(activity[0]).toMatchObject({ disposition: "allowed", outcome: "succeeded" });
-      expect((activity[0] as { reasonCode?: string }).reasonCode).toBeUndefined();
+      const body = result.body as {
+        disposition: string;
+        approval: AtlassianConnectorPendingApproval;
+      };
+      expect(body.disposition).toBe("review-required");
+      expect(body.approval.actionType).toBe("sync-space");
+      expect(body.approval.reviewReason).toBe("mode-approval-required");
+      expect(counter.count).toBe(0);
+      expect(atlassianSyncJobRegistry.listActivity(body.approval.connectorId)).toHaveLength(1);
     },
   );
+
+  it("starts the confluence job under Full access and records the envelope-allowed disposition", async () => {
+    const { deps, credential } = harnessFor("confluence", confluencePort());
+    const authority = registerEnvelope("autonomous-delivery", READ_SCOPES);
+    const result = await handleStartAtlassianConnectorSync(
+      ctxFor({ authRef: credential.authRef }, { spaceKeys: ["ENG"], authority }),
+      withCeiling(deps, "autonomous-delivery"),
+    );
+    expect(result.status).toBe(202);
+    const { job } = result.body as { job: AtlassianSyncJobState };
+    const terminal = await awaitTerminal(job.jobId);
+    expect(terminal.status).toBe("succeeded");
+    const activity = atlassianSyncJobRegistry.listActivity(job.connectorId);
+    expect(activity[0]).toMatchObject({ disposition: "allowed", outcome: "succeeded" });
+    expect((activity[0] as { reasonCode?: string }).reasonCode).toBeUndefined();
+  });
 
   it("starts the jira sync-project job inside a Full-access envelope", async () => {
     const { deps, credential } = harnessFor("jira", jiraPort());

@@ -50,7 +50,7 @@ import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSess
 import {
   _resetEditorAgentStateForTests,
   _setEditorAgentPatchWriterForTests,
-  handleEditorAgentActions,
+  handleEditorAgentActions as handleEditorAgentActionsRoute,
   handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
@@ -62,6 +62,24 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
+
+// Epic #2384: governed-assist now gates workspace-contained mutations, so the action-mechanics
+// harness runs at the Full-access deployment ceiling. Explicit mode-policy tests keep exercising
+// stricter modes through the envelope's requestedMode; deps callers may still override the ceiling.
+function handleEditorAgentActions(
+  routeContext: RouteContext,
+  deps?: Parameters<typeof handleEditorAgentActionsRoute>[1],
+): ReturnType<typeof handleEditorAgentActionsRoute> {
+  const base = {
+    store: createInMemoryUiStore(),
+    redactor: buildRedactor({}),
+    env: {},
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+  };
+  return handleEditorAgentActionsRoute(routeContext, { ...base, ...deps } as unknown as Parameters<
+    typeof handleEditorAgentActionsRoute
+  >[1]);
+}
 
 const HASH = "a".repeat(64);
 const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
@@ -124,7 +142,9 @@ function sha256(content: string): string {
 function authorityEnvelope(
   workspaceRoot: string,
   requestedMode: CodingWorkbenchMode = "autonomous-delivery",
-  deploymentCeiling: CodingWorkbenchMode = "governed-assist",
+  // Epic #2384: governed-assist now gates workspace-contained mutations, so the action-mechanics
+  // harness runs at the Full-access ceiling; mode-policy tests pass explicit modes instead.
+  deploymentCeiling: CodingWorkbenchMode = "autonomous-delivery",
 ): CodingWorkbenchAuthorityEnvelope {
   return {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
@@ -176,7 +196,7 @@ function authorityEnvelope(
 
 function authorityRouteRequest(
   envelope: CodingWorkbenchAuthorityEnvelope,
-  deploymentCeiling: CodingWorkbenchMode = "governed-assist",
+  deploymentCeiling: CodingWorkbenchMode = "autonomous-delivery",
 ): {
   readonly body: Record<string, unknown>;
   readonly deps: Parameters<typeof handleEditorAgentAuthority>[1];
@@ -201,7 +221,7 @@ function registerTestAuthority(
 ): void {
   const registered = editorAgentAuthorityRegistry.register(
     authorityEnvelope(workspaceRoot, requestedMode),
-    "governed-assist",
+    "autonomous-delivery",
     new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("expected editor authority registration");
@@ -2398,7 +2418,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       const expiring = authorityEnvelope(tmpDir);
       const registered = editorAgentAuthorityRegistry.register(
         { ...expiring, expiresAt: "2026-07-10T00:00:01.000Z" },
-        "governed-assist",
+        "autonomous-delivery",
         new Date().toISOString(),
       );
       if (!registered.ok) throw new Error("expected expiring authority registration");
@@ -3612,7 +3632,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     const expiring = authorityEnvelope(workspaceRoot);
     const registered = editorAgentAuthorityRegistry.register(
       { ...expiring, expiresAt: "2026-07-10T00:00:01.000Z" },
-      "governed-assist",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!registered.ok) throw new Error("expected expiring authority registration");
@@ -4126,7 +4146,7 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
         ...limited,
         budget: { ...limited.budget, maxToolCalls: 1 },
       },
-      "governed-assist",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!registered.ok) throw new Error("expected limited authority registration");
@@ -4151,7 +4171,7 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
     const limited = authorityEnvelope("/repo");
     const registered = editorAgentAuthorityRegistry.register(
       { ...limited, budget: { ...limited.budget, maxToolCalls: 1 } },
-      "governed-assist",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!registered.ok) throw new Error("expected limited authority registration");
@@ -4183,7 +4203,7 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
         ...limited,
         budget: { ...limited.budget, maxPatchBytes: 3 },
       },
-      "governed-assist",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!registered.ok) throw new Error("expected limited authority registration");
@@ -4262,7 +4282,9 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
       expect(replay.status).toBe(200);
       expect(forged.status).toBe(403);
       expect(unwrapped.status).toBe(403);
-      expect(auditRecords()[0]).toMatchObject({ disposition: "allowed", origin: "chat" });
+      // Epic #2384: the server-derived local-bridge authority stays governed-assist, where a
+      // contained patch is now approval-required — it queues for browser review, not as allowed.
+      expect(auditRecords()[0]).toMatchObject({ disposition: "review-required", origin: "chat" });
       expect(observer.frames()).toContain("editor-agent:action");
       expect(observer.frames()).not.toContain("authorityRef");
       expect(lastEmittedAction(observer.frames()).requiresReview).toBe(true);

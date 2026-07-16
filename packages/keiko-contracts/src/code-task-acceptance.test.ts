@@ -93,7 +93,7 @@ describe("validateCodeTaskAcceptanceContribution", () => {
   });
 
   it("rejects malformed scenarios across the input space", () => {
-    const base = validContribution().scenarios[0] as Record<string, unknown>;
+    const base = validContribution().scenarios[0] as unknown as Record<string, unknown>;
     for (const patch of [
       { scenarioId: "Bad_Upper" },
       { scenarioId: "x" },
@@ -116,7 +116,7 @@ describe("validateCodeTaskAcceptanceContribution", () => {
   });
 
   it("rejects malformed salvage rows", () => {
-    const base = validContribution().salvage[0] as Record<string, unknown>;
+    const base = validContribution().salvage[0] as unknown as Record<string, unknown>;
     for (const patch of [
       { sourceBranch: "" },
       { sourceBranch: `token ${"x".repeat(10)}` },
