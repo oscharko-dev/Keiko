@@ -172,6 +172,20 @@ describe("SupervisedCodingApprovalStore (task grants)", () => {
     ).toBeUndefined();
   });
 
+  // Gitar review on #2469: the sliding idle window is a TASK-grant concept. A single-use "once"
+  // approval has no activity to slide on — it must stay consumable until its hard TTL.
+  it("keeps an idle once approval consumable until its hard TTL", () => {
+    const store = createInMemorySupervisedCodingApprovalStore({ inactivityMs: 10, ttlMs: 10_000 });
+    const once = binding("run-1", "request-1");
+    const issued = store.issue({ binding: once, approvedByUserId: "u", nowMs: 1 });
+    // Presented well past the idle window but inside the TTL: still a valid single use.
+    expect(store.consume({ approval: issued.approval, binding: once, nowMs: 5_000 })).toBeDefined();
+    const expired = store.issue({ binding: once, approvedByUserId: "u", nowMs: 1 });
+    expect(
+      store.consume({ approval: expired.approval, binding: once, nowMs: 10_002 }),
+    ).toBeUndefined();
+  });
+
   it("drops task grants bound to a superseded policy version", () => {
     const store = createInMemorySupervisedCodingApprovalStore();
     const grant = store.issueTaskGrant({ binding: taskBinding(), approvedByUserId: "u", nowMs: 1 });

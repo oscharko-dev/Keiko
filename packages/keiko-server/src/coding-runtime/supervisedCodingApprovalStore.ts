@@ -237,7 +237,9 @@ function consumeApprovalRecord(
   pruneExpired(records, input.nowMs, maxRecords);
   const record = records.get(input.approval.approvalId);
   if (record === undefined || !approvalRecordMatches(record, input)) return undefined;
-  if (input.nowMs - record.lastActivityMs > inactivityMs) {
+  // The sliding idle window invalidates only reusable TASK grants: a single-use "once" approval
+  // has no activity to slide on and stays consumable until its hard TTL (Gitar review, #2469).
+  if (record.grantScope === "task" && input.nowMs - record.lastActivityMs > inactivityMs) {
     records.delete(input.approval.approvalId);
     return undefined;
   }
