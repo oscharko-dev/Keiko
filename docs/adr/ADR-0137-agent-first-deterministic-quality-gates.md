@@ -55,10 +55,13 @@ assertions (caps, counts, markers, redaction), and validation of committed evide
 Wall-clock assertions (latency percentiles, long-task ceilings, memory-over-time) are enforced
 only in controlled measurement contexts: the official D12 producer environment and the scheduled
 performance workflow, both of which set `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`. In required-runner
-context the same specs still *record* their measurements into evidence output, so regressions stay
-visible, but a shared-runner scheduling spike can no longer fail an integration. The budgets
-themselves are unchanged and continue to be enforced deterministically at PR time through the
-committed D12 evidence document, which was measured under the controlled environment.
+context the same specs still verify their bounded-cap composition (byte, marker, retained-entry,
+and variable caps) but reduce the repeated latency-sampling loops that exist only to feed those
+percentiles — a full ten-sample stop/flood loop can exceed the E2E timeout on a shared two-core
+runner even when nothing regressed. A shared-runner scheduling spike can therefore neither fail a
+budget assertion nor time out an integration. The budgets themselves are unchanged and continue to
+be enforced deterministically at PR time through the committed D12 evidence document, which was
+measured under the controlled environment with the full sample count.
 
 ### D2 — Performance evidence binds the measured product, not the repository
 
