@@ -937,6 +937,22 @@ describe("production debug capsule launcher", () => {
     await expect(handle.terminateContainment("SIGKILL")).resolves.toBeUndefined();
   });
 
+  it("terminates without reading the process table when no descendant was observed", async () => {
+    const current = fixture();
+    const child = fakeChild();
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const launcher = createProductionDebugCapsuleLauncher(
+      dependencies({
+        procRoot: join(temporary(), "missing-proc"),
+        spawnProcess: spawnReturning(child.child),
+      }),
+    );
+    const handle = await launcher(current.envelope, new AbortController().signal);
+
+    await expect(handle.terminateContainment("SIGKILL")).resolves.toBeUndefined();
+    expect(kill).toHaveBeenCalledWith(-42_424, "SIGKILL");
+  });
+
   it.each([
     ["pid", { pid: undefined }],
     ["stdin", { stdin: null }],

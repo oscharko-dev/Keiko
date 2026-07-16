@@ -385,6 +385,7 @@ async function awaitObservedLinuxDescendants(
   tracker: LinuxScopeTracker,
   procRoot: string,
 ): Promise<void> {
+  if (tracker.observedDescendants.size === 0) return;
   for (let attempt = 0; attempt < DESCENDANT_SETTLE_ATTEMPTS; attempt += 1) {
     const remaining = remainingObservedDescendants(tracker, readProcessTable(procRoot));
     if (remaining === 0) return;
