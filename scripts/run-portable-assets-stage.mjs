@@ -8,6 +8,7 @@ import {
   loadPortableRuntimeApprovals,
 } from "./portable-runtime-approvals.mjs";
 import { PORTABLE_TARGET_NAMES } from "./portable-runtime.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -52,7 +53,10 @@ export function collectSidecarSpecPaths(payloadRoot, target) {
 function resolveCommitSha(env) {
   const fromEnv = env.GITHUB_SHA;
   if (typeof fromEnv === "string" && COMMIT_PATTERN.test(fromEnv)) return fromEnv;
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+  const result = spawnSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
   const sha = result.stdout?.trim() ?? "";
   if (result.status !== 0 || !COMMIT_PATTERN.test(sha)) fail("cannot resolve commit sha");
   return sha;

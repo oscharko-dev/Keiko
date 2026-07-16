@@ -1920,7 +1920,7 @@ describe("ingestInlineSources — strip-before-redact ordering in capsule doc te
   // which the pattern matches and redacts.
   const GITHUB_PREFIX = "ghp_";
   const SUFFIX = "AbCdEfGhIjKlMnOpQrSt"; // exactly 20 alphanum chars → matches [A-Za-z0-9]{20,}
-  const ZW = "​"; // U+200B zero-width space — stripped by stripUnsafeFormatChars
+  const ZW = String.fromCodePoint(0x200b); // U+200B zero-width space
   const SPLIT_TOKEN = GITHUB_PREFIX + ZW + SUFFIX; // "ghp_\u200bAbCdEfGhIjKlMnOpQrSt"
   const REASSEMBLED = GITHUB_PREFIX + SUFFIX; // what the token looks like after ZW removal
 

@@ -11,7 +11,7 @@ import { createServer } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   bffProcessArgs,
@@ -20,9 +20,45 @@ import {
   copyHeadersSafely,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
+  normalizeProxyRequestPath,
+  proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
 } from "../dev-runner.mjs";
+
+describe("normalizeProxyRequestPath", () => {
+  it("accepts origin-form paths without changing their encoded query", () => {
+    expect(normalizeProxyRequestPath("/api/search?q=a%2Fb&limit=2")).toBe(
+      "/api/search?q=a%2Fb&limit=2",
+    );
+  });
+
+  it.each([
+    "http://evil.example/path",
+    "//evil.example/path",
+    "/safe#fragment",
+    "/safe\r\nX-Injected: yes",
+    "*",
+    "",
+  ])("rejects non-origin-form or control-bearing target %j", (target) => {
+    expect(normalizeProxyRequestPath(target)).toBeUndefined();
+  });
+
+  it("rejects absent and non-string request targets", () => {
+    expect(normalizeProxyRequestPath(undefined)).toBeUndefined();
+    expect(normalizeProxyRequestPath(null)).toBeUndefined();
+    expect(normalizeProxyRequestPath(42)).toBeUndefined();
+  });
+
+  it("returns a bounded 400 before contacting an upstream for an invalid request target", () => {
+    const response = { end: vi.fn(), writeHead: vi.fn() };
+    proxyHttp({ url: "*" }, response, 3000);
+    expect(response.writeHead).toHaveBeenCalledWith(400, {
+      "content-type": "text/plain; charset=utf-8",
+    });
+    expect(response.end).toHaveBeenCalledWith("Invalid development proxy request path.");
+  });
+});
 
 describe("bffProcessArgs", () => {
   it("keeps watch mode for interactive development", () => {

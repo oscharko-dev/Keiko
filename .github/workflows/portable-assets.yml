@@ -107,7 +107,7 @@ jobs:
           echo LIB=%LIB%>> %GITHUB_ENV%
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -155,7 +155,7 @@ jobs:
           echo LIB=%LIB%>> %GITHUB_ENV%
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -287,7 +287,7 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -358,7 +358,7 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Download immutable verified Windows artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -454,7 +454,7 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       # Assemble into a NON-hidden directory: actions/upload-artifact does not descend into a
       # dot-prefixed root path, so uploading `.portable-release-assets` finds zero files. The
       # per-target stage uploads work because their path ends in a non-hidden leaf. The artifact

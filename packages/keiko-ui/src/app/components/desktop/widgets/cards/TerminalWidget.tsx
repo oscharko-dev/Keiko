@@ -34,6 +34,7 @@ import type {
   TerminalExecutionResult,
   TerminalPolicySummary,
 } from "../../../../../lib/types";
+import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 
@@ -71,8 +72,7 @@ function parseArgs(input: string): readonly string[] {
 }
 
 function createRequestId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return secureRandomId("terminal");
 }
 
 function eventLabel(kind: TerminalEventEnvelope["kind"], t: OptionalWidgetTranslate): string {
