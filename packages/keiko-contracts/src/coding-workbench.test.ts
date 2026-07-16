@@ -541,6 +541,11 @@ describe("supervised coding action authority", () => {
     expect(supervisedCodingActionRequiresApproval("merge")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("connector-write")).toBe(true);
     expect(supervisedCodingActionRequiresApproval("external-write")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("system-mutation")).toBe(true);
+    const autoAdmitted = CODING_WORKBENCH_SUPERVISED_ACTION_KINDS.filter(
+      (kind) => !supervisedCodingActionRequiresApproval(kind),
+    );
+    expect(autoAdmitted).toEqual(["file-edit", "verification-command"]);
   });
 
   it("maps supervised actions to the existing permission classes", () => {
