@@ -277,12 +277,14 @@ function shouldPersistFailureRow(
   return existing === undefined || existing.status === "failed";
 }
 
+const DEFAULT_BUILD_FAILURE_RESULT_OPTIONS = Object.freeze({ persist: true });
+
 function buildFailureResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   documentId: DocumentId,
   error: DiscoveryError,
-  options: { readonly persist: boolean } = { persist: true },
+  options: { readonly persist: boolean } = DEFAULT_BUILD_FAILURE_RESULT_OPTIONS,
 ): ExtractionResult {
   const now = deps.store._internal.now;
   const redactedMessage = redactMessage(error.message, params.source);
