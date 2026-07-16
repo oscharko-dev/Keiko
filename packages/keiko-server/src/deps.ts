@@ -2542,7 +2542,6 @@ function atlassianConnectorCredentialFields(
   };
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function buildAssemblyPeripherals(
   args: UiHandlerDepsAssemblyArgs,
   dapRuntime: DapRuntimeReference,
