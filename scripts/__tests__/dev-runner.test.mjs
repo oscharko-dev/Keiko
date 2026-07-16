@@ -8,9 +8,11 @@
 // fully exercised without mocking. All servers are closed in afterEach.
 
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,43 +22,67 @@ import {
   copyHeadersSafely,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
-  normalizeProxyRequestPath,
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
 } from "../dev-runner.mjs";
 
-describe("normalizeProxyRequestPath", () => {
-  it("accepts origin-form paths without changing their encoded query", () => {
-    expect(normalizeProxyRequestPath("/api/search?q=a%2Fb&limit=2")).toBe(
-      "/api/search?q=a%2Fb&limit=2",
-    );
-  });
-
+describe("proxyHttp request target validation", () => {
   it.each([
     "http://evil.example/path",
     "//evil.example/path",
     "/safe#fragment",
     "/safe\r\nX-Injected: yes",
+    "/safe path",
+    "/safe\\path",
+    "/café",
     "*",
     "",
-  ])("rejects non-origin-form or control-bearing target %j", (target) => {
-    expect(normalizeProxyRequestPath(target)).toBeUndefined();
-  });
-
-  it("rejects absent and non-string request targets", () => {
-    expect(normalizeProxyRequestPath(undefined)).toBeUndefined();
-    expect(normalizeProxyRequestPath(null)).toBeUndefined();
-    expect(normalizeProxyRequestPath(42)).toBeUndefined();
-  });
-
-  it("returns a bounded 400 before contacting an upstream for an invalid request target", () => {
+    undefined,
+    null,
+    42,
+  ])("returns a bounded 400 before proxying invalid target %j", (target) => {
     const response = { end: vi.fn(), writeHead: vi.fn() };
-    proxyHttp({ url: "*" }, response, 3000);
+    proxyHttp({ url: target }, response, 3000);
     expect(response.writeHead).toHaveBeenCalledWith(400, {
       "content-type": "text/plain; charset=utf-8",
     });
     expect(response.end).toHaveBeenCalledWith("Invalid development proxy request path.");
+  });
+
+  it("forwards a valid encoded origin-form target byte-for-byte", async () => {
+    let receivedTarget;
+    const upstream = createHttpServer((request, response) => {
+      receivedTarget = request.url;
+      response.end("proxied");
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+
+      const request = new PassThrough();
+      Object.assign(request, {
+        headers: {},
+        method: "GET",
+        url: "/api/search?q=a%2Fb&limit=2",
+      });
+      const response = new PassThrough();
+      response.writeHead = vi.fn();
+      const completed = new Promise((resolve) => response.on("end", resolve));
+
+      proxyHttp(request, response, address.port);
+      request.end();
+      response.resume();
+      await completed;
+
+      expect(receivedTarget).toBe("/api/search?q=a%2Fb&limit=2");
+      expect(response.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    } finally {
+      await new Promise((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });
 

@@ -430,24 +430,9 @@ export function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
   return safe;
 }
 
-function containsControlCharacter(value) {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.codePointAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
-
-export function normalizeProxyRequestPath(rawUrl) {
-  if (typeof rawUrl !== "string") return undefined;
-  if (!rawUrl.startsWith("/") || rawUrl.startsWith("//") || rawUrl.includes("#")) return undefined;
-  if (containsControlCharacter(rawUrl)) return undefined;
-  return rawUrl;
-}
-
 export function proxyHttp(req, res, targetPort) {
-  const path = normalizeProxyRequestPath(req.url);
-  if (path === undefined) {
+  const path = req.url;
+  if (typeof path !== "string" || !/^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/u.test(path)) {
     res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
     res.end("Invalid development proxy request path.");
     return;
