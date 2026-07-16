@@ -117,11 +117,17 @@ together:
 npm run codex:pre-pr
 ```
 
-This gate runs the local-first sequence in a fixed order: typecheck, lint, format, UI package
-checks, unit tests, coverage quality, LCOV source mapping, architecture checks, ADR/dependency
-hygiene, clean build, UI build, package-surface, editor bundle size, and smoke coverage. It writes a
-machine-readable report to `.codex/pre-pr-report.json` so the exact local outcome is inspectable
-before the first push, a PR update, or a merge.
+This gate runs the local-first sequence in a fixed order: typecheck, lint, format, shell-spawn
+guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping, architecture
+checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor bundle size,
+installable-package smoke, and smoke coverage. It writes a machine-readable report to
+`.codex/pre-pr-report.json` so the exact local outcome is inspectable before the first push, a PR
+update, or a merge.
+
+The gate keeps a content-addressed step cache (`.codex/pre-pr-cache.json`, ADR-0137 D4): steps
+whose declared inputs are byte-identical to the last passing run report `cached` instead of
+re-executing, so a fix-iteration re-runs only what the fix can affect. Pass `--no-cache` to force
+a complete run; CI never uses the cache.
 
 ### Local-first gate policy
 
@@ -275,10 +281,13 @@ These cost real time when rediscovered. They are all real and current.
   it to add component or state styling trips a byte-exact hash check and a cross-mode axe/visual
   proof, turning CI red. Style components with **component-scoped classes** (e.g. `.cmp-*`), not
   by extending global CSS. See [`docs/design-system/`](docs/design-system/).
-- **Any change under `keiko-ui` invalidates the editor release-evidence fingerprint.** Re-run
-  `npm run check:editor-release-evidence` (it regenerates the bundle-evidence proof); a stale
-  fingerprint fails the `ui` and release gates. Fingerprints are platform-specific — macOS ≠
-  Linux — so the authoritative value is the one CI/Linux produces.
+- **A change to a measured product surface invalidates the committed editor evidence.** The
+  binding covers `packages/keiko-editor`, `packages/keiko-ui`, `packages/keiko-server/src/editor`,
+  `packages/keiko-contracts`, `src/`, and the root manifests — test-only files excluded
+  (ADR-0137 D2; tooling/workflow/docs changes never invalidate it). Regenerate both documents
+  with the one-command producer `npm run perf:evidence:regen` (Linux-authoritative; see
+  [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md)) and commit them as your final commit.
+  The scheduled `nightly-perf-evidence` workflow corrects accumulation drift on `dev` by itself.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run build && npm run check:package-surface` and update the
   expected surface, or CI goes red on the release job.
