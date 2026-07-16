@@ -294,3 +294,105 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 });
+
+describe("Coding Workbench runtime API failure branches", () => {
+  const snapshot = {
+    schemaVersion: "1",
+    state: "running",
+    revision: 2,
+    updatedAt: AT,
+    runId: "run-1",
+    requestedMode: "supervised-coding",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+  };
+
+  it("rejects non-record payloads with a single fail-closed error", () => {
+    expect(parseCodingWorkbenchRuntimeStartRequest(null)).toEqual({
+      ok: false,
+      errors: ["start request must be an object"],
+    });
+    expect(parseCodingWorkbenchRuntimeReadinessRequest([])).toEqual({
+      ok: false,
+      errors: ["runtime readiness request must be an object"],
+    });
+    expect(validateCodingWorkbenchRuntimeSseEvent("event")).toEqual({
+      ok: false,
+      errors: ["runtime SSE event must be an object"],
+    });
+  });
+
+  it("rejects unknown requested modes on start and readiness requests", () => {
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        requestId: "request-1",
+        taskIntent: "Investigate",
+        requestedMode: "root-access",
+      }),
+    ).toMatchObject({ ok: false, errors: ["requestedMode is invalid"] });
+    expect(
+      parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: "root-access" }),
+    ).toMatchObject({ ok: false, errors: ["requestedMode is invalid"] });
+  });
+
+  it("rejects a foreign schema version on readiness and snapshot projections", () => {
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        schemaVersion: "2",
+        requestedMode: "supervised-coding",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: true,
+      }),
+    ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, schemaVersion: "2" }),
+    ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
+  });
+
+  it("rejects unsafe snapshot revisions and unknown failure codes", () => {
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, revision: -1 })).toMatchObject({
+      ok: false,
+      errors: ["revision must be a non-negative safe integer"],
+    });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, revision: Number.MAX_VALUE }),
+    ).toMatchObject({ ok: false });
+    const failed = validateCodingWorkbenchRuntimeSnapshot({
+      ...snapshot,
+      state: "failed",
+      failureCode: "raw-stack-trace",
+    });
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.errors).toContain("failureCode is invalid");
+  });
+
+  it("rejects malformed SSE schema versions, event kinds, instants, and failure codes", () => {
+    const event = {
+      schemaVersion: "1",
+      cursor: "cursor-1",
+      sequence: 1,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 3,
+      eventKind: "task-submitted",
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(event)).toMatchObject({ ok: true });
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...event, schemaVersion: "0" })).toMatchObject({
+      ok: false,
+      errors: ["schemaVersion is invalid"],
+    });
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "bogus" })).toMatchObject({
+      ok: false,
+      errors: ["eventKind is invalid"],
+    });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, occurredAt: "2026-02-30T12:00:00.000Z" }),
+    ).toMatchObject({ ok: false, errors: ["occurredAt must be a strict UTC instant"] });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "raw-stack-trace" }),
+    ).toMatchObject({ ok: false, errors: ["failureCode is invalid"] });
+  });
+});

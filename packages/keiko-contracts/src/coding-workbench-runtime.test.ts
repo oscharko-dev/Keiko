@@ -293,3 +293,135 @@ describe("Coding Workbench runtime contracts", () => {
     ).toMatchObject({ ok: false });
   });
 });
+
+describe("Coding Workbench runtime contract failure branches", () => {
+  function facts(): Record<string, unknown> {
+    return {
+      binding: runtimeAuthority().binding,
+      actionClasses: [],
+      connectorScopes: [],
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      budgetDigest: DIGEST,
+      commandPolicyDigest: DIGEST,
+      networkPolicyDigest: DIGEST,
+      gatesDigest: DIGEST,
+      branchConstraintsDigest: DIGEST,
+      modelProfileDigest: DIGEST,
+    };
+  }
+
+  function adapter(): Record<string, unknown> {
+    return {
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      delegationId: "d-1",
+      idempotencyKey: "i-1",
+      binding: runtimeAuthority().binding,
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+    };
+  }
+
+  it("rejects a foreign schema version on every runtime surface", () => {
+    expect(
+      validateCodingWorkbenchRuntimeIntent({
+        schemaVersion: "2",
+        requestId: "r",
+        command: "stop",
+        runId: "run-1",
+      }),
+    ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityEnvelope({ ...runtimeAuthority(), schemaVersion: 1 }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        schemaVersion: "0",
+        state: "idle",
+        revision: 0,
+        updatedAt: "2026-07-11T12:00:00.000Z",
+      }),
+    ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
+  });
+
+  it("rejects a bounded-overflow or empty start task intent", () => {
+    const start = {
+      schemaVersion: "1",
+      requestId: "r",
+      command: "start",
+      taskIntent: "x".repeat(65_537),
+      requestedMode: "supervised-coding",
+      modelSource: "keiko-model-gateway",
+    };
+    expect(validateCodingWorkbenchRuntimeIntent(start)).toMatchObject({
+      ok: false,
+      errors: ["taskIntent must be a bounded non-empty string"],
+    });
+    expect(validateCodingWorkbenchRuntimeIntent({ ...start, taskIntent: "" })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("rejects non-array authority scopes and unknown sources on live facts", () => {
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), actionClasses: "all" }),
+    ).toMatchObject({ ok: false, errors: ["authority scopes must be arrays"] });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), runtimeSource: "external" }),
+    ).toMatchObject({ ok: false, errors: ["runtimeSource is invalid"] });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts(), modelSource: "external" }),
+    ).toMatchObject({ ok: false, errors: ["modelSource is invalid"] });
+  });
+
+  it("rejects unknown sources on the adapter start request", () => {
+    expect(
+      validateCodingWorkbenchRuntimeAdapterStartRequest({ ...adapter(), runtimeSource: "shell" }),
+    ).toMatchObject({ ok: false, errors: ["runtimeSource is invalid"] });
+    expect(
+      validateCodingWorkbenchRuntimeAdapterStartRequest({ ...adapter(), modelSource: "shell" }),
+    ).toMatchObject({ ok: false, errors: ["modelSource is invalid"] });
+  });
+
+  it("fails closed on a non-object binding, malformed digests, and malformed instants", () => {
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityEnvelope({ ...runtimeAuthority(), binding: "b" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityEnvelope({
+        ...runtimeAuthority(),
+        intentDigest: "A".repeat(64),
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["intentDigest must be a 64-character lowercase hex digest"],
+    });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityEnvelope({
+        ...runtimeAuthority(),
+        issuedAt: "not-a-date",
+      }),
+    ).toMatchObject({ ok: false, errors: ["issuedAt must be an ISO instant"] });
+  });
+
+  it("rejects empty optional identity fields and unknown model sources on runtime state", () => {
+    const active = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 1,
+      updatedAt: "2026-07-11T12:00:00.000Z",
+      runId: "run-1",
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+    };
+    const emptyTask = validateCodingWorkbenchRuntimeState({ ...active, taskId: "" });
+    expect(emptyTask.ok).toBe(false);
+    if (!emptyTask.ok) expect(emptyTask.errors).toContain("taskId must be a non-empty string");
+    expect(validateCodingWorkbenchRuntimeState({ ...active, modelSource: "other" })).toMatchObject({
+      ok: false,
+      errors: ["modelSource is invalid"],
+    });
+  });
+});

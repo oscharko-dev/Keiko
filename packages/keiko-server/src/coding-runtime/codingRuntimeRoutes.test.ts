@@ -10,9 +10,16 @@ import type { UiHandlerDeps } from "../deps.js";
 import { API_ROUTES, STREAMING, matchRoute, type RouteContext } from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
+  handleCodingRuntimeApproval,
   handleCodingRuntimeEvents,
+  handleCodingRuntimeRecoveryAcknowledgement,
+  handleCodingRuntimeRetry,
+  handleCodingRuntimeStatus,
+  handleCodingRuntimeStop,
+  handleCodingRuntimeTakeover,
   handleCreateCodingRuntimeRun,
   handleCodingRuntimeReadiness,
+  handleGetCodingRuntimeRun,
   openCodingRuntimeSse,
 } from "./codingRuntimeRoutes.js";
 
@@ -292,5 +299,92 @@ describe("coding runtime routes", () => {
     ctx.req.headers["last-event-id"] = "run-1:0";
     expect(handleCodingRuntimeEvents(ctx, runtime())).toBe(STREAMING);
     expect((ctx.res as unknown as FakeResponse).chunks.join("")).toContain('"cursor":"run-1:0"');
+  });
+
+  it("rejects an over-budget mutation body with 413 without buffering it", async () => {
+    const oversized = "x".repeat(64 * 1024 + 1);
+    const result = await handleCreateCodingRuntimeRun(
+      context(JSON.stringify({ padding: oversized })),
+      runtime(),
+    );
+    expect(result).toMatchObject({ status: 413 });
+    expect(JSON.stringify(result.body)).toContain("PAYLOAD_TOO_LARGE");
+    expect(JSON.stringify(result.body)).not.toContain("xxxx");
+  });
+
+  it("normalizes an empty mutation body to an empty object for the orchestrator", async () => {
+    const deps = runtime();
+    const result = await handleCreateCodingRuntimeRun(context(""), deps);
+    expect(result).toMatchObject({ status: 200 });
+    expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([{}]);
+  });
+
+  it.each([
+    ["malformed JSON", "not json"],
+    ["a JSON array", "[1,2,3]"],
+    ["a JSON scalar", "42"],
+  ])("rejects %s mutation bodies as invalid intent", async (_label, body) => {
+    const result = await handleCreateCodingRuntimeRun(context(body), runtime());
+    expect(result).toMatchObject({ status: 400 });
+    expect(JSON.stringify(result.body)).toContain("CODING_RUNTIME_INVALID_INTENT");
+  });
+
+  it("serves the singleton status and fails closed without the runtime", () => {
+    expect(handleCodingRuntimeStatus(context(""), runtime())).toEqual({
+      status: 200,
+      body: snapshot,
+    });
+    expect(
+      handleCodingRuntimeStatus(context(""), {
+        codingRuntimeOrchestrator: undefined,
+      } as unknown as UiHandlerDeps),
+    ).toMatchObject({ status: 503 });
+  });
+
+  it("serves a run snapshot by id and 404s an unknown run", () => {
+    expect(handleGetCodingRuntimeRun(context("", { runId: "run-1" }), runtime())).toEqual({
+      status: 200,
+      body: snapshot,
+    });
+    expect(handleGetCodingRuntimeRun(context("", { runId: "run-9" }), runtime())).toMatchObject({
+      status: 404,
+    });
+  });
+
+  it.each([
+    ["approval", handleCodingRuntimeApproval],
+    ["stop", handleCodingRuntimeStop],
+    ["takeover", handleCodingRuntimeTakeover],
+    ["retry", handleCodingRuntimeRetry],
+    ["recovery acknowledgement", handleCodingRuntimeRecoveryAcknowledgement],
+  ] as const)("routes the %s mutation to the live run only", async (_label, handler) => {
+    await expect(handler(context("{}", { runId: "run-1" }), runtime())).resolves.toMatchObject({
+      status: 200,
+      body: snapshot,
+    });
+    await expect(handler(context("{}"), runtime())).resolves.toMatchObject({ status: 404 });
+    await expect(handler(context("{}", { runId: "run-9" }), runtime())).resolves.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("detaches the SSE subscriber exactly once when the response closes", () => {
+    const ctx = context("", { runId: "run-1" });
+    let detached = 0;
+    const hub = {
+      subscribe: () => ({
+        ok: true as const,
+        detach: () => {
+          detached += 1;
+        },
+      }),
+    };
+    openCodingRuntimeSse(ctx.res, ctx.req, hub as never, "run-1", undefined);
+    const response = ctx.res as unknown as FakeResponse;
+    response.destroy();
+    response.destroy();
+    expect(detached).toBe(1);
+    // A destroyed transport is never end()ed again; the guard must not double-finalize it.
+    expect(response.writableEnded).toBe(false);
   });
 });

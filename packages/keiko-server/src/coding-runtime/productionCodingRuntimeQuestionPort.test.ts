@@ -113,3 +113,75 @@ function unusedRunPort(): OpenCodeRunPort {
     rejectQuestion: () => Promise.resolve(false),
   };
 }
+
+describe("production coding runtime question port fail-closed branches", () => {
+  function guardedRuns(
+    questionPort:
+      | {
+          list: () => Promise<{ questions: [] } | undefined>;
+          answer: () => Promise<boolean>;
+          reject: () => Promise<boolean>;
+        }
+      | undefined,
+  ): Parameters<typeof createProductionRuntimeQuestionPort>[0] {
+    return new Map([
+      [
+        "run-1",
+        {
+          questionPort,
+          operationGuard: createProductionRuntimeOperationGuard("run-1", () => true),
+        },
+      ],
+    ]);
+  }
+
+  it("releases the reservation when the run has no question surface", async () => {
+    const port = createProductionRuntimeQuestionPort(guardedRuns(undefined));
+    await expect(port.list(operation("run-1", "list-1", 1))).resolves.toBeUndefined();
+    await expect(
+      port.answer({ ...operation("run-1", "answer-1", 2), questionId: "que_1", answers: [["a"]] }),
+    ).resolves.toBe(false);
+    // A released reservation must not burn the request id: the same ids stay usable.
+    const withPort = createProductionRuntimeQuestionPort(
+      guardedRuns({
+        list: () => Promise.resolve({ questions: [] }),
+        answer: () => Promise.resolve(true),
+        reject: () => Promise.resolve(true),
+      }),
+    );
+    await expect(withPort.list(operation("run-1", "list-1", 1))).resolves.toEqual({
+      questions: [],
+    });
+  });
+
+  it("fails closed when the underlying question surface throws", async () => {
+    const port = createProductionRuntimeQuestionPort(
+      guardedRuns({
+        list: () => Promise.reject(new Error("runtime protocol failure")),
+        answer: () => Promise.reject(new Error("runtime protocol failure")),
+        reject: () => Promise.reject(new Error("runtime protocol failure")),
+      }),
+    );
+    await expect(port.list(operation("run-1", "list-1", 1))).resolves.toBeUndefined();
+    await expect(
+      port.answer({ ...operation("run-1", "answer-1", 2), questionId: "que_1", answers: [["a"]] }),
+    ).resolves.toBe(false);
+    await expect(
+      port.reject({ ...operation("run-1", "reject-1", 3), questionId: "que_1" }),
+    ).resolves.toBe(false);
+  });
+
+  it("returns nothing when the runtime reports no listable questions", async () => {
+    const port = createProductionRuntimeQuestionPort(
+      guardedRuns({
+        list: () => Promise.resolve(undefined),
+        answer: () => Promise.resolve(false),
+        reject: () => Promise.resolve(false),
+      }),
+    );
+    await expect(port.list(operation("run-1", "list-1", 1))).resolves.toBeUndefined();
+    await expect(
+      port.reject({ ...operation("run-1", "reject-1", 2), questionId: "que_1" }),
+    ).resolves.toBe(false);
+  });
+});

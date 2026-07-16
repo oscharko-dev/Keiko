@@ -178,3 +178,108 @@ describe("Codex app-server schema evidence", () => {
     expect(() => verifyVendoredSchemaBundle(bundle)).toThrow("Vendored schema is not canonical");
   });
 });
+
+describe("Codex app-server schema bundle fail-closed guards", () => {
+  function readManifest(bundle) {
+    return JSON.parse(readFileSync(join(bundle, "manifest.json"), "utf8"));
+  }
+
+  function writeManifest(bundle, manifest) {
+    writeFileSync(join(bundle, "manifest.json"), JSON.stringify(manifest), "utf8");
+  }
+
+  it("rejects a bundle whose manifest cannot be parsed", () => {
+    const { bundle } = temporarySchemaFixture();
+    writeFileSync(join(bundle, "manifest.json"), "{ not json", "utf8");
+    expect(() => verifyVendoredSchemaBundle(bundle)).toThrow("Cannot load schema bundle manifest");
+  });
+
+  it("rejects a manifest with a foreign algorithm, malformed evidence, or no vendored files", () => {
+    const foreign = temporarySchemaFixture();
+    writeManifest(foreign.bundle, {
+      ...readManifest(foreign.bundle),
+      algorithm: "some-other-algorithm-v9",
+    });
+    expect(() => verifyVendoredSchemaBundle(foreign.bundle)).toThrow(
+      "Unexpected schema bundle algorithm",
+    );
+
+    const malformed = temporarySchemaFixture();
+    writeManifest(malformed.bundle, {
+      ...readManifest(malformed.bundle),
+      generatedFileCount: "not-a-count",
+    });
+    expect(() => verifyVendoredSchemaBundle(malformed.bundle)).toThrow(
+      "Schema bundle manifest is malformed",
+    );
+
+    const empty = temporarySchemaFixture();
+    writeManifest(empty.bundle, { ...readManifest(empty.bundle), vendoredFiles: [] });
+    expect(() => verifyVendoredSchemaBundle(empty.bundle)).toThrow(
+      "Schema bundle manifest has no vendored files",
+    );
+  });
+
+  it("rejects a manifest naming a vendored file that is not on disk", () => {
+    const { bundle } = temporarySchemaFixture();
+    unlinkSync(join(bundle, "codex_app_server_protocol.v2.schemas.json"));
+    expect(() => verifyVendoredSchemaBundle(bundle)).toThrow("Vendored schema file is missing");
+  });
+
+  it("rejects invalid and escaping vendored paths before touching the filesystem", () => {
+    const invalid = temporarySchemaFixture();
+    const invalidManifest = readManifest(invalid.bundle);
+    const original = invalidManifest.vendoredFiles[0].path;
+    invalidManifest.vendoredFiles[0].path = "bad name.json";
+    writeManifest(invalid.bundle, invalidManifest);
+    // Keep the on-disk file set consistent so the path guard itself is what rejects.
+    writeFileSync(
+      join(invalid.bundle, "bad name.json"),
+      readFileSync(join(invalid.bundle, original), "utf8"),
+      "utf8",
+    );
+    unlinkSync(join(invalid.bundle, original));
+    expect(() => verifyVendoredSchemaBundle(invalid.bundle)).toThrow(
+      "manifest contains an invalid vendored path",
+    );
+  });
+
+  it("rejects a vendored schema that is not canonical JSON", () => {
+    const { bundle } = temporarySchemaFixture();
+    const source = '{"z":1,"a":2}';
+    writeFileSync(join(bundle, "codex_app_server_protocol.schemas.json"), source, "utf8");
+    const manifest = readManifest(bundle);
+    manifest.vendoredFiles[0].canonicalSha256 = sha256(source);
+    writeManifest(bundle, manifest);
+    expect(() => verifyVendoredSchemaBundle(bundle)).toThrow("Vendored schema is not canonical");
+  });
+
+  it("rejects a generated tree whose file count drifts from the manifest", () => {
+    const { bundle, generated } = temporarySchemaFixture();
+    const manifest = readManifest(bundle);
+    writeManifest(bundle, { ...manifest, generatedFileCount: manifest.generatedFileCount + 1 });
+    expect(() => verifyGeneratedSchemaDirectory(generated, bundle)).toThrow(
+      "Generated schema file count drift",
+    );
+  });
+
+  it("orders prefix-related schema paths deterministically by code point then length", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-codex-schema-order-test-"));
+    temporaryRoots.push(root);
+    mkdirSync(join(root, "a.json.d"), { recursive: true });
+    writeFileSync(join(root, "a.json"), "{}", "utf8");
+    writeFileSync(join(root, "a.json.d", "b.json"), "{}", "utf8");
+    const { files } = hashSchemaDirectory(root);
+    expect(files.map((file) => file.path)).toEqual(["a.json", "a.json.d/b.json"]);
+  });
+
+  it("rejects a schema tree that does not exist or carries non-JSON entries", () => {
+    expect(() => hashSchemaDirectory(join(tmpdir(), "keiko-does-not-exist"))).toThrow(
+      "Schema directory does not exist",
+    );
+    const root = mkdtempSync(join(tmpdir(), "keiko-codex-schema-nonjson-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "note.txt"), "not a schema", "utf8");
+    expect(() => hashSchemaDirectory(root)).toThrow("Unexpected non-JSON schema file");
+  });
+});

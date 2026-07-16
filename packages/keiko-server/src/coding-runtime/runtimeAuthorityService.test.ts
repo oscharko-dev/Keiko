@@ -266,16 +266,15 @@ function resolve(
   usage = { toolCalls: 1, patchBytes: 1, promptTokens: 1 },
   idempotencyKey = `key-${delegationId}`,
 ): CodingRuntimeResolution {
-  return authority.resolveForDelegation(
-    reference,
-    live,
+  return authority.resolveForDelegation(reference, {
+    liveFacts: live,
     delegationId,
     idempotencyKey,
     usage,
-    ROOT,
-    "autonomous-delivery",
-    NOW,
-  );
+    workspaceRoot: ROOT,
+    deploymentCeiling: "autonomous-delivery",
+    nowIso: NOW,
+  });
 }
 
 function serviceInState(state: CodingWorkbenchRuntimeStateName): {
@@ -857,3 +856,72 @@ function capabilityBinding(reference: {
     expiresAtMs: Date.parse(context().expiresAt),
   };
 }
+
+describe("CodingRuntimeAuthorityService fail-closed mint and release guards", () => {
+  it("refuses a confirmed mint while a run is active", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("mint");
+    expect(authority.mintConfirmedStartForRun("run-2", intent, context(), DIGEST, NOW)).toEqual({
+      ok: false,
+      reason: "active-run-conflict",
+    });
+  });
+
+  it("refuses a confirmed mint for a mismatched model source or malformed approval digest", () => {
+    expect(
+      authority.mintConfirmedStartForRun(
+        "run-1",
+        { ...intent, modelSource: "chatgpt-codex-subscription-profile" },
+        context(),
+        DIGEST,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(
+      authority.mintConfirmedStartForRun("run-1", intent, context(), "not-a-digest", NOW),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(authority.state().state).toBe("idle");
+  });
+
+  it("rejects a tampered one-use mint confirmation", () => {
+    const authority = service();
+    const trusted = context();
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    const tampered = { ...confirmation, taskId: "task-attacker" };
+    expect(authority.mintStart(intent, trusted, tampered, NOW).ok).toBe(false);
+    // The untampered confirmation stays consumable exactly once afterwards.
+    expect(authority.mintStart(intent, trusted, confirmation, NOW).ok).toBe(true);
+  });
+
+  it("rejects a capability presented to the wrong audience", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("mint");
+    expect(
+      authority.authenticateCapability(
+        minted.toolFacadeCapability,
+        "model-gateway",
+        Date.parse(NOW),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(
+      authority.authenticateCapability(minted.toolFacadeCapability, "tool-facade", Date.parse(NOW)),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("abandons only an unlaunched starting run and returns the slot to idle", () => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("mint");
+    expect(authority.abandonUnlaunched("run-9", NOW)).toBe(false);
+    expect(authority.abandonUnlaunched("run-1", NOW)).toBe(true);
+    expect(authority.state()).toMatchObject({ state: "idle" });
+    // The slot is released exactly once; a replay cannot double-release it.
+    expect(authority.abandonUnlaunched("run-1", NOW)).toBe(false);
+    // And the slot is genuinely reusable for a fresh mint.
+    expect(mint(authority, intent, false).ok).toBe(true);
+  });
+
+  const authority = service();
+});

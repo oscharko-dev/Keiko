@@ -3,12 +3,14 @@ import {
   closeSync,
   fstatSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readSync,
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,3 +79,113 @@ describe("production workspace HEAD reader", () => {
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" }).trim();
 }
+
+const MAIN_SHA = "0123456789abcdef0123456789abcdef01234567";
+const TAG_SHA = "fedcba9876543210fedcba9876543210fedcba98";
+
+interface WorktreeFixture {
+  readonly repoRoot: string;
+  readonly worktreeRoot: string;
+  readonly worktreeGitDir: string;
+  readonly commonGitDir: string;
+}
+
+function worktreeFixture(): WorktreeFixture {
+  const root = mkdtempSync(join(tmpdir(), "keiko-runtime-head-worktree-"));
+  roots.push(root);
+  const repoRoot = join(root, "repo");
+  const commonGitDir = join(repoRoot, ".git");
+  const worktreeGitDir = join(commonGitDir, "worktrees", "wt");
+  const worktreeRoot = join(root, "wt");
+  mkdirSync(worktreeGitDir, { recursive: true });
+  mkdirSync(worktreeRoot);
+  writeFileSync(join(commonGitDir, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(
+    join(commonGitDir, "packed-refs"),
+    `# pack-refs with: peeled fully-peeled sorted\nmalformed-line-without-ref\n${TAG_SHA} refs/tags/v1\n^${TAG_SHA}\n${MAIN_SHA} refs/heads/main\n`,
+  );
+  writeFileSync(join(worktreeGitDir, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(worktreeGitDir, "commondir"), "../..\n");
+  writeFileSync(join(worktreeRoot, ".git"), `gitdir: ${worktreeGitDir}\n`);
+  return { repoRoot, worktreeRoot, worktreeGitDir, commonGitDir };
+}
+
+describe("production workspace HEAD reader worktree layouts", () => {
+  it("resolves a linked-worktree HEAD through commondir and packed refs", () => {
+    const fixture = worktreeFixture();
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBe(MAIN_SHA);
+  });
+
+  it("prefers a loose common-root ref over the packed ref", () => {
+    const fixture = worktreeFixture();
+    mkdirSync(join(fixture.commonGitDir, "refs", "heads"), { recursive: true });
+    writeFileSync(join(fixture.commonGitDir, "refs", "heads", "main"), `${TAG_SHA}\n`);
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBe(TAG_SHA);
+  });
+
+  it("reads a detached HEAD when the repository root is itself a linked worktree", () => {
+    const fixture = worktreeFixture();
+    writeFileSync(join(fixture.worktreeGitDir, "HEAD"), `${MAIN_SHA}\n`);
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.worktreeRoot)).toBe(MAIN_SHA);
+  });
+
+  it("fails closed when the commondir pointer escapes the repository git directory", () => {
+    const fixture = worktreeFixture();
+    writeFileSync(join(fixture.worktreeGitDir, "commondir"), "../../../..\n");
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBeUndefined();
+  });
+
+  it("rejects malformed gitdir pointers and symlinked loose refs", () => {
+    const fixture = worktreeFixture();
+    writeFileSync(join(fixture.worktreeRoot, ".git"), "not-a-pointer\n");
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBeUndefined();
+
+    const symlinked = worktreeFixture();
+    mkdirSync(join(symlinked.commonGitDir, "refs", "heads"), { recursive: true });
+    writeFileSync(join(symlinked.commonGitDir, "loose-target"), `${TAG_SHA}\n`);
+    symlinkSync(
+      join(symlinked.commonGitDir, "loose-target"),
+      join(symlinked.commonGitDir, "refs", "heads", "main"),
+    );
+    // The symlinked loose ref must be ignored; the packed ref stays authoritative.
+    expect(readProductionWorkspaceHead(symlinked.worktreeRoot, symlinked.repoRoot)).toBe(MAIN_SHA);
+  });
+
+  it("returns nothing for a packed ref whose recorded object id is malformed", () => {
+    const fixture = worktreeFixture();
+    writeFileSync(join(fixture.commonGitDir, "packed-refs"), "not-hex refs/heads/main\n");
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot)).toBeUndefined();
+  });
+
+  it("rejects a HEAD file whose size races between read and fstat", () => {
+    const fixture = worktreeFixture();
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: lstatSync,
+      open: (path) => openSync(path, "r"),
+      read: () => 0,
+      realpath: realpathSync,
+    };
+    expect(
+      readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
+    ).toBeUndefined();
+  });
+
+  it("rejects a directory whose canonical identity does not match its path", () => {
+    const fixture = worktreeFixture();
+    const decoy = mkdtempSync(join(tmpdir(), "keiko-runtime-head-decoy-"));
+    roots.push(decoy);
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: lstatSync,
+      open: (path) => openSync(path, "r"),
+      read: readSync,
+      realpath: (path) => (path === fixture.worktreeRoot ? decoy : realpathSync(path)),
+    };
+    expect(
+      readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
+    ).toBeUndefined();
+  });
+});
