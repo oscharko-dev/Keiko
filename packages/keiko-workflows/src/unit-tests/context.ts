@@ -28,7 +28,7 @@ export interface TestGenContextDeps {
 }
 
 function toPosix(path: string): string {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 function underDir(path: string, dir: string): boolean {

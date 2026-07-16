@@ -75,7 +75,7 @@ function formatDate(timestamp: number): string {
 
 function fullPreviewPath(root: string, relativePath: string): string {
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
+  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {

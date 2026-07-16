@@ -964,7 +964,7 @@ export async function smokeTestCandidates(
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
 ): Promise<readonly string[]> {
-  const tested = Array<string | undefined>(candidates.length).fill(undefined);
+  const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   let next = 0;
   async function worker(): Promise<void> {
     while (next < candidates.length) {

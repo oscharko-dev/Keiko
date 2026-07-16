@@ -74,11 +74,11 @@ const escapeMarkdownInjection = (value: string): EscapeOutcome => {
     count += 1;
     return `\\${hashes}`;
   });
-  const codeEscaped = headingEscaped.replace(FENCED_CODE, (): string => {
+  const codeEscaped = headingEscaped.replaceAll(FENCED_CODE, (): string => {
     count += 1;
     return "\\`\\`\\`";
   });
-  const imageEscaped = codeEscaped.replace(IMAGE_OPEN, (): string => {
+  const imageEscaped = codeEscaped.replaceAll(IMAGE_OPEN, (): string => {
     count += 1;
     return "\\!\\[";
   });

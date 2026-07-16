@@ -128,7 +128,7 @@ const safeFontFamily = (family: string): string => {
   // egress invariant as escapeHtml: these chars would otherwise survive into the quoted CSS string.
   const cleaned = stripUnsafeFormatChars(family)
     .replace(CSS_INJECTION_RE, "")
-    .replace(/"/gu, "\\22 ");
+    .replaceAll(/"/gu, "\\22 ");
   return `"${cleaned}"`;
 };
 

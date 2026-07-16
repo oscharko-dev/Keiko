@@ -169,7 +169,7 @@ function foldForSearch(text: string): string {
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/gu, "")
-    .replace(/ß/gu, "ss");
+    .replaceAll(/ß/gu, "ss");
 }
 
 const countMatches = (haystack: string, needles: readonly string[]): number => {

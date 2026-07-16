@@ -46,9 +46,9 @@ function formatCssLike(text: string, options: LanguageFormattingOptions | undefi
   const indentUnit = options?.insertSpaces === false ? "\t" : " ".repeat(options?.tabSize ?? 2);
   const tokens = text
     .replace(/\r\n?/gu, "\n")
-    .replace(/\{/gu, "{\n")
-    .replace(/\}/gu, "\n}\n")
-    .replace(/;/gu, ";\n")
+    .replaceAll(/\{/gu, "{\n")
+    .replaceAll(/\}/gu, "\n}\n")
+    .replaceAll(/;/gu, ";\n")
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);

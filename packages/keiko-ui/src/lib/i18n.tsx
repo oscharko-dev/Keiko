@@ -73,7 +73,7 @@ export function loadLocaleMessages(locale: Locale): Promise<MessageCatalog> {
 
 export function resolveLocale(input: string | null | undefined): Locale {
   if (input === null || input === undefined) return DEFAULT_LOCALE;
-  const normalized = input.trim().toLowerCase().replace(/_/gu, "-");
+  const normalized = input.trim().toLowerCase().replaceAll(/_/gu, "-");
   if (normalized.length === 0) return DEFAULT_LOCALE;
   if (normalized === "de" || normalized.startsWith("de-")) return "de";
   return DEFAULT_LOCALE;

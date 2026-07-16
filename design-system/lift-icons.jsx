@@ -41,7 +41,7 @@ const rect = (x, y, w, h, r) =>
   `V${f(y + h - r)} A${r} ${r} 0 0 1 ${f(x + w - r)} ${f(y + h)} H${f(x + r)} ` +
   `A${r} ${r} 0 0 1 ${f(x)} ${f(y + h - r)} V${f(y + r)} A${r} ${r} 0 0 1 ${f(x + r)} ${f(y)} Z`;
 const spokes = (cx, cy, r0, r1, n) =>
-  [...Array(n)]
+  [...new Array(n)]
     .map((_, i) => {
       const d = (i * 360) / n;
       const [ax, ay] = pt(cx, cy, r0, d);

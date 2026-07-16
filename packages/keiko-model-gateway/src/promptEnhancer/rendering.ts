@@ -32,7 +32,7 @@ function bulletList(items: readonly string[]): string {
 }
 
 function renderInputSection(input: string): string {
-  return `## ${INPUT_HEADING}\n\`\`\`text\n${input.replace(/```/gu, "`\u200b``")}\n\`\`\``;
+  return `## ${INPUT_HEADING}\n\`\`\`text\n${input.replaceAll(/```/gu, "`\u200b``")}\n\`\`\``;
 }
 
 // The trusted instruction blocks, in the section order named by the Issue #1310 scope. Excludes the

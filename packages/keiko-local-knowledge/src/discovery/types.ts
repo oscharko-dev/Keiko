@@ -126,7 +126,7 @@ export interface DocumentIdSource {
 // stay injective even when source ids or paths contain `:`, `%`, or `#`. Ordinary paths keep
 // their historical ids; only collision-capable characters are escaped.
 function encodeDocumentIdComponent(value: string): string {
-  return value.replace(/%/g, "%25").replace(/#/g, "%23").replace(/:/g, "%3A");
+  return value.replaceAll(/%/g, "%25").replaceAll(/#/g, "%23").replaceAll(/:/g, "%3A");
 }
 
 export function documentIdFor(input: DocumentIdSource): DocumentId {

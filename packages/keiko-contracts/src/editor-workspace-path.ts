@@ -60,7 +60,7 @@ function isAbsoluteLike(path: string): boolean {
 // Implemented with split/join (no quantified, anchored regex) so it stays strictly linear on
 // adversarial input such as a path of many repeated slashes (avoids polynomial backtracking).
 function toPosix(path: string): string {
-  const slashed = path.replace(/\\/gu, "/");
+  const slashed = path.replaceAll(/\\/gu, "/");
   const collapsed = slashed
     .split("/")
     .filter((segment) => segment.length > 0)

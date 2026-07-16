@@ -67,7 +67,7 @@ function routeBasePath(text: string): string {
 
 function unwrapType(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
-  const clean = raw.replace(/\?/gu, "").trim();
+  const clean = raw.replaceAll(/\?/gu, "").trim();
   if (
     /^(void|Void|String|boolean|Boolean|int|long|double|float|Integer|Long|Double)$/u.test(clean)
   ) {

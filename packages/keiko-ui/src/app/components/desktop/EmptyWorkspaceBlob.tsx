@@ -60,11 +60,11 @@ function prefersReducedMotion(): boolean {
 export function EmptyWorkspaceBlob({ onNewWindow }: EmptyWorkspaceBlobProps): ReactNode {
   const t = useTranslate();
   const rawMaskId = useId();
-  const maskId = `ewb-${rawMaskId.replace(/:/gu, "")}`;
+  const maskId = `ewb-${rawMaskId.replaceAll(/:/gu, "")}`;
   // GEN-UI-A11Y-026 — the "Empty workspace / Open a window to start working" copy lives only inside
   // the aria-hidden SVG mask, so AT never receives that context. A visually-hidden description node,
   // associated via aria-describedby, carries it to screen readers without changing the visual design.
-  const descriptionId = `ewb-desc-${rawMaskId.replace(/:/gu, "")}`;
+  const descriptionId = `ewb-desc-${rawMaskId.replaceAll(/:/gu, "")}`;
   const pathRef = useRef<SVGPathElement>(null);
   const groupRef = useRef<SVGGElement>(null);
 

@@ -678,7 +678,7 @@ function joinAbs(root: string, rel: string): string {
 }
 
 function normaliseSep(p: string): string {
-  return p.replace(/\\/g, "/");
+  return p.replaceAll(/\\/g, "/");
 }
 
 function isContained(absoluteRoot: string, absolutePath: string): boolean {

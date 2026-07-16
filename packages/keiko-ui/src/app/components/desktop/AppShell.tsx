@@ -212,9 +212,11 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
   if (scope?.root === undefined) return null;
   return [
-    scope.root.replace(/\\/gu, "/").replace(/\/+$/u, ""),
+    scope.root.replaceAll(/\\/gu, "/").replace(/\/+$/u, ""),
     scope.kind,
-    ...scope.relativePaths.map((path) => path.replace(/\\/gu, "/").replace(/^\/+|\/+$/gu, "")),
+    ...scope.relativePaths.map((path) =>
+      path.replaceAll(/\\/gu, "/").replaceAll(/^\/+|\/+$/gu, ""),
+    ),
   ].join("\u0000");
 }
 
@@ -226,9 +228,9 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
 
 function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   if (scope.root === undefined) return null;
-  const relativePath = scope.relativePaths[0]?.replace(/\\/gu, "/").replace(/^\/+/u, "");
+  const relativePath = scope.relativePaths[0]?.replaceAll(/\\/gu, "/").replace(/^\/+/u, "");
   if (relativePath === undefined || relativePath.length === 0) return scope.root;
-  const root = scope.root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const root = scope.root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
   return `${root}/${relativePath}`;
 }
 
@@ -245,8 +247,8 @@ function editorCfgRelativePath(root: string, file: string): string | null {
   // Filesystem-root ("/") workspace edge: every absolute path is "under" it, so strip the leading
   // slash. The contract folds a "/" root to empty/outside-root, so this one intentional, tested case
   // (a whole-disk editor root) is handled locally. `^\/+$` is anchored at both ends — linear.
-  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
-    const comparableFile = file.trim().replace(/\\/gu, "/");
+  if (/^\/+$/u.test(root.trim().replaceAll(/\\/gu, "/"))) {
+    const comparableFile = file.trim().replaceAll(/\\/gu, "/");
     return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
   const resolution = resolveWorkspaceFileIdentifier(root, file);

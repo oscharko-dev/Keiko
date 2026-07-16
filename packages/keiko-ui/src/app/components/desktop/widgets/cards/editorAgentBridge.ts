@@ -167,7 +167,7 @@ export function queueLocalEditorAgentAction(
 
 function normalizeActiveTarget(path: string): string {
   return path
-    .replace(/\\/gu, "/")
+    .replaceAll(/\\/gu, "/")
     .split("/")
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join("/");

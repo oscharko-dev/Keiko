@@ -118,7 +118,7 @@ export const normaliseCandidateText = (value: string | undefined): string => {
  * compare identically without mutating the human-readable source/candidate text.
  */
 export const normaliseGermanComparisonText = (value: string | undefined): string =>
-  normaliseCandidateText(value).toLowerCase().replace(/ß/gu, "ss");
+  normaliseCandidateText(value).toLowerCase().replaceAll(/ß/gu, "ss");
 
 /**
  * Keyword-matching fold layered on top of the comparison fold. Umlauts are mapped to their
@@ -127,9 +127,9 @@ export const normaliseGermanComparisonText = (value: string | undefined): string
  */
 export const normaliseGermanKeywordText = (value: string | undefined): string =>
   normaliseGermanComparisonText(value)
-    .replace(/ä/gu, "ae")
-    .replace(/ö/gu, "oe")
-    .replace(/ü/gu, "ue");
+    .replaceAll(/ä/gu, "ae")
+    .replaceAll(/ö/gu, "oe")
+    .replaceAll(/ü/gu, "ue");
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

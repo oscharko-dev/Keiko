@@ -561,7 +561,7 @@ function scopeTargetPath(realProjectRoot: string, relativePath: string): string 
 }
 
 function scopeRelativePath(realProjectRoot: string, absolutePath: string): string {
-  return relative(realProjectRoot, absolutePath).split("\\").join("/");
+  return relative(realProjectRoot, absolutePath).replaceAll("\\", "/");
 }
 
 function assertScopePathMetadataSafe(deps: UiHandlerDeps, relativePath: string): void {

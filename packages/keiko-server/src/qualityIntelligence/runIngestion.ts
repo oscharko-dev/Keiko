@@ -252,7 +252,7 @@ function assertRealPathNotDenied(absPath: string, label: string, noun: string): 
 // security audit. A value with no "\" or "|" encodes to itself, so clean labels/paths keep their
 // existing envelope id (and the atom ids derived from it), preserving re-check stability.
 const escapeEnvelopeField = (value: string): string =>
-  value.split("\\").join("\\\\").split("|").join("\\|");
+  value.replaceAll("\\", "\\\\").replaceAll("|", "\\|");
 
 export const envelopeIdFor = (
   index: number,

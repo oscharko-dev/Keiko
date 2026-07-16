@@ -1187,7 +1187,7 @@ function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
 }
 
 function rootDisplayName(root: string): string {
-  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const normalized = root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }

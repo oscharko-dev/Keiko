@@ -199,7 +199,7 @@ function isSecretShapedString(value: string): boolean {
 
 function looksLikeLocalPath(value: string): boolean {
   const trimmed = value.trim();
-  const normalized = trimmed.replace(/\\/gu, "/");
+  const normalized = trimmed.replaceAll(/\\/gu, "/");
   return (
     /^file:/iu.test(trimmed) ||
     /^[A-Za-z]:\//u.test(normalized) ||
@@ -214,7 +214,7 @@ function looksLikeLocalPath(value: string): boolean {
 
 function containsTraversalSegment(value: string): boolean {
   return value
-    .replace(/\\/gu, "/")
+    .replaceAll(/\\/gu, "/")
     .split("/")
     .some((segment) => segment === "..");
 }
@@ -357,7 +357,7 @@ function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined 
   const out: string[] = [];
   for (const item of value) {
     if (typeof item !== "string") return undefined;
-    const path = item.trim().replace(/\\/gu, "/").replace(/^\/+/u, "");
+    const path = item.trim().replaceAll(/\\/gu, "/").replace(/^\/+/u, "");
     if (
       path.length === 0 ||
       path.length > MAX_EDITOR_OPEN_FILE_LENGTH ||
@@ -505,7 +505,7 @@ function resolveLegacyEditorLayoutPane(
       typeof paneRecord["id"] === "string" && paneRecord["id"].trim().length > 0
         ? paneRecord["id"].trim().slice(0, 32)
         : `pane-${index + 1}`,
-    file: file.length > 0 ? file.replace(/\\/gu, "/").replace(/^\/+/u, "") : nextOpenFiles[0]!,
+    file: file.length > 0 ? file.replaceAll(/\\/gu, "/").replace(/^\/+/u, "") : nextOpenFiles[0]!,
     openFiles: nextOpenFiles,
   };
 }

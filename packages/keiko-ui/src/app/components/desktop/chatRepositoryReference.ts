@@ -8,7 +8,7 @@
 // not a clean pure leaf and moving it would pull the chat domain type into this module.
 
 export function normalizedRepositoryRoot(root: string): string {
-  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  return root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
 export function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
@@ -33,7 +33,7 @@ export function omitAncestorRepositoryRoots(roots: readonly string[]): readonly 
 }
 
 export function normalizedRepositoryPath(path: string): string {
-  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
 
 export function appendRepositoryReference(draft: string, path: string): string {

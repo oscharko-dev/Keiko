@@ -67,7 +67,7 @@ type Mutations = Pick<
 >;
 
 function normalizeEditorOpenRoot(root: string): string {
-  return root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+  return root.trim().replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
 // Root-relative file-identifier contract (Issue #1374): coerce a repository reference / persisted
@@ -1515,8 +1515,8 @@ function isAbsoluteRoot(root: string): boolean {
  */
 function normaliseRoot(root: string): string {
   // Windows drive root: keep the trailing slash that follows the colon (C:/ or C:\).
-  if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replace(/\\/gu, "/");
-  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replaceAll(/\\/gu, "/");
+  return root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
 /**
@@ -1538,7 +1538,7 @@ export function resolvedFilesRoot(w: AppWindow): string | null {
 }
 
 function normaliseRelativePath(path: string): string {
-  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {

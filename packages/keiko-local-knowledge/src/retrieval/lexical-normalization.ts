@@ -128,19 +128,26 @@ function multilingualSubtokens(token: string): readonly string[] {
 function germanSpellingVariants(token: string): readonly string[] {
   const out = new Set<string>([token]);
   const umlautToAscii = token
-    .replace(/ä/gu, "ae")
-    .replace(/ö/gu, "oe")
-    .replace(/ü/gu, "ue")
-    .replace(/ß/gu, "ss");
+    .replaceAll(/ä/gu, "ae")
+    .replaceAll(/ö/gu, "oe")
+    .replaceAll(/ü/gu, "ue")
+    .replaceAll(/ß/gu, "ss");
   out.add(umlautToAscii);
-  const asciiToUmlaut = token.replace(/ae/gu, "ä").replace(/oe/gu, "ö").replace(/ue/gu, "ü");
+  const asciiToUmlaut = token
+    .replaceAll(/ae/gu, "ä")
+    .replaceAll(/oe/gu, "ö")
+    .replaceAll(/ue/gu, "ü");
   out.add(asciiToUmlaut);
-  if (token.includes("ss")) out.add(token.replace(/ss/gu, "ß"));
+  if (token.includes("ss")) out.add(token.replaceAll(/ss/gu, "ß"));
   return [...out].filter((term) => term.length > 0);
 }
 
 function deUmlautStemVariant(token: string): string {
-  return token.replace(/äu/gu, "au").replace(/ä/gu, "a").replace(/ö/gu, "o").replace(/ü/gu, "u");
+  return token
+    .replaceAll(/äu/gu, "au")
+    .replaceAll(/ä/gu, "a")
+    .replaceAll(/ö/gu, "o")
+    .replaceAll(/ü/gu, "u");
 }
 
 function addSuffixStem(out: Set<string>, token: string, suffix: string, replacement = ""): void {

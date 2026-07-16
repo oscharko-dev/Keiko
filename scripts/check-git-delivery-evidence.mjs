@@ -150,7 +150,7 @@ function slugHeading(heading) {
   return heading
     .trim()
     .toLowerCase()
-    .replace(/`/g, "")
+    .replaceAll(/`/g, "")
     .replace(/[^a-z0-9 -]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")

@@ -768,7 +768,7 @@ function envModelIdFromApiKeyName(name: string): string | undefined {
     return undefined;
   }
   const token = name.slice(prefix.length, -suffix.length);
-  return token.length === 0 ? undefined : token.toLowerCase().replace(/_/g, "-");
+  return token.length === 0 ? undefined : token.toLowerCase().replaceAll(/_/g, "-");
 }
 
 function hasEnvProvider(modelId: string, env: EnvSource): boolean {

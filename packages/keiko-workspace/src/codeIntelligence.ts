@@ -742,7 +742,7 @@ function wildcardSubstitution(pattern: string, value: string): string | undefine
 }
 
 function applyWildcard(target: string, substitution: string): string {
-  return target.includes("*") ? target.replace(/\*/gu, substitution) : target;
+  return target.includes("*") ? target.replaceAll(/\*/gu, substitution) : target;
 }
 
 function aliasBase(alias: TsPathAlias, target: string): string {
@@ -885,7 +885,7 @@ function resolvePythonRelativeImport(
   }
   return resolveCandidate(
     pathSet,
-    posix.join(baseDir, moduleName.replace(/\./gu, "/")),
+    posix.join(baseDir, moduleName.replaceAll(/\./gu, "/")),
     PY_EXTENSIONS,
   );
 }
@@ -1077,7 +1077,7 @@ function collectImportEdges(
       (inGoImportBlock ? /^\s*(?:\w+\s+)?["']([^"']+)["']/u.exec(line) : null);
     if (goImport?.[1] !== undefined) emit("import", goImport[1]);
     const rustUse = /^\s*(?:pub\s+)?(?:use|mod)\s+([A-Za-z_][\w:]*)/u.exec(line);
-    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replace(/::/gu, "/"));
+    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replaceAll(/::/gu, "/"));
     const csharpUsing = /^\s*using\s+([A-Za-z_][\w.]*)\s*;/u.exec(line);
     if (csharpUsing?.[1] !== undefined) emit("import", csharpUsing[1]);
   });

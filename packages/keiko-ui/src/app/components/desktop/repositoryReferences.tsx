@@ -109,7 +109,7 @@ function boundaryAfter(value: string, index: number): boolean {
 }
 
 function normalizeReferencePath(path: string): string {
-  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
 
 function referenceIdentity(reference: RepositoryReference | null): string | null {
@@ -225,7 +225,7 @@ export function parseExactRepositoryReference(source: string): RepositoryReferen
 }
 
 export function repositoryRootLabel(root: string): string {
-  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const normalized = root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }
@@ -271,7 +271,7 @@ function referencePathForRoot(referencePath: string, root: string): string {
 }
 
 function repositoryRootSuffix(root: string): string {
-  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const normalized = root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts.slice(-2).join("/");
 }
