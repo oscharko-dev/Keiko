@@ -128,7 +128,7 @@ installable-package smoke, and smoke coverage. It writes a machine-readable repo
 `.agent/pre-pr-report.json` so the exact local outcome is inspectable before the first push, a PR
 update, or a merge.
 
-The gate keeps a content-addressed step cache (`.agent/pre-pr-cache.json`, ADR-0137 D4): steps
+The gate keeps a content-addressed step cache (`.agent/pre-pr-cache.json`, ADR-0139 D4): steps
 whose declared inputs are byte-identical to the last passing run report `cached` instead of
 re-executing, so a fix-iteration re-runs only what the fix can affect. Pass `--no-cache` to force
 a complete run; CI never uses the cache.
@@ -289,7 +289,7 @@ These cost real time when rediscovered. They are all real and current.
   binding covers `packages/keiko-editor`, `packages/keiko-ui`, `packages/keiko-server/src/editor`,
   `packages/keiko-contracts`, `src/`, the root lockfile, and `tsconfig*` — test-only files and
   `package.json` script/metadata churn excluded
-  (ADR-0137 D2; tooling/workflow/docs changes never invalidate it). Regenerate both documents
+  (ADR-0139 D2; tooling/workflow/docs changes never invalidate it). Regenerate both documents
   with the one-command producer `npm run perf:evidence:regen` (Linux-authoritative; see
   [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md)) and commit them as your final commit.
   The scheduled `nightly-perf-evidence` workflow corrects accumulation drift on `dev` by itself.

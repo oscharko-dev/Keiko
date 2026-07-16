@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { scanSource } from "../check-shell-spawn-guardrails.mjs";
 
-// ADR-0137 D5: the guardrail must be precise — provably safe `shell: false` constructs never
+// ADR-0139 D5: the guardrail must be precise — provably safe `shell: false` constructs never
 // require suppression markers, while every other shell option value still demands one nearby.
 describe("shell spawn guardrail scan", () => {
   it.each([

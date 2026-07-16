@@ -1,4 +1,4 @@
-# ADR-0137 D3: scheduled automation owns editor performance evidence drift. This workflow
+# ADR-0139 D3: scheduled automation owns editor performance evidence drift. This workflow
 # re-runs the official D12 producer against the pinned baseline on a clean Linux environment,
 # enforces the wall-clock budgets (controlled measurement context), and — when the refreshed
 # documents differ from the committed ones — opens a bot pull request through the normal
@@ -66,4 +66,4 @@ jobs:
             --base dev \
             --head "${branch}" \
             --title "docs(editor): refresh nightly Linux D12 evidence" \
-            --body "Scheduled ADR-0137 D3 refresh: the committed editor performance evidence drifted from the measured product on dev. Produced by the official Linux D12 producer (pinned baseline, wall-clock budgets enforced); integrates only through the normal required checks."
+            --body "Scheduled ADR-0139 D3 refresh: the committed editor performance evidence drifted from the measured product on dev. Produced by the official Linux D12 producer (pinned baseline, wall-clock budgets enforced); integrates only through the normal required checks."

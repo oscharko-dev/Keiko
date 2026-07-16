@@ -6,7 +6,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const SCRIPTS_DIR = join(ROOT, "scripts");
 const MARKER = "SECURITY-SHELL-OK:";
 const MARKER_LOOKBACK_LINES = 8;
-// ADR-0137 D5: the negative lookahead sits directly behind the colon so backtracking through
+// ADR-0139 D5: the negative lookahead sits directly behind the colon so backtracking through
 // the whitespace quantifier cannot bypass it — `shell: false` never matches in any spacing,
 // while every other shell option value still requires a nearby SECURITY-SHELL-OK justification.
 const SHELL_OPTION_RE = /\bshell\s*:(?!\s*false\b)\s*[^,}\n]+/u;

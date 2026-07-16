@@ -14,7 +14,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultReportPath = resolve(repoRoot, ".agent", "pre-pr-report.json");
 const nodeHeapFlag = "--max-old-space-size=8192";
 
-// ADR-0137 D4: content-addressed step cache. Each step declares a conservative input scope;
+// ADR-0139 D4: content-addressed step cache. Each step declares a conservative input scope;
 // a step is skipped as "cached" only when every file inside its scope (tracked or untracked,
 // working-tree content) hashes to the same digest that last saw the step pass. Groups skip or
 // run as one unit so artifact producers and their consumers can never diverge. The cache is

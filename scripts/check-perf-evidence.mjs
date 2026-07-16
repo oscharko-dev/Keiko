@@ -32,7 +32,7 @@ const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.js
 
 const PERFORMANCE_SUBJECT_DOMAIN = "keiko-performance-measurement-subject-v1\0";
 const SOURCE_TREE_FRESHNESS_BINDING = "source-tree-v1";
-// ADR-0137 D2: the evidence binds the measured product, not the repository. Only surfaces that
+// ADR-0139 D2: the evidence binds the measured product, not the repository. Only surfaces that
 // can alter what the D12 suites load or exercise belong to the subject — the editor and UI
 // packages, the server editor subsystem, the shared contracts, the runtime entry wiring, and the
 // root build/dependency manifests. Repository tooling, workflows, docs, and test-only files are
@@ -113,7 +113,7 @@ function isNonSubjectTree(path) {
   );
 }
 
-// ADR-0137 D2: the lockfile is the authoritative build-affecting dependency state (what
+// ADR-0139 D2: the lockfile is the authoritative build-affecting dependency state (what
 // `npm ci` installs) and tsconfig drives the emitted output, so both bind the evidence.
 // package.json itself is intentionally NOT a subject: renaming a script or editing metadata
 // does not change the measured bundle, and the one package.json change that could — a build

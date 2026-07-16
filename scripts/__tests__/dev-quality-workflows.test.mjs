@@ -58,7 +58,7 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("Test UI with coverage (jsdom + axe a11y)");
     expect(uiJob).toContain("UI coverage ratchet");
     expect(uiJob).toContain("Release smoke E2E");
-    // ADR-0137 D7: hosted workspace-perf refresh and the freshness gate run post-merge only
+    // ADR-0139 D7: hosted workspace-perf refresh and the freshness gate run post-merge only
     // (push/dispatch), while the immutable editor D12 evidence is validated on PRs and merge groups.
     expect(performanceStep).toContain(
       "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",

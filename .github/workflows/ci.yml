@@ -27,7 +27,7 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-opencode-codex
       - "release/**"
-  # ADR-0137 D7: every required workflow also validates merge-queue groups so a human can
+  # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
   # enable GitHub's merge queue without agents re-racing a moving dev branch.
   merge_group:
     branches:
@@ -236,7 +236,7 @@ jobs:
           # as changed but without having changed lines". Push/dispatch runs analyze their own head.
           SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}
         run: |
-          # ADR-0137 D6: transient SonarCloud-side provisioning or network failures retry with
+          # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.
           for attempt in 1 2 3; do
             set +e
@@ -599,7 +599,7 @@ jobs:
           rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
       # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
-      # candidate. Its source-tree and toolchain bindings (ADR-0137 D2: measured surfaces only)
+      # candidate. Its source-tree and toolchain bindings (ADR-0139 D2: measured surfaces only)
       # make it valid across the signed squash and across merge-queue integration.
       - name: Validate immutable editor D12 performance evidence
         if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}

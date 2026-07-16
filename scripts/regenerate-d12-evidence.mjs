@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// One-command producer for both committed editor evidence documents (ADR-0137 D3):
+// One-command producer for both committed editor evidence documents (ADR-0139 D3):
 // the D12 paired performance comparison (docs/release/1209-perf-evidence.json) and the
 // editor release bundle evidence (docs/release/1209-bundle-evidence.json).
 //

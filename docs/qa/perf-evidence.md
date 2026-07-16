@@ -1,4 +1,4 @@
-# Editor performance evidence — producer runbook (ADR-0137)
+# Editor performance evidence — producer runbook (ADR-0139)
 
 The two committed editor evidence documents live in `docs/release/`:
 
@@ -9,7 +9,7 @@ The two committed editor evidence documents live in `docs/release/`:
 
 ## When evidence must be regenerated
 
-Evidence binds the **measured product surfaces** only (ADR-0137 D2): `packages/keiko-editor/`,
+Evidence binds the **measured product surfaces** only (ADR-0139 D2): `packages/keiko-editor/`,
 `packages/keiko-ui/`, `packages/keiko-server/src/editor/`, `packages/keiko-contracts/`, `src/`,
 the root `package-lock.json`, and `tsconfig*` — excluding test-only files and `package.json`
 script/metadata churn — plus the dedicated D12
@@ -42,7 +42,7 @@ installs Linux binaries into `node_modules`; re-run `npm install` on the host af
 - Baseline and candidate `package-lock.json` digests must match; the producer provisions both
   checkouts with `npm ci --ignore-scripts` under a deterministic environment allowlist.
 - Wall-clock budgets are enforced only in this controlled context and in the scheduled workflow
-  (ADR-0137 D1); required CI runners record but do not assert them. The committed comparison
+  (ADR-0139 D1); required CI runners record but do not assert them. The committed comparison
   still enforces every budget deterministically at PR time.
 - Never hand-edit the documents: schemas are exact-key closed, canonical-byte checked, and every
   aggregate is independently recomputed from the raw samples.

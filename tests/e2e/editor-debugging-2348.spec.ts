@@ -41,7 +41,7 @@ const CAP_OUTPUT = "src/cap-output.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
 const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const CAP_SAMPLE_COUNT = 10;
-// ADR-0137 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
+// ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
 // the budgets; required-runner executions still record the measured values into the evidence.
 const ENFORCE_WALL_CLOCK_BUDGETS = process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1";

@@ -1,4 +1,4 @@
-# ADR-0137: Agent-first deterministic quality gates
+# ADR-0139: Agent-first deterministic quality gates
 
 ## Status
 

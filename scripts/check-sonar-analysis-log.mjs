@@ -16,7 +16,7 @@ function warningLines(contents) {
 // that is still in the changed-file set. This is common and benign for pull-request analysis of the
 // GitHub merge ref: it carries no rule, coverage, or rating signal, and the SonarCloud quality gate
 // continues to enforce all of those. Exempt only this exact wording so every other WARN/ERROR the
-// scanner emits still fails the gate. See docs/adr/ADR-0137-agent-first-deterministic-quality-gates.md.
+// scanner emits still fails the gate. See docs/adr/ADR-0139-agent-first-deterministic-quality-gates.md.
 const benignScmMetadataWarning =
   /File '[^']*' was detected as changed but without having changed lines/u;
 

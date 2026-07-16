@@ -21,7 +21,7 @@ function copyStringEnvironment(source, keys) {
 export function createD12RuntimeEnvironment(source = process.env, additions = {}) {
   const environment = {
     ...copyStringEnvironment(source, INHERITED_ENVIRONMENT_KEYS),
-    // ADR-0137 D1: the official producer is a controlled measurement context, so the browser
+    // ADR-0139 D1: the official producer is a controlled measurement context, so the browser
     // suites enforce their wall-clock budgets here; required CI runners leave the flag unset
     // and only record the measured values.
     KEIKO_ENFORCE_WALL_CLOCK_BUDGETS: "1",

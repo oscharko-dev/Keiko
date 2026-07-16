@@ -1621,7 +1621,7 @@ describe("performance measurement subject", () => {
     expect(isPerformanceSubjectPath(path)).toBe(true);
   });
 
-  // ADR-0137 D2: repository tooling, workflows, docs, and test-only files cannot alter the
+  // ADR-0139 D2: repository tooling, workflows, docs, and test-only files cannot alter the
   // measured product and no longer invalidate committed evidence; the measurement toolchain is
   // bound separately through measurementHarnessSha256.
   it.each([
