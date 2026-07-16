@@ -88,7 +88,8 @@ function stripTrailingPathSeparators(value: string): string {
 
 export function fullPreviewPath(root: string, relativePath: string): string {
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${stripTrailingPathSeparators(root)}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
+  const normalizedRelativePath = relativePath.replaceAll(/\//gu, separator);
+  return `${stripTrailingPathSeparators(root)}${separator}${normalizedRelativePath}`;
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {

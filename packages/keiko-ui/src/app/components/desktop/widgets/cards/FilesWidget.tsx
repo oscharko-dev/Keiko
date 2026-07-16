@@ -100,7 +100,8 @@ function parentRelativePath(path: string): string | null {
 function displayPath(root: string, relativePath: string | null): string {
   if (relativePath === null || relativePath.length === 0) return root;
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${trimTrailingSeparators(root, "/\\")}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
+  const normalizedRelativePath = relativePath.replaceAll(/\//gu, separator);
+  return `${trimTrailingSeparators(root, "/\\")}${separator}${normalizedRelativePath}`;
 }
 
 function treePathFromGitPath(visibleDirectoryPath: string | null, path: string): string {
