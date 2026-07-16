@@ -30,7 +30,7 @@ import {
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
-export const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
+export const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
 const SHA_256 = /^[0-9a-f]{64}$/u;
 const REVISIONS = ["baseline", "candidate"];

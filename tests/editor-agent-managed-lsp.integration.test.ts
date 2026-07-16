@@ -230,9 +230,15 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
       allowDetachedHead: false,
       allowedPrefixes: ["local-"],
     },
-    requestedMode: "supervised-coding",
-    deploymentCeiling: "governed-assist",
-    effectiveMode: resolveEffectiveCodingWorkbenchMode("supervised-coding", "governed-assist"),
+    // ADR-0138's monotonic matrix gates repository-backed reads (now classed as workspace-read
+    // like queryGit) behind approval below Full access, so the provider-mechanics harness runs at
+    // the Full-access ceiling; mode-policy behaviour is covered by the governance unit suites.
+    requestedMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(
+      "autonomous-delivery",
+      "autonomous-delivery",
+    ),
     runtimeSource: "keiko-sidecar",
     actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
     connectorScopes: [],
@@ -262,7 +268,7 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
   };
   const registered = editorAgentAuthorityRegistry.register(
     envelope,
-    "governed-assist",
+    "autonomous-delivery",
     new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("expected authority registration");
@@ -346,6 +352,9 @@ async function createFixture(
   const deps = {
     config: undefined,
     configPresent: false,
+    // The provider-mechanics envelope registers at the Full-access ceiling (ADR-0138 gates
+    // repository-backed reads below it), so the route ceiling must match the envelope's.
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery" as const,
     evidenceStore: {
       put: (): string => "",
       list: (): readonly string[] => [],

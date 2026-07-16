@@ -18,7 +18,7 @@ import {
   evaluateFreshness,
 } from "../check-perf-evidence.mjs";
 
-const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
+const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
 const BASELINE_SOURCE_TREE_SHA_256 = "a".repeat(64);
 const SOURCE_TREE_SHA_256 = "b".repeat(64);

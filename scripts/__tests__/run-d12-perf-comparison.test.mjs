@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildHarnessArguments, runD12Comparison } from "../run-d12-perf-comparison.mjs";
 import { createD12RuntimeEnvironment } from "../d12-runtime-environment.mjs";
 
-const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
+const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
 const SOURCE_DIGESTS = { baseline: "a".repeat(64), candidate: "b".repeat(64) };
 const HARNESS_DIGEST = "c".repeat(64);

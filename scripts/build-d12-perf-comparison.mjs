@@ -25,7 +25,7 @@ import {
 } from "./check-perf-evidence.mjs";
 import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
 
-const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
+const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const AGGREGATE_RULE = "median-run-level-percentile";
 const MIN_PERF_RUNS = 10;
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
