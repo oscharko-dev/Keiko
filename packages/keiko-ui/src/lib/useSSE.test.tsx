@@ -93,7 +93,11 @@ describe("useSSE", () => {
     expect(view.result.current.error).toContain("Attempting to reconnect");
 
     act(() => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(499);
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    act(() => {
+      vi.advanceTimersByTime(501);
     });
     const reconnected = FakeEventSource.instances[1];
     act(() => {
