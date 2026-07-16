@@ -329,9 +329,10 @@ export function dashboardComment({
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
   const blocked = hardFailure(result.failures);
+  const incompleteEvidenceLabel = blocked ? "Blocking" : "Waiting";
   const detailsSummary = result.passed
     ? "Validated evidence"
-    : `${blocked ? "Blocking" : "Waiting"} evidence (${String(result.failures.length)})`;
+    : `${incompleteEvidenceLabel} evidence (${String(result.failures.length)})`;
   return [
     dashboardMarker,
     "## Keiko for Quality",
