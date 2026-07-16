@@ -1611,7 +1611,6 @@ describe("performance measurement subject", () => {
 
   it.each([
     "package-lock.json",
-    "package.json",
     "tsconfig.build.json",
     "packages/keiko-contracts/src/dap-debug.ts",
     "packages/keiko-editor/src/components/editor-model-registry.ts",
@@ -1627,6 +1626,7 @@ describe("performance measurement subject", () => {
   // bound separately through measurementHarnessSha256.
   it.each([
     ".github/workflows/e2e-extended.yml",
+    "package.json",
     "docs/release/1209-perf-evidence.json",
     "docs/release/keiko-editor-1209-closure-evidence.md",
     "packages/keiko-server/src/memory-handlers.ts",

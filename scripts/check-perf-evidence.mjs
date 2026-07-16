@@ -112,8 +112,14 @@ function isNonSubjectTree(path) {
   );
 }
 
+// ADR-0137 D2: the lockfile is the authoritative build-affecting dependency state (what
+// `npm ci` installs) and tsconfig drives the emitted output, so both bind the evidence.
+// package.json itself is intentionally NOT a subject: renaming a script or editing metadata
+// does not change the measured bundle, and the one package.json change that could — a build
+// script that alters the output — is independently caught by the deterministic
+// editor-release-evidence rebuild and editor-bundle-size checks on every pull request.
 function isRootMeasurementConfig(path) {
-  return /^package(?:-lock)?\.json$/u.test(path) || /^tsconfig(?:\.[a-z-]+)?\.json$/u.test(path);
+  return /^package-lock\.json$/u.test(path) || /^tsconfig(?:\.[a-z-]+)?\.json$/u.test(path);
 }
 
 export function isPerformanceSubjectPath(path) {

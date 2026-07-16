@@ -63,8 +63,7 @@ committed D12 evidence document, which was measured under the controlled environ
 ### D2 — Performance evidence binds the measured product, not the repository
 
 `sourceTreeSha256` for editor performance evidence is computed over the measured surfaces only:
-the editor and UI packages, the server editor subsystem, the shared contracts package, the runtime
-entry wiring (`src/`), and the root dependency manifests. The D12 measurement toolchain keeps its
+the editor and UI packages, the server editor subsystem, the shared contracts package, the runtime entry wiring (`src/`), the root lockfile, and the TypeScript configuration (package.json itself is not a subject; a build-script change that alters the bundle is caught by the deterministic bundle-evidence rebuild). The D12 measurement toolchain keeps its
 own dedicated digest (`measurementHarnessSha256`) exactly as before. Paths that cannot alter the
 measured product — repository tooling under `scripts/` outside the toolchain list, workflows,
 non-e2e tests, documentation — no longer invalidate evidence. Freshness stays fail-closed: stale,

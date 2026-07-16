@@ -284,7 +284,8 @@ These cost real time when rediscovered. They are all real and current.
   by extending global CSS. See [`docs/design-system/`](docs/design-system/).
 - **A change to a measured product surface invalidates the committed editor evidence.** The
   binding covers `packages/keiko-editor`, `packages/keiko-ui`, `packages/keiko-server/src/editor`,
-  `packages/keiko-contracts`, `src/`, and the root manifests — test-only files excluded
+  `packages/keiko-contracts`, `src/`, the root lockfile, and `tsconfig*` — test-only files and
+  `package.json` script/metadata churn excluded
   (ADR-0137 D2; tooling/workflow/docs changes never invalidate it). Regenerate both documents
   with the one-command producer `npm run perf:evidence:regen` (Linux-authoritative; see
   [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md)) and commit them as your final commit.

@@ -11,7 +11,8 @@ The two committed editor evidence documents live in `docs/release/`:
 
 Evidence binds the **measured product surfaces** only (ADR-0137 D2): `packages/keiko-editor/`,
 `packages/keiko-ui/`, `packages/keiko-server/src/editor/`, `packages/keiko-contracts/`, `src/`,
-and the root build/dependency manifests — excluding test-only files — plus the dedicated D12
+the root `package-lock.json`, and `tsconfig*` — excluding test-only files and `package.json`
+script/metadata churn — plus the dedicated D12
 measurement-toolchain digest. If your change touches none of those, committed evidence stays
 valid; repository tooling, workflow, docs, and test-only changes never require regeneration.
 
