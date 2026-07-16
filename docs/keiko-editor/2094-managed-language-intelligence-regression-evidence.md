@@ -1,24 +1,40 @@
 # Epic 2094 managed language intelligence regression evidence
 
-Evidence refreshed: 2026-07-15. Foundation-wave audit baseline: `origin/dev` at
-`8a1d61575123183d6f1227a5fea4c2742320a933`, plus the reviewed Epic #2094 working-tree changes. The
-final immutable candidate commit must rerun the same commands before delivery.
+Evidence refreshed: 2026-07-16. Foundation-wave audit baseline: `origin/dev` at
+`1056821a5b861f076cc88e120492aaf5cad37b9d`. The signed implementation candidate measured below is
+`5456afe9e5ef7792e478a70dbfe4745b8e22f3cb`; delivery-wide aggregate and remote checks remain
+separate from this focused M6 record.
 
 ## Focused closeout result
 
 ```text
 $ npm run test:managed-lsp-closeout
 Test Files  34 passed | 5 skipped (39)
-Tests       470 passed | 5 skipped (475)
-Duration    16.18s
+Tests       471 passed | 5 skipped (476)
+Duration    17.07s
 
 UI Test Files  2 passed (2)
 UI Tests       102 passed (102)
+UI Duration    3.07s
 ```
 
 The five skips are the offline real-provider smoke files for Python, Go, Shell, Java, and Rust. No
 approved real-provider directory was provisioned in this environment; no download was attempted.
 The mandatory fake-protocol conformance and product-path tests all executed.
+
+## Linux orchestration performance
+
+`npm run check:managed-lsp-performance` passed on Linux arm64 with Node 24.18.0 and npm 11.16.0.
+The deterministic fake-provider harness measured Keiko's process-manager orchestration rather than
+claiming real-provider indexing performance:
+
+| Metric                    | Samples | Observed p95 |  Maximum | Budget | Result   |
+| ------------------------- | ------: | -----------: | -------: | -----: | -------- |
+| cold initialize           |      20 |     0.550 ms | 2.869 ms | 250 ms | **PASS** |
+| warm JSON-RPC request     |     100 |     0.047 ms | 0.216 ms |  25 ms | **PASS** |
+| graceful disposal         |      20 |     0.127 ms | 0.407 ms | 100 ms | **PASS** |
+| process RSS delta         |       - |  1,470,464 B |        - | 64 MiB | **PASS** |
+| persistent disk from test |       - |          0 B |        - |  1 MiB | **PASS** |
 
 ## Provider and operation matrix
 
@@ -102,9 +118,10 @@ results. English and German strings are owned by `managed-language-i18n.ts`; the
 `check:ui-i18n` gate detects raw or missing UI text. Styling is component-scoped in
 `ManagedLanguageSettings.module.css`; the SHA-pinned global stylesheet is unchanged.
 
-The final release claim additionally requires the full UI coverage, editor smoke/performance, and
-Linux editor-release-evidence commands listed in the security/performance review. macOS-generated
-editor fingerprints are not authoritative.
+The signed source candidate additionally passed the Linux editor bundle producer/checker and the
+paired D12 browser comparison recorded in the release artifacts. The delivery-wide exact-head
+aggregate and remote checks remain mandatory; macOS-generated editor fingerprints are not
+authoritative.
 
 ## Coverage and release gates
 
