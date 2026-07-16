@@ -14,6 +14,7 @@ import { Readable } from "node:stream";
 import type { DebugLifecycleEvidence, EvidenceStore } from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import {
   createDapProductionService,
   dapProductionServiceTestBoundary,
@@ -621,6 +622,112 @@ describe("DAP production composition", () => {
     }
   });
 
+  it("routes a failed expiry sweep to the operator diagnostic sink with the real error, not a swallowed one", async () => {
+    vi.useFakeTimers();
+    try {
+      const secret = "SENTINEL_EXPIRY_SWEEP_FAILED";
+      const sweepExpired = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error(secret));
+      const current = observedFactories();
+      current.createManager.mockReturnValue(inertManager({ sweepExpired }));
+      const records: ServerDiagnosticRecord[] = [];
+      const service = dapProductionServiceTestBoundary.compose(
+        {
+          ...portableDeps(inertEndpoint()),
+          expirySweepIntervalMs: 100,
+          diagnosticSink: { record: (record): void => void records.push(record) },
+        },
+        current.factories,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        source: "dapProductionService.sweep",
+        operation: "dap.production.runtime-failure",
+        errorClass: "Error",
+        message: "DAP production background operation failed.",
+      });
+      expect(records[0]?.correlationId).toMatch(/^dap-runtime-failure-.+/u);
+      expect(JSON.stringify(records)).not.toContain(secret);
+      await service.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes a bounded shutdown failure to the operator diagnostic sink", async () => {
+    const secret = "SENTINEL_SHUTDOWN_UPSTREAM_FAILURE";
+    const shutdown = vi.fn(() => Promise.reject(new Error(secret)));
+    const current = observedFactories();
+    current.createManager.mockReturnValue(inertManager({ shutdown }));
+    const records: ServerDiagnosticRecord[] = [];
+    const service = dapProductionServiceTestBoundary.compose(
+      {
+        ...portableDeps(inertEndpoint()),
+        diagnosticSink: { record: (record): void => void records.push(record) },
+      },
+      current.factories,
+    );
+
+    await service.dispose();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      source: "dapProductionService.dispose",
+      operation: "dap.production.runtime-failure",
+      errorClass: "Error",
+      message: "DAP production background operation failed.",
+    });
+    expect(records[0]?.correlationId).toMatch(/^dap-runtime-failure-.+/u);
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
+  it("routes a live-evidence-projection failure to the operator diagnostic sink even when the composition supplies no projection observer", () => {
+    const secret = "SENTINEL_PROJECTION_FAILURE";
+    const current = observedFactories();
+    const records: ServerDiagnosticRecord[] = [];
+    const deps: DapProductionServiceDeps = {
+      ...portableDeps(inertEndpoint()),
+      onProjectionFailure: undefined,
+      diagnosticSink: { record: (record): void => void records.push(record) },
+    };
+    dapProductionServiceTestBoundary.compose(deps, current.factories);
+    const ledgerInput = typedValue<
+      Parameters<DapProductionServiceFactories["createLifecycleLedger"]>[0]
+    >(current.createLifecycleLedger.mock.calls[0]?.[0]);
+
+    ledgerInput.onProjectionFailure?.(new Error(secret));
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      source: "dapProductionService.projectLive",
+      operation: "dap.production.projection-failure",
+      errorClass: "Error",
+      message: "DAP live-evidence projection failed.",
+    });
+    expect(records[0]?.correlationId).toMatch(/^dap-projection-failure-.+/u);
+    expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
+  it("still forwards a live-evidence-projection failure to an optional composition-supplied observer", () => {
+    const onProjectionFailure = vi.fn();
+    const current = observedFactories();
+    const deps: DapProductionServiceDeps = {
+      ...portableDeps(inertEndpoint()),
+      onProjectionFailure,
+    };
+    dapProductionServiceTestBoundary.compose(deps, current.factories);
+    const ledgerInput = typedValue<
+      Parameters<DapProductionServiceFactories["createLifecycleLedger"]>[0]
+    >(current.createLifecycleLedger.mock.calls[0]?.[0]);
+    const failure = new Error("boom");
+
+    ledgerInput.onProjectionFailure?.(failure);
+
+    expect(onProjectionFailure).toHaveBeenCalledExactlyOnceWith(failure);
+  });
+
   it("shares one disposer that waits for an active expiry sweep before shutdown", async () => {
     vi.useFakeTimers();
     try {
@@ -769,7 +876,6 @@ describe("DAP production composition", () => {
     >(current.createRegistry.mock.calls[0]?.[0]);
 
     expect(ledgerInput.appendJournal).toBe(deps.appendJournal);
-    expect(ledgerInput.onProjectionFailure).toBe(deps.onProjectionFailure);
     expect(registryInput.now).toBe(deps.now);
     expect(registryInput.emitOutputLimit).toBe(deps.emitOutputLimit);
     await registryInput.appendEvidence("partition_a", evidence());

@@ -183,7 +183,7 @@ describe("deduplicateCandidates", () => {
     const clean = baseCandidate({ title: "Verify the login flow" });
     const withBidi = baseCandidate({
       id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-gggggggggggg"),
-      title: "Verify‎ the login flow", // U+200E LEFT-TO-RIGHT MARK injected
+      title: ["Verify", String.fromCodePoint(0x200e), " the login flow"].join(""),
     });
     expect(computeCandidateEquivalenceSignature(clean)).toBe(
       computeCandidateEquivalenceSignature(withBidi),
@@ -197,7 +197,7 @@ describe("deduplicateCandidates", () => {
     const clean = baseCandidate({ title: "Verify the login flow" });
     const withZwsp = baseCandidate({
       id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-hhhhhhhhhhhh"),
-      title: "Verify​ the login flow", // U+200B ZERO WIDTH SPACE injected
+      title: `Verify${String.fromCodePoint(0x200b)} the login flow`,
     });
     expect(computeCandidateEquivalenceSignature(clean)).toBe(
       computeCandidateEquivalenceSignature(withZwsp),

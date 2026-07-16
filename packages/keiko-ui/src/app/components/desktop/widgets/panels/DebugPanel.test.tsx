@@ -1,12 +1,17 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WatchEvaluationResult } from "@oscharko-dev/keiko-contracts";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { fetchCommandCatalog } from "../../../../../lib/commands-api";
 import type { DebugSessionSnapshot } from "../cards/debugSessionStore";
 import { useDebugSession } from "../cards/useDebugSession";
 import { DebugPanel, draftWatchId } from "./DebugPanel";
+
+vi.mock("../../../../../lib/commands-api", () => ({
+  fetchCommandCatalog: vi.fn(),
+}));
 
 const actions = {
   refreshInstrumentation: vi.fn(async () => {}),
@@ -216,6 +221,55 @@ describe("DebugPanel", () => {
     );
   });
 
+  it("reveals a same-file frame through onRevealFrame and never re-runs the window-mutation open-editor path", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn();
+    const onRevealFrame = vi.fn();
+    render(
+      <DebugPanel
+        root="/repo"
+        workspaceId="canonical-workspace-id"
+        activeFile="src/second.ts"
+        debugEnabled
+        openEditorFile={openEditorFile}
+        onRevealFrame={onRevealFrame}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /second/i }));
+
+    expect(onRevealFrame).toHaveBeenCalledWith(
+      expect.objectContaining({ frameRef: "frame-2", sourceFileId: "src/second.ts" }),
+    );
+    expect(openEditorFile).not.toHaveBeenCalled();
+  });
+
+  it("still routes a cross-file frame through openEditorFile even when onRevealFrame is wired", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn();
+    const onRevealFrame = vi.fn();
+    render(
+      <DebugPanel
+        root="/repo"
+        workspaceId="canonical-workspace-id"
+        activeFile="src/first.ts"
+        debugEnabled
+        openEditorFile={openEditorFile}
+        onRevealFrame={onRevealFrame}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /second/i }));
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/second.ts",
+      lineStart: 4,
+      lineEnd: 4,
+    });
+    expect(onRevealFrame).not.toHaveBeenCalled();
+  });
+
   it("starts only a closed-catalog file target with the server-projected activation revision", async () => {
     const user = userEvent.setup();
     vi.mocked(useDebugSession).mockReturnValue({
@@ -234,7 +288,54 @@ describe("DebugPanel", () => {
 
     await user.click(screen.getByRole("button", { name: /start debugging current file/i }));
 
-    expect(actions.start).toHaveBeenCalledWith({ kind: "file", fileId: "src/program.ts" }, 7);
+    // The launch target now resolves asynchronously (`resolveDebugLaunchTarget`) before `start` is
+    // invoked, even for a non-test file that never reaches the catalog-discovery branch.
+    await waitFor(() =>
+      expect(actions.start).toHaveBeenCalledWith({ kind: "file", fileId: "src/program.ts" }, 7),
+    );
+  });
+
+  it("starts a recognized test file through the discovered, trusted catalog test task (Epic #2096, ADR-0136 D4)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: null },
+      actions,
+    });
+    vi.mocked(fetchCommandCatalog).mockResolvedValueOnce({
+      schemaVersion: "1",
+      projectId: "/repo",
+      tasks: [
+        {
+          id: "npm-script:test",
+          kind: "test",
+          label: "npm run test",
+          executable: "npm",
+          args: ["run", "test"],
+          source: "package-json-script",
+          trustState: "trusted",
+          trustReason: "repository-authored-script",
+        },
+      ],
+    });
+    render(
+      <DebugPanel
+        root="/repo"
+        activeFile="src/program.test.ts"
+        workspaceId="canonical-workspace-id"
+        activationRevision={7}
+        debugEnabled
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start debugging current file/i }));
+
+    expect(fetchCommandCatalog).toHaveBeenCalledWith("/repo");
+    await waitFor(() =>
+      expect(actions.start).toHaveBeenCalledWith(
+        { kind: "catalog", targetId: "npm-script:test" },
+        7,
+      ),
+    );
   });
 
   it("controls the current paused session through explicit debug controls", async () => {
@@ -314,6 +415,71 @@ describe("DebugPanel", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("lists source breakpoints accessibly and lets a keyboard/screen-reader user inspect and manage them", async () => {
+    // Epic #2096 a11y-sweep finding 1: the gutter glyphs are pure CSS on non-focusable Monaco
+    // decorations, never exposed to the accessibility tree. This is the only accessible inventory.
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn();
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: {
+        ...snapshot,
+        instrumentation: {
+          ...snapshot.instrumentation!,
+          breakpoints: [
+            {
+              id: "bp-1",
+              fileId: "src/second.ts",
+              line: 4,
+              enabled: true,
+              kind: "line",
+              verification: "verified",
+            },
+            {
+              id: "bp-2",
+              fileId: "src/first.ts",
+              line: 2,
+              enabled: false,
+              kind: "conditional",
+              condition: "count > 1",
+              verification: "verified",
+            },
+          ],
+        },
+      },
+      actions,
+    });
+    render(
+      <DebugPanel
+        root="/repo"
+        workspaceId="canonical-workspace-id"
+        debugEnabled
+        openEditorFile={openEditorFile}
+      />,
+    );
+
+    const list = screen.getByRole("list", { name: "Breakpoints" });
+    expect(within(list).getByText("Conditional breakpoint")).toBeInTheDocument();
+    expect(within(list).getByText("count > 1")).toBeInTheDocument();
+
+    await user.click(within(list).getByRole("button", { name: "src/first.ts, line 2" }));
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/first.ts",
+      lineStart: 2,
+      lineEnd: 2,
+    });
+
+    await user.click(within(list).getByRole("checkbox", { name: "Enable breakpoint" }));
+    expect(actions.saveBreakpoints).toHaveBeenCalledWith("src/first.ts", [
+      expect.objectContaining({ id: "bp-2", enabled: true }),
+    ]);
+
+    await user.click(
+      within(list).getAllByRole("button", { name: "Remove breakpoint" })[0] as HTMLElement,
+    );
+    expect(actions.saveBreakpoints).toHaveBeenCalledWith("src/first.ts", []);
+  });
+
   it("keeps the start action disabled without both an active file and a server activation revision", () => {
     vi.mocked(useDebugSession).mockReturnValue({
       snapshot: { ...snapshot, session: null },
@@ -359,6 +525,49 @@ describe("DebugPanel", () => {
     expect(child).toHaveFocus();
     await user.keyboard("{ArrowLeft}");
     expect(scope).toHaveFocus();
+  });
+
+  it("never moves DOM focus into the call stack or variable tree when a session pauses on its own", async () => {
+    const outsideButton = document.createElement("button");
+    outsideButton.textContent = "outside the debug panel";
+    document.body.append(outsideButton);
+    outsideButton.focus();
+
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: null, stack: null },
+      actions,
+    });
+    const { rerender } = render(
+      <DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />,
+    );
+    expect(outsideButton).toHaveFocus();
+
+    // The session pausing here is purely a snapshot/prop change -- no click, no keydown, no user
+    // interaction with this panel at all -- so it must never steal focus away from wherever the
+    // local human already was (e.g. the editor surface). Only an explicit row interaction may move
+    // focus (covered by the tree/call-stack keyboard-navigation tests above and below).
+    vi.mocked(useDebugSession).mockReturnValue({ snapshot, actions });
+    rerender(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
+    await waitFor(() => expect(actions.loadStack).toHaveBeenCalled());
+
+    expect(outsideButton).toHaveFocus();
+    outsideButton.remove();
+  });
+
+  it("discloses that saving a paused variable mutates the live debuggee", async () => {
+    const user = userEvent.setup();
+    render(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
+    const scope = screen.getByRole("treeitem", { name: /local/i });
+    scope.focus();
+
+    await user.keyboard("{ArrowRight}");
+    const child = screen.getByRole("treeitem", { name: /item: 1/i });
+    await user.keyboard("{ArrowRight}");
+    expect(child).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    const editor = screen.getByRole("group", { name: /paused variable editor/i });
+    expect(within(editor).getByText(/mutates the live paused debuggee/i)).toBeInTheDocument();
   });
 
   it("supports pointer-free call-stack focus and selection", async () => {

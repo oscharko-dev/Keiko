@@ -18,6 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const MACOS_SIPS_EXECUTABLE = "/usr/bin/sips";
 const REPO_ROOT = resolve(__dirname, "..");
 const UI_PUBLIC = join(REPO_ROOT, "packages", "keiko-ui", "public");
 
@@ -81,9 +82,13 @@ function writeSvgIcon(file, size, options) {
 }
 
 function renderSvg(inputSvg, outputPng) {
-  const result = spawnSync("sips", ["-s", "format", "png", inputSvg, "--out", outputPng], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    MACOS_SIPS_EXECUTABLE,
+    ["-s", "format", "png", inputSvg, "--out", outputPng],
+    {
+      encoding: "utf8",
+    },
+  );
   if (result.status !== 0) {
     throw new Error(
       [

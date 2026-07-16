@@ -18,12 +18,14 @@ import {
   buildDebugVariableTree,
   buildStackPage,
   parseDebugSessionStartRequest,
+  type DebugActivationInput,
 } from "@oscharko-dev/keiko-contracts";
 
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
+import { createDebugCapabilityGate } from "./debugActivationPolicy.js";
 import { DapAdapterPreflightError, preflightDapAdapter } from "./dapNodeAdapter.js";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
 import { breakpointStoreWorkspaceFingerprint, createBreakpointStore } from "./breakpointStore.js";
@@ -484,6 +486,24 @@ describe("governed DAP cross-stack adversarial containment (#2348)", () => {
   });
 
   it("keeps the activation contract closed while rejecting unknown policy-shaping fields", () => {
-    expect(DEBUG_ACTIVATION_SCHEMA_VERSION).toBe("1");
+    const gate = createDebugCapabilityGate();
+    const wellFormed: DebugActivationInput = {
+      schemaVersion: DEBUG_ACTIVATION_SCHEMA_VERSION,
+      adapterId: "node-typescript",
+      revision: 7,
+      productSupport: "supported",
+      deploymentPolicy: "allowed",
+      provisioning: "provisioned",
+      workspaceActivation: "enabled",
+    };
+    expect(gate.resolve(wellFormed)).toMatchObject({ ok: true, state: "available" });
+
+    const smuggled = { ...wellFormed, forcedPolicyResult: "allowed" };
+    expect(gate.resolve(smuggled as unknown as DebugActivationInput)).toMatchObject({
+      ok: false,
+      state: "disabled",
+      reasonCode: "INVALID_INPUT",
+      policyResult: "denied",
+    });
   });
 });

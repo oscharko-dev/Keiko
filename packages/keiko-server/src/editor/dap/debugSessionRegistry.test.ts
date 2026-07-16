@@ -1557,6 +1557,21 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
     ]);
   });
 
+  it("refuses a fresh startup attempt once the debuggee has already launched (ADR-0136 D5)", async () => {
+    const { records, registry } = setup(() => 1);
+    // A single prior attempt is well under the two-per-minute throttle count, so this proves the
+    // rejection comes from the "already launched" guard and not from attempt counting.
+    await activate(registry);
+    await expect(registry.beginStartupAttempt("session_a")).rejects.toMatchObject({
+      code: "STARTUP_THROTTLED",
+    });
+    expect(registry.session("session_a")).toBeUndefined();
+    expect(records.slice(-2).map(({ evidence }) => evidence)).toMatchObject([
+      { eventKind: "failure", state: "restartThrottled", reason: "restartThrottled" },
+      { eventKind: "teardown", state: "restartThrottled", reason: "restartThrottled" },
+    ]);
+  });
+
   it("retains termination ownership until every pending launch reports completion", async () => {
     const { registry } = setup();
     await registry.reserve(identity());

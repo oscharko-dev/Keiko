@@ -21,6 +21,7 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
 import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -138,7 +139,7 @@ function parseTarget(value) {
 }
 
 function shortSha() {
-  const result = spawnSync("git", ["rev-parse", "--short=7", "HEAD"], {
+  const result = spawnSync(resolveHostExecutable("git"), ["rev-parse", "--short=7", "HEAD"], {
     cwd: repoRoot,
     encoding: "utf8",
   });

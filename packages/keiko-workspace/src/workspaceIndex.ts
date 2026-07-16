@@ -793,7 +793,7 @@ function snapshotFileSegment(storageKey: string): string {
 }
 
 function tempSnapshotFileSegment(finalSegment: string): string {
-  return `${finalSegment}.${sha256Hex(`${finalSegment}:${Date.now().toString()}:${Math.random().toString()}`).slice(0, 16)}.tmp`;
+  return `${finalSegment}.${sha256Hex(`${finalSegment}:${randomUUID()}`).slice(0, 16)}.tmp`;
 }
 
 function assertSafePathSegment(segment: string): string {

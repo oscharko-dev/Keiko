@@ -1,5 +1,7 @@
+import { posix } from "node:path";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandTaskCatalog } from "@oscharko-dev/keiko-contracts";
+import { isCommandAllowed, type CommandRule } from "@oscharko-dev/keiko-tools";
 
 import type { DapAdapterPreflightDeps } from "./dapNodeAdapter.js";
 import type { DebugCapsulePlanBinding } from "./debugCapsulePlan.js";
@@ -29,6 +31,52 @@ export interface DapOperatorProvisioningFactoryOptions {
 
 function unavailableWorkspace(): never {
   throw new Error("INVALID_DEBUG_WORKSPACE_BINDING");
+}
+
+// ADR-0136 D4 "require command-rule approval" — an independent, argv-inspecting Layer-1 check.
+// Deliberately NOT derived from debug-launch-policy.ts's structureAllowed()/expectedArgs(): if a
+// future change ever loosens that exact-match Layer-2 comparison, this hand-authored CommandRule
+// denylist still blocks the argv shapes that load or execute code outside the closed launch plan.
+// Mirrors terminal-policy.ts's isTerminalCommandAllowed, which composes the shared isCommandAllowed
+// as its own independent layer ahead of a per-command flag policy.
+const DEBUG_LAUNCH_DENIED_FLAGS: readonly string[] = Object.freeze([
+  // node: flags that load or execute code beyond the closed single-target/npm-run launch shape.
+  "--require",
+  "-r",
+  "--eval",
+  "-e",
+  "--print",
+  "-p",
+  "--loader",
+  "--experimental-loader",
+  "--import",
+  "--inspect",
+  "--inspect-brk",
+  "--inspect-port",
+  // npm (invoked here as a node target for the catalog launch): flags that run an arbitrary shell
+  // command or widen scope beyond the fixed, reviewed tuple (ADR-0018 S-H2 class of flag).
+  "-c",
+  "--call",
+  "--prefix",
+  "--global",
+  "-g",
+]);
+
+function debugLaunchCommandRules(nodeCapsulePath: string): readonly CommandRule[] {
+  return Object.freeze([
+    { executable: posix.basename(nodeCapsulePath), denyFlags: DEBUG_LAUNCH_DENIED_FLAGS },
+  ]);
+}
+
+// Builds the production Layer-1 callback: independent of Layer-2's exact-match pinning, it
+// resolves its own CommandRule allowlist from the already-approved node capsule identity and then
+// inspects the full argv for denied flags via the shared isCommandAllowed decision function.
+function debugLaunchCommandApproved(
+  nodeCapsulePath: string,
+): (executable: string, args: readonly string[]) => boolean {
+  const rules = debugLaunchCommandRules(nodeCapsulePath);
+  return (executable, args): boolean =>
+    isCommandAllowed(rules, posix.basename(executable), args).allowed;
 }
 
 function artifact(value: DapOperatorProvisionedArtifact): DapOperatorProvisionedArtifact {
@@ -73,7 +121,7 @@ function launchContext(
     backend: artifact(launch.backend),
     runtimeClosure: launch.runtimeClosure.map(artifact),
     platform: process.platform,
-    layer1Allowed: (executable): boolean => executable === launch.node.capsulePath,
+    layer1Allowed: debugLaunchCommandApproved(launch.node.capsulePath),
     ...(launch.containerImage === undefined ? {} : { containerImage: launch.containerImage }),
   };
 }

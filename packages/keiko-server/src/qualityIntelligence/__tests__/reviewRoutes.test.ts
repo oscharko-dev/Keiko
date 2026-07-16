@@ -1262,7 +1262,7 @@ describe("handleQiReview — reviewerLabel handling", () => {
 describe("handleQiReview — reviewerLabel bidi normalisation", () => {
   it("strips U+202E (RLO) from reviewerLabel before it lands in the audit log", async () => {
     // 'Admin' + U+202E + 'rotidua' — the classic Trojan-source RLO spoofing pattern.
-    const rlo = "‮";
+    const rlo = String.fromCodePoint(0x202e);
     const spoofedLabel = `Admin${rlo}rotidua`;
     const req = makeReq({
       action: "approve",
@@ -1281,7 +1281,7 @@ describe("handleQiReview — reviewerLabel bidi normalisation", () => {
 
   it("omits the self-asserted label when reviewerLabel consists only of bidi/format characters", async () => {
     // A label made entirely of format characters normalises to empty string → default fallback.
-    const formatOnly = "‮​‌";
+    const formatOnly = String.fromCodePoint(0x202e, 0x200b, 0x200c);
     const req = makeReq({
       action: "approve",
       candidateId: "cand-format",

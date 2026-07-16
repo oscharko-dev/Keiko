@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const githubApiVersion = "2022-11-28";
 const defaultBaseBranch = "release/0.2";
@@ -216,12 +217,18 @@ async function githubJson(path, token) {
 }
 
 function githubJsonFromGh(path, token) {
+  let executable;
+  try {
+    executable = resolveHostExecutable("gh");
+  } catch {
+    return undefined;
+  }
   const env = { ...process.env };
   if (typeof token === "string" && token.length > 0) {
     env.GH_TOKEN = token;
   }
   const result = spawnSync(
-    "gh",
+    executable,
     ["api", path, "--header", `X-GitHub-Api-Version: ${githubApiVersion}`],
     {
       encoding: "utf8",

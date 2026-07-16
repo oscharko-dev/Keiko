@@ -16,6 +16,7 @@ import {
 } from "./portable-runtime.mjs";
 
 const TARGETS = new Set(["macos-arm64", "macos-x64"]);
+const MACOS_DITTO_EXECUTABLE = "/usr/bin/ditto";
 
 export class IsolatedMacSmokeError extends Error {}
 
@@ -86,7 +87,9 @@ function safeDisposableRoot(disposableRoot, runnerTemp) {
 }
 
 function extractWithDitto(archive, disposable) {
-  const result = spawnSync("ditto", ["-x", "-k", archive, disposable], { stdio: "ignore" });
+  const result = spawnSync(MACOS_DITTO_EXECUTABLE, ["-x", "-k", archive, disposable], {
+    stdio: "ignore",
+  });
   if (result.error !== undefined || result.status !== 0) fail("archive extraction failed");
 }
 

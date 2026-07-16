@@ -83,10 +83,11 @@ smoke E2E, editor E2E, package surface, and deterministic budget checks.
 ### D5 — Unbounded and quota-dependent analysis remains advisory
 
 Gitar remains an independent review and repair aid, but is not required while its current plan can
-pause automatic processing or omit a check. `Keiko for Quality` remains dormant and non-required;
-its check and dashboard are not merge authority. Either product may become required only after a
-live availability probe proves current-head emission, bounded settlement, stable machine-readable
-evidence, and a failure mode that cannot deadlock its own repair path.
+pause automatic processing or omit a check. `Keiko for Quality` may run as an advisory external
+aggregate but remains non-required; its check and dashboard are not merge authority. Either product
+may become required only after a live availability probe proves current-head emission, bounded
+settlement, stable machine-readable evidence, and a failure mode that cannot deadlock its own repair
+path.
 
 Full mutation testing remains strict but runs daily and through explicit dispatch. Focused mutation
 is a pre-publication tool for critical changes when its scope is tractable. The synchronous PR path

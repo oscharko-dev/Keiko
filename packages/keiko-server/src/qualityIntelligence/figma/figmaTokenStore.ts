@@ -35,6 +35,7 @@ import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 const KEY_BYTES = 32;
 const KEYFILE_NAME = "figma-vault.key";
 const KEYCHAIN_SERVICE = "keiko-figma-vault";
+const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 export type FigmaVaultKeySource = "env" | "keychain" | "keyfile";
 
@@ -100,7 +101,7 @@ function keyFromKeychain(): Buffer | undefined {
   const account = userInfo().username;
   try {
     const found = execFileSync(
-      "security",
+      MACOS_SECURITY_EXECUTABLE,
       ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
@@ -114,7 +115,7 @@ function generateKeychainKey(account: string): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
   try {
     execFileSync(
-      "security",
+      MACOS_SECURITY_EXECUTABLE,
       ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", key.toString("base64")],
       { stdio: ["ignore", "ignore", "ignore"] },
     );

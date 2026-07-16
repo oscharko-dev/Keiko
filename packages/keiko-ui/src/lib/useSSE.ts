@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createSameOriginApiEventSource } from "./safe-event-source";
+import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
 
 const MAX_VISIBLE_SSE_EVENTS = 500;
@@ -82,7 +83,7 @@ function reconnectDelay(): number {
   // previous fixed 0–500ms additive jitter clustered every stream consumer (all windows,
   // all tabs) into the same half-second wave after a BFF restart; spreading by half the
   // backoff keeps the herd apart at every attempt depth.
-  return Math.floor(base / 2 + Math.random() * (base / 2));
+  return Math.floor(base / 2) + secureRandomInt(Math.ceil(base / 2));
 }
 
 function scheduleReconnect(): void {

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
@@ -56,8 +56,11 @@ function probeCandidate(
   extension: string,
 ): WorkspaceExternalExecutable | undefined {
   const candidate = resolvePath(resolvePath(directory), name + extension);
-  if (!existsSync(candidate)) return undefined;
-  if ((statSync(candidate).mode & 0o111) === 0) return undefined;
+  try {
+    accessSync(candidate, constants.X_OK);
+  } catch {
+    return undefined;
+  }
   return { path: candidate, real: realpathSync(candidate) };
 }
 

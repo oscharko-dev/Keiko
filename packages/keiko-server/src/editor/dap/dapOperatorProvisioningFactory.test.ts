@@ -78,6 +78,63 @@ describe("createDapOperatorProvisioning", () => {
     expect(provisioning.targetCatalog("/workspace")).toMatchObject({ projectId: "/workspace" });
   });
 
+  it("independently denies argv injection carrying a dangerous node/npm flag (D4 command-rule approval)", () => {
+    const provisioning = createDapOperatorProvisioning({
+      document: parsedDocument(),
+      processEnv: {},
+      fs,
+      discover: () => catalog,
+      workspaceForPartition: (partition) =>
+        partition === "partition"
+          ? { root: "/workspace", projectId: "/workspace", trusted: true }
+          : undefined,
+      workspaceForRoot: (root) =>
+        root === "/workspace" ? { root, projectId: root, trusted: true } : undefined,
+    });
+    const { layer1Allowed } = provisioning.launchContext({
+      workspacePartitionKey: "partition",
+    } as never);
+    const nodeCapsulePath = parsedDocument().launch.node.capsulePath;
+
+    // The legitimate closed shapes (file-target and catalog-target) must still be approved.
+    expect(layer1Allowed(nodeCapsulePath, ["/keiko-execution-root/app.js"])).toBe(true);
+    expect(
+      layer1Allowed(nodeCapsulePath, [
+        parsedDocument().launch.npm.capsulePath,
+        "--ignore-scripts",
+        "--script-shell=/opt/keiko-runtime/shell",
+        "--userconfig=/opt/keiko-debug/npm-user-config",
+        "--globalconfig=/opt/keiko-debug/npm-global-config",
+        "--location=global",
+        "run",
+        "start",
+      ]),
+    ).toBe(true);
+
+    // Even though the executable identity still matches the already-approved node capsule path,
+    // an argv shape that smuggles in a code-loading flag must be denied independently of Layer 2.
+    expect(layer1Allowed(nodeCapsulePath, ["--require", "/keiko-execution-root/evil.js"])).toBe(
+      false,
+    );
+    expect(
+      layer1Allowed(nodeCapsulePath, ["/keiko-execution-root/app.js", "--inspect=0.0.0.0:9229"]),
+    ).toBe(false);
+    expect(
+      layer1Allowed(nodeCapsulePath, [
+        parsedDocument().launch.npm.capsulePath,
+        "--ignore-scripts",
+        "--script-shell=/opt/keiko-runtime/shell",
+        "--userconfig=/opt/keiko-debug/npm-user-config",
+        "--globalconfig=/opt/keiko-debug/npm-global-config",
+        "--location=global",
+        "run",
+        "start",
+        "--call",
+        "rm -rf /",
+      ]),
+    ).toBe(false);
+  });
+
   it("fails closed when the server no longer recognizes a workspace binding", () => {
     const provisioning = createDapOperatorProvisioning({
       document: parsedDocument(),

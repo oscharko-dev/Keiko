@@ -338,7 +338,7 @@
     "packages/keiko-tools/src/debug-launch-policy.ts": 95,
     "packages/keiko-server/src/editor/dap/debugLaunchCatalog.ts": 90,
     "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts": 90,
-    "packages/keiko-server/src/editor/dap/debugLaunchTopology.ts": 80,
+    "packages/keiko-server/src/editor/dap/testing/debugLaunchTopology.ts": 80,
     "packages/keiko-server/src/editor/dap/debugSessionRegistry.ts": 85,
     "packages/keiko-server/src/editor/dap/providers/dapAdapterProviders.ts": 95,
     "packages/keiko-server/src/editor/dap/providers/nodeDebugAdapter.ts": 95,

@@ -245,14 +245,14 @@ describe("classifier — deterministic, fail-closed, ordered precedence", () => 
   });
 
   it("strips a zero-width char injected into a destructive verb (no read-only downgrade)", () => {
-    const zwsp = "​"; // zero-width space
+    const zwsp = String.fromCodePoint(0x200b); // zero-width space
     expect(classifySpokenActionEffect(`de${zwsp}lete the records`)).toBe("destructive");
     expect(classifySpokenActionEffect(`show the rows then de${zwsp}lete them`)).toBe("destructive");
   });
 
   it("strips a BOM / bidi-override injected into a destructive verb", () => {
-    const bom = "﻿"; // zero-width no-break space / BOM
-    const rlo = "‮"; // right-to-left override
+    const bom = String.fromCodePoint(0xfeff); // zero-width no-break space / BOM
+    const rlo = String.fromCodePoint(0x202e); // right-to-left override
     expect(classifySpokenActionEffect(`de${bom}lete it`)).toBe("destructive");
     expect(classifySpokenActionEffect(`de${rlo}lete it`)).toBe("destructive");
   });

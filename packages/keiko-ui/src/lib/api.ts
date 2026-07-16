@@ -139,6 +139,7 @@ import type {
   ManagedLspRuntimeConfiguration,
   ManagedLspSemanticTokenResponse,
   EditorM7SettingsMutation,
+  EditorM7SettingsMutationOk,
   EditorM7SettingsMutationResult,
   EditorM7SettingsSnapshot,
   EditorM7WorkspaceSnippetMutation,
@@ -2046,6 +2047,28 @@ export function mutateEditorSettings(
 ): Promise<EditorM7SettingsMutationResult> {
   return fetchJson("/api/editor/settings", {
     method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export type DebugActivationAction = "activate" | "deactivate";
+
+export interface DebugActivationMutationInput {
+  readonly root: string;
+  readonly expectedRevision: number;
+}
+
+export function mutateDebugActivation(
+  action: DebugActivationAction,
+  input: DebugActivationMutationInput,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsMutationOk> {
+  return fetchJson(`/api/editor/settings/debug/${action}`, {
+    method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),

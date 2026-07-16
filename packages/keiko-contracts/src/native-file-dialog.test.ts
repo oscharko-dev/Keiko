@@ -50,9 +50,11 @@ describe("validateNativeFileDialogRequest", () => {
   });
 
   it("strips bidi and zero-width characters from the dialog title", () => {
+    const rightToLeftOverride = String.fromCodePoint(0x202e);
+    const zeroWidthSpace = String.fromCodePoint(0x200b);
     const result = validateNativeFileDialogRequest({
       mode: "open-file",
-      title: "Select‮ ​file",
+      title: `Select${rightToLeftOverride} ${zeroWidthSpace}file`,
     });
     expect(result).toEqual({ ok: true, value: { mode: "open-file", title: "Select file" } });
   });

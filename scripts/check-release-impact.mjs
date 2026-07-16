@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 export const releaseImpactCatalogFile = "release-impact.catalog.json";
 export const releaseImpactSchemaVersion = 1;
@@ -264,7 +265,13 @@ function githubRepositoryFromRemote(remoteUrl) {
 
 function readGithubReview(reference) {
   const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
-  const result = spawnSync("gh", ["api", path], { encoding: "utf8", stdio: "pipe" });
+  let executable;
+  try {
+    executable = resolveHostExecutable("gh");
+  } catch {
+    return undefined;
+  }
+  const result = spawnSync(executable, ["api", path], { encoding: "utf8", stdio: "pipe" });
   if (result.status !== 0) return undefined;
   try {
     return JSON.parse(result.stdout);
@@ -711,7 +718,11 @@ function validatePublishedEntryRetained(previousEntry, currentById, failures) {
 }
 
 function git(root, args) {
-  return spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" });
+  return spawnSync(resolveHostExecutable("git"), args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
 }
 
 function parseStableVersion(value) {

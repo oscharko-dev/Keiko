@@ -44,6 +44,7 @@ import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js"
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
+const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 export type SecretVaultStoreErrorCode =
   "SECRET_VAULT_STORE_INVALID_JSON" | "SECRET_VAULT_STORE_INVALID_SCHEMA";
@@ -137,7 +138,10 @@ function keyFromEnv(
 export type KeychainCommandRunner = (args: readonly string[]) => string;
 
 function defaultKeychainCommandRunner(args: readonly string[]): string {
-  return execFileSync("security", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return execFileSync(MACOS_SECURITY_EXECUTABLE, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
 }
 
 // Builds the default keychain-backed key access for a service. Exported with an injectable runner so

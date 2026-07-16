@@ -245,4 +245,93 @@ describe("debug activation control", () => {
     expect(disposals.filter((root) => root === healthy)).toHaveLength(1);
     control.dispose();
   });
+
+  it("does not revoke a live session merely because the shared M7 settings revision counter bumped", async () => {
+    vi.useFakeTimers();
+    const root = temporaryDirectory("debug-unrelated-revision-bump");
+    const disposeActiveSession = vi.fn(() => Promise.resolve());
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => "provisioned",
+      disposeActiveSession,
+      watchdogIntervalMs: 1_000,
+    });
+    // The workspace stays enabled/available across both resolves; only the combined M7 revision
+    // (bumped by an unrelated setting such as fontSize) changes, which must never look like
+    // narrowing.
+    expect(control.resolve(context(root, "enabled", 5))).toMatchObject({ state: "available" });
+    expect(control.resolve(context(root, "enabled", 6))).toMatchObject({ state: "available" });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(disposeActiveSession).not.toHaveBeenCalled();
+    control.dispose();
+  });
+
+  it("does not let a routine no-op watchdog tick overwrite real deactivation evidence", async () => {
+    vi.useFakeTimers();
+    const root = temporaryDirectory("debug-evidence-no-overwrite");
+    const evidence: DebugActivationEvidence[] = [];
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: () => "provisioned",
+      disposeActiveSession: () => Promise.resolve(),
+      projectEvidence: (_fingerprint, entry): void => {
+        evidence.push(entry);
+      },
+      watchdogIntervalMs: 1_000,
+    });
+
+    await control.synchronize({
+      action: "deactivate",
+      changed: true,
+      context: context(root, "disabled", 5),
+    });
+    expect(evidence).toEqual([
+      expect.objectContaining({ action: "deactivate", outcome: "accepted", revision: 5 }),
+    ]);
+
+    // A full watchdog tick passes with nothing further changed -- the routine, non-revoking
+    // settingsChange sweep must not durably re-record (and thereby overwrite) the real event.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(evidence).toHaveLength(1);
+    control.dispose();
+  });
+
+  it("evicts an idle-tracked workspace after the retention window instead of watching it forever", async () => {
+    vi.useFakeTimers();
+    const root = temporaryDirectory("debug-idle-eviction");
+    let provisioningCalls = 0;
+    const control = createDebugActivationControlService({
+      mutex: createWorkspaceMutexRegistry(),
+      productSupport: () => "supported",
+      deploymentPolicy: () => "allowed",
+      provisioning: (): "provisioned" => {
+        provisioningCalls += 1;
+        return "provisioned";
+      },
+      disposeActiveSession: () => Promise.resolve(),
+      watchdogIntervalMs: 1_000,
+      trackedIdleTtlMs: 5_000,
+    });
+    control.resolve(context(root, "enabled"));
+    provisioningCalls = 0;
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(provisioningCalls).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const callsAfterEviction = provisioningCalls;
+
+    // No further resolve()/synchronize() ever touches this workspace again, so once it ages out
+    // the watchdog must stop paying its per-second cost for it, forever.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(provisioningCalls).toBe(callsAfterEviction);
+    control.dispose();
+  });
 });

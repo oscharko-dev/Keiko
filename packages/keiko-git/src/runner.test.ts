@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGitProcessRunner, defaultGitProcessRunner, GIT_BASE_ARGS } from "./runner.js";
@@ -74,6 +74,18 @@ describe("createGitProcessRunner", () => {
     expect(result.exitCode).toBe(127);
     expect(result.stderr).toBe("git executable unavailable");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a repository-local git executable inherited through PATH",
+    async () => {
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const runner = createGitProcessRunner(() => ({ PATH: bin }));
+      const result = await runner(["--version"], { cwd: root, maxBytes: 1024, timeoutMs: 10_000 });
+      expect(result).toMatchObject({ exitCode: 127, stderr: "git executable unavailable" });
+    },
+  );
 
   it("truncates output at the byte cap and terminates the process", async () => {
     writeFileSync(join(root, "big.txt"), "x".repeat(64 * 1024));

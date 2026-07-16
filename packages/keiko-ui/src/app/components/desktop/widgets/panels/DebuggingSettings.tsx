@@ -6,6 +6,7 @@ import type {
   DebugActivationReasonCode,
   DebugActivationSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import styles from "./DebuggingSettings.module.css";
 import { type DebuggingTranslate, useDebuggingTranslate as useTranslate } from "./debugging-i18n";
 import { useDebuggingSettings } from "./useDebuggingSettings";
@@ -57,11 +58,28 @@ export function DebuggingSettings({ root }: { readonly root?: string | undefined
   const cancelRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLInputElement>(null);
   const wasConfirmingRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogTabTrap(dialogRef);
 
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
     else if (wasConfirmingRef.current) openerRef.current?.focus();
     wasConfirmingRef.current = confirming;
+  }, [confirming]);
+
+  // Matches the Escape-to-close technique already used by this package's other accessible dialogs
+  // (e.g. EditorDebugSessionHost's BreakpointTextDialog): a document-level listener rather than a JSX
+  // onKeyDown on the non-interactive dialog element, which keeps this on the established pattern
+  // instead of re-deriving the jsx-a11y/no-noninteractive-element-interactions exception per dialog.
+  useEffect(() => {
+    if (!confirming) return;
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") setConfirming(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [confirming]);
 
   const submitToggle = (next: boolean): void => {
@@ -146,6 +164,7 @@ export function DebuggingSettings({ root }: { readonly root?: string | undefined
       {!confirming ? null : (
         <div className={styles.dialogBackdrop}>
           <div
+            ref={dialogRef}
             className={styles.dialog}
             role="alertdialog"
             aria-modal="true"
