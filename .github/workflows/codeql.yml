@@ -17,6 +17,10 @@ on:
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
       - "release/**"
+  # ADR-0137 D7: code scanning also validates merge-queue groups.
+  merge_group:
+    branches:
+      - dev
   schedule:
     - cron: "15 2 * * 0"
 

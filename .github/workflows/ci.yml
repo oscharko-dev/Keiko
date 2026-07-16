@@ -27,6 +27,11 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-opencode-codex
       - "release/**"
+  # ADR-0137 D7: every required workflow also validates merge-queue groups so a human can
+  # enable GitHub's merge queue without agents re-racing a moving dev branch.
+  merge_group:
+    branches:
+      - dev
   workflow_dispatch:
 
 permissions: {}
@@ -226,15 +231,29 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           STEPS_SONAR_VERSION_OUTPUTS_VERSION: ${{ steps.sonar-version.outputs.version }}
         run: |
-          set +e
-          "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
-            -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
-            -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
-            -Dsonar.qualitygate.wait=true \
-            -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
-            2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
-          scanner_status=${PIPESTATUS[0]}
-          set -e
+          # ADR-0137 D6: transient SonarCloud-side provisioning or network failures retry with
+          # backoff before failing closed; genuine quality-gate failures are never retried.
+          for attempt in 1 2 3; do
+            set +e
+            "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
+              -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
+              -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
+              -Dsonar.qualitygate.wait=true \
+              -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
+              2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
+            scanner_status=${PIPESTATUS[0]}
+            set -e
+            if [ "$scanner_status" -eq 0 ]; then
+              break
+            fi
+            if ! grep -qE "Gateway Timeout|Bad Gateway|Service Unavailable|Failed to query JRE metadata|connect timed out|Connection reset" "$RUNNER_TEMP/sonar-scanner.log"; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Transient SonarCloud failure (attempt $attempt); retrying after backoff."
+              sleep $((attempt * 30))
+            fi
+          done
           node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
           echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -324,7 +343,7 @@ jobs:
 
   zizmor:
     name: zizmor
-    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -566,23 +585,23 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-debugging-2348
       - name: Refresh workspace performance evidence
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
           rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
       # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
-      # candidate. Its source-tree and toolchain bindings make it valid across the signed squash.
-      # Replacing it here with a single-revision editor run would discard that comparison.
+      # candidate. Its source-tree and toolchain bindings (ADR-0137 D2: measured surfaces only)
+      # make it valid across the signed squash and across merge-queue integration.
       - name: Validate immutable editor D12 performance evidence
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
         run: npm run check:perf-evidence:editor
       - name: Performance evidence freshness + budget gate
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence
       # Upload only metric documents that passed the redaction-closing schema and canonical-byte
       # gate above. Raw traces can contain workspace fixture text and remain outside this boundary.
       - name: Upload redacted performance evidence
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: performance-evidence-${{ github.run_id }}-${{ github.run_attempt }}
