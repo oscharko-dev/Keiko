@@ -1,4 +1,4 @@
-import { useCallback, useRef, type Dispatch, type MutableRefObject } from "react";
+import { useCallback, useRef, type Dispatch, type RefObject } from "react";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchRuntimeApprovalDecision,
@@ -9,7 +9,6 @@ import {
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./api";
 import {
-  acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchFailureStatus,
   codingWorkbenchRuntimeApiError,
   getCodingWorkbenchRuntimeReadiness,
@@ -34,11 +33,11 @@ import {
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 
 interface RefreshSequences {
-  readonly profile: MutableRefObject<number>;
-  readonly source: MutableRefObject<number>;
-  readonly runtime: MutableRefObject<number>;
-  readonly run: MutableRefObject<number>;
-  readonly runRefresh: MutableRefObject<Promise<void> | null>;
+  readonly profile: RefObject<number>;
+  readonly source: RefObject<number>;
+  readonly runtime: RefObject<number>;
+  readonly run: RefObject<number>;
+  readonly runRefresh: RefObject<Promise<void> | null>;
 }
 
 export interface RuntimeResources {
@@ -47,8 +46,8 @@ export interface RuntimeResources {
   readonly prepareCodexSetup: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
-  readonly profileSequence: MutableRefObject<number>;
-  readonly sourceSequence: MutableRefObject<number>;
+  readonly profileSequence: RefObject<number>;
+  readonly sourceSequence: RefObject<number>;
 }
 
 export interface RuntimeMutationActions {
@@ -61,7 +60,7 @@ export interface RuntimeMutationActions {
 }
 
 interface RuntimeMutationQueueInput {
-  readonly stateRef: MutableRefObject<CodingWorkbenchRuntimeState>;
+  readonly stateRef: RefObject<CodingWorkbenchRuntimeState>;
   readonly refreshRun: () => Promise<void>;
   readonly dispatch: RuntimeDispatch;
 }
@@ -77,8 +76,8 @@ function useRefreshSequences(): RefreshSequences {
 }
 
 function useProfileRefresh(
-  sequenceRef: MutableRefObject<number>,
-  stateRef: MutableRefObject<CodingWorkbenchRuntimeState>,
+  sequenceRef: RefObject<number>,
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
   return useCallback(async (): Promise<void> => {
@@ -105,8 +104,8 @@ function useProfileRefresh(
 }
 
 function useSourceRefresh(
-  sequenceRef: MutableRefObject<number>,
-  stateRef: MutableRefObject<CodingWorkbenchRuntimeState>,
+  sequenceRef: RefObject<number>,
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
   return useCallback(async (): Promise<void> => {
@@ -190,8 +189,8 @@ function useCodexSetup(
 }
 
 function useRuntimeRefresh(
-  sequenceRef: MutableRefObject<number>,
-  stateRef: MutableRefObject<CodingWorkbenchRuntimeState>,
+  sequenceRef: RefObject<number>,
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
   return useCallback(async (): Promise<void> => {
@@ -215,8 +214,8 @@ function useRuntimeRefresh(
 }
 
 function useRunRefresh(
-  runSequence: MutableRefObject<number>,
-  runRefresh: MutableRefObject<Promise<void> | null>,
+  runSequence: RefObject<number>,
+  runRefresh: RefObject<Promise<void> | null>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
   return useCallback((): Promise<void> => {
@@ -247,7 +246,7 @@ function useRunRefresh(
 }
 
 export function useCodingWorkbenchRuntimeResources(
-  stateRef: MutableRefObject<CodingWorkbenchRuntimeState>,
+  stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): RuntimeResources {
   const sequences = useRefreshSequences();

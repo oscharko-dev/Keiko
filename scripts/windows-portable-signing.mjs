@@ -309,8 +309,8 @@ function markNativeHelperVerified(manifest) {
     notarizationRequired: false,
     notarizationVerified: false,
   };
-  manifest.releaseImpact.reviewedBinding.nativeHelpers = JSON.parse(
-    JSON.stringify(manifest.nativeHelpers),
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
   );
 }
 

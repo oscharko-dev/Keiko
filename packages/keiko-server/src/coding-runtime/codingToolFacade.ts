@@ -26,53 +26,49 @@ export function createCodingToolFacade(
   ports: CodingToolFacadePorts,
   options: CodingToolFacadeOptions = {},
 ): CodingToolFacade {
-  const maxBodyBytes = boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_BODY_BYTES);
-  const maxInFlight = boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT);
-  let inFlight = 0;
+  const context: ExecutionContext = {
+    ports,
+    maxBodyBytes: boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_BODY_BYTES),
+    maxInFlight: boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT),
+    invocationRegistry: options.invocationRegistry,
+    requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
+    inFlight: { count: 0 },
+  };
   return {
-    execute: async (input) =>
-      execute(
-        ports,
-        input,
-        maxBodyBytes,
-        maxInFlight,
-        options.invocationRegistry,
-        options.requireInvocationRegistryForEdits === true,
-        () => inFlight,
-        (next) => {
-          inFlight = next;
-        },
-      ),
+    execute: async (input) => execute(context, input),
   };
 }
 
+interface ExecutionContext {
+  readonly ports: CodingToolFacadePorts;
+  readonly maxBodyBytes: number;
+  readonly maxInFlight: number;
+  readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
+  readonly requireInvocationRegistryForEdits: boolean;
+  readonly inFlight: { count: number };
+}
+
 async function execute(
-  ports: CodingToolFacadePorts,
+  context: ExecutionContext,
   input: CodingToolFacadeInput,
-  maxBodyBytes: number,
-  maxInFlight: number,
-  invocationRegistry: CodingToolInvocationRegistry | undefined,
-  requireInvocationRegistryForEdits: boolean,
-  current: () => number,
-  set: (next: number) => void,
 ): Promise<CodingToolResult> {
   if (hasOrigin(input.headers)) return empty("denied");
-  if (isPermissionObservation(input.body, maxBodyBytes)) return empty("observed");
-  const request = parseCodingToolRequest(input.body, maxBodyBytes);
+  if (isPermissionObservation(input.body, context.maxBodyBytes)) return empty("observed");
+  const request = parseCodingToolRequest(input.body, context.maxBodyBytes);
   if (request === undefined) return empty("invalid");
   if (input.signal?.aborted === true) return empty("cancelled");
-  if (current() >= maxInFlight) return empty("busy");
-  set(current() + 1);
+  if (context.inFlight.count >= context.maxInFlight) return empty("busy");
+  context.inFlight.count += 1;
   try {
     return await executeAdmitted(
-      ports,
+      context.ports,
       input,
       request,
-      invocationRegistry,
-      requireInvocationRegistryForEdits,
+      context.invocationRegistry,
+      context.requireInvocationRegistryForEdits,
     );
   } finally {
-    set(current() - 1);
+    context.inFlight.count -= 1;
   }
 }
 

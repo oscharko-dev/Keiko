@@ -188,7 +188,7 @@ function spawnNativeHelper(
     !(controlInput instanceof Writable) ||
     !(controlOutput instanceof Readable)
   ) {
-    throw new Error("native-runtime-helper-pipes-unavailable");
+    throw new TypeError("native-runtime-helper-pipes-unavailable");
   }
   return {
     stdin,

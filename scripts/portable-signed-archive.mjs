@@ -195,10 +195,10 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   binding.assetSizeBytes = manifest.artifact.sizeBytes;
   binding.provenanceStatementSha256 = manifest.provenance.provenanceStatementSha256;
   if (manifest.sidecarRuntimes !== undefined) {
-    binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
+    binding.sidecarRuntimes = globalThis.structuredClone(manifest.sidecarRuntimes);
   }
   if (manifest.nativeHelpers !== undefined) {
-    binding.nativeHelpers = JSON.parse(JSON.stringify(manifest.nativeHelpers));
+    binding.nativeHelpers = globalThis.structuredClone(manifest.nativeHelpers);
   }
 }
 

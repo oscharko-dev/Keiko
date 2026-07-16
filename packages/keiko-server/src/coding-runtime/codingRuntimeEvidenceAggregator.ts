@@ -129,13 +129,20 @@ function manifest(settlement: CodingRuntimeEvidenceSettlement, aggregate: Aggreg
       authority: settlement.authorityDigest,
       binding: settlement.bindingDigest,
       provenance: settlement.provenanceDigest,
-      observedAuthority: [...aggregate.authorityDigests].sort(),
-      observedBinding: [...aggregate.bindingDigests].sort(),
+      observedAuthority: [...aggregate.authorityDigests].sort(compareCodeUnits),
+      observedBinding: [...aggregate.bindingDigests].sort(compareCodeUnits),
     },
     counts: aggregate.counts,
-    states: [...aggregate.states].sort(),
-    failureCodes: [...aggregate.failures].sort(),
+    states: [...aggregate.states].sort(compareCodeUnits),
+    failureCodes: [...aggregate.failures].sort(compareCodeUnits),
   };
+}
+
+/** Byte-stable code-unit ordering keeps redacted evidence digests deterministic across locales. */
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function deletePruned(

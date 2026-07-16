@@ -24,7 +24,7 @@ function launchPacket(executable, cwd) {
     ["KEIKO_ALPHA", "one"],
     ["KEIKO_BETA", "two"],
     // Win32/CRT plumbing in the supervised child needs SystemRoot; nothing else leaks through.
-    ["SystemRoot", process.env.SystemRoot ?? "C:\\Windows"],
+    ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
   ];
   const strings = [
     "0123456789abcdef0123456789abcdef",
@@ -48,6 +48,7 @@ function launchPacket(executable, cwd) {
 }
 
 async function compile(sourcePath, output) {
+  const objectPath = join(dirname(output), `${basename(output)}.obj`);
   const result = await runProcess("cl", [
     "/nologo",
     "/std:c11",
@@ -58,7 +59,7 @@ async function compile(sourcePath, output) {
     "/D_UNICODE",
     "/D_CRT_SECURE_NO_WARNINGS",
     `/Fe:${output}`,
-    `/Fo:${join(dirname(output), `${basename(output)}.obj`)}`,
+    `/Fo:${objectPath}`,
     sourcePath,
   ]);
   assert.equal(result.code, 0, `native compile failed: ${result.stderr.toString("utf8")}`);
@@ -130,7 +131,7 @@ async function response(reader) {
 
 /* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
 function hermeticWindowsEnv() {
-  return { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" };
+  return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
 }
 
 /* Re-throw a stream failure with the child's exit code so CI logs pinpoint the stage. */

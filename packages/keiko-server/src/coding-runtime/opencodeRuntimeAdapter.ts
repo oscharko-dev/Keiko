@@ -196,27 +196,11 @@ export function createOpenCodeRuntimeAdapter(
         void activeIterator?.return?.();
       };
 
-      // eslint-disable-next-line complexity -- stream, reconciliation, and retry failures are independent.
       async function monitorLoop(): Promise<void> {
         let reconnects = 0;
         while (isMonitoring()) {
           try {
-            let hint: OpenCodeSyncHint;
-            let signal: AbortSignal | undefined;
-            if (activeIterator === undefined) {
-              const opened = await openSubscription();
-              hint = opened.hint;
-              signal = opened.signal;
-            } else {
-              const next = await activeIterator.next();
-              if (next.done || !validHint(next.value)) throw new Error("opencode-events-ended");
-              hint = next.value;
-              signal = activeAbort?.signal;
-            }
-            if (!(await reconcileHint(ports, state, hint, signal))) {
-              throw new Error("opencode-history-incomplete");
-            }
-            observeControl("control" in hint ? hint.control : undefined);
+            await observeNextHint();
             reconnects = 0;
           } catch {
             if (!isMonitoring()) return;
@@ -228,6 +212,24 @@ export function createOpenCodeRuntimeAdapter(
             }
           }
         }
+      }
+
+      async function observeNextHint(): Promise<void> {
+        const { hint, signal } = await nextHint();
+        if (!(await reconcileHint(ports, state, hint, signal))) {
+          throw new Error("opencode-history-incomplete");
+        }
+        observeControl("control" in hint ? hint.control : undefined);
+      }
+
+      async function nextHint(): Promise<{
+        readonly hint: OpenCodeSyncHint;
+        readonly signal: AbortSignal | undefined;
+      }> {
+        if (activeIterator === undefined) return openSubscription();
+        const next = await activeIterator.next();
+        if (next.done || !validHint(next.value)) throw new Error("opencode-events-ended");
+        return { hint: next.value, signal: activeAbort?.signal };
       }
 
       function isMonitoring(): boolean {
@@ -296,7 +298,7 @@ export function createOpenCodeRuntimeAdapter(
     turnNotifications.clear();
   }
 
-  // eslint-disable-next-line complexity -- active/terminal, caller, deadline, stop, and polling gates fail independently.
+  /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
   async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
     const generation = turnGeneration;
     if (turnSettled(generation) && !callerSignal.aborted) return true;
@@ -308,36 +310,50 @@ export function createOpenCodeRuntimeAdapter(
     timer.unref();
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     try {
-      while (turnCurrent(generation, signal)) {
-        if (turnCompleted(generation, signal)) {
-          settleTurn(generation);
-          return true;
-        }
-        try {
-          const status = await ports.control.status(ready.sessionId, signal);
-          if (status !== undefined) observeControl({ sessionId: ready.sessionId, state: status });
-          if (turnCompleted(generation, signal)) {
-            settleTurn(generation);
-            return true;
-          }
-          if (turnSettled(generation)) return true;
-          if (status === "terminal") {
-            await reconcileHistory(ports, state, signal);
-            if (turnCompleted(generation, signal)) {
-              settleTurn(generation);
-              return true;
-            }
-            if (turnSettled(generation)) return true;
-          }
-        } catch {
-          if (!turnCurrent(generation, signal)) return false;
-        }
-        await waitForTurnChange(signal, generation);
-      }
-      return turnSettled(generation);
+      return await awaitTurnTerminal(generation, signal, ready.sessionId);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async function awaitTurnTerminal(
+    generation: number,
+    signal: AbortSignal,
+    sessionId: string,
+  ): Promise<boolean> {
+    while (turnCurrent(generation, signal)) {
+      if (settleIfCompleted(generation, signal)) return true;
+      const outcome = await pollTurnOnce(generation, signal, sessionId);
+      if (outcome !== undefined) return outcome;
+      await waitForTurnChange(signal, generation);
+    }
+    return turnSettled(generation);
+  }
+
+  /** Returns the settled wait outcome, or undefined when polling must continue. */
+  async function pollTurnOnce(
+    generation: number,
+    signal: AbortSignal,
+    sessionId: string,
+  ): Promise<boolean | undefined> {
+    try {
+      const status = await ports.control.status(sessionId, signal);
+      if (status !== undefined) observeControl({ sessionId, state: status });
+      if (settleIfCompleted(generation, signal) || turnSettled(generation)) return true;
+      if (status === "terminal") {
+        await reconcileHistory(ports, state, signal);
+        if (settleIfCompleted(generation, signal) || turnSettled(generation)) return true;
+      }
+      return undefined;
+    } catch {
+      return turnCurrent(generation, signal) ? undefined : false;
+    }
+  }
+
+  function settleIfCompleted(generation: number, signal: AbortSignal): boolean {
+    if (!turnCompleted(generation, signal)) return false;
+    settleTurn(generation);
+    return true;
   }
 
   function turnCurrent(generation: number, signal: AbortSignal): boolean {
@@ -471,7 +487,7 @@ function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boole
 
 function parseStartupEndpoint(line: string): string | undefined {
   const match =
-    /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})(?:\r?\n)?$/u.exec(line);
+    /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:\r?\n)?$/u.exec(line);
   const port = Number(match?.[1]);
   return Number.isSafeInteger(port) && port <= 65_535
     ? `http://127.0.0.1:${String(port)}`
@@ -554,7 +570,15 @@ async function applyHistoryPlan(
   replaceMap(state.observedIds, planned.observedIds);
 }
 
-// eslint-disable-next-line complexity -- ordering, dedupe, and conflict gates fail closed independently.
+interface HistoryPlanDraft {
+  readonly checkpoints: Map<string, number>;
+  readonly terminalCheckpoints: Map<string, number>;
+  readonly recent: Map<string, string>;
+  readonly observedIds: Map<string, true>;
+  readonly fresh: OpenCodeReconciliationEvent[];
+}
+
+/** Ordering, dedupe, and conflict gates fail closed independently. */
 function planHistory(
   events: readonly OpenCodeReconciliationEvent[],
   state: ReconciliationState,
@@ -568,36 +592,57 @@ function planHistory(
     }
   | undefined {
   if (!validHistoryWindow(events, state)) return undefined;
-  const checkpoints = new Map(state.checkpoints);
-  const terminalCheckpoints = new Map(state.terminalCheckpoints);
-  const recent = new Map(state.recent);
-  const observedIds = new Map(state.observedIds);
-  const fresh: OpenCodeReconciliationEvent[] = [];
+  const draft: HistoryPlanDraft = {
+    checkpoints: new Map(state.checkpoints),
+    terminalCheckpoints: new Map(state.terminalCheckpoints),
+    recent: new Map(state.recent),
+    observedIds: new Map(state.observedIds),
+    fresh: [],
+  };
   for (const event of events) {
-    if (!validEvent(event)) return undefined;
-    const key = eventIdentity(event);
-    const knownDigest = recent.get(key);
-    if (knownDigest !== undefined) {
-      if (knownDigest !== event.digest) return undefined;
-      touch(recent, key, knownDigest);
-      touchObserved(observedIds, event.id);
-      continue;
-    }
-    const checkpoint = checkpoints.get(event.aggregateId);
-    if (checkpoint !== undefined && event.sequence <= checkpoint) continue;
-    const expected = checkpoint === undefined ? 0 : checkpoint + 1;
-    if (event.sequence !== expected) return undefined;
-    if (!setCheckpoint(checkpoints, event.aggregateId, event.sequence)) return undefined;
-    if (
-      event.kind === "terminal" &&
-      !setCheckpoint(terminalCheckpoints, event.aggregateId, event.sequence)
-    )
-      return undefined;
-    touch(recent, key, event.digest);
-    touchObserved(observedIds, event.id);
-    fresh.push(event);
+    if (!planHistoryEvent(draft, event)) return undefined;
   }
-  return { events: fresh, checkpoints, terminalCheckpoints, recent, observedIds };
+  return {
+    events: draft.fresh,
+    checkpoints: draft.checkpoints,
+    terminalCheckpoints: draft.terminalCheckpoints,
+    recent: draft.recent,
+    observedIds: draft.observedIds,
+  };
+}
+
+function planHistoryEvent(draft: HistoryPlanDraft, event: OpenCodeReconciliationEvent): boolean {
+  if (!validEvent(event)) return false;
+  const key = eventIdentity(event);
+  const knownDigest = draft.recent.get(key);
+  if (knownDigest !== undefined) {
+    if (knownDigest !== event.digest) return false;
+    touch(draft.recent, key, knownDigest);
+    touchObserved(draft.observedIds, event.id);
+    return true;
+  }
+  return planFreshHistoryEvent(draft, event, key);
+}
+
+function planFreshHistoryEvent(
+  draft: HistoryPlanDraft,
+  event: OpenCodeReconciliationEvent,
+  key: string,
+): boolean {
+  const checkpoint = draft.checkpoints.get(event.aggregateId);
+  if (checkpoint !== undefined && event.sequence <= checkpoint) return true;
+  const expected = checkpoint === undefined ? 0 : checkpoint + 1;
+  if (event.sequence !== expected) return false;
+  if (!setCheckpoint(draft.checkpoints, event.aggregateId, event.sequence)) return false;
+  if (
+    event.kind === "terminal" &&
+    !setCheckpoint(draft.terminalCheckpoints, event.aggregateId, event.sequence)
+  )
+    return false;
+  touch(draft.recent, key, event.digest);
+  touchObserved(draft.observedIds, event.id);
+  draft.fresh.push(event);
+  return true;
 }
 
 function validHistoryWindow(

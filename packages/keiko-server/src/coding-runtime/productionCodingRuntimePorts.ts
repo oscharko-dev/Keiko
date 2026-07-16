@@ -170,12 +170,10 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
   return {
     submitTurn: (runId, text) => runPort.submitTask(runId, text),
     abortTurn: (runId) => runPort.abortTask(runId),
-    waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> =>
-      (await runPort.waitForTerminal(runId, signal))
-        ? "succeeded"
-        : signal.aborted
-          ? "cancelled"
-          : "failed",
+    waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
+      if (await runPort.waitForTerminal(runId, signal)) return "succeeded";
+      return signal.aborted ? "cancelled" : "failed";
+    },
   };
 }
 
@@ -245,16 +243,18 @@ async function waitForCodexTerminal(
 ): Promise<CodingRuntimeTaskOutcome> {
   while (!signal.aborted) {
     const status = control.terminalStatus(runId, turnId);
-    if (status !== undefined) {
-      return status === "completed"
-        ? "succeeded"
-        : status === "interrupted"
-          ? "cancelled"
-          : "failed";
-    }
+    if (status !== undefined) return terminalOutcome(status);
     await pollDelay(signal);
   }
   return "cancelled";
+}
+
+function terminalOutcome(
+  status: NonNullable<ReturnType<CodexRuntimeControl["terminalStatus"]>>,
+): CodingRuntimeTaskOutcome {
+  if (status === "completed") return "succeeded";
+  if (status === "interrupted") return "cancelled";
+  return "failed";
 }
 
 function pollDelay(signal: AbortSignal): Promise<void> {
@@ -292,21 +292,22 @@ async function dispatchRuntimeTask(
       return { ok: false };
     }
     if (!reservation.commit()) return { ok: false };
-    return { ok: true, completion: terminalCompletion(record, request.runId) };
   } catch {
     reservation.release();
     return { ok: false };
   }
+  return { ok: true, completion: terminalCompletion(record, request.runId) };
 }
 
-function terminalCompletion(
+async function terminalCompletion(
   record: ProductionRuntimeRunRecord,
   runId: string,
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
-    return record.turnPort.waitForTerminal(runId, record.controller.signal);
+    return await record.turnPort.waitForTerminal(runId, record.controller.signal);
   } catch {
-    return Promise.resolve("failed");
+    // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
+    return "failed";
   }
 }
 

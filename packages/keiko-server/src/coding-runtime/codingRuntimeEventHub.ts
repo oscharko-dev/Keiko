@@ -279,7 +279,7 @@ export class CodingRuntimeEventHub {
   }
 
   private fanOut(run: RunBuffer, event: CodingWorkbenchRuntimeSseEvent): void {
-    for (const subscriber of [...run.subscribers]) {
+    for (const subscriber of run.subscribers) {
       if (!write(subscriber, event)) run.subscribers.delete(subscriber);
     }
   }
@@ -331,7 +331,7 @@ function isContainment(event: CodingWorkbenchRuntimeSseEvent): boolean {
 function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value).sort(compareCodeUnits);
   const required =
     record.kind === "runtime-event"
       ? ["eventKind", "kind", "revision", "runId", "schemaVersion", "state"]
@@ -352,7 +352,7 @@ function parseCursor(
   const runId = value.slice(0, delimiter);
   const sequenceText = value.slice(delimiter + 1);
   if (!SAFE_ID.test(runId)) return undefined;
-  if (!/^(?:0|[1-9][0-9]*)$/u.test(sequenceText)) return undefined;
+  if (!/^(?:0|[1-9]\d*)$/u.test(sequenceText)) return undefined;
   const sequence = Number(sequenceText);
   return Number.isSafeInteger(sequence) && sequence >= 0 ? { runId, sequence } : undefined;
 }
@@ -361,6 +361,12 @@ function reset(
   reason: CodingRuntimeEventHubResetReason,
 ): CodingRuntimeEventHubReplay & CodingRuntimeEventHubSubscribeResult {
   return { ok: false, reason, snapshotNeeded: true };
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {

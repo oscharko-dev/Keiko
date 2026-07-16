@@ -21,11 +21,18 @@ export function canonicalJson(value) {
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.keys(value)
-        .sort()
+        .sort(compareCodeUnits)
         .map((key) => [key, canonicalJson(value[key])]),
     );
   }
   return value;
+}
+
+/** Matches the default Array#sort string ordering: locale-independent UTF-16 code-unit order. */
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 export function canonicalJsonBytes(source, filename = "JSON input") {
@@ -57,18 +64,18 @@ export function normalizeSchemaRelativePath(path) {
   return segments.join("/");
 }
 
-function compareSchemaPaths(left, right) {
-  function compareCodePoints(first, second) {
-    const firstPoints = Array.from(first);
-    const secondPoints = Array.from(second);
-    const length = Math.min(firstPoints.length, secondPoints.length);
-    for (let index = 0; index < length; index += 1) {
-      const difference = firstPoints[index].codePointAt(0) - secondPoints[index].codePointAt(0);
-      if (difference !== 0) return difference;
-    }
-    return firstPoints.length - secondPoints.length;
+function compareCodePoints(first, second) {
+  const firstPoints = Array.from(first);
+  const secondPoints = Array.from(second);
+  const length = Math.min(firstPoints.length, secondPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = firstPoints[index].codePointAt(0) - secondPoints[index].codePointAt(0);
+    if (difference !== 0) return difference;
   }
+  return firstPoints.length - secondPoints.length;
+}
 
+function compareSchemaPaths(left, right) {
   return (
     compareCodePoints(left.toLowerCase(), right.toLowerCase()) || compareCodePoints(left, right)
   );
@@ -123,7 +130,7 @@ function loadManifest(bundleDirectory) {
     !Number.isInteger(manifest.generatedFileCount) ||
     typeof manifest.generatedFolderSha256 !== "string"
   ) {
-    throw new Error("Schema bundle manifest is malformed");
+    throw new TypeError("Schema bundle manifest is malformed");
   }
   if (!Array.isArray(manifest.vendoredFiles) || manifest.vendoredFiles.length === 0) {
     throw new Error("Schema bundle manifest has no vendored files");

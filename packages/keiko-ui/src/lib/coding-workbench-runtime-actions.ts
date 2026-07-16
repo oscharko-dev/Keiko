@@ -1,4 +1,4 @@
-import { useMemo, type Dispatch, type MutableRefObject } from "react";
+import { useMemo, type Dispatch, type RefObject } from "react";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
@@ -29,7 +29,7 @@ export interface CodingWorkbenchRuntimeActions {
 }
 
 interface RuntimeActionInput {
-  readonly stateRef: MutableRefObject<CodingWorkbenchRuntimeState>;
+  readonly stateRef: RefObject<CodingWorkbenchRuntimeState>;
   readonly dispatch: Dispatch<CodingWorkbenchRuntimeStateAction>;
   readonly resources: RuntimeResources;
   readonly mutations: RuntimeMutationActions;

@@ -119,7 +119,7 @@ export function parseOpenCodeChildEndpoint(
 ):
   | { readonly ok: true; readonly endpoint: string }
   | { readonly ok: false; readonly reason: "endpoint-invalid" } {
-  const match = /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})\n$/u.exec(
+  const match = /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\n$/u.exec(
     output,
   );
   const port = Number(match?.[1]);
@@ -130,7 +130,8 @@ export function parseOpenCodeChildEndpoint(
 // eslint-disable-next-line max-lines-per-function -- keeps the closed request policy and client methods in one closure.
 export function createOpenCodeHttpClient(options: OpenCodeHttpClientOptions): OpenCodeHttpClient {
   const parsed = parseEndpoint(options.endpoint);
-  const auth = `Basic ${Buffer.from(`opencode:${options.password}`, "utf8").toString("base64")}`;
+  const credentials = Buffer.from(`opencode:${options.password}`, "utf8").toString("base64");
+  const auth = `Basic ${credentials}`;
   // eslint-disable-next-line complexity -- independent network and protocol failures must not leak secrets.
   async function call(
     method: "GET" | "POST",
@@ -185,7 +186,15 @@ export function createOpenCodeHttpClient(options: OpenCodeHttpClientOptions): Op
         requestOptions,
       ),
     sessions: (requestOptions = {}) =>
-      jsonArray(options, parsed, auth, "GET", "/session", undefined, requestOptions),
+      jsonArray({
+        options,
+        endpoint: parsed,
+        auth,
+        method: "GET",
+        path: "/session",
+        body: undefined,
+        requestOptions,
+      }),
     request: call,
     history: (checkpoints, requestOptions = {}) =>
       history(options, parsed, auth, checkpoints, requestOptions),
@@ -210,17 +219,17 @@ async function listQuestions(
   auth: string,
   requestOptions: OpenCodeHttpRequestOptions,
 ): Promise<readonly OpenCodeQuestionRequest[]> {
-  const value = await jsonArray(
+  const value = await jsonArray({
     options,
     endpoint,
     auth,
-    "GET",
-    "/question",
-    undefined,
+    method: "GET",
+    path: "/question",
+    body: undefined,
     requestOptions,
-    CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
-    "question",
-  );
+    maxResponseBytes: CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
+    responseName: "question",
+  });
   if (value.length > MAX_QUESTION_REQUESTS || !value.every(validQuestionRequest)) {
     throw new Error("opencode-question-invalid");
   }
@@ -516,7 +525,15 @@ async function history(
   requestOptions: OpenCodeHttpRequestOptions,
 ): Promise<readonly Record<string, unknown>[]> {
   if (!validCheckpoints(checkpoints)) throw new Error("opencode-history-invalid");
-  return jsonArray(options, endpoint, auth, "POST", "/sync/history", checkpoints, requestOptions);
+  return jsonArray({
+    options,
+    endpoint,
+    auth,
+    method: "POST",
+    path: "/sync/history",
+    body: checkpoints,
+    requestOptions,
+  });
 }
 
 async function jsonObject(
@@ -550,17 +567,22 @@ async function jsonObject(
   }
 }
 
-async function jsonArray(
-  options: OpenCodeHttpClientOptions,
-  endpoint: URL | undefined,
-  auth: string,
-  method: "GET" | "POST",
-  path: string,
-  body: unknown,
-  requestOptions: OpenCodeHttpRequestOptions,
-  maxResponseBytes = MAX_BODY,
-  responseName = "history",
-): Promise<readonly Record<string, unknown>[]> {
+interface JsonArrayRequest {
+  readonly options: OpenCodeHttpClientOptions;
+  readonly endpoint: URL | undefined;
+  readonly auth: string;
+  readonly method: "GET" | "POST";
+  readonly path: string;
+  readonly body: unknown;
+  readonly requestOptions: OpenCodeHttpRequestOptions;
+  readonly maxResponseBytes?: number;
+  readonly responseName?: string;
+}
+
+async function jsonArray(request: JsonArrayRequest): Promise<readonly Record<string, unknown>[]> {
+  const { options, endpoint, auth, method, path, body, requestOptions } = request;
+  const maxResponseBytes = request.maxResponseBytes ?? MAX_BODY;
+  const responseName = request.responseName ?? "history";
   const cancellation = requestCancellation(options, requestOptions);
   try {
     const response = await responseFor(

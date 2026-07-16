@@ -55,6 +55,16 @@ export type EditorAgentAuthorityResolution =
   | { readonly ok: true; readonly envelope: CodingWorkbenchAuthorityEnvelope }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
 
+export interface EditorAgentRuntimeDelegationRequest {
+  readonly liveFacts: CodingWorkbenchRuntimeAuthorityFacts;
+  readonly delegationId: string;
+  readonly idempotencyKey: string;
+  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
+  readonly workspaceRoot: string;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly nowIso: string;
+}
+
 interface AuthorityRecord {
   readonly envelope: CodingWorkbenchAuthorityEnvelope;
   readonly digest: string;
@@ -130,6 +140,14 @@ function safeEqual(left: string, right: string): boolean {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
+function runtimeResolutionFailureReason(
+  reason: EditorAgentAuthorityFailureReason,
+): CodingWorkbenchRuntimeFailureCode {
+  if (reason === "expired") return "authority-expired";
+  if (reason === "revoked") return "revoked";
+  return "authority-resolution-failed";
+}
+
 function recordKey(reference: EditorAgentGovernedAuthorityReference): string {
   return `${reference.runId}\u0000${reference.envelopeDigest}`;
 }
@@ -197,22 +215,27 @@ export class EditorAgentAuthorityRegistry {
 
   public resolveRuntime(
     reference: EditorAgentGovernedAuthorityReference,
-    liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
-    delegationId: string,
-    idempotencyKey: string,
-    usage: CodingWorkbenchRuntimeDelegationUsage,
-    workspaceRoot: string,
-    deploymentCeiling: CodingWorkbenchMode,
-    nowIso: string,
+    request: EditorAgentRuntimeDelegationRequest,
   ):
     | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
     | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
-    if (!validateCodingWorkbenchRuntimeAuthorityFacts(liveFacts).ok) {
+    if (!validateCodingWorkbenchRuntimeAuthorityFacts(request.liveFacts).ok) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    const resolved = this.resolveRuntimeRecord(
+      reference,
+      request.workspaceRoot,
+      request.deploymentCeiling,
+      request.nowIso,
+    );
     return resolved.ok
-      ? admitRuntimeDelegation(resolved.record, liveFacts, delegationId, idempotencyKey, usage)
+      ? admitRuntimeDelegation(
+          resolved.record,
+          request.liveFacts,
+          request.delegationId,
+          request.idempotencyKey,
+          request.usage,
+        )
       : resolved;
   }
 
@@ -247,12 +270,7 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok)
       return {
         ok: false,
-        reason:
-          resolved.reason === "expired"
-            ? "authority-expired"
-            : resolved.reason === "revoked"
-              ? "revoked"
-              : "authority-resolution-failed",
+        reason: runtimeResolutionFailureReason(resolved.reason),
       };
     const record = this.records.get(recordKey(reference));
     return record?.runtimeEnvelope !== undefined &&

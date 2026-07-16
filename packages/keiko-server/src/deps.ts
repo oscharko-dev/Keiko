@@ -186,8 +186,11 @@ import type {
   KnowledgeStoreKeyProvider,
   OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import type { GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -2705,6 +2708,23 @@ function composeDapRuntime(
   return production;
 }
 
+type GatewayEvidenceOutcome = "accepted" | "cancelled" | "failed" | "output-limit";
+
+function gatewayOutcomeState(outcome: GatewayEvidenceOutcome): "running" | "cancelled" | "failed" {
+  if (outcome === "accepted") return "running";
+  if (outcome === "cancelled") return "cancelled";
+  return "failed";
+}
+
+function gatewayOutcomeFailureCode(
+  outcome: GatewayEvidenceOutcome,
+):
+  { readonly failureCode: "runtime-failed" | "authority-budget-exceeded" } | Record<string, never> {
+  if (outcome === "failed") return { failureCode: "runtime-failed" };
+  if (outcome === "output-limit") return { failureCode: "authority-budget-exceeded" };
+  return {};
+}
+
 // eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
@@ -2778,13 +2798,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       record: ({ runId, outcome }): void => {
         codingRuntimeEvidenceAggregator.observe(runId, {
           kind: "model-request",
-          state:
-            outcome === "accepted" ? "running" : outcome === "cancelled" ? "cancelled" : "failed",
-          ...(outcome === "failed"
-            ? { failureCode: "runtime-failed" }
-            : outcome === "output-limit"
-              ? { failureCode: "authority-budget-exceeded" }
-              : {}),
+          state: gatewayOutcomeState(outcome),
+          ...gatewayOutcomeFailureCode(outcome),
         });
       },
     },

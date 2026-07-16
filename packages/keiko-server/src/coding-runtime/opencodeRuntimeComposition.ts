@@ -297,9 +297,15 @@ function lifecycleAdapter(
       if (run === undefined) return true;
       run.ready = false;
       input.gatewayReadiness.clear(runId);
-      await run.runtimeAdapter?.close();
-      await bridge.close();
-      rmSync(run.runRoot, { recursive: true, force: true });
+      try {
+        await run.runtimeAdapter?.close();
+        await bridge.close();
+        rmSync(run.runRoot, { recursive: true, force: true });
+      } catch {
+        // Surface disposal failure on the port's boolean channel; the manager routes a false
+        // result into the same reap-failure handling it applies to a thrown disposal today.
+        return false;
+      }
       runs.delete(runId);
       return true;
     },
@@ -894,7 +900,7 @@ function preflightToolRequest(
 
 function declaredBodyLength(value: string | null): number | "invalid" {
   if (value === null) return 0;
-  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) return "invalid";
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) return "invalid";
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : "invalid";
 }

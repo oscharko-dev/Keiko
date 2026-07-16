@@ -89,49 +89,77 @@ export function parseOpenCodeSse(
   return parseOpenCodeSseWithLimit(input, MAX_FRAME_BYTES);
 }
 
-// eslint-disable-next-line complexity -- each independent frame violation fails closed.
 function parseOpenCodeSseWithLimit(
   input: string,
   maxFrameBytes: number,
 ): OpenCodeProtocolResult<readonly OpenCodeSseMessage[]> {
   const messages: OpenCodeSseMessage[] = [];
-  for (const frame of input.replace(/\r\n/gu, "\n").split("\n\n")) {
+  for (const frame of input.replaceAll("\r\n", "\n").split("\n\n")) {
     if (frame.length === 0 || frame.startsWith(":")) continue;
-    if (bytes(frame) > maxFrameBytes) return { ok: false, reason: "frame-oversized" };
-    const fields: Record<string, string> = {};
-    const dataLines: string[] = [];
-    for (const line of frame.split("\n")) {
-      const match = /^(event|data): ?(.*)$/u.exec(line);
-      const key = match?.[1];
-      const fieldValue = match?.[2];
-      if (
-        key === undefined ||
-        fieldValue === undefined ||
-        (key !== "data" && fields[key] !== undefined)
-      )
-        return { ok: false, reason: "frame-invalid" };
-      if (key === "data") dataLines.push(fieldValue);
-      fields[key] = fieldValue;
-    }
-    if ((fields.event !== undefined && fields.event !== "message") || fields.data === undefined)
-      return { ok: false, reason: "frame-invalid" };
-    const envelope = parseRecord(dataLines.join("\n"));
-    const data = normalizedGlobalEvent(envelope);
-    if (data === undefined) return { ok: false, reason: "frame-invalid" };
-    if (
-      (data.type === "session.status" || data.type === "session.idle") &&
-      classifyOpenCodeLiveControl(data) === undefined
-    )
-      return { ok: false, reason: "frame-invalid" };
-    if (
-      data.type === "session.next.tool.called" &&
-      (!nonEmpty(data.properties.tool) ||
-        !APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.properties.tool))
-    )
-      return { ok: false, reason: "event-unknown" };
-    messages.push({ event: "message", data });
+    const parsed = parseSseFrame(frame, maxFrameBytes);
+    if (!parsed.ok) return parsed;
+    messages.push(parsed.value);
   }
   return { ok: true, value: messages };
+}
+
+function parseSseFrame(
+  frame: string,
+  maxFrameBytes: number,
+): OpenCodeProtocolResult<OpenCodeSseMessage> {
+  if (bytes(frame) > maxFrameBytes) return { ok: false, reason: "frame-oversized" };
+  const fields = parseSseFields(frame);
+  if (
+    fields === undefined ||
+    (fields.event !== undefined && fields.event !== "message") ||
+    fields.data === undefined
+  )
+    return { ok: false, reason: "frame-invalid" };
+  const data = normalizedGlobalEvent(parseRecord(fields.dataLines.join("\n")));
+  if (data === undefined) return { ok: false, reason: "frame-invalid" };
+  const failure = frameDataFailure(data);
+  if (failure !== undefined) return { ok: false, reason: failure };
+  return { ok: true, value: { event: "message", data } };
+}
+
+function parseSseFields(frame: string):
+  | {
+      readonly event: string | undefined;
+      readonly data: string | undefined;
+      readonly dataLines: readonly string[];
+    }
+  | undefined {
+  const fields: Record<string, string> = {};
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    const match = /^(event|data): ?(.*)$/u.exec(line);
+    const key = match?.[1];
+    const fieldValue = match?.[2];
+    if (
+      key === undefined ||
+      fieldValue === undefined ||
+      (key !== "data" && fields[key] !== undefined)
+    )
+      return undefined;
+    if (key === "data") dataLines.push(fieldValue);
+    fields[key] = fieldValue;
+  }
+  return { event: fields.event, data: fields.data, dataLines };
+}
+
+function frameDataFailure(data: NormalizedSseData): OpenCodeProtocolFailure | undefined {
+  if (
+    (data.type === "session.status" || data.type === "session.idle") &&
+    classifyOpenCodeLiveControl(data) === undefined
+  )
+    return "frame-invalid";
+  if (
+    data.type === "session.next.tool.called" &&
+    (!nonEmpty(data.properties.tool) ||
+      !APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.properties.tool))
+  )
+    return "event-unknown";
+  return undefined;
 }
 
 // eslint-disable-next-line complexity -- exact live-control variants fail closed independently.
@@ -191,9 +219,8 @@ function normalizedGlobalEvent(
   if (
     envelope === undefined ||
     !allowedRecord(envelope, ["directory", "project", "workspace", "payload"]) ||
-    !Object.prototype.hasOwnProperty.call(envelope, "payload") ||
-    (Object.keys(envelope).length > 1 &&
-      !Object.prototype.hasOwnProperty.call(envelope, "directory")) ||
+    !Object.hasOwn(envelope, "payload") ||
+    (Object.keys(envelope).length > 1 && !Object.hasOwn(envelope, "directory")) ||
     ![envelope.directory, envelope.project, envelope.workspace].every(
       (value) => value === undefined || nonEmpty(value),
     )
@@ -236,7 +263,7 @@ function normalizedSyncPayload(payload: Record<string, unknown>): NormalizedSseD
 export function createOpenCodeSseDecoder(maxBufferedBytes = MAX_FRAME_BYTES): OpenCodeSseDecoder {
   let pending = "";
   const decode = (complete: boolean): OpenCodeProtocolResult<readonly OpenCodeSseMessage[]> => {
-    const normalized = pending.replace(/\r\n/gu, "\n");
+    const normalized = pending.replaceAll("\r\n", "\n");
     const boundary = normalized.lastIndexOf("\n\n");
     if (boundary < 0) {
       if (bytes(normalized) > maxBufferedBytes) return { ok: false, reason: "frame-oversized" };
@@ -294,8 +321,22 @@ export function parseOpenCodeHistory(
   return { ok: true, value: result };
 }
 
-// eslint-disable-next-line complexity -- the closed allowlist is a security control, not a dispatch extension point.
+/** The closed allowlist is a security control, not a dispatch extension point. */
 function classifiedEvent(
+  type: string,
+  data: Record<string, unknown>,
+  sequence: number,
+  aggregateId: string,
+): OpenCodeReconciliationEvent["kind"] | undefined {
+  return (
+    classifiedSessionEvent(type, data, sequence, aggregateId) ??
+    classifiedMessageEvent(type, data, aggregateId) ??
+    classifiedInteractionEvent(type, data) ??
+    classifiedToolEvent(type, data)
+  );
+}
+
+function classifiedSessionEvent(
   type: string,
   data: Record<string, unknown>,
   sequence: number,
@@ -304,30 +345,60 @@ function classifiedEvent(
   if (type === "session.created.1" && sequence === 0 && sessionCreated(data, aggregateId))
     return "observation";
   if (type === "session.updated.1" && sessionUpdated(data, aggregateId)) return "observation";
-  if (type === "message.updated.1") return messageUpdated(data, aggregateId);
-  if (type === "message.part.updated.1" && messagePartUpdated(data, aggregateId))
-    return "observation";
-  if (type === "session.idle" && exactRecord(data, ["sessionID"]) && id(data.sessionID, "ses_"))
-    return "terminal";
-  if (
-    type === "session.status" &&
+  if (type === "session.idle" && sessionIdleEvent(data)) return "terminal";
+  if (type === "session.status" && sessionStatusEvent(data)) return "observation";
+  return undefined;
+}
+
+function sessionIdleEvent(data: Record<string, unknown>): boolean {
+  return exactRecord(data, ["sessionID"]) && id(data.sessionID, "ses_");
+}
+
+function sessionStatusEvent(data: Record<string, unknown>): boolean {
+  return (
     exactRecord(data, ["sessionID", "status"]) &&
     id(data.sessionID, "ses_") &&
     nonEmpty(data.status)
-  )
+  );
+}
+
+function classifiedMessageEvent(
+  type: string,
+  data: Record<string, unknown>,
+  aggregateId: string,
+): OpenCodeReconciliationEvent["kind"] | undefined {
+  if (type === "message.updated.1") return messageUpdated(data, aggregateId);
+  if (type === "message.part.updated.1" && messagePartUpdated(data, aggregateId))
     return "observation";
+  return undefined;
+}
+
+function classifiedInteractionEvent(
+  type: string,
+  data: Record<string, unknown>,
+): "permission" | "question" | undefined {
   if (type === "permission.asked" && permissionAsked(data)) return "permission";
-  if (
-    type === "permission.replied" &&
+  if (type === "permission.replied" && permissionReplied(data)) return "permission";
+  if (type === "question.asked" && questionAsked(data)) return "question";
+  if ((type === "question.replied" || type === "question.rejected") && questionSettled(type, data))
+    return "question";
+  return undefined;
+}
+
+function permissionReplied(data: Record<string, unknown>): boolean {
+  return (
     exactRecord(data, ["sessionID", "requestID", "reply"]) &&
     id(data.sessionID, "ses_") &&
     id(data.requestID, "per") &&
     ["once", "always", "reject"].includes(String(data.reply))
-  )
-    return "permission";
-  if (type === "question.asked" && questionAsked(data)) return "question";
-  if (
-    (type === "question.replied" || type === "question.rejected") &&
+  );
+}
+
+function questionSettled(
+  type: "question.replied" | "question.rejected",
+  data: Record<string, unknown>,
+): boolean {
+  return (
     exactRecord(
       data,
       type === "question.replied"
@@ -336,11 +407,7 @@ function classifiedEvent(
     ) &&
     id(data.sessionID, "ses_") &&
     id(data.requestID, "que")
-  )
-    return "question";
-  const toolKind = classifiedToolEvent(type, data);
-  if (toolKind !== undefined) return toolKind;
-  return undefined;
+  );
 }
 
 function sessionCreated(data: Record<string, unknown>, aggregateId: string): boolean {
@@ -459,7 +526,7 @@ function assistantMessage(info: Record<string, unknown>): boolean {
       "path",
       "cost",
       "tokens",
-    ].every((key) => Object.prototype.hasOwnProperty.call(info, key))
+    ].every((key) => Object.hasOwn(info, key))
   )
     return false;
   return (
@@ -610,12 +677,9 @@ function nonNegativeNumber(value: unknown): value is number {
 }
 
 function tokenCounts(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const keys = Object.keys(value).sort();
   if (
-    JSON.stringify(keys) !==
-      JSON.stringify(["cache", "input", "output", "reasoning", "total"].sort()) &&
-    JSON.stringify(keys) !== JSON.stringify(["cache", "input", "output", "reasoning"].sort())
+    !exactRecord(value, ["cache", "input", "output", "reasoning", "total"]) &&
+    !exactRecord(value, ["cache", "input", "output", "reasoning"])
   )
     return false;
   return (
@@ -706,33 +770,48 @@ function historyDigest(
   return digest({ id: eventId, aggregate_id: aggregateId, seq: sequence, type, data: digestData });
 }
 
-// eslint-disable-next-line complexity -- only reviewed identity fields survive content-free projection.
+/** Only reviewed identity fields survive content-free projection. */
 function contentFreeHistoryData(data: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const key of ["sessionID", "id", "requestID", "assistantMessageID", "callID", "reply"]) {
-    const value = data[key];
-    if (typeof value === "string") result[key] = value;
-  }
+  const result: Record<string, unknown> = projectedStringFields(data, [
+    "sessionID",
+    "id",
+    "requestID",
+    "assistantMessageID",
+    "callID",
+    "reply",
+  ]);
   if (isRecord(data.info)) {
-    const info: Record<string, string> = {};
-    for (const key of ["id", "sessionID", "role", "finish"]) {
-      const value = data.info[key];
-      if (typeof value === "string") info[key] = value;
-    }
-    result.info = info;
+    result.info = projectedStringFields(data.info, ["id", "sessionID", "role", "finish"]);
   }
-  if (isRecord(data.part)) {
-    const part: Record<string, string> = {};
-    for (const key of ["id", "sessionID", "messageID", "type", "reason", "tool"]) {
-      const value = data.part[key];
-      if (typeof value === "string") part[key] = value;
-    }
-    result.part = part;
-    if (isRecord(data.part.state) && typeof data.part.state.status === "string") {
-      part.status = data.part.state.status;
-    }
-  }
+  if (isRecord(data.part)) result.part = contentFreePart(data.part);
   return result;
+}
+
+function projectedStringFields(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, string> {
+  const projected: Record<string, string> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string") projected[key] = value;
+  }
+  return projected;
+}
+
+function contentFreePart(part: Record<string, unknown>): Record<string, string> {
+  const projected = projectedStringFields(part, [
+    "id",
+    "sessionID",
+    "messageID",
+    "type",
+    "reason",
+    "tool",
+  ]);
+  if (isRecord(part.state) && typeof part.state.status === "string") {
+    projected.status = part.state.status;
+  }
+  return projected;
 }
 
 function permissionAsked(data: Record<string, unknown>): boolean {
@@ -754,34 +833,9 @@ function questionAsked(data: Record<string, unknown>): boolean {
     Array.isArray(data.questions)
   );
 }
-// eslint-disable-next-line complexity -- the pinned event variants and productive-tool gate stay explicit.
+/** The pinned event variants and productive-tool gate stay explicit. */
 function toolEvent(type: string, data: Record<string, unknown>): boolean {
-  const allowed =
-    type === "session.next.tool.called"
-      ? ["timestamp", "sessionID", "assistantMessageID", "callID", "tool", "input", "provider"]
-      : type === "session.next.tool.success"
-        ? [
-            "timestamp",
-            "sessionID",
-            "assistantMessageID",
-            "callID",
-            "structured",
-            "content",
-            "provider",
-            "outputPaths",
-            "result",
-          ]
-        : type === "session.next.tool.failed"
-          ? [
-              "timestamp",
-              "sessionID",
-              "assistantMessageID",
-              "callID",
-              "error",
-              "provider",
-              "result",
-            ]
-          : undefined;
+  const allowed = toolEventAllowedKeys(type);
   return (
     allowed !== undefined &&
     allowedRecord(data, allowed) &&
@@ -793,6 +847,37 @@ function toolEvent(type: string, data: Record<string, unknown>): boolean {
     (type !== "session.next.tool.called" ||
       (nonEmpty(data.tool) && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.tool)))
   );
+}
+
+function toolEventAllowedKeys(type: string): readonly string[] | undefined {
+  if (type === "session.next.tool.called") {
+    return ["timestamp", "sessionID", "assistantMessageID", "callID", "tool", "input", "provider"];
+  }
+  if (type === "session.next.tool.success") {
+    return [
+      "timestamp",
+      "sessionID",
+      "assistantMessageID",
+      "callID",
+      "structured",
+      "content",
+      "provider",
+      "outputPaths",
+      "result",
+    ];
+  }
+  if (type === "session.next.tool.failed") {
+    return [
+      "timestamp",
+      "sessionID",
+      "assistantMessageID",
+      "callID",
+      "error",
+      "provider",
+      "result",
+    ];
+  }
+  return undefined;
 }
 
 function classifiedToolEvent(
@@ -815,7 +900,7 @@ function exactRecord(value: unknown, keys: readonly string[]): value is Record<s
   return (
     isRecord(value) &&
     Object.keys(value).length === keys.length &&
-    keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    keys.every((key) => Object.hasOwn(value, key))
   );
 }
 function allowedRecord(
@@ -856,7 +941,7 @@ function scanJsonValue(value: string, state: { index: number }, depth: number): 
       return true;
     }
   }
-  const number = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/u.exec(
+  const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u.exec(
     value.slice(state.index),
   )?.[0];
   if (number === undefined) return false;

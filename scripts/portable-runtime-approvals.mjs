@@ -120,6 +120,10 @@ function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
   };
 }
 
+function darwinArchiveSlug(target) {
+  return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
+}
+
 function validateArchives(record, allowedHosts, context, sidecar = false) {
   exactKeys(record, PORTABLE_TARGET_NAMES, context);
   const result = {};
@@ -146,9 +150,7 @@ function validateNodeSection(node) {
   );
   for (const target of PORTABLE_TARGET_NAMES) {
     const expectedName =
-      target === "windows-x64"
-        ? "win-x64.zip"
-        : `${target === "macos-arm64" ? "darwin-arm64" : "darwin-x64"}.tar.gz`;
+      target === "windows-x64" ? "win-x64.zip" : `${darwinArchiveSlug(target)}.tar.gz`;
     const expectedUrl = `https://nodejs.org/dist/v${version}/node-v${version}-${expectedName}`;
     validateLiteral(archives[target].url, expectedUrl, `${context}.archives.${target}.url`);
   }
@@ -275,7 +277,7 @@ function validateSidecarArchives(rawArchives, context) {
     const asset =
       target === "windows-x64"
         ? "opencode-windows-x64.zip"
-        : `opencode-${target === "macos-arm64" ? "darwin-arm64" : "darwin-x64"}.zip`;
+        : `opencode-${darwinArchiveSlug(target)}.zip`;
     validateLiteral(
       archives[target].url,
       `https://github.com/anomalyco/opencode/releases/download/${OPENCODE_PIN.tag}/${asset}`,

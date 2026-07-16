@@ -279,8 +279,15 @@ function signingVerified(
 function signingKeysExact(signing: Record<string, unknown> | undefined): boolean {
   return (
     signing !== undefined &&
-    JSON.stringify(Object.keys(signing).sort()) === JSON.stringify(SIGNING_KEYS)
+    JSON.stringify(Object.keys(signing).sort(compareCodeUnits)) === JSON.stringify(SIGNING_KEYS)
   );
+}
+
+/** Byte-stable code-unit ordering keeps the key-set comparison deterministic across locales. */
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function shippedExecutableEvidenceVerified(signing: Record<string, unknown>): boolean {
