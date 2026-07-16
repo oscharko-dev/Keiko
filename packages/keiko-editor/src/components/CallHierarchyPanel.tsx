@@ -121,6 +121,7 @@ function HierarchyTree(props: {
           type="button"
           role="treeitem"
           aria-level={row.level}
+          aria-selected={focusId === row.id}
           tabIndex={focusId === row.id ? 0 : -1}
           style={{
             display: "block",

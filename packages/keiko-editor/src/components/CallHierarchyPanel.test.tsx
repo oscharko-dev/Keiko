@@ -47,9 +47,14 @@ describe("CallHierarchyPanel", () => {
     const root = screen.getByRole("treeitem", { name: "target" });
     const caller = screen.getByRole("treeitem", { name: "Incoming calls: caller" });
     expect(screen.getAllByRole("treeitem", { name: /Call site/u })).toHaveLength(2);
+    // WCAG 4.1.2 (S6807): a "treeitem" role must expose its selection state via aria-selected.
+    expect(root).toHaveAttribute("aria-selected", "true");
+    expect(caller).toHaveAttribute("aria-selected", "false");
     root.focus();
     fireEvent.keyDown(root, { key: "ArrowDown" });
     expect(document.activeElement).toBe(caller);
+    expect(root).toHaveAttribute("aria-selected", "false");
+    expect(caller).toHaveAttribute("aria-selected", "true");
     fireEvent.click(caller);
     expect(onReveal).toHaveBeenCalledWith({ path: "src/a.ts", range });
   });

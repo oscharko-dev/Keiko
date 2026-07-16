@@ -50,9 +50,9 @@
         </div>
 
         <div class="demo-row" style="margin-bottom: 16px; gap: 10px">
-          <div class="c-seg" role="group" aria-label="Density">
-            <button data-den="comfortable" aria-selected="true">Comfortable</button>
-            <button data-den="compact" aria-selected="false">Compact</button>
+          <div class="c-seg" role="radiogroup" aria-label="Density">
+            <button data-den="comfortable" role="radio" aria-checked="true">Comfortable</button>
+            <button data-den="compact" role="radio" aria-checked="false">Compact</button>
           </div>
           <label class="c-check" style="margin-left: 6px"
             ><input type="checkbox" id="zebra" /><span class="bx"
@@ -512,9 +512,9 @@
       document.querySelectorAll("[data-den]").forEach(function (b) {
         b.addEventListener("click", function () {
           document.querySelectorAll("[data-den]").forEach(function (x) {
-            x.setAttribute("aria-selected", "false");
+            x.setAttribute("aria-checked", "false");
           });
-          b.setAttribute("aria-selected", "true");
+          b.setAttribute("aria-checked", "true");
           document.documentElement.dataset.density =
             b.dataset.den === "compact" ? "compact" : "comfortable";
         });

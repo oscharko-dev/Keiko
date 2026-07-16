@@ -308,7 +308,8 @@
   font: 12.5px var(--font-ui);
   cursor: pointer;
 }
-.c-seg button[aria-selected="true"] {
+.c-seg button[aria-selected="true"],
+.c-seg button[aria-checked="true"] {
   background: var(--surface-secondary);
   color: var(--text-primary);
 }
