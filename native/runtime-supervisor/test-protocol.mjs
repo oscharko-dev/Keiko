@@ -129,6 +129,7 @@ async function explained(stage, pending, exited, stderr) {
     throw new Error(
       `${stage}: ${error instanceof Error ? error.message : String(error)} ` +
         `(exit=${String(settled)} stderrBytes=${String(Buffer.concat(stderr).length)})`,
+      { cause: error },
     );
   }
 }
