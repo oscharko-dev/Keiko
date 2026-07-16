@@ -1510,8 +1510,21 @@ function parseCreateCapsuleInput(body: Record<string, unknown>): {
   };
 }
 
+// Strip trailing "/" characters with a bounded scan instead of the unanchored `/\/+$/`: without a
+// `^` anchor, that pattern retries the match at every position inside a long slash run whenever
+// the string doesn't end in "/", which is quadratic in input length (SonarCloud S8786).
+// Exported for the co-located regression test only — not part of the package's public surface
+// (index.ts re-exports handlers by name and does not list this helper).
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f /* "/" */) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  const normalized = stripTrailingSlashes(baseUrl.trim());
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 

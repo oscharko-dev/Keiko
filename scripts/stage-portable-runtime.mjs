@@ -901,8 +901,18 @@ function archiveEntryInsideRoot(entry, expectedRoot) {
   return normalized === expectedRoot || normalized.startsWith(`${expectedRoot}/`);
 }
 
+// A plain backward scan replaces `/\/+$/u` (S8786): that regex is unanchored at the front, so an
+// archive entry with a long run of `/` not at the very end (an attacker-controlled tar/zip entry
+// name, here) forces the engine to retry the same O(n) backtrack at every position in that run —
+// O(n^2) overall. Trailing-slash stripping never needs backtracking at all.
+function stripTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return value.slice(0, end);
+}
+
 function normalizeArchiveEntry(entry) {
-  const normalized = entry.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const normalized = stripTrailingSlashes(entry.replaceAll("\\", "/"));
   if (normalized.length === 0 || normalized.startsWith("/") || /^[A-Za-z]:/u.test(normalized)) {
     return "";
   }

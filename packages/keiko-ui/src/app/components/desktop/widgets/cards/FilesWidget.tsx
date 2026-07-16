@@ -67,10 +67,20 @@ export interface FilesMutationEvent {
   readonly mutation: FilesMutationResponse;
 }
 
+// Strip trailing separator characters via plain backward scanning instead of a `+$` regex. An
+// unanchored trailing-quantifier pattern (no `^`) lets the engine retry the match at every start
+// position when the string does not actually end in a separator, which is O(n^2) on adversarial
+// input such as a long run of separators followed by one non-separator character (S8786).
+function trimTrailingSeparators(path: string, separators: string): string {
+  let end = path.length;
+  while (end > 0 && separators.includes(path.charAt(end - 1))) end -= 1;
+  return path.slice(0, end);
+}
+
 // Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
 // math (no IO) so the root bar can offer "up" without a round-trip; the BFF still validates.
 function parentDir(path: string): string | null {
-  const trimmed = path.replace(/[/\\]+$/, "");
+  const trimmed = trimTrailingSeparators(path, "/\\");
   const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   if (idx < 0) return null;
   if (idx === 0) return "/"; // POSIX root
@@ -80,7 +90,7 @@ function parentDir(path: string): string | null {
 }
 
 function parentRelativePath(path: string): string | null {
-  const trimmed = path.replace(/\/+$/u, "");
+  const trimmed = trimTrailingSeparators(path, "/");
   const idx = trimmed.lastIndexOf("/");
   if (idx < 0) return null;
   const parent = trimmed.slice(0, idx);
@@ -90,7 +100,7 @@ function parentRelativePath(path: string): string | null {
 function displayPath(root: string, relativePath: string | null): string {
   if (relativePath === null || relativePath.length === 0) return root;
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
+  return `${trimTrailingSeparators(root, "/\\")}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
 }
 
 function treePathFromGitPath(visibleDirectoryPath: string | null, path: string): string {
@@ -229,6 +239,10 @@ export const filesWidgetTestInternals = {
   DIRECTORY_RENDER_BATCH_SIZE,
   pinnedDirectoryPaths,
   pruneDirectoryCache,
+  trimTrailingSeparators,
+  parentDir,
+  parentRelativePath,
+  displayPath,
 } as const;
 
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.

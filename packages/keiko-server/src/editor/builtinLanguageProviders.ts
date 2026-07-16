@@ -28,8 +28,43 @@ function ensureFinalNewline(text: string): string {
   return text.length === 0 || text.endsWith("\n") ? text : `${text}\n`;
 }
 
+// A JS regex `$` under the `m` flag matches immediately before *every individual* LineTerminator
+// code point -- `\n`, `\r`, U+2028, U+2029 -- not only before `\n`, and treats a bare `\r` inside
+// `\r\n` as its own boundary (so trailing whitespace before the `\r` of a CRLF pair is stripped
+// too). A plain `split("\n")` misses all of that: a lone `\r`-terminated line, or the `\r` in a
+// CRLF pair, is left attached to the "line" and never has its trailing space/tab stripped.
+const LINE_TERMINATOR_CHARS = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+// Strips trailing spaces/tabs from every line via a linear, single-pass character scan instead of
+// the previous `/[ \t]+$/gmu` (S8786). That pattern is unanchored at the start of each line, so a
+// single huge "line" (no line terminator at all — e.g. minified CSS/YAML content) with a long run
+// of space/tab characters that never reaches a true line end forces an O(n) backtrack retry at
+// every one of the O(n) positions in that line — quadratic in the line length. This scan visits
+// each character at most twice (once while looking for the next boundary, once while walking back
+// over a trailing whitespace run), so it stays linear while reproducing the regex's exact
+// per-line-terminator boundary semantics — including CRLF, a lone `\r`, and Unicode line/paragraph
+// separators. Exported for direct regression coverage (the function it backs,
+// `normalizeTrailingWhitespace`, is only reachable indirectly through the formatting provider).
+export function stripTrailingSpacesAndTabsPerLine(text: string): string {
+  let result = "";
+  let lineStart = 0;
+  for (let index = 0; index <= text.length; index += 1) {
+    const char = index < text.length ? text[index] : undefined;
+    const atBoundary = char === undefined || LINE_TERMINATOR_CHARS.has(char);
+    if (!atBoundary) continue;
+    let end = index;
+    while (end > lineStart && (text[end - 1] === " " || text[end - 1] === "\t")) {
+      end -= 1;
+    }
+    result += text.slice(lineStart, end);
+    if (char !== undefined) result += char;
+    lineStart = index + 1;
+  }
+  return result;
+}
+
 function normalizeTrailingWhitespace(text: string): string {
-  return ensureFinalNewline(text.replace(/[ \t]+$/gmu, ""));
+  return ensureFinalNewline(stripTrailingSpacesAndTabsPerLine(text));
 }
 
 function formatJson(text: string, options: LanguageFormattingOptions | undefined): string | null {

@@ -116,10 +116,24 @@ function readBody(req: RouteContext["req"]): Promise<string> {
   });
 }
 
+// Exported so a co-located test can pin the ReDoS-safe behavior directly without hardcoding the
+// module's other exports (mirrors the MAX_DISCOVERED_MODELS precedent below).
+// `/\/+$/u` looks like a harmless anchored trim, but it is unanchored at the *start*: engines try
+// every start position looking for a run of "/" that reaches the true end of the string, which is
+// quadratic whenever that never happens (e.g. a long string that ends in a non-"/" character). A
+// single backward scan for the trim point is linear and cannot backtrack.
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function normalizeBaseUrl(raw: string): string {
-  let value = raw.trim().replace(/\/+$/u, "");
+  let value = stripTrailingSlashes(raw.trim());
   if (value.endsWith("/chat/completions")) {
-    value = value.slice(0, -"/chat/completions".length).replace(/\/+$/u, "");
+    value = stripTrailingSlashes(value.slice(0, -"/chat/completions".length));
   }
   return value;
 }

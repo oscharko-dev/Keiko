@@ -55,7 +55,13 @@ const WORD_CHARACTER_PATTERN = /[\p{L}\p{N}_]/u;
 const LINE_BOUNDARY_PATTERN = /\n(?=\S)/g;
 const PARAGRAPH_BOUNDARY_PATTERN = /\n[ \t]*\n+/g;
 const MARKDOWN_HEADING_PATTERN = /\n[ \t]*#{1,6}[ \t]+\S/g;
-const HTML_HEADING_PATTERN = /\n?[ \t]*<\/?h[1-6](?:\s|>|$)/gi;
+// The `[ \t]*` indentation run is bounded (typescript/javascript:S8786): unbounded, it sits
+// directly before the required `<` literal with nothing gating entry into it, so an unanchored
+// global scan across a long run of plain spaces/tabs with no heading tag re-tries the same
+// greedy-then-backtrack walk at every offset inside the run, which is quadratic in run length.
+// 80 columns of leading whitespace before a heading tag is far beyond any real markdown/HTML
+// indentation, so the bound changes nothing for content this pattern is meant to recognise.
+const HTML_HEADING_PATTERN = /\n?[ \t]{0,80}<\/?h[1-6](?:\s|>|$)/gi;
 const SENTENCE_BOUNDARY_PATTERN = /[.!?。！？][)"'\]\u00bb\u201d\u2019]*\s+/g;
 
 function positiveInteger(raw: number | undefined, fallback: number, field: string): number {

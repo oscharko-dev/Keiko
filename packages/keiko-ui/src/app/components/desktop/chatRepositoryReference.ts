@@ -7,8 +7,20 @@
 // domain type and the `effectiveConnectedScopes`/`rootDisplayName` helpers that stay there, so it is
 // not a clean pure leaf and moving it would pull the chat domain type into this module.
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") start += 1;
+  return value.slice(start);
+}
+
 export function normalizedRepositoryRoot(root: string): string {
-  return root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  return trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
 }
 
 export function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
@@ -33,7 +45,7 @@ export function omitAncestorRepositoryRoots(roots: readonly string[]): readonly 
 }
 
 export function normalizedRepositoryPath(path: string): string {
-  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll(/\\/gu, "/")));
 }
 
 export function appendRepositoryReference(draft: string, path: string): string {

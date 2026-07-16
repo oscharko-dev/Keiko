@@ -120,10 +120,39 @@ function extractNotes(body: string): readonly string[] {
   return paragraphs.slice(0, Math.min(paragraphs.length, BULLET_LIMIT));
 }
 
+// The original /^#{2,6}\s+(.+?)\s*#*$/u chained a lazy wildcard capture into a trailing \s*#*
+// run anchored on $ — three quantifiers whose character classes all overlap (`.` matches
+// whitespace and `#`), so the engine can retry many splits between them.
+const HEADING_PREFIX_PATTERN = /^#{2,6}\s+(.+)$/u;
+const SINGLE_CHAR_WHITESPACE_PATTERN = /\s/u;
+
+// Strips a trailing "whitespace-run then hash-run" suffix (mirroring \s*#*$) using a manual
+// backward scan instead of a regex. A regex search for \s*#*$ has no leading ^ anchor, so
+// String.replace() retries it at every one of the O(n) starting positions inside the body; for a
+// body shaped like "<char>" + "#".repeat(n) + "<other char>" every one of those n attempts
+// greedily consumes the remaining hashes and then backtracks hash-by-hash looking for `$`, which
+// never arrives because of the trailing character — O(n) work repeated at O(n) starting
+// positions is O(n^2). Scanning backward from the end once (hashes first, then whitespace
+// immediately before them) finds the identical boundary in O(n) with no backtracking.
+function stripHeadingTrailingRun(body: string): string {
+  let end = body.length;
+  while (end > 0 && body.charAt(end - 1) === "#") {
+    end -= 1;
+  }
+  while (end > 0 && SINGLE_CHAR_WHITESPACE_PATTERN.test(body.charAt(end - 1))) {
+    end -= 1;
+  }
+  return body.slice(0, end);
+}
+
 function normalizeHeading(line: string): string | undefined {
-  const match = /^#{2,6}\s+(.+?)\s*#*$/u.exec(line.trim());
+  const match = HEADING_PREFIX_PATTERN.exec(line.trim());
   if (match === null) return undefined;
-  return normalizeText(match[1] ?? "");
+  const body = match[1] ?? "";
+  // Matching identical output to the original's one-character-minimum quirk of the lazy `+`
+  // capture when the whole body is itself a trailing-run (e.g. "## ###" still yields "#").
+  const stripped = stripHeadingTrailingRun(body);
+  return normalizeText(stripped.length === 0 ? body.charAt(0) : stripped);
 }
 
 function extractNoteSections(body: string): readonly UpdatePreflightPatchNoteSection[] {
@@ -140,7 +169,13 @@ function extractNoteSections(body: string): readonly UpdatePreflightPatchNoteSec
       sections.push(current);
       continue;
     }
-    const bulletMatch = /^[*-]\s+(.+)$/u.exec(line);
+    // \s+ immediately followed by (.+)$ overlaps ("." matches whitespace too), which is the
+    // shape SonarCloud's S8786 flags; requiring the captured content to start with a non-
+    // whitespace character (\S) removes the overlap deterministically. Every line reaching this
+    // point is already trimmed (see `rawLine.trim()` above), so \s+ can never consume all the
+    // way to the end of `line` — the one input shape where this would differ from the original
+    // (a bullet marker followed only by whitespace) cannot occur here.
+    const bulletMatch = /^[*-]\s+(\S.*)$/u.exec(line);
     if (bulletMatch === null || current === undefined || total >= BULLET_LIMIT) continue;
     const bullet = normalizeText(bulletMatch[1] ?? "");
     const key = bullet.toLowerCase();

@@ -32,6 +32,7 @@ import {
   inspectWorkspaceIndexDirectories,
   isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
+  stripTrailingNonWordChars,
   type WorkspaceIndex,
   type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
@@ -529,6 +530,39 @@ describe("workspaceIndex", () => {
     expect(record.truncated).toBe(false);
     expect(record.lines).toEqual([{ startLine: 1, endLine: 1, termHashes: expectedHashes }]);
     expect(record.termHashes).toEqual(expectedHashes);
+  });
+
+  // SonarCloud S8786: `stripTrailingNonWordChars` replaces the old `/[^\p{L}\p{N}]+$/u` regex,
+  // which is unanchored at the start -- a backtracking engine retries every start position looking
+  // for a trailing non-letter/non-number run that reaches the true end of the string, which is
+  // quadratic whenever that run isn't at the very end (blocked by a trailing letter/number, exactly
+  // the shape a real content token can take, e.g. a heavily hyphenated identifier or a line of
+  // markdown separator punctuation followed by one more word).
+  describe("stripTrailingNonWordChars", () => {
+    it.each([
+      ["abc", "abc"],
+      ["abc---", "abc"],
+      ["---", ""],
+      ["", ""],
+      ["abc.def", "abc.def"],
+      ["abc...", "abc"],
+      ["日本語", "日本語"],
+      ["日本語...", "日本語"],
+      ["get𝐀Alpha...", "get𝐀Alpha"],
+    ])("strips trailing non-letter/non-number chars from %s -> %s", (input, expected) => {
+      expect(stripTrailingNonWordChars(input)).toBe(expected);
+    });
+
+    it("completes within a tight budget for a long separator run blocked by one trailing letter", () => {
+      // A real-world analogue: a markdown-style separator line ("----...----") immediately
+      // followed by a single stray word character, tokenized as one long content token.
+      const adversarial = `${"-".repeat(20_000)}a`;
+      const start = Date.now();
+      const result = stripTrailingNonWordChars(adversarial);
+      const elapsedMs = Date.now() - start;
+      expect(elapsedMs).toBeLessThan(200);
+      expect(result).toBe(adversarial);
+    });
   });
 
   it("reports directory freshness and changed-directory deltas from cached snapshots", async () => {

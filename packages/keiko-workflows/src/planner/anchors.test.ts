@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { extractAnchors, type AnchorExtractionResult } from "./anchors.js";
+import { extractAnchors, PATH_RE, type AnchorExtractionResult } from "./anchors.js";
 
 function run(text: string, maxAnchors = 8): AnchorExtractionResult {
   return extractAnchors({ text, maxAnchors });
@@ -151,6 +151,23 @@ describe("extractAnchors", () => {
     const result = run("see src\\foo\\bar.ts for context");
     const path = result.anchors.find((a) => a.kind === "path");
     expect(path).toBeUndefined();
+  });
+
+  it("PATH_RE resolves an adversarial many-segment input without superlinear backtracking (S8786)", () => {
+    // Adversarial-shaped input for the old `(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}` pattern: many
+    // single-character "segment/" pairs with no trailing extension, so a backtracking engine has
+    // to explore every possible split between the repeated group and the trailing atom. Measured
+    // empirically: the old unbounded pattern took ~275ms on this exact 20,001-char input and grew
+    // quadratically with size; PATH_RE's bounded quantifiers keep it well under budget. Exercised
+    // directly against PATH_RE (not extractAnchors) because MAX_INPUT_LENGTH would otherwise
+    // short-circuit before the regex ever runs.
+    const adversarial = "a/".repeat(10_000) + "a";
+    PATH_RE.lastIndex = 0;
+    const start = Date.now();
+    const matched = PATH_RE.test(adversarial);
+    const elapsed = Date.now() - start;
+    expect(matched).toBe(false);
+    expect(elapsed).toBeLessThan(250);
   });
 
   it("sorts by weight desc then term asc", () => {

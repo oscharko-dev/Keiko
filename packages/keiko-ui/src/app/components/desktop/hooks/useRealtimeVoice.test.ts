@@ -5,7 +5,11 @@
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useRealtimeVoice, type RealtimeAudioSink } from "./useRealtimeVoice";
+import {
+  buildRealtimeMemoryContextItem,
+  useRealtimeVoice,
+  type RealtimeAudioSink,
+} from "./useRealtimeVoice";
 import { VoiceRtcError, type VoiceRtcSession, type VoiceRtcTransport } from "./voice-rtc-transport";
 import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-client";
 
@@ -1864,5 +1868,43 @@ describe("useRealtimeVoice — unmount safety", () => {
 
     // No dispatch on unmounted — no error thrown.
     expect(true).toBe(true);
+  });
+});
+
+function memoryItemText(item: Record<string, unknown> | undefined): string | undefined {
+  const content = (item?.item as { readonly content?: readonly { readonly text?: string }[] })
+    ?.content;
+  return content?.[0]?.text;
+}
+
+describe("buildRealtimeMemoryContextItem", () => {
+  it("collapses trailing whitespace before newlines and strips a leading header", () => {
+    const text = memoryItemText(
+      buildRealtimeMemoryContextItem(
+        "Included memory context:\nRemember: line one.   \n\n   \nRemember: line two.",
+      ),
+    );
+    expect(text).toContain("Remember: line one.\nRemember: line two.");
+    expect(text).not.toContain("Included memory context:\nIncluded memory context:");
+  });
+
+  it("returns undefined for text that is empty after normalisation", () => {
+    expect(buildRealtimeMemoryContextItem("   \n\n   ")).toBeUndefined();
+  });
+
+  // Regression for typescript/javascript:S8786. The whitespace-before-newline collapse used to
+  // be `.replace(/\s+\n/gu, "\n")`: `\s` includes `\n`, so the quantified run and the literal
+  // `\n` required after it could both consume the same characters, and an unanchored global
+  // search over a long whitespace-only run with no trailing newline re-walked that ambiguity
+  // from every offset in the run — quadratic in run length. A 40,000-character adversarial
+  // memory context (long padding, never reaching a newline) would have taken the better part of
+  // a second; the callback-based collapse is linear.
+  it("resolves an adversarial whitespace run in linear time", () => {
+    const adversarialText = `Remember: ${" ".repeat(40_000)}this note has trailing padding.`;
+    const start = Date.now();
+    const item = buildRealtimeMemoryContextItem(adversarialText);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(300);
+    expect(memoryItemText(item)).toContain("this note has trailing padding.");
   });
 });

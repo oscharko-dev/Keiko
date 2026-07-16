@@ -4,10 +4,12 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 import { deriveIntent } from "../domain/intentDerivation.js";
 import type { IntentSummary } from "../domain/intentDerivation.js";
+import { STRUCTURAL_BASELINE_MARKER } from "../domain/figma/screenIrTestBaseline.js";
 import { bankingDefault, regressionDefault } from "../domain/policyProfile.js";
 import {
   designTestCaseCandidates,
   DETERMINISTIC_BASELINE_PROVENANCE_TAG,
+  parseFigmaScreenHeaderName,
 } from "../domain/testDesignModel.js";
 import { loadFixture, type LoadedFixture } from "./_fixtureLoader.js";
 
@@ -274,6 +276,116 @@ describe("designTestCaseCandidates", () => {
     expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
     expect(candidate.steps.length).toBeGreaterThan(0);
     expect(candidate.expectedResults.length).toBeGreaterThan(0);
+  });
+
+  // Regression coverage for the S8786 rewrite of the internal Figma screen-header parser: the
+  // original `/^Screen:\s+(.+?)\s+\[[^\]]+\]$/u` had unbounded `\s+` runs on either side of the
+  // lazy `(.+?)` overlapping with `.` (which also matches whitespace), so a long non-matching
+  // "Screen:" line drove severe backtracking (empirically ~10s at 4,000 chars pre-fix on this
+  // machine). A first fix bounded both `\s+` to `{1,20}`, which caps the worst case but — per the
+  // dedicated `parseFigmaScreenHeaderName` capture-correctness suite below — changes what gets
+  // captured once a separator exceeds 20 chars, and raising that bound only makes the SAME
+  // catastrophic backtracking reachable again (worst case scales with bound² × line length). The
+  // header is now parsed with a manual, non-backtracking scan (indexOf/lastIndexOf + bounded
+  // while-loops), so the worst case is linear for every input shape and there is no bound at all.
+  it("stays fast against an adversarial all-whitespace Screen header (no closing bracket)", () => {
+    const fixture = loadFixture("regressionRequirement.synthetic.json");
+    const intent = deriveIntent(fixture.envelopes, regressionDefault);
+    const adversarialHeader = `Screen:${" ".repeat(20_000)}`; // never reaches `\[[^\]]+\]$`
+    const baselineText = [
+      adversarialHeader,
+      STRUCTURAL_BASELINE_MARKER,
+      "- (screen-render) x",
+    ].join("\n");
+    const firstAtom = fixture.atoms[0];
+    if (firstAtom === undefined) throw new Error("fixture exposes no atoms");
+    const atomTextById = new Map([[String(firstAtom.id), baselineText]]);
+
+    const start = Date.now();
+    const candidates = designTestCaseCandidates({
+      runId: fixture.runId,
+      intent,
+      atoms: [firstAtom],
+      atomTextById,
+    });
+    expect(Date.now() - start).toBeLessThan(300);
+    // No screen name could be parsed out of the header, so it falls back to the generic template
+    // rather than throwing or hanging.
+    expect(candidates.length).toBe(1);
+  });
+});
+
+// Adversarial verifier finding (second remediation pass): the S8786 fix that bounded
+// FIGMA_SCREEN_HEADER's two separating `\s+` runs to `{1,20}` is NOT capture-equivalent to the
+// original unbounded pattern — once a separator run exceeds 20 chars, the excess whitespace bleeds
+// into the `(.+?)` capture instead of being consumed by the separator. `PRIOR_BOUNDED_PATTERN`
+// below is that exact bounded regex, kept ONLY to prove the defect it had (RED before this fix);
+// `parseFigmaScreenHeaderName` is the corrected, non-backtracking replacement (GREEN after this
+// fix) that never bleeds separator whitespace into the name, for any separator width — it has no
+// quantifier left to bound in the first place.
+describe("parseFigmaScreenHeaderName — capture correctness (S8786 verifier regression)", () => {
+  const PRIOR_BOUNDED_PATTERN = /^Screen:\s{1,20}(.+?)\s{1,20}\[[^\]]+\]$/u;
+
+  it("never bleeds a >20-char leading separator into the captured name", () => {
+    const line = `Screen:${" ".repeat(21)}Name [id]`;
+    // Proves the prior bounded regex actually had the defect the verifier reported.
+    expect(PRIOR_BOUNDED_PATTERN.exec(line)?.[1]).toBe(" Name");
+    // The corrected parser is not capture-lossy for the same input.
+    expect(parseFigmaScreenHeaderName(line)).toBe("Name");
+  });
+
+  it("never bleeds a >20-char trailing separator into the captured name", () => {
+    const line = `Screen: Name${" ".repeat(21)}[id]`;
+    expect(PRIOR_BOUNDED_PATTERN.exec(line)?.[1]).toBe("Name ");
+    expect(parseFigmaScreenHeaderName(line)).toBe("Name");
+  });
+
+  it("holds for separators far beyond any quantifier bound (2,000 chars each side)", () => {
+    // Demonstrates that "just raise the bound" is not a safe fix for this pattern: this input
+    // would reintroduce catastrophic backtracking on `PRIOR_BOUNDED_PATTERN` if its bound were
+    // raised to 2,000, because the pattern's worst case scales with bound² × line length. The
+    // manual scan has no such term and stays linear regardless of separator width.
+    const line = `Screen:${" ".repeat(2_000)}Name${" ".repeat(2_000)}[id]`;
+    const start = Date.now();
+    const name = parseFigmaScreenHeaderName(line);
+    expect(Date.now() - start).toBeLessThan(50);
+    expect(name).toBe("Name");
+  });
+
+  it("still parses a well-formed header with realistic single-space separators", () => {
+    expect(parseFigmaScreenHeaderName("Screen: Vorhaben + Angebote [1:121867]")).toBe(
+      "Vorhaben + Angebote",
+    );
+  });
+
+  it("resolves the LAST bracket pair when the name itself contains bracketed text", () => {
+    // Mirrors the original regex's anchored `[^\]]+\]$`: the match must end at the true end of
+    // the line, so an earlier "[...]" inside the name is part of the name, not the id bracket.
+    expect(parseFigmaScreenHeaderName("Screen: Choose [Filter] Option [42]")).toBe(
+      "Choose [Filter] Option",
+    );
+  });
+
+  it("returns undefined when there is no closing bracket at all", () => {
+    expect(parseFigmaScreenHeaderName(`Screen:${" ".repeat(50)}`)).toBeUndefined();
+  });
+
+  it('returns undefined when there is no separating whitespace after "Screen:"', () => {
+    expect(parseFigmaScreenHeaderName("Screen:Name [id]")).toBeUndefined();
+  });
+
+  it("keeps extending the name past a bracket that isn't preceded by whitespace (third remediation pass)", () => {
+    // A second adversarial-verification pass on THIS fix (not the bounded-regex one above) found a
+    // real regression: the first bracket-open candidate found by a naive forward scan may not be
+    // whitespace-separated from the name (e.g. the "[" in "Y[Z" below is glued to "Y"), and the
+    // original regex's lazy `(.+?)` would keep extending the name to try the NEXT candidate rather
+    // than failing outright. The name can also legitimately contain an unmatched "]".
+    expect(parseFigmaScreenHeaderName("Screen: X]Y[Z [id]")).toBe("X]Y[Z");
+  });
+
+  it("rejects an id bracket with no content between the brackets", () => {
+    // `[^\]]+` requires at least one character inside the id bracket — "Name []" has none.
+    expect(parseFigmaScreenHeaderName("Screen: Name []")).toBeUndefined();
   });
 });
 

@@ -203,4 +203,16 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
   it("accepts a clean connector-document envelope", () => {
     expect(looksLikeBrowserSafeSourceEnvelope(makeConnector())).toBe(true);
   });
+
+  it("stays fast against an adversarial localRef with no URL scheme delimiter (S8786)", () => {
+    // The scheme-detection scan's scheme-name run was unbounded pre-fix; a long run of lowercase
+    // letters with no "://" anywhere drove O(n²) backtracking (empirically ~450ms at 32,000 chars
+    // pre-fix on this machine — `localRef` has no length cap, unlike `displayLabel`). Bounding the
+    // run to {0,63} makes the worst case linear without narrowing detection of any real URL.
+    const env = { ...makeRepo(), localRef: "a".repeat(20_000) };
+    const start = Date.now();
+    const safe = looksLikeBrowserSafeSourceEnvelope(env);
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(safe).toBe(true);
+  });
 });

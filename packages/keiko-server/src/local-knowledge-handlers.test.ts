@@ -54,6 +54,7 @@ import {
   handleRebindLocalKnowledgeCapsuleSource,
   handleStartLocalKnowledgeCapsuleIndexing,
   selectEmbeddingModelId,
+  stripTrailingSlashes,
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
@@ -312,6 +313,30 @@ afterEach(() => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   }
+});
+
+describe("stripTrailingSlashes", () => {
+  it("strips one or more trailing slashes, matching the prior regex behaviour", () => {
+    expect(stripTrailingSlashes("https://api.example.com/v1/")).toBe("https://api.example.com/v1");
+    expect(stripTrailingSlashes("https://api.example.com/v1////")).toBe(
+      "https://api.example.com/v1",
+    );
+    expect(stripTrailingSlashes("https://api.example.com/v1")).toBe("https://api.example.com/v1");
+    expect(stripTrailingSlashes("")).toBe("");
+    expect(stripTrailingSlashes("///")).toBe("");
+  });
+
+  // SonarCloud S8786: the previous `/\/+$/` pattern has no leading `^` anchor, so the engine
+  // retries the match at every position inside a long slash run before concluding there is no
+  // match — O(n^2) when the string never ends in "/". Empirically, the old pattern took ~1.6s
+  // for a 64k-character adversarial input; this bounded scan must stay near-instant at 5x that.
+  it("stays linear for a long non-terminating slash run (regression for SonarCloud S8786)", () => {
+    const adversarial = "/".repeat(320_000) + "x";
+    const start = Date.now();
+    const result = stripTrailingSlashes(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(result).toBe(adversarial);
+  });
 });
 
 describe("local-knowledge handlers", () => {

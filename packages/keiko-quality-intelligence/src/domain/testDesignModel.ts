@@ -246,13 +246,94 @@ function atomTextFor(
 // NON-figma source kind's deterministic candidate stays byte-identical (no cross-source regression);
 // the model path (parseGeneratedCandidates) is unaffected and still produces the per-element tests.
 
-const FIGMA_SCREEN_HEADER = /^Screen:\s+(.+?)\s+\[[^\]]+\]$/u;
+// Single-character whitespace test (no quantifier — called once per scanned character below, so it
+// carries none of the multi-character backtracking risk a quantified `\s+`/`\s{1,N}` would).
+const isWhitespaceChar = (ch: string | undefined): boolean => ch !== undefined && /\s/u.test(ch);
+
+// Parses a single trimmed "Screen: <name> [<id>]" header line WITHOUT a backtracking regex
+// (SonarCloud S8786 root-cause fix, not a bound). The original
+// `/^Screen:\s+(.+?)\s+\[[^\]]+\]$/u` had two unbounded `\s+` runs straddling a lazy `(.+?)` that
+// also matches whitespace, so a long non-matching line (only whitespace after "Screen:", no
+// "[...]") drove severe backtracking. A first pass capped both quantifiers at `{1,20}`, which
+// bounds the worst case but changes WHAT gets captured once a separator run exceeds 20 chars
+// (confirmed: 21+ separating spaces bleed into the captured name instead of being fully consumed
+// by the separator). Raising the bound to make that unreachable does not work either — this
+// pattern's worst case scales with the SQUARE of the bound (~bound² × line length: verified
+// empirically, bound=20 ⇒ ~23ms, bound=50 ⇒ ~124ms, bound=100 ⇒ ~472ms against a 20,000-char
+// adversarial line), so a bound generous enough to never observe the capture-bleed reintroduces
+// the same catastrophic slowdown. A manual, single-pass scan removes the ambiguity instead of
+// bounding it: consume the mandatory leading whitespace run, then locate the closing "[...]" pair
+// exactly the way the regex's anchored `[^\]]+\]$` does (walk back from the line's final "]" to
+// the nearest "[" not separated from it by another "]"), then trim the mandatory trailing
+// whitespace run off the name from the right only (mirrors the lazy `(.+?)` deferring as much as
+// possible to what follows it). Every step is `indexOf`/`lastIndexOf` or a single bounded
+// while-loop, so the worst case is LINEAR in the line length for every input shape — there is no
+// quantifier left to bound, so there is nothing for a bound to outgrow.
+// Consumes "Screen:" plus the mandatory leading `\s+` separator. Returns undefined when the prefix
+// or the separator is missing (mirrors the original pattern's `^Screen:\s+`).
+function screenHeaderNameStart(line: string): number | undefined {
+  const PREFIX = "Screen:";
+  if (!line.startsWith(PREFIX)) return undefined;
+  const length = line.length;
+  let index = PREFIX.length;
+  if (!isWhitespaceChar(line[index])) return undefined;
+  while (index < length && isWhitespaceChar(line[index])) index += 1;
+  return index;
+}
+
+// Trims the mandatory whitespace separator immediately before `bracketOpen` off the name — mirrors
+// the lazy `(.+?)` deferring as much as possible to what follows it. Returns undefined when there is
+// no such separator or the remaining name would be empty.
+function screenHeaderNameEnd(
+  line: string,
+  nameStart: number,
+  bracketOpen: number,
+): number | undefined {
+  let index = bracketOpen;
+  while (index > nameStart && isWhitespaceChar(line[index - 1])) index -= 1;
+  return index === bracketOpen || index <= nameStart ? undefined : index;
+}
+
+// Finds the "[" that opens the closing "[...]" pair anchored at the end of the line: the name's
+// character class (`[^\]]+`) forbids "]", so only "[" positions after the last "]"-free run before
+// the final "]" are eligible — but that run can itself contain more than one "[" (e.g.
+// "X]Y[Z [id]" has candidates at both the "[" in "Y[Z" and the one before "id]"). The original
+// regex's lazy `(.+?)\s+` keeps extending the name until SOME candidate is immediately preceded by
+// whitespace, so this walks the candidates in the same left-to-right order and returns the first
+// one for which `screenHeaderNameEnd` finds a valid separator, instead of stopping at the first "["
+// regardless of what precedes it. `[^\]]+` also requires at least one character between "[" and the
+// final "]" (an adjacent "[]" has zero-length content and must be rejected, mirroring the `+`).
+function screenHeaderBracketOpen(line: string, nameStart: number): number | undefined {
+  const length = line.length;
+  if (length === 0 || line[length - 1] !== "]") return undefined;
+  const priorClose = line.lastIndexOf("]", length - 2);
+  let searchFrom = Math.max(nameStart, priorClose + 1);
+  while (searchFrom < length - 1) {
+    const openIndex = line.indexOf("[", searchFrom);
+    if (openIndex === -1 || openIndex >= length - 2) return undefined;
+    if (screenHeaderNameEnd(line, nameStart, openIndex) !== undefined) return openIndex;
+    searchFrom = openIndex + 1;
+  }
+  return undefined;
+}
+
+// Exported ONLY for direct unit coverage of the capture boundary (`testDesignModel.test.ts`) — not
+// re-exported from the package barrel (`src/index.ts`), so this stays an internal implementation
+// detail as far as `check:package-surface` and external consumers are concerned.
+export function parseFigmaScreenHeaderName(line: string): string | undefined {
+  const nameStart = screenHeaderNameStart(line);
+  if (nameStart === undefined) return undefined;
+  const bracketOpen = screenHeaderBracketOpen(line, nameStart);
+  if (bracketOpen === undefined) return undefined;
+  const nameEnd = screenHeaderNameEnd(line, nameStart, bracketOpen);
+  if (nameEnd === undefined) return undefined;
+  return line.slice(nameStart, nameEnd);
+}
 
 function figmaScreenNameFromAtomText(rawText: string | undefined): string | undefined {
   if (rawText?.includes(STRUCTURAL_BASELINE_MARKER) !== true) return undefined;
   for (const line of rawText.split("\n")) {
-    const match = FIGMA_SCREEN_HEADER.exec(line.trim());
-    const name = match?.[1]?.trim();
+    const name = parseFigmaScreenHeaderName(line.trim())?.trim();
     if (name !== undefined && name.length > 0) return name;
   }
   return undefined;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   MemoryId,
@@ -161,6 +161,19 @@ describe("tryExtractForget", () => {
     expect(outcome.operation.reason).toBe("explicit-user-request");
     expect(outcome.requiresConfirmation).toBe(true);
   });
+
+  // Regression: see the matching note on tryExtractRemember above. For forget specifically the
+  // consequence is worse than a merely-inert candidate: a fuzzy/substring resolver invoked with
+  // the swallowed keyword text ("about", "bitte") as the target can plausibly match some
+  // unrelated real memory and produce a live `forget` operation with requiresConfirmation:true.
+  // The resolver spy proves the fix rejects before ever calling the resolver, not just that it
+  // happens to return null.
+  it("never calls the resolver with swallowed keyword text when no real target follows", () => {
+    const resolver = vi.fn((target: string) => (target.length > 0 ? ["m-wrong" as MemoryId] : []));
+    expect(tryExtractForget("forget about   ", ctx(), { resolver })).toBeNull();
+    expect(tryExtractForget("vergiss bitte   ", ctx(), { resolver })).toBeNull();
+    expect(resolver).not.toHaveBeenCalled();
+  });
 });
 
 describe("tryExtractUpdate", () => {
@@ -270,5 +283,93 @@ describe("tryExtractCorrection", () => {
     if (wrong?.kind === "candidate") {
       expect(wrong.proposal.body).toBe("der Runner ist vitest");
     }
+  });
+});
+
+// ─── Regex performance (SonarCloud S8786 regression) ─────────────────────────
+// All extractor regexes end (or, for update/correction, also begin) a capture group with an
+// unbounded quantifier immediately followed by another unbounded quantifier over an overlapping
+// character class (`.+?` then `\s*$`, or `.+?` then `\s+`). That overlap forces the engine to
+// re-scan the remaining input at every position the lazy group could stop at, which is
+// quadratic on an adversarial "single token, huge whitespace run" input. A 20_000-character
+// adversarial body would have taken the old `(.+?)\s*$`-style patterns on the order of seconds
+// (verified empirically before the fix: ~35ms at 8k chars and growing ~4x per doubling, i.e.
+// O(n^2)); the fixed patterns resolve the same input in low single-digit milliseconds because
+// `\S`/`\s` are disjoint character classes with no ambiguous split to backtrack over.
+const PERFORMANCE_BUDGET_MS = 300;
+
+describe("regex performance (SonarCloud S8786 regression)", () => {
+  it("tryExtractRemember resolves a large single-token whitespace-run body quickly", () => {
+    const adversarialBody = `x${" ".repeat(20_000)}y`;
+    const start = Date.now();
+    const outcome = tryExtractRemember(`remember that ${adversarialBody}`, ctx());
+    expect(Date.now() - start).toBeLessThan(PERFORMANCE_BUDGET_MS);
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind !== "candidate") return;
+    expect(outcome.proposal.body).toBe(adversarialBody);
+  });
+
+  it("tryExtractForget resolves a large single-token whitespace-run target quickly", () => {
+    const adversarialTarget = `x${" ".repeat(20_000)}y`;
+    const start = Date.now();
+    const outcome = tryExtractForget(`forget about ${adversarialTarget}`, ctx(), {
+      resolver: () => ["m-1" as MemoryId],
+    });
+    expect(Date.now() - start).toBeLessThan(PERFORMANCE_BUDGET_MS);
+    expect(outcome?.kind).toBe("forget");
+  });
+
+  it("tryExtractUpdate rejects a large whitespace-run target with no separator quickly", () => {
+    // No "to be"/"with"/"auf"/"mit"/"zu"/":" ever appears, so the old pattern had to fully
+    // explore the adjacent \s+ vs .+? split at every position in the whitespace run before
+    // concluding there is no match.
+    const adversarialTarget = `a${" ".repeat(20_000)}`;
+    const start = Date.now();
+    const outcome = tryExtractUpdate(`update memory about ${adversarialTarget}`, ctx(), {
+      resolver: () => ["m-1" as MemoryId],
+    });
+    expect(Date.now() - start).toBeLessThan(PERFORMANCE_BUDGET_MS);
+    expect(outcome).toBeNull();
+  });
+
+  it("tryExtractCorrection rejects a large whitespace-run 'that's wrong' body with no verb quickly", () => {
+    // No "is"/"are"/"should be"/"ist"/"sind"/"sollte sein" ever appears.
+    const adversarialSubject = `a${" ".repeat(20_000)}`;
+    const start = Date.now();
+    const outcome = tryExtractCorrection(`that's wrong, ${adversarialSubject}`, ctx());
+    expect(Date.now() - start).toBeLessThan(PERFORMANCE_BUDGET_MS);
+    expect(outcome).toBeNull();
+  });
+
+  // Behaviour-equivalence note: the old `(.+?)\s*$`-shaped patterns had an accidental quirk where
+  // a body consisting of *only* whitespace (e.g. "remember  ") would backtrack into capturing a
+  // single space character as the body, because `.` and `\s` overlap. The fixed `\S`-anchored
+  // patterns require at least one non-whitespace character, so a whitespace-only body correctly
+  // falls through to "not this intent" (null) instead of producing a degenerate single-space
+  // memory candidate. This is intentional: it was never a designed input, and the file's own
+  // contract (see the top-of-file comment) is that ambiguous matches return null.
+  it("treats a whitespace-only body as no match rather than capturing a stray space", () => {
+    expect(tryExtractRemember("remember  ", ctx())).toBeNull();
+  });
+
+  // Regression: a second-pass fix bounded the trailing capture as `(\S(?:.*\S)?)` chained
+  // directly onto the prefix alternation. Because the inner keyword clauses ("that", "bitte",
+  // "dass", "about this project:", …) are themselves optional, the engine could backtrack one of
+  // them out of the prefix whenever doing so was the only way to still satisfy the mandatory
+  // `\s+` separator before the capture — and then the keyword's own text got captured as the
+  // body/target. This is strictly worse than the single-space quirk documented above: instead of
+  // a body that (almost) never resolves to anything, it produces a real word that a fuzzy/
+  // substring resolver can plausibly match to an unrelated memory. Each case here reproduces the
+  // exact adversarial shape (keyword clause followed by nothing but trailing whitespace) and must
+  // return null / no match, not the swallowed keyword.
+  it("treats prefix keyword text followed only by whitespace as no body, not as the body itself", () => {
+    expect(tryExtractRemember("remember that   ", ctx())).toBeNull();
+    expect(tryExtractRemember("merke dir bitte, dass \t", ctx())).toBeNull();
+    expect(
+      tryExtractRemember(
+        "remember about this project:    ",
+        ctx({ projectId: "p-1" as ProjectId }),
+      ),
+    ).toBeNull();
   });
 });

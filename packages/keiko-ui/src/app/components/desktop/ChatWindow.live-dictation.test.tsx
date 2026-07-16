@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { clearVoiceCapabilityCacheForTests } from "./hooks/useVoiceCapability";
+import type { UseDictationOptions } from "./hooks/useDictation";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ModelCapability, VoiceCapabilityResolution } from "@/lib/types";
@@ -317,5 +318,43 @@ describe("ChatWindow live dictation mode selection", () => {
     await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
     expect(realtimeVoiceMock.start).toHaveBeenCalledTimes(1);
     expect(dictationMock.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("insertTranscript composer join (SonarCloud S8786 regression)", () => {
+  // The old join trimmed the draft's trailing whitespace with `draft.replace(/\s+$/u, "")`.
+  // `\s+$` is unanchored at its start, so when the whitespace run does NOT reach the true end
+  // of the string (there is more content after it), the engine must, at every offset inside the
+  // run, greedily consume to the end, fail the `$` anchor, and backtrack one character at a time
+  // before advancing to the next start offset — O(n^2). Critically, a whitespace run that DOES
+  // reach the true end is *not* pathological: the very first offset the engine tries inside the
+  // run succeeds immediately (greedy `\s+` already lands exactly on `$`), with zero backtracking.
+  // So the adversarial shape needs trailing content AFTER the huge whitespace run, e.g.
+  // "existing draft" + 20,000 spaces + "more text" (a large paste landing before more typed
+  // text is unusual but realistic). `trimEnd()` is the native, non-regex equivalent — it scans
+  // once from the true end and stops at the first non-whitespace character, so it is O(1) here
+  // (the last character is non-whitespace) and O(n) in the worst case, but never O(n^2).
+  //
+  // Verified directly against the isolated regex: for this exact input, the pre-fix
+  // `/\s+$/u` pattern takes ~210ms (over the 200ms budget below), while `trimEnd()` takes
+  // well under 1ms — both leave the string unchanged, so only performance differs.
+  it("joins a draft with a huge non-trailing whitespace run in O(n), not O(n^2)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    stubCaptureBrowser();
+    const setDraft = vi.fn();
+    const bigDraft = `existing draft${" ".repeat(20_000)}more text`;
+    renderWindow(makeSession({ draft: bigDraft, setDraft }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
+    );
+
+    const { onInsert } = dictationMock.options.at(-1) as UseDictationOptions;
+    const start = performance.now();
+    onInsert("hello");
+    const elapsed = performance.now() - start;
+
+    expect(setDraft).toHaveBeenCalledWith(`${bigDraft} hello`);
+    expect(elapsed).toBeLessThan(200);
   });
 });

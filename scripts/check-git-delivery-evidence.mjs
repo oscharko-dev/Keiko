@@ -157,10 +157,13 @@ function slugHeading(heading) {
     .replace(/^-|-$/g, "");
 }
 
-function markdownAnchors(markdown) {
+export function markdownAnchors(markdown) {
   const anchors = new Set();
   for (const line of markdown.split(/\r?\n/)) {
-    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    // Greedy `.+` (not lazy `.+?` followed by a separate `\s*$`) removes the overlapping-quantifier
+    // shape that made this superlinear (S8786): `slugHeading` already trims, so trailing whitespace
+    // doesn't need stripping here too.
+    const match = /^(#{1,6})\s+(.+)$/.exec(line);
     if (match) {
       anchors.add(slugHeading(match[2]));
     }
@@ -168,9 +171,13 @@ function markdownAnchors(markdown) {
   return anchors;
 }
 
-function markdownLinks(markdown) {
+export function markdownLinks(markdown) {
   const links = [];
-  const regex = /(?<!!)\[[^\]]+\]\(([^)]+)\)/g;
+  // Link text/target are bounded (S8786): unbounded `[^\]]+`/`[^)]+` are unanchored, so a string
+  // built from many repeated `[` (or `(`) characters forces the engine to retry a full O(n) consume
+  // at every position — O(n^2) overall. 2000 chars is far beyond any real Markdown link in this
+  // repository's docs.
+  const regex = /(?<!!)\[[^\]]{1,2000}\]\(([^)]{1,2000})\)/g;
   for (const match of markdown.matchAll(regex)) {
     const target = match[1].trim();
     if (

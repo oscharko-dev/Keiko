@@ -6,7 +6,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -187,6 +195,40 @@ describe("idempotent safe retry (AC3)", () => {
     expect(second.created).toBe(false);
     expect(second.instance.workspaceId).toBe(first.instance.workspaceId);
     expect(store.listByRepository(first.instance.repositoryId)).toHaveLength(1);
+  });
+
+  // Regression for S8786: gitdirIdentity's `.git` pointer parse used to be
+  // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
+  // multiline flag, made the parse quadratic on adversarial pointer content. It is now
+  // `/^gitdir:(.+)$/mu`, relying on the pre-existing `.trim()` to strip the same whitespace. This
+  // pads the real `.git` pointer with a huge, otherwise-meaningless whitespace run around the
+  // actual target and asserts the idempotent retry still resumes quickly with the SAME identity.
+  it("resumes with an unchanged identity when the .git pointer is padded with adversarial whitespace", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t2",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const gitPointerPath = join(first.instance.managedWorktreePath, ".git");
+    const rawTarget = readFileSync(gitPointerPath, "utf8")
+      .replace(/^gitdir:/u, "")
+      .trim();
+    writeFileSync(gitPointerPath, `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`);
+
+    const start = Date.now();
+    const second = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t2",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(500);
+    expect(second.created).toBe(false);
+    expect(second.instance.gitdirIdentity).toBe(first.instance.gitdirIdentity);
   });
 });
 

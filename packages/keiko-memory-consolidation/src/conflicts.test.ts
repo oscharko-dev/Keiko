@@ -145,6 +145,43 @@ describe("findConflictPairs - value replacement conflicts", () => {
     const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
     expect(items).toEqual([]);
   });
+
+  // REGION_PATTERN and KEY_VALUE_PATTERN used to sandwich their optional connector token between
+  // two independent `\s*`s (`\s*(?:connector)?\s*`). Once the trailing capture never matches — the
+  // common case for a keyword mention with no real fact attached — the engine re-tries every split
+  // of a shared whitespace run between both quantifiers, which is quadratic in the run length
+  // (S8786; empirically ~940ms/~1.3s at a 40k-char gap for the region/key-value patterns
+  // respectively, before this fix). A body with one such gap plus a genuine, separate fact
+  // regression-tests both the fix's speed and that the real fact still gets extracted.
+  //
+  // The gap's tail deliberately is NOT `zzzzzz`: an all-lowercase-letters tail is a *valid* match
+  // for KEY_VALUE_PATTERN's value charset (`[a-z][a-z0-9+#._-]{1,40}`), so the whole match
+  // succeeds on the engine's very first (maximal `\s*`) attempt — no backtracking ever happens,
+  // and the case exercises nothing about KEY_VALUE_PATTERN's fix (it only genuinely stresses
+  // REGION_PATTERN, whose stricter `[a-z]{2}-[a-z]+-\d` value shape does reject "zzzzzz"). `)))`
+  // fails the mandatory value capture of BOTH patterns (neither starts with `[a-z]`), so the
+  // engine is forced to backtrack across the entire whitespace run for both, which is exactly the
+  // shape this test needs to catch a regression in either pattern.
+  it("extracts a value fact from a body with a large non-matching gap in linear time", () => {
+    const gap = " ".repeat(50_000);
+    const older = makeRecord({
+      id: "m-old",
+      body: `Deployment region is eu-central-1. region${gap})))  tool${gap}))) `,
+      createdAt: 100,
+    });
+    const newer = makeRecord({
+      id: "m-new",
+      body: "Deployment region is us-east-1",
+      createdAt: 200,
+    });
+    const start = Date.now();
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+    expect(items).toHaveLength(1);
+    expect(must(items[0]).evidence?.map((item) => item.kind)).toContain("value-replacement");
+    expect(must(items[0]).evidence?.[0]?.detail).toContain("eu-central-1 -> us-east-1");
+  });
 });
 
 describe("detectConflicts - deterministic output", () => {

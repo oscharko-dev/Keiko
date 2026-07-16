@@ -70,16 +70,40 @@ function normalizedNote(note) {
   return note.trim().replace(/\s+/gu, " ").toLowerCase();
 }
 
+// Whitespace runs around the "(#123)" marker are bounded (rather than left unbounded with
+// `\s*`) so a long non-matching run of whitespace cannot force quadratic backtracking (S8786);
+// 64 characters comfortably exceeds any whitespace run that occurs in authored release-note
+// text. This bound never loses information even for longer runs: any leftover whitespace it
+// doesn't reach is still fully collapsed by the unconditional `\s{2,}` step immediately below
+// (that step has no trailing required literal, so it cannot backtrack superlinearly regardless
+// of run length -- it is the same non-lossy, non-backtracking shape as `\s+` in normalizedNote).
+const MAX_SANITIZED_WHITESPACE_RUN = 64;
+
 function sanitizeUserFacingText(value) {
+  // Order matters here: the general whitespace collapse runs BEFORE the punctuation-adjacent
+  // trims, so by the time those trims run, no gap can be more than a single leftover space --
+  // which lets them use a tiny, genuinely non-lossy `\s?` bound instead of a large-but-still-
+  // finite one. (An earlier version bounded them directly to `\s{1,64}` and ran the collapse
+  // afterward; for a whitespace run longer than 64 characters immediately before a mid-string
+  // `,`/`.`/`;`/`:`, that bounded regex could only reach the last 64 characters of the run,
+  // leaving a residual space that the later collapse shrank to `' '` instead of removing --
+  // e.g. `"Alpha" + " ".repeat(200) + "; Beta"` produced `"Alpha ; Beta"` instead of
+  // `"Alpha; Beta"`. Collapsing first removes that failure mode entirely, for any run length.)
   return value
     .replace(/https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+/giu, "")
     .replace(/\b(?:issues?|prs?|pull requests?)\s*#\d+\b/giu, "")
-    .replace(/\s*\(#\d+\)\s*/gu, " ")
+    .replace(
+      new RegExp(
+        `\\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}\\(#\\d+\\)\\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}`,
+        "gu",
+      ),
+      " ",
+    )
     .replace(/#\d+\b/gu, "")
-    .replace(/\s+([,.;:])/gu, "$1")
     .replace(/\s{2,}/gu, " ")
+    .replace(/\s?([,.;:])/gu, "$1")
     .trim()
-    .replace(/\s+([.!?])$/u, "$1");
+    .replace(/\s?([.!?])$/u, "$1");
 }
 
 function extractTraceReferences(value) {

@@ -7,6 +7,7 @@ import {
 
 import {
   buildStructuredCompactionDigest,
+  explicitClassification,
   type StructuredCompactionEntry,
 } from "./structured-digest.js";
 import { buildCompactionRecords } from "./compaction.js";
@@ -129,5 +130,45 @@ throw new Error("${SECRET}")
     expect(record).toBeDefined();
     expect(validateContextCompactionRecord(record).ok).toBe(true);
     expect(record?.preservedFacts?.[0]?.statement).toBe("summary builder validates records");
+  });
+});
+
+// SonarCloud S8786: explicitClassification's regex had a redundant `\s*` immediately before the
+// trailing `(.+)$` capture group, which overlaps with `.+` (both can consume whitespace) -- the
+// "adjacent quantified atoms" shape the rule flags. Empirically this pattern was never actually
+// superlinear (it is anchored at `^`, so only one start position is ever tried, and unlike the
+// other findings in this batch there is nothing after `(.+)$` besides `$` for a shrunk `\s*` to
+// fail against), but the quantifier is dropped anyway for lint compliance and because it was
+// provably redundant: match[2] is `.trim()`-ed immediately after extraction, so the final `text`
+// is identical whether the leading whitespace is consumed by `\s*` or captured and trimmed away.
+describe("explicitClassification", () => {
+  it.each([
+    ["fact: hello", { kind: "fact", text: "hello" }],
+    ["fact:hello", { kind: "fact", text: "hello" }],
+    ["fact :   hello  ", { kind: "fact", text: "hello" }],
+    ["fact=hello", { kind: "fact", text: "hello" }],
+    ["fact-hello", { kind: "fact", text: "hello" }],
+    ["FACT: Hello", { kind: "fact", text: "Hello" }],
+    ["open question: still unresolved?", { kind: "question", text: "still unresolved?" }],
+    ["resolved question: it is done", { kind: "resolved-question", text: "it is done" }],
+    ["assume: cache is warm", { kind: "assumption", text: "cache is warm" }],
+    ["not a classification line", undefined],
+    ["fact:", undefined],
+    ["fact:    ", undefined],
+  ])("classifies %j as %j", (line, expected) => {
+    expect(explicitClassification(line)).toEqual(expected);
+  });
+
+  it("completes within a tight budget for a long run of whitespace after the separator", () => {
+    // Real callers never see more than MAX_TEXT_CHARS (260) characters here (cleanLine/boundText
+    // truncate every line first), but this asserts the pattern itself has no hidden superlinear
+    // cost at a scale ten thousand times that bound, guarding against a future rewrite quietly
+    // reintroducing genuine ambiguity between the separator's surrounding quantifiers.
+    const adversarial = `fact:${" ".repeat(20_000)}x`;
+    const start = Date.now();
+    const result = explicitClassification(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(result).toEqual({ kind: "fact", text: "x" });
   });
 });

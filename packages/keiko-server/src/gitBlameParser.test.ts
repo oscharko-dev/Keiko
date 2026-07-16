@@ -90,4 +90,19 @@ describe("parseGitBlamePorcelain", () => {
     expect(parsed.lines[0]?.author).toBe("Private author");
     expect(JSON.stringify(parsed)).not.toContain("private@example.invalid");
   });
+
+  it("completes within budget for a long non-email author with no '@' at all (S8786 regression)", () => {
+    // EMAIL_SHAPE used to be `/[^\s<>@]+@[^\s<>@]+/u` - unbounded and unanchored, so a long run
+    // of qualifying characters with no "@" anywhere forced an O(remaining-length) backtrack at
+    // every character position (empirically ~4x time per 2x input before the {1,320} bound).
+    const adversarialAuthor = "a".repeat(20_000);
+    const start = Date.now();
+    const parsed = parseGitBlamePorcelain(
+      record("e".repeat(40), 1, adversarialAuthor, 1_752_172_800, "Summary", "source"),
+      { maxLines: 1, processTruncated: false },
+    );
+    expect(Date.now() - start).toBeLessThan(300);
+    // Not email-shaped (no "@"), so it is bounded rather than redacted as "Private author".
+    expect(parsed.lines[0]?.author).toBe("a".repeat(256));
+  });
 });

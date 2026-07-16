@@ -126,9 +126,46 @@ export const WORKSPACE_SEARCH_MAX_RESULTS = 200;
 export const WORKSPACE_REPLACE_MAX_FILES = 200;
 const TEXT_ENCODER = new TextEncoder();
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
-const DANGEROUS_GROUP_OR_CLASS_REPETITION = /\([^)]*\)[+*{]|\[[^\]]*\][+*{]/;
 const ADJACENT_QUANTIFIED_ATOMS =
   /(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})/;
+const GROUP_OR_CLASS_QUANTIFIER_CHARS = new Set(["+", "*", "{"]);
+
+/**
+ * Does `source` contain an `open`-delimited run (no nested `open`/`close` tracking needed, since a
+ * negated class or `[^)]`-shaped group content can never consume its own `close` delimiter, so the
+ * *first* `close` after any `open` is always the only candidate end for it) immediately followed by
+ * a repetition quantifier? A single left-to-right scan tracks "have we seen an unresolved open
+ * since the last close" and settles it in one pass, with no possibility of backtracking.
+ */
+function hasQuantifiedDelimiterPair(source: string, open: string, close: string): boolean {
+  let isOpen = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === open) {
+      isOpen = true;
+    } else if (char === close) {
+      if (isOpen && GROUP_OR_CLASS_QUANTIFIER_CHARS.has(source[index + 1] ?? "")) {
+        return true;
+      }
+      isOpen = false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Plain-JS equivalent of the old `/\([^)]*\)[+*{]|\[[^\]]*\][+*{]/` check: does `source` contain a
+ * parenthesized group or bracketed class immediately followed by a repetition quantifier (e.g.
+ * `(a+)+` or `[abc]+{2}`)? The old regex cost O(n^2) in the worst case, because it is unanchored
+ * (every start position is retried) and a backtracking engine mechanically retries every possible
+ * run length before concluding a required-but-absent delimiter can't be reached, even though
+ * logically only one attempt was ever necessary.
+ */
+export function hasDangerousGroupOrClassRepetition(source: string): boolean {
+  return (
+    hasQuantifiedDelimiterPair(source, "(", ")") || hasQuantifiedDelimiterPair(source, "[", "]")
+  );
+}
 
 function buildResult(reasons: readonly string[]): ValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
@@ -158,7 +195,7 @@ function utf8ByteLength(value: string): number {
  */
 export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_QUERY_LENGTH) return "query regex too long";
-  if (DANGEROUS_GROUP_OR_CLASS_REPETITION.test(source)) return "query regex unsafe";
+  if (hasDangerousGroupOrClassRepetition(source)) return "query regex unsafe";
   if (ADJACENT_QUANTIFIED_ATOMS.test(source)) return "query regex unsafe";
   try {
     new RegExp(source);

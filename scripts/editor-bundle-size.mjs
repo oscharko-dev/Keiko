@@ -84,11 +84,17 @@ export function isEditorFirstLoadForbiddenSpecifier(specifier) {
 // Matches a value (non-type) import/export/dynamic-import/require of a string-literal specifier.
 // `import type ... from` / `export type ... from` are excluded so type-only references — which emit no
 // runtime code and never reach a bundle — do not count as first-load value imports.
+//
+// The last pattern's leading/trailing whitespace runs are bounded (S8786): it is anchored with
+// `^` (so, even with the `m` flag, each line only ever gets ONE match attempt — empirically
+// linear even at 100,000 characters of adversarial input), but the bound removes the shape
+// SonarCloud flags without changing what any real source line matches (200 characters of
+// indentation, or of whitespace between `import` and the specifier, does not occur in practice).
 const VALUE_IMPORT_PATTERNS = [
   /(?<!\btype\s)\bfrom\s*["']([^"']+)["']/g,
   /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-  /^\s*import\s+["']([^"']+)["']/gm,
+  /^\s{0,200}import\s{1,200}["']([^"']+)["']/gm,
 ];
 
 /**

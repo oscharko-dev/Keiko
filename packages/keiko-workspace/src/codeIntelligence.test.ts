@@ -1376,3 +1376,305 @@ describe("lookupCodeIntelligenceAtoms", () => {
     ).toBe(true);
   });
 });
+
+// Regression coverage for SonarCloud S8786 (superlinear regex backtracking) remediation in
+// codeIntelligence.ts. Each case feeds a large, adversarially-shaped input through the public
+// buildCodeIntelligenceIndex entry point (the regexes involved are all private) and asserts the
+// whole build stays well inside a tight wall-clock budget. Before the fix, the equivalent
+// standalone regex on comparable input took from hundreds of milliseconds up to several seconds
+// and kept growing quadratically with input size; every budget below is chosen with large
+// headroom over the fixed implementation's measured cost.
+describe("regex superlinear-backtracking regressions (S8786)", () => {
+  it("parses a go.mod module directive preceded by many blank lines without quadratic backtracking", () => {
+    const manyBlankLines = "\n".repeat(40_000);
+    const { scope, fs } = makeScope({
+      "go.mod": `${manyBlankLines}module example.com/perf\n`,
+      "service/handler.go": `
+        package service
+        import "example.com/perf/pkg/helper"
+        func UseHelper() { helper.Do() }
+      `,
+      "pkg/helper/helper.go": `
+        package helper
+        func Do() {}
+      `,
+    });
+
+    const startedAtMs = Date.now();
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+
+    expect(
+      index.imports.some(
+        (edge) =>
+          edge.importerPath === "service/handler.go" &&
+          edge.targetPath === "pkg/helper/helper.go" &&
+          edge.confidence === "resolved",
+      ),
+    ).toBe(true);
+  });
+
+  it("parses a long python import line and strips a trailing comment without quadratic backtracking", () => {
+    const paddedTail = " ".repeat(20_000);
+    const { scope, fs } = makeScope({
+      "services/py/perfpkg/__init__.py": `
+        def perf_helper():
+          return 1
+      `,
+      "services/py/perf_consumer.py": `
+        from services.py.perfpkg import perf_helper${paddedTail}
+        perf_helper()
+      `,
+    });
+
+    const startedAtMs = Date.now();
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+
+    expect(
+      index.imports.some(
+        (edge) =>
+          edge.importerPath === "services/py/perf_consumer.py" &&
+          edge.specifier === "services.py.perfpkg" &&
+          edge.targetPath === "services/py/perfpkg/__init__.py",
+      ),
+    ).toBe(true);
+  });
+
+  it("extracts DTO field names from adversarial C#-like declarations without quadratic backtracking", () => {
+    const wideGap = " ".repeat(20_000);
+    const longDefaultValue = `"${"=".repeat(20_000)},"`;
+    const { scope, fs } = makeScope({
+      "src/PerfDto.cs": `
+        public record PerfRecord(string Label, string Text = ${longDefaultValue});
+        public class PerfDto {
+          public T${wideGap}BigProp { get; set; }
+        }
+      `,
+    });
+
+    const startedAtMs = Date.now();
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+
+    const perfRecord = index.symbols.find((symbol) => symbol.name === "PerfRecord");
+    expect(perfRecord?.fields).toEqual(expect.arrayContaining(["Label", "Text"]));
+    const perfDto = index.symbols.find((symbol) => symbol.name === "PerfDto");
+    expect(perfDto?.fields).toEqual(expect.arrayContaining(["BigProp"]));
+  });
+
+  it("normalizes route paths with unterminated bracket segments without quadratic backtracking", () => {
+    const longSegment = "a".repeat(20_000);
+    const { scope, fs } = makeScope({
+      "src/perf/routes.ts": `
+        import express from "express";
+        const app = express();
+        app.get("/perf/<${longSegment}", (_req, res) => res.json({ ok: true }));
+      `,
+    });
+
+    const startedAtMs = Date.now();
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+
+    expect(
+      index.endpoints.some(
+        (endpoint) => endpoint.scopePath === "src/perf/routes.ts" && endpoint.method === "GET",
+      ),
+    ).toBe(true);
+  });
+
+  it("parses GraphQL schema fields and operation text without quadratic backtracking", () => {
+    const trailingFieldGap = " ".repeat(20_000);
+    const trailingBlankRun = "\n ".repeat(10_000);
+    const { scope, fs } = makeScope({
+      "schema.graphql": `
+        type Query {
+          order(id: ID!): Order
+          padding${trailingFieldGap}
+        }
+        ${trailingBlankRun}
+      `,
+    });
+
+    const startedAtMs = Date.now();
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+
+    expect(
+      index.endpoints.some(
+        (endpoint) => endpoint.scopePath === "schema.graphql" && endpoint.path.includes("order"),
+      ),
+    ).toBe(true);
+  });
+});
+
+// Regression coverage for a second, adversarial-verifier-confirmed pass over the S8786 fixes
+// above: each case reproduces the exact shape the verifier used to show that the *first* fix
+// either changed accept/reject behavior for a realistic input, or silently dropped data, rather
+// than actually removing the backtracking risk. Every test below fails against the previously
+// committed (first-pass) bound/regex and passes against the corrected implementation.
+describe("second-pass correctness regressions (verifier-confirmed)", () => {
+  it("splits two GraphQL operations separated by a newline plus a long run of same-line whitespace instead of merging them", () => {
+    // A single newline, then 250 non-newline whitespace characters - more than the 200-char
+    // bound the first-pass fix put on the lookahead's `\s*`. Under that bound the lazy operation
+    // body silently swallows the second operation, and its endpoint is lost.
+    const wideGap = `\n${" ".repeat(250)}`;
+    const graphqlOperations =
+      'query EdgeLookup { edgeLookup(id: "1") { id } }' +
+      wideGap +
+      'mutation EdgeChange { edgeChange(id: "1") { id } }';
+    const { scope, fs } = makeScope({
+      "src/perf/edge-ops.ts": `
+        const q = graphql\`${graphqlOperations}\`;
+      `,
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+
+    expect(
+      sorted(
+        index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "client:QUERY:/graphql/query/edgeLookup",
+        "client:MUTATION:/graphql/mutation/edgeChange",
+      ]),
+    );
+  });
+
+  it("resolves a go.mod module directive preceded by 65 same-line leading spaces", () => {
+    // Same-line indentation, not blank lines: the multiline anchor cannot restart mid-line, so
+    // this exercises the leading-`\s` bound directly rather than the (already-safe) blank-line
+    // case covered above.
+    const { scope, fs } = makeScope({
+      "go.mod": `${" ".repeat(65)}module example.com/indented\n`,
+      "service/handler.go": `
+        package service
+        import "example.com/indented/pkg/helper"
+        func UseHelper() { helper.Do() }
+      `,
+      "pkg/helper/helper.go": `
+        package helper
+        func Do() {}
+      `,
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+
+    expect(
+      index.imports.some(
+        (edge) =>
+          edge.importerPath === "service/handler.go" &&
+          edge.targetPath === "pkg/helper/helper.go" &&
+          edge.confidence === "resolved",
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves a Python relative import with 60 leading dots", () => {
+    // 60 exceeds the first-pass fix's 50-dot bound; `dirname` bottoms out at "." well before that
+    // many levels, so the actual resolved directory is unaffected by the dot count once it
+    // exceeds the real nesting depth. The import is aliased (`as helper`) so the call can only
+    // resolve through the binding this regex produces, not through the separate
+    // global-symbol-name fallback (which would also "succeed" - for the wrong reason - if the
+    // callee were named `perf_dot_helper` directly, masking the very bug under test).
+    const relativeSpecifier = `${".".repeat(60)}perfpkg`;
+    const { scope, fs } = makeScope({
+      "perfpkg/__init__.py": `
+        def perf_dot_helper():
+          return 1
+      `,
+      "services/py/perf_consumer.py": `
+        from ${relativeSpecifier} import perf_dot_helper as helper
+        def use():
+          helper()
+      `,
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+
+    expect(index.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          callerPath: "services/py/perf_consumer.py",
+          calleeName: "helper",
+          targetName: "perf_dot_helper",
+          targetPath: "perfpkg/__init__.py",
+          confidence: "resolved",
+        }),
+      ]),
+    );
+  });
+
+  it("extracts a C#-like field name behind a 311-character type expression", () => {
+    // A genuinely long *type* (not merely padding whitespace, which the mandatory unbounded
+    // `\s+` already absorbs regardless of the bound) - past the first-pass fix's 300-char bound.
+    const longType = `T${"Z".repeat(310)}`;
+    const { scope, fs } = makeScope({
+      "src/LongTypeDto.cs": `
+        public class LongTypeDto {
+          public ${longType} BigProp { get; set; }
+        }
+      `,
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+
+    const dto = index.symbols.find((symbol) => symbol.name === "LongTypeDto");
+    expect(dto?.fields).toEqual(expect.arrayContaining(["BigProp"]));
+  });
+
+  it("collapses closed <...> and {...} route segments of 210 characters instead of leaving them raw", () => {
+    const longParam = "a".repeat(210);
+    const { scope, fs } = makeScope({
+      "src/routes/angle.ts": `
+        import express from "express";
+        const app = express();
+        app.get("/perf/<${longParam}>/detail", (_req, res) => res.json({ ok: true }));
+      `,
+      "src/routes/brace.ts": `
+        import express from "express";
+        const app = express();
+        app.get("/perf/{${longParam}}/detail", (_req, res) => res.json({ ok: true }));
+      `,
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      nowMs: FIXED_NOW,
+    });
+
+    const paths = index.endpoints.map((endpoint) => endpoint.path);
+    expect(paths).toEqual(expect.arrayContaining(["/perf/:param/detail"]));
+    expect(paths.some((path) => path.includes(longParam))).toBe(false);
+  });
+});

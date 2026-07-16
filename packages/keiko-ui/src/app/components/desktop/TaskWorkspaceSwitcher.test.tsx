@@ -115,6 +115,27 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(screen.getByText(/locked: mutation/)).toBeInTheDocument();
   });
 
+  // Regression for S8786: pathBasename's trailing-separator trim used to be `/[/\\]+$/`, a shape
+  // SonarCloud flags on sight even though this bounded class has no ambiguity of its own
+  // (TaskWorkspaceSwitcher.tsx's trimTrailingSeparators is now regex-free). This asserts a managed
+  // worktree path with a huge run of trailing separators still renders the correct basename and the
+  // panel still opens quickly.
+  it("renders the managed worktree path's basename with a huge trailing-separator run, quickly", () => {
+    const start = Date.now();
+    renderSwitcher(
+      api({
+        activeInstance: instance({
+          managedWorktreePath: `/managed/repo/ws-1${"/".repeat(20_000)}`,
+        }),
+      }),
+    );
+    openPanel();
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(500);
+    expect(screen.getByText("ws-1")).toBeInTheDocument();
+  });
+
   it("invokes pause for an active workspace (a legal active→paused transition)", () => {
     const value = api({ activeInstance: instance() });
     renderSwitcher(value);

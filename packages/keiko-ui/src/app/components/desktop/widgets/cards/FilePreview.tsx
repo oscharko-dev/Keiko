@@ -73,9 +73,22 @@ function formatDate(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-function fullPreviewPath(root: string, relativePath: string): string {
+// Strips trailing "/" and "\" characters from a root path. Plain string scan from the end
+// instead of the `/[/\\]+$/` regex it replaces: that pattern was unanchored at the start, so
+// matching it against a long run of separators that never reaches the end (e.g. a root string
+// built entirely from repeated separators) forced the engine to retry the trailing-run
+// backtrack from every position, which is quadratic in the input length (S8786).
+function stripTrailingPathSeparators(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value[end - 1] === "/" || value[end - 1] === "\\")) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+export function fullPreviewPath(root: string, relativePath: string): string {
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
+  return `${stripTrailingPathSeparators(root)}${separator}${relativePath.replaceAll(/\//gu, separator)}`;
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {

@@ -190,15 +190,33 @@ export async function resolveRepository(
   };
 }
 
+const WHITESPACE = /\s/u;
+
+// Strips a trailing whitespace-run-then-`[...]` tracking annotation (e.g. " [ahead 1]") by
+// scanning for the first `[` immediately preceded by whitespace and cutting there. The regex
+// equivalent, `/\s+\[.*$/`, pairs an unanchored `\s+` with a following literal it may not find,
+// forcing the engine to retry the whitespace-run scan at every offset in the string — quadratic
+// on adversarial input with no `[` at all (S8786). Each whitespace test here is single-character,
+// so there is nothing left to backtrack.
+function stripTrackingSuffix(value: string): string {
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === "[" && i > 0 && WHITESPACE.test(value[i - 1] ?? "")) {
+      let start = i;
+      while (start > 0 && WHITESPACE.test(value[start - 1] ?? "")) start--;
+      return value.slice(0, start);
+    }
+  }
+  return value;
+}
+
 function parseBranch(header: string): { readonly branch?: string; readonly detached: boolean } {
   if (header.includes("HEAD (no branch)") || header.includes("HEAD detached")) {
     return { detached: true };
   }
   const trimmed = header.replace(/^##\s*/u, "");
-  const branch = trimmed
-    .split("...")[0]
-    ?.replace(/\s+\[.*$/u, "")
-    .trim();
+  const beforeTracking = trimmed.split("...")[0];
+  const branch =
+    beforeTracking === undefined ? undefined : stripTrackingSuffix(beforeTracking).trim();
   if (branch === undefined || branch.length === 0 || branch.startsWith("No commits yet on ")) {
     const unborn = branch?.replace(/^No commits yet on\s+/u, "");
     return unborn === undefined || unborn.length === 0

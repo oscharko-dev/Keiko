@@ -92,6 +92,21 @@ describe("normaliseUntrustedContent", () => {
     expect(result.markdownInjectionEscapes).toBeGreaterThanOrEqual(2);
   });
 
+  // SonarCloud S8786: the link-open escape used to be the regex `/(?<!!)\[([^\]]*)\]\(/gu`. Its
+  // negated class `[^\]]*` has only one valid match length per "[", but the unanchored global
+  // search retried the full failed match at EVERY unmatched "[" — quadratic in input length on
+  // content with many "[" and no closing "]" (confirmed empirically: ~860ms at 32k characters
+  // before the fix). Must stay fast well past that size, and leave content with no closing
+  // bracket untouched.
+  it("stays fast on many unmatched '[' characters (regression for SonarCloud S8786)", () => {
+    const adversarial = "[".repeat(40_000);
+    const start = Date.now();
+    const result = normaliseUntrustedContent(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(result.value).toBe(adversarial);
+    expect(result.markdownInjectionEscapes).toBe(0);
+  });
+
   it("clamps to maxBytes and signals the clamp", () => {
     const big = "x".repeat(1000);
     const result = normaliseUntrustedContent(big, { maxBytes: 16 });

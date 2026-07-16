@@ -8,7 +8,12 @@ import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/k
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
+import {
+  EMBEDDING_EVIDENCE_PATTERN,
+  TESTED_CONTEXT_TOKENS_PATTERN,
+  handleGatewayReadiness,
+  runGatewayReadiness,
+} from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -534,5 +539,67 @@ describe("gateway readiness route", () => {
       "unsupported",
     ]);
     deps.store.close();
+  });
+});
+
+describe("verified-capability evidence patterns (S8786 regression)", () => {
+  it("still recovers a realistic token count", () => {
+    const match = "64000 approximate tokens were accepted and the sentinel was recovered.".match(
+      TESTED_CONTEXT_TOKENS_PATTERN,
+    );
+    expect(match?.[1]).toBe("64000");
+  });
+
+  it("still recovers realistic embedding dimensions and L2 norm", () => {
+    // The real evidence string (built in this file as
+    // `Embedding endpoint returned ${dimensions} dimensions with L2 norm ${norm.toFixed(4)}.`)
+    // ends in a sentence-terminating period, and `[0-9.]` — unchanged by this fix, both before
+    // and after — greedily swallows it into the capture too; `Number.parseFloat` below still
+    // recovers the correct value regardless. This asserts the (pre-existing, unchanged) capture
+    // shape, not a new behavior introduced by the S8786 bound.
+    const match = "Embedding endpoint returned 1536 dimensions with L2 norm 1.0000.".match(
+      EMBEDDING_EVIDENCE_PATTERN,
+    );
+    expect(match?.[1]).toBe("1536");
+    expect(match?.[2]).toBe("1.0000.");
+    expect(Number.parseFloat(match?.[2] ?? "0")).toBe(1);
+  });
+
+  // Regression: `norm` is computed from an untrusted embedding provider's Float32Array response,
+  // so an adversarial/broken provider can drive it into the 1e17..1e21 range (well within float32
+  // magnitude) before `.toFixed(4)` switches to exponential notation at 1e21. A norm capture bound
+  // of 20 characters silently truncates the digits instead of failing to match — an entire order
+  // of magnitude wrong rather than a clean parse failure. The bound must be wide enough to capture
+  // the full value up to the 26-character ceiling that `.toFixed(4)` can produce below 1e21.
+  it("recovers the full adversarial norm instead of silently truncating it", () => {
+    const adversarialNorm = (9.999e20).toFixed(4);
+    expect(adversarialNorm).toBe("999900000000000000000.0000");
+    const evidence = `Embedding endpoint returned 1536 dimensions with L2 norm ${adversarialNorm}.`;
+    const match = evidence.match(EMBEDDING_EVIDENCE_PATTERN);
+    // The full numeric value must be captured (plus the trailing sentence period, consistent with
+    // the greedy `[0-9.]` class above) -- not truncated to the first 20 characters.
+    expect(match?.[2]).toBe(`${adversarialNorm}.`);
+    expect(Number.parseFloat(match?.[2] ?? "0")).toBe(9.999e20);
+  });
+
+  // The old unbounded `\d+`/`[0-9.]+` patterns were unanchored, so a long digit run that never
+  // reaches the expected trailing literal forced an O(n) backtrack retry at every one of the
+  // O(n) start positions in the evidence string — quadratic in local timing (measured seconds at
+  // ~100k characters). The `{1,15}`/`{1,20}` bounds cap that retry to a constant, so this must
+  // stay comfortably under budget even at 100,000 characters.
+  it("stays well within a tight time budget for an adversarial non-matching evidence string", () => {
+    const adversarialTokens = "9".repeat(100_000) + " tokens";
+    const start = Date.now();
+    const tokenMatch = adversarialTokens.match(TESTED_CONTEXT_TOKENS_PATTERN);
+    const tokenElapsedMs = Date.now() - start;
+    expect(tokenElapsedMs).toBeLessThan(300);
+    expect(tokenMatch).toBeNull();
+
+    const adversarialEmbedding = "9.".repeat(50_000) + " norm";
+    const embeddingStart = Date.now();
+    const embeddingMatch = adversarialEmbedding.match(EMBEDDING_EVIDENCE_PATTERN);
+    const embeddingElapsedMs = Date.now() - embeddingStart;
+    expect(embeddingElapsedMs).toBeLessThan(300);
+    expect(embeddingMatch).toBeNull();
   });
 });

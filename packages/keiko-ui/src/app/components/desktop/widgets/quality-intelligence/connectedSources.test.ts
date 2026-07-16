@@ -335,6 +335,17 @@ describe("resolveConnectedFilePath", () => {
     // join stays a single-separator "/docs/spec.md" (absolute AND correctly formed — #714 AC3).
     expect(resolveConnectedFilePath("/", "docs/spec.md")).toBe("/docs/spec.md");
   });
+
+  it("stays fast against a connected root with an adversarial run of trailing slashes (S8786)", () => {
+    // trimTrailingSeparators used to strip trailing "/" via the unanchored `/\/+$/u`, which backtracks
+    // O(n²) on a long run of "/" that never reaches the string's true end (empirically ~400ms at
+    // 32,000 slashes pre-fix on this machine). The manual scan is O(n).
+    const adversarialRoot = `/root${"/".repeat(20_000)}`;
+    const start = Date.now();
+    const resolved = resolveConnectedFilePath(adversarialRoot, "spec.md");
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(resolved).toBe("/root/spec.md");
+  });
 });
 
 describe("connected run source window cfg (#744)", () => {

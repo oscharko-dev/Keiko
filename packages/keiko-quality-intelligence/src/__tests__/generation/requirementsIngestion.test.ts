@@ -543,3 +543,39 @@ describe("splitRequirementsIntoAtoms — edge cases", () => {
     }
   });
 });
+
+// ─── 8. Markdown heading parsing — ReDoS regression (S8786) ─────────────────
+//
+// `parseMarkdownHeading` used to run `/^\s{0,3}(#{1,6})\s+(.+?)\s*$/u` and, separately,
+// `.replace(/\s+#+\s*$/u, "")` to strip a trailing ATX close marker (e.g. "## Heading ##"). Both
+// had an unbounded quantifier on either side of an internal whitespace run with no non-whitespace
+// character to force a split, which is quadratic in the length of that run once the line has no
+// trailing "#" to find. A heading with one huge internal whitespace gap reproduces this.
+
+describe("splitRequirementsIntoAtoms — markdown heading parsing performance", () => {
+  it("parses a heading with a large internal whitespace gap and no closing marker in linear time", () => {
+    const gap = " ".repeat(50_000);
+    const text = `## a${gap}b`;
+    const start = Date.now();
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.canonicalText.startsWith(`## a${gap}b`)).toBe(true);
+  });
+
+  it("strips a trailing ATX closing marker from a heading line", () => {
+    const text = ["## Section Title ##", "The requirement text for this section."].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.canonicalText).toContain("## Section Title\n");
+    expect(atoms[0]?.canonicalText).not.toContain("##\n");
+  });
+
+  it("keeps a heading's inner hash characters that are not a whitespace-preceded closing run", () => {
+    const text = ["## C# migration notes", "Every service must target C# 12."].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.canonicalText).toContain("## C# migration notes");
+  });
+});

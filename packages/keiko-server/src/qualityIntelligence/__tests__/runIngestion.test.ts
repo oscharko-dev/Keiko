@@ -759,6 +759,43 @@ describe("ingestInlineSources — label sanitisation", () => {
     const result = ingestInlineSources(input([requirementsSource(exactLabel, VALID_TEXT)]));
     expect(result.envelopes[0]?.displayLabel).toBe(exactLabel);
   });
+
+  it("stays fast against an adversarial label with no URL scheme delimiter (S8786)", () => {
+    // The URL-authority scheme-name run was unbounded pre-fix; a long run of lowercase letters
+    // with no "://" anywhere drove O(n²) backtracking (empirically ~450ms at 32,000 chars pre-fix
+    // on this machine). The label is now redacted with a manual, non-backtracking scan (see
+    // `redactUrlAuthorities` in runIngestion.ts), so the worst case stays linear for any input
+    // shape without narrowing detection of any real URL.
+    const adversarialLabel = "a".repeat(20_000);
+    const start = Date.now();
+    const result = ingestInlineSources(input([requirementsSource(adversarialLabel, VALID_TEXT)]));
+    expect(Date.now() - start).toBeLessThan(500);
+    const label = result.envelopes[0]?.displayLabel ?? "";
+    expect(label.length).toBeLessThanOrEqual(120);
+  });
+
+  // Adversarial verifier finding (second remediation pass): the S8786 fix that bounded the
+  // scheme-name quantifier to `{0,63}` was applied inside a `.replace()`, not a boolean `.test()`.
+  // Bounding a quantifier used in a `.replace()` changes WHERE the leftmost match starts once the
+  // (fake-or-real) "scheme" run exceeds the bound — everything before `runLength - 64` falls
+  // OUTSIDE the match and is never redacted. Verified exploitable through this exact production
+  // entry point, not just an isolated regex test: with the `{0,63}`-bounded regex, this label
+  // produced displayLabel `"q".repeat(36)` (100 - 64 unredacted characters) streamed straight into
+  // the browser-facing envelope display surface. The corrected `redactUrlAuthorities` (a manual,
+  // non-backtracking scan) has no quantifier to bound, so it fully redacts this regardless of how
+  // long the scheme-like run is — matching the ORIGINAL unbounded regex's behaviour exactly.
+  it("fully redacts a URL whose scheme-name run is longer than any bounded quantifier", () => {
+    const adversarialLabel = `${"q".repeat(100)}://secretpayload`;
+    const result = ingestInlineSources(input([requirementsSource(adversarialLabel, VALID_TEXT)]));
+    const label = result.envelopes[0]?.displayLabel ?? "";
+    expect(label).not.toContain("secretpayload");
+    expect(label).not.toMatch(/q{5,}/u);
+    // The whole label is exactly one URL, so full redaction collapses it to nothing, which falls
+    // back to "Untitled source" — the `{0,63}`-bounded regex instead left a 36-char unredacted
+    // "q" prefix as a non-empty displayLabel here, so this assertion is the one that would have
+    // failed against that bounded-but-still-lossy fix.
+    expect(label).toBe("Untitled source");
+  });
 });
 
 // ─── Provenance refs ─────────────────────────────────────────────────────────

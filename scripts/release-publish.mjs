@@ -33,6 +33,7 @@ import {
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
+import { parseDotEnvTokenLine } from "./dotenv-token.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -267,16 +268,8 @@ function loadDotEnvToken() {
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-    const match = /^(NODE_AUTH_TOKEN|NPM_TOKEN)\s*=\s*(.*)$/u.exec(trimmed);
-    if (match === null) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    return value;
+    const value = parseDotEnvTokenLine(trimmed);
+    if (value !== undefined) return value;
   }
   return undefined;
 }

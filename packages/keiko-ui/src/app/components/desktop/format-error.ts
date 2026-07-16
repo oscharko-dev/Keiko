@@ -24,8 +24,6 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bghp_[A-Za-z0-9_]{12,}\b/g,
 ];
 
-const TRAILING_CODE_PATTERN = /\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/;
-
 function sanitizeMessage(message: string): string {
   let out = message;
   for (const pattern of SECRET_PATTERNS) {
@@ -35,13 +33,51 @@ function sanitizeMessage(message: string): string {
   return out;
 }
 
+function isSpaceChar(ch: string): boolean {
+  return ch !== "" && /\s/u.test(ch);
+}
+
+function isCodeBodyChar(ch: string): boolean {
+  return /[A-Z0-9_/-]/u.test(ch);
+}
+
+interface TrailingCode {
+  readonly prefixEnd: number;
+  readonly code: string;
+}
+
+// Manual scan replacing the former `/\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/` (SonarCloud S8786): that
+// pattern's leading `\s+` is unanchored, so a message with no trailing " (CODE)" at all (e.g. one
+// long whitespace-only string) forces the engine to retry the full backtrack at every start
+// position, giving O(n²) work. Scanning back from the end char-by-char can't backtrack and is O(n).
+function extractTrailingCode(message: string): TrailingCode | undefined {
+  let end = message.length;
+  while (end > 0 && isSpaceChar(message[end - 1] ?? "")) end--;
+  if (end === 0 || message[end - 1] !== ")") return undefined;
+  const closeParen = end - 1;
+
+  let runStart = closeParen;
+  while (runStart > 0 && isCodeBodyChar(message[runStart - 1] ?? "")) runStart--;
+  const code = message.slice(runStart, closeParen);
+  if (code.length < 3 || !/^[A-Z]$/u.test(code[0] ?? "")) return undefined;
+
+  const openParen = runStart - 1;
+  if (openParen < 0 || message[openParen] !== "(") return undefined;
+
+  let wsStart = openParen;
+  while (wsStart > 0 && isSpaceChar(message[wsStart - 1] ?? "")) wsStart--;
+  if (wsStart === openParen) return undefined;
+
+  return { prefixEnd: wsStart, code };
+}
+
 function parseFormattedMessage(message: string): {
   readonly message: string;
   readonly code: string | undefined;
 } {
-  const match = TRAILING_CODE_PATTERN.exec(message);
-  if (match === null) return { message, code: undefined };
-  return { message: message.slice(0, match.index).trim(), code: match[1] };
+  const trailing = extractTrailingCode(message);
+  if (trailing === undefined) return { message, code: undefined };
+  return { message: message.slice(0, trailing.prefixEnd).trim(), code: trailing.code };
 }
 
 function isTooBroadRepositoryQuestion(message: string, code: string | undefined): boolean {

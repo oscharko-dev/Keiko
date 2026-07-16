@@ -31,7 +31,10 @@ function lineIndent(line: string): number {
   return match?.[0].length ?? 0;
 }
 
-function looksLikeBlockHeader(line: string): boolean {
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly instead of routing an adversarial line through the
+// full `collectBestLines` pipeline.
+export function looksLikeBlockHeader(line: string): boolean {
   const trimmed = line.trim();
   if (looksLikeControlFlowHeader(trimmed)) {
     return false;
@@ -43,7 +46,20 @@ function looksLikeBlockHeader(line: string): boolean {
   ) {
     return true;
   }
-  return /\b[A-Za-z_$][\w$<>,.[\]?]*\s+[A-Za-z_$][\w$]*\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{/u.test(
+  // Both variable-length character classes in this pattern are bounded (typescript/javascript:
+  // S8786), not just the parameter-list one. On a dead-end line (no `{` anywhere), `.test()`
+  // tries every start position in the line, and the type-prefix class `[\w$<>,.[\]?]*` includes
+  // `,` and `.`, so it overlaps with comma/dot-separated content (e.g. "a,a,a,..."): each comma
+  // creates its own word-boundary start position, and from every one of those the engine can
+  // greedily consume the rest of the line before backtracking off looking for the required
+  // `\s+`, which is O(remaining length) per start position and therefore quadratic overall — the
+  // same failure shape as the parameter-list class, just one token earlier in the pattern.
+  // Bounding both classes caps the worst-case work at each start position to a constant, making
+  // the whole scan linear in line length. 2000 characters is far beyond any realistic single-line
+  // type prefix or parameter list — even a verbose real signature (many parameters, long generic
+  // types, long default values, or a deeply nested return type) stays well under it — so the
+  // bound does not change matching for legitimate source lines.
+  return /\b[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]+)?\{/u.test(
     trimmed,
   );
 }
@@ -52,14 +68,24 @@ function looksLikeControlFlowHeader(trimmedLine: string): boolean {
   return /^(?:if|for|while|switch|catch|else|do|try|finally|using|lock|when)\b/u.test(trimmedLine);
 }
 
-function looksLikeSignatureStart(line: string): boolean {
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly instead of routing an adversarial line through the
+// full `collectBestLines` pipeline.
+export function looksLikeSignatureStart(line: string): boolean {
   const trimmed = line.trim();
   if (trimmed.length === 0 || looksLikeControlFlowHeader(trimmed)) {
     return false;
   }
+  // Same S8786 shape as `looksLikeBlockHeader` (this pattern is reached from the same
+  // `collectBestLines` line-scan on arbitrary source lines): the repeated group's inner class
+  // `[\w$<>,.[\]?]*` includes `,`/`.`, so on a dead-end line (never followed by `(`) it overlaps
+  // comma/dot-separated content and re-walks an O(remaining length) search from every one of the
+  // many word-boundary start positions that creates — quadratic in line length. Bounded to 2000
+  // characters per the same "far beyond any realistic single-line type prefix" reasoning as
+  // `looksLikeBlockHeader`.
   return (
     looksLikeBlockHeader(trimmed) ||
-    /\b(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
+    /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
   );
 }
 

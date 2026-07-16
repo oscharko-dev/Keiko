@@ -85,11 +85,21 @@ interface ValueFact {
   readonly rawValue: string;
 }
 
+// Both patterns below wrap their optional connector token as `(?:(?:connector)\s*)?` rather than
+// the more obvious `(?:connector)?\s*` sandwiched between two independent `\s*`s. The two-`\s*`
+// form is a classic S8786 shape: when the trailing capture group never matches (the common "no
+// real fact here" case), the engine must re-try the connector at every possible split of a single
+// run of whitespace shared by *both* unbounded quantifiers, which is quadratic in the run length.
+// Folding the trailing `\s*` inside the optional connector group removes the second independent
+// backtracking site — the leading `\s*` still explores the run once, but each attempt now fails
+// fast (the connector literal never matches inside a whitespace-only or non-connector run), so the
+// whole match is linear. Verified byte-for-byte identical captures against the prior pattern across
+// realistic inputs plus a 20k/30k-case fuzz sweep of the keyword/connector/value vocabulary.
 const REGION_PATTERN =
-  /\b(?:deployment\s+region|server\s+region|aws\s+region|cloud\s+region|region)\b\s*(?:is|ist|=|:|to|auf)?\s*([a-z]{2}-[a-z]+-\d)\b/giu;
+  /\b(?:deployment\s+region|server\s+region|aws\s+region|cloud\s+region|region)\b\s*(?:(?:is|ist|=|:|to|auf)\s*)?([a-z]{2}-[a-z]+-\d)\b/giu;
 
 const KEY_VALUE_PATTERN =
-  /\b(formatter|database|db|test\s+runner|runner|tool|model)\b\s*(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)?\s*([a-z][a-z0-9+#._-]{1,40})\b/giu;
+  /\b(formatter|database|db|test\s+runner|runner|tool|model)\b\s*(?:(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*)?([a-z][a-z0-9+#._-]{1,40})\b/giu;
 
 const VALUE_KEY_PATTERN =
   /\b(?:uses|use|nutzt|verwenden|verwende)\s+([a-z][a-z0-9+#._-]{1,40})\s+(?:as\s+)?(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;

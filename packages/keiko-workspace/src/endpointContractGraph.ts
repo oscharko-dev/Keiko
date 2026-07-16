@@ -35,19 +35,30 @@ const SPRING_METHODS: Readonly<Record<string, EndpointHttpMethod>> = {
   PatchMapping: "PATCH",
   DeleteMapping: "DELETE",
 };
+// The whitespace runs around the two optional segments (annotation args, access modifier) are
+// bounded ({0,200}) rather than unbounded (`\s*`) so a crafted run of whitespace between the
+// annotation and the method signature cannot make three adjacent quantifiers backtrack against
+// each other with polynomial cost (typescript:S8786). 200 chars comfortably covers any
+// realistically formatted Java source gap.
 const JAVA_ROUTE =
-  /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s*(?:\(([^)]*)\))?[\s\r\n]*(?:public|private|protected)?\s*([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
+  /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}(?:public|private|protected)?\s{0,200}([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/gu;
 const JAVA_RECORD = /\brecord\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
 const TS_INTERFACE = /\binterface\s+([A-Za-z_$][\w$]*)\s*\{([^}]*)\}/gu;
 const TS_TYPE_OBJECT = /\btype\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^}]*)\}/gu;
+// Same fix as JAVA_ROUTE: bound the whitespace runs around the optional generic-type argument so
+// the two adjacent `\s*` atoms (before/after the optional `<Type>`) cannot backtrack against each
+// other across an attacker-controlled whitespace run (typescript:S8786).
 const AXIOS_CALL =
-  /\baxios\.(get|post|put|patch|delete)\s*(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gu;
+  /\baxios\.(get|post|put|patch|delete)\s{0,50}(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s{0,50}\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gu;
 const FETCH_CALL =
   /\bfetch\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")(?:\s*,\s*\{([\s\S]{0,300}?)\})?/gu;
 
 function firstStringLiteral(args: string | undefined): string {
   if (args === undefined) return "/";
-  const match = /(?:path|value)?\s*=?\s*(["'])([^"']+)\1/u.exec(args);
+  // Bound the whitespace runs around the optional `=` (e.g. `path = "/x"` vs `"/x"`) so the two
+  // adjacent `\s*` atoms cannot backtrack against each other over a long non-matching input
+  // (typescript:S8786). Real annotation-argument gaps are a handful of characters at most.
+  const match = /(?:path|value)?\s{0,20}=?\s{0,20}(["'])([^"']+)\1/u.exec(args);
   return match?.[2] ?? "/";
 }
 
@@ -102,10 +113,33 @@ function addRoute(state: EndpointBuildState, file: SourceFile, match: RegExpExec
   });
 }
 
+const IDENT_START = /[A-Za-z_$]/u;
+const IDENT_PART = /[\w$]/u;
+
+// Extracts the field/parameter name trailing a Java type (e.g. "String status" -> "status").
+// Written as a plain backward-then-forward character scan instead of an unanchored
+// `/([A-Za-z_$][\w$]*)\s*$/` regex: that pattern has no `^` anchor, so a non-matching entry (one
+// that doesn't end in an identifier) forces `.exec` to retry the match at every offset, each
+// retry rescanning the remaining suffix - O(n^2) on a crafted entry (typescript:S8786). The scan
+// below visits each character at most twice, so it is linear regardless of input shape.
+function trailingIdentifier(text: string): string | undefined {
+  const end = text.length;
+  let runStart = end;
+  while (runStart > 0 && IDENT_PART.test(text[runStart - 1] ?? "")) {
+    runStart -= 1;
+  }
+  for (let index = runStart; index < end; index += 1) {
+    if (IDENT_START.test(text[index] ?? "")) {
+      return text.slice(index, end);
+    }
+  }
+  return undefined;
+}
+
 function javaFieldNames(fields: string): readonly string[] {
   return fields
     .split(",")
-    .map((entry) => /([A-Za-z_$][\w$]*)\s*$/u.exec(entry.trim())?.[1])
+    .map((entry) => trailingIdentifier(entry.trim()))
     .filter((field): field is string => field !== undefined)
     .sort((a, b) => a.localeCompare(b));
 }

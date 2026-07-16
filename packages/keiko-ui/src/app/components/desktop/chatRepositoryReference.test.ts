@@ -20,6 +20,17 @@ describe("normalizedRepositoryRoot", () => {
     expect(normalizedRepositoryRoot("C:\\repo\\")).toBe("C:/repo");
     expect(normalizedRepositoryRoot("/a/b///")).toBe("/a/b");
   });
+
+  it("completes within budget for a long slash run with no trailing match (S8786 regression)", () => {
+    // The former `.replace(/\/+$/u, "")` had no leading anchor, so a string that is almost all
+    // "/" but does NOT end in one forces the engine to retry the trailing `+` scan from every
+    // offset: O(n^2) on this adversarial shape (verified empirically against the old pattern).
+    const adversarial = `${"/".repeat(20000)}a`;
+    const start = Date.now();
+    const result = normalizedRepositoryRoot(adversarial);
+    expect(Date.now() - start).toBeLessThan(200);
+    expect(result).toBe(adversarial);
+  });
 });
 
 describe("repositoryRootContains", () => {

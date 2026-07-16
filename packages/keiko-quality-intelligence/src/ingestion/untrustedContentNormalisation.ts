@@ -32,7 +32,6 @@ export interface NormaliseUntrustedContentResult {
 const HEADING_LINE = /^(#{1,6})/gmu;
 const FENCED_CODE = /```/gu;
 const IMAGE_OPEN = /!\[/gu;
-const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;
 
 const isControlCodePoint = (code: number): boolean => {
   // TAB (0x09), LF (0x0A), and CR (0x0D) are C0 code points but are legitimate
@@ -70,6 +69,57 @@ interface EscapeOutcome {
   readonly count: number;
 }
 
+const OPEN_BRACKET = 0x5b; // "["
+const CLOSE_BRACKET = 0x5d; // "]"
+const OPEN_PAREN = 0x28; // "("
+const BANG = 0x21; // "!"
+
+// For every index, the index of the nearest "]" at or after it (or -1 if none remains). Computed
+// once with a single backward pass so each "[" lookup below is an O(1) array read instead of a
+// fresh forward scan — see `escapeLinkOpens` for why that matters.
+function nextCloseBracketIndex(value: string): readonly number[] {
+  const table = new Array<number>(value.length + 1).fill(-1);
+  for (let idx = value.length - 1; idx >= 0; idx -= 1) {
+    table[idx] = value.charCodeAt(idx) === CLOSE_BRACKET ? idx : (table[idx + 1] ?? -1);
+  }
+  return table;
+}
+
+function isUnescapedOpenBracket(value: string, index: number): boolean {
+  return (
+    value.charCodeAt(index) === OPEN_BRACKET &&
+    (index === 0 || value.charCodeAt(index - 1) !== BANG)
+  );
+}
+
+// Escape a markdown link-open `[text](`, skipping image syntax `![text](` (a "[" preceded by
+// "!"). Previously a single regex, `/(?<!!)\[([^\]]*)\]\(/gu`. That pattern's negated class
+// `[^\]]*` only has one valid match length per "[" (it must stop at the very next "]"), but an
+// unanchored global search retries the full failed match at EVERY "[" when no "]" (or no "]("
+// pair) follows nearby — quadratic in input length on content with many unmatched "["
+// (SonarCloud S8786, confirmed empirically: ~860ms at 32k characters before the fix). Precomputing
+// "the nearest ']' at or after index i" once turns each "[" lookup into an O(1) array read,
+// making the whole pass linear regardless of how many brackets are unmatched.
+const escapeLinkOpens = (value: string): EscapeOutcome => {
+  const nextCloseBracket = nextCloseBracketIndex(value);
+  let result = "";
+  let count = 0;
+  let i = 0;
+  while (i < value.length) {
+    const closeIdx = isUnescapedOpenBracket(value, i) ? (nextCloseBracket[i + 1] ?? -1) : -1;
+    const isLinkOpen = closeIdx !== -1 && value.charCodeAt(closeIdx + 1) === OPEN_PAREN;
+    if (!isLinkOpen) {
+      result += value.charAt(i);
+      i += 1;
+      continue;
+    }
+    result += `\\[${value.slice(i + 1, closeIdx)}\\](`;
+    count += 1;
+    i = closeIdx + 2;
+  }
+  return { value: result, count };
+};
+
 const escapeMarkdownInjection = (value: string): EscapeOutcome => {
   let count = 0;
   const headingEscaped = value.replace(HEADING_LINE, (hashes: string): string => {
@@ -84,11 +134,8 @@ const escapeMarkdownInjection = (value: string): EscapeOutcome => {
     count += 1;
     return "\\!\\[";
   });
-  const linkEscaped = imageEscaped.replace(LINK_OPEN, (_match: string, inner: string): string => {
-    count += 1;
-    return `\\[${inner}\\](`;
-  });
-  return { value: linkEscaped, count };
+  const links = escapeLinkOpens(imageEscaped);
+  return { value: links.value, count: count + links.count };
 };
 
 const clampToBytes = (value: string, maxBytes: number): { value: string; clamped: boolean } => {

@@ -15,11 +15,57 @@ import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./typ
 const IDENTITY_CAPTURE_RATIONALE = "Automatically inferred from conversation (identity statement)";
 const MAX_NAME_TOKENS = 4;
 const NAME_TOKEN_RE = /^\p{L}[\p{L}'’.-]*$/u;
-const TRAILING_PUNCTUATION_RE = /[.!?]+$/u;
-const STRONG_IDENTITY_RE =
-  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:my\s+name\s+is|call\s+me|ich\s+hei(?:ß|ss)e|mein\s+name\s+ist)\s+(.+?)\s*[.!?]*$/iu;
-const WEAK_IDENTITY_RE =
-  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:i\s+am|i(?:'|’)m|ich\s+bin)\s+(.+?)\s*[.!?]*$/iu;
+// Trailing whitespace/punctuation used to be stripped inline by the identity regexes via a
+// `\s*[.!?]*$` tail. That chained two unbounded, overlapping-character-class quantifiers right
+// next to the capturing group ahead of them (`.`/`[\s\S]` both include whitespace and `.!?`),
+// which is super-linear to backtrack on adversarial input (S8786). Stripping is now done with
+// plain string scans instead, so the regexes only ever have a single unbounded atom in their tail.
+const IDENTITY_TRAILING_PUNCTUATION = new Set([".", "!", "?"]);
+
+function stripTrailingPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && IDENTITY_TRAILING_PUNCTUATION.has(value.charAt(end - 1))) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function stripTrailingWhitespace(value: string): string {
+  let end = value.length;
+  while (end > 0 && /\s/u.test(value.charAt(end - 1))) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+// Mirrors the old inline `\s*[.!?]*$` tail: strip a trailing punctuation run, then a trailing
+// whitespace run, from the raw capture (in that order, matching the original match semantics).
+function stripIdentityCaptureTail(rawCapture: string): string {
+  return stripTrailingWhitespace(stripTrailingPunctuation(rawCapture));
+}
+
+// The identity regexes below intentionally match ONLY the fixed-alternation prefix ("my name
+// is", "ich bin", the optional greeting, …) and stop — no capture group, no `$`. The name itself
+// is never extracted by regex backtracking; it is sliced out manually below. This is what the
+// original `.`-based capture ("cannot cross a line terminator") structurally guaranteed, and what
+// a bare `[\s\S]+` capture would silently give up: without this split, a two-line chat message
+// like "my name is Sarah\nNice to chat" would merge the unrelated second line into the captured
+// name instead of failing to match, the way the original single-line-only regex did.
+const STRONG_IDENTITY_PREFIX_RE =
+  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:my\s+name\s+is|call\s+me|ich\s+hei(?:ß|ss)e|mein\s+name\s+ist)\s+/iu;
+const WEAK_IDENTITY_PREFIX_RE =
+  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:i\s+am|i(?:'|’)m|ich\s+bin)\s+/iu;
+// JS `.` (no `s`/dotAll flag) stops at any of these four LineTerminator code points, not just
+// `\n` (ECMA-262 LineTerminator = LF | CR | LS | PS). A plain `indexOf("\n")` would therefore be
+// narrower than the original's line boundary; this class matches it exactly. It carries no
+// quantifier, so `String#search` with it is a single linear scan — no backtracking is possible.
+const LINE_TERMINATOR_RE = /[\n\r\u2028\u2029]/u;
+// Whatever follows an embedded line break must be pure filler (blank lines / trailing
+// punctuation) for the match to still count — anything else is ordinary further chat content,
+// which the original regex could never reach past its embedded-`.`-stopping capture. A single
+// bounded-free `*` quantifier anchored at both ends over a fixed class: no adjacent/overlapping
+// quantifier, so nothing here can backtrack super-linearly either.
+const TRAILING_FILLER_RE = /^[\s.!?]*$/u;
 const DISALLOWED_NAME_TOKENS = new Set([
   "and",
   "are",
@@ -48,7 +94,7 @@ function userScope(context: CaptureContext): MemoryScope {
 }
 
 function normalizeCandidateName(raw: string): string | null {
-  const trimmed = raw.trim().replace(TRAILING_PUNCTUATION_RE, "");
+  const trimmed = stripTrailingPunctuation(raw.trim());
   if (trimmed.length === 0) {
     return null;
   }
@@ -104,12 +150,21 @@ function buildIdentityCandidate(
 }
 
 function extractIdentityName(text: string, requireStrictName: boolean): string | null {
-  const match = (requireStrictName ? WEAK_IDENTITY_RE : STRONG_IDENTITY_RE).exec(text);
-  const rawName = match?.[1];
-  if (rawName === undefined) {
+  const prefixRe = requireStrictName ? WEAK_IDENTITY_PREFIX_RE : STRONG_IDENTITY_PREFIX_RE;
+  const prefixMatch = prefixRe.exec(text);
+  if (prefixMatch === null) {
     return null;
   }
-  const name = normalizeCandidateName(rawName);
+  const rest = text.slice(prefixMatch[0].length);
+  const terminatorIndex = rest.search(LINE_TERMINATOR_RE);
+  const firstLine = terminatorIndex === -1 ? rest : rest.slice(0, terminatorIndex);
+  const remainder = terminatorIndex === -1 ? "" : rest.slice(terminatorIndex);
+  // Anything after the first line break must be pure filler; real further content (a second
+  // chat line, another sentence, …) means this was never a single-line identity statement.
+  if (remainder.length > 0 && !TRAILING_FILLER_RE.test(remainder)) {
+    return null;
+  }
+  const name = normalizeCandidateName(stripIdentityCaptureTail(firstLine));
   if (name === null) {
     return null;
   }

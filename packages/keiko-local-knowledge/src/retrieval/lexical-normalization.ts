@@ -16,7 +16,6 @@ const CJK_OR_KANA_OR_HANGUL_PATTERN =
 const LATIN_PATTERN = /\p{Script=Latin}/u;
 const LETTER_PATTERN = /\p{L}/u;
 const DIGIT_PATTERN = /\p{N}/u;
-const EXACT_EDGE_PUNCTUATION_PATTERN = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
 const EXACT_SYMBOL_PATTERN = /[._:/#-]/u;
 const CAMEL_CASE_PATTERN = /[a-z][A-Z]/u;
 
@@ -206,8 +205,27 @@ export function lexicalTextTokens(value: string): readonly string[] {
   return unique(rawTokens(value).filter(keepSearchToken));
 }
 
+function isLetterOrNumber(codePoint: string): boolean {
+  return LETTER_PATTERN.test(codePoint) || DIGIT_PATTERN.test(codePoint);
+}
+
+// Strips leading/trailing non-letter/non-number code points without a regex scan: the previous
+// `/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu` alternation re-tried its `$`-anchored branch's greedy
+// run-then-backtrack at every position a global search visited, which is quadratic for a long
+// punctuation run that sits in the middle of an unbroken token (no true trailing match, so every
+// position inside the run pays for a full backtrack before giving up). Scanning inward from both
+// ends with a single-code-point class test keeps identical trim semantics in linear time.
 function trimExactCandidate(value: string): string {
-  return value.normalize("NFC").replace(EXACT_EDGE_PUNCTUATION_PATTERN, "");
+  const codePoints = Array.from(value.normalize("NFC"));
+  let start = 0;
+  while (start < codePoints.length && !isLetterOrNumber(codePoints[start] ?? "")) {
+    start += 1;
+  }
+  let end = codePoints.length;
+  while (end > start && !isLetterOrNumber(codePoints[end - 1] ?? "")) {
+    end -= 1;
+  }
+  return codePoints.slice(start, end).join("");
 }
 
 export function isExactTerm(value: string): boolean {

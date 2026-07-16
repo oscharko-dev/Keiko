@@ -13,6 +13,7 @@ import {
   normalizeForDedup,
   parseSalienceItems,
   SALIENCE_SYSTEM_PROMPT,
+  trimDashes,
 } from "./salience.js";
 import type { CaptureContext, CaptureOutcome, SalienceDeps, SalienceInput } from "./types.js";
 
@@ -637,5 +638,34 @@ describe("parseSalienceItems", () => {
     },
   ])("filters an item missing the required '$field' field", ({ raw }) => {
     expect(parseSalienceItems(raw)).toEqual([]);
+  });
+});
+
+// `trimDashes` replaced the former `/^-+|-+$/gu` in normalizeTag (S8786): that alternation of two
+// unanchored, unbounded `-+` scans can jointly re-split one long dash run across the whole string
+// in O(run^2) once applied to unconstrained input. normalizeTag's own call sites never hand it a
+// long run (the preceding `[^\p{L}\p{N}]+` -> "-" collapse guarantees isolated dashes, and the
+// second call site is additionally bounded by MAX_TAG_CHARS), so this is tested directly.
+describe("trimDashes", () => {
+  it("strips leading and trailing dash runs but keeps interior dashes", () => {
+    expect(trimDashes("--foo-bar--")).toBe("foo-bar");
+    expect(trimDashes("foo")).toBe("foo");
+    expect(trimDashes("-----")).toBe("");
+    expect(trimDashes("")).toBe("");
+    expect(trimDashes("-a")).toBe("a");
+    expect(trimDashes("a-")).toBe("a");
+  });
+
+  it("completes in linear time on a long adversarial dash run with no matching boundary", () => {
+    // Old `/^-+|-+$/gu` on "x" + "-".repeat(n) + "x": the interior dash run touches neither end,
+    // so both `^-+` and `-+$` fail everywhere, but each of the run's O(n) starting offsets forces
+    // an O(n) backtrack — O(n^2) overall (empirically ~3.1s at n=80,000 before this fix).
+    const run = "-".repeat(50_000);
+    const input = `x${run}x`;
+    const start = Date.now();
+    const result = trimDashes(input);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(300);
+    expect(result).toBe(input);
   });
 });

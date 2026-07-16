@@ -27,6 +27,7 @@ import {
   normalizeDiscoveryPayloadForSetup,
   rawConfigFromCurrent,
   smokeTestCandidates,
+  stripTrailingSlashes,
 } from "./gateway-setup.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import type { RouteContext } from "./routes.js";
@@ -1694,6 +1695,39 @@ describe("smokeTestCandidates", () => {
     );
     expect(tracker.peak).toBeLessThanOrEqual(2);
     expect(tracker.peak).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// SonarCloud S8786: normalizeBaseUrl used to strip trailing slashes with `/\/+$/u`. That pattern is
+// anchored at the end but not at the start, so a backtracking engine retries the match at every
+// start position looking for a run of "/" that reaches the true end of the string — quadratic
+// whenever the string never ends in "/" (or has such a run far from the end). stripTrailingSlashes
+// replaces it with a single backward scan that cannot backtrack.
+describe("stripTrailingSlashes", () => {
+  it.each([
+    ["https://example.com", "https://example.com"],
+    ["https://example.com/", "https://example.com"],
+    ["https://example.com///", "https://example.com"],
+    ["", ""],
+    ["///", ""],
+    ["no/trailing/slash/here", "no/trailing/slash/here"],
+  ])("strips trailing slashes from %s -> %s", (input, expected) => {
+    expect(stripTrailingSlashes(input)).toBe(expected);
+  });
+
+  // The adversarial shape for the OLD `/\/+$/u` regex is a long run of "/" that is blocked from
+  // reaching the true end of the string by one trailing non-"/" character: a backtracking engine
+  // tries every position within the run, and at each one exhausts every possible run length before
+  // concluding "$" can never be reached from here. A run with NO "/" at all is fast even for the
+  // old regex (the very first character check fails immediately at every position), so it would not
+  // have caught a regression — this shape is the one that actually distinguishes old from new.
+  it("completes within a tight budget for a long slash run blocked by a trailing character", () => {
+    const adversarial = `${"/".repeat(100_000)}!`;
+    const start = Date.now();
+    const result = stripTrailingSlashes(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(result).toBe(adversarial);
   });
 });
 

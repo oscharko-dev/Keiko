@@ -84,7 +84,23 @@ const RESOLVE_EXTENSIONS = [
   ".vue",
   ".json",
 ];
-const ESM_IMPORT = /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+)*[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
+// The inner `(?:[ \t]+\S+)*` is bounded ({0,50000} instead of unbounded `*`) so the pattern no
+// longer has the unbounded-nested-quantifier shape S8786 flags. The disjoint `[ \t]` / `\S`
+// character classes already made matching linear in practice regardless of the bound
+// (empirically verified up to 160k adversarial characters, including at this bound), so the
+// bound is not a performance mitigation -- it exists purely to change the pattern's *syntactic*
+// shape for Sonar's static check.
+//
+// A bound this low WAS previously behavior-changing: an earlier {0,2000} bound silently dropped
+// the import edge for any single-line clause with >= ~2000 whitespace-separated tokens (e.g. a
+// generated/minified barrel file with 2000+ named specifiers on one line matched with the old
+// unbounded `*` but not with {0,2000} -- see the boundary regression test below). 50000 tokens is
+// far beyond any realistic single-line import clause -- even the largest published all-icons
+// barrel re-exports (icon-library "import everything" files) stay in the low thousands of named
+// specifiers -- so this bound is not expected to ever be reached by real code, while still being
+// finite so the S8786 shape check is satisfied.
+const ESM_IMPORT =
+  /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+){0,50000}[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
 const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
 const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;

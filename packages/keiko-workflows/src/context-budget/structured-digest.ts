@@ -32,7 +32,9 @@ interface DigestBuckets {
   readonly droppedCategories: string[];
 }
 
-interface Classification {
+// Exported so a co-located test can exercise the regex directly, at sizes larger than the
+// MAX_TEXT_CHARS bound every real caller is limited to (see cleanLine/boundText below).
+export interface Classification {
   readonly kind:
     "fact" | "assumption" | "constraint" | "decision" | "question" | "resolved-question" | "other";
   readonly text: string;
@@ -147,9 +149,17 @@ function classifyLine(line: string): Classification {
   return { kind: "other", text: line };
 }
 
-function explicitClassification(line: string): Classification | undefined {
+// SonarCloud S8786: the trailing `\s*` immediately before `(.+)$` overlapped with `.+` (both can
+// consume whitespace), which is the flagged "adjacent quantified atoms" shape. It never actually
+// blew up here in practice (the whole pattern is anchored at `^`, so only one start position is
+// ever tried, and `.+$` always succeeds on the first backtrack step once `\s*` gives back enough
+// characters), but the `\s*` is redundant anyway: `match[2]` is `.trim()`-ed immediately below, so
+// whichever side of the boundary the whitespace lands on, the final `text` is identical. Dropping
+// the redundant quantifier removes the overlap without changing the label, the match/no-match
+// result, or the final trimmed text for any input.
+export function explicitClassification(line: string): Classification | undefined {
   const match =
-    /^(fact|known|confirmed|assumption|assume|constraint|requirement|decision|decided|open question|question|resolved question|answered question|closed question)\s*[:=-]\s*(.+)$/iu.exec(
+    /^(fact|known|confirmed|assumption|assume|constraint|requirement|decision|decided|open question|question|resolved question|answered question|closed question)\s*[:=-](.+)$/iu.exec(
       line,
     );
   if (match === null) {

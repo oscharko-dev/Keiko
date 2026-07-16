@@ -258,6 +258,60 @@ describe("release-impact release notes", () => {
     expect(secretResult.failures.join("\n")).toContain("secret-like token");
   });
 
+  it("sanitizes a large non-matching whitespace run in a bullet without superlinear backtracking", () => {
+    // Regression for SonarCloud S8786: the sanitizer's whitespace quantifiers around "(#123)"
+    // and trailing punctuation used to be unbounded (\s*/\s+), which forces O(n^2) backtracking
+    // when a long whitespace run never resolves into a match. A 20k-character non-matching run
+    // took ~400ms under the old unbounded pattern; the bounded pattern must stay well under that.
+    const adversarialBullet = `Handles pathological spacing${" ".repeat(20_000)}!`;
+    const start = Date.now();
+    const result = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "adversarial-whitespace-bullet",
+          releaseNoteBullets: [adversarialBullet],
+        }),
+      ]),
+      rootManifest(),
+    );
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(300);
+    expect(result.ok).toBe(true);
+    expect(result.notes).toContain("Handles pathological spacing!");
+  });
+
+  it("fully removes a whitespace run longer than the bound before mid-string punctuation", () => {
+    // Regression for a verifier-confirmed defect in the S8786 fix above: bounding the
+    // punctuation-adjacent quantifier directly to `\s{1,64}` could only reach the last 64
+    // characters of a longer whitespace run, leaving a residual single space before the
+    // punctuation once the later `\s{2,}` collapse ran (e.g. gap=200 before a semicolon
+    // produced "Alpha ; Beta" instead of "Alpha; Beta"). This must fully collapse regardless
+    // of run length, the same way it already does for terminal punctuation at string end.
+    const semicolonBullet = `Handles wide gaps before punctuation${" ".repeat(200)}; keep going!`;
+    const commaBullet = `Handles wide gaps before a comma${" ".repeat(100)}, keep going!`;
+
+    const result = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "adversarial-mid-string-whitespace-semicolon",
+          releaseNoteBullets: [semicolonBullet],
+        }),
+        entry({
+          id: "adversarial-mid-string-whitespace-comma",
+          releaseNoteBullets: [commaBullet],
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.notes).toContain("Handles wide gaps before punctuation; keep going!");
+    expect(result.notes).toContain("Handles wide gaps before a comma, keep going!");
+    expect(result.notes).not.toContain(" ;");
+    expect(result.notes).not.toContain(" ,");
+  });
+
   it("prints generated notes during plan-only release proof without publishing", () => {
     // Version-agnostic repo-state proof: the plan-only run must render the notes for the
     // CURRENT package version from its committed catalog entry, whatever that version is.

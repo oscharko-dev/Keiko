@@ -66,8 +66,20 @@ type Mutations = Pick<
   | "toggleTool"
 >;
 
+// `/\/+$/u` looks harmless (one quantified atom anchored at `$`) but on a string that does NOT
+// end in "/" the engine still retries the greedy run from every start position before giving up
+// (super-linear backtracking, S8786) — a plain index scan from the end can't backtrack at all and
+// produces the identical "strip every trailing slash" result.
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function normalizeEditorOpenRoot(root: string): string {
-  return root.trim().replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  return stripTrailingSlashes(root.trim().replaceAll(/\\/gu, "/"));
 }
 
 // Root-relative file-identifier contract (Issue #1374): coerce a repository reference / persisted
@@ -1516,7 +1528,7 @@ function isAbsoluteRoot(root: string): boolean {
 function normaliseRoot(root: string): string {
   // Windows drive root: keep the trailing slash that follows the colon (C:/ or C:\).
   if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replaceAll(/\\/gu, "/");
-  return root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  return stripTrailingSlashes(root.replaceAll(/\\/gu, "/"));
 }
 
 /**
@@ -1538,7 +1550,7 @@ export function resolvedFilesRoot(w: AppWindow): string | null {
 }
 
 function normaliseRelativePath(path: string): string {
-  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  return stripTrailingSlashes(path.replaceAll(/\\/gu, "/").replace(/^\/+/u, ""));
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {

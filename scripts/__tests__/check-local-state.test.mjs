@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runRepairCli } from "@oscharko-dev/keiko-cli";
 import { sealString } from "@oscharko-dev/keiko-security";
 
-import { auditLocalState } from "../lib/local-state-audit.mjs";
+import { _testables, auditLocalState } from "../lib/local-state-audit.mjs";
 import { createDriftedFixture, createHealthyFixture } from "../lib/local-state-fixture.mjs";
 
 // Builds a minimal SQLite file at `path` from raw DDL/DML. Used to craft store-shaped databases that
@@ -891,5 +891,39 @@ describe("auditLocalState — secret-shape detection", () => {
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("secret key assignment");
+  });
+});
+
+// Regression coverage for the S8786 rewrite of `isPlaceholderSafe`'s trailing-punctuation trim: a
+// manual character scan replaced `/[.,;)}]+$/g`, which backtracked O(n²) on a long run of matching
+// punctuation that never reaches the string's true end.
+describe("isPlaceholderSafe — trailing punctuation trim (S8786 rewrite)", () => {
+  it("still accepts the redacted placeholder with common trailing punctuation", () => {
+    expect(_testables.isPlaceholderSafe("[REDACTED]")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED].")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED]),")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED]}")).toBe(true);
+    expect(_testables.isPlaceholderSafe("  [REDACTED];  ")).toBe(true);
+  });
+
+  it("still accepts booleans/null/numeric placeholders with trailing punctuation", () => {
+    expect(_testables.isPlaceholderSafe("true,")).toBe(true);
+    expect(_testables.isPlaceholderSafe("FALSE.")).toBe(true);
+    expect(_testables.isPlaceholderSafe("null)")).toBe(true);
+    expect(_testables.isPlaceholderSafe("12345;")).toBe(true);
+  });
+
+  it("still rejects a real-looking secret value, punctuation notwithstanding", () => {
+    expect(_testables.isPlaceholderSafe("sk-live-abcdef123456.")).toBe(false);
+    expect(_testables.isPlaceholderSafe("[REDACTED]tail")).toBe(false);
+  });
+
+  it("completes in linear time against an adversarial run of trailing punctuation", () => {
+    // Old `/[.,;)}]+$/g`: a long run of matching characters that never reaches the string end forces
+    // an O(n²) backtrack (empirically ~450ms at n=32,000 on this machine); the manual scan is O(n).
+    const adversarial = ".,;)}".repeat(4000) + "X"; // 20,000 matching chars, then a non-match
+    const start = Date.now();
+    _testables.isPlaceholderSafe(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
   });
 });

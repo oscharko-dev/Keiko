@@ -24,18 +24,63 @@ import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./typ
 // All patterns are anchored and use a single open or bounded quantifier. The phrase trailing
 // the imperative is captured greedily ON A SINGLE LINE (no `s` flag) so embedded newlines
 // terminate the match — this prevents a multi-line paste from being absorbed into one body.
+//
+// REMEMBER_RE / REMEMBER_ABOUT_RE / FORGET_RE are intentionally *prefix-only*: they match the
+// imperative keyword plus its optional inner clauses ("that", "bitte", "dass", "about this
+// project:", …) and the mandatory separator before the body, but capture nothing and place no
+// constraint after their own final quantifier. An earlier revision chained a `\S`-anchored
+// capture group directly onto these alternations (`...)\s+(\S(?:.*\S)?)\s*$`), which reintroduced
+// backtracking: because the inner keyword clauses are *optional*, the engine can retreat one out
+// of the prefix — as long as some leftover whitespace still lets the mandatory `\s+` separator
+// match — and then reinterpret the keyword's own text as the captured body, whenever the true
+// trailing content is whitespace-only. Concretely, that shape made "remember that   " capture
+// body="that" and "forget about   " capture target="about" (the keyword itself), instead of
+// correctly recognizing there is no body/target at all. A prefix pattern with nothing after its
+// final quantifier has exactly one possible parse for a given input — greedy match of the full
+// optional chain, or no match — so there is nothing left for the engine to backtrack into.
+// `bodyAfterPrefix` (below) derives the body by slicing off the matched prefix and trimming,
+// which is a plain linear-time string operation with no adjacent overlapping quantifiers, and
+// correctly returns `null` (not this intent) when nothing but whitespace remains.
+//
+// The other patterns (UPDATE_RE, ACTUALLY_RE, CORRECTION_LABEL_RE, THATS_WRONG_RE) keep the
+// single-regex `(\S(?:.*\S)?)\s*$` capture style: their prefixes have no optional inner clause
+// immediately adjacent to the mandatory separator, so they aren't subject to the same ambiguity.
+// `\S` and `\s` are disjoint, so `(\S(?:.*\S)?)` has exactly one way to split the input: the body
+// is forced to end on its own last non-whitespace character, with no ambiguity to backtrack over
+// (O(n) instead of the O(n^2) that `(.+?)\s*$` had — SonarCloud S8786). The two-target patterns
+// (UPDATE_RE, THATS_WRONG_RE) apply the analogous fix to the leading group:
+// `(\S+(?:\s+\S+)*?)` tokenizes on the disjoint `\S`/`\s` boundary instead of scanning
+// character-by-character with `.+?`, which removes the same overlap against the separator's
+// `\s+`.
 const REMEMBER_RE =
-  /^\s*(?:remember(?:\s+that)?|(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?|speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?|notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?)\s+(.+?)\s*$/iu;
+  /^\s*(?:remember(?:\s+that)?|(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?|speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?|notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?)\s+/iu;
 const REMEMBER_ABOUT_RE =
-  /^\s*(?:remember\s+about|merk(?:e)?\s+dir\s+(?:zu|über|ueber)|speicher(?:e)?\s+(?:zu|über|ueber))\s+(?:this\s+(?:project|workspace)[:,\s]+)?(.+?)\s*$/iu;
+  /^\s*(?:remember\s+about|merk(?:e)?\s+dir\s+(?:zu|über|ueber)|speicher(?:e)?\s+(?:zu|über|ueber))\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu;
 const FORGET_RE =
-  /^\s*(?:forget(?:\s+about)?|vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?|lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?)\s+(.+?)\s*$/iu;
+  /^\s*(?:forget(?:\s+about)?|vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?|lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?)\s+/iu;
+// Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
+// patterns above) never matches these without the `s`/dotAll flag, so a trimmed body/target
+// containing one means the real content spans more than one line — treated as "not this intent",
+// mirroring the multi-line-paste guard those patterns get from `.` alone.
+const LINE_TERMINATOR_RE = /[\n\r\u2028\u2029]/;
+
+// Derives the body/target for the prefix-only patterns above: slice off the matched prefix, trim
+// surrounding whitespace, and reject (null) an empty or genuinely multi-line remainder. Plain
+// linear-time string ops — no regex, no backtracking.
+function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
+  const rest = text.slice(prefixMatch[0].length);
+  const trimmed = rest.trim();
+  if (trimmed === "" || LINE_TERMINATOR_RE.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
 const UPDATE_RE =
-  /^\s*(?:update\s+(?:memory|the\s+memory)\s+about|aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber))\s+(.+?)\s+(?:to\s+be|with|auf|mit|zu|:)\s+(.+?)\s*$/iu;
-const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(.+?)\s*$/iu;
-const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(.+?)\s*$/iu;
+  /^\s*(?:update\s+(?:memory|the\s+memory)\s+about|aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber))\s+(\S+(?:\s+\S+)*?)\s+(?:to\s+be|with|auf|mit|zu|:)\s+(\S(?:.*\S)?)\s*$/iu;
+const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(\S(?:.*\S)?)\s*$/iu;
+const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(\S(?:.*\S)?)\s*$/iu;
 const THATS_WRONG_RE =
-  /^\s*(?:that(?:'s|\s+is)\s+wrong|das\s+stimmt\s+nicht|falsch)[,.]?\s+(.+?)\s+(is|are|should\s+be|ist|sind|sollte\s+sein)\s+(.+?)\s*$/iu;
+  /^\s*(?:that(?:'s|\s+is)\s+wrong|das\s+stimmt\s+nicht|falsch)[,.]?\s+(\S+(?:\s+\S+)*?)\s+(is|are|should\s+be|ist|sind|sollte\s+sein)\s+(\S(?:.*\S)?)\s*$/iu;
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
@@ -108,10 +153,18 @@ export function tryExtractRemember(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const aboutMatch = REMEMBER_ABOUT_RE.exec(text);
-  const plainMatch = aboutMatch === null ? REMEMBER_RE.exec(text) : null;
-  const body = aboutMatch?.[1] ?? plainMatch?.[1];
-  if (body === undefined) {
+  // "about" is tried first and, if its prefix matches at all (even with an unusable body), wins
+  // outright — falling back to the plain prefix on a matched-but-empty "about" body would let
+  // the plain pattern reinterpret the word "about" itself as body text (the same class of bug
+  // this file's regex catalogue comment documents).
+  const aboutPrefixMatch = REMEMBER_ABOUT_RE.exec(text);
+  const plainPrefixMatch = aboutPrefixMatch === null ? REMEMBER_RE.exec(text) : null;
+  const prefixMatch = aboutPrefixMatch ?? plainPrefixMatch;
+  if (prefixMatch === null) {
+    return null;
+  }
+  const body = bodyAfterPrefix(prefixMatch, text);
+  if (body === null) {
     return null;
   }
   const rejection = rejectIfUnsafe(body, policy);
@@ -147,12 +200,12 @@ export function tryExtractForget(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const match = FORGET_RE.exec(text);
-  if (match === null) {
+  const prefixMatch = FORGET_RE.exec(text);
+  if (prefixMatch === null) {
     return null;
   }
-  const target = match[1];
-  if (target === undefined) {
+  const target = bodyAfterPrefix(prefixMatch, text);
+  if (target === null) {
     return null;
   }
   const scopeResolution = scopeOrReject(context, policy);

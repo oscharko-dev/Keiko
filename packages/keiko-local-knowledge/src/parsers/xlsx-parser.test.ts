@@ -4,8 +4,16 @@ import { deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import { buildParserOptions } from "./registry.js";
-import { selectionFromBytes, XLSX_SIMPLE } from "./parser-test-fixtures.js";
-import { columnIndexFromName, xlsxParser } from "./xlsx-parser.js";
+import { selectionFromBytes, selectionFromText, XLSX_SIMPLE } from "./parser-test-fixtures.js";
+import {
+  columnIndexFromName,
+  parseSharedStrings,
+  readSheetRows,
+  xlsxParser,
+  type XlsxStyles,
+} from "./xlsx-parser.js";
+
+const EMPTY_STYLES: XlsxStyles = { cellFormatNumFmtIds: [], customNumFmts: new Map() };
 
 interface ZipEntryFixture {
   readonly name: string;
@@ -235,6 +243,77 @@ describe("xlsxParser", () => {
     expect(result.diagnostics[0]?.message).toBe(
       "xlsx parser rejected malformed or unsupported workbook",
     );
+  });
+
+  // Regression for typescript/javascript:S8786 (follow-up finding). `itemPattern` used to be
+  // `/<si\b[\s\S]*?<\/si>/gi`: a lazy dot-all class searching for a literal `</si>` that an
+  // unanchored `.exec()` loop retries from every "<si" occurrence in the document. When the
+  // document contains many "<si " occurrences but no "</si>" at all, each of those retries
+  // rescans all the way to the end of the (attacker-sized, up to 32 MiB) string before failing
+  // — O(n) work at each of O(n) positions, i.e. O(n^2). 32,000 reps of "<si " with no closing
+  // tag (128 KB) took well over half a second against the vulnerable pattern with clean
+  // ~4x-per-doubling scaling; the indexOf-based scan keeps this linear.
+  it("resolves an adversarial shared-strings document with no closing </si> in linear time", () => {
+    const adversarialXml = "<sst>" + "<si ".repeat(32_000) + "</sst>";
+    const input = selectionFromText("", { extension: "xlsx" });
+    const options = buildParserOptions();
+
+    const start = Date.now();
+    const result = parseSharedStrings(adversarialXml, input, options);
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(300);
+    expect(result.strings).toEqual([]);
+  });
+
+  // Same S8786 follow-up finding, for the worksheet row splitter: `/<row\b[^>]*>[\s\S]*?<\/row>/gi`
+  // has the identical shape and was independently measured at the same quadratic scaling for
+  // "<row ..." with no "</row>" (497ms/1970ms at 80KB/160KB against the vulnerable pattern).
+  it("resolves an adversarial worksheet document with no closing </row> in linear time", () => {
+    const adversarialXml = "<sheetData>" + "<row ".repeat(32_000) + "</sheetData>";
+
+    const start = Date.now();
+    const result = readSheetRows("Sheet1", adversarialXml, [], EMPTY_STYLES);
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(300);
+    expect(result).toEqual([]);
+  });
+
+  // The same lazy-dot-all-then-literal-terminator shape was reused one level deeper for cell
+  // splitting (`/<c\b[^>]*>[\s\S]*?<\/c>/gi`). A single legitimate, well-terminated `<row>` can
+  // still carry a malicious cell payload (many "<c " occurrences, never closed) large enough to
+  // reproduce the same O(n^2) blowup purely inside `readSheetRows`'s inner loop, even though the
+  // outer row-splitting itself is fast.
+  it("resolves a single row with an adversarial, never-closed cell payload in linear time", () => {
+    const adversarialXml = `<row r="1">${"<c ".repeat(32_000)}</row>`;
+
+    const start = Date.now();
+    const result = readSheetRows("Sheet1", adversarialXml, [], EMPTY_STYLES);
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(300);
+    expect(result).toEqual([]);
+  });
+
+  it("still parses legitimate shared strings and rows unaffected by the linear rewrite", () => {
+    const input = selectionFromText("", { extension: "xlsx" });
+    const options = buildParserOptions();
+    const sharedResult = parseSharedStrings(
+      "<sst><si><t>Alpha</t></si><si><t>Bravo</t></si></sst>",
+      input,
+      options,
+    );
+    expect(sharedResult.strings).toEqual(["Alpha", "Bravo"]);
+
+    const rows = readSheetRows(
+      "Sheet1",
+      '<row r="1"><c r="A1" t="inlineStr"><is><t>Charlie</t></is></c></row>',
+      [],
+      EMPTY_STYLES,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.cells).toEqual([{ column: "A", columnIndex: 0, value: "Charlie" }]);
   });
 });
 

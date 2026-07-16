@@ -24,22 +24,51 @@ export interface RepositoryReferenceTextPart {
   readonly reference?: RepositoryReference;
 }
 
-const REPOSITORY_REFERENCE_PATTERN =
-  /@?((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15})(?::(\d{1,7})(?:-(\d{1,7}))?)?/gu;
-const REPOSITORY_REFERENCE_SOURCE = String.raw`@?(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15}(?::\d{1,7}(?:-\d{1,7})?)?`;
+// Path depth and per-segment length are bounded (rather than left unbounded) so matching stays
+// linear in input length. An unbounded `(?:segment\/)*segment` shape lets the engine retry the
+// unmatched tail from every character offset in adversarial (non-matching) text: each retry costs
+// up to O(n), and there are O(n) offsets to try, giving O(n^2) overall (S8786). Bounding both
+// quantifiers caps the retry cost at a constant, restoring O(n).
+//
+// The two bounds are chosen on different grounds:
+//   - Per-segment length (255) is a hard ceiling, not a headroom guess: it matches the real
+//     NAME_MAX enforced by ext4/APFS/NTFS. No single path COMPONENT can legitimately exceed it on
+//     any real filesystem, so this bound is exact, not lossy, and widening it further would only
+//     accept segments that cannot exist as real filenames.
+//   - Path depth (segment count) has no equivalent hard OS ceiling — it is an application-level
+//     choice, and an earlier revision of this fix picked 64, which is comfortably exceeded by real
+//     (if unusual) deeply-nested vendor/cache/monorepo trees (e.g. pnpm's `.pnpm` store, Bazel
+//     sandbox output, or nested `node_modules`). Per this repo's ReDoS-remediation guidance, that
+//     bound is raised generously — to 1000 — so that no realistic repository path can ever reach
+//     the ceiling, while staying finite so the retry cost above stays a bounded constant and static
+//     analysis still recognizes the quantifier as bounded.
+const REPOSITORY_REFERENCE_SEGMENT = "[A-Za-z0-9_.-]{1,255}";
+const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
+const REPOSITORY_REFERENCE_PATTERN = new RegExp(
+  String.raw`@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:-(\d{1,7}))?)?`,
+  "gu",
+);
+const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:-\d{1,7})?)?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
 );
+// `[^\]]+` already allows whitespace, so a preceding `\s*` is redundant and only creates an
+// ambiguous split point between two quantified atoms that can consume the same characters
+// (S8786): with no closing bracket, the engine explores every way to divide a run of whitespace
+// between `\s*` and `[^\]]+`, which is quadratic. Dropping the redundant `\s*` matches the exact
+// same set of strings (proof: `\s* [^\]]+` requires >=1 total char, all drawn from `[^\]]`, which
+// is exactly what `[^\]]+` alone requires) while removing the ambiguity entirely.
+const SOURCE_LABEL_FRAGMENT = String.raw`\[source:[^\]]+\]`;
 const BRACKETED_REFERENCE_DUPLICATE_PATTERN = new RegExp(
-  String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]\s*(?:\[source:\s*[^\]]+\]\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
+  String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]\s*(?:${SOURCE_LABEL_FRAGMENT}\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
   "giu",
 );
 const ADJACENT_REFERENCE_DUPLICATE_PATTERN = new RegExp(
-  String.raw`(${REPOSITORY_REFERENCE_SOURCE})\s+(?:\[source:\s*[^\]]+\]\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
+  String.raw`(${REPOSITORY_REFERENCE_SOURCE})\s+(?:${SOURCE_LABEL_FRAGMENT}\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
   "giu",
 );
-const SOURCE_LABEL_PATTERN = /\[source:\s*[^\]]+\]/giu;
+const SOURCE_LABEL_PATTERN = new RegExp(SOURCE_LABEL_FRAGMENT, "giu");
 
 const KNOWN_REPOSITORY_EXTENSIONS = new Set([
   "astro",
@@ -108,8 +137,23 @@ function boundaryAfter(value: string, index: number): boolean {
   return !/[A-Za-z0-9_/:+-]/u.test(next);
 }
 
-function normalizeReferencePath(path: string): string {
-  return path.replaceAll(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+// Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
+// `+` quantifier retried at every offset of a non-matching string is O(n^2) (S8786); a manual
+// scan is O(n) by construction and can never regress into that shape.
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") start += 1;
+  return value.slice(start);
+}
+
+export function normalizeReferencePath(path: string): string {
+  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll(/\\/gu, "/")));
 }
 
 function referenceIdentity(reference: RepositoryReference | null): string | null {
@@ -128,7 +172,12 @@ function collapseDuplicateReferences(first: string, second: string, fallback: st
 }
 
 function tidyEvidenceText(source: string): string {
-  return source.replace(/[ \t]{2,}/gu, " ").replace(/[ \t]+([,.;:!?])/gu, "$1");
+  // The first pass already collapses every run of 2+ space/tab characters down to a single " ",
+  // so by the time the second pass runs, no two space/tab characters can ever be adjacent. The
+  // trailing `+` in the second pass therefore only ever matches 0 or 1 characters in practice;
+  // dropping it removes the unbounded-quantifier-next-to-a-group shape S8786 flags, with no
+  // behavior change given that invariant.
+  return source.replace(/[ \t]{2,}/gu, " ").replace(/[ \t]([,.;:!?])/gu, "$1");
 }
 
 // Grounded model answers sometimes echo evidence as:
@@ -225,7 +274,7 @@ export function parseExactRepositoryReference(source: string): RepositoryReferen
 }
 
 export function repositoryRootLabel(root: string): string {
-  const normalized = root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  const normalized = trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }
@@ -271,7 +320,7 @@ function referencePathForRoot(referencePath: string, root: string): string {
 }
 
 function repositoryRootSuffix(root: string): string {
-  const normalized = root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  const normalized = trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts.slice(-2).join("/");
 }

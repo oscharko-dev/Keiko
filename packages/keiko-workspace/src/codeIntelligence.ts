@@ -634,7 +634,12 @@ function collectGoModules(
     } catch {
       continue;
     }
-    const modulePath = /^\s*module\s+(\S+)/mu.exec(text)?.[1];
+    // Leading whitespace is bounded so a run of blank lines cannot force the multiline
+    // anchor to re-scan the remaining text from every line start (superlinear backtracking).
+    // 500 is far beyond any realistic same-line indentation before a `module` directive
+    // (real go.mod files use none) while still being small enough to keep the bounded
+    // per-line scan fast even across a file that is nothing but blank lines.
+    const modulePath = /^\s{0,500}module\s+(\S+)/mu.exec(text)?.[1];
     if (modulePath === undefined || modulePath.length === 0) {
       continue;
     }
@@ -1234,6 +1239,25 @@ function collectTypescriptImportBindings(
   return bindings;
 }
 
+/**
+ * Strips a trailing `# comment` (and any whitespace immediately before the `#`) from a single
+ * source line. Implemented with plain string operations rather than `/\s*#.*$/` because that
+ * pattern is unanchored at the start: when no `#` is present, the regex engine retries the
+ * leading `\s*` backtrack at every character position, giving O(n^2) behavior on long
+ * whitespace-heavy input.
+ */
+function stripPythonLineComment(text: string): string {
+  const hashIndex = text.indexOf("#");
+  if (hashIndex < 0) {
+    return text;
+  }
+  let end = hashIndex;
+  while (end > 0 && /\s/u.test(text[end - 1] ?? "")) {
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
+
 function collectPolyglotImportBindings(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
@@ -1250,7 +1274,12 @@ function collectPolyglotImportBindings(
   const bindings: CodeImportBinding[] = [];
   const lines = file.text.split(/\r?\n/u);
   for (const line of lines) {
-    const match = /^\s*from\s+(\.*[A-Za-z_][\w.]*)\s+import\s+(.+)$/u.exec(line);
+    // The dotted-name segments are bounded so the (already low-risk, single-line,
+    // fully-anchored) pattern cannot be flagged for unbounded superlinear backtracking.
+    // 100 leading dots and a 2000-char dotted path are both far past any realistic Python
+    // relative-import depth or module path length, so no legitimate `from X import Y`
+    // statement can ever be affected by the cutoff.
+    const match = /^\s*from\s+(\.{0,100}[A-Za-z_][\w.]{0,2000})\s+import\s+(.+)$/u.exec(line);
     if (match?.[1] === undefined || match[2] === undefined) {
       continue;
     }
@@ -1258,7 +1287,7 @@ function collectPolyglotImportBindings(
     if (targetPath === undefined) {
       continue;
     }
-    const importList = match[2].replace(/\s*#.*$/u, "").replace(/[()]/gu, "");
+    const importList = stripPythonLineComment(match[2]).replace(/[()]/gu, "");
     for (const part of importList.split(",")) {
       const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
       if (importMatch?.[1] === undefined) {
@@ -1518,15 +1547,31 @@ function fieldNameFromSerializationAnnotation(text: string): string | undefined 
   return match;
 }
 
+/**
+ * Strips a trailing `= <default value>` assignment (with no top-level comma in the value) from
+ * a field/parameter component, mirroring `/=[^,]+$/`. Implemented with plain string operations
+ * because that pattern is unanchored at the start: a string with many `=` characters ahead of a
+ * comma near the end forces the engine to retry the full trailing scan at every `=` position,
+ * giving O(n^2) behavior. The last comma in the text is the only place an unbroken,
+ * comma-free `=...` suffix can begin, so the leftmost qualifying `=` is found in one pass.
+ */
+function stripTrailingCommaFreeAssignment(text: string): string {
+  const lastCommaIndex = text.lastIndexOf(",");
+  const equalsIndex = text.indexOf("=", lastCommaIndex + 1);
+  if (equalsIndex < 0 || equalsIndex === text.length - 1) {
+    return text;
+  }
+  return `${text.slice(0, equalsIndex)} `;
+}
+
 function fieldNameFromComponent(component: string): string | undefined {
   const serializedFieldName = fieldNameFromSerializationAnnotation(component);
   if (serializedFieldName !== undefined) {
     return serializedFieldName;
   }
-  const cleaned = component
-    .replace(/@\w+(?:\([^)]*\))?/gu, " ")
-    .replace(/=[^,]+$/u, " ")
-    .trim();
+  const cleaned = stripTrailingCommaFreeAssignment(
+    component.replace(/@\w+(?:\([^)]*\))?/gu, " "),
+  ).trim();
   const kotlinConstructorProperty =
     /^(?:(?:public|private|protected|internal|override)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*:/u.exec(
       cleaned,
@@ -1916,7 +1961,13 @@ function declarationFieldNames(
     /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
       declarationLine,
     )?.[1],
-    /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
+    // The type-expression run is bounded: its character class includes a literal space (to
+    // allow multi-token generics like "Dictionary<string, string>"), which otherwise overlaps
+    // with the mandatory `\s+` before the property name and lets the engine re-split a long run
+    // of trailing spaces in O(n) different ways, giving O(n^2) backtracking. 1000 characters is
+    // far past even deeply-nested real-world generic type expressions, so no legitimate
+    // declaration can be affected by the cutoff.
+    /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]{1,1000}\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
       declarationLine,
     )?.[1],
   ].filter((name): name is string => name !== undefined);
@@ -2815,20 +2866,47 @@ function pathOnlyRouteInput(path: string): string {
   return path.split(/[?#]/u)[0] ?? path;
 }
 
+// Replaces every non-empty `<...>` (or `{...}`) span with ":param" using a single forward scan
+// instead of a `/<[^>]+>/g`-style regex. An unclosed opening bracket makes the negated character
+// class scan all the way to the end of the string before failing, and an unanchored global regex
+// then retries that same failing scan from every subsequent position - O(n^2) on a string with
+// many unclosed brackets. A finite bound on the bracket contents avoids the blowup but silently
+// leaves long-but-legitimate segments un-normalized (raw "<...>"/"{...}" text in the route path),
+// which is a correctness regression for a code-intelligence index. Scanning forward once, and
+// giving up on further close-bracket lookups for the rest of the string the first time one is not
+// found, keeps this exactly linear for any input while normalizing brackets of any length.
+function collapseBracketedRouteSegments(text: string, open: string, close: string): string {
+  let result = "";
+  let index = 0;
+  let noCloseRemaining = false;
+  while (index < text.length) {
+    const character = text[index] ?? "";
+    if (!noCloseRemaining && character === open) {
+      const closeIndex = text.indexOf(close, index + 1);
+      if (closeIndex < 0) {
+        noCloseRemaining = true;
+      } else if (closeIndex > index + 1) {
+        result += ":param";
+        index = closeIndex + 1;
+        continue;
+      }
+    }
+    result += character;
+    index += 1;
+  }
+  return result;
+}
+
 function normalizeRoutePath(path: string): string {
   const pathOnly = pathOnlyRouteInput(path);
   const collapsed = `/${pathOnly}`.replace(/\/+/gu, "/");
-  return (
-    collapsed
-      .replace(/^\/\^/u, "/")
-      .replace(/\$$/u, "")
-      .replace(/<[^>]+>/gu, ":param")
-      .replace(/\(\?P<[^>]+>[^)]+\)/gu, ":param")
-      .replace(/\$\{[^}]+\}/gu, ":param")
-      .replace(/\{[^}]+\}/gu, ":param")
-      .replace(/:[A-Za-z_][\w-]*/gu, ":param")
-      .replace(/\/$/u, "") || "/"
-  );
+  const anchored = collapsed.replace(/^\/\^/u, "/").replace(/\$$/u, "");
+  const withoutAngleBrackets = collapseBracketedRouteSegments(anchored, "<", ">");
+  const withoutNamedCaptures = withoutAngleBrackets
+    .replace(/\(\?P<[^>]+>[^)]+\)/gu, ":param")
+    .replace(/\$\{[^}]+\}/gu, ":param");
+  const withoutBraces = collapseBracketedRouteSegments(withoutNamedCaptures, "{", "}");
+  return withoutBraces.replace(/:[A-Za-z_][\w-]*/gu, ":param").replace(/\/$/u, "") || "/";
 }
 
 function combineRoutePath(prefix: string | undefined, path: string): string {
@@ -3145,7 +3223,10 @@ function graphqlEndpoint(
 
 function collectGraphqlFields(segment: string): readonly string[] {
   const fields: string[] = [];
-  for (const match of segment.matchAll(/\b([A-Za-z_][\w]*)\s*(?:\([^)]*\))?\s*:/gu)) {
+  // The leading `\s*` is nested inside the optional arg-list group rather than sitting next to
+  // a second, independent `\s*` — two adjacent `\s*` runs around the same optional group let the
+  // engine re-split a long whitespace-only run in O(n) ways for every position, giving O(n^2).
+  for (const match of segment.matchAll(/\b([A-Za-z_][\w]*)(?:\s*\([^)]*\))?\s*:/gu)) {
     const name = match[1];
     if (name !== undefined && !["schema", "type", "extend"].includes(name.toLowerCase())) {
       fields.push(name);
@@ -3207,29 +3288,94 @@ function firstGraphqlSelectionField(operationText: string): string | undefined {
   return /\b([A-Za-z_][\w]*)\s*(?:\([^)]*\))?/u.exec(selection)?.[1];
 }
 
+// A GraphQL operation keyword starts a *new* operation only when there is a line break between
+// it and whatever precedes it, with nothing but non-newline whitespace in between - i.e. it
+// begins its own line, however far that line is indented. Mirrors the original
+// `\n\s*(?:query|mutation)` lookahead: scanning backward through same-line whitespace and
+// stopping as soon as a newline is found (rather than continuing through it into the previous
+// operation's content) means a keyword used mid-operation on the *same* line as other content
+// (e.g. an argument name like `query: "..."`) is correctly rejected as a boundary, while any
+// amount of whitespace - of any length, on any number of lines - after the last newline still
+// counts. The scan is bounded by the nearest newline or non-whitespace character, so consecutive
+// boundary checks never re-walk the same span of text.
+function isGraphqlOperationBoundary(text: string, index: number): boolean {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const character = text[i];
+    if (character === "\n") {
+      return true;
+    }
+    if (character !== " " && character !== "\t" && character !== "\r") {
+      return false;
+    }
+  }
+  return true;
+}
+
+interface GraphqlOperationStart {
+  readonly index: number;
+  readonly kind: string;
+}
+
+function graphqlOperationStarts(text: string): readonly GraphqlOperationStart[] {
+  const starts: GraphqlOperationStart[] = [];
+  for (const match of text.matchAll(/\b(query|mutation)\b/giu)) {
+    const kind = match[1];
+    if (kind !== undefined) {
+      starts.push({ index: match.index, kind });
+    }
+  }
+  return starts;
+}
+
+function pushGraphqlOperationEndpoint(
+  endpoints: ApiEndpoint[],
+  file: SourceFile,
+  text: string,
+  baseOffset: number,
+  segment: GraphqlOperationStart,
+  end: number,
+): void {
+  const operationText = text.slice(segment.index, end);
+  const fieldName = firstGraphqlSelectionField(operationText);
+  if (fieldName === undefined) {
+    return;
+  }
+  endpoints.push(
+    graphqlEndpoint(
+      file,
+      "client",
+      segment.kind,
+      fieldName,
+      lineNumberAtOffset(file.text, baseOffset + segment.index),
+    ),
+  );
+}
+
 function collectGraphqlOperationEndpoints(
   file: SourceFile,
   text: string,
   baseOffset: number,
 ): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
-  const operationPattern = /\b(query|mutation)\b[\s\S]*?(?=\n\s*(?:query|mutation)\b|$)/giu;
-  for (const operation of text.matchAll(operationPattern)) {
-    const operationText = operation[0];
-    const kind = operation[1];
-    const fieldName = firstGraphqlSelectionField(operationText);
-    if (kind === undefined || fieldName === undefined) {
-      continue;
+  // Operation boundaries are found with a forward keyword scan plus a backward whitespace walk
+  // instead of a `\n\s*(query|mutation)` lookahead: an unbounded `\s*` there backtracks
+  // catastrophically, while bounding it silently merges - and loses - a later operation whenever
+  // the separating whitespace run exceeds the bound (e.g. operations separated by many spaces on
+  // one line rather than a newline). This scan is linear and lossless for a separator of any
+  // length or shape.
+  const starts = graphqlOperationStarts(text);
+  let segment: GraphqlOperationStart | undefined;
+  starts.forEach((candidate, i) => {
+    if (i > 0 && !isGraphqlOperationBoundary(text, candidate.index)) {
+      return;
     }
-    endpoints.push(
-      graphqlEndpoint(
-        file,
-        "client",
-        kind,
-        fieldName,
-        lineNumberAtOffset(file.text, baseOffset + operation.index),
-      ),
-    );
+    if (segment !== undefined) {
+      pushGraphqlOperationEndpoint(endpoints, file, text, baseOffset, segment, candidate.index);
+    }
+    segment = candidate;
+  });
+  if (segment !== undefined) {
+    pushGraphqlOperationEndpoint(endpoints, file, text, baseOffset, segment, text.length);
   }
   return endpoints;
 }

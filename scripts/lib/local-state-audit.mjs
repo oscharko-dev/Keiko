@@ -683,8 +683,21 @@ function auditKnowledgeEncryption(stateDir) {
 }
 
 // ── Class 6: protected Evidence / Quality-Intelligence artifacts ──────────────────────────────
+const TRAILING_PLACEHOLDER_PUNCTUATION = new Set([".", ",", ";", ")", "}"]);
+
+// Strips trailing punctuation one character at a time instead of via `/[.,;)}]+$/` (SonarCloud
+// S8786): that pattern is unanchored at the start, so on a long run of matching characters that
+// never reaches the true end of the string (e.g. a secret value followed by other content), the
+// engine backtracks the run one character at a time from every position within it, giving O(n²)
+// work. A manual scan from the end can't backtrack at all and is O(n).
+function stripTrailingPlaceholderPunctuation(value) {
+  let end = value.length;
+  while (end > 0 && TRAILING_PLACEHOLDER_PUNCTUATION.has(value[end - 1])) end--;
+  return value.slice(0, end);
+}
+
 function isPlaceholderSafe(value) {
-  const trimmed = value.trim().replace(/[.,;)}]+$/g, "");
+  const trimmed = stripTrailingPlaceholderPunctuation(value.trim());
   return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|[0-9]+)$/iu.test(trimmed);
 }
 
@@ -1215,3 +1228,7 @@ export const AUDIT_MARKERS = Object.freeze({
   LK_ENC_SCOPE_KEY,
   LK_ENC_SCOPE_VALUE,
 });
+
+// Exported solely for a direct, fast regression test of the ReDoS-safe rewrite of the trailing
+// placeholder-punctuation trim (SonarCloud S8786) — not part of the module's operational surface.
+export const _testables = Object.freeze({ isPlaceholderSafe });

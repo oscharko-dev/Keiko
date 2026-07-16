@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  containsPrimaryShellCommand,
   runPortableLaunchSetupSmoke,
   validatePortableLaunchSetupDocs,
 } from "../portable-launch-setup-smoke.mjs";
@@ -66,5 +67,46 @@ describe("portable launch/setup smoke", () => {
       primaryJourneyShellFree: true,
       troubleshootingHonest: true,
     });
+  });
+
+  it("still detects each primary-shell-command shape", () => {
+    expect(containsPrimaryShellCommand("plain prose with no commands")).toBe(false);
+    expect(containsPrimaryShellCommand("```\nsome code\n```")).toBe(true);
+    expect(containsPrimaryShellCommand("run npm install to set up")).toBe(true);
+    expect(containsPrimaryShellCommand("keiko start")).toBe(true);
+    expect(containsPrimaryShellCommand("keiko portable")).toBe(true);
+    expect(containsPrimaryShellCommand("  npm install")).toBe(true);
+    expect(containsPrimaryShellCommand("text\n    node script.js\nmore text")).toBe(true);
+  });
+
+  // The line-start indent must accept ANY `\s` member other than `\n` (matching the pre-S8786-fix
+  // `\s*` semantics), not just space/tab. A narrower `[ \t]*` silently stops detecting a keyword
+  // preceded by a bare CR, form feed, vertical tab, NBSP, or a Unicode line/paragraph separator —
+  // all real filler a CRLF-unnormalised file or content pasted from Word/Notion/Google Docs can
+  // contain — which would let a real shell command slip past this documentation-quality gate.
+  it("detects a keyword indented with non-tab/space whitespace (CR, FF, VT, NBSP, U+2028/2029)", () => {
+    expect(containsPrimaryShellCommand("\rnode server.js")).toBe(true);
+    expect(containsPrimaryShellCommand("\fnode server.js")).toBe(true);
+    expect(containsPrimaryShellCommand("\vnode server.js")).toBe(true);
+    expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
+    expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
+    expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
+    expect(containsPrimaryShellCommand("intro\r\nnode server.js")).toBe(true);
+  });
+
+  // The former `(?:^|\n)\s*(?:node|npm|npx|yarn|keiko)\s+` let its `\s*` re-enter the same run of
+  // newlines that `(?:^|\n)` already anchors on, so text with many blank lines and no matching
+  // keyword forced a retry at every offset of the run — quadratic in the run length (S8786;
+  // empirically ~1.3s at 40k newlines before this fix). Regression-tests both the fix's speed and
+  // that a real command mention deep inside such a document is still found.
+  it("scans a document with many newlines and no keyword in linear time", () => {
+    const filler = "\n ".repeat(50_000);
+    const start = Date.now();
+    const noCommand = containsPrimaryShellCommand(`${filler}just prose, no commands here`);
+    const withCommand = containsPrimaryShellCommand(`${filler}npm install`);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+    expect(noCommand).toBe(false);
+    expect(withCommand).toBe(true);
   });
 });

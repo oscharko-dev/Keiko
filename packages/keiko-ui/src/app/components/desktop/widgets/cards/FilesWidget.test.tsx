@@ -2092,3 +2092,63 @@ describe("FilesWidget file operations", () => {
     expect(pinned["dir-001"]).toBeUndefined();
   });
 });
+
+// S8786 — parentDir/parentRelativePath/displayPath used to strip trailing separators with an
+// unanchored `[/\\]+$` / `\/+$` regex. Because the pattern has no `^`, the engine retries the
+// match at every start position when the string does not end in a separator, which is O(n^2) on
+// an adversarial "run of separators + one other character" input. They now share
+// trimTrailingSeparators, a plain backward scan with no backtracking.
+describe("FilesWidget path helpers (S8786 regex-safety)", () => {
+  it("stays fast on an adversarial separator run that never reaches a trailing match", () => {
+    const { trimTrailingSeparators, parentDir, parentRelativePath, displayPath } =
+      filesWidgetTestInternals;
+    // 20,000 separators followed by a non-separator character: the old `+$` regex would explore
+    // every (start position × backtrack length) pair — O(n^2) — because it can never match.
+    const adversarial = `${"/".repeat(20_000)}x`;
+
+    const start = Date.now();
+    const trimmed = trimTrailingSeparators(adversarial, "/\\");
+    parentDir(adversarial);
+    parentRelativePath(adversarial);
+    displayPath(adversarial, "src/index.ts");
+    const elapsed = Date.now() - start;
+
+    expect(trimmed).toBe(adversarial); // nothing trailing to strip
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  it("trims trailing separators the same way the original regexes did", () => {
+    const { trimTrailingSeparators } = filesWidgetTestInternals;
+    expect(trimTrailingSeparators("/repo/src/", "/\\")).toBe("/repo/src");
+    expect(trimTrailingSeparators("C:\\repo\\src\\\\", "/\\")).toBe("C:\\repo\\src");
+    expect(trimTrailingSeparators("no-trailing-separator", "/\\")).toBe("no-trailing-separator");
+    expect(trimTrailingSeparators("///", "/\\")).toBe("");
+    expect(trimTrailingSeparators("", "/\\")).toBe("");
+    expect(trimTrailingSeparators("src/nested//", "/")).toBe("src/nested");
+    expect(trimTrailingSeparators("top-level", "/")).toBe("top-level");
+  });
+
+  it("parentDir resolves POSIX and Windows parents, including the drive-root case", () => {
+    const { parentDir } = filesWidgetTestInternals;
+    expect(parentDir("/repo/src/")).toBe("/repo");
+    expect(parentDir("/repo")).toBe("/");
+    expect(parentDir("/")).toBe(null);
+    expect(parentDir("C:\\Users\\test\\")).toBe("C:\\Users");
+    expect(parentDir("C:\\Users\\")).toBe("C:\\");
+  });
+
+  it("parentRelativePath resolves the root-relative parent or null at the top", () => {
+    const { parentRelativePath } = filesWidgetTestInternals;
+    expect(parentRelativePath("src/nested/")).toBe("src");
+    expect(parentRelativePath("top-level/")).toBe(null);
+    expect(parentRelativePath("a/b/c")).toBe("a/b");
+  });
+
+  it("displayPath joins the resolved root with the relative path using the root's separator", () => {
+    const { displayPath } = filesWidgetTestInternals;
+    expect(displayPath("/repo/", "src/index.ts")).toBe("/repo/src/index.ts");
+    expect(displayPath("C:\\repo\\", "src/index.ts")).toBe("C:\\repo\\src\\index.ts");
+    expect(displayPath("/repo", null)).toBe("/repo");
+    expect(displayPath("/repo", "")).toBe("/repo");
+  });
+});

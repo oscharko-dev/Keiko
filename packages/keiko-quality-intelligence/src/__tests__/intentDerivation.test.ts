@@ -43,6 +43,41 @@ describe("deriveIntent", () => {
     expect(summary.sourceMode).toBe("empty");
   });
 
+  it("still recognises hyphenated traceability-ID theme tokens (S8786 behavior equivalence)", () => {
+    const fixture = loadFixture("bankingRequirement.synthetic.json");
+    const envelopes = fixture.envelopes.map((envelope) => ({
+      ...envelope,
+      displayLabel: "Generic upload label",
+    }));
+    const summary = deriveIntent(envelopes, bankingDefault, {
+      evidenceTexts: ["RB-1 requires a documented rollback plan before release."],
+    });
+    expect(summary.themes).toContain("RB-1");
+  });
+
+  // Regression for typescript/javascript:S8786. TRACEABILITY_ID_PATTERN used to be
+  // `/^[A-Za-z]{2,}-\d+[A-Za-z0-9-]*$/u`: `\d+` and the trailing `[A-Za-z0-9-]*` both accept
+  // digits, so a theme token shaped like an ID but ending in a character the pattern ultimately
+  // rejects (forcing the engine to explore every split between the two runs before failing) took
+  // quadratic time. A 20,000-digit adversarial token would have taken seconds; the fixed pattern
+  // (single mandatory `\d` then the same trailing class) recognises the identical set of IDs in
+  // linear time.
+  it("resolves an adversarial traceability-ID-shaped theme token in linear time", () => {
+    const fixture = loadFixture("bankingRequirement.synthetic.json");
+    const envelopes = fixture.envelopes.map((envelope) => ({
+      ...envelope,
+      displayLabel: "Generic upload label",
+    }));
+    const adversarialToken = `AB-${"1".repeat(20_000)}_`;
+    const start = Date.now();
+    const summary = deriveIntent(envelopes, bankingDefault, {
+      evidenceTexts: [`${adversarialToken} normal requirement text follows.`],
+    });
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(300);
+    expect(summary.sourceMode).toBe("body");
+  });
+
   it("derives requirement candidates from canonical body text instead of generic labels", () => {
     const fixture = loadFixture("bankingRequirement.synthetic.json");
     const envelopes = fixture.envelopes.map((envelope) => ({

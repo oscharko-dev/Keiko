@@ -13,6 +13,7 @@ import {
   SUPPORTED_MIME_LITERALS,
   SUPPORTED_MIME_PREFIXES,
   extractDocumentContext,
+  trimTrailingWhitespace,
   type DocumentExtractionBudget,
   type DocumentExtractionFailure,
 } from "./document-extraction.js";
@@ -562,6 +563,28 @@ describe("extractDocumentContext — display name is basename only", () => {
     if (!result.ok) return;
     expect(result.context.displayName).toBe("notes.md");
     expect(result.context.displayName).not.toContain("/");
+  });
+});
+
+describe("trimTrailingWhitespace", () => {
+  it("strips trailing whitespace only, matching the prior regex behaviour", () => {
+    expect(trimTrailingWhitespace("hello   \n\t")).toBe("hello");
+    expect(trimTrailingWhitespace("  hello  ")).toBe("  hello");
+    expect(trimTrailingWhitespace("hello")).toBe("hello");
+    expect(trimTrailingWhitespace("")).toBe("");
+    expect(trimTrailingWhitespace("line1\nline2\n\n")).toBe("line1\nline2");
+  });
+
+  // SonarCloud S8786: the previous `/\s+$/u` pattern has no leading `^` anchor, so the engine
+  // retries the match at every position inside a long whitespace run before concluding there is
+  // no match — O(n^2) when the string never ends in whitespace. Empirically the old pattern took
+  // ~530ms for a 32k-character adversarial input; `trimEnd()` must stay near-instant at 10x that.
+  it("stays linear for a long non-terminating whitespace run (regression for SonarCloud S8786)", () => {
+    const adversarial = `${" ".repeat(320_000)}x`;
+    const start = Date.now();
+    const result = trimTrailingWhitespace(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(result).toBe(adversarial);
   });
 });
 

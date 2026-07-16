@@ -8,6 +8,7 @@ import {
   type WorkspaceSearchRequest,
   type WorkspaceSymbolSearchRequest,
 } from "./index.js";
+import { hasDangerousGroupOrClassRepetition } from "./workspace-search.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {
   expect(result.ok).toBe(false);
@@ -174,5 +175,42 @@ describe("workspace replace preview wire validators", () => {
       validateWorkspaceReplacePreviewRequest(replaceRequest({ mode: "regex", query: "(a+)+" })),
       "regex",
     );
+  });
+});
+
+// SonarCloud S8786: the old `/\([^)]*\)[+*{]|\[[^\]]*\][+*{]/` check is unanchored, so a
+// backtracking engine retries every start position; when a "(" or "[" is present but the string
+// never gives it a satisfying close + quantifier, each of the O(n) positions costs O(n) to
+// disprove. hasDangerousGroupOrClassRepetition replaces it with a single left-to-right scan.
+describe("hasDangerousGroupOrClassRepetition", () => {
+  it.each([
+    ["(a+)+", true],
+    ["[abc]+", true],
+    ["(abc){2}", true],
+    ["[abc]*", true],
+    ["a(b)c", false],
+    ["(abc)", false],
+    ["[abc]", false],
+    ["abc+", false],
+    ["(", false],
+    [")", false],
+    ["]", false],
+    ["([)]+", true],
+    ["(a))+", false],
+    ["", false],
+  ])("flags %s as dangerous=%s", (source, expected) => {
+    expect(hasDangerousGroupOrClassRepetition(source)).toBe(expected);
+  });
+
+  it("completes within a tight budget for many unresolved opens before a single close", () => {
+    // The adversarial shape for the OLD regex: many "(" characters, each of which independently
+    // scans all the way to the single "(...)" close before the engine can conclude that position
+    // doesn't lead to a satisfying quantifier — O(n) work repeated at O(n) start positions.
+    const adversarial = `${"(".repeat(20_000)})`;
+    const start = Date.now();
+    const result = hasDangerousGroupOrClassRepetition(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(result).toBe(false);
   });
 });
