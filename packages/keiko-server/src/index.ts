@@ -28,10 +28,25 @@ export {
   buildRedactor,
   type UiHandlerDeps,
   type BuildHandlerDepsOptions,
+  type ProductionCodingRuntimePorts,
   type Redactor,
   type ModelPortFactory,
   type MemoryAuthorizationContext,
 } from "./deps.js";
+export {
+  createProductionCodingRuntimeHost,
+  type CodingRuntimeTaskDispatcher,
+  type ProductionCodingRuntimeHost,
+  type ProductionCodingRuntimeResolver,
+  type QualifiedProductionCodingRuntime,
+} from "./coding-runtime/productionCodingRuntimeHost.js";
+export {
+  createProductionCodingRuntimeResolver,
+  type ProductionCodingRuntimeResolverInput,
+  type ProductionRuntimeBackendInput,
+  type ProductionRuntimeBackendResolver,
+  type QualifiedProductionRuntimeRun,
+} from "./coding-runtime/productionCodingRuntimeResolver.js";
 export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,

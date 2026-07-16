@@ -994,6 +994,9 @@ button {
   --accent-solid-ink: oklch(1 0 0);
   --accent-on-tint: oklch(0.43 0.13 160);
   --danger: oklch(0.5 0.18 25);
+  /* Light danger surfaces require light ink; the dark inverse ink used by the dark theme
+     fails WCAG contrast on this deliberately darker semantic danger surface. */
+  --button-danger-text: var(--accent-solid-ink);
   --warn: oklch(0.43 0.14 75);
   --info: oklch(0.45 0.15 240);
   /* --ok #4eba87 = 2.12:1 FAIL on light --bg; matches --accent-text light (uiux-fix F005) */

@@ -91,13 +91,6 @@ export const DE_MESSAGES = {
     "{verified}, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
   "gatewaySetup.voice.success.verifiedAudio":
     "{verified} und Audio- sowie Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
-  "codingWorkbench.status.checking": "Prüfe",
-  "codingWorkbench.status.available": "Verfügbar",
-  "codingWorkbench.status.unavailable": "Nicht verfügbar",
-  "codingWorkbench.runtime.gatewayManagedDetail": "Verwalteter Provider über Keiko Gateway",
-  "codingWorkbench.runtime.gatewayApiKeyDetail": "API-Schlüssel über Keiko Gateway geroutet",
-  "codingWorkbench.runtime.codexDetail":
-    "Das Subscription-Profil läuft über den Codex-Runtime-Adapter",
   "newWindow.chat.title": "Neues Chatfenster",
   "newWindow.chat.description": "Mit Keiko sprechen",
   "newWindow.chat.fieldTitle": "Titel",

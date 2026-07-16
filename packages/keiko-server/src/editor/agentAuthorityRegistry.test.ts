@@ -115,7 +115,23 @@ describe("EditorAgentAuthorityRegistry", () => {
     registry.revoke(registered.authorityRef);
     expect(registry.resolve(registered.authorityRef, ROOT, "autonomous-delivery", NOW)).toEqual({
       ok: false,
-      reason: "invalid",
+      reason: "revoked",
+    });
+    expect(
+      registry.resolve(
+        registered.authorityRef,
+        ROOT,
+        "autonomous-delivery",
+        "2026-07-09T14:00:00.000Z",
+      ),
+    ).toEqual({ ok: false, reason: "revoked" });
+    expect(registry.register(envelope(), "autonomous-delivery", NOW)).toEqual({
+      ok: false,
+      reason: "revoked",
+    });
+    expect(registry.resolve(registered.authorityRef, ROOT, "autonomous-delivery", NOW)).toEqual({
+      ok: false,
+      reason: "revoked",
     });
 
     const expired = registry.register(
@@ -153,6 +169,30 @@ describe("EditorAgentAuthorityRegistry", () => {
     expect(registry.resolve(oldest, ROOT, "autonomous-delivery", NOW)).toMatchObject({
       ok: true,
     });
+  });
+
+  it("evicts expired revoked records before applying the capacity limit", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const revoked = registry.register(
+      envelope({ runId: "run-63", expiresAt: "2026-07-09T12:00:01.000Z" }),
+      "autonomous-delivery",
+      NOW,
+    );
+    if (!revoked.ok) throw new Error("expected registration");
+    registry.revoke(revoked.authorityRef);
+    for (let index = 0; index < EDITOR_AGENT_AUTHORITY_MAX_RECORDS - 1; index += 1) {
+      expect(
+        registry.register(envelope({ runId: `run-${String(index)}` }), "autonomous-delivery", NOW),
+      ).toMatchObject({ ok: true });
+    }
+
+    expect(
+      registry.register(
+        envelope({ runId: "run-64" }),
+        "autonomous-delivery",
+        "2026-07-09T12:00:02.000Z",
+      ),
+    ).toMatchObject({ ok: true });
   });
 
   it("atomically enforces cumulative tool-call and patch-byte budgets", () => {

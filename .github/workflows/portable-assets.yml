@@ -95,6 +95,25 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify preinstalled 7z capability for staging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Official Windows runners provide 7-Zip. Staging must use that preinstalled tool and
+          # must never install, download, or globally mutate archive tooling.
+          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
+          if ($null -eq $command) {
+            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
+          }
+
+          $versionOutput = @(& $command.Path i 2>&1)
+          $versionExitCode = $LASTEXITCODE
+          $versionEvidence = @($versionOutput | Select-Object -First 6)
+          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
+            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
+          }
+
+          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
@@ -108,6 +127,8 @@ jobs:
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -116,6 +137,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Upload staged target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -146,6 +169,25 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify preinstalled 7z capability for staging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Official Windows runners provide 7-Zip. Staging must use that preinstalled tool and
+          # must never install, download, or globally mutate archive tooling.
+          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
+          if ($null -eq $command) {
+            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
+          }
+
+          $versionOutput = @(& $command.Path i 2>&1)
+          $versionExitCode = $LASTEXITCODE
+          $versionEvidence = @($versionOutput | Select-Object -First 6)
+          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
+            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
+          }
+
+          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
         shell: cmd
         run: |
@@ -156,6 +198,8 @@ jobs:
           echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
@@ -164,6 +208,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target windows-x64
       - name: Smoke test the unsigned staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/windows-x64 windows-x64 --load
       - name: Validate protected Azure configuration
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -288,12 +334,16 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
       - name: Validate protected Apple configuration
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
@@ -379,6 +429,10 @@ jobs:
           GITHUB_TOKEN: ""
           NODE_AUTH_TOKEN: ""
         run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
+      - name: Functionally requalify the signed secure-read helper
+        run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
+      - name: Run signed secure-read executable consistency harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
 
   qualify-macos-production:
     name: Fresh native qualification (${{ matrix.platform_target }})
@@ -420,6 +474,10 @@ jobs:
           APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
+      - name: Functionally requalify the signed secure-read helper
+        run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
+      - name: Run signed secure-read executable consistency harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read
       - name: Execute bundled runtimes in isolated disposable copy
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ""

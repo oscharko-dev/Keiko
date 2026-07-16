@@ -97,7 +97,47 @@ const PRIVATE_PATH_PATTERN =
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
+const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
+const NATIVE_HELPER_KEYS = Object.freeze([
+  "name",
+  "kind",
+  "platformTarget",
+  "architecture",
+  "executablePath",
+  "protocol",
+  "source",
+  "unsignedSha256",
+  "shippedSha256",
+  "sizeBytes",
+  "sbomBomRef",
+  "signing",
+]);
+const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
+const GITHUB_REVIEW_REFERENCE_PATTERN =
+  /^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u;
+const SIDECAR_RUNTIME_KEYS = Object.freeze([
+  "approvalSchemaVersion",
+  "name",
+  "kind",
+  "upstream",
+  "adapterCompatibility",
+  "protocolSchema",
+  "releaseApproval",
+  "license",
+  "archive",
+  "executableTreeAlgorithm",
+  "executableTreeSha256",
+  "executableSha256",
+  "platformTarget",
+  "payloadRootPath",
+  "executablePath",
+  "payloadSha256",
+  "sizeBytes",
+  "licenseEvidence",
+  "sbomEvidence",
+  "signing",
+]);
 const FORBIDDEN_KEY_PARTS = [
   "absolutePath",
   "credentialValue",
@@ -225,6 +265,18 @@ function stringArrayAt(record, key, path, failures) {
     push(failures, `${path}.${key}`, "must be a string array");
     return [];
   }
+  return value;
+}
+
+function exactKeysAt(record, allowedKeys, path, failures) {
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.includes(key)) push(failures, `${path}.${key}`, "is not allowed");
+  }
+}
+
+function literalAt(record, key, expected, path, failures) {
+  const value = at(record, key, path, failures);
+  if (value !== expected) push(failures, `${path}.${key}`, `must be ${String(expected)}`);
   return value;
 }
 
@@ -384,24 +436,212 @@ function validateSidecarRuntimes(manifest, failures, options) {
   );
 }
 
+// One closed schema validator intentionally enumerates every field and lifecycle invariant,
+// split into per-section helpers that run in declaration order.
+function validateNativeHelpers(manifest, failures, options) {
+  const helpers = manifest.nativeHelpers;
+  // Schema v1 predates #2333. Absence remains parseable so an installed legacy artifact can be
+  // recognized and the secure-read capability can fail closed instead of breaking manifest reads.
+  if (helpers === undefined) {
+    if (options.requireNativeHelpers === true) {
+      push(
+        failures,
+        "nativeHelpers",
+        "must contain exactly one helper for newly produced artifacts",
+      );
+    }
+    return;
+  }
+  if (!Array.isArray(helpers) || helpers.length !== 1) {
+    push(failures, "nativeHelpers", "must contain exactly one helper when present");
+    return;
+  }
+  const helper = helpers[0];
+  const path = "nativeHelpers[0]";
+  if (!isRecord(helper)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  const { target, targetName } = validateNativeHelperIdentity(manifest, helper, path, failures);
+  validateNativeHelperProtocol(helper, path, failures);
+  validateNativeHelperSource(helper, path, failures, options);
+  validateNativeHelperBinding(helper, targetName, path, failures, options);
+  validateNativeHelperSigning(helper, target, path, failures, options);
+}
+
+function validateNativeHelperIdentity(manifest, helper, path, failures) {
+  exactKeysAt(helper, NATIVE_HELPER_KEYS, path, failures);
+  literalAt(helper, "name", "keiko-secure-workspace-read", path, failures);
+  literalAt(helper, "kind", "secure-workspace-text-read", path, failures);
+  const targetName = stringAt(helper, "platformTarget", path, failures);
+  const target = portableTargetByName(targetName);
+  if (targetName !== manifest.artifact?.platformTarget) {
+    push(failures, `${path}.platformTarget`, "must match artifact");
+  }
+  if (
+    target !== undefined &&
+    stringAt(helper, "architecture", path, failures) !== target.nodeArchitecture
+  ) {
+    push(failures, `${path}.architecture`, `must be ${target.nodeArchitecture}`);
+  }
+  const expectedExecutable = `runtime/native/keiko-secure-workspace-read${target?.nodePlatform === "win32" ? ".exe" : ""}`;
+  if (stringAt(helper, "executablePath", path, failures) !== expectedExecutable) {
+    push(failures, `${path}.executablePath`, `must be ${expectedExecutable}`);
+  }
+  return { target, targetName };
+}
+
+function validateNativeHelperProtocol(helper, path, failures) {
+  const protocol = recordAt(helper, "protocol", path, failures);
+  exactKeysAt(
+    protocol,
+    ["schemaVersion", "requestMagic", "responseMagic"],
+    `${path}.protocol`,
+    failures,
+  );
+  literalAt(protocol, "schemaVersion", 1, `${path}.protocol`, failures);
+  literalAt(protocol, "requestMagic", "KSR1", `${path}.protocol`, failures);
+  literalAt(protocol, "responseMagic", "KSS1", `${path}.protocol`, failures);
+}
+
+function validateNativeHelperSource(helper, path, failures, options) {
+  const source = recordAt(helper, "source", path, failures);
+  exactKeysAt(source, ["commitSha", "path", "treeSha256"], `${path}.source`, failures);
+  const commitSha = stringAt(source, "commitSha", `${path}.source`, failures);
+  const acceptedCommitPattern = options.allowPlaceholders ? COMMIT_PATTERN : STRICT_COMMIT_PATTERN;
+  if (!acceptedCommitPattern.test(commitSha))
+    push(failures, `${path}.source.commitSha`, "must be a commit SHA");
+  literalAt(source, "path", "native/secure-workspace-read", `${path}.source`, failures);
+  digestAt(source, "treeSha256", `${path}.source`, failures, options);
+}
+
+function validateNativeHelperBinding(helper, targetName, path, failures, options) {
+  digestAt(helper, "unsignedSha256", path, failures, options);
+  digestAt(helper, "shippedSha256", path, failures, options);
+  positiveNumberAt(helper, "sizeBytes", path, failures);
+  const bomRef = stringAt(helper, "sbomBomRef", path, failures);
+  if (
+    !bomRef.startsWith("pkg:generic/keiko-secure-workspace-read@") ||
+    !bomRef.endsWith(`?platform=${targetName}`)
+  ) {
+    push(failures, `${path}.sbomBomRef`, "must bind the helper and platform target");
+  }
+}
+
+function validateNativeHelperSigning(helper, target, path, failures, options) {
+  const signing = recordAt(helper, "signing", path, failures);
+  exactKeysAt(
+    signing,
+    [
+      "signatureKind",
+      "verificationStatus",
+      "signatureVerified",
+      "notarizationRequired",
+      "notarizationVerified",
+    ],
+    `${path}.signing`,
+    failures,
+  );
+  if (
+    target !== undefined &&
+    stringAt(signing, "signatureKind", `${path}.signing`, failures) !== target.signatureKind
+  ) {
+    push(failures, `${path}.signing.signatureKind`, `must be ${target.signatureKind}`);
+  }
+  const status = stringAt(signing, "verificationStatus", `${path}.signing`, failures);
+  if (!PORTABLE_VERIFICATION_STATUSES.includes(status))
+    push(failures, `${path}.signing.verificationStatus`, "is unsupported");
+  const state = {
+    status,
+    signatureVerified: booleanAt(signing, "signatureVerified", `${path}.signing`, failures),
+    notarizationRequired: booleanAt(signing, "notarizationRequired", `${path}.signing`, failures),
+    notarizationVerified: booleanAt(signing, "notarizationVerified", `${path}.signing`, failures),
+  };
+  validateNativeHelperSigningLifecycle(target, path, failures, options, state);
+}
+
+function validateNativeHelperSigningLifecycle(target, path, failures, options, state) {
+  if (target !== undefined && state.notarizationRequired !== (target.nodePlatform === "darwin"))
+    push(failures, `${path}.signing.notarizationRequired`, "must match target");
+  if (target?.nodePlatform !== "darwin" && state.notarizationVerified)
+    push(failures, `${path}.signing.notarizationVerified`, "must be false for non-macOS targets");
+  if (options.context === "staging" && violatesStagingSigning(state)) {
+    push(failures, `${path}.signing`, "must remain explicitly unverified during staging");
+  }
+  if (requiresProductionVerification(options) && violatesProductionSigning(target, state)) {
+    push(failures, `${path}.signing`, "must be verified for production");
+  }
+}
+
+function violatesStagingSigning(state) {
+  return (
+    state.status !== "unverified-staging" || state.signatureVerified || state.notarizationVerified
+  );
+}
+
+function violatesProductionSigning(target, state) {
+  return (
+    state.status !== "verified-production" ||
+    !state.signatureVerified ||
+    (target?.nodePlatform === "darwin" && !state.notarizationVerified)
+  );
+}
+
 function validateSidecarRuntime(manifest, runtime, index, names, failures, options) {
   const path = `sidecarRuntimes[${String(index)}]`;
   if (!isRecord(runtime)) {
     push(failures, path, "must be an object");
     return;
   }
+  const name = validateSidecarProvenance(runtime, path, names, failures, options);
+  const target = validateSidecarPayload(manifest, runtime, name, path, failures, options);
+  validateSidecarSigning(runtime, target, path, failures, options);
+}
+
+function validateSidecarProvenance(runtime, path, names, failures, options) {
+  exactKeysAt(runtime, SIDECAR_RUNTIME_KEYS, path, failures);
+  literalAt(runtime, "approvalSchemaVersion", 2, path, failures);
   const name = validateSidecarName(runtime, path, names, failures);
-  stringAt(runtime, "kind", path, failures);
+  if (stringAt(runtime, "kind", path, failures) !== "coding-runtime") {
+    push(failures, `${path}.kind`, "must be coding-runtime");
+  }
   validateSidecarUpstream(runtime, path, failures);
   validateSidecarAdapter(runtime, path, failures);
+  validateSidecarProtocolSchema(runtime, path, failures, options);
+  validateSidecarReleaseApproval(runtime, path, failures);
+  validateSidecarLicense(runtime, path, failures, options);
+  validateSidecarArchive(runtime, path, failures, options);
+  validateSidecarExecutableProvenance(runtime, path, failures, options);
+  return name;
+}
+
+function validateSidecarExecutableProvenance(runtime, path, failures, options) {
+  if (stringAt(runtime, "executableTreeAlgorithm", path, failures) !== EXECUTABLE_TREE_ALGORITHM) {
+    push(failures, `${path}.executableTreeAlgorithm`, `must be ${EXECUTABLE_TREE_ALGORITHM}`);
+  }
+  digestAt(runtime, "executableTreeSha256", path, failures, options);
+  digestAt(runtime, "executableSha256", path, failures, options);
+}
+
+function validateSidecarPayload(manifest, runtime, name, path, failures, options) {
   const target = validateSidecarTarget(manifest, runtime, path, failures);
   const payloadRootPath = validateSidecarPayloadRoot(runtime, name, path, failures);
   validateSidecarPath(runtime, "executablePath", payloadRootPath, path, failures);
   digestAt(runtime, "payloadSha256", path, failures, options);
   positiveNumberAt(runtime, "sizeBytes", path, failures);
-  validateSidecarEvidence(runtime, "licenseEvidence", payloadRootPath, path, failures, options);
+  const licenseEvidence = validateSidecarEvidence(
+    runtime,
+    "licenseEvidence",
+    payloadRootPath,
+    path,
+    failures,
+    options,
+  );
+  if (licenseEvidence.sha256 !== runtime.license?.sha256) {
+    push(failures, `${path}.licenseEvidence.sha256`, "must match approved license digest");
+  }
   validateSidecarEvidence(runtime, "sbomEvidence", payloadRootPath, path, failures, options);
-  validateSidecarSigning(runtime, target, path, failures, options);
+  return target;
 }
 
 function validateSidecarName(runtime, path, names, failures) {
@@ -416,15 +656,121 @@ function validateSidecarName(runtime, path, names, failures) {
 
 function validateSidecarUpstream(runtime, path, failures) {
   const upstream = recordAt(runtime, "upstream", path, failures);
+  exactKeysAt(
+    upstream,
+    ["owner", "repository", "name", "version", "tag", "commit"],
+    `${path}.upstream`,
+    failures,
+  );
+  stringAt(upstream, "owner", `${path}.upstream`, failures);
+  stringAt(upstream, "repository", `${path}.upstream`, failures);
   stringAt(upstream, "name", `${path}.upstream`, failures);
   stringAt(upstream, "version", `${path}.upstream`, failures);
+  stringAt(upstream, "tag", `${path}.upstream`, failures);
+  const commit = stringAt(upstream, "commit", `${path}.upstream`, failures);
+  if (!STRICT_COMMIT_PATTERN.test(commit)) {
+    push(failures, `${path}.upstream.commit`, "must be a 40-hex commit SHA");
+  }
 }
 
 function validateSidecarAdapter(runtime, path, failures) {
   const adapter = recordAt(runtime, "adapterCompatibility", path, failures);
-  stringAt(adapter, "adapterName", `${path}.adapterCompatibility`, failures);
-  stringAt(adapter, "adapterVersion", `${path}.adapterCompatibility`, failures);
-  stringAt(adapter, "protocolVersion", `${path}.adapterCompatibility`, failures);
+  exactKeysAt(
+    adapter,
+    ["adapterName", "adapterVersion", "transport"],
+    `${path}.adapterCompatibility`,
+    failures,
+  );
+  literalAt(
+    adapter,
+    "adapterName",
+    "keiko-coding-sidecar",
+    `${path}.adapterCompatibility`,
+    failures,
+  );
+  literalAt(adapter, "adapterVersion", "1", `${path}.adapterCompatibility`, failures);
+  literalAt(adapter, "transport", "http-sse", `${path}.adapterCompatibility`, failures);
+}
+
+function validateSidecarProtocolSchema(runtime, path, failures, options) {
+  const schemaPath = `${path}.protocolSchema`;
+  const schema = recordAt(runtime, "protocolSchema", path, failures);
+  exactKeysAt(
+    schema,
+    ["path", "url", "sha256", "hashAlgorithm", "hashEncoding", "digestInput", "transport"],
+    schemaPath,
+    failures,
+  );
+  const upstream = runtime.upstream ?? {};
+  const rawPath = relativePathAt(schema, "path", schemaPath, failures);
+  const expectedUrl = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/${rawPath}`;
+  if (stringAt(schema, "url", schemaPath, failures) !== expectedUrl) {
+    push(failures, `${schemaPath}.url`, "must bind the upstream commit and raw schema path");
+  }
+  digestAt(schema, "sha256", schemaPath, failures, options);
+  literalAt(schema, "hashAlgorithm", "sha256", schemaPath, failures);
+  literalAt(schema, "hashEncoding", "lowercase-hex", schemaPath, failures);
+  literalAt(schema, "digestInput", "upstream-raw-bytes", schemaPath, failures);
+  literalAt(schema, "transport", "http-sse", schemaPath, failures);
+  if (schema.transport !== runtime.adapterCompatibility?.transport) {
+    push(failures, `${schemaPath}.transport`, "must match adapterCompatibility.transport");
+  }
+}
+
+function validateSidecarReleaseApproval(runtime, path, failures) {
+  const approvalPath = `${path}.releaseApproval`;
+  const approval = recordAt(runtime, "releaseApproval", path, failures);
+  exactKeysAt(approval, ["redistribution", "subscriptionAuth"], approvalPath, failures);
+  validateSidecarApprovalGate(approval, "redistribution", "approved", approvalPath, failures);
+  validateSidecarApprovalGate(
+    approval,
+    "subscriptionAuth",
+    "not-applicable",
+    approvalPath,
+    failures,
+  );
+}
+
+function validateSidecarApprovalGate(approval, key, expectedStatus, path, failures) {
+  const gatePath = `${path}.${key}`;
+  const gate = recordAt(approval, key, path, failures);
+  exactKeysAt(gate, ["status", "reviewReference"], gatePath, failures);
+  literalAt(gate, "status", expectedStatus, gatePath, failures);
+  const reference = stringAt(gate, "reviewReference", gatePath, failures);
+  if (!GITHUB_REVIEW_REFERENCE_PATTERN.test(reference)) {
+    push(failures, `${gatePath}.reviewReference`, "must reference a Keiko issue or pull request");
+  }
+}
+
+function validateSidecarLicense(runtime, path, failures, options) {
+  const licensePath = `${path}.license`;
+  const license = recordAt(runtime, "license", path, failures);
+  exactKeysAt(license, ["spdxId", "url", "sha256"], licensePath, failures);
+  stringAt(license, "spdxId", licensePath, failures);
+  const url = stringAt(license, "url", licensePath, failures);
+  const upstream = runtime.upstream ?? {};
+  const expectedPrefix = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/`;
+  if (!url.startsWith(expectedPrefix)) {
+    push(failures, `${licensePath}.url`, "must bind the upstream commit");
+  }
+  digestAt(license, "sha256", licensePath, failures, options);
+}
+
+function validateSidecarArchive(runtime, path, failures, options) {
+  const archivePath = `${path}.archive`;
+  const archive = recordAt(runtime, "archive", path, failures);
+  exactKeysAt(archive, ["platformTarget", "url", "sizeBytes", "sha256"], archivePath, failures);
+  if (stringAt(archive, "platformTarget", archivePath, failures) !== runtime.platformTarget) {
+    push(failures, `${archivePath}.platformTarget`, "must match sidecar platformTarget");
+  }
+  const url = stringAt(archive, "url", archivePath, failures);
+  const upstream = runtime.upstream ?? {};
+  const expectedPrefix = `https://github.com/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
+  if (!url.startsWith(expectedPrefix)) {
+    push(failures, `${archivePath}.url`, "must bind the upstream repository and tag");
+  }
+  positiveNumberAt(archive, "sizeBytes", archivePath, failures);
+  digestAt(archive, "sha256", archivePath, failures, options);
 }
 
 function validateSidecarTarget(manifest, runtime, path, failures) {
@@ -460,6 +806,7 @@ function validateSidecarEvidence(runtime, key, payloadRootPath, path, failures, 
     push(failures, `${path}.${key}.path`, "must stay inside payloadRootPath");
   }
   digestAt(evidence, "sha256", `${path}.${key}`, failures, options);
+  return evidence;
 }
 
 function portablePathInside(root, candidate) {
@@ -633,6 +980,7 @@ function validateVerificationCheckConsistency(
 function validateSidecarSigning(runtime, target, path, failures, options) {
   const signing = recordAt(runtime, "signing", path, failures);
   const signingPath = `${path}.signing`;
+  validateSidecarSigningKeys(signing, signingPath, failures);
   const policy = stringAt(signing, "verificationPolicy", signingPath, failures);
   const status = stringAt(signing, "verificationStatus", signingPath, failures);
   const reasonCodes = stringArrayAt(signing, "verificationReasonCodes", signingPath, failures);
@@ -649,6 +997,7 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
+  validateShippedExecutableEvidence(signing, policy, signingPath, failures, options);
   validateLifecycleVerificationContext(policy, status, signingPath, options, failures);
   validateVerificationCheckConsistency(
     target,
@@ -667,6 +1016,34 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     options,
     path,
   );
+}
+
+function validateSidecarSigningKeys(signing, signingPath, failures) {
+  exactKeysAt(
+    signing,
+    [
+      "verificationPolicy",
+      "verificationStatus",
+      "verificationReasonCodes",
+      "signatureKind",
+      "signatureVerified",
+      "notarizationRequired",
+      "notarizationVerified",
+      "verificationChecks",
+      "shippedExecutableSha256",
+      "shippedExecutableTreeAlgorithm",
+      "shippedExecutableTreeSha256",
+    ],
+    signingPath,
+    failures,
+  );
+}
+
+function validateShippedExecutableEvidence(signing, policy, path, failures, options) {
+  if (policy !== "production") return;
+  digestAt(signing, "shippedExecutableSha256", path, failures, options);
+  literalAt(signing, "shippedExecutableTreeAlgorithm", EXECUTABLE_TREE_ALGORITHM, path, failures);
+  digestAt(signing, "shippedExecutableTreeSha256", path, failures, options);
 }
 
 function validateLifecycleVerificationContext(policy, status, path, options, failures) {
@@ -899,6 +1276,7 @@ function reviewedBindingChecks(manifest) {
     ...evidenceBindingChecks(manifest),
     ...securityBindingChecks(manifest),
     ...sidecarBindingChecks(manifest),
+    ...nativeHelperBindingChecks(manifest),
   ];
 }
 
@@ -944,6 +1322,10 @@ function securityBindingChecks(manifest) {
 function sidecarBindingChecks(manifest) {
   const sidecars = Array.isArray(manifest.sidecarRuntimes) ? manifest.sidecarRuntimes : [];
   return sidecars.length > 0 ? [["sidecarRuntimes", sidecars]] : [];
+}
+
+function nativeHelperBindingChecks(manifest) {
+  return Array.isArray(manifest.nativeHelpers) ? [["nativeHelpers", manifest.nativeHelpers]] : [];
 }
 
 function nodeRuntimeIdentity(manifest, target) {
@@ -1163,6 +1545,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateProvenance(manifest, failures, normalized);
   validateRuntime(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
+  validateNativeHelpers(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
@@ -1176,11 +1559,19 @@ export function validatePortableManifest(manifest, options = {}) {
 }
 
 export function validatePortableStagingManifest(manifest, options = {}) {
-  return validatePortableManifest(manifest, { ...options, context: "staging" });
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "staging",
+    requireNativeHelpers: true,
+  });
 }
 
 export function validatePortableCandidateManifest(manifest, options = {}) {
-  return validatePortableManifest(manifest, { ...options, context: "candidate" });
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "candidate",
+    requireNativeHelpers: true,
+  });
 }
 
 export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
@@ -1188,6 +1579,7 @@ export function validatePortablePublishedManifest(manifest, apiIdentity, options
     ...options,
     apiIdentity,
     context: "published",
+    requireNativeHelpers: true,
   });
 }
 
@@ -1216,9 +1608,26 @@ export function portableVerificationSummaryForManifest(manifest) {
     notarizationVerified: security.notarizationVerified,
     platformSignatureLocallyVerified: platformSignatureVerified(manifest),
     reasonCodes: security.verificationReasonCodes ?? [],
+    nativeHelpers: nativeHelperVerificationSummaries(manifest),
     sidecarRuntimes: sidecarVerificationSummaries(manifest),
     verificationChecks: security.verificationChecks ?? {},
   };
+}
+
+function nativeHelperVerificationSummaries(manifest) {
+  if (!Array.isArray(manifest.nativeHelpers)) return [];
+  return manifest.nativeHelpers.map((helper) => ({
+    name: helper.name,
+    platformTarget: helper.platformTarget,
+    architecture: helper.architecture,
+    executablePath: helper.executablePath,
+    shippedSha256: helper.shippedSha256,
+    signingStatus: helper.signing?.verificationStatus,
+    signatureKind: helper.signing?.signatureKind,
+    signatureVerified: helper.signing?.signatureVerified,
+    notarizationRequired: helper.signing?.notarizationRequired,
+    notarizationVerified: helper.signing?.notarizationVerified,
+  }));
 }
 
 function sidecarVerificationSummaries(manifest) {

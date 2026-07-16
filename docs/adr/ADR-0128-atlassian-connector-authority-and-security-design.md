@@ -4,6 +4,11 @@
 
 Accepted (Issue #2239, Epic #2238, 2026-07-11).
 
+> **Narrowed by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
+> The D4 **Approve for me** column (now **Supervised workspace**) is recomputed under the ADR-0138
+> matrix: every connector action is `review-required` in `supervised-coding`. Scope gating,
+> envelope admission, risk tiers, and all other decisions remain unchanged.
+
 ADR-0128 was allocated after refreshing `origin/dev` and checking all open pull requests on
 2026-07-11. The product-wide authority record it builds on was drafted as ADR-0127 and renumbered to
 [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md) during this epic's integration,

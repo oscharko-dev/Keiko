@@ -10,6 +10,11 @@ Accepted (Issue #1986, 2026-07-07).
 > pre-approved. The three machine values remain unchanged; tri-state resource/risk policy replaces
 > the stale read-mostly and blanket-write assumptions.
 
+> **Amended by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
+> `supervised-coding` is displayed as **Supervised workspace**, the mode/resource/risk policy is the
+> total monotonic matrix in ADR-0138 D2, and "sidecar" is retired in favor of the canonical
+> runtime artifact/process/adapter/host vocabulary. The three machine values remain unchanged.
+
 ## Context
 
 Epic #1982 introduces the governed Coding Workbench. Later child issues will add the sidecar

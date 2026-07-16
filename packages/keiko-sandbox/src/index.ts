@@ -22,6 +22,25 @@ export {
   type DebugCapsuleImmutableMount,
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
+export {
+  CLOSED_RUNTIME_LAUNCH_PROFILE,
+  PRODUCTION_RUNTIME_QUALIFICATIONS,
+  qualificationFromReceipt,
+  qualifyLongLivedRuntime,
+} from "./runtime.js";
+export type {
+  ClosedRuntimeLaunchProfile,
+  LongLivedRuntimeArchitecture,
+  LongLivedRuntimeBackend,
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+  LongLivedRuntimeQualificationResult,
+  RuntimeQualificationReceipt,
+  RuntimeQualificationReceiptBinding,
+  RuntimeQualificationReceiptResult,
+  RuntimeQualificationSidecarDigest,
+  RuntimeQualificationTarget,
+} from "./runtime.js";
 export type {
   BackendAvailability,
   IsolatedRunDecision,

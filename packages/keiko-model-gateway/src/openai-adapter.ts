@@ -85,6 +85,7 @@ interface ChatRequestBody {
   readonly temperature?: number;
   readonly top_p?: number;
   readonly seed?: number;
+  readonly max_tokens?: number;
   readonly stream?: boolean;
   readonly stream_options?: { readonly include_usage: boolean };
 }
@@ -177,6 +178,7 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
+    ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
   };
 }
 

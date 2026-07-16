@@ -1,84 +1,105 @@
-import type { ReactNode } from "react";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { type ReactNode, type RefObject } from "react";
+import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
-import type { CodingWorkbenchRequestState } from "./CodingWorkbenchWindow";
-import type {
-  CodingWorkbenchModeOption,
-  CodingWorkbenchProjection,
-} from "./codingWorkbenchProjection";
 import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
+import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
+import type {
+  CodingWorkbenchResourceStatus,
+  CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
+import {
+  activeRunState,
   cx,
-  diffText,
-  eventDetail,
-  eventTitle,
-  isActiveRunState,
   modeDescription,
   modeLabel,
-  permissionLabel,
-  progressText,
-  requestStatusLabel,
+  resourceStatusLabel,
+  resourceStatusSymbol,
+  resourceTone,
   runStateLabel,
-  runtimeLabel,
-  verificationText,
 } from "./codingWorkbenchLabels";
+export { PanelTitle } from "./CodingWorkbenchPanelTitle";
+export { Timeline } from "./CodingWorkbenchTimeline";
+import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import styles from "./CodingWorkbenchWindow.module.css";
 
+const MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>> = {
+  "governed-assist": 0,
+  "supervised-coding": 1,
+  "autonomous-delivery": 2,
+};
+
 export function WorkbenchHeader({
-  projection,
+  state,
+  focusRef,
 }: {
-  readonly projection: CodingWorkbenchProjection;
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly focusRef: RefObject<HTMLHeadingElement | null>;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useCodingWorkbenchTranslate();
+  const sharedT = useTranslate();
+  const snapshotState = state.run.value?.state ?? "idle";
   return (
     <header className={styles.header}>
       <div>
-        <p className={styles.eyebrow}>{t("rail.coding")}</p>
-        <h2 className={styles.title}>{projection.title}</h2>
-        <p className={styles.summary}>{projection.currentStep}</p>
+        <p className={styles.eyebrow}>{t("codingWorkbench.header.eyebrow")}</p>
+        <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
+          {sharedT("rail.coding")}
+        </h2>
+        <p className={styles.summary}>{t("codingWorkbench.header.summary")}</p>
       </div>
-      <span className={styles.statePill}>{runStateLabel(projection.runState)}</span>
+      <span className={styles.statePill} data-state={snapshotState}>
+        <span aria-hidden="true">{activeRunState(snapshotState) ? "●" : "○"}</span>
+        {runStateLabel(snapshotState, t)}
+      </span>
     </header>
   );
 }
 
 export function ModeAuthority({
-  options,
-  selectedMode,
-  locked,
-  pending,
+  state,
   onModeChange,
+  locked,
 }: {
-  readonly options: readonly CodingWorkbenchModeOption[];
-  readonly selectedMode: CodingWorkbenchMode;
-  readonly locked: boolean;
-  readonly pending: boolean;
+  readonly state: CodingWorkbenchRuntimeState;
   readonly onModeChange: (mode: CodingWorkbenchMode) => void;
+  readonly locked: boolean;
 }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const ceiling = state.runtime.value?.deploymentCeiling;
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-mode-title">
-      <PanelTitle eyebrow="Mode authority" id="coding-workbench-mode-title">
-        Select governed autonomy
+      <PanelTitle eyebrow={t("codingWorkbench.mode.eyebrow")} id="coding-workbench-mode-title">
+        {t("codingWorkbench.mode.title")}
       </PanelTitle>
       <div
         className={styles.modeGrid}
         role="radiogroup"
-        aria-label="Coding autonomy mode"
-        aria-busy={pending}
-        aria-describedby={pending ? "coding-workbench-mode-status" : undefined}
+        aria-label={t("codingWorkbench.mode.group")}
       >
-        {options.map((option) => (
-          <ModeOption
-            key={option.mode}
-            option={option}
-            selected={selectedMode === option.mode}
-            locked={locked}
-            onModeChange={onModeChange}
-          />
-        ))}
+        {CODING_WORKBENCH_MODES.map((mode) => {
+          const aboveCeiling = ceiling !== undefined && MODE_ORDER[mode] > MODE_ORDER[ceiling];
+          return (
+            <ModeOption
+              key={mode}
+              mode={mode}
+              selected={state.requestedMode === mode}
+              disabled={locked}
+              capped={aboveCeiling}
+              onModeChange={onModeChange}
+              t={t}
+            />
+          );
+        })}
       </div>
-      {pending ? (
-        <p className={styles.requestStatus} id="coding-workbench-mode-status" role="status">
-          Mode change pending server confirmation.
+      {state.runtime.value ? (
+        <p className={styles.boundaryNote}>
+          {t("codingWorkbench.mode.boundary", {
+            effectiveMode: modeLabel(state.runtime.value.effectiveMode, t),
+            deploymentCeiling: modeLabel(state.runtime.value.deploymentCeiling, t),
+          })}
         </p>
       ) : null}
     </section>
@@ -86,289 +107,276 @@ export function ModeAuthority({
 }
 
 function ModeOption({
-  option,
+  mode,
   selected,
-  locked,
+  disabled,
+  capped,
   onModeChange,
+  t,
 }: {
-  readonly option: CodingWorkbenchModeOption;
+  readonly mode: CodingWorkbenchMode;
   readonly selected: boolean;
-  readonly locked: boolean;
+  readonly disabled: boolean;
+  readonly capped: boolean;
   readonly onModeChange: (mode: CodingWorkbenchMode) => void;
+  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const disabled = locked || !option.enabled;
-  const id = `coding-workbench-mode-${option.mode}`;
+  const id = `coding-workbench-mode-${mode}`;
   return (
-    <div
-      className={styles.modeOption}
-      data-selected={selected ? "true" : "false"}
-      data-enabled={disabled ? "false" : "true"}
-    >
+    <div className={styles.modeOption} data-selected={selected} data-capped={capped}>
       <input
         id={id}
         type="radio"
         name="coding-workbench-mode"
         checked={selected}
         disabled={disabled}
-        onChange={() => onModeChange(option.mode)}
+        onChange={() => onModeChange(mode)}
       />
       <label className={styles.modeText} htmlFor={id}>
-        <span className={styles.modeName}>{modeLabel(option.mode)}</span>
-        <span className={styles.modeDetail}>{option.reason ?? modeDescription(option.mode)}</span>
+        <span className={styles.modeName}>{modeLabel(mode, t)}</span>
+        <span className={styles.modeDetail}>{modeDescription(mode, t)}</span>
+        {capped ? (
+          <span className={styles.cappedText}>{t("codingWorkbench.mode.capped")}</span>
+        ) : null}
       </label>
     </div>
   );
 }
 
-export function AuthoritySummary({
-  projection,
+export function TaskStartSection({
+  taskIntent,
+  onTaskIntentChange,
+  onStart,
+  canStart,
+  busy,
 }: {
-  readonly projection: CodingWorkbenchProjection;
+  readonly taskIntent: string;
+  readonly onTaskIntentChange: (value: string) => void;
+  readonly onStart: () => void;
+  readonly canStart: boolean;
+  readonly busy: boolean;
 }): ReactNode {
-  const authority = projection.authority;
+  const t = useCodingWorkbenchTranslate();
+  const startDisabled = busy || !canStart || taskIntent.trim().length === 0;
   return (
-    <section className={styles.card} aria-labelledby="coding-workbench-authority-title">
-      <PanelTitle eyebrow="Authority Envelope" id="coding-workbench-authority-title">
-        Current boundaries
+    <section className={styles.card} aria-labelledby="coding-workbench-task-title">
+      <PanelTitle eyebrow={t("codingWorkbench.task.eyebrow")} id="coding-workbench-task-title">
+        {t("codingWorkbench.task.title")}
       </PanelTitle>
-      <dl className={styles.authorityList}>
-        <AuthorityItem label="Task" value={projection.taskRef} />
-        <AuthorityItem label="Mode" value={modeLabel(authority.effectiveMode)} />
-        <AuthorityItem label="Runtime" value={runtimeLabel(authority.runtimeSource)} />
-        <AuthorityItem
-          label="Branch"
-          value={`${authority.branch.baseRef} -> ${authority.branch.headRef}`}
-        />
-        <AuthorityItem label="Network" value={authority.networkPolicy.mode} />
-        <AuthorityItem label="Approval" value={authority.approvalProofDigest} />
-      </dl>
-    </section>
-  );
-}
-
-export function RunSummary({
-  projection,
-}: {
-  readonly projection: CodingWorkbenchProjection;
-}): ReactNode {
-  return (
-    <section className={styles.card} aria-labelledby="coding-workbench-run-title">
-      <PanelTitle eyebrow="Run timeline" id="coding-workbench-run-title">
-        Current run
-      </PanelTitle>
-      <div className={styles.metricGrid}>
-        <Metric label="Task" value={projection.taskRef} detail={projection.progress.label} />
-        <Metric
-          label="Todo progress"
-          value={progressText(projection.progress)}
-          detail="Content-free counts"
-        />
-        <Metric label="Diff summary" value={projection.diff.label} detail={diffText(projection)} />
-        <Metric
-          label="Verification"
-          value={projection.verification.label}
-          detail={verificationText(projection)}
-        />
-        <Metric
-          label="Delivery"
-          value={projection.deliveryStatus}
-          detail="Human-gated closeout remains required"
-        />
-      </div>
-    </section>
-  );
-}
-
-export function ActionControls({
-  projection,
-  requestState,
-  onStop,
-  onTakeOver,
-}: {
-  readonly projection: CodingWorkbenchProjection;
-  readonly requestState: CodingWorkbenchRequestState;
-  readonly onStop: () => void;
-  readonly onTakeOver: () => void;
-}): ReactNode {
-  const active = isActiveRunState(projection.runState);
-  return (
-    <section className={styles.card} aria-labelledby="coding-workbench-controls-title">
-      <PanelTitle eyebrow="Operator controls" id="coding-workbench-controls-title">
-        Stop or take over
-      </PanelTitle>
-      <div className={styles.controls}>
-        <button
-          className={cx(styles.button, styles.buttonDanger)}
-          disabled={!active}
-          onClick={onStop}
-          type="button"
-        >
-          Stop sidecar
-        </button>
-        <button className={styles.button} disabled={!active} onClick={onTakeOver} type="button">
-          Take over manually
-        </button>
-      </div>
-      <p className={styles.requestStatus} role="status">
-        {requestStatusLabel(requestState)}
+      <label className={styles.fieldLabel} htmlFor="coding-workbench-task-intent">
+        {t("codingWorkbench.task.instructions")}
+      </label>
+      <textarea
+        id="coding-workbench-task-intent"
+        className={styles.taskInput}
+        value={taskIntent}
+        maxLength={65_536}
+        disabled={busy}
+        aria-describedby="coding-workbench-task-help"
+        onChange={(event) => onTaskIntentChange(event.target.value)}
+      />
+      <p id="coding-workbench-task-help" className={styles.helpText}>
+        {t("codingWorkbench.task.help")}
       </p>
+      <button
+        className={cx(styles.button, styles.buttonPrimary)}
+        type="button"
+        disabled={startDisabled}
+        onClick={onStart}
+      >
+        {busy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
+      </button>
     </section>
   );
 }
 
-export function PermissionPrompt({
-  projection,
-  onRequestState,
+export function ReadinessGrid({
+  state,
+  actions,
+  refreshWorkspace,
 }: {
-  readonly projection: CodingWorkbenchProjection;
-  readonly onRequestState: (state: CodingWorkbenchRequestState) => void;
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly actions: Pick<
+    CodingWorkbenchRuntimeActions,
+    "refreshRuntime" | "refreshRun" | "refreshSource"
+  >;
+  readonly refreshWorkspace: () => Promise<void>;
 }): ReactNode {
-  const request = projection.permissionRequest;
-  if (request === undefined) return null;
+  const t = useCodingWorkbenchTranslate();
   return (
-    <section
-      className={cx(styles.card, styles.permission)}
-      aria-labelledby="coding-workbench-permission-title"
-    >
-      <PanelTitle eyebrow="Permission required" id="coding-workbench-permission-title">
-        Just-in-time approval
+    <section className={styles.card} aria-labelledby="coding-workbench-readiness-title">
+      <PanelTitle
+        eyebrow={t("codingWorkbench.readiness.eyebrow")}
+        id="coding-workbench-readiness-title"
+      >
+        {t("codingWorkbench.readiness.title")}
       </PanelTitle>
-      <p className={styles.summary}>
-        {permissionLabel(request.kind)} requested for {request.reasonCode}. Raw commands, prompts,
-        diffs, and customer content stay hidden.
-      </p>
-      <dl className={styles.promptGrid}>
-        <PromptItem label="Action kind" value={request.actionKind ?? request.kind} />
-        <PromptItem label="Scope" value={request.scopeLabel ?? "redacted-scope"} />
-        <PromptItem label="Risk" value={request.risk ?? "medium"} />
-        <PromptItem label="Policy reason" value={request.policyReason ?? request.reasonCode} />
-      </dl>
-      <div className={styles.controls}>
-        <button
-          className={cx(styles.button, styles.buttonPrimary)}
-          type="button"
-          onClick={() => onRequestState("approved")}
-        >
-          Approve once
-        </button>
-        <button className={styles.button} type="button" onClick={() => onRequestState("denied")}>
-          Deny
-        </button>
-      </div>
+      <ReadinessResourceCards
+        state={state}
+        actions={actions}
+        refreshWorkspace={refreshWorkspace}
+        t={t}
+      />
     </section>
   );
 }
 
-function PromptItem({
-  label,
-  value,
-}: {
-  readonly label: string;
-  readonly value: string;
-}): ReactNode {
+interface ReadinessResourceCardsProps {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly actions: Pick<
+    CodingWorkbenchRuntimeActions,
+    "refreshRuntime" | "refreshRun" | "refreshSource"
+  >;
+  readonly refreshWorkspace: () => Promise<void>;
+  readonly t: CodingWorkbenchTranslate;
+}
+
+function ReadinessResourceCards({
+  state,
+  actions,
+  refreshWorkspace,
+  t,
+}: ReadinessResourceCardsProps): ReactNode {
   return (
-    <div>
-      <dt className={styles.metaLabel}>{label}</dt>
-      <dd>{value}</dd>
+    <div className={styles.resourceGrid}>
+      <SourceResourceCard state={state} onRetry={actions.refreshSource} t={t} />
+      <WorkspaceResourceCard state={state} onRetry={refreshWorkspace} t={t} />
+      <RuntimeResourceCard state={state} onRetry={actions.refreshRuntime} t={t} />
+      <RunResourceCard state={state} onRetry={actions.refreshRun} t={t} />
+      <StreamResourceCard state={state} onRetry={actions.refreshRun} t={t} />
     </div>
   );
 }
 
-export function PolicyDenials({ denials }: { readonly denials: readonly string[] }): ReactNode {
-  if (denials.length === 0) return null;
-  return (
-    <section className={styles.card} aria-labelledby="coding-workbench-denials-title">
-      <PanelTitle eyebrow="Policy denials" id="coding-workbench-denials-title">
-        Governance holds
-      </PanelTitle>
-      <ul className={styles.denials}>
-        {denials.map((denial) => (
-          <li key={denial} className={styles.denial}>
-            <span className={styles.denialText}>{denial}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
+function unavailableResourceStatus(
+  status: CodingWorkbenchResourceStatus,
+  unavailable: boolean,
+): CodingWorkbenchResourceStatus {
+  return status === "ready" && unavailable ? "unavailable" : status;
 }
 
-export function Timeline({
-  events,
-}: {
-  readonly events: CodingWorkbenchProjection["timeline"];
-}): ReactNode {
+interface ReadinessResourceCardProps {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly onRetry: () => Promise<void>;
+  readonly t: CodingWorkbenchTranslate;
+}
+
+function SourceResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
   return (
-    <section className={styles.card} aria-labelledby="coding-workbench-timeline-title">
-      <PanelTitle eyebrow="Event stream" id="coding-workbench-timeline-title">
-        Redacted run events
-      </PanelTitle>
-      {events.length === 0 ? (
-        <p className={styles.emptyText}>No runtime events yet.</p>
-      ) : (
-        <ol className={styles.timeline} aria-label="Redacted coding run timeline">
-          {events.map((event) => (
-            <li key={event.eventId} className={styles.timelineItem}>
-              <span className={styles.timelineMarker} aria-hidden="true" />
-              <div>
-                <p className={styles.timelineTitle}>{eventTitle(event)}</p>
-                <p className={styles.timelineDetail}>{eventDetail(event)}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
+    <ResourceCard
+      label={t("codingWorkbench.readiness.modelSource.label")}
+      detail={
+        state.source.value?.available
+          ? t("codingWorkbench.readiness.modelSource.confirmed")
+          : t("codingWorkbench.readiness.modelSource.select")
+      }
+      status={unavailableResourceStatus(
+        state.source.status,
+        state.source.value?.available !== true,
       )}
-    </section>
+      onRetry={onRetry}
+    />
   );
 }
 
-export function PanelTitle({
-  eyebrow,
-  id,
-  children,
-}: {
-  readonly eyebrow: string;
-  readonly id: string;
-  readonly children: ReactNode;
-}): ReactNode {
+function WorkspaceResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
+  const workspace = state.workspace.value;
   return (
-    <div>
-      <p className={styles.label}>{eyebrow}</p>
-      <h3 id={id} className={styles.cardTitle}>
-        {children}
-      </h3>
-    </div>
+    <ResourceCard
+      label={t("codingWorkbench.readiness.workspace.label")}
+      detail={
+        workspace
+          ? `${workspace.taskId} · ${workspace.taskBranch} · ${workspace.health}`
+          : t("codingWorkbench.readiness.workspace.none")
+      }
+      status={unavailableResourceStatus(state.workspace.status, workspace?.health !== "healthy")}
+      onRetry={onRetry}
+    />
   );
 }
 
-function AuthorityItem({
-  label,
-  value,
-}: {
-  readonly label: string;
-  readonly value: string;
-}): ReactNode {
+function RuntimeResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
   return (
-    <div className={styles.authorityItem}>
-      <dt className={styles.metaLabel}>{label}</dt>
-      <dd>{value}</dd>
-    </div>
+    <ResourceCard
+      label={t("codingWorkbench.readiness.runtime.label")}
+      detail={
+        state.runtime.value?.runtimeAvailable
+          ? t("codingWorkbench.readiness.runtime.available")
+          : t("codingWorkbench.readiness.runtime.notConfirmed")
+      }
+      status={unavailableResourceStatus(
+        state.runtime.status,
+        state.runtime.value?.runtimeAvailable !== true,
+      )}
+      onRetry={onRetry}
+    />
   );
 }
 
-function Metric({
+function RunResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
+  return (
+    <ResourceCard
+      label={t("codingWorkbench.readiness.run.label")}
+      detail={
+        state.run.value
+          ? runStateLabel(state.run.value.state, t)
+          : t("codingWorkbench.readiness.run.none")
+      }
+      status={state.run.status}
+      onRetry={onRetry}
+    />
+  );
+}
+
+function StreamResourceCard({ state, onRetry, t }: ReadinessResourceCardProps): ReactNode {
+  return (
+    <ResourceCard
+      label={t("codingWorkbench.readiness.eventStream.label")}
+      detail={
+        state.run.value?.runId
+          ? t("codingWorkbench.readiness.eventStream.resumable")
+          : t("codingWorkbench.readiness.eventStream.waiting")
+      }
+      status={state.stream.status}
+      onRetry={onRetry}
+      retryLabel={t("codingWorkbench.readiness.eventStream.resnapshot")}
+    />
+  );
+}
+
+function ResourceCard({
   label,
-  value,
   detail,
+  status,
+  onRetry,
+  retryLabel,
 }: {
   readonly label: string;
-  readonly value: string;
   readonly detail: string;
+  readonly status: CodingWorkbenchResourceStatus;
+  readonly onRetry: () => Promise<void>;
+  readonly retryLabel?: string;
 }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const sharedT = useTranslate();
+  const retryable = status === "error" || status === "unavailable";
   return (
-    <article className={styles.metric}>
-      <p className={styles.metricLabel}>{label}</p>
-      <p className={styles.metricValue}>{value}</p>
-      <p className={styles.metricLabel}>{detail}</p>
+    <article className={styles.resourceCard} data-status={status}>
+      <div className={styles.resourceHeading}>
+        <span className={styles.statusSymbol} aria-hidden="true">
+          {resourceStatusSymbol(status)}
+        </span>
+        <p className={styles.resourceName}>{label}</p>
+      </div>
+      <p className={styles.resourceState} data-tone={resourceTone(status)}>
+        {resourceStatusLabel(status, t)}
+      </p>
+      <p className={styles.resourceDetail}>{detail}</p>
+      {retryable ? (
+        <button className={styles.button} type="button" onClick={() => void onRetry()}>
+          {retryLabel ?? sharedT("common.retry")}
+        </button>
+      ) : null}
     </article>
   );
 }

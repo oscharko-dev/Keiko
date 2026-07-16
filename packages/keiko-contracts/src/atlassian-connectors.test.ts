@@ -85,7 +85,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "low",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -97,7 +97,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "low",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -109,7 +109,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "low",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -133,7 +133,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "medium",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -157,7 +157,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "low",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -181,7 +181,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "medium",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },
@@ -193,7 +193,7 @@ const D4_TABLE: readonly D4Row[] = [
     risk: "low",
     dispositions: {
       "governed-assist": "review-required",
-      "supervised-coding": "allowed",
+      "supervised-coding": "review-required",
       "autonomous-delivery": "allowed",
     },
   },

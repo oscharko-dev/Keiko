@@ -4,6 +4,12 @@
 
 Accepted (Issue #2114, 2026-07-09).
 
+> **Amended by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
+> D1's mode policy matrix and the **Approve for me** label are superseded: `supervised-coding` is
+> displayed as **Supervised workspace**, `governed-assist` workspace-contained mutations are
+> approval-required at every risk, and supervised external-file/internet effects are
+> approval-required at every risk. Docking, transaction, budget, and review mechanics remain in force.
+
 ## Amends
 
 This decision supersedes in part the stale review, mutation-owner, action-set, and autonomy-mode

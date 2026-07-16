@@ -1,0 +1,192 @@
+import { createHash } from "node:crypto";
+
+export const OPENCODE_PINNED_VERSION = "1.17.17";
+
+const QUESTION_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  properties: {
+    questions: {
+      description: "Questions to ask",
+      items: {
+        properties: {
+          header: { description: "Very short label (max 30 chars)", type: "string" },
+          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
+          options: {
+            description: "Available choices",
+            items: {
+              properties: {
+                description: { description: "Explanation of choice", type: "string" },
+                label: { description: "Display text (1-5 words, concise)", type: "string" },
+              },
+              required: ["label", "description"],
+              type: "object",
+            },
+            type: "array",
+          },
+          question: { description: "Complete question", type: "string" },
+        },
+        required: ["question", "header", "options"],
+        type: "object",
+      },
+      type: "array",
+    },
+  },
+  required: ["questions"],
+  type: "object",
+} as const;
+
+const WORKSPACE_READ_SCHEMA = {
+  type: "object",
+  properties: {
+    relativePath: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+    },
+  },
+  required: ["relativePath"],
+} as const;
+
+const CHANGESET_EDIT_SCHEMA = {
+  type: "object",
+  properties: {
+    changeset: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        patch: { type: "string", maxLength: 262_144 },
+        files: { type: "array", maxItems: 256 },
+        selectedFiles: { type: "array", maxItems: 256 },
+        prepared: { type: "object" },
+      },
+    },
+  },
+  required: ["changeset"],
+} as const;
+
+const VERIFICATION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    verifierId: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+  },
+  required: ["verifierId"],
+} as const;
+
+/** OpenCode v1.17.17 removes this unsupported JSON Schema keyword before forwarding a tool. */
+const VERIFICATION_PROJECTED_SCHEMA = {
+  type: "object",
+  properties: {
+    verifierId: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+  },
+  required: ["verifierId"],
+} as const;
+
+export const OPENCODE_MODEL_VISIBLE_TOOLS = [
+  { name: "question", parameters: QUESTION_SCHEMA },
+  { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
+  { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
+] as const;
+
+export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.map(
+  ({ name }) => name,
+);
+
+export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
+  {
+    name: "keiko_workspace_read",
+    action: "read",
+    argument: "relativePath",
+    inputSchema: WORKSPACE_READ_SCHEMA.properties.relativePath,
+  },
+  {
+    name: "keiko_changeset_edit",
+    action: "edit",
+    argument: "changeset",
+    inputSchema: CHANGESET_EDIT_SCHEMA.properties.changeset,
+  },
+  {
+    name: "keiko_verification",
+    action: "verification",
+    argument: "verifierId",
+    inputSchema: VERIFICATION_SCHEMA.properties.verifierId,
+  },
+] as const;
+
+export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
+  "invalid",
+  "bash",
+  "read",
+  "glob",
+  "grep",
+  "edit",
+  "write",
+  "task",
+  "webfetch",
+  "todowrite",
+  "websearch",
+  "skill",
+  "apply_patch",
+  "lsp",
+  "plan",
+  "execute",
+  "git",
+] as const;
+
+interface OpenCodeToolInput {
+  readonly name: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!isRecord(value)) return JSON.stringify(value);
+  return `{${Object.keys(value)
+    .sort(compareCodeUnits)
+    .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+    .join(",")}}`;
+}
+
+/** Preserves the default code-unit sort so schema digests stay byte-stable across locales. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+function schemaDigest(schema: Readonly<Record<string, unknown>>): string {
+  return createHash("sha256").update(stableJson(schema), "utf8").digest("hex");
+}
+
+/** Gateway requests contain OpenCode's v1.17.17 projection, not the generated source schema. */
+const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
+  OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
+    name,
+    schemaDigest(name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters),
+  ]),
+);
+
+export function hasExactOpenCodeVisibleToolContract(
+  tools: readonly OpenCodeToolInput[] | undefined,
+): boolean {
+  if (tools?.length !== OPENCODE_MODEL_VISIBLE_TOOLS.length) return false;
+  const names = new Set(tools.map(({ name }) => name));
+  return (
+    names.size === OPENCODE_MODEL_VISIBLE_TOOLS.length &&
+    tools.every(
+      ({ name, parameters }) =>
+        EXPECTED_GATEWAY_SCHEMA_DIGESTS.get(name) === schemaDigest(parameters),
+    )
+  );
+}

@@ -86,6 +86,7 @@ export const ATLASSIAN_AUTHORITY_FAILURE_REASON: Readonly<
   invalid: "authority-invalid",
   expired: "authority-expired",
   "budget-exceeded": "authority-budget-exceeded",
+  revoked: "authority-invalid",
 } as const satisfies Readonly<
   Record<EditorAgentAuthorityFailureReason, AtlassianConnectorAuthorityFailureReason>
 >);

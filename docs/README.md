@@ -33,9 +33,11 @@ agent context.
   ceiling grants bounded local authority. Actions that the shared policy marks `allowed` do not
   require another prompt; delivery actions and authority widening remain separately
   human-approved. See [ADR-0125](adr/ADR-0125-governed-agent-docking-and-editor-changesets.md).
-- The three user-facing modes are **Ask for approval**, **Approve for me**, and **Full access**.
-  Their machine values, resource/risk matrix, and mode-independent hard denials come only from the
-  shared Coding Workbench contract and ADR-0125; do not reconstruct them in a feature-local policy.
+- The three user-facing modes are **Ask for approval**, **Supervised workspace**, and
+  **Full access**. Their machine values, resource/risk matrix, and mode-independent hard denials
+  come only from the shared Coding Workbench contract and
+  [ADR-0138](adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md);
+  do not reconstruct them in a feature-local policy.
 - Evidence and audit surfaces are redacted, bounded, and content-minimized. Persist
   ids, hashes, counts, enums, timestamps, branch names, and safe summaries rather
   than raw source text, secrets, unbounded logs, provider payloads, or customer data.

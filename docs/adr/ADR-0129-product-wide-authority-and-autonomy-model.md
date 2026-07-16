@@ -4,6 +4,11 @@
 
 Accepted (2026-07-10; renumbered to 0129 on 2026-07-11 during epic integration).
 
+> **Amended by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
+> Display labels become **Ask for approval**, **Supervised workspace**, and **Full access**, and the
+> shared policy matrix is replaced by ADR-0138's total monotonic matrix. The three machine values,
+> product-wide adoption rule, hard denials, and delivery contract remain unchanged.
+
 This record was first drafted as ADR-0127. During integration of Epic #2238, `origin/dev` had
 advanced to include ADR-0127 (editor Git reads, diff rendering, and conflict-editing semantics,
 Epic #2093) and the connector ADR-0128 from this epic. To avoid a number collision it was renumbered

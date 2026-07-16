@@ -13,14 +13,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  hashDirectoryTree,
   PORTABLE_TARGETS,
   findPortableMetadataRedactionFailures,
-  hashDirectoryTree,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,
@@ -206,6 +206,32 @@ const BASE_MANIFEST = {
     nodeDistribution: "official-nodejs-dist",
     nodeArchiveSha256: DIGEST_B,
   },
+  nativeHelpers: [
+    {
+      name: "keiko-secure-workspace-read",
+      kind: "secure-workspace-text-read",
+      platformTarget: "windows-x64",
+      architecture: "x64",
+      executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+      protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+      source: {
+        commitSha: COMMIT_SHA,
+        path: "native/secure-workspace-read",
+        treeSha256: DIGEST_B,
+      },
+      unsignedSha256: DIGEST_C,
+      shippedSha256: DIGEST_D,
+      sizeBytes: 4096,
+      sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${ROOT_PACKAGE_VERSION}?platform=windows-x64`,
+      signing: {
+        signatureKind: "authenticode",
+        verificationStatus: "verified-production",
+        signatureVerified: true,
+        notarizationRequired: false,
+        notarizationVerified: false,
+      },
+    },
+  ],
   packageSurface: {
     source: "root-npm-package-surface",
     packageSurfaceGate: "npm run check:package-surface",
@@ -280,6 +306,7 @@ const BASE_MANIFEST = {
         publisherChainVerified: true,
         timestampVerified: true,
       },
+      nativeHelpers: [],
     },
   },
   updateEligibility: {
@@ -313,7 +340,11 @@ afterEach(() => {
 }, 60_000);
 
 function manifest() {
-  return JSON.parse(JSON.stringify(BASE_MANIFEST));
+  const value = JSON.parse(JSON.stringify(BASE_MANIFEST));
+  value.releaseImpact.reviewedBinding.nativeHelpers = JSON.parse(
+    JSON.stringify(value.nativeHelpers),
+  );
+  return value;
 }
 
 function digestFor(text) {
@@ -466,6 +497,11 @@ function syncReviewedBinding(candidate) {
   } else {
     delete candidate.releaseImpact.reviewedBinding.sidecarRuntimes;
   }
+  if (Array.isArray(candidate.nativeHelpers)) {
+    candidate.releaseImpact.reviewedBinding.nativeHelpers = JSON.parse(
+      JSON.stringify(candidate.nativeHelpers),
+    );
+  }
   candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
     platformSignatureLocallyVerified(candidate);
 }
@@ -476,6 +512,14 @@ function setManifestTarget(candidate, platformTarget) {
   candidate.artifact.assetName = target.assetName;
   candidate.runtime.nodePlatform = target.nodePlatform;
   candidate.runtime.nodeArchitecture = target.nodeArchitecture;
+  const helper = candidate.nativeHelpers[0];
+  helper.platformTarget = target.platformTarget;
+  helper.architecture = target.nodeArchitecture;
+  helper.executablePath = `runtime/native/keiko-secure-workspace-read${target.nodePlatform === "win32" ? ".exe" : ""}`;
+  helper.sbomBomRef = `pkg:generic/keiko-secure-workspace-read@${ROOT_PACKAGE_VERSION}?platform=${target.platformTarget}`;
+  helper.signing.signatureKind = target.signatureKind;
+  helper.signing.notarizationRequired = target.nodePlatform === "darwin";
+  helper.signing.notarizationVerified = target.nodePlatform === "darwin";
   candidate.entrypoints.primaryLauncher = target.primaryLauncher;
   candidate.entrypoints.supportLaunchers =
     target.nodePlatform === "win32" ? ["support/keiko-support.cmd"] : ["support/keiko-support.sh"];
@@ -500,7 +544,18 @@ function setVerificationState(candidate, options = {}) {
   candidate.security.notarizationRequired = target.nodePlatform === "darwin";
   candidate.security.notarizationVerified =
     target.nodePlatform === "darwin" ? checks.notarizationVerified === true : false;
+  syncNativeHelperVerification(candidate, target);
   syncReviewedBinding(candidate);
+}
+
+function syncNativeHelperVerification(candidate, target) {
+  for (const helper of candidate.nativeHelpers ?? []) {
+    helper.signing.signatureKind = target.signatureKind;
+    helper.signing.verificationStatus = candidate.security.verificationStatus;
+    helper.signing.signatureVerified = candidate.security.signatureVerified;
+    helper.signing.notarizationRequired = candidate.security.notarizationRequired;
+    helper.signing.notarizationVerified = candidate.security.notarizationVerified;
+  }
 }
 
 function writeManifestFixture(candidate, dir) {
@@ -574,10 +629,20 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
     candidate.artifact.sha256 = digestFor(readFileSync(archivePath));
+    const resourceRoot =
+      target.nodePlatform === "darwin"
+        ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+        : join(stageRoot, "payload", "Keiko");
+    const helper = candidate.nativeHelpers[0];
+    const helperPath = join(resourceRoot, ...helper.executablePath.split("/"));
+    mkdirSync(dirname(helperPath), { recursive: true });
+    writeFileSync(helperPath, `signed helper ${target.platformTarget}\n`);
+    helper.shippedSha256 = digestFor(readFileSync(helperPath));
+    helper.sizeBytes = statSync(helperPath).size;
+    syncReviewedBinding(candidate);
     if (index === 0 && unsafeSidecarKind !== undefined) {
       addSidecarRuntime(candidate, target.platformTarget);
       const sidecar = candidate.sidecarRuntimes[0];
-      const resourceRoot = join(stageRoot, "payload", "Keiko");
       const sidecarRoot = join(resourceRoot, sidecar.payloadRootPath);
       mkdirSync(join(sidecarRoot, "evidence"), { recursive: true });
       writeFileSync(join(resourceRoot, sidecar.executablePath), "sidecar executable\n");
@@ -607,6 +672,19 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
       buildWorkflowRunId: 123456789,
       packageVersion: ROOT_PACKAGE_VERSION,
       sourceCommitSha: COMMIT_SHA,
+      nativeHelpers: [
+        {
+          architecture: helper.architecture,
+          executablePath: helper.executablePath,
+          name: helper.name,
+          shippedSha256: helper.shippedSha256,
+          signatureKind: helper.signing.signatureKind,
+          signatureVerified: helper.signing.signatureVerified,
+          notarizationVerified: helper.signing.notarizationVerified,
+          sourceTreeSha256: helper.source.treeSha256,
+          unsignedSha256: helper.unsignedSha256,
+        },
+      ],
       subjectDigest: candidate.artifact.sha256,
       target: target.platformTarget,
     })}\n`;
@@ -621,7 +699,10 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
       join(stageRoot, "evidence", "SHA256SUMS.txt"),
       `${candidate.artifact.sha256}  ${target.assetName}\n`,
     );
-    writeFileSync(join(stageRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+    writeFileSync(
+      join(stageRoot, "evidence", "sbom.cdx.json"),
+      `${JSON.stringify({ bomFormat: "CycloneDX", components: [{ "bom-ref": helper.sbomBomRef, hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }] }] })}\n`,
+    );
     writeFileSync(join(stageRoot, "evidence", "third-party-notices.txt"), "Notices.\n");
     writeFileSync(
       join(stageRoot, "evidence", "signing-verification.json"),
@@ -664,6 +745,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
+      buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
     },
   );
@@ -672,6 +754,30 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
 function writePrimaryLauncherFixture(target, destination) {
   writeFileSync(destination, `fixture native launcher for ${target.platformTarget}\n`);
 }
+
+function writeSecureReadHelperFixture(target, destination) {
+  writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
+}
+
+describe("portable native helper manifest", () => {
+  it("keeps legacy schema-v1 manifests parseable while secure read remains unavailable", () => {
+    const legacy = manifest();
+    delete legacy.nativeHelpers;
+    delete legacy.releaseImpact.reviewedBinding.nativeHelpers;
+    expect(validatePortableManifest(legacy)).toEqual([]);
+    expect(validatePortableCandidateManifest(legacy)).toContain(
+      "nativeHelpers: must contain exactly one helper for newly produced artifacts",
+    );
+  });
+
+  it("requires an exact helper identity, target, fixed path, protocol, and reviewed binding", () => {
+    const candidate = manifest();
+    candidate.nativeHelpers.push(candidate.nativeHelpers[0]);
+    expect(validatePortableManifest(candidate)).toContain(
+      "nativeHelpers: must contain exactly one helper when present",
+    );
+  });
+});
 
 function stagedMacAppRoot(outDir, platformTarget) {
   return join(outDir, platformTarget, "payload", "Keiko", "Keiko.app");
@@ -698,14 +804,55 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
   const name = overrides.name ?? "opencode-compatible";
   const payloadRootPath = `runtime/sidecars/${name}`;
   return {
+    approvalSchemaVersion: 2,
     name,
     kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+      transport: "http-sse",
     },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      sha256: DIGEST_A,
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: {
+      redistribution: {
+        status: "approved",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+      subscriptionAuth: {
+        status: "not-applicable",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+    },
+    license: {
+      spdxId: "MIT",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      sha256: DIGEST_F,
+    },
+    archive: {
+      platformTarget,
+      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      sizeBytes: 123456,
+      sha256: DIGEST_B,
+    },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256: DIGEST_C,
+    executableSha256: DIGEST_D,
     platformTarget,
     payloadRootPath,
     executablePath: sidecarExecutablePath(payloadRootPath, target),
@@ -736,6 +883,9 @@ function verifiedSidecarSigning(target) {
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified: target.nodePlatform === "darwin",
     verificationChecks,
+    shippedExecutableSha256: DIGEST_D,
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: DIGEST_C,
   };
 }
 
@@ -757,6 +907,9 @@ function stagingSidecarSigning(target) {
             notarizationVerified: false,
             stapleVerified: false,
           }),
+    shippedExecutableSha256: DIGEST_D,
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: DIGEST_C,
   };
 }
 
@@ -773,27 +926,98 @@ function createSidecarFixture(dir, platformTarget, overrides = {}) {
   mkdirSync(join(sourceRoot, "evidence"), { recursive: true });
   writeFileSync(join(sourceRoot, executablePath), `fixture opencode for ${platformTarget}\n`);
   writeFileSync(join(sourceRoot, "LICENSE.txt"), "OpenCode-compatible fixture license\n");
-  writeFileSync(join(sourceRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
   return sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, overrides);
 }
 
 function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, overrides) {
-  return {
+  const executableSha256 = digestBuffer(readFileSync(join(sourceRoot, executablePath)));
+  const executableTreeSha256 = digestFor(`${executablePath}\0${executableSha256}\0`);
+  const licenseSha256 = digestBuffer(readFileSync(join(sourceRoot, "LICENSE.txt")));
+  const archive = {
+    platformTarget,
+    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-fixture.zip",
+    sizeBytes: 123456,
+    sha256: DIGEST_B,
+  };
+  writeFileSync(
+    join(sourceRoot, "evidence", "sbom.cdx.json"),
+    `${JSON.stringify({
+      bomFormat: "CycloneDX",
+      metadata: {
+        component: { type: "application", name: "opencode-compatible", version: "1.17.17" },
+      },
+      components: [
+        {
+          type: "application",
+          name: "opencode",
+          version: "1.17.17",
+          purl: "pkg:github/anomalyco/opencode@v1.17.17",
+          licenses: [{ license: { id: "MIT" } }],
+          hashes: [{ alg: "SHA-256", content: executableSha256 }],
+          externalReferences: [
+            {
+              type: "distribution",
+              url: archive.url,
+              hashes: [{ alg: "SHA-256", content: archive.sha256 }],
+            },
+          ],
+        },
+      ],
+    })}\n`,
+  );
+  const spec = {
+    approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+      transport: "http-sse",
     },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      sha256: DIGEST_A,
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: {
+      redistribution: {
+        status: "approved",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+      subscriptionAuth: {
+        status: "not-applicable",
+        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+      },
+    },
+    license: {
+      spdxId: "MIT",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      sha256: licenseSha256,
+    },
+    archive,
     platformTarget,
     sourceRoot,
     executablePath,
     licenseEvidencePath: "LICENSE.txt",
     sbomEvidencePath: "evidence/sbom.cdx.json",
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    expectedExecutableTreeSha256: executableTreeSha256,
+    expectedPayloadSha256: hashDirectoryTree(sourceRoot),
     ...overrides,
   };
+  return spec;
 }
 
 function stageArgs(dir, platformTarget, nodeArchive, sidecarSpec) {
@@ -1010,6 +1234,47 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("sidecarRuntimes[0].platformTarget: must match artifact");
     expect(failures).toContain("sidecarRuntimes[0].licenseEvidence: is required");
     expect(failures).toContain("sidecarRuntimes[0].signing.signatureVerified: must be true");
+  });
+
+  it("requires schema-v2 sidecar provenance and rejects the fictional protocol claim", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    candidate.sidecarRuntimes[0].adapterCompatibility.protocolVersion = "coding-sidecar-v1";
+    delete candidate.sidecarRuntimes[0].protocolSchema.digestInput;
+    candidate.sidecarRuntimes[0].releaseApproval.redistribution.status = "pending";
+
+    const failures = validatePortableManifest(candidate);
+
+    expect(failures).toContain(
+      "sidecarRuntimes[0].adapterCompatibility.protocolVersion: is not allowed",
+    );
+    expect(failures).toContain("sidecarRuntimes[0].protocolSchema.digestInput: is required");
+    expect(failures).toContain(
+      "sidecarRuntimes[0].releaseApproval.redistribution.status: must be approved",
+    );
+  });
+
+  it("requires exact lowercase shipped executable evidence for production sidecars", () => {
+    const missing = manifest();
+    addSidecarRuntime(missing, "windows-x64");
+    delete missing.sidecarRuntimes[0].signing.shippedExecutableTreeSha256;
+    expect(validatePortableCandidateManifest(missing)).toContain(
+      "sidecarRuntimes[0].signing.shippedExecutableTreeSha256: is required",
+    );
+
+    const malformed = manifest();
+    addSidecarRuntime(malformed, "windows-x64");
+    malformed.sidecarRuntimes[0].signing.shippedExecutableSha256 = "A".repeat(64);
+    expect(validatePortableCandidateManifest(malformed)).toContain(
+      "sidecarRuntimes[0].signing.shippedExecutableSha256: must be a SHA-256 digest",
+    );
+
+    const unknown = manifest();
+    addSidecarRuntime(unknown, "windows-x64");
+    unknown.sidecarRuntimes[0].signing.nativeProof = true;
+    expect(validatePortableCandidateManifest(unknown)).toContain(
+      "sidecarRuntimes[0].signing.nativeProof: is not allowed",
+    );
   });
 
   it("rejects sidecar runtimes without production signing metadata", () => {
@@ -1824,11 +2089,29 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     );
     expect(manifest.sidecarRuntimes).toHaveLength(1);
     expect(manifest.sidecarRuntimes[0]).toMatchObject({
+      approvalSchemaVersion: 2,
       name: "opencode-compatible",
       kind: "coding-runtime",
       platformTarget: "macos-arm64",
       payloadRootPath: "runtime/sidecars/opencode-compatible",
       executablePath: "runtime/sidecars/opencode-compatible/bin/opencode",
+      executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      upstream: {
+        owner: "anomalyco",
+        repository: "opencode",
+        version: "1.17.17",
+        commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      },
+      protocolSchema: {
+        hashAlgorithm: "sha256",
+        hashEncoding: "lowercase-hex",
+        digestInput: "upstream-raw-bytes",
+        transport: "http-sse",
+      },
+      releaseApproval: {
+        redistribution: { status: "approved" },
+        subscriptionAuth: { status: "not-applicable" },
+      },
     });
     expect(manifest.sidecarRuntimes[0].sourceRoot).toBeUndefined();
     expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
@@ -2141,6 +2424,49 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("sidecar expected digest does not match payload");
+  });
+
+  it("fails closed when the executable tree differs from its independent approval pin", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64", {
+      expectedExecutableTreeSha256: DIGEST_A,
+    });
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "sidecar executable tree digest does not match independent approval",
+    );
+  });
+
+  it("fails closed when SBOM identity and executable hashes do not match the payload", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+    const sbomPath = join(sidecarSpec.sourceRoot, sidecarSpec.sbomEvidencePath);
+    const sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+    sbom.components[0].version = "9.9.9";
+    writeFileSync(sbomPath, `${JSON.stringify(sbom)}\n`);
+    sidecarSpec.expectedPayloadSha256 = hashDirectoryTree(sidecarSpec.sourceRoot);
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar SBOM identity, version, license");
+  });
+
+  it("rejects caller-supplied signing booleans instead of treating them as native proof", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+    sidecarSpec.signing = verifiedSidecarSigning(portableTarget("windows-x64"));
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar spec contains unsupported key signing");
   });
 
   it("fails closed when sidecar license or SBOM evidence is incomplete", () => {
