@@ -987,7 +987,7 @@ async function streamGatewayResponse(
     return;
   }
   if (response.toolCalls.length > 0) {
-    writeOpenAiSse(
+    const wrote = writeOpenAiSse(
       ctx,
       openAiStreamChunk(
         id,
@@ -997,6 +997,12 @@ async function streamGatewayResponse(
         null,
       ),
     );
+    if (!wrote) {
+      ctx.res.destroy();
+      await iterator.return?.();
+      recordSessionOutcome(session, "cancelled");
+      return;
+    }
   }
   recordSessionOutcome(session, "accepted");
   writeSessionTerminal(session, response.finishReason);
