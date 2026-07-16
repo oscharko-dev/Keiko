@@ -32,7 +32,7 @@ that the gate *cost model* — not the gate *strictness* — was misfitted to th
    identical suite passes reproducibly on controlled hardware. The repository's own policy already
    states that hosted-runner performance evidence runs outside the PR critical path; the required
    path had drifted from that policy.
-3. **Local/CI asymmetry.** `npm run codex:pre-pr` did not cover everything the required checks
+3. **Local/CI asymmetry.** `npm run agent:pre-pr` did not cover everything the required checks
    execute (e.g. the packaging smoke's shell-spawn guardrail), so agents discovered CI-only gates
    only after pushing — the exact failure mode the local-first policy exists to prevent.
 4. **Repeat cost.** The pre-PR gate is fail-fast and non-incremental: a one-line fix to a test file
@@ -84,10 +84,10 @@ independent re-validation) so the procedure is reproducible and not session folk
 
 ### D4 — Local-first parity is mechanical, and iteration is incremental
 
-Every deterministic required check is represented as a step of `npm run codex:pre-pr`, including
+Every deterministic required check is represented as a step of `npm run agent:pre-pr`, including
 the packaging shell-spawn guardrail and the installable-package smoke (platform-skipped where the
 authoritative platform is Linux, with the container path documented). The pre-PR gate maintains a
-content-addressed step cache (`.codex/pre-pr-cache.json`): each step declares its input scope, and
+content-addressed step cache (`.agent/pre-pr-cache.json`): each step declares its input scope, and
 a step re-runs only when the content hash of its inputs changes. Cache entries record the input
 digest and the step's last verdict; `--no-cache` forces a full run, and CI never uses the cache.
 This turns the fix-iteration loop from ~65 minutes into minutes without removing any check.

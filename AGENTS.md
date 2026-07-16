@@ -110,21 +110,22 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
-For PR-bound work, use the Codex pre-PR gate instead of manually stitching a partial checklist
-together:
+For PR-bound work, use the agent pre-PR gate instead of manually stitching a partial checklist
+together. This is the single, agent-agnostic quality gate every agent (Claude Code, Codex,
+Cursor, …) runs before a push, a PR update, or a merge:
 
 ```bash
-npm run codex:pre-pr
+npm run agent:pre-pr
 ```
 
 This gate runs the local-first sequence in a fixed order: typecheck, lint, format, shell-spawn
 guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping, architecture
 checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor bundle size,
 installable-package smoke, and smoke coverage. It writes a machine-readable report to
-`.codex/pre-pr-report.json` so the exact local outcome is inspectable before the first push, a PR
+`.agent/pre-pr-report.json` so the exact local outcome is inspectable before the first push, a PR
 update, or a merge.
 
-The gate keeps a content-addressed step cache (`.codex/pre-pr-cache.json`, ADR-0137 D4): steps
+The gate keeps a content-addressed step cache (`.agent/pre-pr-cache.json`, ADR-0137 D4): steps
 whose declared inputs are byte-identical to the last passing run report `cached` instead of
 re-executing, so a fix-iteration re-runs only what the fix can affect. Pass `--no-cache` to force
 a complete run; CI never uses the cache.
@@ -135,12 +136,12 @@ Never use GitHub Actions as the first test environment for a change. Before push
 force-pushing, updating a pull request, or merging:
 
 1. Identify every GitHub quality gate that the change can affect.
-2. Run `npm run codex:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
+2. Run `npm run agent:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
    already covered by that command.
 3. If a GitHub gate is already red, reproduce that exact failure locally, or reduce it to the
    nearest deterministic local gate, before pushing another fix.
 4. Fix every local finding before pushing; after any fix, rerun the failed targeted gate and then
-   rerun the full `npm run codex:pre-pr` gate before the next push.
+   rerun the full `npm run agent:pre-pr` gate before the next push.
 5. Push only after the relevant local gate is green or a documented platform-specific local skip is
    unavoidable.
 6. Report the exact local commands and outcomes from the generated pre-PR report.

@@ -49,7 +49,7 @@ through M16.
 
 ## Verification policy
 
-The candidate is accepted only after the complete local-first `npm run codex:pre-pr` report is
+The candidate is accepted only after the complete local-first `npm run agent:pre-pr` report is
 green, all touched-area gates are green, Linux-authoritative D12/bundle evidence is regenerated,
 the debug-launch mutation gate reports no surviving or uncovered mutants, and the exact pushed PR
 head passes every direct app-bound required check. No gate, coverage floor, evidence bound, policy,

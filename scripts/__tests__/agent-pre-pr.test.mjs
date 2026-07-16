@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { commandText, createPrePrSteps, runPrePrGate } from "../codex-pre-pr.mjs";
+import { commandText, createPrePrSteps, runPrePrGate } from "../agent-pre-pr.mjs";
 
-const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "codex-pre-pr.mjs");
+const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "agent-pre-pr.mjs");
 
 const REQUIRED_LINUX_COMMANDS = [
   "npm run typecheck",
@@ -79,7 +79,7 @@ async function installFakeNpm(binDir) {
   await chmod(shim, 0o755);
 }
 
-describe("codex pre-PR gate", () => {
+describe("agent pre-PR gate", () => {
   it("pins the local-first command order used before push, PR updates, and merge", () => {
     const commands = createPrePrSteps({ env: {}, platform: "linux" }).map((step) =>
       commandText(step),
@@ -116,7 +116,7 @@ describe("codex pre-PR gate", () => {
   });
 
   it("supports a dry run that writes the planned local gate report without running commands", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const reportPath = join(tempDir, "report.json");
 
     try {
@@ -140,7 +140,7 @@ describe("codex pre-PR gate", () => {
   });
 
   it("executes live steps sequentially and records the report", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const binDir = join(tempDir, "bin");
     const reportPath = join(tempDir, "report.json");
     const logPath = join(tempDir, "npm.log");
@@ -166,7 +166,7 @@ describe("codex pre-PR gate", () => {
   });
 
   it("caches unchanged scoped steps and reruns them when their inputs change", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-cache-"));
+    const workspace = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-cache-"));
     const repo = join(workspace, "repo");
     const binDir = join(workspace, "bin");
     const reportPath = join(workspace, "report.json");
@@ -228,7 +228,7 @@ describe("codex pre-PR gate", () => {
   });
 
   it("stops live execution after the first failing required step", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const binDir = join(tempDir, "bin");
     const reportPath = join(tempDir, "report.json");
     const logPath = join(tempDir, "npm.log");
@@ -255,7 +255,7 @@ describe("codex pre-PR gate", () => {
   });
 });
 
-describe("codex pre-PR gate step construction", () => {
+describe("agent pre-PR gate step construction", () => {
   it.each([
     { expected: "npm", platform: "linux" },
     { expected: "npm", platform: "darwin" },
@@ -307,9 +307,9 @@ describe("codex pre-PR gate step construction", () => {
   });
 });
 
-describe("codex pre-PR gate failure modes", () => {
+describe("agent pre-PR gate failure modes", () => {
   it("records an error result when the npm binary cannot be spawned", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const reportPath = join(tempDir, "report.json");
 
     try {
@@ -333,7 +333,7 @@ describe("codex pre-PR gate failure modes", () => {
   });
 
   it("still records durationMs on a failed live step", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const binDir = join(tempDir, "bin");
     const reportPath = join(tempDir, "report.json");
     const logPath = join(tempDir, "npm.log");
@@ -362,9 +362,9 @@ describe("codex pre-PR gate failure modes", () => {
   });
 });
 
-describe("codex pre-PR gate CLI entrypoint", () => {
+describe("agent pre-PR gate CLI entrypoint", () => {
   it("parses --dry-run and --report, prints the report, and exits zero", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const reportPath = join(tempDir, "cli-dry-run.json");
 
     try {
@@ -374,15 +374,15 @@ describe("codex pre-PR gate CLI entrypoint", () => {
       expect(result.code).toBe(0);
       expect(persisted.dryRun).toBe(true);
       expect(persisted.summary.failed).toBe(0);
-      expect(result.stdout).toContain("[codex:pre-pr] Local gate report");
-      expect(result.stdout).toContain(`[codex:pre-pr] Report written to ${reportPath}`);
+      expect(result.stdout).toContain("[agent:pre-pr] Local gate report");
+      expect(result.stdout).toContain(`[agent:pre-pr] Report written to ${reportPath}`);
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
   });
 
   it("sets exit code 1 and formats step durations when a live step fails", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "keiko-codex-pre-pr-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
     const binDir = join(tempDir, "bin");
     const reportPath = join(tempDir, "cli-fail.json");
     const logPath = join(tempDir, "npm.log");

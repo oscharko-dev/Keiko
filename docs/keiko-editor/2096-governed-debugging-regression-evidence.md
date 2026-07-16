@@ -34,7 +34,7 @@ pushed head's remote gates. The companion trust-boundary assessment is
 
 ## Local quality evidence before the final aggregate
 
-A pre-expansion `npm run codex:pre-pr` passed on 2026-07-13, but it is not reused as final acceptance
+A pre-expansion `npm run agent:pre-pr` passed on 2026-07-13, but it is not reused as final acceptance
 after the failure-first repairs. The changed surfaces were then exercised directly:
 
 - the focused Debug panel suite passed 20 tests, including retained row-node identity under append;
@@ -46,9 +46,9 @@ after the failure-first repairs. The changed surfaces were then exercised direct
   or uncovered mutants.
 
 `npm run check:error-observability` also passed: top-level 500 correlation, redacted diagnostic,
-and opaque UI correlation behavior remain enforced. The final `npm run codex:pre-pr` is deliberately
+and opaque UI correlation behavior remain enforced. The final `npm run agent:pre-pr` is deliberately
 run only after this ledger and both generated release artifacts are finalized; its machine-readable
-result is `.codex/pre-pr-report.json`.
+result is `.agent/pre-pr-report.json`.
 
 ## Dedicated composed-browser evidence (#2348)
 
@@ -150,5 +150,5 @@ above. The machine-readable report is
 `reports/mutation/debug-launch-security/mutation-report.json`; generated reports are not committed.
 
 The implementation, mutation, Linux D12 comparison, and refreshed bundle evidence are complete.
-Remaining delivery conditions are the final `npm run codex:pre-pr` on the documentation/evidence
+Remaining delivery conditions are the final `npm run agent:pre-pr` on the documentation/evidence
 head and the direct required checks on the exact pushed PR head.

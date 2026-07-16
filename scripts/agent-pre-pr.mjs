@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const defaultReportPath = resolve(repoRoot, ".codex", "pre-pr-report.json");
+const defaultReportPath = resolve(repoRoot, ".agent", "pre-pr-report.json");
 const nodeHeapFlag = "--max-old-space-size=8192";
 
 // ADR-0137 D4: content-addressed step cache. Each step declares a conservative input scope;
@@ -20,7 +20,7 @@ const nodeHeapFlag = "--max-old-space-size=8192";
 // versioned, keyed on the exact command line and Node major, disabled in CI, and bypassed
 // with --no-cache.
 const CACHE_SCHEMA_VERSION = 1;
-const defaultCacheFileName = join(".codex", "pre-pr-cache.json");
+const defaultCacheFileName = join(".agent", "pre-pr-cache.json");
 const SCOPE_SOURCES = ["packages/", "src/", "tests/", "scripts/"];
 const SCOPE_PRODUCT = ["packages/", "src/", "scripts/", "tests/e2e/", "docs/release/"];
 const SCOPE_COVERAGE = [...SCOPE_SOURCES, "docs/qa/"];
@@ -387,11 +387,11 @@ async function runLiveSteps(steps, options) {
   const cachePlan = options.cachePlan ?? { cached: new Set(), digests: new Map() };
   for (const step of steps) {
     if (cachePlan.cached.has(step.id)) {
-      console.log(`\n[codex:pre-pr] ${step.id}: cached (inputs unchanged)`);
+      console.log(`\n[agent:pre-pr] ${step.id}: cached (inputs unchanged)`);
       results.push(resultForCached(step));
       continue;
     }
-    console.log(`\n[codex:pre-pr] ${step.id}: ${commandText(step)}`);
+    console.log(`\n[agent:pre-pr] ${step.id}: ${commandText(step)}`);
     const result = await runStep(step, options);
     results.push(result);
     if (result.status === "failed") break;
@@ -466,13 +466,13 @@ export async function runPrePrGate(options = {}) {
 }
 
 function printReport(report, reportPath = defaultReportPath) {
-  console.log("\n[codex:pre-pr] Local gate report");
+  console.log("\n[agent:pre-pr] Local gate report");
   for (const result of report.results) {
     const suffix = result.durationMs === undefined ? "" : ` (${formatDuration(result.durationMs)})`;
     const reason = result.skipReason === undefined ? "" : ` - ${result.skipReason}`;
     console.log(`- ${result.status}: ${result.id} :: ${result.command}${suffix}${reason}`);
   }
-  console.log(`[codex:pre-pr] Report written to ${reportPath}`);
+  console.log(`[agent:pre-pr] Report written to ${reportPath}`);
 }
 
 function parseArgs(argv) {
