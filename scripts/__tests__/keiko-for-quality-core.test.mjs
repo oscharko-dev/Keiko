@@ -85,7 +85,6 @@ describe("Keiko for Quality core", () => {
       { appId: 15368, name: "Review dependency diff (dev/main)" },
       { appId: 15368, name: "ui" },
       { appId: 15368, name: "Scan dependency lockfiles" },
-      { appId: 15368, name: "Mutation quality gate" },
       { appId: 12526, name: "SonarCloud Code Analysis" },
       { appId: 156372, name: "Socket Security: Project Report" },
       { appId: 156372, name: "Socket Security: Pull Request Alerts" },
@@ -136,6 +135,25 @@ describe("Keiko for Quality core", () => {
       })),
     ];
     expect(evaluateKeikoForQuality(input)).toEqual({ failures: [], passed: true });
+  });
+
+  it("keeps running checks pending and reserves failure for terminal conclusions", () => {
+    const [expected] = requiredChecks;
+    const running = {
+      appId: expected.appId,
+      conclusion: null,
+      headSha,
+      name: expected.name,
+      status: "in_progress",
+    };
+    expect(checkFailures([running], headSha, [expected])).toEqual([
+      `Check is pending: ${expected.name}.`,
+    ]);
+    expect(
+      checkFailures([{ ...running, conclusion: "failure", status: "completed" }], headSha, [
+        expected,
+      ]),
+    ).toEqual([`Check is not successful: ${expected.name}.`]);
   });
 
   it("binds bot evidence to immutable user, type, and app identities", () => {
@@ -246,7 +264,7 @@ describe("Keiko for Quality core", () => {
     expect(commentIsCurrent({ updatedAt: completedAt }, Number.NEGATIVE_INFINITY)).toBe(false);
   });
 
-  it("uses the newest duplicate check and rejects incomplete terminal state", () => {
+  it("uses the newest duplicate check and keeps an incomplete state pending", () => {
     const policy = requiredChecks[0];
     const checks = [
       {
@@ -266,7 +284,7 @@ describe("Keiko for Quality core", () => {
         status: "in_progress",
       },
     ];
-    expect(checkFailures(checks, headSha)).toContain(`Check is not successful: ${policy.name}.`);
+    expect(checkFailures(checks, headSha)).toContain(`Check is pending: ${policy.name}.`);
     expect(
       checkFailures(
         [

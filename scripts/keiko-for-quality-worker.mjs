@@ -10,7 +10,7 @@ const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
 const deliveryRetentionMs = 86_400_000;
-const postMergeReconciliationMs = 900_000;
+const postMergeReconciliationMs = 3_600_000;
 const persistedPullPageSize = 100;
 const persistedPullPageLimit = 10;
 
@@ -312,7 +312,8 @@ function failureDetails(failures) {
 
 function evidenceState(failures, pattern, cleanLabel) {
   const failure = failures.find((entry) => pattern.test(entry));
-  return failure === undefined ? `✅ ${cleanLabel}` : `❌ ${failure}`;
+  if (failure === undefined) return `✅ ${cleanLabel}`;
+  return `${hardFailure([failure]) ? "❌" : "⏳"} ${failure}`;
 }
 
 export function dashboardComment({
@@ -327,9 +328,10 @@ export function dashboardComment({
   const successfulChecks = currentCheckCount(checks, headSha, expectedChecks);
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
+  const blocked = hardFailure(result.failures);
   const detailsSummary = result.passed
     ? "Validated evidence"
-    : `Blocking or waiting evidence (${String(result.failures.length)})`;
+    : `${blocked ? "Blocking" : "Waiting"} evidence (${String(result.failures.length)})`;
   return [
     dashboardMarker,
     "## Keiko for Quality",
@@ -351,7 +353,7 @@ export function dashboardComment({
     `| Gitar Auto-Apply | ${autoApplyState(comments)} |`,
     `| GitHub Auto-Merge | ${autoMerge} |`,
     "",
-    `<details${result.passed ? "" : " open"}>`,
+    `<details${blocked ? " open" : ""}>`,
     `<summary>${detailsSummary}</summary>`,
     "",
     failureDetails(result.failures),

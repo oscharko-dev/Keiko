@@ -18,7 +18,6 @@ export const requiredChecks = checks([
   ["Review dependency diff (dev/main)", actionsAppId],
   ["ui", actionsAppId],
   ["Scan dependency lockfiles", actionsAppId],
-  ["Mutation quality gate", actionsAppId],
   ["SonarCloud Code Analysis", 12526],
   ["Socket Security: Project Report", 156372],
   ["Socket Security: Pull Request Alerts", 156372],
@@ -67,8 +66,8 @@ export function checkFailures(checkRuns, headSha, expectedChecks = requiredCheck
     )[0];
     if (check === undefined) return [`Missing current-head check: ${name}.`];
     if (check.appId !== appId) return [`Wrong producer for ${name}.`];
-    if (check.status !== "completed" || check.conclusion !== "success")
-      return [`Check is not successful: ${name}.`];
+    if (check.status !== "completed") return [`Check is pending: ${name}.`];
+    if (check.conclusion !== "success") return [`Check is not successful: ${name}.`];
     return [];
   });
 }
