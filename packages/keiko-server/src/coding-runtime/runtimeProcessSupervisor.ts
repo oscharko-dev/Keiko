@@ -18,6 +18,7 @@ export { CLOSED_RUNTIME_LAUNCH_PROFILE };
 
 export interface RuntimeSupervisorLaunchRequest {
   readonly runId: string;
+  readonly recoveryHandle: string;
   readonly treeBindingId: string;
   readonly executable: string;
   readonly args: readonly string[];
