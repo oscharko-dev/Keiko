@@ -10,6 +10,7 @@ const githubApi = "https://api.github.com";
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
 const deliveryRetentionMs = 86_400_000;
+const postMergeReconciliationMs = 900_000;
 const persistedPullPageSize = 100;
 const persistedPullPageLimit = 10;
 
@@ -396,11 +397,34 @@ export async function publishDashboardComment({
   });
 }
 
+function postMergeReconciliation(pull, evaluatedAt) {
+  const mergedAt = Date.parse(pull.merged_at);
+  return (
+    pull.state === "closed" &&
+    pull.merged === true &&
+    Number.isFinite(mergedAt) &&
+    mergedAt + postMergeReconciliationMs >= evaluatedAt
+  );
+}
+
+function pullNeedsEvaluation(pull, baseBranch, evaluatedAt) {
+  return (
+    pull.base?.ref === baseBranch &&
+    (pull.state === "open" || postMergeReconciliation(pull, evaluatedAt))
+  );
+}
+
+async function persistEvaluatedPull(database, tracked, pull, result) {
+  if (pull.state === "open" || !result.passed) await storeTrackedPull(database, tracked);
+  else await deleteTrackedPull(database, tracked);
+}
+
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
   const target = targetForRepository(`${owner}/${repository}`, env);
   const token = await installationToken(installationId, env);
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
-  if (pull.state !== "open" || pull.base?.ref !== target.baseBranch) {
+  const evaluatedAt = Date.now();
+  if (!pullNeedsEvaluation(pull, target.baseBranch, evaluatedAt)) {
     await deleteTrackedPull(env.KEIKO_FOR_QUALITY_DB, { owner, pullNumber, repository });
     return;
   }
@@ -409,7 +433,6 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     throw new Error("Pull request head SHA is invalid.");
   }
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
-  const evaluatedAt = Date.now();
   const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
@@ -433,12 +456,13 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     token,
     env,
   });
-  await storeTrackedPull(env.KEIKO_FOR_QUALITY_DB, {
+  const tracked = {
     installationId,
     owner,
     pullNumber,
     repository,
-  });
+  };
+  await persistEvaluatedPull(env.KEIKO_FOR_QUALITY_DB, tracked, pull, result);
 }
 
 async function authenticateWebhook(request, env, body) {

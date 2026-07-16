@@ -1611,6 +1611,56 @@ describe("Keiko for Quality worker trust boundary", () => {
     }
   });
 
+  it("reconciles a merged pull through the stability window before deleting tracking", async () => {
+    const headSha = "a".repeat(40);
+    const mergedAt = "2026-07-11T09:00:20.000Z";
+    const pull = {
+      base: { ref: "dev" },
+      head: { sha: headSha },
+      merged: true,
+      merged_at: mergedAt,
+      state: "closed",
+    };
+    const fetchMock = githubMock(headSha, { openPulls: [], pull });
+    const state = stateBinding();
+    trackPull(state, 2329);
+    const env = { ...environment(state), STABILITY_WINDOW_MS: "60000" };
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse(mergedAt) + 10_000);
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merged-stability",
+      ),
+      env,
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(true);
+    expect(
+      fetchMock.mock.calls
+        .filter(([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST")
+        .map(([, init]) => JSON.parse(init.body)),
+    ).toContainEqual(expect.objectContaining({ status: "in_progress" }));
+
+    now.mockReturnValue(Date.parse(mergedAt) + 120_000);
+    const scheduled = [];
+    await worker.scheduled({}, env, { waitUntil: (promise) => scheduled.push(promise) });
+    await Promise.all(scheduled);
+    expect(state.tracked.has("oscharko-dev/Keiko#2329")).toBe(false);
+    expect(
+      fetchMock.mock.calls
+        .filter(([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST")
+        .map(([, init]) => JSON.parse(init.body)),
+    ).toContainEqual(expect.objectContaining({ conclusion: "success", status: "completed" }));
+  });
+
   it("rejects malformed paginated evidence", async () => {
     const headSha = "1".repeat(40);
     githubMock(headSha, { invalidReviews: true });
