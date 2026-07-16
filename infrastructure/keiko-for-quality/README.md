@@ -16,7 +16,7 @@ deliberately outside GitHub Actions so pull-request code cannot mint the require
    openssl pkcs8 -topk8 -nocrypt -in github-app-private-key.pem -out github-app-private-key.pkcs8.pem
    ```
 
-3. Install the app only on `oscharko-dev/Keiko`.
+3. Install the app only on `oscharko-dev/Keiko` and `oscharko-dev/Keiko-Native`.
 4. Create the D1 database, apply `schema.sql`, copy `wrangler.toml.example` to an untracked
    deployment config, and replace the D1 identifier.
 5. Store `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_PKCS8`, and `GITHUB_WEBHOOK_SECRET` with
@@ -26,7 +26,7 @@ deliberately outside GitHub Actions so pull-request code cannot mint the require
 7. Enable Workers Observability with redacted application logs. Verify a fresh webhook delivery,
    one scheduled reconciliation, and one app-authored check before making the check required.
 
-`TARGET_REPOSITORY`, `STABILITY_WINDOW_MS`, `SOCKET_RISK_ALLOWLIST_JSON`, and
+`TARGET_REPOSITORIES_JSON`, `STABILITY_WINDOW_MS`, `SOCKET_RISK_ALLOWLIST_JSON`, and
 `SOCKET_RISK_ACTORS_JSON` are non-secret Worker variables. Socket entries are exact
 `npm/package@version` identifiers, and only explicitly listed maintainers may issue an acceptance
 command. They are valid only while
@@ -34,10 +34,12 @@ the matching version and integrity digest in
 [`../../docs/qa/supply-chain-risk-acceptances.json`](../../docs/qa/supply-chain-risk-acceptances.json)
 still match `package-lock.json`; the required repository test enforces that binding.
 
-The one-minute schedule is a liveness backstop, not merely a stability timer. It discovers every
-open pull request targeting `dev` through the exact GitHub App installation, so webhook loss or
-replay rejection cannot strand a new pull request. Keep the schedule enabled even when webhook
-delivery is healthy. Unchanged dashboard comments are not rewritten.
+`TARGET_REPOSITORIES_JSON` declares a unique repository, protected base branch, and quality profile
+for every target. The one-minute schedule is a liveness backstop, not merely a stability timer. It
+discovers every open pull request targeting each declared base branch through the exact GitHub App
+installation, so webhook loss or replay rejection cannot strand a new pull request. Keep the
+schedule enabled even when webhook delivery is healthy. Unchanged dashboard comments are not
+rewritten.
 
 D1 is the atomic replay and metadata store. A unique delivery identifier rejects duplicate GitHub
 webhooks without relying on eventually consistent reads. The Worker reserves a delivery only after
