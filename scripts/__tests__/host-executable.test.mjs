@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,6 +77,52 @@ describe("resolveHostExecutable", () => {
           workspaceRoot: workspace,
         }),
       ).toBe(realpathSync(executable));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts a group-writable npm symlink anchored to the running Node toolchain",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const toolchain = temporary("keiko-host-executable-toolchain-");
+      const bin = join(toolchain, "bin");
+      const npmBin = join(toolchain, "lib", "node_modules", "npm", "bin");
+      mkdirSync(bin);
+      mkdirSync(npmBin, { recursive: true });
+      writeFileSync(join(npmBin, "npm-cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync("../lib/node_modules/npm/bin/npm-cli.js", join(bin, "npm"));
+      chmodSync(bin, 0o775);
+      chmodSync(npmBin, 0o775);
+
+      expect(
+        resolveHostExecutable("npm", {
+          env: { PATH: bin },
+          trustedRoots: [toolchain],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a group-writable symlink that escapes its trusted runtime root",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const toolchain = temporary("keiko-host-executable-toolchain-");
+      const outside = temporary("keiko-host-executable-outside-");
+      const bin = join(toolchain, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(outside, "npm-cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync(join(outside, "npm-cli.js"), join(bin, "npm"));
+      chmodSync(bin, 0o775);
+
+      expect(() =>
+        resolveHostExecutable("npm", {
+          env: { PATH: bin },
+          trustedRoots: [toolchain],
+          workspaceRoot: workspace,
+        }),
+      ).toThrow("trusted host executable is unavailable");
     },
   );
 
