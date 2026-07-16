@@ -84,7 +84,7 @@ interface WorkbenchContentProps {
   readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
-  readonly focusRef: RefObject<HTMLHeadingElement>;
+  readonly focusRef: RefObject<HTMLHeadingElement | null>;
   readonly locked: boolean;
   readonly alert: string | null;
   readonly t: CodingWorkbenchTranslate;

@@ -36,7 +36,7 @@ export function WorkbenchHeader({
   focusRef,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
-  readonly focusRef: RefObject<HTMLHeadingElement>;
+  readonly focusRef: RefObject<HTMLHeadingElement | null>;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const sharedT = useTranslate();

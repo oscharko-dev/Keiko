@@ -39,8 +39,7 @@ export interface FunctionalPortableOpenCodeRuntime {
 }
 
 export type ResolvedPortableOpenCodeRuntime =
-  | QualifiedPortableOpenCodeRuntime
-  | FunctionalPortableOpenCodeRuntime;
+  QualifiedPortableOpenCodeRuntime | FunctionalPortableOpenCodeRuntime;
 
 export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;

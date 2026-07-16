@@ -29,7 +29,8 @@ export interface ProductionOpenCodeActivationInput {
    * deployment supplies this port, activation fails closed and coding readiness stays unavailable.
    */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
-  readonly editorAgentClient?: ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
+  readonly editorAgentClient?:
+    ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
 }
 
