@@ -119,6 +119,6 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   }
 
   private resolveProofWaiters(proved: boolean): void {
-    for (const waiter of [...this.proofWaiters]) waiter(proved);
+    for (const waiter of this.proofWaiters) waiter(proved);
   }
 }

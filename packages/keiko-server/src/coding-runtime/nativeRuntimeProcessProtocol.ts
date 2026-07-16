@@ -9,7 +9,7 @@ const MAX_ARGUMENTS = 64;
 const MAX_ENVIRONMENT_ENTRIES = 64;
 const MAX_ARGUMENT_BYTES = 4 * 1024;
 const MAX_ENVIRONMENT_VALUE_BYTES = 16 * 1024;
-const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
+const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_]\w{0,127}$/u;
 
 interface LaunchValidationDependencies {
   readonly runtimeRoots: readonly string[];

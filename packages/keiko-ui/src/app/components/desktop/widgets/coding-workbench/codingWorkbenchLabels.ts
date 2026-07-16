@@ -62,20 +62,31 @@ export function resourceTone(status: CodingWorkbenchResourceStatus): CodingWorkb
   return "neutral";
 }
 
+function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {
+  if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
+  const snapshot = state.run.value;
+  if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
+  return t("codingWorkbench.announcement.runRevision", {
+    state: runStateLabel(snapshot.state, t),
+    revision: snapshot.revision,
+  });
+}
+
+function setupAnnouncement(
+  status: CodingWorkbenchResourceStatus,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (status === "ready") return t("codingWorkbench.announcement.setupReady");
+  if (status === "loading") return t("codingWorkbench.announcement.setupChecking");
+  if (status === "unavailable") return t("codingWorkbench.announcement.setupUnavailable");
+  return "";
+}
+
 export function lifecycleAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
 ): string {
   const snapshot = state.run.value;
-  const run =
-    state.run.status === "loading"
-      ? t("codingWorkbench.announcement.runChecking")
-      : snapshot === null
-        ? t("codingWorkbench.announcement.noActiveRun")
-        : t("codingWorkbench.announcement.runRevision", {
-            state: runStateLabel(snapshot.state, t),
-            revision: snapshot.revision,
-          });
   const sourceAvailable =
     state.source.value?.runtimePreference === state.runtimePreference &&
     state.source.value.available;
@@ -85,25 +96,32 @@ export function lifecycleAnnouncement(
     snapshot?.state === "recovery-required" && snapshot.recoveryAcknowledged === true
       ? t("codingWorkbench.announcement.recoveryComplete")
       : "";
-  const setup =
-    state.codexSetup.status === "ready"
-      ? t("codingWorkbench.announcement.setupReady")
-      : state.codexSetup.status === "loading"
-        ? t("codingWorkbench.announcement.setupChecking")
-        : state.codexSetup.status === "unavailable"
-          ? t("codingWorkbench.announcement.setupUnavailable")
-          : "";
   return [
-    run,
+    runAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
     recovery,
-    setup,
+    setupAnnouncement(state.codexSetup.status, t),
   ]
     .filter((announcement) => announcement.length > 0)
     .join(" ");
+}
+
+type ReadinessAnnouncementState =
+  "checking" | "refreshFailed" | "unavailable" | "ready" | "notSelected" | "notChecked";
+
+function readinessAnnouncementState(
+  status: CodingWorkbenchResourceStatus,
+  available: boolean,
+): ReadinessAnnouncementState {
+  if (status === "loading") return "checking";
+  if (status === "error") return "refreshFailed";
+  if (status === "unavailable") return "unavailable";
+  if (status === "ready") return available ? "ready" : "unavailable";
+  if (status === "empty") return "notSelected";
+  return "notChecked";
 }
 
 function readinessAnnouncement(
@@ -112,18 +130,7 @@ function readinessAnnouncement(
   available: boolean,
   t: CodingWorkbenchTranslate,
 ): string {
-  const state =
-    status === "loading"
-      ? "checking"
-      : status === "error"
-        ? "refreshFailed"
-        : status === "unavailable" || (status === "ready" && !available)
-          ? "unavailable"
-          : status === "ready"
-            ? "ready"
-            : status === "empty"
-              ? "notSelected"
-              : "notChecked";
+  const state = readinessAnnouncementState(status, available);
   return t(`codingWorkbench.announcement.${resource}.${state}`);
 }
 

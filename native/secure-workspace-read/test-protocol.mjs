@@ -165,6 +165,7 @@ function assertSafeResult(result) {
 }
 
 async function compile(binary, paused = false) {
+  const objectPath = join(dirname(binary), `${basename(binary)}.obj`);
   const args = isWindows
     ? [
         "/nologo",
@@ -177,7 +178,7 @@ async function compile(binary, paused = false) {
         "/D_CRT_SECURE_NO_WARNINGS",
         ...(paused ? ["/DKSR_TEST_PAUSE_AFTER_FINAL_OPEN"] : []),
         `/Fe:${binary}`,
-        `/Fo:${join(dirname(binary), `${basename(binary)}.obj`)}`,
+        `/Fo:${objectPath}`,
         source,
         "/link",
         "ntdll.lib",
@@ -287,7 +288,10 @@ async function assertProtocolCases(binary, fixture, outside) {
   }
   assert.equal(response(await run(binary, request(fixture, "../outside.txt"))).status, 3);
   assert.equal(response(await run(binary, request(fixture, "/absolute.txt"))).status, 3);
-  assert.equal(response(await run(binary, request(fixture, "nested\\good.txt"))).status, 3);
+  assert.equal(
+    response(await run(binary, request(fixture, String.raw`nested\good.txt`))).status,
+    3,
+  );
   assert.equal(response(await run(binary, request(fixture, "linked/outside.txt"))).status, 4);
   assert.equal(response(await run(binary, request(fixture, "final-link.txt"))).status, 4);
   assert.equal(
@@ -310,8 +314,8 @@ async function assertProtocolCases(binary, fixture, outside) {
     response(await run(binary, request(fixture, "nested/good.txt", { cap: 1 }))).status,
     1,
   );
-  const path64 = `${Array.from({ length: 63 }, (_, index) => `d${index}`).join("/")}/deep.txt`;
-  const path65 = `${Array.from({ length: 64 }, (_, index) => `d${index}`).join("/")}/deep.txt`;
+  const path64 = deepRelativePath(63);
+  const path65 = deepRelativePath(64);
   assert.equal(response(await run(binary, request(fixture, path64))).status, 0);
   assert.equal(response(await run(binary, request(fixture, path65))).status, 3);
   if (isWindows) await assertWindowsPolicies(binary, fixture);
@@ -319,6 +323,11 @@ async function assertProtocolCases(binary, fixture, outside) {
     assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
     assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
   }
+}
+
+function deepRelativePath(directoryCount) {
+  const directories = Array.from({ length: directoryCount }, (_, index) => `d${index}`);
+  return `${directories.join("/")}/deep.txt`;
 }
 
 async function assertWindowsPolicies(binary, fixture) {
@@ -343,7 +352,7 @@ async function assertWindowsPolicies(binary, fixture) {
       `Windows path policy mismatch for ${JSON.stringify(denied)}`,
     );
   }
-  for (const invalidRoot of ["C:relative", "\\\\server\\share", "relative"]) {
+  for (const invalidRoot of ["C:relative", String.raw`\\server\share`, "relative"]) {
     assert.equal(
       response(await run(binary, request(invalidRoot, "safe.txt"))).status,
       1,
@@ -578,7 +587,7 @@ async function stableResourceCount() {
 }
 
 async function windowsHandleCount() {
-  const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const powershell = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
   return new Promise((resolveCount, reject) => {
     const child = spawn(
       powershell,
@@ -645,13 +654,10 @@ try {
   const binary =
     externalBinary ??
     join(binaryRoot, isWindows ? "secure-workspace-read.exe" : "secure-workspace-read");
-  const pausedBinary =
-    binaryRoot === undefined
-      ? undefined
-      : join(
-          binaryRoot,
-          isWindows ? "secure-workspace-read-paused.exe" : "secure-workspace-read-paused",
-        );
+  const pausedBinaryName = isWindows
+    ? "secure-workspace-read-paused.exe"
+    : "secure-workspace-read-paused";
+  const pausedBinary = binaryRoot === undefined ? undefined : join(binaryRoot, pausedBinaryName);
   await assertWindowsSourceContract();
   if (externalBinary === undefined) {
     await compile(binary);

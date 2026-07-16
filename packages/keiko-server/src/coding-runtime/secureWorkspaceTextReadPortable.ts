@@ -299,9 +299,8 @@ function absoluteResourceRoot(root: string, target: TargetContract): string | un
 function containedExecutable(root: string, target: TargetContract): string | undefined {
   const path = target.artifactTarget === "win32-x64" ? win32 : { resolve };
   const executable = path.resolve(root, ...target.executablePath.split("/"));
-  const prefix = root.endsWith(target.artifactTarget === "win32-x64" ? "\\" : "/")
-    ? root
-    : `${root}${target.artifactTarget === "win32-x64" ? "\\" : "/"}`;
+  const separator = target.artifactTarget === "win32-x64" ? "\\" : "/";
+  const prefix = root.endsWith(separator) ? root : `${root}${separator}`;
   const candidate = target.artifactTarget === "win32-x64" ? executable.toLowerCase() : executable;
   const boundary = target.artifactTarget === "win32-x64" ? prefix.toLowerCase() : prefix;
   return candidate.startsWith(boundary) ? executable : undefined;

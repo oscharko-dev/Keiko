@@ -8,9 +8,10 @@ import type {
 
 import type {
   CodingToolAuthorityPort,
+  CodingToolFacade,
+  CodingToolFacadeOptions,
   CodingToolProducerBinding,
 } from "./codingToolFacadePorts.js";
-import type { CodingToolFacade, CodingToolFacadeOptions } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import {
   createCodingToolGovernedDelegate,

@@ -5,6 +5,7 @@ import {
   projectCodexAppServerToolCallOutcome,
   validateCodexAppServerClientRequest,
   type CodexAppServerId,
+  type CodexAppServerMessage,
   type CodexAppServerProjection,
   type CodexAppServerToolCallOutcome,
 } from "./codexAppServerProtocol.js";
@@ -223,7 +224,6 @@ export class CodexAppServerClient {
     const oldest = this.#recentCompletedToolRequestOrder.shift();
     if (oldest !== undefined) this.#recentCompletedToolRequests.delete(oldest);
   }
-  // eslint-disable-next-line complexity -- response, notification, and server-request envelopes fail closed independently.
   #receive(chunk: string): void {
     if (this.#closed) return;
     const parsed = this.#decoder.push(chunk);
@@ -232,42 +232,39 @@ export class CodexAppServerClient {
       return;
     }
     for (const message of parsed.value) {
-      const isResponse =
-        Object.prototype.hasOwnProperty.call(message, "id") &&
-        (Object.prototype.hasOwnProperty.call(message, "result") ||
-          Object.prototype.hasOwnProperty.call(message, "error"));
-      if (isResponse) {
-        if (!this.#response(message)) {
-          this.#fail("protocol-invalid");
-          return;
-        }
-      } else {
-        const projection = projectCodexAppServerMessage(message);
-        if (!projection.ok) {
-          this.#fail("protocol-invalid");
-          return;
-        }
-        if (projection.value === undefined) continue;
-        if (projection.value.kind === "tool-call") {
-          if (
-            this.#admittedToolRequests.has(projection.value.id) ||
-            this.#recentCompletedToolRequests.has(projection.value.id) ||
-            this.#admittedToolRequests.size >= DEFAULT_MAX_PENDING
-          ) {
-            this.#fail("protocol-invalid");
-            return;
-          }
-          this.#admittedToolRequests.add(projection.value.id);
-        }
-        this.#onProjection?.(projection.value);
+      const accepted = isResponseEnvelope(message)
+        ? this.#response(message)
+        : this.#projectIncoming(message);
+      if (!accepted) {
+        this.#fail("protocol-invalid");
+        return;
       }
     }
+  }
+  #projectIncoming(message: CodexAppServerMessage): boolean {
+    const projection = projectCodexAppServerMessage(message);
+    if (!projection.ok) return false;
+    if (projection.value === undefined) return true;
+    if (projection.value.kind === "tool-call" && !this.#admitToolRequest(projection.value.id))
+      return false;
+    this.#onProjection?.(projection.value);
+    return true;
+  }
+  #admitToolRequest(id: CodexAppServerId): boolean {
+    if (
+      this.#admittedToolRequests.has(id) ||
+      this.#recentCompletedToolRequests.has(id) ||
+      this.#admittedToolRequests.size >= DEFAULT_MAX_PENDING
+    )
+      return false;
+    this.#admittedToolRequests.add(id);
+    return true;
   }
   #response(message: Readonly<Record<string, unknown>>): boolean {
     const id = message.id;
     if (!validId(id)) return false;
-    const hasResult = Object.prototype.hasOwnProperty.call(message, "result");
-    const hasError = Object.prototype.hasOwnProperty.call(message, "error");
+    const hasResult = Object.hasOwn(message, "result");
+    const hasError = Object.hasOwn(message, "error");
     if (hasResult === hasError || Object.keys(message).length !== 2) return false;
     const pending = this.#take(id);
     if (pending === undefined) return false;
@@ -288,7 +285,7 @@ export class CodexAppServerClient {
     this.#closed = true;
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
-    for (const id of [...this.#pending.keys()]) {
+    for (const id of this.#pending.keys()) {
       this.#take(id)?.reject(error("transport-failed"));
     }
     this.#admittedToolRequests.clear();
@@ -306,6 +303,12 @@ export class CodexAppServerClient {
   }
 }
 
+function isResponseEnvelope(message: CodexAppServerMessage): boolean {
+  return (
+    Object.hasOwn(message, "id") &&
+    (Object.hasOwn(message, "result") || Object.hasOwn(message, "error"))
+  );
+}
 function isPromiseLike(value: void | Promise<void>): value is Promise<void> {
   return typeof value === "object" && typeof value.then === "function";
 }

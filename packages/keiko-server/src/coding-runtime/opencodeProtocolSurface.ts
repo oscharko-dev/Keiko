@@ -49,7 +49,9 @@ function projectPaths(
     const path = route.slice(separator + 1);
     const operation = record(record(source?.[path])?.[method]);
     if (operation === undefined) continue;
-    (paths[path] ??= {})[method] = structural(operation);
+    const operations = paths[path] ?? {};
+    operations[method] = structural(operation);
+    paths[path] = operations;
   }
   return paths;
 }
@@ -68,7 +70,9 @@ function projectReferencedComponents(
     visited.add(reference);
     const component = projectComponent(document, reference);
     if (component === undefined) continue;
-    (projected[component.category] ??= {})[component.name] = component.value;
+    const category = projected[component.category] ?? {};
+    category[component.name] = component.value;
+    projected[component.category] = category;
     for (const nested of collectReferences(component.value)) {
       if (!visited.has(nested)) references.add(nested);
     }
@@ -131,9 +135,15 @@ function canonicalJson(value: unknown): string {
   const object = record(value);
   if (object !== undefined) {
     return `{${Object.keys(object)
-      .sort()
+      .sort(compareCodeUnits)
       .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+/** Preserves the default code-unit sort so the pinned protocol-surface digest stays byte-stable. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }

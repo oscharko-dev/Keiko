@@ -93,7 +93,7 @@ class BoundedLineParser implements CodingRuntimeLineParser {
   private emitPartial(): CodingRuntimeProcessIoResult {
     const line = this.partial;
     this.partial = Buffer.alloc(0);
-    const decoded = decodeUtf8(line[line.length - 1] === 0x0d ? line.subarray(0, -1) : line);
+    const decoded = decodeUtf8(line.at(-1) === 0x0d ? line.subarray(0, -1) : line);
     if (decoded === undefined) return this.reject("utf8-invalid");
     try {
       this.onLine(decoded);

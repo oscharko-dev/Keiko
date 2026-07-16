@@ -1,9 +1,6 @@
 import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
-/** Opaque authority material; only the authoritative admission port may inspect its value. */
-export type CodingToolCapability = string;
-
 export interface CodingToolProducerBinding {
   readonly runId: string;
   readonly envelopeDigest: string;
@@ -28,7 +25,8 @@ export type CodingToolAdmission =
 
 export interface CodingToolAuthorityPort {
   readonly admit: (
-    capability: CodingToolCapability | undefined,
+    /** Opaque authority material; only the authoritative admission port may inspect its value. */
+    capability: string | undefined,
     request: CodingToolActionRequest,
   ) => CodingToolAdmission;
 }
@@ -55,7 +53,8 @@ export interface CodingToolFacadeOptions {
 
 export interface CodingToolFacadeInput {
   readonly body: string | Buffer;
-  readonly capability?: CodingToolCapability | undefined;
+  /** Opaque authority material; only the authoritative admission port may inspect its value. */
+  readonly capability?: string | undefined;
   readonly headers?: Headers | Readonly<Record<string, string | undefined>> | undefined;
   readonly signal?: AbortSignal | undefined;
 }

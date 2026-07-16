@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodingToolFacade } from "./codingToolFacade.js";
-import type {
-  CodingToolAuthorityPort,
-  CodingToolCapability,
-  CodingToolDelegatePort,
-} from "./codingToolFacadePorts.js";
+import type { CodingToolAuthorityPort, CodingToolDelegatePort } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
 const capability = "capability-1-opaque-runtime-secret";
@@ -74,7 +70,7 @@ describe("CodingToolFacade", () => {
     const ports = facade();
     const admitted = new Set<string>();
     ports.authority.admit = vi.fn(
-      (_capability: CodingToolCapability | undefined, request: CodingToolActionRequest) => {
+      (_capability: string | undefined, request: CodingToolActionRequest) => {
         const replayKey = `${request.actionId}:${request.idempotencyKey}`;
         if (admitted.has(replayKey)) {
           return { ok: false as const, reason: "authority-replayed" };

@@ -42,7 +42,7 @@ const WORKSPACE_READ_SCHEMA = {
       type: "string",
       minLength: 1,
       maxLength: 512,
-      pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+      pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
     },
   },
   required: ["relativePath"],
@@ -154,9 +154,15 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (!isRecord(value)) return JSON.stringify(value);
   return `{${Object.keys(value)
-    .sort()
+    .sort(compareCodeUnits)
     .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
     .join(",")}}`;
+}
+
+/** Preserves the default code-unit sort so schema digests stay byte-stable across locales. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }
 
 function schemaDigest(schema: Readonly<Record<string, unknown>>): string {

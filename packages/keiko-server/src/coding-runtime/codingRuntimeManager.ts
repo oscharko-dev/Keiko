@@ -915,8 +915,15 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return handshakeFailure;
   }
 
-  // eslint-disable-next-line complexity -- every independent revocation/reap barrier must fail closed without skipping termination
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    const barrierComplete = await this.runShutdownBarrier(active);
+    active.shutdownBarrierComplete = barrierComplete;
+    const receipt = await this.reapTree(active);
+    return barrierComplete ? receipt : undefined;
+  }
+
+  /** Every independent revocation barrier must fail closed without skipping termination. */
+  private async runShutdownBarrier(active: ActiveRuntime): Promise<boolean> {
     let barrierComplete = true;
     try {
       if (!(await this.deps.revokeRuntime(active.context.runId))) barrierComplete = false;
@@ -935,37 +942,35 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     if (!this.disposeLifecycleMonitor(active)) barrierComplete = false;
     if (!(await this.detachCodexProtocol(active))) barrierComplete = false;
-    active.shutdownBarrierComplete = barrierComplete;
+    return barrierComplete;
+  }
 
-    let receipt: RuntimeReapReceipt | undefined;
+  private async reapTree(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
     try {
       this.deps.supervisor.terminate(active.tree, "graceful");
-      let exit = await this.deps.supervisor.waitForCompleteTreeExit(
+      const exit = await this.deps.supervisor.waitForCompleteTreeExit(
         active.tree,
         active.shutdownTimeoutMs,
       );
-      if (exit.status === "reaped") receipt = exit.receipt;
-      else {
-        this.deps.supervisor.terminate(active.tree, "force");
-        exit = await this.deps.supervisor.waitForCompleteTreeExit(
-          active.tree,
-          active.shutdownTimeoutMs,
-        );
-        if (exit.status === "reaped") receipt = exit.receipt;
-      }
+      if (exit.status === "reaped") return exit.receipt;
+      return await this.forceReap(active);
     } catch {
       try {
-        this.deps.supervisor.terminate(active.tree, "force");
-        const exit = await this.deps.supervisor.waitForCompleteTreeExit(
-          active.tree,
-          active.shutdownTimeoutMs,
-        );
-        if (exit.status === "reaped") receipt = exit.receipt;
+        return await this.forceReap(active);
       } catch {
         // The caller moves the run to recovery-required when reap cannot be proven.
+        return undefined;
       }
     }
-    return barrierComplete ? receipt : undefined;
+  }
+
+  private async forceReap(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    this.deps.supervisor.terminate(active.tree, "force");
+    const exit = await this.deps.supervisor.waitForCompleteTreeExit(
+      active.tree,
+      active.shutdownTimeoutMs,
+    );
+    return exit.status === "reaped" ? exit.receipt : undefined;
   }
 
   private attachRuntime(active: ActiveRuntime): void {

@@ -221,3 +221,59 @@ describe("Coding Workbench live state", () => {
     expect(state.canStart).toBe(false);
   });
 });
+
+describe("mode selection, setup plans, and mutation failures", () => {
+  it("keeps the state identity when the requested mode does not change", () => {
+    const state = readyState();
+    expect(
+      codingWorkbenchRuntimeReducer(state, { kind: "select-mode", mode: "governed-assist" }),
+    ).toBe(state);
+  });
+
+  it("resets runtime readiness when the requested mode changes", () => {
+    const state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "select-mode",
+      mode: "supervised-coding",
+    });
+    expect(state.requestedMode).toBe("supervised-coding");
+    expect(state.runtime).toMatchObject({ status: "idle", value: null });
+    expect(state.canStart).toBe(false);
+  });
+
+  it("stores a server-approved codex setup plan as ready truth", () => {
+    const state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "codex-setup-set",
+      plan: {
+        schemaVersion: "1",
+        profileId: "profile-1",
+        method: "chatgpt-device-code",
+        modelSource: "chatgpt-codex-subscription-profile",
+        runtimeSource: "codex-cli-adapter",
+        credentialStore: "auto",
+        stateScope: "keiko-owned-state",
+        stateRoot: "keiko-codex-runtime-state",
+        usesGlobalCodexHome: false,
+        commandLabel: "codex-login-device-auth",
+        requiresSecretInput: false,
+      },
+    });
+    expect(state.codexSetup).toMatchObject({
+      status: "ready",
+      value: { method: "chatgpt-device-code" },
+      error: null,
+    });
+  });
+
+  it("projects a failed mutation as a scoped retryable error", () => {
+    const failed = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-failed",
+      error: { code: "CODING_RUNTIME_INVALID_INTENT", message: "redacted", retryable: true },
+    });
+    expect(failed.mutation).toMatchObject({
+      status: "error",
+      error: { code: "CODING_RUNTIME_INVALID_INTENT" },
+    });
+    const recovered = codingWorkbenchRuntimeReducer(failed, { kind: "mutation-complete" });
+    expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
+  });
+});

@@ -436,8 +436,8 @@ function validateSidecarRuntimes(manifest, failures, options) {
   );
 }
 
-// One closed schema validator intentionally enumerates every field and lifecycle invariant.
-// eslint-disable-next-line complexity, max-lines-per-function
+// One closed schema validator intentionally enumerates every field and lifecycle invariant,
+// split into per-section helpers that run in declaration order.
 function validateNativeHelpers(manifest, failures, options) {
   const helpers = manifest.nativeHelpers;
   // Schema v1 predates #2333. Absence remains parseable so an installed legacy artifact can be
@@ -462,6 +462,14 @@ function validateNativeHelpers(manifest, failures, options) {
     push(failures, path, "must be an object");
     return;
   }
+  const { target, targetName } = validateNativeHelperIdentity(manifest, helper, path, failures);
+  validateNativeHelperProtocol(helper, path, failures);
+  validateNativeHelperSource(helper, path, failures, options);
+  validateNativeHelperBinding(helper, targetName, path, failures, options);
+  validateNativeHelperSigning(helper, target, path, failures, options);
+}
+
+function validateNativeHelperIdentity(manifest, helper, path, failures) {
   exactKeysAt(helper, NATIVE_HELPER_KEYS, path, failures);
   literalAt(helper, "name", "keiko-secure-workspace-read", path, failures);
   literalAt(helper, "kind", "secure-workspace-text-read", path, failures);
@@ -480,6 +488,10 @@ function validateNativeHelpers(manifest, failures, options) {
   if (stringAt(helper, "executablePath", path, failures) !== expectedExecutable) {
     push(failures, `${path}.executablePath`, `must be ${expectedExecutable}`);
   }
+  return { target, targetName };
+}
+
+function validateNativeHelperProtocol(helper, path, failures) {
   const protocol = recordAt(helper, "protocol", path, failures);
   exactKeysAt(
     protocol,
@@ -490,6 +502,9 @@ function validateNativeHelpers(manifest, failures, options) {
   literalAt(protocol, "schemaVersion", 1, `${path}.protocol`, failures);
   literalAt(protocol, "requestMagic", "KSR1", `${path}.protocol`, failures);
   literalAt(protocol, "responseMagic", "KSS1", `${path}.protocol`, failures);
+}
+
+function validateNativeHelperSource(helper, path, failures, options) {
   const source = recordAt(helper, "source", path, failures);
   exactKeysAt(source, ["commitSha", "path", "treeSha256"], `${path}.source`, failures);
   const commitSha = stringAt(source, "commitSha", `${path}.source`, failures);
@@ -498,6 +513,9 @@ function validateNativeHelpers(manifest, failures, options) {
     push(failures, `${path}.source.commitSha`, "must be a commit SHA");
   literalAt(source, "path", "native/secure-workspace-read", `${path}.source`, failures);
   digestAt(source, "treeSha256", `${path}.source`, failures, options);
+}
+
+function validateNativeHelperBinding(helper, targetName, path, failures, options) {
   digestAt(helper, "unsignedSha256", path, failures, options);
   digestAt(helper, "shippedSha256", path, failures, options);
   positiveNumberAt(helper, "sizeBytes", path, failures);
@@ -508,6 +526,9 @@ function validateNativeHelpers(manifest, failures, options) {
   ) {
     push(failures, `${path}.sbomBomRef`, "must bind the helper and platform target");
   }
+}
+
+function validateNativeHelperSigning(helper, target, path, failures, options) {
   const signing = recordAt(helper, "signing", path, failures);
   exactKeysAt(
     signing,
@@ -530,37 +551,40 @@ function validateNativeHelpers(manifest, failures, options) {
   const status = stringAt(signing, "verificationStatus", `${path}.signing`, failures);
   if (!PORTABLE_VERIFICATION_STATUSES.includes(status))
     push(failures, `${path}.signing.verificationStatus`, "is unsupported");
-  const signatureVerified = booleanAt(signing, "signatureVerified", `${path}.signing`, failures);
-  const notarizationRequired = booleanAt(
-    signing,
-    "notarizationRequired",
-    `${path}.signing`,
-    failures,
-  );
-  const notarizationVerified = booleanAt(
-    signing,
-    "notarizationVerified",
-    `${path}.signing`,
-    failures,
-  );
-  if (target !== undefined && notarizationRequired !== (target.nodePlatform === "darwin"))
+  const state = {
+    status,
+    signatureVerified: booleanAt(signing, "signatureVerified", `${path}.signing`, failures),
+    notarizationRequired: booleanAt(signing, "notarizationRequired", `${path}.signing`, failures),
+    notarizationVerified: booleanAt(signing, "notarizationVerified", `${path}.signing`, failures),
+  };
+  validateNativeHelperSigningLifecycle(target, path, failures, options, state);
+}
+
+function validateNativeHelperSigningLifecycle(target, path, failures, options, state) {
+  if (target !== undefined && state.notarizationRequired !== (target.nodePlatform === "darwin"))
     push(failures, `${path}.signing.notarizationRequired`, "must match target");
-  if (target?.nodePlatform !== "darwin" && notarizationVerified)
+  if (target?.nodePlatform !== "darwin" && state.notarizationVerified)
     push(failures, `${path}.signing.notarizationVerified`, "must be false for non-macOS targets");
-  if (
-    options.context === "staging" &&
-    (status !== "unverified-staging" || signatureVerified || notarizationVerified)
-  ) {
+  if (options.context === "staging" && violatesStagingSigning(state)) {
     push(failures, `${path}.signing`, "must remain explicitly unverified during staging");
   }
-  if (
-    requiresProductionVerification(options) &&
-    (status !== "verified-production" ||
-      !signatureVerified ||
-      (target?.nodePlatform === "darwin" && !notarizationVerified))
-  ) {
+  if (requiresProductionVerification(options) && violatesProductionSigning(target, state)) {
     push(failures, `${path}.signing`, "must be verified for production");
   }
+}
+
+function violatesStagingSigning(state) {
+  return (
+    state.status !== "unverified-staging" || state.signatureVerified || state.notarizationVerified
+  );
+}
+
+function violatesProductionSigning(target, state) {
+  return (
+    state.status !== "verified-production" ||
+    !state.signatureVerified ||
+    (target?.nodePlatform === "darwin" && !state.notarizationVerified)
+  );
 }
 
 function validateSidecarRuntime(manifest, runtime, index, names, failures, options) {

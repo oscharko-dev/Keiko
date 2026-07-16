@@ -18,5 +18,6 @@ export function projectRuntimeAuthorityValue(
   rawValue: string,
 ): string {
   const hex = createHash("sha256").update(`${domain}\0${rawValue}`, "utf8").digest("hex");
-  return `${PREFIX[domain]}-${BigInt(`0x${hex}`).toString(10)}`;
+  const decimal = BigInt(`0x${hex}`).toString(10);
+  return `${PREFIX[domain]}-${decimal}`;
 }

@@ -2,8 +2,7 @@
 
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -206,7 +205,7 @@ async function stableResourceCount(nodePlatform) {
 }
 
 async function windowsHandleCount() {
-  const executable = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const executable = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
   return new Promise((resolveCount, reject) => {
     const child = spawn(
       executable,

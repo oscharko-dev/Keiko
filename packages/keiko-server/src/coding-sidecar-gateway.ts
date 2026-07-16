@@ -475,8 +475,10 @@ function incrementalUtf8ByteCount(
   if (token.length === 0) {
     return { bytes: 0, endsWithHighSurrogate: previousEndedWithHighSurrogate };
   }
-  const firstCodeUnit = token.charCodeAt(0);
-  const lastCodeUnit = token.charCodeAt(token.length - 1);
+  // codePointAt reports the trailing code unit itself at these positions unless the token starts
+  // a full surrogate pair, whose combined code point falls outside both surrogate ranges anyway.
+  const firstCodeUnit = token.codePointAt(0) ?? 0;
+  const lastCodeUnit = token.codePointAt(token.length - 1) ?? 0;
   const joinsSplitSurrogatePair =
     previousEndedWithHighSurrogate && firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff;
   return {
@@ -793,7 +795,6 @@ async function executeBufferedGatewayChat(
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
-// eslint-disable-next-line complexity, max-lines-per-function
 async function streamGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -803,8 +804,6 @@ async function streamGatewayChat(
   runId: string,
   cancellationSignal: AbortSignal,
 ): Promise<RouteResult | typeof STREAMING> {
-  const id = `chatcmpl-${randomUUID()}`;
-  const created = Math.floor(Date.now() / 1000);
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
     iterator = chatStreamFactoryFor(deps)(config, modelId)(request)[Symbol.asyncIterator]();
@@ -813,6 +812,79 @@ async function streamGatewayChat(
     emitGatewayFailureDiagnostic(ctx, deps);
     return unavailableError();
   }
+  const session = createGatewayStreamSession(
+    ctx,
+    deps,
+    modelId,
+    request,
+    runId,
+    cancellationSignal,
+    iterator,
+  );
+  if (!beginGatewayStream(session)) return STREAMING;
+  const cancelIterator = (): void => {
+    void iterator.return?.();
+  };
+  cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
+  try {
+    await pumpGatewayStream(session);
+  } catch {
+    settleGatewayStreamError(session);
+  } finally {
+    cancellationSignal.removeEventListener("abort", cancelIterator);
+  }
+  return STREAMING;
+}
+
+interface GatewayStreamSession {
+  readonly ctx: RouteContext;
+  readonly deps: UiHandlerDeps;
+  readonly id: string;
+  readonly created: number;
+  readonly modelId: string;
+  readonly request: GatewayRequest;
+  readonly runId: string;
+  readonly cancellationSignal: AbortSignal;
+  readonly iterator: AsyncIterator<GatewayStreamChunk>;
+  readonly metrics: {
+    completionTokens: number;
+    promptTokens: number;
+    outputBytes: number;
+    previousDeltaEndedWithHighSurrogate: boolean;
+  };
+}
+
+function createGatewayStreamSession(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  modelId: string,
+  request: GatewayRequest,
+  runId: string,
+  cancellationSignal: AbortSignal,
+  iterator: AsyncIterator<GatewayStreamChunk>,
+): GatewayStreamSession {
+  return {
+    ctx,
+    deps,
+    id: `chatcmpl-${randomUUID()}`,
+    created: Math.floor(Date.now() / 1000),
+    modelId,
+    request,
+    runId,
+    cancellationSignal,
+    iterator,
+    metrics: {
+      completionTokens: 0,
+      promptTokens: 0,
+      outputBytes: 0,
+      previousDeltaEndedWithHighSurrogate: false,
+    },
+  };
+}
+
+/** Returns false when the initial SSE handshake could not be delivered. */
+function beginGatewayStream(session: GatewayStreamSession): boolean {
+  const { ctx, id, created, modelId } = session;
   ctx.res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-store",
@@ -820,105 +892,129 @@ async function streamGatewayChat(
   });
   if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
     ctx.res.destroy();
-    recordGatewayOutcome(deps, runId, "cancelled", 0, 0);
-    return STREAMING;
+    recordSessionOutcome(session, "cancelled");
+    return false;
   }
-  const cancelIterator = (): void => {
-    void iterator.return?.();
-  };
-  cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
-  let completionTokens = 0;
-  let promptTokens = 0;
-  let outputBytes = 0;
-  let previousDeltaEndedWithHighSurrogate = false;
-  try {
-    for (;;) {
-      if (isGatewayRequestCancelled(cancellationSignal)) {
-        await iterator.return?.();
-        recordGatewayOutcome(deps, runId, "cancelled", completionTokens, outputBytes);
-        return STREAMING;
-      }
-      const next = await iterator.next();
-      if (cancellationSignal.aborted) {
-        recordGatewayOutcome(deps, runId, "cancelled", completionTokens, outputBytes);
-        return STREAMING;
-      }
-      if (next.done) break;
-      const chunk = next.value;
-      if (chunk.type === "delta") {
-        const deltaMetrics = incrementalUtf8ByteCount(
-          chunk.token,
-          previousDeltaEndedWithHighSurrogate,
-        );
-        outputBytes += deltaMetrics.bytes;
-        previousDeltaEndedWithHighSurrogate = deltaMetrics.endsWithHighSurrogate;
-        completionTokens = Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
-        if (exceedsOutputBudget({ completionTokens, outputBytes }, request.maxOutputTokens ?? 1)) {
-          await iterator.return?.();
-          recordGatewayOutcome(deps, runId, "output-limit", completionTokens, outputBytes);
-          writeStreamTerminal(ctx, id, created, modelId, "length", promptTokens, completionTokens);
-          return STREAMING;
-        }
-        if (
-          !writeOpenAiSse(
-            ctx,
-            openAiStreamChunk(id, created, modelId, { content: chunk.token }, null),
-          )
-        ) {
-          ctx.res.destroy();
-          await iterator.return?.();
-          recordGatewayOutcome(deps, runId, "cancelled", completionTokens, outputBytes);
-          return STREAMING;
-        }
-        continue;
-      }
-      const metrics = outputMetrics(chunk.response);
-      completionTokens = metrics.completionTokens;
-      outputBytes = metrics.outputBytes;
-      promptTokens = chunk.response.usage.promptTokens;
-      if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
-        await iterator.return?.();
-        recordGatewayOutcome(deps, runId, "output-limit", completionTokens, outputBytes);
-        writeStreamTerminal(ctx, id, created, modelId, "length", promptTokens, completionTokens);
-        return STREAMING;
-      }
-      if (chunk.response.toolCalls.length > 0) {
-        writeOpenAiSse(
-          ctx,
-          openAiStreamChunk(
-            id,
-            created,
-            modelId,
-            { tool_calls: openAiToolCalls(chunk.response.toolCalls) },
-            null,
-          ),
-        );
-      }
-      recordGatewayOutcome(deps, runId, "accepted", completionTokens, outputBytes);
-      writeStreamTerminal(
-        ctx,
+  return true;
+}
+
+function recordSessionOutcome(
+  session: GatewayStreamSession,
+  outcome: "accepted" | "cancelled" | "failed" | "output-limit",
+): void {
+  const { deps, runId, metrics } = session;
+  recordGatewayOutcome(deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+}
+
+function writeSessionTerminal(
+  session: GatewayStreamSession,
+  finishReason: NormalizedResponse["finishReason"],
+): void {
+  const { ctx, id, created, modelId, metrics } = session;
+  writeStreamTerminal(
+    ctx,
+    id,
+    created,
+    modelId,
+    finishReason,
+    metrics.promptTokens,
+    metrics.completionTokens,
+  );
+}
+
+async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
+  const { cancellationSignal, iterator } = session;
+  for (;;) {
+    if (isGatewayRequestCancelled(cancellationSignal)) {
+      await iterator.return?.();
+      recordSessionOutcome(session, "cancelled");
+      return;
+    }
+    const next = await iterator.next();
+    if (cancellationSignal.aborted) {
+      recordSessionOutcome(session, "cancelled");
+      return;
+    }
+    if (next.done) break;
+    const chunk = next.value;
+    if (chunk.type === "delta") {
+      if (await streamGatewayDelta(session, chunk.token)) continue;
+      return;
+    }
+    await streamGatewayResponse(session, chunk.response);
+    return;
+  }
+  recordSessionOutcome(session, "failed");
+  writeSessionTerminal(session, "error");
+}
+
+/** Returns true when the stream may continue with the next chunk. */
+async function streamGatewayDelta(session: GatewayStreamSession, token: string): Promise<boolean> {
+  const { ctx, id, created, modelId, request, iterator, metrics } = session;
+  const deltaMetrics = incrementalUtf8ByteCount(token, metrics.previousDeltaEndedWithHighSurrogate);
+  metrics.outputBytes += deltaMetrics.bytes;
+  metrics.previousDeltaEndedWithHighSurrogate = deltaMetrics.endsWithHighSurrogate;
+  metrics.completionTokens = Math.ceil(metrics.outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
+  const budget = { completionTokens: metrics.completionTokens, outputBytes: metrics.outputBytes };
+  if (exceedsOutputBudget(budget, request.maxOutputTokens ?? 1)) {
+    await iterator.return?.();
+    recordSessionOutcome(session, "output-limit");
+    writeSessionTerminal(session, "length");
+    return false;
+  }
+  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { content: token }, null))) {
+    ctx.res.destroy();
+    await iterator.return?.();
+    recordSessionOutcome(session, "cancelled");
+    return false;
+  }
+  return true;
+}
+
+async function streamGatewayResponse(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+): Promise<void> {
+  const { ctx, id, created, modelId, request, iterator, metrics } = session;
+  const outcome = outputMetrics(response);
+  metrics.completionTokens = outcome.completionTokens;
+  metrics.outputBytes = outcome.outputBytes;
+  metrics.promptTokens = response.usage.promptTokens;
+  if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
+    await iterator.return?.();
+    recordSessionOutcome(session, "output-limit");
+    writeSessionTerminal(session, "length");
+    return;
+  }
+  if (response.toolCalls.length > 0) {
+    const wrote = writeOpenAiSse(
+      ctx,
+      openAiStreamChunk(
         id,
         created,
         modelId,
-        chunk.response.finishReason,
-        promptTokens,
-        completionTokens,
-      );
-      return STREAMING;
+        { tool_calls: openAiToolCalls(response.toolCalls) },
+        null,
+      ),
+    );
+    if (!wrote) {
+      ctx.res.destroy();
+      await iterator.return?.();
+      recordSessionOutcome(session, "cancelled");
+      return;
     }
-    recordGatewayOutcome(deps, runId, "failed", completionTokens, outputBytes);
-    writeStreamTerminal(ctx, id, created, modelId, "error", promptTokens, completionTokens);
-  } catch {
-    if (!cancellationSignal.aborted) {
-      recordGatewayOutcome(deps, runId, "failed", completionTokens, outputBytes);
-      writeStreamTerminal(ctx, id, created, modelId, "error", promptTokens, completionTokens);
-    } else {
-      recordGatewayOutcome(deps, runId, "cancelled", completionTokens, outputBytes);
-    }
-  } finally {
-    cancellationSignal.removeEventListener("abort", cancelIterator);
   }
-  return STREAMING;
+  recordSessionOutcome(session, "accepted");
+  writeSessionTerminal(session, response.finishReason);
+}
+
+function settleGatewayStreamError(session: GatewayStreamSession): void {
+  if (!session.cancellationSignal.aborted) {
+    recordSessionOutcome(session, "failed");
+    writeSessionTerminal(session, "error");
+  } else {
+    recordSessionOutcome(session, "cancelled");
+  }
 }
 
 function isGatewayRequestCancelled(signal: AbortSignal): boolean {

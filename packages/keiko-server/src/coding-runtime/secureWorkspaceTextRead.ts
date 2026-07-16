@@ -65,7 +65,6 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
 
   public constructor(private readonly deps: SecureWorkspaceTextReadDeps) {}
 
-  // eslint-disable-next-line max-lines-per-function, complexity
   public async readText(request: {
     readonly relativePath: string;
     readonly signal?: AbortSignal | undefined;
@@ -77,59 +76,74 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       return { ok: false, reason: "unsupported-platform" };
     if (this.live >= SECURE_WORKSPACE_TEXT_READ_MAX_LIVE) return { ok: false, reason: "busy" };
     this.live += 1;
-    let frame: Buffer | undefined;
     try {
-      const workspaceRoot = await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot);
-      if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
-      const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
-        this.deps.artifact,
-        platform,
-        this.deps.artifactVerifier,
-      );
-      if (verifiedArtifact === undefined) return { ok: false, reason: "artifact-unverified" };
-      frame = encodeSecureWorkspaceReadRequest({
-        root: workspaceRoot,
-        relativePath: request.relativePath,
-        byteCap: 65_536,
-      });
-      const signal =
-        request.signal === undefined
-          ? AbortSignal.timeout(SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS)
-          : AbortSignal.any([
-              request.signal,
-              AbortSignal.timeout(SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS),
-            ]);
+      return await this.readTextGuarded(request);
+    } finally {
+      this.live -= 1;
+    }
+  }
+
+  private async readTextGuarded(request: {
+    readonly relativePath: string;
+    readonly signal?: AbortSignal | undefined;
+  }): Promise<SecureWorkspaceTextReadResult> {
+    const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
+    const workspaceRoot = await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot);
+    if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
+    const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
+      this.deps.artifact,
+      platform,
+      this.deps.artifactVerifier,
+    );
+    if (verifiedArtifact === undefined) return { ok: false, reason: "artifact-unverified" };
+    const frame = encodeSecureWorkspaceReadRequest({
+      root: workspaceRoot,
+      relativePath: request.relativePath,
+      byteCap: 65_536,
+    });
+    try {
+      const signal = readSignal(request.signal);
       let response: Uint8Array;
       try {
         response = await this.deps.processFactory
           .create(verifiedArtifact)
           .run({ stdin: frame, signal });
       } catch (error) {
-        if (error instanceof SecureWorkspaceReadProcessError && error.reason === "protocol-invalid")
-          return { ok: false, reason: "protocol-invalid" };
-        return {
-          ok: false,
-          reason: signal.aborted
-            ? callerCancelled(request.signal)
-              ? "cancelled"
-              : "timeout"
-            : "process-failed",
-        };
+        return processRunFailure(error, signal, request.signal);
       }
-      try {
-        const decoded = decodeSecureWorkspaceReadResponse(response);
-        if (decoded.status !== "ok") return { ok: false, reason: helperFailure(decoded.status) };
-        const text = decodeSecureWorkspaceText(decoded.bytes);
-        return text.ok ? { ok: true, text: text.text } : { ok: false, reason: text.reason };
-      } catch {
-        return { ok: false, reason: "protocol-invalid" };
-      } finally {
-        response.fill(0);
-      }
+      return decodeHelperResponse(response);
     } finally {
-      frame?.fill(0);
-      this.live -= 1;
+      frame.fill(0);
     }
+  }
+}
+
+function readSignal(callerSignal: AbortSignal | undefined): AbortSignal {
+  const timeout = AbortSignal.timeout(SECURE_WORKSPACE_TEXT_READ_TIMEOUT_MS);
+  return callerSignal === undefined ? timeout : AbortSignal.any([callerSignal, timeout]);
+}
+
+function processRunFailure(
+  error: unknown,
+  signal: AbortSignal,
+  callerSignal: AbortSignal | undefined,
+): SecureWorkspaceTextReadResult {
+  if (error instanceof SecureWorkspaceReadProcessError && error.reason === "protocol-invalid")
+    return { ok: false, reason: "protocol-invalid" };
+  if (!signal.aborted) return { ok: false, reason: "process-failed" };
+  return { ok: false, reason: callerCancelled(callerSignal) ? "cancelled" : "timeout" };
+}
+
+function decodeHelperResponse(response: Uint8Array): SecureWorkspaceTextReadResult {
+  try {
+    const decoded = decodeSecureWorkspaceReadResponse(response);
+    if (decoded.status !== "ok") return { ok: false, reason: helperFailure(decoded.status) };
+    const text = decodeSecureWorkspaceText(decoded.bytes);
+    return text.ok ? { ok: true, text: text.text } : { ok: false, reason: text.reason };
+  } catch {
+    return { ok: false, reason: "protocol-invalid" };
+  } finally {
+    response.fill(0);
   }
 }
 

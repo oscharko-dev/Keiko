@@ -75,8 +75,8 @@ const MAX_JSONL_BATCH_MESSAGES = 256;
 const MAX_JSON_DEPTH = 64;
 const MAX_TEXT_BYTES = 64 * 1024;
 const CLIENT_METHODS = new Set<string>(CODEX_APP_SERVER_CLIENT_METHODS);
-const FORBIDDEN_KEYS =
-  /(?:api[_-]?key|auth[_-]?tokens?|refresh[_-]?tokens?|access[_-]?tokens?|token|password|secret|credential)/iu;
+// "token" alone already covers auth/refresh/access token variants because matching is unanchored.
+const FORBIDDEN_KEYS = /(?:api[_-]?key|token|password|secret|credential)/iu;
 const BUILT_IN_TOOL =
   /^(?:exec|shell|bash|apply[_-]?patch|file|fs|config|plugin|mcp|approval)(?:$|[/:._-])/iu;
 const PLAN_TYPES = new Set([
@@ -146,60 +146,82 @@ export function validateCodexAppServerClientRequest(
   return valid ? { ok: true, value: undefined } : denied("method-denied");
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- every response variant has an independent exact projection.
 export function projectCodexAppServerResponse(
   method: string,
   result: unknown,
 ): CodexAppServerResult<unknown> {
   switch (method) {
     case "initialize":
-      if (exactStringRecord(result, ["codexHome", "platformFamily", "platformOs", "userAgent"]))
-        return {
-          ok: true,
-          value: {
-            codexHome: result.codexHome,
-            platformFamily: result.platformFamily,
-            platformOs: result.platformOs,
-            userAgent: result.userAgent,
-          },
-        };
-      break;
+      return projectInitializeResponse(result);
     case "account/read":
-      if (validAccountResponse(result))
-        return {
-          ok: true,
-          value: {
-            authenticated: isRecord(result.account),
-            authMode: isRecord(result.account) ? "chatgpt" : null,
-            requiresOpenaiAuth: result.requiresOpenaiAuth,
-          },
-        };
-      break;
+      return projectAccountReadResponse(result);
     case "account/login/start":
-      if (validBrowserLoginResponse(result)) return { ok: true, value: result };
-      if (validDeviceLoginResponse(result)) return { ok: true, value: result };
-      break;
+      return projectLoginStartResponse(result);
     case "account/login/cancel":
-      if (
-        exactRecord(result, ["status"]) &&
-        (result.status === "canceled" || result.status === "notFound")
-      )
-        return { ok: true, value: { status: result.status } };
-      break;
+      return projectLoginCancelResponse(result);
     case "account/logout":
     case "turn/interrupt":
-      if (exactRecord(result, [])) return { ok: true, value: { completed: true } };
-      break;
+      return projectEmptyResponse(result);
     case "thread/start":
-      if (validThreadStartResponse(result))
-        return { ok: true, value: { threadId: result.thread.id } };
-      break;
+      return projectThreadStartedResponse(result);
     case "turn/start":
-      if (exactRecord(result, ["turn"]) && validTurn(result.turn))
-        return { ok: true, value: { turnId: result.turn.id } };
-      break;
+      return projectTurnStartedResponse(result);
+    default:
+      return denied("message-denied");
   }
+}
+
+function projectInitializeResponse(result: unknown): CodexAppServerResult<unknown> {
+  if (!exactStringRecord(result, ["codexHome", "platformFamily", "platformOs", "userAgent"]))
+    return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      codexHome: result.codexHome,
+      platformFamily: result.platformFamily,
+      platformOs: result.platformOs,
+      userAgent: result.userAgent,
+    },
+  };
+}
+function projectAccountReadResponse(result: unknown): CodexAppServerResult<unknown> {
+  if (!validAccountResponse(result)) return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      authenticated: isRecord(result.account),
+      authMode: isRecord(result.account) ? "chatgpt" : null,
+      requiresOpenaiAuth: result.requiresOpenaiAuth,
+    },
+  };
+}
+function projectLoginStartResponse(result: unknown): CodexAppServerResult<unknown> {
+  if (validBrowserLoginResponse(result) || validDeviceLoginResponse(result))
+    return { ok: true, value: result };
   return denied("message-denied");
+}
+function projectLoginCancelResponse(result: unknown): CodexAppServerResult<unknown> {
+  if (
+    exactRecord(result, ["status"]) &&
+    (result.status === "canceled" || result.status === "notFound")
+  )
+    return { ok: true, value: { status: result.status } };
+  return denied("message-denied");
+}
+function projectEmptyResponse(result: unknown): CodexAppServerResult<unknown> {
+  return exactRecord(result, [])
+    ? { ok: true, value: { completed: true } }
+    : denied("message-denied");
+}
+function projectThreadStartedResponse(result: unknown): CodexAppServerResult<unknown> {
+  return validThreadStartResponse(result)
+    ? { ok: true, value: { threadId: result.thread.id } }
+    : denied("message-denied");
+}
+function projectTurnStartedResponse(result: unknown): CodexAppServerResult<unknown> {
+  return exactRecord(result, ["turn"]) && validTurn(result.turn)
+    ? { ok: true, value: { turnId: result.turn.id } }
+    : denied("message-denied");
 }
 
 export function projectCodexAppServerToolCallOutcome(
@@ -254,7 +276,7 @@ export function createCodexAppServerJsonlDecoder(): CodexAppServerJsonlDecoder {
         failed ??= "frame-oversized";
         return { ok: false, reason: failed };
       }
-      pending = (pending + chunk).replace(/\r\n/gu, "\n");
+      pending = (pending + chunk).replaceAll("\r\n", "\n");
       return drain(false);
     },
     finish(): CodexAppServerResult<readonly CodexAppServerMessage[]> {
@@ -273,131 +295,156 @@ export function parseCodexAppServerJsonl(
   return last.ok ? { ok: true, value: [...first.value, ...last.value] } : last;
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function -- notification/request variants fail closed independently.
 export function projectCodexAppServerMessage(
   message: CodexAppServerMessage,
 ): CodexAppServerResult<CodexAppServerProjection | undefined> {
   if (
     typeof message.method !== "string" ||
     !allowedRecord(message, ["id", "method", "params"]) ||
-    Object.prototype.hasOwnProperty.call(message, "result") ||
-    Object.prototype.hasOwnProperty.call(message, "error")
+    Object.hasOwn(message, "result") ||
+    Object.hasOwn(message, "error")
   )
     return denied("message-denied");
-  const params = message.params;
-  const hasId = Object.prototype.hasOwnProperty.call(message, "id");
-  if (message.method === "item/agentMessage/delta") {
-    if (
-      hasId ||
-      !exactRecord(params, ["threadId", "turnId", "itemId", "delta"]) ||
-      !nonEmpty(params.threadId) ||
-      !nonEmpty(params.turnId) ||
-      !nonEmpty(params.itemId) ||
-      typeof params.delta !== "string" ||
-      bytes(params.delta) > MAX_TEXT_BYTES
-    )
-      return denied("message-denied");
-    return {
-      ok: true,
-      value: {
-        kind: "delta",
-        threadId: params.threadId,
-        turnId: params.turnId,
-        itemId: params.itemId,
-        delta: params.delta,
-      },
-    };
-  }
-  if (message.method === "remoteControl/status/changed") {
-    if (
-      hasId ||
-      !allowedRecord(params, ["installationId", "serverName", "status", "environmentId"]) ||
-      !["installationId", "serverName", "status"].every((key) =>
-        Object.prototype.hasOwnProperty.call(params, key),
-      ) ||
-      !nonEmpty(params.installationId) ||
-      !nonEmpty(params.serverName) ||
-      (params.environmentId !== undefined &&
-        params.environmentId !== null &&
-        !nonEmpty(params.environmentId)) ||
-      (params.status !== "disabled" &&
-        params.status !== "connecting" &&
-        params.status !== "connected" &&
-        params.status !== "errored")
-    )
-      return denied("message-denied");
-    return { ok: true, value: undefined };
-  }
-  const lifecycle = projectLifecycle(message.method, params);
-  if (lifecycle !== undefined)
-    return hasId ? denied("message-denied") : { ok: true, value: lifecycle };
-  if (message.method === "account/login/completed") {
-    if (
-      hasId ||
-      !allowedRecord(params, ["loginId", "success", "error"]) ||
-      !Object.prototype.hasOwnProperty.call(params, "success") ||
-      (params.loginId !== undefined && params.loginId !== null && !nonEmpty(params.loginId)) ||
-      (params.error !== undefined && params.error !== null && typeof params.error !== "string") ||
-      typeof params.success !== "boolean"
-    )
-      return denied("message-denied");
-    return {
-      ok: true,
-      value: { kind: "auth-lifecycle", event: message.method, authenticated: params.success },
-    };
-  }
-  if (message.method === "account/updated") {
-    if (
-      hasId ||
-      !allowedRecord(params, ["authMode", "planType"]) ||
-      (params.authMode !== undefined &&
-        params.authMode !== null &&
-        params.authMode !== "chatgpt") ||
-      (params.planType !== undefined &&
-        params.planType !== null &&
-        (typeof params.planType !== "string" || !PLAN_TYPES.has(params.planType)))
-    )
-      return denied("message-denied");
-    return {
-      ok: true,
-      value: {
-        kind: "auth-lifecycle",
-        event: message.method,
-        authenticated: params.authMode === "chatgpt",
-      },
-    };
-  }
-  if (message.method === "item/tool/call") {
-    if (
-      !validId(message.id) ||
-      !allowedRecord(params, ["threadId", "turnId", "callId", "tool", "arguments", "namespace"]) ||
-      !nonEmpty(params.threadId) ||
-      !nonEmpty(params.turnId) ||
-      !nonEmpty(params.callId) ||
-      !nonEmpty(params.tool) ||
-      BUILT_IN_TOOL.test(params.tool) ||
-      (params.namespace !== undefined &&
-        params.namespace !== null &&
-        !nonEmpty(params.namespace)) ||
-      !isRecord(params.arguments) ||
-      !validJsonValue(params.arguments, 0) ||
-      hasForbiddenData(params.arguments)
-    )
-      return denied("message-denied");
-    return {
-      ok: true,
-      value: {
-        kind: "tool-call",
-        id: message.id,
-        threadId: params.threadId,
-        turnId: params.turnId,
-        callId: params.callId,
-        tool: params.tool,
-        arguments: params.arguments,
-      },
-    };
-  }
+  if (message.method === "item/tool/call")
+    return projectToolCallRequest(message.id, message.params);
+  if (Object.hasOwn(message, "id")) return denied("message-denied");
+  return projectNotification(message.method, message.params);
+}
+
+function projectNotification(
+  method: string,
+  params: unknown,
+): CodexAppServerResult<CodexAppServerProjection | undefined> {
+  if (method === "item/agentMessage/delta") return projectAgentMessageDelta(params);
+  if (method === "remoteControl/status/changed") return projectRemoteControlStatus(params);
+  const lifecycle = projectLifecycle(method, params);
+  if (lifecycle !== undefined) return { ok: true, value: lifecycle };
+  if (method === "account/login/completed") return projectLoginCompleted(params);
+  if (method === "account/updated") return projectAccountUpdated(params);
   return denied("message-denied");
+}
+
+function projectAgentMessageDelta(params: unknown): CodexAppServerResult<CodexAppServerProjection> {
+  if (
+    !exactRecord(params, ["threadId", "turnId", "itemId", "delta"]) ||
+    !nonEmpty(params.threadId) ||
+    !nonEmpty(params.turnId) ||
+    !nonEmpty(params.itemId) ||
+    typeof params.delta !== "string" ||
+    bytes(params.delta) > MAX_TEXT_BYTES
+  )
+    return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      kind: "delta",
+      threadId: params.threadId,
+      turnId: params.turnId,
+      itemId: params.itemId,
+      delta: params.delta,
+    },
+  };
+}
+
+function projectRemoteControlStatus(params: unknown): CodexAppServerResult<undefined> {
+  if (
+    !allowedRecord(params, ["installationId", "serverName", "status", "environmentId"]) ||
+    !["installationId", "serverName", "status"].every((key) => Object.hasOwn(params, key)) ||
+    !nonEmpty(params.installationId) ||
+    !nonEmpty(params.serverName) ||
+    !optionalNonEmpty(params.environmentId) ||
+    !isRemoteControlStatus(params.status)
+  )
+    return denied("message-denied");
+  return { ok: true, value: undefined };
+}
+
+function isRemoteControlStatus(value: unknown): boolean {
+  return (
+    value === "disabled" || value === "connecting" || value === "connected" || value === "errored"
+  );
+}
+
+function projectLoginCompleted(params: unknown): CodexAppServerResult<CodexAppServerProjection> {
+  if (
+    !allowedRecord(params, ["loginId", "success", "error"]) ||
+    !Object.hasOwn(params, "success") ||
+    !optionalNonEmpty(params.loginId) ||
+    (params.error !== undefined && params.error !== null && typeof params.error !== "string") ||
+    typeof params.success !== "boolean"
+  )
+    return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      kind: "auth-lifecycle",
+      event: "account/login/completed",
+      authenticated: params.success,
+    },
+  };
+}
+
+function projectAccountUpdated(params: unknown): CodexAppServerResult<CodexAppServerProjection> {
+  if (
+    !allowedRecord(params, ["authMode", "planType"]) ||
+    (params.authMode !== undefined && params.authMode !== null && params.authMode !== "chatgpt") ||
+    !validOptionalPlanType(params.planType)
+  )
+    return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      kind: "auth-lifecycle",
+      event: "account/updated",
+      authenticated: params.authMode === "chatgpt",
+    },
+  };
+}
+
+function validOptionalPlanType(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  return typeof value === "string" && PLAN_TYPES.has(value);
+}
+
+function projectToolCallRequest(
+  id: unknown,
+  params: unknown,
+): CodexAppServerResult<CodexAppServerProjection> {
+  if (
+    !validId(id) ||
+    !allowedRecord(params, ["threadId", "turnId", "callId", "tool", "arguments", "namespace"]) ||
+    !nonEmpty(params.threadId) ||
+    !nonEmpty(params.turnId) ||
+    !nonEmpty(params.callId) ||
+    !validToolName(params.tool) ||
+    !optionalNonEmpty(params.namespace) ||
+    !validToolArguments(params.arguments)
+  )
+    return denied("message-denied");
+  return {
+    ok: true,
+    value: {
+      kind: "tool-call",
+      id,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId: params.callId,
+      tool: params.tool,
+      arguments: params.arguments,
+    },
+  };
+}
+
+function validToolName(value: unknown): value is string {
+  return nonEmpty(value) && !BUILT_IN_TOOL.test(value);
+}
+
+function validToolArguments(value: unknown): value is Readonly<Record<string, unknown>> {
+  return isRecord(value) && validJsonValue(value, 0) && !hasForbiddenData(value);
+}
+
+function optionalNonEmpty(value: unknown): boolean {
+  return value === undefined || value === null || nonEmpty(value);
 }
 
 // eslint-disable-next-line complexity, max-lines-per-function -- each generated notification wire shape is closed independently.
@@ -499,7 +546,7 @@ function validAccountResponse(
 ): value is Record<string, unknown> & { readonly requiresOpenaiAuth: boolean } {
   return (
     allowedRecord(value, ["account", "requiresOpenaiAuth"]) &&
-    Object.prototype.hasOwnProperty.call(value, "requiresOpenaiAuth") &&
+    Object.hasOwn(value, "requiresOpenaiAuth") &&
     typeof value.requiresOpenaiAuth === "boolean" &&
     (value.account === undefined || value.account === null || validChatgptAccount(value.account))
   );
@@ -538,7 +585,7 @@ function validThreadStartResponse(
       "modelProvider",
       "sandbox",
       "thread",
-    ].every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    ].every((key) => Object.hasOwn(value, key)) &&
     validApprovalPolicy(value.approvalPolicy) &&
     (value.approvalsReviewer === "user" ||
       value.approvalsReviewer === "auto_review" ||
@@ -601,7 +648,7 @@ function validThread(value: unknown): value is Record<"id", string> & Record<str
     "updatedAt",
   ];
   return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    required.every((key) => Object.hasOwn(value, key)) &&
     [
       value.cliVersion,
       value.cwd,
@@ -671,7 +718,7 @@ function validTurn(value: unknown): value is Record<"id", string> & Record<strin
       "startedAt",
       "status",
     ]) &&
-    ["id", "items", "status"].every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    ["id", "items", "status"].every((key) => Object.hasOwn(value, key)) &&
     nonEmpty(value.id) &&
     Array.isArray(value.items) &&
     value.items.every((item) => validJsonValue(item, 0)) &&
@@ -759,13 +806,13 @@ function validJsonValue(value: unknown, depth: number): boolean {
   );
 }
 function hasForbiddenData(value: unknown): boolean {
-  return isRecord(value)
-    ? Object.entries(value).some(
-        ([key, item]) => FORBIDDEN_KEYS.test(key) || hasForbiddenData(item),
-      )
-    : Array.isArray(value)
-      ? value.some(hasForbiddenData)
-      : false;
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([key, item]) => FORBIDDEN_KEYS.test(key) || hasForbiddenData(item),
+    );
+  }
+  if (Array.isArray(value)) return value.some(hasForbiddenData);
+  return false;
 }
 function exactStringRecord<const Key extends string>(
   value: unknown,
@@ -777,7 +824,7 @@ function exactRecord(value: unknown, keys: readonly string[]): value is Record<s
   return (
     isRecord(value) &&
     Object.keys(value).length === keys.length &&
-    keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    keys.every((key) => Object.hasOwn(value, key))
   );
 }
 function allowedRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {

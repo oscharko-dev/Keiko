@@ -50,13 +50,14 @@ function isRouteResult(value: RuntimeDeps | RouteResult): value is RouteResult {
   return "status" in value;
 }
 
+function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
+  if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
+  if (failureCode === "authority-resolution-failed") return 403;
+  return 400;
+}
+
 function failureResult(failureCode: CodingWorkbenchRuntimeFailureCode): RouteResult {
-  const status =
-    failureCode === "active-run-conflict" || failureCode === "recovery-required"
-      ? 409
-      : failureCode === "authority-resolution-failed"
-        ? 403
-        : 400;
+  const status = failureStatus(failureCode);
   return {
     status,
     body: errorBody(

@@ -19,6 +19,7 @@ import {
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
+import { secureRandomId } from "./secure-random";
 
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
 
@@ -51,8 +52,7 @@ export function codingWorkbenchFailureStatus(
 }
 
 export function newCodingWorkbenchRuntimeRequestId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
-  return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return secureRandomId("ui");
 }
 
 export function codingWorkbenchRuntimeActionError(message: string): Error {

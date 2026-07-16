@@ -7,9 +7,11 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchRuntimeApprovalDecisionRequest,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -18,6 +20,7 @@ import type {
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
+import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
 import type {
@@ -70,7 +73,10 @@ export class CodingRuntimeOrchestrator {
     // so the default identity is the approved `run-<decimal>` projection of the UUID's 128 bits.
     this.newRunId =
       deps.newRunId ??
-      ((): string => `run-${BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString(10)}`);
+      ((): string => {
+        const decimal = BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString(10);
+        return `run-${decimal}`;
+      });
     this.projection = new CodingRuntimeOrchestratorState({
       eventHub: deps.eventHub,
       now: this.now,
@@ -137,60 +143,106 @@ export class CodingRuntimeOrchestrator {
     return this.operations.rejectQuestion(runId, input);
   }
 
-  // eslint-disable-next-line max-lines-per-function -- Closed approval state transition.
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    // eslint-disable-next-line complexity, max-lines-per-function -- Closed approval state transition.
     return this.serial(async () => {
-      const parsed = parseCodingWorkbenchRuntimeApprovalDecisionRequest(input);
-      const current = this.current();
-      const challenge = this.approvals.get(current?.runId ?? "");
-      if (
-        !parsed.ok ||
-        current?.runId !== runId ||
-        current.state !== "awaiting-approval" ||
-        challenge?.permission.requestId !== parsed.value.requestId ||
-        challenge.used ||
-        !challenge.permission.actionKind ||
-        challenge.revision !== parsed.value.expectedRevision ||
-        challenge.expiresAt <= this.now().getTime()
-      )
-        return this.fail("invalid-intent");
+      const admitted = this.validateApprovalDecision(runId, input);
+      if (admitted === undefined) return this.fail("invalid-intent");
+      const { decision, current, challenge, actionKind } = admitted;
       challenge.used = true;
-      if (parsed.value.decision === "approved") {
-        const principal = this.deps.serverPrincipal();
-        if (!principal) return this.transition(current, "failed", "authority-resolution-failed");
-        let issued: CodingRuntimeApprovalIssueResult;
-        try {
-          issued = this.deps.approvalAuthority.issue({
-            runId: current.runId,
-            requestId: challenge.permission.requestId,
-            actionKind: challenge.permission.actionKind,
-            ...(challenge.permission.connectorScopes
-              ? { connectorScopes: challenge.permission.connectorScopes }
-              : {}),
-            approvedByUserId: principal,
-            ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
-          });
-        } catch {
-          this.approvals.delete(current.runId);
-          try {
-            const stopped = await this.deps.manager.stop(current.runId);
-            return stopped.ok
-              ? this.transition(current, "failed", "authority-resolution-failed")
-              : this.transition(current, "recovery-required", "recovery-required");
-          } catch {
-            return this.transition(current, "recovery-required", "recovery-required");
-          }
-        }
-        if (!issued.ok) return this.transition(current, "failed", "runtime-failed");
+      if (decision === "approved") {
+        const rejection = await this.issueApprovedAuthority(current, challenge, actionKind);
+        if (rejection !== undefined) return rejection;
       }
       this.approvals.delete(current.runId);
       return this.transition(
         current,
-        parsed.value.decision === "approved" ? "running" : "failed",
-        parsed.value.decision === "approved" ? undefined : "revoked",
+        decision === "approved" ? "running" : "failed",
+        decision === "approved" ? undefined : "revoked",
       );
     });
+  }
+
+  private validateApprovalDecision(
+    runId: string,
+    input: unknown,
+  ):
+    | {
+        readonly decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"];
+        readonly current: CodingRuntimeSnapshot;
+        readonly challenge: ApprovalChallenge;
+        readonly actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>;
+      }
+    | undefined {
+    const parsed = parseCodingWorkbenchRuntimeApprovalDecisionRequest(input);
+    const current = this.current();
+    const challenge = this.approvals.get(current?.runId ?? "");
+    if (
+      !parsed.ok ||
+      current?.runId !== runId ||
+      current.state !== "awaiting-approval" ||
+      !this.approvalChallengeMatches(challenge, parsed.value) ||
+      !challenge.permission.actionKind
+    )
+      return undefined;
+    return {
+      decision: parsed.value.decision,
+      current,
+      challenge,
+      actionKind: challenge.permission.actionKind,
+    };
+  }
+
+  private approvalChallengeMatches(
+    challenge: ApprovalChallenge | undefined,
+    decision: { readonly requestId: string; readonly expectedRevision: number },
+  ): challenge is ApprovalChallenge {
+    return (
+      challenge?.permission.requestId === decision.requestId &&
+      !challenge.used &&
+      challenge.revision === decision.expectedRevision &&
+      challenge.expiresAt > this.now().getTime()
+    );
+  }
+
+  /** Returns the failure transition when issuing approved authority did not succeed. */
+  private async issueApprovedAuthority(
+    current: CodingRuntimeSnapshot,
+    challenge: ApprovalChallenge,
+    actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    const principal = this.deps.serverPrincipal();
+    if (!principal) return this.transition(current, "failed", "authority-resolution-failed");
+    let issued: CodingRuntimeApprovalIssueResult;
+    try {
+      issued = this.deps.approvalAuthority.issue({
+        runId: current.runId,
+        requestId: challenge.permission.requestId,
+        actionKind,
+        ...(challenge.permission.connectorScopes
+          ? { connectorScopes: challenge.permission.connectorScopes }
+          : {}),
+        approvedByUserId: principal,
+        ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
+      });
+    } catch {
+      this.approvals.delete(current.runId);
+      return this.stopAfterIssueFailure(current);
+    }
+    if (!issued.ok) return this.transition(current, "failed", "runtime-failed");
+    return undefined;
+  }
+
+  private async stopAfterIssueFailure(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    try {
+      const stopped = await this.deps.manager.stop(current.runId);
+      return stopped.ok
+        ? this.transition(current, "failed", "authority-resolution-failed")
+        : this.transition(current, "recovery-required", "recovery-required");
+    } catch {
+      return this.transition(current, "recovery-required", "recovery-required");
+    }
   }
 
   stop(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -217,39 +269,51 @@ export class CodingRuntimeOrchestrator {
 
   /** Accepts only manager events for the current slot and projects no event content into durable state. */
   ingest(event: CodingWorkbenchRuntimeEvent): Promise<CodingRuntimeOrchestratorResult> {
-    // eslint-disable-next-line complexity -- Closed runtime event state transition.
     return this.serialValue(() => {
       const current = this.current();
       if (event.runId !== current?.runId) return this.fail("invalid-intent");
       if (event.kind === "permission-requested") {
-        if (!event.permissionRequest?.actionKind) return this.fail("invalid-intent");
-        const expiresAt = Date.parse(event.permissionRequest.expiresAt);
-        if (!Number.isFinite(expiresAt) || expiresAt <= this.now().getTime())
-          return this.fail("invalid-intent");
-        this.approvals.set(current.runId, {
-          revision: current.revision + 1,
-          expiresAt,
-          permission: event.permissionRequest,
-          used: false,
-        });
-        const next = this.transition(current, "awaiting-approval");
-        if (!next.ok) this.approvals.delete(current.runId);
-        return next;
+        return this.ingestPermissionRequested(current, event);
       }
-      if (event.kind === "task-submitted") {
-        return current.state === "running"
-          ? this.projection.publish(current, event.kind)
-            ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
-            : this.transition(current, "recovery-required", "recovery-required")
-          : this.transition(current, "running");
-      }
+      if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
       if (event.kind === "runtime-stopped") return this.transition(current, "cancelled");
       if (event.kind === "failure-redacted")
         return this.transition(current, "failed", "runtime-failed");
-      return this.projection.publish(current, event.kind)
-        ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
-        : this.transition(current, "recovery-required", "recovery-required");
+      return this.publishOrRecover(current, event.kind);
     });
+  }
+
+  private ingestPermissionRequested(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): CodingRuntimeOrchestratorResult {
+    if (!event.permissionRequest?.actionKind) return this.fail("invalid-intent");
+    const expiresAt = Date.parse(event.permissionRequest.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= this.now().getTime())
+      return this.fail("invalid-intent");
+    this.approvals.set(current.runId, {
+      revision: current.revision + 1,
+      expiresAt,
+      permission: event.permissionRequest,
+      used: false,
+    });
+    const next = this.transition(current, "awaiting-approval");
+    if (!next.ok) this.approvals.delete(current.runId);
+    return next;
+  }
+
+  private ingestTaskSubmitted(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
+    if (current.state !== "running") return this.transition(current, "running");
+    return this.publishOrRecover(current, "task-submitted");
+  }
+
+  private publishOrRecover(
+    current: CodingRuntimeSnapshot,
+    eventKind: CodingWorkbenchRuntimeEvent["kind"],
+  ): CodingRuntimeOrchestratorResult {
+    return this.projection.publish(current, eventKind)
+      ? { ok: true, snapshot: this.projection.publicSnapshot(current) }
+      : this.transition(current, "recovery-required", "recovery-required");
   }
 
   /** Startup containment: persisted nonterminal executions are never replayed. */
@@ -295,7 +359,6 @@ export class CodingRuntimeOrchestrator {
       : Promise.resolve({ ok: true, snapshot: this.projection.idle() });
   }
 
-  // eslint-disable-next-line complexity, max-lines-per-function -- Closed lifecycle state transition.
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
@@ -307,30 +370,78 @@ export class CodingRuntimeOrchestrator {
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();
-    const now = this.now().toISOString();
-    let launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>;
+    const launch = this.resolveLaunch(parsed.value, active, principal, runId);
+    if (launch === undefined) return this.fail("authority-resolution-failed");
+    const snapshot = this.buildStartSnapshot(
+      parsed.value,
+      active,
+      principal,
+      runId,
+      launch,
+      predecessorRunId,
+    );
+    this.deps.snapshots.create(snapshot);
+    this.activeRunId = runId;
+    this.projection.publish(snapshot);
+    const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
+    if (started !== undefined) return started;
+    return this.runInitialTurn(parsed.value, runId);
+  }
+
+  private async runInitialTurn(
+    request: CodingWorkbenchRuntimeStartRequest,
+    runId: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const ready = this.transitionActive("ready");
+    if (!ready.ok) return ready;
+    const initialTurn = await this.operations.startInitialTurn({
+      runId,
+      requestId: request.requestId,
+      expectedRevision: ready.snapshot.revision,
+      taskIntent: request.taskIntent,
+    });
+    if (initialTurn === "accepted") return this.transitionActive("running");
+    if (initialTurn === "failed") return this.transitionActive("failed", "runtime-failed");
+    return this.transitionActive("recovery-required", "recovery-required");
+  }
+
+  private resolveLaunch(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    principal: string,
+    runId: string,
+  ): ReturnType<CodingRuntimeLaunchResolver["resolve"]> | undefined {
     try {
-      launch = this.deps.launchResolver.resolve({
+      return this.deps.launchResolver.resolve({
         runId,
-        requestId: parsed.value.requestId,
-        taskIntent: parsed.value.taskIntent,
-        requestedMode: parsed.value.requestedMode,
-        ...(parsed.value.runtimePreference
-          ? { runtimePreference: parsed.value.runtimePreference }
-          : {}),
+        requestId: request.requestId,
+        taskIntent: request.taskIntent,
+        requestedMode: request.requestedMode,
+        ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
       });
     } catch {
-      return this.fail("authority-resolution-failed");
+      return undefined;
     }
-    const snapshot: CodingRuntimeSnapshot = {
+  }
+
+  private buildStartSnapshot(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    principal: string,
+    runId: string,
+    launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+    predecessorRunId?: string,
+  ): CodingRuntimeSnapshot {
+    const now = this.now().toISOString();
+    return {
       schemaVersion: "1",
       runId,
       state: "starting",
       revision: 1,
-      requestedMode: parsed.value.requestedMode,
+      requestedMode: request.requestedMode,
       runtimeSource: launch.runtimeSource,
       modelSource: launch.modelSource,
       createdAt: now,
@@ -346,47 +457,43 @@ export class CodingRuntimeOrchestrator {
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),
     };
-    this.deps.snapshots.create(snapshot);
-    this.activeRunId = runId;
-    this.projection.publish(snapshot);
+  }
+
+  /** Returns the failure transition when the managed runtime did not reach a trusted start. */
+  private async startManagedRuntime(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     let result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
     try {
       result = await this.deps.manager.start({
         ...launch,
         runId,
         workspaceRoot: active.binding.activeRoot,
-        requestedMode: parsed.value.requestedMode,
+        requestedMode: request.requestedMode,
       });
     } catch {
-      try {
-        await this.deps.manager.reconcile(runId);
-      } catch {
-        // Recovery-required remains the only safe projection when host containment cannot be proven.
-      }
+      // Recovery-required remains the only safe projection when host containment cannot be proven.
+      await this.reconcileQuietly(runId);
       return this.transitionActive("recovery-required", "recovery-required");
     }
     if (result.ok && result.runId !== runId) {
-      try {
-        await this.deps.manager.reconcile(result.runId);
-      } catch {
-        // A mismatched host success cannot be trusted; recovery remains fail-closed.
-      }
+      // A mismatched host success cannot be trusted; recovery remains fail-closed.
+      await this.reconcileQuietly(result.runId);
       return this.transitionActive("recovery-required", "recovery-required");
     }
     if (!result.ok) return this.transitionActive("failed", "runtime-failed");
-    const ready = this.transitionActive("ready");
-    if (!ready.ok) return ready;
-    const initialTurn = await this.operations.startInitialTurn({
-      runId,
-      requestId: parsed.value.requestId,
-      expectedRevision: ready.snapshot.revision,
-      taskIntent: parsed.value.taskIntent,
-    });
-    return initialTurn === "accepted"
-      ? this.transitionActive("running")
-      : initialTurn === "failed"
-        ? this.transitionActive("failed", "runtime-failed")
-        : this.transitionActive("recovery-required", "recovery-required");
+    return undefined;
+  }
+
+  private async reconcileQuietly(runId: string): Promise<void> {
+    try {
+      await this.deps.manager.reconcile(runId);
+    } catch {
+      // Recovery-required remains the only safe projection when host containment cannot be proven.
+    }
   }
 
   private advanceRevision(

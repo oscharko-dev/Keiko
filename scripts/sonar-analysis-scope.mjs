@@ -123,7 +123,7 @@ export function isTestPath(input) {
     path.includes("/__tests__/") ||
     path.includes("/testing/") ||
     /\.(?:spec|test)\.[^/]+$/u.test(path) ||
-    /\/(?:_support|test-fixtures|test-support|testing)\.[^/]+$/u.test(path)
+    /\/(?:_support|test-fixtures|test-support|test-protocol|testing)\.[^/]+$/u.test(path)
   );
 }
 

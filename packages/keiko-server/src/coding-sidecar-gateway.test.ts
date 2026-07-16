@@ -1123,6 +1123,85 @@ describe("coding-sidecar gateway", () => {
     expect(response.res.destroyed).toBe(true);
   });
 
+  it("reports a stream that ends without a terminal response chunk as an error", async () => {
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "partial" };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "truncate" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-truncated" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(response.body()).not.toContain('"finish_reason":"stop"');
+  });
+
+  it("destroys the response when the terminal tool-call frame hits backpressure", async () => {
+    let returned = false;
+    const toolResponse: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "",
+      toolCalls: [{ id: "call-1", name: "workspace_read", arguments: { path: "README.md" } }],
+    };
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await Promise.resolve();
+        yield { type: "done", response: toolResponse };
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    let writes = 0;
+    response.res.write = vi.fn(() => {
+      writes += 1;
+      return writes === 1;
+    });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "tool call backpressure" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-tool-backpressure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(returned).toBe(true);
+    expect(response.res.destroyed).toBe(true);
+  });
+
   it("returns an opaque 503 when stream construction fails before committing SSE headers", async () => {
     const response = mockResponse({ captureBody: true });
     const context: RouteContext = {

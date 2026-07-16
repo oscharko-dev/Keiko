@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
@@ -22,7 +22,7 @@ interface WorkspaceEffectInput {
 interface RuntimeEventStreamInput {
   readonly runId: string | undefined;
   readonly streamEpoch: number;
-  readonly stateRef: MutableRefObject<CodingWorkbenchRuntimeState>;
+  readonly stateRef: RefObject<CodingWorkbenchRuntimeState>;
   readonly refreshRun: () => Promise<void>;
   readonly dispatch: RuntimeDispatch;
   readonly setStreamEpoch: Dispatch<SetStateAction<number>>;

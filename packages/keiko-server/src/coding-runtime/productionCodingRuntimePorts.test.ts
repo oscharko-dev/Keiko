@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
+import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import {
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
+  createProductionRuntimeManager,
   createProductionRuntimeOperationGuard,
   createProductionRuntimeTaskDispatcher,
   type ProductionRuntimeRunRecord,
@@ -185,6 +188,292 @@ describe("production coding runtime turn ports", () => {
     accept?.(true);
     await expect(first).resolves.toMatchObject({ ok: true });
     expect(submitTurn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("production runtime singleton manager", () => {
+  function fakeManager(
+    overrides: Partial<CodingRuntimeManager> = {},
+  ): CodingRuntimeManager & { readonly start: ReturnType<typeof vi.fn> } {
+    return {
+      start: vi.fn(() =>
+        Promise.resolve({ ok: true as const, runId: "run-1", status: "ready" as const }),
+      ),
+      issueApproval: vi.fn(() => ({
+        ok: false as const,
+        failureCode: "runtime-stopped" as const,
+        retryable: false as const,
+      })),
+      stop: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+      takeover: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+      reconcile: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+      health: vi.fn(() => ({ status: "running" as const })),
+      ...overrides,
+    } as CodingRuntimeManager & { readonly start: ReturnType<typeof vi.fn> };
+  }
+
+  function fakeAuthority(): CodingRuntimeAuthorityService & {
+    readonly transition: ReturnType<typeof vi.fn>;
+    readonly abandonUnlaunched: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      transition: vi.fn(() => true),
+      abandonUnlaunched: vi.fn(() => true),
+    } as unknown as CodingRuntimeAuthorityService & {
+      readonly transition: ReturnType<typeof vi.fn>;
+      readonly abandonUnlaunched: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  function managedRecord(
+    runId: string,
+    manager: CodingRuntimeManager,
+  ): ProductionRuntimeRunRecord & { readonly dispose: ReturnType<typeof vi.fn> } {
+    return {
+      ...record(runId, {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+      }),
+      manager,
+      dispose: vi.fn(() => undefined),
+    };
+  }
+
+  it("marks the run authority ready and running after a successful launch", async () => {
+    const inner = fakeManager();
+    const authority = fakeAuthority();
+    const runs = new Map([["run-1", managedRecord("run-1", inner)]]);
+    const manager = createProductionRuntimeManager(runs, authority);
+
+    await expect(manager.start(launch("run-1"))).resolves.toMatchObject({ ok: true });
+    expect(authority.transition).toHaveBeenNthCalledWith(1, "run-1", "ready", expect.any(String));
+    expect(authority.transition).toHaveBeenNthCalledWith(2, "run-1", "running", expect.any(String));
+    expect(manager.health()).toEqual({ status: "running" });
+  });
+
+  it("rejects a start for an unknown run or while another run is active", async () => {
+    const inner = fakeManager();
+    const runs = new Map([["run-1", managedRecord("run-1", inner)]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+
+    await expect(manager.start(launch("run-9"))).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+    await manager.start(launch("run-1"));
+    await expect(manager.start(launch("run-1"))).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+  });
+
+  it("abandons unlaunched authority and disposes the record after a dead launch failure", async () => {
+    const inner = fakeManager({
+      start: vi.fn(() =>
+        Promise.resolve({
+          ok: false as const,
+          failureCode: "qualification-missing" as const,
+          retryable: false as const,
+        }),
+      ),
+      health: vi.fn(() => ({ status: "stopped" as const })),
+    });
+    const authority = fakeAuthority();
+    const failed = managedRecord("run-1", inner);
+    const runs = new Map([["run-1", failed]]);
+    const manager = createProductionRuntimeManager(runs, authority);
+
+    await expect(manager.start(launch("run-1"))).resolves.toMatchObject({ ok: false });
+    expect(authority.abandonUnlaunched).toHaveBeenCalledWith("run-1", expect.any(String));
+    expect(failed.dispose).toHaveBeenCalledTimes(1);
+    expect(failed.controller.signal.aborted).toBe(true);
+    expect(runs.size).toBe(0);
+    expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  it("routes stop, takeover and reconcile only to the live run and cleans it up", async () => {
+    const takeover = vi.fn(() =>
+      Promise.resolve({ ok: true as const, status: "stopped" as const }),
+    );
+    const inner = fakeManager({ takeover });
+    const cleaned = managedRecord("run-1", inner);
+    const runs = new Map([["run-1", cleaned]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+
+    await expect(manager.stop("run-1")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+
+    await manager.start(launch("run-1"));
+    await expect(manager.takeover("run-1")).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(takeover).toHaveBeenCalledWith("run-1");
+    expect(cleaned.dispose).toHaveBeenCalledTimes(1);
+    expect(runs.size).toBe(0);
+    await expect(manager.reconcile("run-1")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+  });
+
+  it("fails approvals closed without a live run and delegates them to the live run", async () => {
+    const approval = {
+      ok: false as const,
+      failureCode: "runtime-run-mismatch" as const,
+      retryable: false as const,
+    };
+    const inner = fakeManager({ issueApproval: vi.fn(() => approval) });
+    const runs = new Map([["run-1", managedRecord("run-1", inner)]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+
+    expect(manager.issueApproval({} as never)).toMatchObject({
+      failureCode: "runtime-stopped",
+    });
+    await manager.start(launch("run-1"));
+    expect(manager.issueApproval({} as never)).toBe(approval);
+  });
+
+  function launch(runId: string): Parameters<CodingRuntimeManager["start"]>[0] {
+    return { runId } as Parameters<CodingRuntimeManager["start"]>[0];
+  }
+});
+
+describe("turn port terminal semantics", () => {
+  it("maps OpenCode abort and non-terminal outcomes onto the shared contract", async () => {
+    const abortTask = vi.fn(() => Promise.resolve(true));
+    let terminal = false;
+    const runPort: OpenCodeRunPort = {
+      submitTask: () => Promise.resolve(true),
+      abortTask,
+      waitForTerminal: () => Promise.resolve(terminal),
+      listQuestions: () => Promise.resolve([]),
+      answerQuestion: () => Promise.resolve(false),
+      rejectQuestion: () => Promise.resolve(false),
+    };
+    const port = createOpenCodeRuntimeTurnPort(runPort);
+
+    await expect(port.abortTurn("run-open")).resolves.toBe(true);
+    expect(abortTask).toHaveBeenCalledWith("run-open");
+
+    const live = new AbortController();
+    await expect(port.waitForTerminal("run-open", live.signal)).resolves.toBe("failed");
+    live.abort();
+    await expect(port.waitForTerminal("run-open", live.signal)).resolves.toBe("cancelled");
+    terminal = true;
+    await expect(port.waitForTerminal("run-open", new AbortController().signal)).resolves.toBe(
+      "succeeded",
+    );
+  });
+
+  it("fails a Codex terminal wait without a submitted turn and aborts only a live turn", async () => {
+    const interruptTurn = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const control = codexControl({
+      startThread: () => Promise.resolve({ ok: true, threadId: "thread-1" }),
+      startTurn: () => Promise.resolve({ ok: true, turnId: "turn-1" }),
+      statuses: new Map([["turn-1", "interrupted" as const]]),
+    });
+    const port = createCodexRuntimeTurnPort({ ...control, interruptTurn });
+
+    await expect(port.waitForTerminal("run-codex", new AbortController().signal)).resolves.toBe(
+      "failed",
+    );
+    await expect(port.abortTurn("run-codex")).resolves.toBe(false);
+
+    await expect(port.submitTurn("run-codex", "task")).resolves.toBe(true);
+    await expect(port.abortTurn("run-codex")).resolves.toBe(true);
+    expect(interruptTurn).toHaveBeenCalledWith("run-codex", "thread-1", "turn-1", {
+      timeoutMs: 30_000,
+    });
+    await expect(port.waitForTerminal("run-codex", new AbortController().signal)).resolves.toBe(
+      "cancelled",
+    );
+  });
+
+  it("maps failed Codex terminal statuses and polls until abort", async () => {
+    const failedControl = codexControl({
+      startThread: () => Promise.resolve({ ok: true, threadId: "thread-1" }),
+      startTurn: () => Promise.resolve({ ok: true, turnId: "turn-1" }),
+      statuses: new Map([["turn-1", "failed" as const]]),
+    });
+    const failedPort = createCodexRuntimeTurnPort(failedControl);
+    await failedPort.submitTurn("run-codex", "task");
+    await expect(
+      failedPort.waitForTerminal("run-codex", new AbortController().signal),
+    ).resolves.toBe("failed");
+
+    const pendingControl = codexControl({
+      startThread: () => Promise.resolve({ ok: true, threadId: "thread-1" }),
+      startTurn: () => Promise.resolve({ ok: true, turnId: "turn-1" }),
+      statuses: new Map(),
+    });
+    const pendingPort = createCodexRuntimeTurnPort(pendingControl);
+    await pendingPort.submitTurn("run-codex", "task");
+    const controller = new AbortController();
+    const pending = pendingPort.waitForTerminal("run-codex", controller.signal);
+    setTimeout(() => {
+      controller.abort();
+    }, 30);
+    await expect(pending).resolves.toBe("cancelled");
+  });
+
+  it("releases a declined submit for retry and reports an unprovable terminal as failed", async () => {
+    let accept = false;
+    const runs = new Map<string, ProductionRuntimeRunRecord>([
+      [
+        "run-open",
+        record("run-open", {
+          submitTurn: () => Promise.resolve(accept),
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.reject(new Error("stream torn down")),
+        }),
+      ],
+    ]);
+    const dispatcher = createProductionRuntimeTaskDispatcher(runs);
+
+    await expect(dispatcher.dispatch(operation("run-open", "req-1", 1, "task"))).resolves.toEqual({
+      ok: false,
+    });
+    accept = true;
+    const retried = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    expect(retried.ok).toBe(true);
+    if (retried.ok) await expect(retried.completion).resolves.toBe("failed");
+  });
+
+  it("aborts a task only when the adapter accepts the interruption", async () => {
+    let accept = false;
+    const runs = new Map<string, ProductionRuntimeRunRecord>([
+      [
+        "run-open",
+        record("run-open", {
+          submitTurn: () => Promise.resolve(true),
+          abortTurn: () => Promise.resolve(accept),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        }),
+      ],
+    ]);
+    const dispatcher = createProductionRuntimeTaskDispatcher(runs);
+
+    await expect(dispatcher.abort(operation("run-open", "req-1", 1, "task"))).resolves.toBe(false);
+    expect(runs.get("run-open")?.controller.signal.aborted).toBe(true);
+    await expect(dispatcher.abort(operation("missing", "req-2", 2, "task"))).resolves.toBe(false);
+
+    const acceptedRuns = new Map<string, ProductionRuntimeRunRecord>([
+      [
+        "run-open",
+        record("run-open", {
+          submitTurn: () => Promise.resolve(true),
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("cancelled" as const),
+        }),
+      ],
+    ]);
+    accept = true;
+    const acceptedDispatcher = createProductionRuntimeTaskDispatcher(acceptedRuns);
+    await expect(acceptedDispatcher.abort(operation("run-open", "req-1", 1, "task"))).resolves.toBe(
+      true,
+    );
+    expect(acceptedRuns.get("run-open")?.controller.signal.aborted).toBe(true);
   });
 });
 

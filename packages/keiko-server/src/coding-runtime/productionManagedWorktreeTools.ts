@@ -149,12 +149,7 @@ function publishVerification(
     occurredAt: new Date().toISOString(),
     kind: "verification-summarized",
     verificationKind: "verification-command",
-    verificationStatus:
-      report.overallStatus === "passed"
-        ? "passed"
-        : report.overallStatus === "skipped"
-          ? "partial"
-          : "failed",
+    verificationStatus: verificationStatus(report.overallStatus),
     passedCount: report.counts.passed,
     failedCount: failedCount(report),
     skippedCount: report.counts.skipped,
@@ -163,6 +158,14 @@ function publishVerification(
     throw new Error("runtime-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
+}
+
+function verificationStatus(
+  overallStatus: VerificationReport["overallStatus"],
+): "passed" | "partial" | "failed" {
+  if (overallStatus === "passed") return "passed";
+  if (overallStatus === "skipped") return "partial";
+  return "failed";
 }
 
 function failedCount(report: VerificationReport): number {

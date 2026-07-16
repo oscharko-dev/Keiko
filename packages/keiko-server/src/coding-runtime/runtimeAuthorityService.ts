@@ -32,6 +32,7 @@ import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityEnvelopeDigest,
   editorAgentWorkspaceRootDigest,
+  type EditorAgentRuntimeDelegationRequest,
 } from "../editor/agentAuthorityRegistry.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
@@ -240,13 +241,7 @@ export class CodingRuntimeAuthorityService {
 
   public resolveForDelegation(
     reference: CodingRuntimeAuthorityRef,
-    liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
-    delegationId: string,
-    idempotencyKey: string,
-    usage: CodingWorkbenchRuntimeDelegationUsage,
-    workspaceRoot: string,
-    deploymentCeiling: CodingWorkbenchMode,
-    nowIso: string,
+    request: EditorAgentRuntimeDelegationRequest,
   ): CodingRuntimeResolution {
     if (
       this.reapPending?.runId === reference.runId &&
@@ -261,16 +256,7 @@ export class CodingRuntimeAuthorityService {
     ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.registry.resolveRuntime(
-      reference,
-      liveFacts,
-      delegationId,
-      idempotencyKey,
-      usage,
-      workspaceRoot,
-      deploymentCeiling,
-      nowIso,
-    );
+    return this.registry.resolveRuntime(reference, request);
   }
 
   public resolveCapabilityForDelegation(
@@ -294,16 +280,15 @@ export class CodingRuntimeAuthorityService {
     ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.resolveForDelegation(
-      reference,
-      input.liveFacts,
-      input.delegationId,
-      input.idempotencyKey,
-      input.usage,
-      input.workspaceRoot,
-      input.deploymentCeiling,
-      input.nowIso,
-    );
+    return this.resolveForDelegation(reference, {
+      liveFacts: input.liveFacts,
+      delegationId: input.delegationId,
+      idempotencyKey: input.idempotencyKey,
+      usage: input.usage,
+      workspaceRoot: input.workspaceRoot,
+      deploymentCeiling: input.deploymentCeiling,
+      nowIso: input.nowIso,
+    });
   }
 
   public revalidateCapabilityForMutation(
@@ -756,7 +741,10 @@ function canonicalJson(value: unknown): string {
     const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
       a.localeCompare(b),
     );
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+    const body = entries
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+      .join(",");
+    return `{${body}}`;
   }
   return JSON.stringify(value);
 }

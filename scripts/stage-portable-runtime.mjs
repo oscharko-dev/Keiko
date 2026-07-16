@@ -683,7 +683,8 @@ function requireExactSpecKeys(spec, allowedKeys) {
 function requireExactRecordKeys(record, allowedKeys, context) {
   const unexpected = Object.keys(record).filter((key) => !allowedKeys.includes(key));
   if (unexpected.length > 0) {
-    fail(`sidecar ${context} contains unsupported key ${unexpected.sort()[0]}`);
+    const [firstUnexpected] = unexpected.toSorted((left, right) => left.localeCompare(right));
+    fail(`sidecar ${context} contains unsupported key ${firstUnexpected}`);
   }
 }
 
@@ -1035,7 +1036,7 @@ function assertSevenZipEntrySafe(record) {
 
 function sevenZipUnixEntryType(attributes) {
   if (typeof attributes !== "string") return undefined;
-  return attributes.match(/(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u)?.[1];
+  return /(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u.exec(attributes)?.[1];
 }
 
 function sevenZipTypeUnsupported(unixType) {
@@ -1780,19 +1781,12 @@ function manifestReviewedBinding(
   return binding;
 }
 
-function manifestReleaseImpact(
-  options,
-  target,
-  digests,
-  nodeIdentity,
-  security,
-  releaseImpactEntry,
-  sidecarRuntimes,
-  nativeHelpers,
-) {
+function manifestReleaseImpact(input) {
+  const { options, target, digests, nodeIdentity, security, sidecarRuntimes, nativeHelpers } =
+    input;
   return {
     catalogPath: "app/release-impact.catalog.json",
-    entryId: releaseImpactEntry.id,
+    entryId: input.releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
     reviewedBinding: manifestReviewedBinding(
@@ -1852,16 +1846,16 @@ function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpe
     stateExclusion: manifestStateExclusion(),
     security,
     evidence: manifestEvidence(),
-    releaseImpact: manifestReleaseImpact(
+    releaseImpact: manifestReleaseImpact({
       options,
       target,
-      { ...digests, assetSha256: assetSha },
+      digests: { ...digests, assetSha256: assetSha },
       nodeIdentity,
       security,
       releaseImpactEntry,
       sidecarRuntimes,
       nativeHelpers,
-    ),
+    }),
     updateEligibility: manifestUpdateEligibility(),
   };
   if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;

@@ -29,6 +29,7 @@ import {
   type CodingRuntimeManager,
   type CodingRuntimeManagerDeps,
   type CodingRuntimeLaunchRequest,
+  type ReviewedCodexEgressPolicy,
 } from "./codingRuntimeManager.js";
 import {
   createRuntimeProcessSupervisor,
@@ -2963,5 +2964,190 @@ describe("coding runtime manager", () => {
       retryable: false,
     });
     expect(manager.health()).toMatchObject({ status: "recovery-required" });
+  });
+});
+
+describe("codex reviewed egress policy validation", () => {
+  function reviewedPolicy(
+    overrides: Partial<ReviewedCodexEgressPolicy>,
+  ): ReviewedCodexEgressPolicy {
+    return { verified: true, receipt: "reviewed-receipt", directEgress: "disabled", ...overrides };
+  }
+
+  async function expectEgressRejected(
+    qualify: NonNullable<CodingRuntimeManagerDeps["qualifyCodexEgress"]>,
+  ): Promise<void> {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+      qualifyCodexEgress: qualify,
+    });
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  }
+
+  it("fails closed when the egress qualifier itself throws", async () => {
+    await expectEgressRejected(() => {
+      throw new Error("egress qualification backend offline");
+    });
+  });
+
+  it.each([
+    ["an empty review receipt", (): ReviewedCodexEgressPolicy => reviewedPolicy({ receipt: "" })],
+    [
+      "a malformed https proxy value",
+      (): ReviewedCodexEgressPolicy => reviewedPolicy({ httpsProxy: "::not-a-url::" }),
+    ],
+    [
+      "a plain-http proxy",
+      (): ReviewedCodexEgressPolicy => reviewedPolicy({ httpsProxy: "http://proxy.example.test" }),
+    ],
+    [
+      "a no-proxy list without approved direct egress",
+      (): ReviewedCodexEgressPolicy => reviewedPolicy({ noProxy: "localhost" }),
+    ],
+    [
+      "control characters in the no-proxy list",
+      (): ReviewedCodexEgressPolicy =>
+        reviewedPolicy({ directEgress: "approved", noProxy: "localhost\nevil.example" }),
+    ],
+    [
+      "an empty no-proxy list",
+      (): ReviewedCodexEgressPolicy => reviewedPolicy({ directEgress: "approved", noProxy: "" }),
+    ],
+    [
+      "a ca bundle without a server config root",
+      (): ReviewedCodexEgressPolicy => {
+        const root = tempDir("keiko-egress-ca-");
+        const bundle = join(root, "ca.pem");
+        writeFileSync(bundle, "reviewed-ca\n");
+        return reviewedPolicy({ caBundlePath: bundle });
+      },
+    ],
+    [
+      "a server config root without a ca bundle",
+      (): ReviewedCodexEgressPolicy =>
+        reviewedPolicy({ serverConfigRoot: tempDir("keiko-egress-root-") }),
+    ],
+    [
+      "a ca bundle escaping the server config root",
+      (): ReviewedCodexEgressPolicy => {
+        const root = tempDir("keiko-egress-root-");
+        const outside = join(tempDir("keiko-egress-outside-"), "ca.pem");
+        writeFileSync(outside, "reviewed-ca\n");
+        return reviewedPolicy({ caBundlePath: outside, serverConfigRoot: root });
+      },
+    ],
+    [
+      "a ca bundle that is not a regular file",
+      (): ReviewedCodexEgressPolicy => {
+        const root = tempDir("keiko-egress-root-");
+        const bundleDir = join(root, "ca-bundle");
+        mkdirSync(bundleDir);
+        return reviewedPolicy({ caBundlePath: bundleDir, serverConfigRoot: root });
+      },
+    ],
+    [
+      "a missing ca bundle",
+      (): ReviewedCodexEgressPolicy => {
+        const root = tempDir("keiko-egress-root-");
+        return reviewedPolicy({ caBundlePath: join(root, "missing.pem"), serverConfigRoot: root });
+      },
+    ],
+  ])("rejects %s before supervisor spawn", async (_scenario, policy) => {
+    await expectEgressRejected(() => policy());
+  });
+
+  it("accepts a fully reviewed direct-egress policy and proceeds to state-root preparation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const root = tempDir("keiko-egress-root-");
+    const bundle = join(root, "ca.pem");
+    writeFileSync(bundle, "reviewed-ca\n");
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+      codexLocalSecretRoot: undefined,
+      qualifyCodexEgress: () =>
+        reviewedPolicy({
+          directEgress: "approved",
+          httpsProxy: "https://proxy.example.test",
+          noProxy: "localhost,.internal.example",
+          caBundlePath: bundle,
+          serverConfigRoot: root,
+        }),
+    });
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "runtime-state-unavailable", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("reports an already-aborted start before any qualification work", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+      qualifyCodexEgress: (): never => {
+        throw new Error("egress must not be qualified after abort");
+      },
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      Promise.resolve(
+        manager.start({
+          ...codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          signal: controller.signal,
+        }),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "start-aborted", retryable: true });
+    expect(harness.children).toHaveLength(0);
+  });
+});
+
+describe("run-bound stop authority", () => {
+  it("rejects a stop for a different run id while the active run keeps running", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(
+        () => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            if (signal === "SIGKILL") child.exit(0);
+          },
+        }),
+        { setTimer: (callback): undefined => (callback(), undefined) },
+      ),
+    });
+    await expect(
+      Promise.resolve(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ),
+    ).resolves.toEqual({ ok: true, runId: "run-1988", status: "ready" });
+    await expect(manager.stop("run-2088")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+      retryable: false,
+    });
+    expect(manager.health()).toMatchObject({ status: "ready" });
+    await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
   });
 });

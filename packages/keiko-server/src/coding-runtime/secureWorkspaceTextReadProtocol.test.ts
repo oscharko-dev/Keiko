@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  decodeSecureWorkspaceReadRequest,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
   encodeSecureWorkspaceReadRequest,
+  encodeSecureWorkspaceReadResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 
 const MAX_TEXT_BYTES = 65_536;
@@ -139,5 +141,82 @@ describe("secure workspace text-read binary protocol", () => {
       ok: false,
       reason: "not-text",
     });
+  });
+});
+
+describe("secure workspace text-read request decoding and response encoding", () => {
+  it("round-trips a request frame through the helper-side decoder", () => {
+    expect(decodeSecureWorkspaceReadRequest(requestFrame("/workspace", "src/a.ts"))).toEqual({
+      root: "/workspace",
+      relativePath: "src/a.ts",
+      byteCap: MAX_TEXT_BYTES,
+    });
+  });
+
+  it("rejects truncated, oversized, and foreign-magic request frames", () => {
+    expect(() => decodeSecureWorkspaceReadRequest(Buffer.alloc(19))).toThrow(
+      "secure-workspace-read-malformed-request",
+    );
+    expect(() =>
+      decodeSecureWorkspaceReadRequest(Buffer.alloc(20 + MAX_ROOT_BYTES + MAX_PATH_BYTES + 1)),
+    ).toThrow("secure-workspace-read-malformed-request");
+    const foreign = requestFrame("/workspace", "src/a.ts");
+    foreign.write("KSRX", 0, "ascii");
+    expect(() => decodeSecureWorkspaceReadRequest(foreign)).toThrow(
+      "secure-workspace-read-malformed-request",
+    );
+  });
+
+  it("rejects header lies: version, reserved flags, cap, and length mismatches", () => {
+    for (const corrupt of [
+      (frame: Buffer): void => {
+        frame.writeUInt16LE(2, 4);
+      },
+      (frame: Buffer): void => {
+        frame.writeUInt16LE(1, 6);
+      },
+      (frame: Buffer): void => {
+        frame.writeUInt32LE(MAX_TEXT_BYTES - 1, 16);
+      },
+      (frame: Buffer): void => {
+        frame.writeUInt32LE(999, 8);
+      },
+    ]) {
+      const frame = requestFrame("/workspace", "src/a.ts");
+      corrupt(frame);
+      expect(() => decodeSecureWorkspaceReadRequest(frame)).toThrow(
+        "secure-workspace-read-malformed-request",
+      );
+    }
+  });
+
+  it("rejects request text that is not strict UTF-8 or embeds NUL", () => {
+    const frame = requestFrame("/workspace", "src/a.ts");
+    frame[frame.byteLength - 1] = 0xff;
+    expect(() => decodeSecureWorkspaceReadRequest(frame)).toThrow(
+      "secure-workspace-read-malformed-request",
+    );
+  });
+
+  it("encodes bounded helper responses that decode back to the same truth", () => {
+    const ok = encodeSecureWorkspaceReadResponse({
+      status: "ok",
+      bytes: Buffer.from("safe text\n", "utf8"),
+    });
+    expect(decodeSecureWorkspaceReadResponse(ok)).toMatchObject({ status: "ok" });
+    expect(ok.readUInt32LE(8)).toBe(10);
+
+    const denied = encodeSecureWorkspaceReadResponse({ status: "access-denied" });
+    expect(denied.byteLength).toBe(12);
+    expect(decodeSecureWorkspaceReadResponse(denied)).toEqual({ status: "access-denied" });
+  });
+
+  it("refuses to encode a response payload above the byte cap", () => {
+    expect(() =>
+      encodeSecureWorkspaceReadResponse({
+        status: "ok",
+        bytes: Buffer.alloc(MAX_TEXT_BYTES + 1),
+      }),
+    ).toThrow("secure-workspace-read-response-too-large");
   });
 });

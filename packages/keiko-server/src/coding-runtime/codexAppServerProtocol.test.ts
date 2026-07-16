@@ -227,6 +227,15 @@ describe("Codex app-server 0.144.1 protocol boundary", () => {
         tool: "keiko_lookup",
         arguments: { token: "secret" },
       },
+      ...["auth_token", "authTokens", "refresh-token", "refreshTokens", "ACCESS_TOKEN"].map(
+        (key) => ({
+          threadId: "t1",
+          turnId: "u1",
+          callId: "c1",
+          tool: "keiko_lookup",
+          arguments: { nested: { [key]: "secret" } },
+        }),
+      ),
     ])
       expect(projectCodexAppServerMessage({ id: 2, method: "item/tool/call", params })).toEqual({
         ok: false,
