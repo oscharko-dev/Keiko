@@ -74,41 +74,57 @@ function runProcess(command, args) {
   });
 }
 
-function readBytes(stream, length) {
+/* Persistent per-stream accumulator: listeners attach once at spawn time, so bytes arriving
+ * between protocol reads are buffered instead of being dropped by a flowing, listener-less
+ * stream (the swap-listener pattern loses exactly the final pre-exit write on Windows). */
+function streamReader(stream) {
+  const reader = { buffered: [], size: 0, waiter: null, ended: false };
+  stream.on("data", (chunk) => {
+    reader.buffered.push(chunk);
+    reader.size += chunk.length;
+    reader.waiter?.();
+  });
+  stream.once("end", () => {
+    reader.ended = true;
+    reader.waiter?.();
+  });
+  return reader;
+}
+
+function readBytes(reader, length) {
   return new Promise((resolveBytes, reject) => {
-    const chunks = [];
-    let size = 0;
-    const onData = (chunk) => {
-      chunks.push(chunk);
-      size += chunk.length;
-      if (size < length) return;
-      cleanup();
-      const bytes = Buffer.concat(chunks);
-      if (bytes.length > length) stream.unshift(bytes.subarray(length));
-      resolveBytes(bytes.subarray(0, length));
+    const check = () => {
+      if (reader.size >= length) {
+        reader.waiter = null;
+        const bytes = Buffer.concat(reader.buffered);
+        reader.buffered = [bytes.subarray(length)];
+        reader.size = bytes.length - length;
+        resolveBytes(bytes.subarray(0, length));
+        return;
+      }
+      if (reader.ended) {
+        reader.waiter = null;
+        reject(
+          new Error(
+            `native helper ended before producing bounded response (buffered=${String(reader.size)})`,
+          ),
+        );
+      }
     };
-    const onEnd = () => {
-      cleanup();
-      reject(new Error("native helper ended before producing bounded response"));
-    };
-    const cleanup = () => {
-      stream.off("data", onData);
-      stream.off("end", onEnd);
-    };
-    stream.on("data", onData);
-    stream.once("end", onEnd);
+    reader.waiter = check;
+    check();
   });
 }
 
-async function response(stream) {
-  const responseHeader = await readBytes(stream, 12);
+async function response(reader) {
+  const responseHeader = await readBytes(reader, 12);
   assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
   assert.equal(responseHeader.readUInt16LE(4), 1);
   const length = responseHeader.readUInt32LE(8);
   assert.ok(length <= 64);
   return {
     kind: responseHeader.readUInt16LE(6),
-    payload: length === 0 ? Buffer.alloc(0) : await readBytes(stream, length),
+    payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
   };
 }
 
@@ -145,21 +161,18 @@ async function qualifyWindows(helper, runtime, root) {
   });
   const stderr = [];
   child.stderr.on("data", (chunk) => stderr.push(chunk));
+  const responses = streamReader(child.stdio[4]);
+  const output = streamReader(child.stdout);
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   child.stdio[3].write(launchPacket(runtime, root));
   const acknowledgement = await explained(
     "launch acknowledgement",
-    response(child.stdio[4]),
+    response(responses),
     exited,
     stderr,
   );
   assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
-  const observation = await explained(
-    "fixture observation",
-    readBytes(child.stdout, 12),
-    exited,
-    stderr,
-  );
+  const observation = await explained("fixture observation", readBytes(output, 12), exited, stderr);
   assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
   const rootProcess = processHandle(observation.readUInt32LE(4));
   const descendant = processHandle(observation.readUInt32LE(8));
@@ -167,7 +180,7 @@ async function qualifyWindows(helper, runtime, root) {
   child.stdio[3].write(control.subarray(0, 5));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   child.stdio[3].write(control.subarray(5));
-  const reap = await explained("reap response", response(child.stdio[4]), exited, stderr);
+  const reap = await explained("reap response", response(responses), exited, stderr);
   assert.equal(reap.kind, 2);
   assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
   await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
@@ -192,18 +205,26 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   });
   const stderr = [];
   child.stderr.on("data", (chunk) => stderr.push(chunk));
+  const responses = streamReader(child.stdio[4]);
+  const output = streamReader(child.stdout);
   child.stdio[3].write(launchPacket(runtime, root));
   const acknowledgement = await explained(
     "eof-probe acknowledgement",
-    response(child.stdio[4]),
+    response(responses),
     exited,
     stderr,
   );
   assert.equal(acknowledgement.kind, 1);
-  const observation = await readBytes(child.stdout, 12);
+  const observation = await explained(
+    "eof-probe observation",
+    readBytes(output, 12),
+    exited,
+    stderr,
+  );
   const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
   child.stdio[3].end();
-  assert.equal((await response(child.stdio[4])).kind, 3);
+  const closure = await explained("eof-probe closure", response(responses), exited, stderr);
+  assert.equal(closure.kind, 3);
   await Promise.all(pids.map(waitForExit));
 }
 
