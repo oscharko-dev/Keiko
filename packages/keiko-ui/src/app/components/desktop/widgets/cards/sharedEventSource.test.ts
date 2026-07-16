@@ -146,7 +146,6 @@ describe("subscribeSharedEventSource", () => {
 
   it("shares one source generation per dispatch and advances it after reconnect", () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.stubGlobal("EventSource", FakeEventSource);
     const generations: number[] = [];
     const subscribe = (): (() => void) =>
@@ -166,7 +165,7 @@ describe("subscribeSharedEventSource", () => {
     expect(generations).toEqual([1, 1]);
 
     first.onerror?.();
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_500);
     const secondOutput = FakeEventSource.instances[1]?.listeners.get("editor-debug:output");
     if (secondOutput === undefined) throw new Error("Expected reconnected stream.");
     for (const listener of secondOutput) {
