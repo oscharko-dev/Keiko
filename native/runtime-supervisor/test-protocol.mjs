@@ -117,6 +117,22 @@ function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" };
 }
 
+/* Re-throw a stream failure with the child's exit code so CI logs pinpoint the stage. */
+async function explained(stage, pending, exited, stderr) {
+  try {
+    return await pending;
+  } catch (error) {
+    const settled = await Promise.race([
+      exited,
+      new Promise((resolveLate) => setTimeout(resolveLate, 2_000, "still-running")),
+    ]);
+    throw new Error(
+      `${stage}: ${error instanceof Error ? error.message : String(error)} ` +
+        `(exit=${String(settled)} stderrBytes=${String(Buffer.concat(stderr).length)})`,
+    );
+  }
+}
+
 async function qualifyWindows(helper, runtime, root) {
   const child = spawn(helper, [], {
     env: hermeticWindowsEnv(),
@@ -130,18 +146,19 @@ async function qualifyWindows(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   child.stdio[3].write(launchPacket(runtime, root));
-  const acknowledgement = await Promise.race([
+  const acknowledgement = await explained(
+    "launch acknowledgement",
     response(child.stdio[4]),
-    exited.then((code) => {
-      throw new Error(
-        `supervisor exited before launch acknowledgement: exit=${String(code)} stderrBytes=${String(
-          Buffer.concat(stderr).length,
-        )}`,
-      );
-    }),
-  ]);
+    exited,
+    stderr,
+  );
   assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
-  const observation = await readBytes(child.stdout, 12);
+  const observation = await explained(
+    "fixture observation",
+    readBytes(child.stdout, 12),
+    exited,
+    stderr,
+  );
   assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
   const rootProcess = processHandle(observation.readUInt32LE(4));
   const descendant = processHandle(observation.readUInt32LE(8));
@@ -149,7 +166,7 @@ async function qualifyWindows(helper, runtime, root) {
   child.stdio[3].write(control.subarray(0, 5));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   child.stdio[3].write(control.subarray(5));
-  const reap = await response(child.stdio[4]);
+  const reap = await explained("reap response", response(child.stdio[4]), exited, stderr);
   assert.equal(reap.kind, 2);
   assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
   await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
@@ -168,8 +185,20 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
     env: hermeticWindowsEnv(),
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
   });
+  const exited = new Promise((resolveExit, reject) => {
+    child.once("error", reject);
+    child.once("close", resolveExit);
+  });
+  const stderr = [];
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
   child.stdio[3].write(launchPacket(runtime, root));
-  assert.equal((await response(child.stdio[4])).kind, 1);
+  const acknowledgement = await explained(
+    "eof-probe acknowledgement",
+    response(child.stdio[4]),
+    exited,
+    stderr,
+  );
+  assert.equal(acknowledgement.kind, 1);
   const observation = await readBytes(child.stdout, 12);
   const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
   child.stdio[3].end();
