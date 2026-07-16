@@ -110,6 +110,12 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");
     expect(ci).toContain('-Dsonar.projectBaseDir="$GITHUB_WORKSPACE"');
     expect(ci).toContain('-Dsonar.working.directory="$RUNNER_TEMP/sonar-work"');
+    // Pin the analysis revision to the pull-request head so the merge-ref checkout does not trip the
+    // SonarCloud "detected as changed but without having changed lines" SCM warning.
+    expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
+    expect(ci).toContain(
+      "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
+    );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
     expect(ci).toContain(

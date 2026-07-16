@@ -230,6 +230,11 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           STEPS_SONAR_VERSION_OUTPUTS_VERSION: ${{ steps.sonar-version.outputs.version }}
+          # Pull-request runs analyze the GitHub-provided merge ref (refs/pull/N/merge), whose commit
+          # SHA differs from the pull-request head. Pin the analysis revision to the head commit so the
+          # SonarCloud SCM sensor attributes changed lines to the real head instead of warning "detected
+          # as changed but without having changed lines". Push/dispatch runs analyze their own head.
+          SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}
         run: |
           # ADR-0137 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.
@@ -238,6 +243,7 @@ jobs:
             "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
               -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
               -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
+              -Dsonar.scm.revision="${SONAR_HEAD_SHA}" \
               -Dsonar.qualitygate.wait=true \
               -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
               2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
