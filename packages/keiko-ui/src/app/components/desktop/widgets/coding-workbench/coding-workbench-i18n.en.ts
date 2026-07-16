@@ -13,10 +13,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Server effective mode: {effectiveMode}. Deployment ceiling: {deploymentCeiling}.",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.description":
-    "Workspace-contained edits, saves, and commands proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
-  "codingWorkbench.mode.supervised-coding.label": "Approve for me",
+    "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
+  "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
   "codingWorkbench.mode.supervised-coding.description":
-    "Low- and medium-risk file and internet operations proceed; high- and critical-risk actions require approval. Delivery remains separately human-approved.",
+    "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.description":
     "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
@@ -27,6 +27,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Task text is transient intent. Start unlocks only after every readiness check is confirmed.",
   "codingWorkbench.task.starting": "Starting…",
   "codingWorkbench.task.start": "Start coding run",
+  "codingWorkbench.setup.eyebrow": "Workspace",
+  "codingWorkbench.setup.title": "Code setup",
+  "codingWorkbench.setup.help":
+    "Bind an existing local Git checkout so the coding run starts inside a governed task workspace.",
+  "codingWorkbench.setup.repositoryPath": "Repository path",
+  "codingWorkbench.setup.repositoryPathPlaceholder": "/absolute/path/to/repository",
+  "codingWorkbench.setup.targetBranch": "Target branch",
+  "codingWorkbench.setup.targetBranchPlaceholder": "main",
+  "codingWorkbench.setup.submit": "Bind workspace",
+  "codingWorkbench.setup.binding": "Binding…",
   "codingWorkbench.readiness.eyebrow": "Readiness",
   "codingWorkbench.readiness.title": "Independent live resources",
   "codingWorkbench.readiness.modelSource.label": "Model source",
@@ -193,6 +203,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed": "Model source could not be refreshed.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime could not be refreshed.",
   "codingWorkbench.alert.workspaceRefreshFailed": "Workspace could not be refreshed.",
+  "codingWorkbench.alert.workspaceBindFailed":
+    "The workspace could not be bound. Review the repository path and target branch.",
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
 } as const;

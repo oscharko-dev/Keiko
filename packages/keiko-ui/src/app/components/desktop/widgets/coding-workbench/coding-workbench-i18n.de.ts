@@ -15,10 +15,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Serverseitig wirksamer Modus: {effectiveMode}. Bereitstellungsgrenze: {deploymentCeiling}.",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
   "codingWorkbench.mode.governed-assist.description":
-    "Bearbeitungen, Speichervorgänge und Befehle innerhalb des Arbeitsbereichs werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
-  "codingWorkbench.mode.supervised-coding.label": "Für mich genehmigen",
+    "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
+  "codingWorkbench.mode.supervised-coding.label": "Überwachter Workspace",
   "codingWorkbench.mode.supervised-coding.description":
-    "Datei- und Internetvorgänge mit niedrigem und mittlerem Risiko werden ausgeführt; Aktionen mit hohem und kritischem Risiko erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
+    "Routinemäßige Bearbeitungen im Arbeitsbereich mit niedrigem und mittlerem Risiko, geprüfte Befehle und Verifizierungen werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
   "codingWorkbench.mode.autonomous-delivery.description":
     "Datei- und Internetvorgänge innerhalb des validierten Authority Envelope werden ohne Genehmigung pro Aktion ausgeführt. Die Auslieferung bleibt separat menschlich genehmigt.",
@@ -29,6 +29,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Aufgabentext ist eine flüchtige Absicht. Start wird erst freigeschaltet, wenn alle Bereitschaftsprüfungen bestätigt sind.",
   "codingWorkbench.task.starting": "Wird gestartet…",
   "codingWorkbench.task.start": "Coding-Lauf starten",
+  "codingWorkbench.setup.eyebrow": "Workspace",
+  "codingWorkbench.setup.title": "Code-Einrichtung",
+  "codingWorkbench.setup.help":
+    "Binde einen vorhandenen lokalen Git-Checkout, damit der Coding-Lauf in einem gesteuerten Aufgabenarbeitsbereich startet.",
+  "codingWorkbench.setup.repositoryPath": "Repository-Pfad",
+  "codingWorkbench.setup.repositoryPathPlaceholder": "/absoluter/pfad/zum/repository",
+  "codingWorkbench.setup.targetBranch": "Zielbranch",
+  "codingWorkbench.setup.targetBranchPlaceholder": "main",
+  "codingWorkbench.setup.submit": "Workspace binden",
+  "codingWorkbench.setup.binding": "Wird gebunden…",
   "codingWorkbench.readiness.eyebrow": "Bereitschaft",
   "codingWorkbench.readiness.title": "Unabhängige Live-Ressourcen",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -203,6 +213,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
+  "codingWorkbench.alert.workspaceBindFailed":
+    "Der Workspace konnte nicht gebunden werden. Prüfe Repository-Pfad und Zielbranch.",
   "codingWorkbench.alert.runRefreshFailed": "Lauf konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.eventStreamRefreshFailed":
     "Ereignisstrom konnte nicht aktualisiert werden.",

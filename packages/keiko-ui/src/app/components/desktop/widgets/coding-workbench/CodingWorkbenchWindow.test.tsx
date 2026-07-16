@@ -126,7 +126,7 @@ describe("CodingWorkbenchWindow", () => {
       "Server effective mode: Ask for approval.",
     );
     expect(screen.getByText(/Deployment ceiling:/u)).toHaveTextContent(
-      "Deployment ceiling: Approve for me.",
+      "Deployment ceiling: Supervised workspace.",
     );
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
     expect(screen.queryByText(/Issue #1990|marketing|preview/u)).not.toBeInTheDocument();
