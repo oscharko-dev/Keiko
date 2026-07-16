@@ -19,11 +19,30 @@ const nodeHeapFlag = "--max-old-space-size=8192";
 // run as one unit so artifact producers and their consumers can never diverge. The cache is
 // versioned, keyed on the exact command line and Node major, disabled in CI, and bypassed
 // with --no-cache.
-const CACHE_SCHEMA_VERSION = 1;
+const CACHE_SCHEMA_VERSION = 2;
 const defaultCacheFileName = join(".agent", "pre-pr-cache.json");
+// Root configuration that changes what a step ENFORCES: editing these must bust the cached
+// verdict of the steps that consume them, or a local run could report a false green bar.
+const ROOT_TS_CONFIG = [
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.packages.json",
+  "package.json",
+];
+const ROOT_LINT_CONFIG = ["eslint.config.js", "package.json"];
 const SCOPE_SOURCES = ["packages/", "src/", "tests/", "scripts/"];
-const SCOPE_PRODUCT = ["packages/", "src/", "scripts/", "tests/e2e/", "docs/release/"];
-const SCOPE_COVERAGE = [...SCOPE_SOURCES, "docs/qa/"];
+const SCOPE_TYPECHECK = [...SCOPE_SOURCES, ...ROOT_TS_CONFIG];
+const SCOPE_LINT = [...SCOPE_SOURCES, ...ROOT_LINT_CONFIG];
+const SCOPE_PRODUCT = [
+  "packages/",
+  "src/",
+  "scripts/",
+  "tests/e2e/",
+  "docs/release/",
+  ...ROOT_TS_CONFIG,
+];
+const SCOPE_COVERAGE = [...SCOPE_SOURCES, ...ROOT_TS_CONFIG, "docs/qa/"];
 
 function npmCommand(platform = process.platform) {
   return platform === "win32" ? "npm.cmd" : "npm";
@@ -230,8 +249,8 @@ function resultForCached(step) {
 
 function staticQualitySteps(platform, lintEnv) {
   return [
-    npmStep("typecheck", ["run", "typecheck"], { cacheScope: SCOPE_SOURCES, platform }),
-    npmStep("lint", ["run", "lint"], { cacheScope: SCOPE_SOURCES, env: lintEnv, platform }),
+    npmStep("typecheck", ["run", "typecheck"], { cacheScope: SCOPE_TYPECHECK, platform }),
+    npmStep("lint", ["run", "lint"], { cacheScope: SCOPE_LINT, env: lintEnv, platform }),
     npmStep("format", ["run", "format:check"], { platform }),
     npmStep("gitar-config", ["run", "check:gitar-config"], { platform }),
     npmStep("ui-i18n", ["run", "check:ui-i18n"], {
@@ -245,11 +264,11 @@ function staticQualitySteps(platform, lintEnv) {
     }),
     nativeQualityStep(platform),
     npmStep("ui-typecheck", ["run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"], {
-      cacheScope: ["packages/"],
+      cacheScope: ["packages/", ...ROOT_TS_CONFIG],
       platform,
     }),
     npmStep("ui-lint", ["run", "lint", "--workspace", "@oscharko-dev/keiko-ui"], {
-      cacheScope: ["packages/"],
+      cacheScope: ["packages/", ...ROOT_LINT_CONFIG],
       env: lintEnv,
       platform,
     }),

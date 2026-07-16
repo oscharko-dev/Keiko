@@ -9,10 +9,12 @@ import { BASELINE_COMMIT } from "../run-d12-perf-comparison.mjs";
 
 function injectedDeps(overrides = {}) {
   return {
-    capture: vi.fn(() => "false"),
+    capture: vi.fn(() => "cafebabecafebabecafebabecafebabecafebabe"),
     copyFile: vi.fn(),
+    hasCommit: vi.fn(() => true),
     log: vi.fn(),
     makeWorkdir: vi.fn(() => "/work"),
+    originUrl: vi.fn(() => "https://github.com/oscharko-dev/Keiko.git"),
     platform: "linux",
     run: vi.fn(),
     ...overrides,
@@ -79,13 +81,7 @@ describe("regenerateEvidence orchestration", () => {
   });
 
   it("provisions both checkouts, runs every step, and copies both documents back", () => {
-    const deps = injectedDeps({
-      capture: vi.fn((_command, args) =>
-        args.includes("--is-shallow-repository")
-          ? "false"
-          : "cafebabecafebabecafebabecafebabecafebabe",
-      ),
-    });
+    const deps = injectedDeps();
 
     const result = regenerateEvidence(deps);
 
@@ -96,43 +92,54 @@ describe("regenerateEvidence orchestration", () => {
     const nodeSteps = deps.run.mock.calls.filter((call) => call[0] === "node");
     expect(nodeSteps).toHaveLength(6);
     expect(deps.copyFile).toHaveBeenCalledTimes(2);
-    // Shallow probe returned "false", so no unshallow fetch is issued.
-    expect(deps.run.mock.calls.some((call) => call[1].includes("--unshallow"))).toBe(false);
+    // Every commit is already present locally, so no remote fetch is issued.
+    expect(deps.run.mock.calls.some((call) => call[1].includes("fetch"))).toBe(false);
   });
 
-  it("completes the history when a checkout is shallow", () => {
+  it("fetches a host-missing commit from the true origin instead of --unshallow", () => {
+    // A shallow host lacks the pinned baseline; hasCommit reports it absent for the baseline
+    // checkout only, so exactly that checkout fetches the commit from the real origin URL.
     const deps = injectedDeps({
-      capture: vi.fn((_command, args) =>
-        args.includes("--is-shallow-repository")
-          ? "true"
-          : "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-      ),
+      hasCommit: vi.fn((root) => !root.endsWith("baseline")),
     });
 
     regenerateEvidence(deps);
 
-    const unshallowFetches = deps.run.mock.calls.filter((call) => call[1].includes("--unshallow"));
-    expect(unshallowFetches).toHaveLength(2);
+    const fetches = deps.run.mock.calls.filter((call) => call[1].includes("fetch"));
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0][1]).toEqual([
+      "fetch",
+      "--quiet",
+      "https://github.com/oscharko-dev/Keiko.git",
+      BASELINE_COMMIT,
+    ]);
+    // No --unshallow against the local clone origin is ever attempted.
+    expect(deps.run.mock.calls.some((call) => call[1].includes("--unshallow"))).toBe(false);
   });
 
-  it("routes the default run/capture boundary through an injected executor", () => {
-    const exec = vi.fn(() => "  abcabcabcabcabcabcabcabcabcabcabcabcabca  \n");
+  it("routes every default boundary (run, capture, hasCommit, originUrl) through the executor", () => {
+    // `cat-file` (the hasCommit probe) throws → default hasCommit returns false → the default
+    // originUrl and the remote fetch run, so every executor-derived boundary is exercised.
+    const exec = vi.fn((_bin, args) => {
+      if (args.includes("cat-file")) throw new Error("missing commit");
+      return "  abcabcabcabcabcabcabcabcabcabcabcabcabca  \n";
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
-      // Only the executor and copy sink are injected, so the default log and workdir factory
-      // run (covering the boundary defaults) without touching real subprocesses or git.
+      // Only the executor and copy sink are injected, so the default log, workdir, hasCommit,
+      // and originUrl factories run without touching real subprocesses or git.
       regenerateEvidence({ copyFile: vi.fn(), exec, platform: "linux" });
       expect(logSpy).toHaveBeenCalled();
     } finally {
       logSpy.mockRestore();
     }
 
-    // Every boundary call resolves its host executable and inherits stdio for `run` (no
-    // encoding) while `capture` requests utf8 and trims; a git checkout is a `run`.
-    const captureCall = exec.mock.calls.find((call) => call[2]?.encoding === "utf8");
-    const runCall = exec.mock.calls.find((call) => call[2]?.stdio === "inherit");
-    expect(captureCall).toBeDefined();
-    expect(runCall).toBeDefined();
+    // capture requests utf8 and trims; run inherits stdio; the hasCommit probe passes
+    // stdio:"ignore"; and a remote fetch (originUrl resolved) is issued for the absent commit.
+    expect(exec.mock.calls.some((call) => call[2]?.encoding === "utf8")).toBe(true);
+    expect(exec.mock.calls.some((call) => call[2]?.stdio === "inherit")).toBe(true);
+    expect(exec.mock.calls.some((call) => call[2]?.stdio === "ignore")).toBe(true);
+    expect(exec.mock.calls.some((call) => call[1].includes("fetch"))).toBe(true);
     expect(exec.mock.calls.every((call) => typeof call[0] === "string")).toBe(true);
   });
 });

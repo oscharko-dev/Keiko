@@ -44,13 +44,37 @@ function makeCapture(exec) {
     exec(resolveHostExecutable(command), args, { encoding: "utf8", ...options }).trim();
 }
 
+function makeHasCommit(exec) {
+  return (root, commit) => {
+    try {
+      exec(resolveHostExecutable("git"), ["cat-file", "-e", `${commit}^{commit}`], {
+        cwd: root,
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
+function makeOriginUrl(exec) {
+  return () =>
+    exec(resolveHostExecutable("git"), ["remote", "get-url", "origin"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+}
+
 function resolveDependencies(overrides) {
   const exec = overrides.exec ?? execFileSync;
   return {
     capture: makeCapture(exec),
     copyFile: copyFileSync,
+    hasCommit: makeHasCommit(exec),
     log: (message) => console.log(message),
     makeWorkdir: () => mkdtempSync(join(tmpdir(), "keiko-d12-regen-")),
+    originUrl: makeOriginUrl(exec),
     platform: process.platform,
     run: makeRun(exec),
     ...overrides,
@@ -103,11 +127,12 @@ export function buildRegenerationPlan({ headCommit, workdir }) {
 
 function provisionCheckout(deps, root, commit) {
   deps.run("git", ["clone", "--quiet", "--no-checkout", repoRoot, root]);
-  // Local clones of a shallow repository stay shallow; complete the history from origin so the
-  // pinned baseline commit and the ancestry checks are always resolvable.
-  const shallow = deps.capture("git", ["rev-parse", "--is-shallow-repository"], { cwd: root });
-  if (shallow === "true") {
-    deps.run("git", ["fetch", "--quiet", "--unshallow", "origin"], { cwd: root });
+  // The clone's origin is the local repoRoot, which may itself be a shallow worktree, so
+  // `git fetch --unshallow` from it cannot recover a commit the host lacks (e.g. the pinned
+  // baseline). Fetch any missing commit from the host's TRUE origin remote (GitHub) instead;
+  // the candidate HEAD is always present locally, so only a shallow-host baseline needs this.
+  if (!deps.hasCommit(root, commit)) {
+    deps.run("git", ["fetch", "--quiet", deps.originUrl(), commit], { cwd: root });
   }
   deps.run("git", ["checkout", "--quiet", commit], { cwd: root });
 }

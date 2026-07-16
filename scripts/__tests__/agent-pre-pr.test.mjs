@@ -214,6 +214,25 @@ describe("agent pre-PR gate", () => {
       expect(thirdStatus("build")).toBe("passed");
       expect(thirdStatus("adr-index")).toBe("cached");
 
+      // Root config that changes what a step enforces must bust exactly that step's cached
+      // verdict, even though it lives outside the packages/src/tests/scripts trees: tsconfig
+      // busts typecheck (not lint), and the ESLint config busts lint (not typecheck).
+      await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      await writeFile(join(repo, "tsconfig.json"), '{ "compilerOptions": {} }\n', "utf8");
+      const afterTs = await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      const afterTsStatus = (id) => afterTs.results.find((result) => result.id === id)?.status;
+      expect(afterTsStatus("typecheck")).toBe("passed");
+      expect(afterTsStatus("lint")).toBe("cached");
+      expect(afterTsStatus("adr-index")).toBe("cached");
+
+      await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      await writeFile(join(repo, "eslint.config.js"), "export default [];\n", "utf8");
+      const afterEslint = await runPrePrGate({ cwd: repo, env, platform: "darwin", reportPath });
+      const afterEslintStatus = (id) =>
+        afterEslint.results.find((result) => result.id === id)?.status;
+      expect(afterEslintStatus("lint")).toBe("passed");
+      expect(afterEslintStatus("typecheck")).toBe("cached");
+
       const fourth = await runPrePrGate({
         cwd: repo,
         env,
