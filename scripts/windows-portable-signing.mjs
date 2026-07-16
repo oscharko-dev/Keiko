@@ -24,7 +24,8 @@ import {
   portablePayloadRelativePath as portablePath,
   validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
-import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
+import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
+import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
 import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
@@ -156,6 +157,9 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   if (!paths.has("runtime/node/node.exe")) {
     fail("bundled Node executable is missing from the PE inventory");
   }
+  if (!paths.has("runtime/native/keiko-secure-workspace-read.exe")) {
+    fail("secure workspace read helper is missing from the PE inventory");
+  }
   return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
 }
 
@@ -272,12 +276,42 @@ function run(command, args, cwd, { surfaceOutputOnFailure = false } = {}) {
   }
 }
 
-export async function rebindPortableSignedArchive(stageRoot, manifest) {
+function windowsZipAdapter() {
+  return createPortableZipAdapter("win32", (command, args, options = {}) => {
+    run(command, args, options.cwd);
+    return { stdout: "" };
+  });
+}
+
+export async function rebindPortableSignedArchive(
+  stageRoot,
+  manifest,
+  archiveAdapter = windowsZipAdapter(),
+) {
   const payloadContainer = join(stageRoot, "payload");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
+  rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
   rmSync(archivePath, { force: true });
-  run("zip", ["-qr", archivePath, "Keiko"], payloadContainer);
-  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET);
+  archiveAdapter.create(payloadContainer, "Keiko", archivePath);
+  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET, {
+    payloadAlreadyRebound: true,
+  });
+}
+
+function markNativeHelperVerified(manifest) {
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail("manifest must contain exactly one native helper");
+  }
+  manifest.nativeHelpers[0].signing = {
+    signatureKind: "authenticode",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
+  );
 }
 
 async function finalizeCommand(options) {
@@ -289,6 +323,7 @@ async function finalizeCommand(options) {
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
   assertWindowsProductionVerificationInput(verificationInputPath, manifest);
+  markNativeHelperVerified(manifest);
   await rebindPortableSignedArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(

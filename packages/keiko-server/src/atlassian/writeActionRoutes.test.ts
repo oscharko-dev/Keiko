@@ -317,12 +317,12 @@ const D4_WRITE_DISPOSITIONS: Readonly<
   },
   "supervised-coding": {
     "create-issue": "review-required",
-    "update-issue-fields": "allowed",
+    "update-issue-fields": "review-required",
     "transition-issue": "review-required",
-    "add-issue-comment": "allowed",
+    "add-issue-comment": "review-required",
     "create-page": "review-required",
-    "update-page": "allowed",
-    "add-page-comment": "allowed",
+    "update-page": "review-required",
+    "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
     "create-issue": "allowed",

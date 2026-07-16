@@ -1,143 +1,205 @@
-import {
-  CODING_WORKBENCH_MODE_POLICIES,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeHealth,
-} from "@oscharko-dev/keiko-contracts";
 import type {
-  CodingWorkbenchProjection,
-  CodingWorkbenchRunState,
-} from "./codingWorkbenchProjection";
+  CodingWorkbenchMode,
+  CodingWorkbenchModelSource,
+  CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
+} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import type {
+  CodingWorkbenchResourceStatus,
+  CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
 
 export type CodingWorkbenchTone = "neutral" | "success" | "warning" | "danger";
 
-export function isActiveRunState(state: CodingWorkbenchRunState): boolean {
+export function cx(...classes: readonly (string | undefined | false)[]): string {
+  return classes.filter((value): value is string => typeof value === "string").join(" ");
+}
+
+export function modeLabel(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
+  return t(`codingWorkbench.mode.${mode}.label`);
+}
+
+export function modeDescription(mode: CodingWorkbenchMode, t: CodingWorkbenchTranslate): string {
+  return t(`codingWorkbench.mode.${mode}.description`);
+}
+
+export function modelSourceLabel(
+  source: CodingWorkbenchModelSource,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (source === "keiko-model-gateway") return t("codingWorkbench.modelSource.gateway");
+  if (source === "openai-api-key-through-gateway")
+    return t("codingWorkbench.modelSource.openaiGateway");
+  return t("codingWorkbench.modelSource.codexSubscription");
+}
+
+export function runStateLabel(
+  state: CodingWorkbenchRuntimeStateName,
+  t: CodingWorkbenchTranslate,
+): string {
+  return t(`codingWorkbench.runState.${state}`);
+}
+
+export function resourceStatusLabel(
+  status: CodingWorkbenchResourceStatus,
+  t: CodingWorkbenchTranslate,
+): string {
+  return t(`codingWorkbench.resourceStatus.${status}`);
+}
+
+export function resourceStatusSymbol(status: CodingWorkbenchResourceStatus): string {
+  if (status === "ready") return "✓";
+  if (status === "loading") return "↻";
+  if (status === "error" || status === "unavailable") return "!";
+  return "○";
+}
+
+export function resourceTone(status: CodingWorkbenchResourceStatus): CodingWorkbenchTone {
+  if (status === "ready") return "success";
+  if (status === "error") return "danger";
+  if (status === "unavailable") return "warning";
+  return "neutral";
+}
+
+function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {
+  if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
+  const snapshot = state.run.value;
+  if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
+  return t("codingWorkbench.announcement.runRevision", {
+    state: runStateLabel(snapshot.state, t),
+    revision: snapshot.revision,
+  });
+}
+
+function setupAnnouncement(
+  status: CodingWorkbenchResourceStatus,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (status === "ready") return t("codingWorkbench.announcement.setupReady");
+  if (status === "loading") return t("codingWorkbench.announcement.setupChecking");
+  if (status === "unavailable") return t("codingWorkbench.announcement.setupUnavailable");
+  return "";
+}
+
+export function lifecycleAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  const snapshot = state.run.value;
+  const sourceAvailable =
+    state.source.value?.runtimePreference === state.runtimePreference &&
+    state.source.value.available;
+  const workspaceAvailable = state.workspace.value?.health === "healthy";
+  const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
+  const recovery =
+    snapshot?.state === "recovery-required" && snapshot.recoveryAcknowledged === true
+      ? t("codingWorkbench.announcement.recoveryComplete")
+      : "";
+  return [
+    runAnnouncement(state, t),
+    readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
+    authenticationAnnouncement(state, t),
+    readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
+    readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
+    recovery,
+    setupAnnouncement(state.codexSetup.status, t),
+  ]
+    .filter((announcement) => announcement.length > 0)
+    .join(" ");
+}
+
+type ReadinessAnnouncementState =
+  "checking" | "refreshFailed" | "unavailable" | "ready" | "notSelected" | "notChecked";
+
+function readinessAnnouncementState(
+  status: CodingWorkbenchResourceStatus,
+  available: boolean,
+): ReadinessAnnouncementState {
+  if (status === "loading") return "checking";
+  if (status === "error") return "refreshFailed";
+  if (status === "unavailable") return "unavailable";
+  if (status === "ready") return available ? "ready" : "unavailable";
+  if (status === "empty") return "notSelected";
+  return "notChecked";
+}
+
+function readinessAnnouncement(
+  resource: "modelSource" | "workspace" | "runtime",
+  status: CodingWorkbenchResourceStatus,
+  available: boolean,
+  t: CodingWorkbenchTranslate,
+): string {
+  const state = readinessAnnouncementState(status, available);
+  return t(`codingWorkbench.announcement.${resource}.${state}`);
+}
+
+function authenticationAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (state.runtimePreference !== "codex-subscription") {
+    return t("codingWorkbench.announcement.authenticationNotSelected");
+  }
+  if (state.profile.status === "loading")
+    return t("codingWorkbench.announcement.authenticationChecking");
+  if (state.profile.status === "error" || state.profile.status === "unavailable") {
+    return t("codingWorkbench.announcement.authenticationUnavailable");
+  }
+  const profile = state.profile.value;
+  if (profile?.status === "connected") return t("codingWorkbench.announcement.authenticationReady");
+  if (profile?.status === "missing")
+    return t("codingWorkbench.announcement.authenticationRequired");
+  if (profile !== null) return t("codingWorkbench.announcement.authenticationUnavailable");
+  return t("codingWorkbench.announcement.authenticationNotChecked");
+}
+
+export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
   return (
+    state === "starting" ||
+    state === "ready" ||
     state === "running" ||
-    state === "approval-required" ||
-    state === "approved" ||
-    state === "blocked" ||
-    state === "governed-assist" ||
-    state === "governed-assist-blocked"
+    state === "awaiting-approval" ||
+    state === "stopping"
   );
 }
 
-export function cx(...classes: readonly (string | undefined)[]): string {
-  return classes.filter((value): value is string => value !== undefined).join(" ");
+export function eventTitle(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind === "status") return runStateLabel(event.state, t);
+  return t(`codingWorkbench.event.${event.eventKind}`);
 }
 
-export function modeLabel(mode: CodingWorkbenchMode): string {
-  return CODING_WORKBENCH_MODE_POLICIES[mode].display.label;
+export function eventDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  return event.failureCode
+    ? t("codingWorkbench.event.detailFailure", {
+        sequence: event.sequence,
+        revision: event.revision,
+        failure: event.failureCode,
+      })
+    : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
 }
 
-export function modeDescription(mode: CodingWorkbenchMode): string {
-  return CODING_WORKBENCH_MODE_POLICIES[mode].display.description;
-}
-
-export function modelSourceLabel(source: CodingWorkbenchModelSource): string {
-  if (source === "keiko-model-gateway") return "Keiko Gateway providers";
-  if (source === "openai-api-key-through-gateway") return "OpenAI API key through Gateway";
-  return "ChatGPT/Codex subscription profile";
-}
-
-export function runtimeLabel(runtime: string): string {
-  if (runtime === "keiko-sidecar") return "Keiko sidecar";
-  if (runtime === "codex-cli-adapter") return "Codex CLI adapter";
-  return "Delivery runner";
-}
-
-export function runStateLabel(state: CodingWorkbenchRunState): string {
-  const labels: Record<CodingWorkbenchRunState, string> = {
-    empty: "Ready",
-    running: "Running",
-    "approval-required": "Approval required",
-    approved: "Approved",
-    denied: "Denied",
-    stopped: "Stopped",
-    blocked: "Blocked",
-    "governed-assist": "Assist proposal",
-    "governed-assist-blocked": "Assist blocked",
-    failed: "Failed",
-    completed: "Completed",
-  };
-  return labels[state];
-}
-
-export function healthLabel(health: CodingWorkbenchRuntimeHealth): string {
-  if (health === "ready") return "Sidecar ready";
-  if (health === "busy") return "Sidecar busy";
-  if (health === "degraded") return "Sidecar degraded";
-  return "Sidecar stopped";
-}
-
-export function healthTone(health: CodingWorkbenchRuntimeHealth): CodingWorkbenchTone {
-  if (health === "ready") return "success";
-  if (health === "busy") return "neutral";
-  if (health === "degraded") return "warning";
-  return "danger";
-}
-
-export function progressText(progress: CodingWorkbenchProjection["progress"]): string {
-  return progress.total === 0
-    ? "0 items"
-    : `${String(progress.completed)} / ${String(progress.total)}`;
-}
-
-export function diffText(projection: CodingWorkbenchProjection): string {
-  return `${String(projection.diff.addedLines)} added, ${String(projection.diff.deletedLines)} deleted`;
-}
-
-export function verificationText(projection: CodingWorkbenchProjection): string {
-  const summary = projection.verification;
-  return `${String(summary.passedCount)} passed, ${String(summary.failedCount)} failed, ${String(summary.skippedCount)} skipped`;
-}
-
-export function requestStatusLabel(state: string): string {
-  if (state === "stop-requested") return "Stop requested. Server authority must perform the stop.";
-  if (state === "takeover-requested") {
-    return "Manual takeover requested. Runtime authority remains server-side.";
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (state.mutation.error) return t("codingWorkbench.alert.actionFailed");
+  for (const [resource, value] of [
+    ["authentication", state.profile],
+    ["authenticationSetup", state.codexSetup],
+    ["modelSource", state.source],
+    ["runtime", state.runtime],
+    ["workspace", state.workspace],
+    ["run", state.run],
+    ["eventStream", state.stream],
+  ] as const) {
+    if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
-  if (state === "approved") return "One-time approval recorded in the UI surface.";
-  if (state === "denied") return "Permission request denied in the UI surface.";
-  return "No operator override requested.";
-}
-
-export function permissionLabel(kind: string): string {
-  if (kind === "workspace-write") return "Workspace write";
-  if (kind === "command-execution") return "Command execution";
-  if (kind === "network-egress") return "Network egress";
-  if (kind === "connector-access") return "Connector access";
-  return "Delivery substrate";
-}
-
-export function codexStatusLabel(status: string): string {
-  if (status === "connected") return "Connected";
-  if (status === "loading") return "Checking";
-  if (status === "unavailable") return "Profile unavailable";
-  if (status === "disabled-by-deployment") return "Disabled by deployment";
-  if (status === "unsupported-headless") return "Unavailable headless";
-  return "Needs setup";
-}
-
-export function eventTitle(event: CodingWorkbenchRuntimeEvent): string {
-  if (event.kind === "runtime-started") return "Runtime started";
-  if (event.kind === "permission-requested") return "Permission requested";
-  if (event.kind === "diff-summarized") return "Diff summarized";
-  if (event.kind === "verification-summarized") return "Verification summarized";
-  if (event.kind === "failure-redacted") return "Failure redacted";
-  if (event.kind === "artifact-produced") return "Artifact produced";
-  if (event.kind === "task-submitted") return "Task submitted";
-  return "Runtime observation";
-}
-
-export function eventDetail(event: CodingWorkbenchRuntimeEvent): string {
-  if (event.kind === "diff-summarized") return `${String(event.fileCount ?? 0)} files changed`;
-  if (event.kind === "verification-summarized") {
-    return `${event.verificationStatus ?? "unknown"} verification`;
-  }
-  if (event.kind === "permission-requested") return "A privileged action is waiting for approval";
-  if (event.kind === "failure-redacted") return event.failureSummary ?? "Failure details redacted";
-  if (event.kind === "artifact-produced") return event.artifactLabel ?? "Content-free artifact";
-  return event.taskRef ?? event.channel ?? event.runtimeSource ?? "Content-free runtime event";
+  return null;
 }

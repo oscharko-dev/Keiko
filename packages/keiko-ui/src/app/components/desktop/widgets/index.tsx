@@ -513,7 +513,7 @@ registerWindowRender("runtime", (cfg, ctx) => {
     />
   );
 });
-registerWindowRender("coding", (cfg) => <CodingWorkbenchWindow state={str(cfg, "state")} />);
+registerWindowRender("coding", () => <CodingWorkbenchWindow />);
 // Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
 // Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
 // Files/Editor window root; an empty state renders when none is available. The shell persists the

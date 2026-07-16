@@ -213,28 +213,14 @@ afterEach(() => {
 });
 
 describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
-  it("is registered as an exact POST route", () => {
-    const confirmMatch = matchRoute("POST", "/api/coding-workbench/autonomous-delivery/confirm");
-    const match = matchRoute("POST", "/api/coding-workbench/autonomous-delivery/execute");
-
-    expect(confirmMatch).not.toBe("method-not-allowed");
-    expect(confirmMatch).toBeDefined();
-    expect(match).not.toBe("method-not-allowed");
-    expect(match).toBeDefined();
-    if (confirmMatch === undefined || confirmMatch === "method-not-allowed") {
-      throw new Error("confirm route missing");
-    }
-    if (match === undefined || match === "method-not-allowed") throw new Error("route missing");
-    expect(confirmMatch.definition.pattern).toBe(
+  it("keeps browser-owned authority confirmation and execution unmounted", () => {
+    for (const pattern of [
       "/api/coding-workbench/autonomous-delivery/confirm",
-    );
-    expect(match.definition.pattern).toBe("/api/coding-workbench/autonomous-delivery/execute");
-    expect(matchRoute("GET", "/api/coding-workbench/autonomous-delivery/confirm")).toBe(
-      "method-not-allowed",
-    );
-    expect(matchRoute("GET", "/api/coding-workbench/autonomous-delivery/execute")).toBe(
-      "method-not-allowed",
-    );
+      "/api/coding-workbench/autonomous-delivery/execute",
+    ]) {
+      expect(matchRoute("POST", pattern)).toBeUndefined();
+      expect(matchRoute("GET", pattern)).toBeUndefined();
+    }
   });
 
   it("mints server-owned confirmations that execute can consume once", async () => {

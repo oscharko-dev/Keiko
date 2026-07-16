@@ -52,9 +52,11 @@ export interface SupervisedCodingApprovalStore {
   consume(
     input: SupervisedCodingApprovalConsumeInput,
   ): SupervisedCodingConsumedApproval | undefined;
+  invalidateRun(runId: string): void;
 }
 
 interface StoredApprovalRecord {
+  readonly runId: string;
   readonly bindingHash: string;
   readonly tokenHash: string;
   readonly approvedByUserId: string;
@@ -112,6 +114,7 @@ export function createInMemorySupervisedCodingApprovalStore(
       const tokenHash = hashToken(approvalToken);
       const expiresAtMs = nowMs + (input.ttlMs ?? ttlMs);
       records.set(approvalId, {
+        runId: input.binding.runId,
         bindingHash: supervisedCodingApprovalBindingHash(input.binding),
         tokenHash,
         approvedByUserId: input.approvedByUserId,
@@ -129,6 +132,11 @@ export function createInMemorySupervisedCodingApprovalStore(
     consume(input): SupervisedCodingConsumedApproval | undefined {
       pruneExpired(records, input.nowMs, maxRecords);
       return consumeApprovalRecord(records, input);
+    },
+    invalidateRun(runId: string): void {
+      for (const [approvalId, record] of records) {
+        if (record.runId === runId) records.delete(approvalId);
+      }
     },
   };
 }

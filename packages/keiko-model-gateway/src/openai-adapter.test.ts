@@ -464,6 +464,21 @@ describe("OpenAiAdapter.call", () => {
     expect((sentBody as { temperature?: number; top_p?: number }).top_p).toBe(1);
   });
 
+  it("serialises the server-selected output budget as OpenAI max_tokens", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "bounded" }, finish_reason: "stop" }] }),
+      );
+    });
+
+    await adapter.call({ ...REQUEST, maxOutputTokens: 37 }, CONFIG);
+
+    expect((sentBody as { max_tokens?: number }).max_tokens).toBe(37);
+  });
+
   it("rejects invalid sampling parameters before sending the provider request", async () => {
     let called = false;
     const adapter = adapterWith(() => {
@@ -497,6 +512,7 @@ describe("OpenAiAdapter.call", () => {
     expect("response_format" in body).toBe(false);
     expect("temperature" in body).toBe(false);
     expect("top_p" in body).toBe(false);
+    expect("max_tokens" in body).toBe(false);
   });
 
   it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {

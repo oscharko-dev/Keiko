@@ -17,7 +17,7 @@ import {
   PortableVerificationInputError,
   readPortableVerificationInput,
 } from "./portable-verification-input.mjs";
-import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
+import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
 
 const TEAM_PATTERN = /^[A-Z0-9]{10}$/u;
 const UUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
@@ -148,6 +148,14 @@ function inventoryCommand(options) {
     if (!paths.has(executable))
       fail("manifest sidecar executable is missing from the Mach-O inventory");
   }
+  if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 1) {
+    fail("manifest must contain exactly one native helper");
+  }
+  const helper = manifest.nativeHelpers[0];
+  const helperExecutable = `Keiko.app/Contents/Resources/${helper.executablePath}`;
+  if (!paths.has(helperExecutable)) {
+    fail("manifest native helper is missing from the Mach-O inventory");
+  }
   writeFileSync(
     resolve(required(options, "inventory")),
     `${JSON.stringify(inventory, null, 2)}\n`,
@@ -179,6 +187,33 @@ function compareCommand(options, includeHashes) {
     fail("macOS code inventory changed unexpectedly");
 }
 
+function rebindPayloadCommand(options) {
+  const stage = resolve(required(options, "stage-root"));
+  const target = required(options, "target");
+  const manifestPath = join(stage, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest.artifact?.platformTarget !== target) {
+    fail("manifest target does not match signed payload");
+  }
+  rebindSignedPayload(stage, manifest, target);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function markNativeHelperVerified(manifest) {
+  const helper = manifest.nativeHelpers?.[0];
+  if (manifest.nativeHelpers?.length !== 1) fail("manifest must contain exactly one native helper");
+  helper.signing = {
+    signatureKind: "developer-id-notarized",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: true,
+    notarizationVerified: true,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeHelpers = globalThis.structuredClone(
+    manifest.nativeHelpers,
+  );
+}
+
 async function finalize(options) {
   const stage = resolve(required(options, "stage-root"));
   const expected = readInventory(required(options, "expected-inventory"));
@@ -191,9 +226,12 @@ async function finalize(options) {
     fail("manifest target does not match the verified inventory");
   const inputPath = resolve(required(options, "verification-input"));
   assertProductionInput(inputPath, manifest);
+  markNativeHelperVerified(manifest);
   const archivePath = join(stage, manifest.artifact.assetName);
   if (!existsSync(archivePath)) fail("final ditto archive is missing");
-  await rebindExistingSignedArchive(stage, manifest, archivePath);
+  await rebindExistingSignedArchive(stage, manifest, archivePath, expected.target, {
+    payloadAlreadyRebound: true,
+  });
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
@@ -229,6 +267,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "inventory-root") inventoryRootCommand(options);
   else if (command === "compare-paths") compareCommand(options, false);
   else if (command === "compare-bytes") compareCommand(options, true);
+  else if (command === "rebind-payload") rebindPayloadCommand(options);
   else if (command === "notary-result")
     assertAcceptedNotaryResult(resolve(required(options, "result")));
   else if (command === "finalize") await finalize(options);

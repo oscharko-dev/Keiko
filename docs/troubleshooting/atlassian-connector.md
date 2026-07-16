@@ -9,8 +9,9 @@ Setup and normal operation are documented in the
 [Atlassian connector setup and operations guide](../local-knowledge/atlassian-connector-guide.md);
 the authority, credential, egress, evidence, and permissions decisions are fixed by
 [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md). Autonomy-mode names
-follow [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md): **Ask for
-approval**, **Approve for me**, and **Full access**.
+follow [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md), as amended by
+[ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md):
+**Ask for approval**, **Supervised workspace**, and **Full access**.
 
 All examples use synthetic hosts, keys, and identifiers (`example.atlassian.net`, `EXAMPLE-1`,
 `service-account@example.com`) and redacted placeholders (`<redacted-api-token>`,

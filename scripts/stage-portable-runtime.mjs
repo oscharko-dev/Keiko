@@ -47,6 +47,8 @@ const NODE_ARCHIVE_TIMEOUT_MS = 300_000;
 const NODE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
+const SIDECAR_APPROVAL_SCHEMA_VERSION = 2;
+const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
 const STAGING_ASSET_ID_UNAVAILABLE = 0;
 const MAC_APP_ICON_FILE = "Keiko.icns";
 const MAC_APP_ICON_SOURCE = join(repoRoot, "native", "portable-launcher", "keiko.icns");
@@ -57,6 +59,8 @@ const WINDOWS_LAUNCHER_RESOURCE_SOURCE = join(
   "portable-launcher",
   "keiko-portable-launcher.rc",
 );
+const SECURE_READ_SOURCE_ROOT = join(repoRoot, "native", "secure-workspace-read");
+const SECURE_READ_NAME = "keiko-secure-workspace-read";
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -213,6 +217,28 @@ function normalizeSidecarRuntimeSpecs(specs, target) {
 
 function normalizeSidecarRuntimeSpec(spec, target, names, index) {
   if (!isRecord(spec)) fail(`sidecar spec ${String(index + 1)} must be an object`);
+  requireExactSpecKeys(spec, [
+    "approvalSchemaVersion",
+    "name",
+    "kind",
+    "sourceRoot",
+    "executablePath",
+    "licenseEvidencePath",
+    "sbomEvidencePath",
+    "upstream",
+    "adapterCompatibility",
+    "protocolSchema",
+    "releaseApproval",
+    "license",
+    "archive",
+    "platformTarget",
+    "executableTreeAlgorithm",
+    "expectedExecutableTreeSha256",
+    "expectedPayloadSha256",
+  ]);
+  if (spec.approvalSchemaVersion !== SIDECAR_APPROVAL_SCHEMA_VERSION) {
+    fail("sidecar approvalSchemaVersion must be 2");
+  }
   const name = normalizeSidecarName(spec, names);
   const sourceRoot = resolve(requiredSpecString(spec, "sourceRoot"));
   const files = sidecarTreeFiles(sourceRoot);
@@ -242,36 +268,105 @@ function normalizeSidecarName(spec, names) {
 }
 
 function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, files, sourceRoot) {
-  const executablePath = sidecarPayloadPath(payloadRootPath, spec, "executablePath", files);
-  const licensePath = sidecarPayloadPath(payloadRootPath, spec, "licenseEvidencePath", files);
-  const sbomPath = sidecarPayloadPath(payloadRootPath, spec, "sbomEvidencePath", files);
+  const paths = sidecarPathsForSpec(spec, payloadRootPath, files);
+  const provenance = sidecarProvenanceForSpec(spec, target);
+  const executable = sidecarExecutableForSpec(spec, sourceRoot, paths.executableSourcePath);
+  const evidence = sidecarEvidenceForSpec(spec, sourceRoot, paths, provenance, executable);
   return {
+    approvalSchemaVersion: SIDECAR_APPROVAL_SCHEMA_VERSION,
     name: requiredSpecString(spec, "name"),
-    kind: requiredSpecString(spec, "kind"),
-    upstream: sidecarUpstream(spec),
-    adapterCompatibility: sidecarAdapterCompatibility(spec),
-    platformTarget: sidecarPlatformTarget(spec, target),
+    kind: requiredSpecLiteral(spec, "kind", "coding-runtime"),
+    ...provenance,
+    ...executable,
+    platformTarget: provenance.archive.platformTarget,
     payloadRootPath,
-    executablePath,
+    executablePath: paths.executablePath,
     payloadSha256,
     sizeBytes: sidecarTreeSize(files),
-    licenseEvidence: sidecarEvidence(
-      sourceRoot,
-      sourcePathForSpec(spec, "licenseEvidencePath"),
-      licensePath,
-    ),
-    sbomEvidence: sidecarEvidence(
-      sourceRoot,
-      sourcePathForSpec(spec, "sbomEvidencePath"),
-      sbomPath,
-    ),
-    signing: sidecarSigningForSpec(spec, target),
+    ...evidence,
+    signing: sidecarStagingSigning(target, executable),
   };
 }
 
-function sidecarPayloadPath(payloadRootPath, spec, key, files) {
-  const sourcePath = sourcePathForSpec(spec, key);
-  if (!files.some((file) => file.relativePath === sourcePath)) fail(`sidecar ${key} is missing`);
+function sidecarPathsForSpec(spec, payloadRootPath, files) {
+  const executableSourcePath = sourcePathForSpec(spec, "executablePath");
+  const licenseSourcePath = sourcePathForSpec(spec, "licenseEvidencePath");
+  const sbomSourcePath = sourcePathForSpec(spec, "sbomEvidencePath");
+  const executablePath = sidecarPayloadPath(
+    payloadRootPath,
+    executableSourcePath,
+    files,
+    "executablePath",
+  );
+  const licensePath = sidecarPayloadPath(
+    payloadRootPath,
+    licenseSourcePath,
+    files,
+    "licenseEvidencePath",
+  );
+  const sbomPath = sidecarPayloadPath(payloadRootPath, sbomSourcePath, files, "sbomEvidencePath");
+  return {
+    executableSourcePath,
+    licenseSourcePath,
+    sbomSourcePath,
+    executablePath,
+    licensePath,
+    sbomPath,
+  };
+}
+
+function sidecarProvenanceForSpec(spec, target) {
+  const upstream = sidecarUpstream(spec);
+  const adapterCompatibility = sidecarAdapterCompatibility(spec);
+  const protocolSchema = sidecarProtocolSchema(spec, upstream, adapterCompatibility);
+  const releaseApproval = sidecarReleaseApproval(spec);
+  const license = sidecarLicense(spec);
+  const platformTarget = sidecarPlatformTarget(spec, target);
+  const archive = sidecarArchive(spec, upstream, platformTarget);
+  return { upstream, adapterCompatibility, protocolSchema, releaseApproval, license, archive };
+}
+
+function sidecarExecutableForSpec(spec, sourceRoot, executableSourcePath) {
+  const executableTreeAlgorithm = requiredSpecLiteral(
+    spec,
+    "executableTreeAlgorithm",
+    EXECUTABLE_TREE_ALGORITHM,
+  );
+  const executableTreeSha256 = requiredSpecDigest(spec, "expectedExecutableTreeSha256");
+  const actualExecutableTreeSha256 = hashExecutableTree(sourceRoot, executableSourcePath);
+  if (actualExecutableTreeSha256 !== executableTreeSha256) {
+    fail("sidecar executable tree digest does not match independent approval");
+  }
+  const executableSha256 = sha256Bytes(
+    readFileSync(resolveSidecarSourcePath(sourceRoot, executableSourcePath)),
+  );
+  return { executableTreeAlgorithm, executableTreeSha256, executableSha256 };
+}
+
+function sidecarEvidenceForSpec(spec, sourceRoot, paths, provenance, executable) {
+  const licenseEvidence = sidecarEvidence(sourceRoot, paths.licenseSourcePath, paths.licensePath);
+  if (licenseEvidence.sha256 !== provenance.license.sha256) {
+    fail("sidecar license evidence digest does not match approval");
+  }
+  validateSidecarSbom(
+    sourceRoot,
+    paths.sbomSourcePath,
+    spec,
+    provenance.upstream,
+    provenance.license,
+    provenance.archive,
+    executable.executableSha256,
+  );
+  return {
+    licenseEvidence,
+    sbomEvidence: sidecarEvidence(sourceRoot, paths.sbomSourcePath, paths.sbomPath),
+  };
+}
+
+function sidecarPayloadPath(payloadRootPath, sourcePath, files, key) {
+  if (!files.some((file) => file.relativePath === sourcePath)) {
+    fail(`sidecar ${key} is missing`);
+  }
   return posix.join(payloadRootPath, sourcePath);
 }
 
@@ -283,19 +378,203 @@ function sourcePathForSpec(spec, key) {
 
 function sidecarUpstream(spec) {
   const upstream = requiredSpecRecord(spec, "upstream");
+  requireExactRecordKeys(
+    upstream,
+    ["owner", "repository", "name", "version", "tag", "commit"],
+    "upstream",
+  );
   return {
+    owner: requiredSpecString(upstream, "owner"),
+    repository: requiredSpecString(upstream, "repository"),
     name: requiredSpecString(upstream, "name"),
     version: requiredSpecString(upstream, "version"),
+    tag: requiredSpecString(upstream, "tag"),
+    commit: requiredSpecCommit(upstream, "commit"),
   };
 }
 
 function sidecarAdapterCompatibility(spec) {
   const adapter = requiredSpecRecord(spec, "adapterCompatibility");
+  requireExactRecordKeys(
+    adapter,
+    ["adapterName", "adapterVersion", "transport"],
+    "adapterCompatibility",
+  );
   return {
-    adapterName: requiredSpecString(adapter, "adapterName"),
-    adapterVersion: requiredSpecString(adapter, "adapterVersion"),
-    protocolVersion: requiredSpecString(adapter, "protocolVersion"),
+    adapterName: requiredSpecLiteral(adapter, "adapterName", "keiko-coding-sidecar"),
+    adapterVersion: requiredSpecLiteral(adapter, "adapterVersion", "1"),
+    transport: requiredSpecLiteral(adapter, "transport", "http-sse"),
   };
+}
+
+function sidecarProtocolSchema(spec, upstream, adapter) {
+  const schema = requiredSpecRecord(spec, "protocolSchema");
+  requireExactRecordKeys(
+    schema,
+    ["path", "url", "sha256", "hashAlgorithm", "hashEncoding", "digestInput", "transport"],
+    "protocolSchema",
+  );
+  const path = requiredSpecRelativePath(schema, "path");
+  const expectedUrl = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/${path}`;
+  const url = requiredSpecLiteral(schema, "url", expectedUrl);
+  const transport = requiredSpecLiteral(schema, "transport", "http-sse");
+  if (transport !== adapter.transport) fail("sidecar protocol schema transport must match adapter");
+  return {
+    path,
+    url,
+    sha256: requiredSpecDigest(schema, "sha256"),
+    hashAlgorithm: requiredSpecLiteral(schema, "hashAlgorithm", "sha256"),
+    hashEncoding: requiredSpecLiteral(schema, "hashEncoding", "lowercase-hex"),
+    digestInput: requiredSpecLiteral(schema, "digestInput", "upstream-raw-bytes"),
+    transport,
+  };
+}
+
+function sidecarReleaseApproval(spec) {
+  const approval = requiredSpecRecord(spec, "releaseApproval");
+  requireExactRecordKeys(approval, ["redistribution", "subscriptionAuth"], "releaseApproval");
+  return {
+    redistribution: sidecarApprovalGate(approval, "redistribution", "approved"),
+    subscriptionAuth: sidecarApprovalGate(approval, "subscriptionAuth", "not-applicable"),
+  };
+}
+
+function sidecarApprovalGate(approval, key, expectedStatus) {
+  const gate = requiredSpecRecord(approval, key);
+  requireExactRecordKeys(gate, ["status", "reviewReference"], `releaseApproval.${key}`);
+  const reviewReference = requiredSpecString(gate, "reviewReference");
+  if (
+    !/^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u.test(reviewReference)
+  ) {
+    fail(`sidecar releaseApproval.${key}.reviewReference must reference Keiko review`);
+  }
+  return {
+    status: requiredSpecLiteral(gate, "status", expectedStatus),
+    reviewReference,
+  };
+}
+
+function sidecarLicense(spec) {
+  const license = requiredSpecRecord(spec, "license");
+  requireExactRecordKeys(license, ["spdxId", "url", "sha256"], "license");
+  const url = requiredSpecHttpsUrl(license, "url");
+  const upstream = requiredSpecRecord(spec, "upstream");
+  const expectedPrefix = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/`;
+  if (!url.startsWith(expectedPrefix)) {
+    fail("sidecar license URL must bind the approved upstream commit");
+  }
+  return {
+    spdxId: requiredSpecString(license, "spdxId"),
+    url,
+    sha256: requiredSpecDigest(license, "sha256"),
+  };
+}
+
+function sidecarArchive(spec, upstream, platformTarget) {
+  const archive = requiredSpecRecord(spec, "archive");
+  requireExactRecordKeys(archive, ["platformTarget", "url", "sizeBytes", "sha256"], "archive");
+  requiredSpecLiteral(archive, "platformTarget", platformTarget);
+  const url = requiredSpecHttpsUrl(archive, "url");
+  const parsed = new URL(url);
+  const expectedPrefix = `/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
+  if (parsed.hostname !== "github.com" || !parsed.pathname.startsWith(expectedPrefix)) {
+    fail("sidecar archive URL must bind the approved upstream repository and tag");
+  }
+  return {
+    platformTarget,
+    url,
+    sizeBytes: requiredSpecPositiveInteger(archive, "sizeBytes"),
+    sha256: requiredSpecDigest(archive, "sha256"),
+  };
+}
+
+function validateSidecarSbom(
+  sourceRoot,
+  sbomSourcePath,
+  spec,
+  upstream,
+  license,
+  archive,
+  executableSha256,
+) {
+  const sbom = readSidecarSbom(sourceRoot, sbomSourcePath);
+  const component = findSidecarSbomComponent(sbom, upstream.name);
+  const checks = [
+    sidecarSbomIdentityMatches(sbom, component, spec.name, upstream),
+    sidecarSbomLicenseMatches(component, license.spdxId),
+    sidecarSbomHashMatches(component, executableSha256),
+    sidecarSbomDistributionMatches(component, archive),
+  ];
+  if (checks.includes(false)) {
+    fail("sidecar SBOM identity, version, license, executable, or archive provenance mismatch");
+  }
+}
+
+function readSidecarSbom(sourceRoot, sbomSourcePath) {
+  try {
+    return JSON.parse(readFileSync(resolveSidecarSourcePath(sourceRoot, sbomSourcePath), "utf8"));
+  } catch {
+    fail("sidecar SBOM evidence must be valid JSON");
+  }
+}
+
+function findSidecarSbomComponent(sbom, upstreamName) {
+  if (!Array.isArray(sbom.components)) return undefined;
+  return sbom.components.find((candidate) => candidate?.name === upstreamName);
+}
+
+function sidecarSbomIdentityMatches(sbom, component, runtimeName, upstream) {
+  return (
+    sbom.bomFormat === "CycloneDX" &&
+    sidecarSbomMetadataMatches(sbom.metadata, runtimeName, upstream.version) &&
+    sidecarSbomComponentIdentityMatches(component, upstream)
+  );
+}
+
+function sidecarSbomMetadataMatches(metadata, runtimeName, upstreamVersion) {
+  return (
+    metadata?.component?.name === runtimeName && metadata?.component?.version === upstreamVersion
+  );
+}
+
+function sidecarSbomComponentIdentityMatches(component, upstream) {
+  const expectedPurl = `pkg:github/${upstream.owner}/${upstream.repository}@${upstream.tag}`;
+  return component?.version === upstream.version && component?.purl === expectedPurl;
+}
+
+function sidecarSbomLicenseMatches(component, spdxId) {
+  return component?.licenses?.some((entry) => entry?.license?.id === spdxId) === true;
+}
+
+function sidecarSbomHashMatches(component, executableSha256) {
+  return (
+    component?.hashes?.some(
+      (entry) => entry?.alg === "SHA-256" && entry?.content === executableSha256,
+    ) === true
+  );
+}
+
+function sidecarSbomDistributionMatches(component, archive) {
+  return (
+    component?.externalReferences?.some(
+      (entry) => entry?.type === "distribution" && sidecarDistributionMatches(entry, archive),
+    ) === true
+  );
+}
+
+function sidecarDistributionMatches(reference, archive) {
+  return (
+    reference.url === archive.url &&
+    reference.hashes?.some(
+      (hash) => hash?.alg === "SHA-256" && hash?.content === archive.sha256,
+    ) === true
+  );
+}
+
+function hashExecutableTree(sourceRoot, executableRelativePath) {
+  const executable = resolveSidecarSourcePath(sourceRoot, executableRelativePath);
+  const digest = sha256Bytes(readFileSync(executable));
+  return createHash("sha256").update(`${executableRelativePath}\0${digest}\0`).digest("hex");
 }
 
 function sidecarPlatformTarget(spec, target) {
@@ -311,13 +590,7 @@ function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
   };
 }
 
-function sidecarSigningForSpec(spec, target) {
-  if (spec.signing === undefined) return sidecarStagingSigning(target);
-  if (!isRecord(spec.signing)) fail("sidecar signing must be an object");
-  return JSON.parse(JSON.stringify(spec.signing));
-}
-
-function sidecarStagingSigning(target) {
+function sidecarStagingSigning(target, executable) {
   return {
     verificationPolicy: "staging",
     verificationStatus: "unverified-staging",
@@ -327,6 +600,9 @@ function sidecarStagingSigning(target) {
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified: false,
     verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
+    shippedExecutableSha256: executable.executableSha256,
+    shippedExecutableTreeAlgorithm: executable.executableTreeAlgorithm,
+    shippedExecutableTreeSha256: executable.executableTreeSha256,
   };
 }
 
@@ -400,10 +676,68 @@ function requiredSpecRecord(spec, key) {
   return value;
 }
 
+function requireExactSpecKeys(spec, allowedKeys) {
+  requireExactRecordKeys(spec, allowedKeys, "spec");
+}
+
+function requireExactRecordKeys(record, allowedKeys, context) {
+  const unexpected = Object.keys(record).filter((key) => !allowedKeys.includes(key));
+  if (unexpected.length > 0) {
+    const [firstUnexpected] = unexpected.toSorted((left, right) => left.localeCompare(right));
+    fail(`sidecar ${context} contains unsupported key ${firstUnexpected}`);
+  }
+}
+
 function requiredSpecString(spec, key) {
   const value = spec[key];
   if (typeof value !== "string" || value.length === 0) {
     fail(`sidecar ${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredSpecLiteral(spec, key, expected) {
+  const value = spec[key];
+  if (value !== expected) fail(`sidecar ${key} must be ${String(expected)}`);
+  return value;
+}
+
+function requiredSpecDigest(spec, key) {
+  const value = requiredSpecString(spec, key);
+  if (!SHA256_PATTERN.test(value)) fail(`sidecar ${key} must be a SHA-256 digest`);
+  return value;
+}
+
+function requiredSpecCommit(spec, key) {
+  const value = requiredSpecString(spec, key);
+  if (!COMMIT_PATTERN.test(value)) fail(`sidecar ${key} must be a commit SHA`);
+  return value;
+}
+
+function requiredSpecRelativePath(spec, key) {
+  const value = requiredSpecString(spec, key).replaceAll("\\", "/");
+  if (!isSafePortableRelativePath(value)) fail(`sidecar ${key} must be a contained relative path`);
+  return value;
+}
+
+function requiredSpecHttpsUrl(spec, key) {
+  const value = requiredSpecString(spec, key);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail(`sidecar ${key} must be a valid URL`);
+  }
+  if (url.protocol !== "https:" || url.username.length > 0 || url.password.length > 0) {
+    fail(`sidecar ${key} must be a credential-free HTTPS URL`);
+  }
+  return url.toString();
+}
+
+function requiredSpecPositiveInteger(spec, key) {
+  const value = spec[key];
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`sidecar ${key} must be a positive safe integer`);
   }
   return value;
 }
@@ -518,7 +852,7 @@ function extractArchiveRoot(
 
 function extractArchive(archivePath, archiveKind, extractRoot, entries) {
   if (archiveKind === "zip") {
-    run("unzip", ["-q", archivePath, "-d", extractRoot]);
+    createPortableZipAdapter().extract(archivePath, extractRoot);
     return;
   }
   const includeFile = join(extractRoot, "portable-runtime-tar-include.txt");
@@ -528,27 +862,37 @@ function extractArchive(archivePath, archiveKind, extractRoot, entries) {
 }
 
 function safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy) {
-  const entries = archiveEntries(archivePath, archiveKind);
+  if (archiveKind === "zip") {
+    return safeZipExtractionEntries(archivePath, expectedRoot, createPortableZipAdapter());
+  }
+  const entries = archiveEntries(archivePath);
   if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
     fail(`archive must contain ${expectedRoot}`);
   }
   for (const entry of entries) {
     if (!archiveEntryInsideRoot(entry, expectedRoot)) fail(`archive entry escapes ${expectedRoot}`);
   }
-  if (archiveKind === "zip") {
-    assertZipEntryTypesSafe(archivePath);
-    return entries;
-  }
   return tarExtractionEntries(archivePath, entries, expectedRoot, policy.tarLinkPolicy);
 }
 
-function archiveEntries(archivePath, archiveKind) {
-  const result =
-    archiveKind === "zip" ? run("unzip", ["-Z1", archivePath]) : run("tar", ["-tzf", archivePath]);
-  return result.stdout
-    .split(/\r?\n/u)
+function archiveEntries(archivePath) {
+  return run("tar", ["-tzf", archivePath])
+    .stdout.split(/\r?\n/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function safeZipExtractionEntries(archivePath, expectedRoot, adapter) {
+  const entries = adapter.list(archivePath);
+  if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
+    throw new Error(`archive must contain ${expectedRoot}`);
+  }
+  for (const entry of entries) {
+    if (!archiveEntryInsideRoot(entry, expectedRoot)) {
+      throw new Error(`archive entry escapes ${expectedRoot}`);
+    }
+  }
+  return entries;
 }
 
 function archiveEntryInsideRoot(entry, expectedRoot) {
@@ -601,15 +945,111 @@ function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
   }
 }
 
-function assertZipEntryTypesSafe(archivePath) {
-  for (const line of run("unzip", ["-Z", "-l", archivePath])
-    .stdout.split(/\r?\n/u)
-    .filter(Boolean)) {
+export function createPortableZipAdapter(platform = process.platform, commandRunner = run) {
+  return platform === "win32"
+    ? createSevenZipAdapter(commandRunner)
+    : createInfoZipAdapter(commandRunner);
+}
+
+function createSevenZipAdapter(commandRunner) {
+  return {
+    list(archivePath) {
+      const result = commandRunner("7z", ["l", "-slt", "-ba", archivePath]);
+      return parseSevenZipEntries(result.stdout);
+    },
+    extract(archivePath, extractRoot) {
+      commandRunner("7z", ["x", "-y", `-o${extractRoot}`, archivePath]);
+    },
+    create(sourceRoot, entryName, archivePath) {
+      commandRunner("7z", ["a", "-tzip", "-mx=9", archivePath, entryName], {
+        cwd: sourceRoot,
+      });
+    },
+  };
+}
+
+function createInfoZipAdapter(commandRunner) {
+  return {
+    list(archivePath) {
+      assertInfoZipEntryTypesSafe(archivePath, commandRunner);
+      return commandRunner("unzip", ["-Z1", archivePath])
+        .stdout.split(/\r?\n/u)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    },
+    extract(archivePath, extractRoot) {
+      commandRunner("unzip", ["-q", archivePath, "-d", extractRoot]);
+    },
+    create(sourceRoot, entryName, archivePath) {
+      commandRunner("zip", ["-qr", archivePath, entryName], { cwd: sourceRoot });
+    },
+  };
+}
+
+function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
+  const lines = commandRunner("unzip", ["-Z", "-l", archivePath]).stdout.split(/\r?\n/u);
+  for (const line of lines) {
     if (!/^[dl-][rwx-]/u.test(line)) continue;
     const type = line[0];
     if (type === "d" || type === "-") continue;
-    fail("archive contains unsupported special-file entries");
+    throw new Error("archive contains unsupported special-file entries");
   }
+}
+
+function parseSevenZipEntries(output) {
+  const records = sevenZipTechnicalRecords(output).filter((record) => "Folder" in record);
+  if (records.length === 0) throw new Error("7z did not report ZIP entries");
+  for (const record of records) assertSevenZipEntrySafe(record);
+  return records.map((record) => record.Path);
+}
+
+function sevenZipTechnicalRecords(output) {
+  return output
+    .split(/\r?\n\s*\r?\n/u)
+    .map(sevenZipTechnicalRecord)
+    .filter((record) => typeof record.Path === "string" && record.Path.length > 0);
+}
+
+function sevenZipTechnicalRecord(block) {
+  const record = {};
+  for (const line of block.split(/\r?\n/u)) {
+    const separator = line.indexOf(" = ");
+    if (separator <= 0) continue;
+    record[line.slice(0, separator)] = line.slice(separator + 3);
+  }
+  return record;
+}
+
+function assertSevenZipEntrySafe(record) {
+  const folder = record.Folder;
+  const unixType = sevenZipUnixEntryType(record.Attributes);
+  if (
+    (folder !== "+" && folder !== "-") ||
+    record.Encrypted === "+" ||
+    sevenZipTypeUnsupported(unixType) ||
+    sevenZipHasLinkMetadata(record) ||
+    sevenZipFolderTypeMismatch(folder, unixType)
+  ) {
+    throw new Error("archive contains unsupported special-file entries");
+  }
+}
+
+function sevenZipUnixEntryType(attributes) {
+  if (typeof attributes !== "string") return undefined;
+  return /(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u.exec(attributes)?.[1];
+}
+
+function sevenZipTypeUnsupported(unixType) {
+  return unixType !== undefined && unixType !== "-" && unixType !== "d";
+}
+
+function sevenZipHasLinkMetadata(record) {
+  return "Symbolic Link" in record || "Hard Link" in record || "Alternate Stream" in record;
+}
+
+function sevenZipFolderTypeMismatch(folder, unixType) {
+  if (folder === "+") return unixType !== undefined && unixType !== "d";
+  return folder === "-" && unixType === "d";
 }
 
 function copySafeTreeContents(sourceRoot, destinationRoot) {
@@ -865,7 +1305,36 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
   );
   writeFileSync(
     join(evidenceRoot, "sbom.cdx.json"),
-    JSON.stringify({ bomFormat: "CycloneDX", components: [] }, null, 2) + "\n",
+    JSON.stringify(
+      {
+        bomFormat: "CycloneDX",
+        specVersion: "1.6",
+        version: 1,
+        components: manifest.nativeHelpers.map((helper) => ({
+          type: "application",
+          "bom-ref": helper.sbomBomRef,
+          name: helper.name,
+          version: rootPackage.version,
+          licenses: [{ license: { id: "Apache-2.0" } }],
+          hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+          properties: [
+            { name: "keiko:platform-target", value: helper.platformTarget },
+            { name: "keiko:architecture", value: helper.architecture },
+            { name: "keiko:source-commit", value: helper.source.commitSha },
+            { name: "keiko:source-tree-sha256", value: helper.source.treeSha256 },
+            { name: "keiko:unsigned-sha256", value: helper.unsignedSha256 },
+            { name: "keiko:build-script", value: "scripts/build-secure-workspace-read.mjs" },
+            { name: "keiko:executable-path", value: helper.executablePath },
+            { name: "keiko:protocol-request-magic", value: helper.protocol.requestMagic },
+            { name: "keiko:protocol-response-magic", value: helper.protocol.responseMagic },
+            { name: "keiko:protocol-schema-version", value: String(helper.protocol.schemaVersion) },
+            { name: "keiko:source-path", value: helper.source.path },
+          ],
+        })),
+      },
+      null,
+      2,
+    ) + "\n",
   );
   writeFileSync(
     join(evidenceRoot, "third-party-notices.txt"),
@@ -886,7 +1355,7 @@ function writeManifest(stageRoot, manifest) {
   );
 }
 
-function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
+function provenanceStatementFor(options, target, digests, sidecarRuntimes, nativeHelpers) {
   return (
     JSON.stringify({
       artifact: target.assetName,
@@ -894,6 +1363,17 @@ function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
       buildWorkflowRunId: options.workflowRunId ?? 0,
       packageVersion: rootPackage.version,
       sourceCommitSha: options.commitSha,
+      nativeHelpers: nativeHelpers.map((helper) => ({
+        architecture: helper.architecture,
+        executablePath: helper.executablePath,
+        name: helper.name,
+        shippedSha256: helper.shippedSha256,
+        signatureKind: helper.signing.signatureKind,
+        signatureVerified: helper.signing.signatureVerified,
+        notarizationVerified: helper.signing.notarizationVerified,
+        sourceTreeSha256: helper.source.treeSha256,
+        unsignedSha256: helper.unsignedSha256,
+      })),
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
       target: target.platformTarget,
@@ -930,6 +1410,57 @@ function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
   }
   stageSetupManifest(target, resourceRoot);
   stageSupportLauncher(target, stageRoot);
+}
+
+function secureReadExecutablePath(target) {
+  return `runtime/native/${SECURE_READ_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
+}
+
+function stageSecureReadHelper(target, resourceRoot, options, hooks) {
+  const executablePath = secureReadExecutablePath(target);
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  (hooks.buildSecureReadHelper ?? buildSecureReadHelper)(target, destination);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("secure workspace read helper build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+  const unsignedSha256 = createHash("sha256").update(readFileSync(destination)).digest("hex");
+  return [
+    {
+      name: SECURE_READ_NAME,
+      kind: "secure-workspace-text-read",
+      platformTarget: target.platformTarget,
+      architecture: target.nodeArchitecture,
+      executablePath,
+      protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+      source: {
+        commitSha: options.commitSha,
+        path: "native/secure-workspace-read",
+        treeSha256: hashDirectoryTree(SECURE_READ_SOURCE_ROOT),
+      },
+      unsignedSha256,
+      shippedSha256: unsignedSha256,
+      sizeBytes: entry.size,
+      sbomBomRef: `pkg:generic/${SECURE_READ_NAME}@${rootPackage.version}?platform=${target.platformTarget}`,
+      signing: {
+        signatureKind: target.signatureKind,
+        verificationStatus: "unverified-staging",
+        signatureVerified: false,
+        notarizationRequired: target.nodePlatform === "darwin",
+        notarizationVerified: false,
+      },
+    },
+  ];
+}
+
+function buildSecureReadHelper(target, destination) {
+  run(process.execPath, [
+    join(repoRoot, "scripts", "build-secure-workspace-read.mjs"),
+    target.platformTarget,
+    destination,
+  ]);
 }
 
 function stageMacAppMetadata(target, stageRoot, resourceRoot) {
@@ -1219,6 +1750,7 @@ function manifestReviewedBinding(
   nodeIdentity,
   security,
   sidecarRuntimes,
+  nativeHelpers,
 ) {
   const binding = {
     releaseId: options.releaseId,
@@ -1245,21 +1777,16 @@ function manifestReviewedBinding(
     verificationChecks: security.verificationChecks,
   };
   if (sidecarRuntimes.length > 0) binding.sidecarRuntimes = cloneJson(sidecarRuntimes);
+  binding.nativeHelpers = cloneJson(nativeHelpers);
   return binding;
 }
 
-function manifestReleaseImpact(
-  options,
-  target,
-  digests,
-  nodeIdentity,
-  security,
-  releaseImpactEntry,
-  sidecarRuntimes,
-) {
+function manifestReleaseImpact(input) {
+  const { options, target, digests, nodeIdentity, security, sidecarRuntimes, nativeHelpers } =
+    input;
   return {
     catalogPath: "app/release-impact.catalog.json",
-    entryId: releaseImpactEntry.id,
+    entryId: input.releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
     reviewedBinding: manifestReviewedBinding(
@@ -1269,6 +1796,7 @@ function manifestReleaseImpact(
       nodeIdentity,
       security,
       sidecarRuntimes,
+      nativeHelpers,
     ),
   };
 }
@@ -1296,7 +1824,7 @@ function manifestUpdateEligibility() {
   };
 }
 
-function manifestFor(options, target, digests, sidecarRuntimes = []) {
+function manifestFor(options, target, digests, sidecarRuntimes = [], nativeHelpers = []) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(target);
@@ -1308,6 +1836,7 @@ function manifestFor(options, target, digests, sidecarRuntimes = []) {
     artifact: manifestArtifact(options, target, { ...digests, assetSha256: assetSha }),
     provenance: manifestProvenance(options, digests),
     runtime: manifestRuntime(options, target, digests),
+    nativeHelpers,
     packageSurface: manifestPackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
@@ -1317,15 +1846,16 @@ function manifestFor(options, target, digests, sidecarRuntimes = []) {
     stateExclusion: manifestStateExclusion(),
     security,
     evidence: manifestEvidence(),
-    releaseImpact: manifestReleaseImpact(
+    releaseImpact: manifestReleaseImpact({
       options,
       target,
-      { ...digests, assetSha256: assetSha },
+      digests: { ...digests, assetSha256: assetSha },
       nodeIdentity,
       security,
       releaseImpactEntry,
       sidecarRuntimes,
-    ),
+      nativeHelpers,
+    }),
     updateEligibility: manifestUpdateEligibility(),
   };
   if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;
@@ -1418,10 +1948,12 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   const tarball = packRoot(dirname(paths.extractRoot));
   stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
   stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
+  const nativeHelpers = stageSecureReadHelper(target, paths.resourceRoot, options, hooks);
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const manifestInput = await manifestInputFor(options, target, paths, tarball, {
     nodeArchiveSha256,
     sidecarRuntimes,
+    nativeHelpers,
   });
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
@@ -1437,6 +1969,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     target,
     { assetSha256 },
     staged.sidecarRuntimes,
+    staged.nativeHelpers,
   );
   const provenanceSha256 = sha256Text(provenanceStatement);
   return {
@@ -1452,6 +1985,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
         tarballSha256: await sha256File(tarball),
       },
       staged.sidecarRuntimes,
+      staged.nativeHelpers,
     ),
     provenanceStatement,
   };

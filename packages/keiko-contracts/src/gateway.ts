@@ -498,6 +498,11 @@ export interface GatewayRequest {
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
+  /**
+   * Optional server-selected positive completion budget.  Adapters translate this
+   * provider-neutral value to their provider-specific output-token parameter.
+   */
+  readonly maxOutputTokens?: number | undefined;
   /** Optional provider-neutral temperature for sampling; valid range is 0..2. */
   readonly temperature?: number | undefined;
   /** Optional provider-neutral nucleus sampling value; serialized as `top_p` for OpenAI APIs. */

@@ -108,6 +108,7 @@ test("requires catalog review only for i18n-relevant added lines", () => {
   expect(hasI18nRelevantAddedLine("return <p>{t(`feature.title`)}</p>;")).toBe(true);
   expect(hasI18nRelevantAddedLine("const t = useTranslate();")).toBe(true);
   expect(hasI18nRelevantAddedLine("const t = useOptionalWidgetTranslate();")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const t = useCodingWorkbenchTranslate();")).toBe(true);
   expect(hasI18nRelevantAddedLine("const i18n = useI18n();")).toBe(true);
   expect(hasI18nRelevantAddedLine('<I18nTranslate id="feature.title" />')).toBe(true);
   expect(hasI18nRelevantAddedLine("type T = OptionalWidgetTranslate;")).toBe(true);
@@ -473,4 +474,70 @@ test("fails a change that adds new hard-coded user-facing text", async () => {
 
   expect(result.ok).toBe(false);
   expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
+});
+
+const FEATURE_EN = "packages/keiko-ui/src/app/components/widgets/example/example-i18n.en.ts";
+const FEATURE_DE = "packages/keiko-ui/src/app/components/widgets/example/example-i18n.de.ts";
+const FEATURE_UI_FILE = "packages/keiko-ui/src/app/components/widgets/example/ExamplePanel.tsx";
+const featureUiSource =
+  'const t = useCodingWorkbenchTranslate();\nexport const label = t("example.title");\n';
+
+test("accepts a changed feature catalog pair in place of the shared catalogs", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [FEATURE_UI_FILE]: featureUiSource,
+      [FEATURE_EN]: 'export const EN = {\n  "example.title": "Example",\n} as const;\n',
+      [FEATURE_DE]: 'export const DE = {\n  "example.title": "Beispiel",\n} as const;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [FEATURE_UI_FILE, FEATURE_EN, FEATURE_DE],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("flags a feature catalog changed without its language counterpart", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [FEATURE_UI_FILE]: featureUiSource,
+      [FEATURE_EN]: 'export const EN = {\n  "example.title": "Example",\n} as const;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [FEATURE_UI_FILE, FEATURE_EN],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("without its language counterpart");
+    },
+  );
+});
+
+test("flags mismatched keys across a changed feature catalog pair", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [FEATURE_UI_FILE]: featureUiSource,
+      [FEATURE_EN]:
+        'export const EN = {\n  "example.title": "Example",\n  "example.extra": "Extra",\n} as const;\n',
+      [FEATURE_DE]: 'export const DE = {\n  "example.title": "Beispiel",\n} as const;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [FEATURE_UI_FILE, FEATURE_EN, FEATURE_DE],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("must expose the same keys");
+    },
+  );
 });

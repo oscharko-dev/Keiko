@@ -2,10 +2,12 @@
 
 > **Historical planning baseline.** The package and editor boundaries remain useful, but the blanket
 > patch-review and save semantics in this blueprint were superseded by
-> [ADR-0125](../adr/ADR-0125-governed-agent-docking-and-editor-changesets.md). Current behavior uses
-> **Ask for approval**, **Approve for me**, and **Full access** with one shared resource/risk policy;
-> policy-allowed changes do not require per-action approval, while delivery remains separately
-> human-approved.
+> [ADR-0125](../adr/ADR-0125-governed-agent-docking-and-editor-changesets.md), whose matrix was in
+> turn replaced by
+> [ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).
+> Current behavior uses **Ask for approval**, **Supervised workspace**, and **Full access** with one
+> shared monotonic resource/risk policy; policy-allowed changes do not require per-action approval,
+> while delivery remains separately human-approved.
 
 > Planning artifact for Issue [#1190](https://github.com/oscharko-dev/Keiko/issues/1190)
 > (Parent Epic [#1189](https://github.com/oscharko-dev/Keiko/issues/1189)).

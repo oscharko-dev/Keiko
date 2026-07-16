@@ -1,43 +1,25 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayConfig,
   type GatewayRequest,
+  type GatewayStreamChunk,
   type ModelCapability,
   type ModelProviderConfig,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  validateCodingWorkbenchEvidenceRecord,
-  type CodingWorkbenchEvidenceRecord,
-} from "@oscharko-dev/keiko-contracts";
-import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
+  createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import type { RouteContext } from "./routes.js";
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
+import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -100,6 +82,7 @@ function depsValue(
     readonly diagnostics?: UiHandlerDeps["diagnostics"];
     readonly modelSource?: UiHandlerDeps["codingSidecarGatewayModelSource"];
     readonly codingWorkbenchEvidenceStore?: UiHandlerDeps["codingWorkbenchEvidenceStore"];
+    readonly evidenceAggregator?: UiHandlerDeps["codingSidecarGatewayEvidenceAggregator"];
   } = {},
 ): UiHandlerDeps {
   return {
@@ -119,6 +102,17 @@ function depsValue(
     ...(options.codingWorkbenchEvidenceStore === undefined
       ? {}
       : { codingWorkbenchEvidenceStore: options.codingWorkbenchEvidenceStore }),
+    ...(options.evidenceAggregator === undefined
+      ? {}
+      : { codingSidecarGatewayEvidenceAggregator: options.evidenceAggregator }),
+    // Every sidecar request is capability-authenticated. The readiness registry
+    // remains absent here so generic gateway tests do not claim the OpenCode lane.
+    runtimeCapabilityAuthenticator: {
+      authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+        capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
+          ? { ok: true, binding: { runId: "run-gateway-test" } }
+          : { ok: false },
+    },
   };
 }
 
@@ -128,6 +122,7 @@ function routeContext(body: unknown): RouteContext {
     method: "POST",
     url: "/api/coding-sidecar/gateway/chat/completions",
     body: rawBody,
+    headers: { authorization: "Bearer gateway-capability-material-0000000001" },
   });
   const response = mockResponse();
   return {
@@ -136,6 +131,162 @@ function routeContext(body: unknown): RouteContext {
     params: {},
     url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/chat/completions"),
   };
+}
+
+function runtimeGatewayDeps(
+  authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown,
+  chatFactory?: UiHandlerDeps["codingSidecarGatewayChatFactory"],
+  readiness = createOpenCodeGatewayReadinessRegistry(),
+  streamFactory?: unknown,
+): UiHandlerDeps {
+  return {
+    ...depsValue(configValue(provider(), capability()), chatFactory),
+    runtimeCapabilityAuthenticator: { authenticate },
+    openCodeGatewayReadinessRegistry: readiness,
+    ...(streamFactory === undefined
+      ? {}
+      : { codingSidecarGatewayChatStreamFactory: streamFactory }),
+  } as unknown as UiHandlerDeps;
+}
+
+function authenticatedContext(body: unknown, origin?: string): RouteContext {
+  const rawBody = typeof body === "string" ? body : JSON.stringify(body);
+  const response = mockResponse({ captureBody: true });
+  return {
+    req: mockRequest({
+      method: "POST",
+      url: "/api/coding-sidecar/gateway/chat/completions",
+      body: rawBody,
+      headers: {
+        authorization: "Bearer gateway-capability-material-0000000001",
+        ...(origin === undefined ? {} : { origin }),
+      },
+    }),
+    res: response.res,
+    params: {},
+    url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/chat/completions"),
+  };
+}
+
+const QUESTION_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  properties: {
+    questions: {
+      description: "Questions to ask",
+      items: {
+        properties: {
+          header: { description: "Very short label (max 30 chars)", type: "string" },
+          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
+          options: {
+            description: "Available choices",
+            items: {
+              properties: {
+                description: { description: "Explanation of choice", type: "string" },
+                label: { description: "Display text (1-5 words, concise)", type: "string" },
+              },
+              required: ["label", "description"],
+              type: "object",
+            },
+            type: "array",
+          },
+          question: { description: "Complete question", type: "string" },
+        },
+        required: ["question", "header", "options"],
+        type: "object",
+      },
+      type: "array",
+    },
+  },
+  required: ["questions"],
+  type: "object",
+} as const;
+
+const WORKSPACE_READ_SCHEMA = {
+  type: "object",
+  properties: {
+    relativePath: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+    },
+  },
+  required: ["relativePath"],
+} as const;
+
+const CHANGESET_EDIT_SCHEMA = {
+  type: "object",
+  properties: {
+    changeset: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        patch: { type: "string", maxLength: 262_144 },
+        files: { type: "array", maxItems: 256 },
+        selectedFiles: { type: "array", maxItems: 256 },
+        prepared: { type: "object" },
+      },
+    },
+  },
+  required: ["changeset"],
+} as const;
+
+// OpenCode v1.17.17 strips `additionalProperties` before forwarding this schema.
+const VERIFICATION_PROJECTED_SCHEMA = {
+  type: "object",
+  properties: {
+    verifierId: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+  },
+  required: ["verifierId"],
+} as const;
+
+const PINNED_MODEL_VISIBLE_TOOLS = [
+  { name: "question", parameters: QUESTION_SCHEMA },
+  { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
+  { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
+  { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
+] as const;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value !== "object" || value === null) return JSON.stringify(value);
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function schemaDigest(value: unknown): string {
+  return createHash("sha256").update(stableJson(value), "utf8").digest("hex");
+}
+
+interface ModelVisibleRequestTool {
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly parameters: unknown;
+  };
+}
+
+function modelVisibleTools(
+  tools: readonly {
+    readonly name: string;
+    readonly parameters: unknown;
+  }[] = PINNED_MODEL_VISIBLE_TOOLS,
+): ModelVisibleRequestTool[] {
+  return tools.map((tool) => ({
+    type: "function",
+    function: { name: tool.name, parameters: tool.parameters },
+  }));
+}
+
+function assertRouteResult(result: RouteResult | typeof STREAMING): asserts result is RouteResult {
+  expect(result).not.toBe(STREAMING);
+  if (result === STREAMING) throw new Error("Expected a buffered route result.");
 }
 
 function assistantResponse(modelId: string): NormalizedResponse {
@@ -155,15 +306,930 @@ function assistantResponse(modelId: string): NormalizedResponse {
   };
 }
 
-function parseEvidenceRecord(value: string): CodingWorkbenchEvidenceRecord {
-  const parsed = validateCodingWorkbenchEvidenceRecord(JSON.parse(value));
-  if (!parsed.ok) {
-    throw new Error(parsed.errors.join("; "));
-  }
-  return parsed.value;
+async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<GatewayStreamChunk> {
+  await Promise.resolve();
+  if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
+  yield { type: "done" as const, response };
 }
 
 describe("coding-sidecar gateway", () => {
+  it("fails closed when a runtime gateway route has no capability authenticator", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
+      string,
+      unknown
+    >;
+    delete deps.runtimeCapabilityAuthenticator;
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+        tools: [],
+      }),
+      deps as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({ status: 401 });
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("authenticates the model-gateway audience before parsing a body and rejects Origin", async () => {
+    const authenticate = vi.fn(() => ({ ok: false, reason: "invalid" }));
+    const malformed = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext("{"),
+      runtimeGatewayDeps(authenticate),
+    );
+    expect(authenticate).toHaveBeenCalledWith(
+      "gateway-capability-material-0000000001",
+      "model-gateway",
+    );
+    expect(malformed).toMatchObject({ status: 401 });
+
+    const browser = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ messages: [{ role: "user", content: "hello" }] }, "http://evil.test"),
+      runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } })),
+    );
+    expect(browser).toMatchObject({ status: 403 });
+  });
+
+  it("accepts exactly the pinned OpenCode v1.17.17 visible schemas by canonical digest", async () => {
+    expect(
+      PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
+    ).toEqual([
+      ["question", "4f618d23c27d7147ab8564c3ec1050c508762a19b9a4858951a9cd3089b52df3"],
+      ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
+      ["keiko_changeset_edit", "720fa492da7b2ff3cb0f6c3c19e1cf68d714d850207d1c614c37c8b6499c0089"],
+      ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+    ]);
+    const chat = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "ask and read" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(chat.mock.calls[0]?.[0]).toMatchObject({ modelId: "azure-coding-model" });
+  });
+
+  it("fails closed when OpenCode sends the unprojected verification source schema", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const tools = modelVisibleTools(
+      PINNED_MODEL_VISIBLE_TOOLS.map((tool) =>
+        tool.name === "keiko_verification"
+          ? { ...tool, parameters: { ...tool.parameters, additionalProperties: false } }
+          : tool,
+      ),
+    );
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "verify" }],
+        tools,
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("denies selected-upstream and arbitrary model ids on the authenticated runtime lane", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    for (const model of [undefined, "azure-coding-model", "other-profile-model"]) {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model,
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-1" } }),
+          () => chat,
+        ),
+      );
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: { code: "INVALID_MODEL" } },
+      });
+    }
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("observes readiness only after authenticated exact tool-contract validation", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const signal = new AbortController().signal;
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const observed = readiness.waitForObservedRequest("run-1", signal);
+    const exact = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "readiness" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(exact).toMatchObject({ status: 200 });
+    await expect(observed).resolves.toBe(true);
+    expect(chat).not.toHaveBeenCalled();
+
+    const duplicate = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "normal turn" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(duplicate).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+
+    const driftAbort = new AbortController();
+    let driftSettled = false;
+    const driftPending = readiness
+      .waitForObservedRequest("run-2", driftAbort.signal)
+      .finally(() => {
+        driftSettled = true;
+      });
+    const drifted = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "readiness" }],
+        tools: modelVisibleTools().slice(0, 2),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-2" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(drifted).toMatchObject({ status: 403 });
+    await Promise.resolve();
+    expect(driftSettled).toBe(false);
+    driftAbort.abort();
+    await expect(driftPending).resolves.toBe(false);
+    const afterAbortedReadiness = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "normal after aborted readiness" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-2" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(afterAbortedReadiness).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledTimes(2);
+
+    const crossAbort = new AbortController();
+    let crossSettled = false;
+    const crossPending = readiness
+      .waitForObservedRequest("run-a", crossAbort.signal)
+      .finally(() => {
+        crossSettled = true;
+      });
+    const crossRun = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "normal cross-run turn" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-b" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(crossRun).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledTimes(3);
+    await Promise.resolve();
+    expect(crossSettled).toBe(false);
+    crossAbort.abort();
+    await expect(crossPending).resolves.toBe(false);
+  });
+
+  it("canonicalizes key order but denies empty, drifted, unknown, and productive built-in tools", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const acceptedWithReorderedKeys = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "continue" }],
+        tools: modelVisibleTools([
+          { name: "question", parameters: { ...QUESTION_SCHEMA, required: ["questions"] } },
+          {
+            name: "keiko_workspace_read",
+            parameters: {
+              required: ["relativePath"],
+              properties: { ...WORKSPACE_READ_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_changeset_edit",
+            parameters: {
+              required: ["changeset"],
+              properties: { ...CHANGESET_EDIT_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_verification",
+            parameters: {
+              required: ["verifierId"],
+              properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
+              type: "object",
+            },
+          },
+        ]),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+    );
+    expect(acceptedWithReorderedKeys).toMatchObject({ status: 200 });
+
+    for (const tools of [
+      modelVisibleTools().map((tool) => ({
+        ...tool,
+        function: { ...tool.function, parameters: {} },
+      })),
+      modelVisibleTools([
+        ...PINNED_MODEL_VISIBLE_TOOLS.slice(0, 1),
+        {
+          name: "keiko_workspace_read",
+          parameters: {
+            ...WORKSPACE_READ_SCHEMA,
+            properties: { relativePath: { type: "string", minLength: 1 } },
+          },
+        },
+        PINNED_MODEL_VISIBLE_TOOLS[2],
+      ]),
+      modelVisibleTools([
+        ...PINNED_MODEL_VISIBLE_TOOLS,
+        { name: "unknown_tool", parameters: QUESTION_SCHEMA },
+      ]),
+      modelVisibleTools([
+        ...PINNED_MODEL_VISIBLE_TOOLS,
+        { name: "bash", parameters: QUESTION_SCHEMA },
+      ]),
+    ]) {
+      const denied = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools,
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-1" } }),
+          () => chat,
+        ),
+      );
+      expect(denied).toMatchObject({ status: 403 });
+    }
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
+  it("preserves assistant tool_calls and tool_call_id on continuation turns", async () => {
+    const seen: GatewayRequest[] = [];
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "read it" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-1",
+                type: "function",
+                function: {
+                  name: "keiko_workspace_read",
+                  arguments: '{"relativePath":"src/a.ts"}',
+                },
+              },
+            ],
+          },
+          { role: "tool", content: "result", tool_call_id: "call-1" },
+        ],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          toolCalls: [expect.objectContaining({ id: "call-1" })],
+        }),
+        expect.objectContaining({ role: "tool", toolCallId: "call-1" }),
+      ]),
+    );
+  });
+
+  it("emits the pinned role, text, terminal, and done frame order for final text", async () => {
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [
+          { role: "user", content: "finish" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-edit",
+                type: "function",
+                function: {
+                  name: "keiko_changeset_edit",
+                  arguments: '{"changeset":{"patch":"bounded"}}',
+                },
+              },
+            ],
+          },
+          { role: "tool", content: "completed", tool_call_id: "call-edit" },
+        ],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.resolve({ ...assistantResponse("azure-coding-model"), content: "Completed." }),
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse({ ...assistantResponse("azure-coding-model"), content: "Completed." }),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(response.res.writableEnded).toBe(true);
+    const frames = response
+      .body()
+      .trim()
+      .split("\n\n")
+      .map((frame) => frame.slice("data: ".length));
+    expect(frames).toHaveLength(5);
+    expect(JSON.parse(frames[0] ?? "null")).toMatchObject({
+      choices: [{ delta: { role: "assistant" }, finish_reason: null }],
+    });
+    expect(JSON.parse(frames[1] ?? "null")).toMatchObject({
+      choices: [{ delta: { content: "Completed." }, finish_reason: null }],
+    });
+    expect(JSON.parse(frames[2] ?? "null")).toMatchObject({
+      choices: [{ delta: {}, finish_reason: "stop" }],
+    });
+    expect(JSON.parse(frames[3] ?? "null")).toMatchObject({
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+    });
+    expect(frames[4]).toBe("[DONE]");
+  });
+
+  it("synthesizes OpenAI SSE from a buffered tool-call response", async () => {
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "read" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const normalized: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "",
+      finishReason: "tool_calls",
+      toolCalls: [
+        { id: "call-1", name: "keiko_workspace_read", arguments: { relativePath: "src/a.ts" } },
+      ],
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.resolve(normalized),
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse(normalized),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.body()).toContain('"tool_calls"');
+    expect(response.body()).toContain('"finish_reason":"tool_calls"');
+    expect(response.body()).toContain("data: [DONE]");
+  });
+
+  it("aborts a buffered provider call on response close and run stop", async () => {
+    for (const cancellation of ["response-close", "run-stop"] as const) {
+      const run = new AbortController();
+      let seenSignal: AbortSignal | undefined;
+      let observeAbort: (() => void) | undefined;
+      const providerAborted = new Promise<void>((resolve) => {
+        observeAbort = resolve;
+      });
+      const chat = vi.fn(
+        (request: GatewayRequest): Promise<NormalizedResponse> =>
+          new Promise((_resolve, reject) => {
+            seenSignal = request.cancellationSignal;
+            request.cancellationSignal?.addEventListener(
+              "abort",
+              () => {
+                observeAbort?.();
+                reject(new Error("provider cancellation details must not escape"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-cancel" } }),
+          () => chat,
+        ),
+        codingSidecarGatewayCancellationRegistry: { signalFor: () => run.signal },
+      } as unknown as UiHandlerDeps;
+      const context = authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "cancel" }],
+        tools: modelVisibleTools(),
+      });
+
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await vi.waitFor((): void => {
+        expect(chat).toHaveBeenCalledOnce();
+      });
+      if (cancellation === "response-close") context.res.emit("close");
+      else run.abort();
+      await expect(providerAborted).resolves.toBeUndefined();
+      await expect(pending).resolves.toMatchObject({ status: 503 });
+      expect(seenSignal?.aborted).toBe(true);
+    }
+  });
+
+  it("passes the sidecar deadline through to an in-flight provider call", async () => {
+    let seenSignal: AbortSignal | undefined;
+    let observeAbort: (() => void) | undefined;
+    const providerAborted = new Promise<void>((resolve) => {
+      observeAbort = resolve;
+    });
+    const chat = vi.fn(
+      (request: GatewayRequest): Promise<NormalizedResponse> =>
+        new Promise((_resolve, reject) => {
+          seenSignal = request.cancellationSignal;
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              observeAbort?.();
+              reject(new Error("deadline cancellation details must not escape"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-deadline" } }),
+        () => chat,
+      ),
+      config: configValue(provider({ timeoutMs: 10 }), capability()),
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "deadline" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    await expect(providerAborted).resolves.toBeUndefined();
+    expect(result).toMatchObject({ status: 503 });
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("rejects buffered responses that exceed completion-token or UTF-8 output bounds", async () => {
+    const oversizedArguments = { secretLikePayload: "x".repeat(800) };
+    const responses: readonly NormalizedResponse[] = [
+      {
+        ...assistantResponse("azure-coding-model"),
+        content: "too many",
+        usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 3 },
+      },
+      {
+        ...assistantResponse("azure-coding-model"),
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          { id: "call-oversized", name: "keiko_workspace_read", arguments: oversizedArguments },
+        ],
+        usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 1 },
+      },
+    ];
+    for (const response of responses) {
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-output" } }),
+          (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+            Promise.resolve(response),
+        ),
+        config: configValue(provider(), capability({ maxOutputTokens: 2 })),
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "bounded" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      expect(result).toEqual({
+        status: 503,
+        body: {
+          error: {
+            code: "CODING_SIDECAR_UNAVAILABLE",
+            message: "Coding sidecar gateway is unavailable.",
+          },
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("secretLikePayload");
+    }
+  });
+
+  it("uses the injected gateway stream, bounds cumulative output, and returns it on overflow", async () => {
+    let returned = false;
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await Promise.resolve();
+        yield { type: "delta", token: "x".repeat(20) };
+        yield { type: "done", response: assistantResponse("azure-coding-model") };
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "bounded stream" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      config: configValue(provider(), capability({ maxOutputTokens: 2 })),
+    } as UiHandlerDeps;
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    expect(returned).toBe(true);
+    expect(response.body()).not.toContain("x".repeat(20));
+    expect(response.body()).toContain('"finish_reason":"length"');
+    expect(response.body()).toContain("data: [DONE]");
+  });
+
+  it("counts only each new UTF-8 stream delta instead of re-encoding accumulated output", async () => {
+    const firstToken = "gateway-delta-one-α";
+    const secondToken = "gateway-delta-two-β";
+    const byteLength = vi.spyOn(Buffer, "byteLength");
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: firstToken };
+      yield { type: "delta", token: secondToken };
+      yield { type: "done", response: assistantResponse("azure-coding-model") };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stream incrementally" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-stream" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    );
+
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain(firstToken);
+      expect(response.body()).toContain(secondToken);
+      expect(byteLength.mock.calls.some(([value]) => value === firstToken + secondToken)).toBe(
+        false,
+      );
+    } finally {
+      byteLength.mockRestore();
+    }
+  });
+
+  it("counts a UTF-8 surrogate pair split across stream deltas as one scalar", async () => {
+    const record = vi.fn();
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "\ud83d" };
+      yield { type: "delta", token: "\ude00" };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stream one emoji" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      config: configValue(provider(), capability({ maxOutputTokens: 1 })),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    expect(response.body()).not.toContain('"finish_reason":"length"');
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(record).toHaveBeenCalledWith({
+      runId: "run-stream",
+      outcome: "failed",
+      completionTokens: 1,
+      outputBytes: 4,
+    });
+  });
+
+  it("returns the injected stream and aborts its provider signal when the client disconnects", async () => {
+    let returned = false;
+    let seenSignal: AbortSignal | undefined;
+    let started: (() => void) | undefined;
+    const streamStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const stream = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      seenSignal = request.cancellationSignal;
+      started?.();
+      try {
+        await new Promise<void>((resolve) => {
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        yield* [] as GatewayStreamChunk[];
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "disconnect" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-stream-cancel" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+        (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+          stream(request),
+    );
+
+    const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+    await streamStarted;
+    context.res.emit("close");
+    await expect(pending).resolves.toBe(STREAMING);
+    expect(seenSignal?.aborted).toBe(true);
+    expect(returned).toBe(true);
+  });
+
+  it("cancels the provider iterator when the streaming response applies backpressure", async () => {
+    let pulls = 0;
+    let returned = false;
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await Promise.resolve();
+        pulls += 1;
+        yield { type: "delta", token: "first" };
+        pulls += 1;
+        yield { type: "delta", token: "must-not-be-pulled" };
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    let writes = 0;
+    response.res.write = vi.fn(() => {
+      writes += 1;
+      return writes === 1;
+    });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stream slowly" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-backpressure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(returned).toBe(true);
+    expect(pulls).toBe(1);
+    expect(response.res.destroyed).toBe(true);
+  });
+
+  it("reports a stream that ends without a terminal response chunk as an error", async () => {
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "partial" };
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "truncate" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-truncated" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(response.body()).not.toContain('"finish_reason":"stop"');
+  });
+
+  it("destroys the response when the terminal tool-call frame hits backpressure", async () => {
+    let returned = false;
+    const toolResponse: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "",
+      toolCalls: [{ id: "call-1", name: "workspace_read", arguments: { path: "README.md" } }],
+    };
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await Promise.resolve();
+        yield { type: "done", response: toolResponse };
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    let writes = 0;
+    response.res.write = vi.fn(() => {
+      writes += 1;
+      return writes === 1;
+    });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "tool call backpressure" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-tool-backpressure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(returned).toBe(true);
+    expect(response.res.destroyed).toBe(true);
+  });
+
+  it("returns an opaque 503 when stream construction fails before committing SSE headers", async () => {
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "construct stream" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-setup" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> => {
+          throw new Error("private stream setup failure");
+        },
+      ),
+    );
+
+    assertRouteResult(result);
+    expect(result).toMatchObject({ status: 503 });
+    expect(response.headers.get("content-type") ?? "").not.toContain("text/event-stream");
+  });
   it("projects an available coding-capable model without provider endpoint or credential details", () => {
     const result = resolveCodingSafeSidecarGatewayProfile(configValue(provider(), capability()));
 
@@ -373,12 +1439,14 @@ describe("coding-sidecar gateway", () => {
 
     const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
 
+    assertRouteResult(result);
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       model: "azure-coding-model",
       choices: [{ message: { role: "assistant", content: "assistant-content" } }],
     });
     expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.maxOutputTokens).toBe(4_096);
     expect(JSON.stringify(seenRequests[0])).not.toContain("baseUrl");
     expect(JSON.stringify(seenRequests[0])).not.toContain("apiKey");
     expect(JSON.stringify(seenRequests[0])).not.toContain("api-key");
@@ -446,6 +1514,7 @@ describe("coding-sidecar gateway", () => {
       deps,
     );
 
+    assertRouteResult(result);
     expect(result.status).toBe(200);
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.tools).toEqual([
@@ -619,9 +1688,18 @@ describe("coding-sidecar gateway", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
-  it("writes content-free accepted routing evidence after a successful chat completion", async () => {
+  it("aggregates accepted counts without a durable per-request evidence write", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
     const codingPut = vi.fn((_runId: string, _json: string): string => "");
+    const record =
+      vi.fn<
+        (event: {
+          readonly runId: string;
+          readonly outcome: "accepted" | "cancelled" | "failed" | "output-limit";
+          readonly completionTokens: number;
+          readonly outputBytes: number;
+        }) => void
+      >();
     const deps = depsValue(
       configValue(provider(), capability()),
       (
@@ -647,6 +1725,7 @@ describe("coding-sidecar gateway", () => {
           get: () => undefined,
           delete: () => undefined,
         },
+        evidenceAggregator: { record },
       },
     );
 
@@ -658,28 +1737,78 @@ describe("coding-sidecar gateway", () => {
       deps,
     );
 
+    assertRouteResult(result);
     expect(result.status).toBe(200);
     expect(rootPut).not.toHaveBeenCalled();
-    expect(codingPut).toHaveBeenCalledTimes(1);
-    const evidenceJson = codingPut.mock.calls[0]?.[1];
-    expect(typeof evidenceJson).toBe("string");
-    const record = parseEvidenceRecord(String(evidenceJson));
-    expect(record).toMatchObject({
-      kind: "run",
-      effectiveMode: "governed-assist",
-      runtimeSource: "keiko-sidecar",
-      modelSource: "keiko-model-gateway",
-      safeSummary: "sidecar-gateway-ready",
+    expect(codingPut).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith({
+      runId: "run-gateway-test",
+      outcome: "accepted",
+      completionTokens: 8,
+      outputBytes: expect.any(Number) as number,
     });
-    expect(record.denied).toBeUndefined();
-    expect(String(evidenceJson)).not.toContain("continue");
-    expect(String(evidenceJson)).not.toContain("assistant-content");
-    expect(String(evidenceJson)).not.toContain("provider-secret");
-    expect(String(evidenceJson)).not.toContain("api-key");
-    expect(String(evidenceJson)).not.toContain("https://provider.example/v1");
   });
 
-  it("emits a content-free routing diagnostic instead of writing to the root evidence store when no dedicated coding store is configured", async () => {
+  it.each([
+    [
+      "synchronous",
+      (): void => {
+        throw new Error("customer/path/secret-sync");
+      },
+    ],
+    ["asynchronous", (): Promise<void> => Promise.reject(new Error("customer/path/secret-async"))],
+  ])(
+    "emits a content-free diagnostic for %s evidence aggregation failure",
+    async (_kind, record) => {
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const deps = depsValue(
+        configValue(provider(), capability()),
+        (
+          _config: GatewayConfig,
+          modelId: string,
+        ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+          return (request: GatewayRequest): Promise<NormalizedResponse> => {
+            void request;
+            return Promise.resolve(assistantResponse(modelId));
+          };
+        },
+        {},
+        {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        { diagnostics, evidenceAggregator: { record } },
+      );
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        routeContext({
+          model: "azure-coding-model",
+          messages: [{ role: "user", content: "continue" }],
+        }),
+        deps,
+      );
+
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(diagnostics.record).toHaveBeenCalledTimes(1);
+      });
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-gateway-test",
+          operation: "POST /api/coding-sidecar/gateway/chat/completions",
+          source: "coding-sidecar-gateway.evidence-aggregation",
+          errorClass: "CodingSidecarGatewayEvidenceAggregationFailure",
+          message: "sidecar-gateway-evidence-aggregation-failed",
+        }),
+      );
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("customer/path/secret");
+    },
+  );
+
+  it("does not substitute diagnostics or root evidence for the optional aggregator", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const deps = depsValue(
@@ -711,59 +1840,10 @@ describe("coding-sidecar gateway", () => {
       deps,
     );
 
+    assertRouteResult(result);
     expect(result.status).toBe(200);
     expect(rootPut).not.toHaveBeenCalled();
-    expect(diagnostics.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "coding-sidecar-gateway.routing",
-        errorClass: "RoutingDecision",
-        message: "sidecar-gateway-ready:keiko-model-gateway",
-      }),
-    );
-  });
-
-  it("uses the default production coding-workbench evidence store instead of the root evidence store", async () => {
-    const evidenceDir = tempDir("keiko-sidecar-evidence-");
-    const configPath = join(evidenceDir, "keiko.config.json");
-    writeFileSync(configPath, JSON.stringify(configValue(provider(), capability())), "utf8");
-    const built = buildUiHandlerDeps({
-      configPath,
-      evidenceDir,
-      env: {},
-      store: createInMemoryUiStore(),
-    });
-    const deps: UiHandlerDeps = {
-      ...built,
-      codingSidecarGatewayChatFactory:
-        (_config: GatewayConfig, modelId: string) =>
-        (_request: GatewayRequest): Promise<NormalizedResponse> =>
-          Promise.resolve(assistantResponse(modelId)),
-    };
-    const rootEntriesBefore = deps.evidenceStore.list();
-    const codingEntriesBefore = deps.codingWorkbenchEvidenceStore?.list() ?? [];
-
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      routeContext({
-        model: "azure-coding-model",
-        messages: [{ role: "user", content: "continue" }],
-      }),
-      deps,
-    );
-
-    expect(result.status).toBe(200);
-    expect(deps.evidenceStore.list()).toEqual(rootEntriesBefore);
-    expect(deps.codingWorkbenchEvidenceStore).toBeDefined();
-    expect(deps.codingWorkbenchEvidenceStore?.list()).toHaveLength(codingEntriesBefore.length + 1);
-    const runId = deps.codingWorkbenchEvidenceStore?.list().at(-1);
-    expect(runId).toBeDefined();
-    const record = parseEvidenceRecord(
-      String(deps.codingWorkbenchEvidenceStore?.get(String(runId))),
-    );
-    expect(record).toMatchObject({
-      kind: "run",
-      modelSource: "keiko-model-gateway",
-      safeSummary: "sidecar-gateway-ready",
-    });
+    expect(diagnostics.record).not.toHaveBeenCalled();
   });
 
   it("returns a content-free unavailable error when deployment policy disables the gateway", async () => {
@@ -828,17 +1908,10 @@ describe("coding-sidecar gateway", () => {
       },
     });
     expect(rootPut).not.toHaveBeenCalled();
-    expect(codingPut).toHaveBeenCalledTimes(1);
-    const record = parseEvidenceRecord(String(codingPut.mock.calls[0]?.[1]));
-    expect(record).toMatchObject({
-      kind: "failure",
-      modelSource: "chatgpt-codex-subscription-profile",
-      safeSummary: "sidecar-gateway-denied",
-      denied: true,
-    });
+    expect(codingPut).not.toHaveBeenCalled();
   });
 
-  it("writes failed routing evidence and emits a diagnostic when the gateway call throws", async () => {
+  it("aggregates a content-free failure without a durable per-request evidence write", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
     const codingPut = vi.fn((_runId: string, _json: string): string => "");
     let capturedDiagnostic: ServerDiagnosticRecord | undefined;
@@ -847,6 +1920,7 @@ describe("coding-sidecar gateway", () => {
         capturedDiagnostic = record;
       }),
     };
+    const record = vi.fn();
     const hostileMessage =
       "tool call '/Users/customer/private-repo/secret-tool' has non-JSON arguments";
     const deps = depsValue(
@@ -872,6 +1946,7 @@ describe("coding-sidecar gateway", () => {
           get: () => undefined,
           delete: () => undefined,
         },
+        evidenceAggregator: { record },
       },
     );
 
@@ -892,17 +1967,13 @@ describe("coding-sidecar gateway", () => {
       },
     });
     expect(rootPut).not.toHaveBeenCalled();
-    expect(codingPut).toHaveBeenCalledTimes(1);
-    const evidenceJson = String(codingPut.mock.calls[0]?.[1]);
-    const record = parseEvidenceRecord(evidenceJson);
-    expect(record).toMatchObject({
-      kind: "failure",
-      modelSource: "keiko-model-gateway",
-      safeSummary: "sidecar-gateway-failed",
-      denied: true,
+    expect(codingPut).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith({
+      runId: "run-gateway-test",
+      outcome: "failed",
+      completionTokens: 0,
+      outputBytes: 0,
     });
-    expect(evidenceJson).not.toContain("continue");
-    expect(evidenceJson).not.toContain(hostileMessage);
     expect(diagnostics.record).toHaveBeenCalledTimes(1);
     expect(diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({
