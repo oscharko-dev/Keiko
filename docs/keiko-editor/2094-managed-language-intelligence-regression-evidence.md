@@ -118,10 +118,10 @@ results. English and German strings are owned by `managed-language-i18n.ts`; the
 `check:ui-i18n` gate detects raw or missing UI text. Styling is component-scoped in
 `ManagedLanguageSettings.module.css`; the SHA-pinned global stylesheet is unchanged.
 
-The signed source candidate additionally passed the Linux editor bundle producer/checker and the
-paired D12 browser comparison recorded in the release artifacts. The delivery-wide exact-head
-aggregate and remote checks remain mandatory; macOS-generated editor fingerprints are not
-authoritative.
+The final Foundation-wave source candidate additionally passed the Linux editor bundle
+producer/checker and the paired D12 browser comparison recorded in the release artifacts. The
+delivery-wide exact-head aggregate and remote checks remain mandatory; macOS-generated editor
+fingerprints are not authoritative.
 
 ## Coverage and release gates
 

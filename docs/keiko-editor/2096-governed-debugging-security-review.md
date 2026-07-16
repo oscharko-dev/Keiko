@@ -64,7 +64,7 @@ endpoint credential, or reusable browser capability.
 The output-flood evidence composes 1,048,576 adapter bytes into exactly one terminal limit marker,
 retains 524,288 bytes across 32 keyed rows, and reports zero residual heap bytes after teardown. The
 independent checker re-derived those values from closed raw artifacts and accepted the source-tree,
-toolchain, lockfile, runtime, and measurement fingerprints for signed candidate `5456afe9...`.
+toolchain, lockfile, runtime, and measurement fingerprints for signed candidate `57524a9c...`.
 
 `npm run check:error-observability` passed, preserving correlation-id propagation and redacted
 operator diagnostics for server error paths.

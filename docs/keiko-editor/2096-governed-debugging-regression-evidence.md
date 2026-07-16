@@ -14,9 +14,9 @@ pushed head's remote gates. The companion trust-boundary assessment is
 - Foundation-wave audit base: `origin/dev` at
   `1056821a5b861f076cc88e120492aaf5cad37b9d`.
 - Signed measured implementation candidate:
-  `5456afe9e5ef7792e478a70dbfe4745b8e22f3cb`.
+  `57524a9c0ea92b5ad19830d7199af32ffbc0822c`.
 - Performance subject digest:
-  `b99eee36acc59b5635892441ee08c33c18b39ae5bae0f81736a53cfb2a7626e3`. The checker requires the
+  `7134c0b6d8765d08f64d2cdba38c6c0575f775818d70c7d42c48ea3f8f7016ef`. The checker requires the
   measured commit to remain reachable and independently recomputes this digest, so subsequent
   evidence-only documentation does not masquerade as a new source measurement.
 
@@ -76,10 +76,10 @@ independent Linux checker both accepted the generated artifact:
 
 ```text
 npm run run:d12-perf-comparison -- <pinned baseline and signed candidate inputs>
-Wrote D12 comparison for 5456afe9e5ef7792e478a70dbfe4745b8e22f3cb from six orchestrated runs
+Wrote D12 comparison for 57524a9c0ea92b5ad19830d7199af32ffbc0822c from six orchestrated runs
 
 node scripts/check-perf-evidence.mjs --target editor
-perf-evidence: editor OK (budgets within limits, evidence fresh @ 5456afe9...)
+perf-evidence: editor OK (budgets within limits, evidence fresh @ 57524a9c...)
 ```
 
 The recorded artifact is
@@ -87,7 +87,7 @@ The recorded artifact is
 
 | Budget                     | Candidate result                                                        |
 | -------------------------- | ----------------------------------------------------------------------- |
-| B4 cold start              | p50 893 ms; p95 911 ms (budgets 1,500/2,500 ms)                         |
+| B4 cold start              | p50 893 ms; p95 899 ms (budgets 1,500/2,500 ms)                         |
 | B5 ordinary keystroke      | captured; zero long tasks; maximum 0 ms (budget 50 ms)                  |
 | B5 idle active DAP session | p95 2 ms; 60 samples; zero long tasks; paused; 226 matched input events |
 | B6 interaction             | p75 24 ms (budget 200 ms)                                               |
@@ -101,7 +101,7 @@ The median-run-level D12 comparison retained the following baseline/candidate/de
 | B2 shipped editor bytes |  1,180,165 B |  1,180,213 B |    +48 B |
 | B10 own-code gzip       |     67,903 B |     73,392 B | +5,489 B |
 | B4 p50                  |       886 ms |       893 ms |    +7 ms |
-| B4 p95                  |       916 ms |       911 ms |    -5 ms |
+| B4 p95                  |       897 ms |       899 ms |    +2 ms |
 | B5 idle-debug p95       |         2 ms |         2 ms |     0 ms |
 | B6 p75                  |        24 ms |        24 ms |     0 ms |
 | B11 peak/residual       | 50,400,000 B | 50,400,000 B |      0 B |
@@ -115,9 +115,9 @@ limit marker, 524,288 retained bytes across 32 rendered/retained rows, and zero 
 
 | Sequence | stopped projection p75 | output stop p75 | stopped max long task | output max long task |
 | -------: | ---------------------: | --------------: | --------------------: | -------------------: |
-|        2 |               145.7 ms |         80.2 ms |                  0 ms |                 0 ms |
-|        3 |               150.8 ms |         79.3 ms |                  0 ms |                 0 ms |
-|        6 |               142.1 ms |         81.5 ms |                  0 ms |                 0 ms |
+|        2 |                 139 ms |         82.1 ms |                  0 ms |                 0 ms |
+|        3 |               143.7 ms |         78.8 ms |                  0 ms |                 0 ms |
+|        6 |               139.5 ms |         79.1 ms |                  0 ms |                 0 ms |
 
 The Linux production static-export evidence was regenerated and immediately rechecked:
 
