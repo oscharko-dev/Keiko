@@ -16,6 +16,9 @@ function mutations(): RuntimeMutationActions {
     takeover: vi.fn(() => Promise.resolve()),
     retry: vi.fn(() => Promise.resolve()),
     acknowledgeRecovery: vi.fn(() => Promise.resolve()),
+    pause: vi.fn(() => Promise.resolve()),
+    resume: vi.fn(() => Promise.resolve()),
+    submitFollowUp: vi.fn(() => Promise.resolve()),
   };
 }
 

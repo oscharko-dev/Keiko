@@ -16,6 +16,8 @@ import {
 } from "./coding-workbench-runtime-api";
 import {
   createApprovalMutation,
+  createFollowUpMutation,
+  createLifecycleMutation,
   createRecoveryAcknowledgementMutation,
   createRetryMutation,
   createRunBoundMutation,
@@ -57,6 +59,9 @@ export interface RuntimeMutationActions {
   readonly takeover: () => Promise<void>;
   readonly retry: (taskIntent: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
+  readonly pause: () => Promise<void>;
+  readonly resume: () => Promise<void>;
+  readonly submitFollowUp: (taskIntent: string) => Promise<void>;
 }
 
 interface RuntimeMutationQueueInput {
@@ -337,6 +342,21 @@ export function useCodingWorkbenchRuntimeMutations(
       enqueueMutation("recovery-ack", (current) => createRecoveryAcknowledgementMutation(current)),
     [enqueueMutation],
   );
+  const pause = useCallback(
+    (): Promise<void> =>
+      enqueueMutation("pause", (current) => createLifecycleMutation("pause", current)),
+    [enqueueMutation],
+  );
+  const resume = useCallback(
+    (): Promise<void> =>
+      enqueueMutation("resume", (current) => createLifecycleMutation("resume", current)),
+    [enqueueMutation],
+  );
+  const submitFollowUp = useCallback(
+    (taskIntent: string): Promise<void> =>
+      enqueueMutation("follow-up", (current) => createFollowUpMutation(taskIntent, current)),
+    [enqueueMutation],
+  );
   return {
     start,
     decideApproval,
@@ -344,5 +364,8 @@ export function useCodingWorkbenchRuntimeMutations(
     takeover,
     retry,
     acknowledgeRecovery,
+    pause,
+    resume,
+    submitFollowUp,
   };
 }

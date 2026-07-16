@@ -71,7 +71,15 @@ export interface CodingWorkbenchStreamProjection {
 }
 
 export type CodingWorkbenchMutationKind =
-  "start" | "approval" | "stop" | "takeover" | "retry" | "recovery-ack";
+  | "start"
+  | "approval"
+  | "stop"
+  | "takeover"
+  | "retry"
+  | "recovery-ack"
+  | "pause"
+  | "resume"
+  | "follow-up";
 
 export interface CodingWorkbenchMutationState {
   readonly status: "idle" | "pending" | "error";
@@ -145,7 +153,7 @@ const IDLE_MUTATION: CodingWorkbenchMutationState = {
 };
 
 export function createInitialCodingWorkbenchRuntimeState(
-  requestedMode: CodingWorkbenchMode = "governed-assist",
+  requestedMode: CodingWorkbenchMode = "supervised-coding",
   runtimePreference: CodingWorkbenchRuntimePreference = "managed-gateway",
 ): CodingWorkbenchRuntimeState {
   return {

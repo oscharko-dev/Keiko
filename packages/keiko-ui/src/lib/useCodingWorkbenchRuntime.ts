@@ -43,10 +43,13 @@ export interface UseCodingWorkbenchRuntimeResult {
   readonly actions: CodingWorkbenchRuntimeActions;
 }
 
-const STREAMABLE_RUNTIME_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+export const STREAMABLE_RUNTIME_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "starting",
   "ready",
   "running",
+  // #2386: a paused run stays live — the stream must survive Pause, or the follow-up's
+  // task-submitted event (and any later question signal) never reaches the timeline.
+  "paused",
   "awaiting-approval",
   "stopping",
   "recovery-required",

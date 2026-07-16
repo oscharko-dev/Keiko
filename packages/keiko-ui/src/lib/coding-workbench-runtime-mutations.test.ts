@@ -6,6 +6,8 @@ import {
 } from "./coding-workbench-live-state";
 import {
   createApprovalMutation,
+  createFollowUpMutation,
+  createLifecycleMutation,
   createRecoveryAcknowledgementMutation,
   createRetryMutation,
   createRunBoundMutation,
@@ -21,6 +23,9 @@ const apiMocks = vi.hoisted(() => ({
   takeOverCodingWorkbenchRuntime: vi.fn(),
   retryCodingWorkbenchRuntime: vi.fn(),
   acknowledgeCodingWorkbenchRuntimeRecovery: vi.fn(),
+  pauseCodingWorkbenchRuntime: vi.fn(),
+  resumeCodingWorkbenchRuntime: vi.fn(),
+  submitCodingWorkbenchRuntimeFollowUp: vi.fn(),
 }));
 
 vi.mock("./coding-workbench-runtime-api", async (importOriginal) => ({
@@ -122,7 +127,7 @@ describe("createStartMutation", () => {
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
       requestId: mutation.requestId,
       taskIntent: "add a regression test",
-      requestedMode: "governed-assist",
+      requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
     });
   });
@@ -195,8 +200,57 @@ describe("createRetryMutation", () => {
     expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
       requestId: mutation.requestId,
       taskIntent: "retry it",
-      requestedMode: "governed-assist",
+      requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
+    });
+  });
+});
+
+describe("createLifecycleMutation", () => {
+  it("pauses only a running run and resumes only a paused run", () => {
+    expect(() =>
+      createLifecycleMutation("pause", stateWithRun(snapshot({ state: "paused" }))),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(() =>
+      createLifecycleMutation("resume", stateWithRun(snapshot({ state: "running" }))),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("routes pause and resume to their run-bound endpoints", async () => {
+    await createLifecycleMutation("pause", stateWithRun(snapshot({ state: "running" }))).run();
+    expect(apiMocks.pauseCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
+      requestId: "run-1",
+    });
+
+    await createLifecycleMutation("resume", stateWithRun(snapshot({ state: "paused" }))).run();
+    expect(apiMocks.resumeCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
+      requestId: "run-1",
+    });
+  });
+});
+
+describe("createFollowUpMutation", () => {
+  it("admits a follow-up only while the run is paused with a non-empty draft", () => {
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(snapshot({ state: "running" }))),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(snapshot({ state: "paused" }))),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("submits a paused follow-up bound to the current revision", async () => {
+    const mutation = createFollowUpMutation(
+      "add a test",
+      stateWithRun(snapshot({ state: "paused" })),
+    );
+    expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+    expect(mutation.mayInstallNewRun).toBe(false);
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "add a test",
     });
   });
 });
