@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 // EVIDENCE captures, not assertions (nothing compares against the committed bytes), so by default we
 // redirect them into the gitignored test-results/ tree. Set KEIKO_WRITE_TRACKED_EVIDENCE=1 to
 // regenerate the committed baseline on purpose (separating evidence generation from gating).
-export function evidenceScreenshotPath(trackedRelPath: string): string {
+export function evidenceArtifactPath(trackedRelPath: string): string {
   if (process.env.KEIKO_WRITE_TRACKED_EVIDENCE === "1") {
     mkdirSync(dirname(trackedRelPath), { recursive: true });
     return trackedRelPath;
@@ -15,4 +15,8 @@ export function evidenceScreenshotPath(trackedRelPath: string): string {
   const redirected = join("test-results", "e2e-evidence", trackedRelPath.replace(/^docs\//u, ""));
   mkdirSync(dirname(redirected), { recursive: true });
   return redirected;
+}
+
+export function evidenceScreenshotPath(trackedRelPath: string): string {
+  return evidenceArtifactPath(trackedRelPath);
 }

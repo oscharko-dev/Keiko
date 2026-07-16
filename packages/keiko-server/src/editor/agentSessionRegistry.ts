@@ -82,7 +82,11 @@ export interface EditorAgentRegistry {
   // original action's (sessionId, actionId). The caller MUST have already cleared preflight policy.
   // A second admit for an actionId already in flight for that session is rejected (no silent
   // supersede), so the first action's deadline is preserved.
-  queueAction(action: EditorAgentAction, emitAction: EditorAgentAction): EditorAgentQueueOutcome;
+  queueAction(
+    action: EditorAgentAction,
+    emitAction: EditorAgentAction,
+    options?: { readonly runtimeOwned?: boolean | undefined },
+  ): EditorAgentQueueOutcome;
   // Atomically removes and returns the exact original action for one pending session/action pair.
   // Result requests use this one-use claim before any server-side commit can run.
   takePendingAction(
@@ -90,6 +94,10 @@ export interface EditorAgentRegistry {
     actionId: string,
     capabilityDigest: string,
   ): EditorAgentAction | undefined;
+  // Removes only runtime-originated actions for the exact server-owned authority run. This is used
+  // during runtime revocation so a later browser review result cannot claim a stale mutation.
+  cancelPendingByAuthorityRun(runId: string): number;
+  isRuntimeOwnedAction(action: EditorAgentAction): boolean;
   // Fans out a result event after the route has authenticated and claimed any pending action.
   // Reporting alone never clears a queue slot.
   reportResult(result: EditorAgentActionResult): void;
@@ -100,6 +108,7 @@ export interface EditorAgentRegistry {
 interface PendingAction {
   readonly action: EditorAgentAction;
   readonly timer: unknown;
+  readonly runtimeOwned: boolean;
 }
 
 type EditorAgentEventPayload =
@@ -115,6 +124,7 @@ interface RegistryState {
   // sessionId -> actionId -> pending entry. Session-scoped so no cross-session interference is possible
   // and the per-session depth is exactly the inner map's size (no separate counter to drift).
   readonly pending: Map<string, Map<string, PendingAction>>;
+  runtimeOwnedActions: WeakSet<EditorAgentAction>;
   readonly actionTimeoutMs: number;
   readonly reviewTimeoutMs: number;
   readonly maxQueuedPerSession: number;
@@ -257,6 +267,35 @@ function takePendingActionImpl(
   return action;
 }
 
+function cancelPendingByAuthorityRunImpl(state: RegistryState, runId: string): number {
+  let cancelled = 0;
+  for (const [sessionId, inner] of state.pending) {
+    for (const [actionId, entry] of inner) {
+      if (!isRuntimeActionForRun(entry, runId)) continue;
+      state.clearTimer(entry.timer);
+      inner.delete(actionId);
+      cancelled += 1;
+      emit(state, { type: "result", result: cancelledRuntimeResult(entry.action) });
+    }
+    if (inner.size === 0) state.pending.delete(sessionId);
+  }
+  return cancelled;
+}
+
+function isRuntimeActionForRun(entry: PendingAction, runId: string): boolean {
+  return entry.runtimeOwned && entry.action.authorityRef?.runId === runId;
+}
+
+function cancelledRuntimeResult(action: EditorAgentAction): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    sessionId: action.sessionId,
+    status: "failed",
+    message: "The runtime action was cancelled.",
+  };
+}
+
 function onTimeout(state: RegistryState, action: EditorAgentAction): void {
   const inner = state.pending.get(action.sessionId);
   if (inner?.get(action.actionId) === undefined) return;
@@ -335,33 +374,11 @@ function queueActionImpl(
   state: RegistryState,
   action: EditorAgentAction,
   emitAction: EditorAgentAction,
+  options?: { readonly runtimeOwned?: boolean | undefined },
 ): EditorAgentQueueOutcome {
   const inner = state.pending.get(action.sessionId);
-  if (inner?.get(action.actionId) !== undefined) {
-    // A second admit for an actionId already in flight would otherwise strand the first action's
-    // deadline; reject it instead so the first action still self-heals (AC2). Pure rejection — the
-    // existing slot/timer are untouched.
-    return rejectedQueueOutcome(
-      action,
-      "An action with this id is already in flight for this session.",
-    );
-  }
-  if (isMutatingEditorAgentAction(action.type) && hasPendingMutation(inner)) {
-    return rejectedQueueOutcome(
-      action,
-      "A mutating editor action is already awaiting a terminal result.",
-    );
-  }
-  if ((inner?.size ?? 0) >= state.maxQueuedPerSession) {
-    return {
-      kind: "rejected",
-      result: lifecycleFailure(
-        action,
-        "QUEUE_FULL",
-        "The editor action queue for this session is full; retry once an action completes.",
-      ),
-    };
-  }
+  const rejection = queueRejection(state, action, inner);
+  if (rejection !== undefined) return rejection;
   const slots = inner ?? new Map<string, PendingAction>();
   if (inner === undefined) state.pending.set(action.sessionId, slots);
   const timer = state.setTimer(
@@ -370,7 +387,8 @@ function queueActionImpl(
     },
     actionTimeoutMs(state, action),
   );
-  slots.set(action.actionId, { action, timer });
+  slots.set(action.actionId, { action, timer, runtimeOwned: options?.runtimeOwned === true });
+  if (options?.runtimeOwned === true) state.runtimeOwnedActions.add(action);
   emit(state, { type: "action", action: emitAction });
   return {
     kind: "queued",
@@ -380,6 +398,32 @@ function queueActionImpl(
       sessionId: action.sessionId,
       status: "queued",
     },
+  };
+}
+
+function queueRejection(
+  state: RegistryState,
+  action: EditorAgentAction,
+  inner: ReadonlyMap<string, PendingAction> | undefined,
+): EditorAgentQueueOutcome | undefined {
+  if (inner?.get(action.actionId) !== undefined)
+    return rejectedQueueOutcome(
+      action,
+      "An action with this id is already in flight for this session.",
+    );
+  if (isMutatingEditorAgentAction(action.type) && hasPendingMutation(inner))
+    return rejectedQueueOutcome(
+      action,
+      "A mutating editor action is already awaiting a terminal result.",
+    );
+  if ((inner?.size ?? 0) < state.maxQueuedPerSession) return undefined;
+  return {
+    kind: "rejected",
+    result: lifecycleFailure(
+      action,
+      "QUEUE_FULL",
+      "The editor action queue for this session is full; retry once an action completes.",
+    ),
   };
 }
 
@@ -483,6 +527,7 @@ function resetImpl(state: RegistryState): void {
   state.bridges.clear();
   state.observers.clear();
   state.pending.clear();
+  state.runtimeOwnedActions = new WeakSet<EditorAgentAction>();
   state.eventSeq = 0;
 }
 
@@ -493,6 +538,7 @@ function createRegistryState(options: EditorAgentRegistryOptions): RegistryState
     bridges: new Map(),
     observers: new Set(),
     pending: new Map(),
+    runtimeOwnedActions: new WeakSet<EditorAgentAction>(),
     actionTimeoutMs: options.actionTimeoutMs ?? EDITOR_AGENT_ACTION_TIMEOUT_MS,
     reviewTimeoutMs: options.reviewTimeoutMs ?? EDITOR_AGENT_REVIEW_TIMEOUT_MS,
     maxQueuedPerSession: options.maxQueuedPerSession ?? EDITOR_AGENT_MAX_QUEUED_PER_SESSION,
@@ -528,10 +574,12 @@ export function createEditorAgentRegistry(
     connect: (sessionId, send): (() => void) => connectImpl(state, sessionId, send),
     connectAuthenticated: (sessionId, capabilityDigest, send): (() => void) | undefined =>
       connectAuthenticatedImpl(state, sessionId, capabilityDigest, send),
-    queueAction: (action, emitAction): EditorAgentQueueOutcome =>
-      queueActionImpl(state, action, emitAction),
+    queueAction: (action, emitAction, options): EditorAgentQueueOutcome =>
+      queueActionImpl(state, action, emitAction, options),
     takePendingAction: (sessionId, actionId, capabilityDigest): EditorAgentAction | undefined =>
       takePendingActionImpl(state, sessionId, actionId, capabilityDigest),
+    cancelPendingByAuthorityRun: (runId): number => cancelPendingByAuthorityRunImpl(state, runId),
+    isRuntimeOwnedAction: (action): boolean => state.runtimeOwnedActions.has(action),
     reportResult: (result): void => {
       reportResultImpl(state, result);
     },

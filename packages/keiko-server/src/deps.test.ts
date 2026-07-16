@@ -549,6 +549,48 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.store.close();
   });
 
+  it("constructs one production runtime control plane over the shared durable stores", () => {
+    const uiDir = tmp("ui-runtime-");
+    const evidenceDir = tmp("ev-runtime-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    expect(deps.codingRuntimeSnapshotStore).toBeDefined();
+    expect(deps.codingRuntimeEvidenceAggregator).toBeDefined();
+    expect(deps.codingRuntimeOrchestrator?.status()).toMatchObject({ state: "idle", revision: 0 });
+    expect(deps.codingRuntimeEventHub).toBeDefined();
+    void deps.dispose?.();
+  });
+
+  it("keeps the normal production runtime unavailable without a trusted confirmation consumer", () => {
+    const createRun = vi.fn((): never => {
+      throw new Error("backend must not be reached");
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-closed-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-closed-"), "keiko-ui.db"),
+      codingRuntimeProductionPorts: {
+        backend: { createRun },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.codingRuntimeHostQualified).toBe(false);
+    expect(createRun).not.toHaveBeenCalled();
+    void deps.dispose?.();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");

@@ -2,9 +2,15 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
+  validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeAuthorityEnvelope,
+  type CodingWorkbenchRuntimeAuthorityFacts,
+  type CodingWorkbenchRuntimeDelegationUsage,
+  type CodingWorkbenchRuntimeFailureCode,
   type EditorAgentAction,
   type EditorAgentGovernedAuthorityReference,
   type EditorAgentSessionSnapshot,
@@ -38,7 +44,8 @@ const LOCAL_BRIDGE_NETWORK_POLICY = {
   connectorScopes: [],
 } as const;
 
-export type EditorAgentAuthorityFailureReason = "invalid" | "expired" | "budget-exceeded";
+export type EditorAgentAuthorityFailureReason =
+  "invalid" | "expired" | "budget-exceeded" | "revoked";
 
 export type EditorAgentAuthorityRegistration =
   | { readonly ok: true; readonly authorityRef: EditorAgentGovernedAuthorityReference }
@@ -55,12 +62,27 @@ interface AuthorityRecord {
   readonly usage: AuthorityUsage;
   sessionId?: string | undefined;
   readonly localActionBinding?: LocalActionBinding | undefined;
+  readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
+  readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
+  readonly runtimeIdempotencyKeys?: Set<string> | undefined;
+  revoked: boolean;
 }
 
 interface AuthorityUsage {
   toolCalls: number;
   patchBytes: number;
+  promptTokens: number;
 }
+
+interface RuntimeDelegationReservation {
+  readonly delegationId: string;
+  readonly idempotencyKey: string;
+  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
+}
+
+type RuntimeRecordResolution =
+  | { readonly ok: true; readonly record: AuthorityRecord }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
 
 interface LocalActionBinding {
   readonly sessionId: string;
@@ -129,7 +151,9 @@ export class EditorAgentAuthorityRegistry {
     const authorityRef = { runId: parsed.value.runId, envelopeDigest: digest };
     const key = recordKey(authorityRef);
     const existing = this.records.get(key);
-    if (existing !== undefined) return { ok: true, authorityRef };
+    if (existing !== undefined) {
+      return existing.revoked ? { ok: false, reason: "revoked" } : { ok: true, authorityRef };
+    }
     this.evictInactive(nowIso);
     if (this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS) {
       return { ok: false, reason: "invalid" };
@@ -138,9 +162,104 @@ export class EditorAgentAuthorityRegistry {
       envelope: parsed.value,
       digest,
       registeredAtMs: Date.parse(nowIso),
-      usage: { toolCalls: 0, patchBytes: 0 },
+      usage: { toolCalls: 0, patchBytes: 0, promptTokens: 0 },
+      revoked: false,
     });
     return { ok: true, authorityRef };
+  }
+
+  public registerRuntime(
+    envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ): EditorAgentAuthorityRegistration {
+    if (!validateCodingWorkbenchRuntimeAuthorityEnvelope(envelope).ok) {
+      return { ok: false, reason: "invalid" };
+    }
+    const registration = this.register(envelope.authority, deploymentCeiling, nowIso);
+    if (!registration.ok) return registration;
+    const key = recordKey(registration.authorityRef);
+    const record = this.records.get(key);
+    if (record === undefined) return { ok: false, reason: "invalid" };
+    if (record.runtimeEnvelope !== undefined) {
+      return canonicalJson(record.runtimeEnvelope) === canonicalJson(envelope)
+        ? registration
+        : { ok: false, reason: "invalid" };
+    }
+    this.records.set(key, {
+      ...record,
+      runtimeEnvelope: envelope,
+      runtimeDelegations: new Map(),
+      runtimeIdempotencyKeys: new Set(),
+    });
+    return registration;
+  }
+
+  public resolveRuntime(
+    reference: EditorAgentGovernedAuthorityReference,
+    liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
+    delegationId: string,
+    idempotencyKey: string,
+    usage: CodingWorkbenchRuntimeDelegationUsage,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ):
+    | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validateCodingWorkbenchRuntimeAuthorityFacts(liveFacts).ok) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    return resolved.ok
+      ? admitRuntimeDelegation(resolved.record, liveFacts, delegationId, idempotencyKey, usage)
+      : resolved;
+  }
+
+  /** Revalidates live authority without reserving budget or replay identity a second time. */
+  public revalidateRuntime(
+    reference: EditorAgentGovernedAuthorityReference,
+    liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ):
+    | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validateCodingWorkbenchRuntimeAuthorityFacts(liveFacts).ok) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    if (!resolved.ok) return resolved;
+    const envelope = resolved.record.runtimeEnvelope;
+    if (envelope === undefined) return { ok: false, reason: "authority-resolution-failed" };
+    const drift = runtimeDrift(runtimeFacts(envelope), liveFacts);
+    return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
+  }
+
+  private resolveRuntimeRecord(
+    reference: EditorAgentGovernedAuthorityReference,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ): RuntimeRecordResolution {
+    const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
+    if (!resolved.ok)
+      return {
+        ok: false,
+        reason:
+          resolved.reason === "expired"
+            ? "authority-expired"
+            : resolved.reason === "revoked"
+              ? "revoked"
+              : "authority-resolution-failed",
+      };
+    const record = this.records.get(recordKey(reference));
+    return record?.runtimeEnvelope !== undefined &&
+      record.runtimeDelegations !== undefined &&
+      record.runtimeIdempotencyKeys !== undefined
+      ? { ok: true, record }
+      : { ok: false, reason: "authority-resolution-failed" };
   }
 
   public registerLocalBridge(
@@ -183,6 +302,7 @@ export class EditorAgentAuthorityRegistry {
     const key = recordKey(reference);
     const record = this.records.get(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
+    if (record.revoked) return { ok: false, reason: "revoked" };
     if (expired(nowIso, record.envelope.expiresAt)) {
       this.records.delete(key);
       return { ok: false, reason: "expired" };
@@ -242,16 +362,9 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok) return resolved;
     const record = this.records.get(recordKey(reference));
     if (record === undefined) return { ok: false, reason: "invalid" };
-    const nextToolCalls = record.usage.toolCalls + 1;
-    const nextPatchBytes = record.usage.patchBytes + patchBytes;
-    if (
-      nextToolCalls > record.envelope.budget.maxToolCalls ||
-      nextPatchBytes > record.envelope.budget.maxPatchBytes
-    ) {
+    if (!reserveUsage(record, { toolCalls: 1, patchBytes, promptTokens: 0 })) {
       return { ok: false, reason: "budget-exceeded" };
     }
-    record.usage.toolCalls = nextToolCalls;
-    record.usage.patchBytes = nextPatchBytes;
     return resolved;
   }
 
@@ -303,7 +416,8 @@ export class EditorAgentAuthorityRegistry {
   }
 
   public revoke(reference: EditorAgentGovernedAuthorityReference): void {
-    this.records.delete(recordKey(reference));
+    const record = this.records.get(recordKey(reference));
+    if (record !== undefined) record.revoked = true;
   }
 
   public reset(): void {
@@ -334,6 +448,145 @@ export class EditorAgentAuthorityRegistry {
       }
     }
   }
+}
+
+function nonEmptyIdentity(value: string): boolean {
+  return value.length > 0 && value.length <= 256;
+}
+
+function admitRuntimeDelegation(
+  record: AuthorityRecord,
+  liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
+  delegationId: string,
+  idempotencyKey: string,
+  usage: CodingWorkbenchRuntimeDelegationUsage,
+):
+  | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+  if (
+    record.runtimeEnvelope === undefined ||
+    record.runtimeDelegations === undefined ||
+    record.runtimeIdempotencyKeys === undefined
+  )
+    return { ok: false, reason: "authority-resolution-failed" };
+  if (!nonEmptyIdentity(delegationId) || !nonEmptyIdentity(idempotencyKey))
+    return { ok: false, reason: "authority-resolution-failed" };
+  if (
+    record.runtimeDelegations.has(delegationId) ||
+    record.runtimeIdempotencyKeys.has(idempotencyKey)
+  )
+    return { ok: false, reason: "authority-replayed" };
+  const drift = runtimeDrift(runtimeFacts(record.runtimeEnvelope), liveFacts);
+  if (drift !== undefined) return { ok: false, reason: drift };
+  if (!reserveUsage(record, usage)) return { ok: false, reason: "authority-budget-exceeded" };
+  record.runtimeDelegations.set(delegationId, {
+    delegationId,
+    idempotencyKey,
+    usage: { ...usage },
+  });
+  record.runtimeIdempotencyKeys.add(idempotencyKey);
+  return { ok: true, envelope: record.runtimeEnvelope };
+}
+
+function reserveUsage(
+  record: AuthorityRecord,
+  usage: CodingWorkbenchRuntimeDelegationUsage,
+): boolean {
+  if (![usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount)) return false;
+  const next = {
+    toolCalls: record.usage.toolCalls + usage.toolCalls,
+    patchBytes: record.usage.patchBytes + usage.patchBytes,
+    promptTokens: record.usage.promptTokens + usage.promptTokens,
+  };
+  if (
+    next.toolCalls > record.envelope.budget.maxToolCalls ||
+    next.patchBytes > record.envelope.budget.maxPatchBytes ||
+    next.promptTokens > record.envelope.budget.maxPromptTokens
+  )
+    return false;
+  Object.assign(record.usage, next);
+  return true;
+}
+
+function validUsageCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function runtimeFacts(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+): CodingWorkbenchRuntimeAuthorityFacts {
+  return {
+    binding: envelope.binding,
+    actionClasses: envelope.authority.actionClasses,
+    connectorScopes: envelope.authority.connectorScopes,
+    runtimeSource: envelope.authority.runtimeSource,
+    modelSource: envelope.authority.modelProfile.source,
+    budgetDigest: createHash("sha256")
+      .update(canonicalJson(envelope.authority.budget), "utf8")
+      .digest("hex"),
+    commandPolicyDigest: digestCanonical(envelope.authority.commandPolicy),
+    networkPolicyDigest: digestCanonical(envelope.authority.networkPolicy),
+    gatesDigest: digestCanonical(envelope.authority.gates),
+    branchConstraintsDigest: digestCanonical(envelope.authority.branch),
+    modelProfileDigest: digestCanonical(envelope.authority.modelProfile),
+  };
+}
+
+function runtimeDrift(
+  expected: CodingWorkbenchRuntimeAuthorityFacts,
+  actual: CodingWorkbenchRuntimeAuthorityFacts,
+): CodingWorkbenchRuntimeFailureCode | undefined {
+  const bindingDrift = runtimeBindingDrift(expected, actual);
+  if (bindingDrift !== undefined) return bindingDrift;
+  if (
+    canonicalJson(expected.actionClasses) !== canonicalJson(actual.actionClasses) ||
+    canonicalJson(expected.connectorScopes) !== canonicalJson(actual.connectorScopes)
+  )
+    return "scope-drift";
+  if (expected.budgetDigest !== actual.budgetDigest) return "budget-drift";
+  if (policyFactsDrifted(expected, actual)) return "scope-drift";
+  return expected.runtimeSource !== actual.runtimeSource ||
+    expected.modelSource !== actual.modelSource
+    ? "source-drift"
+    : undefined;
+}
+
+function policyFactsDrifted(
+  expected: CodingWorkbenchRuntimeAuthorityFacts,
+  actual: CodingWorkbenchRuntimeAuthorityFacts,
+): boolean {
+  return (
+    expected.commandPolicyDigest !== actual.commandPolicyDigest ||
+    expected.networkPolicyDigest !== actual.networkPolicyDigest ||
+    expected.gatesDigest !== actual.gatesDigest ||
+    expected.branchConstraintsDigest !== actual.branchConstraintsDigest ||
+    expected.modelProfileDigest !== actual.modelProfileDigest
+  );
+}
+
+function digestCanonical(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function runtimeBindingDrift(
+  expected: CodingWorkbenchRuntimeAuthorityFacts,
+  actual: CodingWorkbenchRuntimeAuthorityFacts,
+): CodingWorkbenchRuntimeFailureCode | undefined {
+  if (expected.binding.taskId !== actual.binding.taskId) return "task-drift";
+  if (
+    expected.binding.workspaceId !== actual.binding.workspaceId ||
+    expected.binding.workspaceRootDigest !== actual.binding.workspaceRootDigest
+  )
+    return "workspace-drift";
+  if (
+    expected.binding.projectId !== actual.binding.projectId ||
+    expected.binding.projectDigest !== actual.binding.projectDigest
+  )
+    return "project-drift";
+  return expected.binding.branchRef !== actual.binding.branchRef ||
+    expected.binding.branchHeadDigest !== actual.binding.branchHeadDigest
+    ? "branch-drift"
+    : undefined;
 }
 
 function localBridgeAuthorityEnvelope(

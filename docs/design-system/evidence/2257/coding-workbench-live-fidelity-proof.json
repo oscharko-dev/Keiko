@@ -1,0 +1,45 @@
+{
+  "issue": 2257,
+  "status": "verified",
+  "verified": true,
+  "componentStateEvidence": {
+    "captured": [
+      "ready",
+      "approval-conflict",
+      "recovery-conflict",
+      "selected",
+      "disabled",
+      "focus-visible"
+    ],
+    "automated": [
+      "loading",
+      "unavailable",
+      "error",
+      "empty",
+      "reconnecting",
+      "syncing"
+    ],
+    "automatedEvidence": [
+      "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx",
+      "packages/keiko-ui/src/lib/useCodingWorkbenchRuntime.test.tsx",
+      "tests/e2e/coding-workbench-2257.spec.ts"
+    ]
+  },
+  "captureIds": [
+    "01-dark-820",
+    "02-light-820",
+    "03-dark-hc-820",
+    "04-light-hc-820",
+    "05-forced-colors-820",
+    "06-reduced-motion-820",
+    "07-width-820",
+    "08-width-768",
+    "09-width-560",
+    "10-width-390-focus",
+    "11-width-320-200pct"
+  ],
+  "allPrimaryActionsVisible": true,
+  "allPrimaryActionsWithinViewport": true,
+  "allOuterWindowsWithinViewport": true,
+  "horizontalOverflowFailures": 0
+}

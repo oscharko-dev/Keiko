@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 interface Migration {
   readonly version: number;
@@ -273,6 +273,68 @@ const V9_SQL = `
 ALTER TABLE chat_messages ADD COLUMN grounded_preview_citations_json TEXT;
 `;
 
+// V10 (issue #2256) — content-free runtime lifecycle snapshots. This is deliberately a narrow
+// recovery ledger, not an event/token stream: every field is an enum, timestamp, bounded counter,
+// digest, or opaque identifier. Runtime process details and model input/output remain transient.
+const V10_SQL = `
+CREATE TABLE coding_runtime_snapshots (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  requested_mode TEXT NOT NULL,
+  runtime_source TEXT NOT NULL,
+  model_source TEXT NOT NULL,
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  terminal_at TEXT,
+  recovery_acknowledged_at TEXT,
+  predecessor_run_id TEXT,
+  task_digest TEXT NOT NULL,
+  workspace_digest TEXT NOT NULL,
+  operator_digest TEXT NOT NULL,
+  authority_digest TEXT NOT NULL,
+  binding_digest TEXT NOT NULL,
+  provenance_digest TEXT NOT NULL,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  patch_byte_count INTEGER NOT NULL DEFAULT 0,
+  model_request_count INTEGER NOT NULL DEFAULT 0,
+  recovery_handle TEXT,
+  CHECK (
+    schema_version = '1'
+    AND state IN ('starting','ready','running','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+    AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
+    AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required'))
+    AND revision >= 0
+    AND tool_call_count BETWEEN 0 AND 1000000
+    AND patch_byte_count BETWEEN 0 AND 1073741824
+    AND model_request_count BETWEEN 0 AND 1000000
+    AND length(run_id) BETWEEN 1 AND 128
+    AND length(task_digest) BETWEEN 1 AND 128
+    AND length(workspace_digest) BETWEEN 1 AND 128
+    AND length(operator_digest) BETWEEN 1 AND 128
+    AND length(authority_digest) BETWEEN 1 AND 128
+    AND length(binding_digest) BETWEEN 1 AND 128
+    AND length(provenance_digest) BETWEEN 1 AND 128
+    AND (recovery_handle IS NULL OR length(recovery_handle) BETWEEN 1 AND 128)
+  )
+) STRICT;
+
+-- A settled run may be retained, but exactly one nonterminal run occupies the runtime slot.
+-- Recovery acknowledgement alone does not set terminal_at; an explicit fresh retry releases it.
+CREATE UNIQUE INDEX uniq_coding_runtime_active_slot
+  ON coding_runtime_snapshots((1))
+  WHERE terminal_at IS NULL;
+CREATE INDEX idx_coding_runtime_recent_active
+  ON coding_runtime_snapshots(terminal_at, updated_at DESC, run_id);
+CREATE INDEX idx_coding_runtime_settled_oldest
+  ON coding_runtime_snapshots(terminal_at, updated_at, run_id)
+  WHERE terminal_at IS NOT NULL;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -283,6 +345,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 7, sql: V7_SQL },
   { version: 8, sql: V8_SQL },
   { version: 9, sql: V9_SQL },
+  { version: 10, sql: V10_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

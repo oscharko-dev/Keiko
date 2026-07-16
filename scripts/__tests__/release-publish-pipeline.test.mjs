@@ -37,6 +37,7 @@
 //      needed on an idempotent re-run must fail with an actionable error rather than a bare
 //      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
 
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -106,6 +107,7 @@ function portableManifest(target, archivePath, assetId) {
   const archiveBytes = readFileSync(archivePath);
   const archiveSha256 = digestFor(archiveBytes);
   const archiveSize = statSync(archivePath).size;
+  const nativeHelpers = [portableNativeHelper(target)];
   const provenanceText = `${JSON.stringify({
     artifact: target.assetName,
     buildWorkflowAttempt: 1,
@@ -114,6 +116,7 @@ function portableManifest(target, archivePath, assetId) {
     sourceCommitSha: HEAD_SHA,
     subjectDigest: archiveSha256,
     target: target.platformTarget,
+    nativeHelpers: nativeHelpers.map(nativeHelperProvenance),
   })}\n`;
   const provenanceSha256 = digestFor(provenanceText);
   const notarizationRequired = target.nodePlatform === "darwin";
@@ -127,6 +130,7 @@ function portableManifest(target, archivePath, assetId) {
       provenanceSha256,
       notarizationRequired,
       verificationChecks,
+      nativeHelpers,
     ),
     provenanceText,
   };
@@ -140,6 +144,7 @@ function portableManifestObject(
   provenanceSha256,
   notarizationRequired,
   verificationChecks,
+  nativeHelpers,
 ) {
   const releaseTag = `v${RELEASE_VERSION}`;
   const security = portableSecurity(target, notarizationRequired, verificationChecks);
@@ -150,6 +155,7 @@ function portableManifestObject(
     artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
     provenance: portableProvenance(provenanceSha256),
     runtime: portableRuntime(target),
+    nativeHelpers,
     packageSurface: portablePackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
@@ -166,8 +172,65 @@ function portableManifestObject(
       archiveSha256,
       provenanceSha256,
       security,
+      nativeHelpers,
     ),
     updateEligibility: portableUpdateEligibility(),
+  };
+}
+
+function nativeHelperBytes(target) {
+  return Buffer.from(
+    target.nodePlatform === "win32"
+      ? "release-pipeline-signed-secure-read-pe-fixture\n"
+      : "#!/bin/sh\n# release-pipeline-signed-secure-read-fixture\n",
+  );
+}
+
+function nativeHelperExecutablePath(target) {
+  return `runtime/native/keiko-secure-workspace-read${target.nodePlatform === "win32" ? ".exe" : ""}`;
+}
+
+function portableNativeHelper(target) {
+  const bytes = nativeHelperBytes(target);
+  const digest = digestFor(bytes);
+  const notarizationRequired = target.nodePlatform === "darwin";
+  return {
+    name: "keiko-secure-workspace-read",
+    kind: "secure-workspace-text-read",
+    platformTarget: target.platformTarget,
+    architecture: target.nodeArchitecture,
+    executablePath: nativeHelperExecutablePath(target),
+    protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
+    source: {
+      commitSha: HEAD_SHA,
+      path: "native/secure-workspace-read",
+      treeSha256: digestFor("native/secure-workspace-read\n"),
+    },
+    unsignedSha256: digest,
+    shippedSha256: digest,
+    sizeBytes: bytes.length,
+    sbomBomRef: `pkg:generic/keiko-secure-workspace-read@${RELEASE_VERSION}?platform=${target.platformTarget}`,
+    signing: {
+      signatureKind: target.signatureKind,
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired,
+      notarizationVerified: notarizationRequired,
+    },
+  };
+}
+
+function nativeHelperProvenance(helper) {
+  return {
+    architecture: helper.architecture,
+    executablePath: helper.executablePath,
+    name: helper.name,
+    shippedSha256: helper.shippedSha256,
+    signatureKind: helper.signing.signatureKind,
+    signatureVerified: helper.signing.signatureVerified,
+    notarizationVerified: helper.signing.notarizationVerified,
+    sourceTreeSha256: helper.source.treeSha256,
+    unsignedSha256: helper.unsignedSha256,
   };
 }
 
@@ -267,6 +330,7 @@ function portableReleaseImpact(
   archiveSha256,
   provenanceSha256,
   security,
+  nativeHelpers,
 ) {
   return {
     catalogPath: "app/release-impact.catalog.json",
@@ -280,6 +344,7 @@ function portableReleaseImpact(
       archiveSha256,
       provenanceSha256,
       security,
+      nativeHelpers,
     ),
   };
 }
@@ -291,6 +356,7 @@ function portableReviewedBinding(
   archiveSha256,
   provenanceSha256,
   security,
+  nativeHelpers,
 ) {
   return {
     releaseId: 0,
@@ -315,6 +381,7 @@ function portableReviewedBinding(
     notarizationRequired: security.notarizationRequired,
     notarizationVerified: security.notarizationVerified,
     verificationChecks: security.verificationChecks,
+    nativeHelpers,
   };
 }
 
@@ -461,6 +528,7 @@ function writePortableAssetsFixture(root, options = {}) {
     mkdirSync(dirname(manifestPath), { recursive: true });
     writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
     const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
+    writeNativeHelperFixture(targetRoot, target);
     if (options.sidecarEvidenceKind !== undefined && index === 0) {
       addPortableSidecarFixture(targetRoot, manifest, target, options.sidecarEvidenceKind);
     }
@@ -480,6 +548,16 @@ function writePortableAssetsFixture(root, options = {}) {
   options.mutateBundle?.(bundle);
   writeFileSync(manifestPath, JSON.stringify(bundle, null, 2) + "\n");
   return manifestPath;
+}
+
+function writeNativeHelperFixture(targetRoot, target) {
+  const resourceRoot =
+    target.nodePlatform === "darwin"
+      ? join(targetRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+      : join(targetRoot, "payload", "Keiko");
+  const path = join(resourceRoot, nativeHelperExecutablePath(target));
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, nativeHelperBytes(target));
 }
 
 function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
@@ -538,7 +616,21 @@ function writePortableEvidence(targetRoot, manifest, provenanceText) {
     join(targetRoot, "evidence", "SHA256SUMS.txt"),
     `${manifest.artifact.sha256}  ${manifest.artifact.assetName}\n`,
   );
-  writeFileSync(join(targetRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+  writeFileSync(
+    join(targetRoot, "evidence", "sbom.cdx.json"),
+    JSON.stringify({
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      version: 1,
+      components: manifest.nativeHelpers.map((helper) => ({
+        type: "application",
+        name: helper.name,
+        version: RELEASE_VERSION,
+        "bom-ref": helper.sbomBomRef,
+        hashes: [{ alg: "SHA-256", content: helper.shippedSha256 }],
+      })),
+    }) + "\n",
+  );
   writeFileSync(
     join(targetRoot, "evidence", "third-party-notices.txt"),
     "Portable fixture notices.\n",

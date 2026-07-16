@@ -1,0 +1,189 @@
+import {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  validateCodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeAdapterKind,
+  type CodingWorkbenchRuntimeAuthorityFacts,
+  type CodingWorkbenchRuntimeEvent,
+  type EditorAgentGovernedAuthorityReference,
+  type VerificationKind,
+  type VerificationReport,
+} from "@oscharko-dev/keiko-contracts";
+
+import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
+import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
+import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
+import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import {
+  createCodingToolReadEditPorts,
+  type CodingToolReadEditPortDeps,
+  type CodingToolReadEditPorts,
+} from "./codingToolReadEditPorts.js";
+import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+
+export interface ProductionManagedWorktreeToolInput {
+  readonly authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >;
+  readonly authorityRef: EditorAgentGovernedAuthorityReference;
+  readonly adapterKind?: CodingWorkbenchRuntimeAdapterKind | undefined;
+  readonly workspaceRoot: string;
+  readonly authorityExpiresAt: string;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
+  readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
+  readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
+  readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
+  readonly invocationRegistry: CodingToolInvocationRegistry;
+  readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+}
+
+export function createProductionManagedWorktreeToolFacade(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolFacade {
+  const readEdit = createReadEditPorts(input);
+  return createRuntimeCodingToolFacade(
+    input.authority,
+    () => ({
+      adapterKind: input.adapterKind ?? "model-gateway-sidecar",
+      liveFacts: input.liveFacts(),
+      workspaceRoot: input.workspaceRoot,
+      deploymentCeiling: input.deploymentCeiling,
+      nowIso: new Date().toISOString(),
+      runId: input.authorityRef.runId,
+      envelopeDigest: input.authorityRef.envelopeDigest,
+      authorityExpiresAt: input.authorityExpiresAt,
+    }),
+    governedPorts(input, readEdit),
+    {
+      invocationRegistry: input.invocationRegistry,
+      reserveEditDelegation: true,
+    },
+  );
+}
+
+function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
+  return createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    editorAgentClient: input.editorAgentClient,
+    resolveEditorActionContext: () => ({
+      sessionId: `runtime-${input.authorityRef.runId}`,
+      authorityRef: input.authorityRef,
+      origin: "agent",
+      workspaceId: input.liveFacts().binding.workspaceId,
+      workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
+      expiresAt: input.authorityExpiresAt,
+    }),
+    resolveRepositoryReadContext: () => ({
+      runId: input.authorityRef.runId,
+      envelopeDigest: input.authorityRef.envelopeDigest,
+      workspaceId: input.liveFacts().binding.workspaceId,
+      workspaceRootDigest: input.liveFacts().binding.workspaceRootDigest,
+      expiresAt: input.authorityExpiresAt,
+    }),
+    ...(input.mutationLeaseCoordinator
+      ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
+      : {}),
+  });
+}
+
+function governedPorts(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+): CodingToolGovernedPorts {
+  let verificationSequence = 0;
+  const failed = (): Promise<{ readonly status: "failed" }> =>
+    Promise.resolve({ status: "failed" });
+  return {
+    ...readEdit,
+    commandRunner: { execute: failed },
+    verificationRunner: {
+      execute: async (
+        request,
+        signal,
+        guard,
+      ): Promise<{ readonly status: "completed" | "failed" }> => {
+        if (!guard.check() || !live(input)) return { status: "failed" };
+        const kind = verificationKind(request.verifierId);
+        if (kind === undefined) return { status: "failed" };
+        const report = await input.verificationRunner.runToReport(
+          { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
+          signal ?? new AbortController().signal,
+        );
+        verificationSequence += 1;
+        publishVerification(input, verificationSequence, report);
+        return {
+          status: report.overallStatus === "passed" && live(input) ? "completed" : "failed",
+        };
+      },
+    },
+    gitAuthority: { execute: failed },
+    deliveryAuthority: { execute: failed },
+    connectorAuthority: { execute: failed },
+    egressAuthority: { execute: failed },
+  };
+}
+
+function live(input: ProductionManagedWorktreeToolInput): boolean {
+  try {
+    input.liveFacts();
+    return Date.now() < Date.parse(input.authorityExpiresAt);
+  } catch {
+    return false;
+  }
+}
+
+function publishVerification(
+  input: ProductionManagedWorktreeToolInput,
+  sequence: number,
+  report: VerificationReport,
+): void {
+  const event: CodingWorkbenchRuntimeEvent = {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    eventId: `event-verification-${String(sequence)}`,
+    runId: input.authorityRef.runId,
+    occurredAt: new Date().toISOString(),
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    verificationStatus:
+      report.overallStatus === "passed"
+        ? "passed"
+        : report.overallStatus === "skipped"
+          ? "partial"
+          : "failed",
+    passedCount: report.counts.passed,
+    failedCount: failedCount(report),
+    skippedCount: report.counts.skipped,
+  };
+  if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
+    throw new Error("runtime-verification-event-invalid");
+  }
+  input.onRuntimeEvent(event);
+}
+
+function failedCount(report: VerificationReport): number {
+  return (
+    report.counts.failed +
+    report.counts.denied +
+    report.counts["timed-out"] +
+    report.counts.cancelled +
+    report.counts["resource-exceeded"]
+  );
+}
+
+function verificationKind(value: string): VerificationKind | undefined {
+  switch (value) {
+    case "test":
+    case "targeted-test":
+    case "typecheck":
+    case "lint":
+    case "build":
+      return value;
+    default:
+      return undefined;
+  }
+}

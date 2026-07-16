@@ -90,12 +90,22 @@ release artifacts; they are not committed to Git.
 Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
 `scripts/stage-portable-runtime.mjs` may receive controlled local sidecar specs through
 `--sidecar-runtime-spec`; those specs can name a local `sourceRoot`, but only contained relative
-payload paths, digests, size, license/SBOM evidence, adapter compatibility, platform target, and
-signing/notarization status are written to portable manifests/evidence. A sidecar refresh requires a
-Keiko release decision and regenerated Windows x64, macOS arm64, and macOS x64 artifacts. It must
-not be implemented as a customer-side download during install, first run, app launch, or update.
+payload paths, digests, size, license/SBOM evidence, immutable upstream and raw protocol-schema
+provenance, adapter compatibility, release approval, platform target, and signing/notarization
+status are written to portable manifests/evidence. A sidecar refresh requires a Keiko release
+decision and regenerated Windows x64, macOS arm64, and macOS x64 artifacts. It must not be
+implemented as a customer-side download during install, first run, app launch, or update, or as a
+global install, self-update, or independently promoted sidecar. Whole-product crash-safe promotion
+is the only promotion path and preserves the current complete install on failure.
 Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
 manager launches only manifest-verified sidecar payloads from the attested managed install root.
+
+The schema-v2 OpenCode approval binds version `1.17.17` to commit
+`474abdd7ee60f4b67476cfcef7e5311beff4a824` and HTTP/SSE compatibility to the raw bytes of
+`packages/sdk/openapi.json` at that commit (SHA-256
+`7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de`). Reformatted JSON does not
+satisfy this provenance. Codex is not an approved payload or support claim: pending redistribution
+or subscription-auth approval yields `redistribution-unapproved`, with no global-install fallback.
 
 ## Automated portable asset staging
 
@@ -119,21 +129,23 @@ it:
    the Release workflow consumes through `portable_assets_run_id`.
 
 Version approval is a pull request: [`portable-runtime-approvals.json`](../../portable-runtime-approvals.json)
-pins the Node.js runtime version and the coding sidecar runtime version with per-target URLs and
-SHA-256 digests. `npm run portable:approve-runtimes -- --node-version <v> --opencode-version <v>`
-regenerates the pins from the official upstream sources; reviewing and merging that diff is the
-release approval act. The staging pipeline never downloads unpinned or `latest` inputs.
+pins the Node.js runtime version and each coding sidecar's immutable upstream commit, raw protocol
+schema, archive, executable-tree, license, redistribution, and subscription-auth evidence.
+`npm run portable:approve-runtimes -- --node-version <v> --opencode-version <v>` may regenerate
+mechanical archive inputs, but it cannot independently approve new OpenCode protocol provenance or
+Codex redistribution. Reviewing and merging the complete approval diff is the release approval act.
+The staging pipeline never downloads unpinned or `latest` inputs.
 
 Publishing remains a human decision. Secret-free `workflow_dispatch`, prerelease, development, and
 pull-request staging never selects `portable-release-signing`, requests Azure OIDC, or receives Apple
 secrets; those artifacts intentionally remain staging/non-production, do not emit the canonical
-`portable-release-assets` bundle, and cannot be promoted. Production
-signing is restricted to protected native-runner jobs triggered by a reviewed stable tag, with separate
-event, tag-shape, exact `v<package.json.version>`, digest, and signing-identity guards. Only their
-`verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler validates
-those outputs but cannot generate or upgrade signing-verification booleans. `release.yml` still requires
-an operator dispatch with `portable_assets_run_id` pointing at the resulting green `Portable assets`
-run.
+`portable-release-assets` bundle, and cannot be promoted. Production signing is restricted to
+protected native-runner jobs triggered by a reviewed stable tag, with separate event, tag-shape,
+exact `v<package.json.version>`, digest, and signing-identity guards. Only their
+`verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler
+validates those outputs but cannot generate or upgrade signing-verification booleans. `release.yml`
+still requires an operator dispatch with `portable_assets_run_id` pointing at the resulting green
+`Portable assets` run.
 
 ## Triggering
 

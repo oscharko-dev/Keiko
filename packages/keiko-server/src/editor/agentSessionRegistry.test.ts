@@ -442,6 +442,72 @@ describe("editor agent session registry", () => {
     scheduler.fireAll();
   });
 
+  it("cancels only the revoked runtime run, clears its timer, and rejects its late browser result", () => {
+    const scheduler = fakeScheduler();
+    const registry = createEditorAgentRegistry(scheduler);
+    const events: EditorAgentEvent[] = [];
+    registry.registerSnapshot(snapshot(), CAPABILITY_DIGEST);
+    registry.registerSnapshot(snapshot("session-2"), CAPABILITY_DIGEST);
+    registry.registerSnapshot(snapshot("session-3"), CAPABILITY_DIGEST);
+    registry.connect("session-1", (event) => events.push(event));
+    registry.connect("session-2", () => undefined);
+    registry.connect("session-3", () => undefined);
+    const runtimeAction = action({
+      type: "applyChangeset",
+      authorityRef: { runId: "runtime-run", envelopeDigest: HASH },
+      changeset: {
+        patch: "SENTINEL_RAW_PATCH",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      },
+    });
+    const otherRun = action({
+      actionId: "other-action",
+      idempotencyKey: "other-key",
+      sessionId: "session-2",
+      type: "applyChangeset",
+      authorityRef: { runId: "other-run", envelopeDigest: HASH },
+      changeset: {
+        patch: "OTHER_SENTINEL_PATCH",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      },
+    });
+    const localAction = action({
+      actionId: "local-action",
+      idempotencyKey: "local-key",
+      sessionId: "session-3",
+      type: "applyChangeset",
+      changeset: {
+        patch: "LOCAL_SENTINEL_PATCH",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      },
+    });
+    const localAuthorityRef = action({
+      actionId: "local-authority-action",
+      idempotencyKey: "local-authority-key",
+      sessionId: "session-3",
+      authorityRef: { runId: "runtime-run", envelopeDigest: HASH },
+    });
+    registry.queueAction(runtimeAction, runtimeAction, { runtimeOwned: true });
+    registry.queueAction(otherRun, otherRun);
+    registry.queueAction(localAction, localAction);
+    registry.queueAction(localAuthorityRef, localAuthorityRef);
+
+    expect(registry.cancelPendingByAuthorityRun("runtime-run")).toBe(1);
+    expect(registry.pendingCount("session-1")).toBe(0);
+    expect(scheduler.pending()).toBe(3);
+    expect(JSON.stringify(events.at(-1))).not.toContain("SENTINEL_RAW_PATCH");
+    expect(registry.takePendingAction("session-1", "action-1", CAPABILITY_DIGEST)).toBeUndefined();
+    expect(registry.takePendingAction("session-2", "other-action", CAPABILITY_DIGEST)).toEqual(
+      otherRun,
+    );
+    expect(registry.takePendingAction("session-3", "local-action", CAPABILITY_DIGEST)).toEqual(
+      localAction,
+    );
+    expect(
+      registry.takePendingAction("session-3", "local-authority-action", CAPABILITY_DIGEST),
+    ).toEqual(localAuthorityRef);
+  });
+
   it("correlates results per session: a cross-session result cannot clear another session's slot", () => {
     const scheduler = fakeScheduler();
     const registry = createEditorAgentRegistry(scheduler);
