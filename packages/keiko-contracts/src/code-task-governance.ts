@@ -282,7 +282,7 @@ function absentErrors(value: unknown, path: string): string[] {
   return isAbsent(value) ? [] : [`${path} must be an explicit { outcome: "absent" } fact`];
 }
 
-const GOVERNED_ACTION_KEYS = [
+const GOVERNED_ACTION_KEYS = new Set([
   "kind",
   "schemaVersion",
   "taskId",
@@ -293,14 +293,14 @@ const GOVERNED_ACTION_KEYS = [
   "decision",
   "grant",
   "question",
-];
+]);
 
 export function validateGovernedActionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<GovernedActionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["governed action must be an object"] };
   const errors = Object.keys(value)
-    .filter((key) => !GOVERNED_ACTION_KEYS.includes(key))
+    .filter((key) => !GOVERNED_ACTION_KEYS.has(key))
     .map((key) => `governedAction.${key} is not allowed`);
   errors.push(...envelopeErrors(value));
   if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
@@ -334,7 +334,7 @@ export interface CodeTaskExecutionV1 {
   readonly failure: CodeTaskFact<string>;
 }
 
-const CODE_TASK_EXECUTION_KEYS = [
+const CODE_TASK_EXECUTION_KEYS = new Set([
   "kind",
   "schemaVersion",
   "taskId",
@@ -350,7 +350,7 @@ const CODE_TASK_EXECUTION_KEYS = [
   "authorityEnvelopeDigest",
   "updatedAt",
   "failure",
-];
+]);
 
 function executionHeaderErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
@@ -410,11 +410,13 @@ export function validateCodeTaskExecutionV1(
 ): CodingWorkbenchValidationResult<CodeTaskExecutionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["code-task execution must be an object"] };
   const errors = Object.keys(value)
-    .filter((key) => !CODE_TASK_EXECUTION_KEYS.includes(key))
+    .filter((key) => !CODE_TASK_EXECUTION_KEYS.has(key))
     .map((key) => `codeTaskExecution.${key} is not allowed`);
-  errors.push(...executionHeaderErrors(value));
-  errors.push(...executionModeErrors(value));
-  errors.push(...executionFactErrors(value));
+  errors.push(
+    ...executionHeaderErrors(value),
+    ...executionModeErrors(value),
+    ...executionFactErrors(value),
+  );
   return errors.length === 0
     ? { ok: true, value: value as unknown as CodeTaskExecutionV1 }
     : { ok: false, errors };

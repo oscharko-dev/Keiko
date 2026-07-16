@@ -164,8 +164,10 @@ export function validateRunControlSnapshotV1(
   } else {
     errors.push("grantRefs must be an array");
   }
-  errors.push(...boundedStringFactErrors(value.recoveryRef, "recoveryRef"));
-  errors.push(...questionFactErrors(value.pendingQuestion));
+  errors.push(
+    ...boundedStringFactErrors(value.recoveryRef, "recoveryRef"),
+    ...questionFactErrors(value.pendingQuestion),
+  );
   return errors.length === 0
     ? { ok: true, value: value as unknown as RunControlSnapshotV1 }
     : { ok: false, errors };

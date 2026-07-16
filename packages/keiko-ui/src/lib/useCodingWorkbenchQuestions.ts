@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type MutableRefObject,
+  type RefObject,
   type SetStateAction,
 } from "react";
 import type {
@@ -69,11 +69,11 @@ const EMPTY_STATE: CodingWorkbenchQuestionsState = {
 
 interface QuestionContext {
   readonly runId: string;
-  readonly revisionRef: MutableRefObject<number>;
+  readonly revisionRef: RefObject<number>;
   readonly refreshSnapshot: () => Promise<void>;
-  readonly submissionRef: MutableRefObject<boolean>;
-  readonly abortRef: MutableRefObject<AbortController | null>;
-  readonly consumedRef: MutableRefObject<Set<string>>;
+  readonly submissionRef: RefObject<boolean>;
+  readonly abortRef: RefObject<AbortController | null>;
+  readonly consumedRef: RefObject<Set<string>>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchQuestionsState>>;
   readonly bumpEpoch: () => void;
 }
@@ -175,8 +175,8 @@ function isActive(
 }
 
 function cancelMutation(
-  abortRef: MutableRefObject<AbortController | null>,
-  submissionRef: MutableRefObject<boolean>,
+  abortRef: RefObject<AbortController | null>,
+  submissionRef: RefObject<boolean>,
 ): void {
   abortRef.current?.abort();
   abortRef.current = null;
@@ -188,9 +188,9 @@ interface ListingInput {
   readonly terminal: boolean;
   readonly epoch: number;
   readonly runId: string | undefined;
-  readonly revisionRef: MutableRefObject<number>;
+  readonly revisionRef: RefObject<number>;
   readonly refreshSnapshot: () => Promise<void>;
-  readonly consumedRef: MutableRefObject<Set<string>>;
+  readonly consumedRef: RefObject<Set<string>>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchQuestionsState>>;
 }
 
@@ -232,7 +232,7 @@ function useQuestionListing(input: ListingInput): void {
 
 function listedState(
   questions: readonly CodingWorkbenchRuntimeQuestionRequest[],
-  consumedRef: MutableRefObject<Set<string>>,
+  consumedRef: RefObject<Set<string>>,
 ): CodingWorkbenchQuestionsState {
   const upstream = new Set(questions.map(({ id }) => id));
   for (const id of consumedRef.current) if (!upstream.has(id)) consumedRef.current.delete(id);

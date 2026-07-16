@@ -124,7 +124,7 @@ export function createFollowUpMutation(
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
   // No hidden prompt queue: a drafted follow-up is only ever admitted against a paused run.
-  if (!runId || snapshot === null || snapshot.state !== "paused" || taskIntent.length === 0)
+  if (!runId || snapshot?.state !== "paused" || taskIntent.length === 0)
     throw codingWorkbenchRuntimeActionError(
       "A follow-up can only be sent while the run is paused.",
     );

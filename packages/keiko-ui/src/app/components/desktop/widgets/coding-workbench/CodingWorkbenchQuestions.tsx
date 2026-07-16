@@ -7,7 +7,7 @@ import {
   useState,
   type ChangeEvent,
   type Dispatch,
-  type FormEvent,
+  type SubmitEvent,
   type ReactNode,
   type RefObject,
   type SetStateAction,
@@ -128,7 +128,7 @@ function QuestionStatus({
       role={alert ? "alert" : "status"}
       aria-live={alert ? undefined : "polite"}
       aria-atomic="true"
-      data-tone={alert ? "danger" : status === "stale" ? "warning" : "neutral"}
+      data-tone={statusTone(alert, status)}
     >
       {status === "ready"
         ? t("codingWorkbench.questions.ready", { count })
@@ -162,7 +162,7 @@ function QuestionRequestForm({
     [customValues, request.questions, selections],
   );
   const valid = answers.every((answer) => answer.length > 0);
-  const submit = (event: FormEvent<HTMLFormElement>): void => {
+  const submit = (event: SubmitEvent<HTMLFormElement>): void => {
     event.preventDefault();
     setValidationVisible(!valid);
     if (valid && !busy) void onAnswer(request.id, answers);
@@ -295,13 +295,14 @@ function updateSelections(
   inputType: "checkbox" | "radio",
 ): string[][] {
   const previous = current[index] ?? [];
-  const next =
-    inputType === "radio"
-      ? [label]
-      : checked
-        ? [...previous, label]
-        : previous.filter((item) => item !== label);
+  if (inputType === "radio") return replaceAt(current, index, [label]);
+  const next = checked ? [...previous, label] : previous.filter((item) => item !== label);
   return replaceAt(current, index, next);
+}
+
+function statusTone(alert: boolean, status: CodingWorkbenchQuestionsStatus): string {
+  if (alert) return "danger";
+  return status === "stale" ? "warning" : "neutral";
 }
 
 function replaceAt<T>(current: readonly T[], index: number, value: T): T[] {
