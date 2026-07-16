@@ -73,19 +73,20 @@ If no provider is available, API responses use:
 
 1. Add a local project path.
 2. Select a configured chat model.
-3. For coding agents, select **Ask for approval**, **Approve for me**, or **Full access** and confirm
-   the bounded task and Authority Envelope.
+3. For coding agents, select **Ask for approval**, **Supervised workspace**, or **Full access** and
+   confirm the bounded task and Authority Envelope.
 4. Use chat for repository questions.
 5. Use workflows for generated tests, bug investigation, plan explanation, or verification.
 6. Review proposed diffs when policy requires approval; inspect directly applied agent changes in
    the Changes and recent-agent-actions surfaces before delivery.
 7. Review evidence before using it in delivery material.
 
-**Ask for approval** allows workspace-contained work and asks before external-file, internet, or
-delivery actions. **Approve for me** allows low/medium-risk file and internet work and asks before
-high/critical-risk work or delivery. **Full access** allows file and internet work inside the
-validated Authority Envelope without per-action approval. Delivery remains separately
-human-approved in all three modes, and hard denials always win.
+**Ask for approval** allows reads and planning and asks before workspace edits, commands,
+external-file, internet, or delivery actions. **Supervised workspace** allows routine
+workspace-contained edits, vetted commands, and verification and asks before high/critical-risk
+contained work and every external-file, internet, or delivery action. **Full access** allows file
+and internet work inside the validated Authority Envelope without per-action approval. Delivery
+remains separately human-approved in all three modes, and hard denials always win.
 
 Keiko selects only configured chat models that pass the gateway smoke test. Non-chat models are not offered for chat or workflow execution.
 

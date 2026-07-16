@@ -207,9 +207,16 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.applyChangeset).toBe("high");
   });
 
-  it("allows normal contained saves in every maintained mode", () => {
+  it("requires approval for a contained save in Ask for approval and allows it above (#2384)", () => {
     const baseline = classifyEditorAgentAction("save", ctx());
-    for (const mode of CODING_WORKBENCH_MODES) {
+    const governed = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("governed-assist"),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.save,
+    );
+    expect(governed.disposition).toBe("review-required");
+    expect(governed.reviewReason).toBe("mode-approval-required");
+    for (const mode of ["supervised-coding", "autonomous-delivery"] as const) {
       const decision = composeEditorAgentActionPolicyDecision(
         baseline,
         authority(mode),
@@ -220,19 +227,17 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     }
   });
 
-  it("requires approval for a high-risk contained changeset only in Approve for me", () => {
+  it("requires approval for a high-risk contained changeset below Full access", () => {
     const baseline = classifyEditorAgentAction("applyChangeset", ctx());
-    const decision = composeEditorAgentActionPolicyDecision(
-      baseline,
-      authority("supervised-coding"),
-      EDITOR_AGENT_ACTION_APPROVAL_RISK.applyChangeset,
-    );
-    expect(decision.disposition).toBe("review-required");
-    expect(decision.reviewReason).toBe("deterministic-risk-approval-required");
-    expect(
-      composeEditorAgentActionPolicyDecision(baseline, authority("governed-assist"), "high")
-        .disposition,
-    ).toBe("allowed");
+    for (const mode of ["governed-assist", "supervised-coding"] as const) {
+      const decision = composeEditorAgentActionPolicyDecision(
+        baseline,
+        authority(mode),
+        EDITOR_AGENT_ACTION_APPROVAL_RISK.applyChangeset,
+      );
+      expect(decision.disposition).toBe("review-required");
+      expect(decision.reviewReason).toBe("deterministic-risk-approval-required");
+    }
     expect(
       composeEditorAgentActionPolicyDecision(baseline, authority("autonomous-delivery"), "high")
         .disposition,

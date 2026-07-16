@@ -26,6 +26,7 @@ import {
   WorkbenchHeader,
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
+import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
 import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -144,9 +145,16 @@ function WorkbenchColumns({
   locked,
   onDecision,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
+  // The bootstrap Code setup (#2385) renders only while the runtime is confirmed available but no
+  // active task-workspace binding exists; once a binding lands it yields to the task-start flow.
+  const showSetup =
+    state.runtime.value?.runtimeAvailable === true && activeWorkspace.activeBinding === null;
   return (
     <div className={styles.grid}>
       <div className={styles.stack}>
+        {showSetup ? (
+          <CodingWorkbenchSetup refreshWorkspace={(root) => activeWorkspace.refresh(root)} />
+        ) : null}
         <TaskStartSection
           taskIntent={taskIntent}
           onTaskIntentChange={onTaskIntentChange}

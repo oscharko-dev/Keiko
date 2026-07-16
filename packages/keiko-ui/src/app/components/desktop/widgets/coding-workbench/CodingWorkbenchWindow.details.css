@@ -70,6 +70,34 @@
   opacity: var(--opacity-disabled);
 }
 
+.setupInput {
+  width: 100%;
+  min-height: var(--control-height);
+  margin-top: var(--space-2);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-4);
+  color: var(--input-text);
+  background: var(--input-surface);
+  font: inherit;
+  line-height: var(--leading-normal);
+}
+
+.setupInput:hover:not(:disabled) {
+  border-color: var(--input-border-hover);
+}
+
+.setupInput:focus-visible {
+  border-color: var(--input-border-focus);
+  outline: var(--focus-w) solid var(--input-ring-focus);
+  outline-offset: var(--space-1);
+}
+
+.setupInput:disabled {
+  color: var(--text-disabled);
+  opacity: var(--opacity-disabled);
+}
+
 .resourceCard {
   display: flex;
   flex-direction: column;

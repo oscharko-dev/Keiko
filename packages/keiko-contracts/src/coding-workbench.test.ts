@@ -194,12 +194,12 @@ describe("coding workbench autonomy policy", () => {
     expect(CODING_WORKBENCH_MODE_POLICIES["governed-assist"].display).toEqual({
       label: "Ask for approval",
       description:
-        "Workspace-contained edits, saves, and commands proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
+        "Reads and planning proceed; workspace edits, commands, external files, and internet use require approval. Delivery remains separately human-approved.",
     });
     expect(CODING_WORKBENCH_MODE_POLICIES["supervised-coding"].display).toEqual({
-      label: "Approve for me",
+      label: "Supervised workspace",
       description:
-        "Low- and medium-risk file and internet operations proceed; high- and critical-risk actions require approval. Delivery remains separately human-approved.",
+        "Routine low- and medium-risk workspace-contained edits, vetted commands, and verification proceed; risky, external-file, and internet actions require approval. Delivery remains separately human-approved.",
     });
     expect(CODING_WORKBENCH_MODE_POLICIES["autonomous-delivery"].display).toEqual({
       label: "Full access",
@@ -232,14 +232,24 @@ describe("coding workbench autonomy policy", () => {
   it("covers the full mode, resource, and risk matrix", () => {
     const expected = {
       "governed-assist": {
-        low: ["allowed", "approval-required", "approval-required", "approval-required"],
-        medium: ["allowed", "approval-required", "approval-required", "approval-required"],
-        high: ["allowed", "approval-required", "approval-required", "approval-required"],
-        critical: ["allowed", "approval-required", "approval-required", "approval-required"],
+        low: ["approval-required", "approval-required", "approval-required", "approval-required"],
+        medium: [
+          "approval-required",
+          "approval-required",
+          "approval-required",
+          "approval-required",
+        ],
+        high: ["approval-required", "approval-required", "approval-required", "approval-required"],
+        critical: [
+          "approval-required",
+          "approval-required",
+          "approval-required",
+          "approval-required",
+        ],
       },
       "supervised-coding": {
-        low: ["allowed", "allowed", "allowed", "approval-required"],
-        medium: ["allowed", "allowed", "allowed", "approval-required"],
+        low: ["allowed", "approval-required", "approval-required", "approval-required"],
+        medium: ["allowed", "approval-required", "approval-required", "approval-required"],
         high: ["approval-required", "approval-required", "approval-required", "approval-required"],
         critical: [
           "approval-required",
@@ -273,6 +283,26 @@ describe("coding workbench autonomy policy", () => {
       "denied",
     );
     expect(strictestCodingWorkbenchPolicyEffect("allowed")).toBe("allowed");
+  });
+
+  // Epic #2384: total monotonicity. Raising the mode must never make ANY (scope, risk) cell
+  // stricter — otherwise a lower mode would grant authority a higher mode withholds.
+  it("never gets stricter for any scope and risk as the mode rises (Epic #2384)", () => {
+    for (let index = 0; index < CODING_WORKBENCH_MODES.length - 1; index += 1) {
+      const lowerMode = CODING_WORKBENCH_MODES[index];
+      const higherMode = CODING_WORKBENCH_MODES[index + 1];
+      if (lowerMode === undefined || higherMode === undefined) throw new Error("mode pair missing");
+      for (const scope of CODING_WORKBENCH_POLICY_RESOURCE_SCOPES) {
+        for (const risk of CODING_WORKBENCH_APPROVAL_RISKS) {
+          const lowerEffect = codingWorkbenchPolicyEffectFor(lowerMode, scope, risk);
+          const higherEffect = codingWorkbenchPolicyEffectFor(higherMode, scope, risk);
+          expect(
+            strictestCodingWorkbenchPolicyEffect(lowerEffect, higherEffect),
+            `${lowerMode} -> ${higherMode} × ${scope} × ${risk}`,
+          ).toBe(lowerEffect);
+        }
+      }
+    }
   });
 });
 
@@ -472,6 +502,17 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
     expect(resolveEffectiveCodingWorkbenchMode("autonomous-delivery", "wide-open")).toBe(
       "governed-assist",
     );
+  });
+
+  it("fails closed to governed-assist for malformed non-string values", () => {
+    for (const malformed of [undefined, null, 2, {}, ["autonomous-delivery"], true]) {
+      expect(resolveEffectiveCodingWorkbenchMode(malformed, "supervised-coding")).toBe(
+        "governed-assist",
+      );
+      expect(resolveEffectiveCodingWorkbenchMode("autonomous-delivery", malformed)).toBe(
+        "governed-assist",
+      );
+    }
   });
 });
 

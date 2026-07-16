@@ -178,7 +178,7 @@ export const CODING_WORKBENCH_POLICY_RESOURCE_SCOPES: readonly CodingWorkbenchPo
   Object.freeze(["workspace-contained", "external-file", "internet", "delivery"] as const);
 
 export interface CodingWorkbenchModeDisplay {
-  readonly label: "Ask for approval" | "Approve for me" | "Full access";
+  readonly label: "Ask for approval" | "Supervised workspace" | "Full access";
   readonly description: string;
 }
 
@@ -296,14 +296,14 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
     display: {
       label: "Ask for approval",
       description:
-        "Workspace-contained edits, saves, and commands proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
+        "Reads and planning proceed; workspace edits, commands, external files, and internet use require approval. Delivery remains separately human-approved.",
     },
     effects: {
       "workspace-contained": {
-        low: "allowed",
-        medium: "allowed",
-        high: "allowed",
-        critical: "allowed",
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
       },
       "external-file": {
         low: "approval-required",
@@ -331,9 +331,9 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
     allowsCommandExecution: true,
     allowsDeliverySubstrate: true,
     display: {
-      label: "Approve for me",
+      label: "Supervised workspace",
       description:
-        "Low- and medium-risk file and internet operations proceed; high- and critical-risk actions require approval. Delivery remains separately human-approved.",
+        "Routine low- and medium-risk workspace-contained edits, vetted commands, and verification proceed; risky, external-file, and internet actions require approval. Delivery remains separately human-approved.",
     },
     effects: {
       "workspace-contained": {
@@ -343,14 +343,14 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
         critical: "approval-required",
       },
       "external-file": {
-        low: "allowed",
-        medium: "allowed",
+        low: "approval-required",
+        medium: "approval-required",
         high: "approval-required",
         critical: "approval-required",
       },
       internet: {
-        low: "allowed",
-        medium: "allowed",
+        low: "approval-required",
+        medium: "approval-required",
         high: "approval-required",
         critical: "approval-required",
       },

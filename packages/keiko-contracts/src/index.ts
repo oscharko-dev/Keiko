@@ -885,6 +885,41 @@ export {
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-validation.js";
+export type {
+  CodeTaskAcceptanceBinding,
+  CodeTaskAcceptanceContributionV1,
+  CodeTaskAcceptanceScenarioV1,
+  CodeTaskBranded,
+  CodeTaskCleanupResultV1,
+  CodeTaskEvidenceClass,
+  CodeTaskEvidencePlatform,
+  CodeTaskFact,
+  CodeTaskGitCommitSha,
+  CodeTaskGitTreeSha,
+  CodeTaskIsoInstant,
+  CodeTaskSalvageDisposition,
+  CodeTaskSalvageRowV1,
+  CodeTaskScenarioId,
+  CodeTaskScenarioOutcome,
+  CodeTaskSha256Digest,
+} from "./code-task-acceptance.js";
+export {
+  CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
+  CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
+  CODE_TASK_EVIDENCE_CLASSES,
+  CODE_TASK_EVIDENCE_PLATFORMS,
+  CODE_TASK_SALVAGE_DISPOSITIONS,
+  CODE_TASK_SCENARIO_OUTCOMES,
+  codeTaskAcceptanceQualificationFailures,
+  isCodeTaskContentFreeNote,
+  isCodeTaskGitCommitSha,
+  isCodeTaskGitTreeSha,
+  isCodeTaskIsoInstant,
+  isCodeTaskRepoRelativePath,
+  isCodeTaskScenarioId,
+  isCodeTaskSha256Digest,
+  validateCodeTaskAcceptanceContribution,
+} from "./code-task-acceptance.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded

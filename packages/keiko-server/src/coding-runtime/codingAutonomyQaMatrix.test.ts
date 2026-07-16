@@ -194,7 +194,7 @@ describe("coding autonomy closeout QA matrix", () => {
 
     expect(
       codingWorkbenchPolicyEffectFor("governed-assist", "workspace-contained", "critical"),
-    ).toBe("allowed");
+    ).toBe("approval-required");
     expect(codingWorkbenchPolicyEffectFor("governed-assist", "external-file", "low")).toBe(
       "approval-required",
     );
@@ -202,7 +202,7 @@ describe("coding autonomy closeout QA matrix", () => {
       "approval-required",
     );
     expect(codingWorkbenchPolicyEffectFor("supervised-coding", "external-file", "medium")).toBe(
-      "allowed",
+      "approval-required",
     );
     expect(codingWorkbenchPolicyEffectFor("supervised-coding", "internet", "high")).toBe(
       "approval-required",

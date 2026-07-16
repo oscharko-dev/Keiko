@@ -82,6 +82,7 @@
   .setupPanel,
   .setupPlan,
   .taskInput,
+  .setupInput,
   .alert {
     border-color: CanvasText;
     color: CanvasText;

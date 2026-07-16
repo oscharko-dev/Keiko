@@ -24,6 +24,77 @@ const USER_FACING_STRING_RETURN_PATTERN =
   /\breturn\s+(?:"[^"]*\s[A-Za-z][^"]*"|'[^']*\s[A-Za-z][^']*'|`[^`]*\s[A-Za-z][^`]*`)/u;
 const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+'|`[^`]+`)/u;
 
+const FEATURE_CATALOG_EN_PATTERN = /-i18n\.en\.ts$/u;
+const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
+
+export function changedFeatureCatalogPairs(changedFileSet) {
+  const pairs = [];
+  for (const file of changedFileSet) {
+    if (!file.startsWith("packages/keiko-ui/src/") || !FEATURE_CATALOG_EN_PATTERN.test(file)) {
+      continue;
+    }
+    const counterpart = file.replace(FEATURE_CATALOG_EN_PATTERN, "-i18n.de.ts");
+    if (changedFileSet.has(counterpart)) pairs.push([file, counterpart]);
+  }
+  return pairs.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+export function unpairedFeatureCatalogs(changedFileSet) {
+  const unpaired = [];
+  for (const file of changedFileSet) {
+    if (!file.startsWith("packages/keiko-ui/src/")) continue;
+    if (FEATURE_CATALOG_EN_PATTERN.test(file)) {
+      const de = file.replace(FEATURE_CATALOG_EN_PATTERN, "-i18n.de.ts");
+      if (!changedFileSet.has(de)) unpaired.push(file);
+    } else if (FEATURE_CATALOG_DE_PATTERN.test(file)) {
+      const en = file.replace(FEATURE_CATALOG_DE_PATTERN, "-i18n.en.ts");
+      if (!changedFileSet.has(en)) unpaired.push(file);
+    }
+  }
+  return unpaired.sort((a, b) => a.localeCompare(b));
+}
+
+// Feature-scoped catalog pairs (e.g. the dynamically loaded Coding Workbench boundary from
+// #2257) satisfy the catalog-update requirement exactly like the shared catalogs, as long as
+// the English and German halves change together.
+function catalogUpdateProblems(changedFileSet) {
+  const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
+  const sharedCatalogsTouched = changedFileSet.has(EN_CATALOG) && changedFileSet.has(DE_CATALOG);
+  const problems = [];
+  if (sharedCatalogsTouched || featureCatalogPairs.length > 0) {
+    return { problems, featureCatalogPairs };
+  }
+  for (const catalog of [EN_CATALOG, DE_CATALOG]) {
+    if (!changedFileSet.has(catalog)) {
+      problems.push(
+        `UI source changed, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
+      );
+    }
+  }
+  for (const file of unpairedFeatureCatalogs(changedFileSet)) {
+    problems.push(
+      `Feature i18n catalog ${file} changed without its language counterpart. Update the English and German halves together.`,
+    );
+  }
+  return { problems, featureCatalogPairs };
+}
+
+function featureCatalogParityProblems(repoRoot, featureCatalogPairs) {
+  const problems = [];
+  for (const [enFile, deFile] of featureCatalogPairs) {
+    const pairMismatches = symmetricDifference(
+      extractCatalogKeys(readText(repoRoot, enFile)),
+      extractCatalogKeys(readText(repoRoot, deFile)),
+    );
+    if (pairMismatches.length > 0) {
+      problems.push(
+        `Feature i18n catalogs ${enFile} and ${deFile} must expose the same keys. Mismatched keys: ${pairMismatches.join(", ")}.`,
+      );
+    }
+  }
+  return problems;
+}
+
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -408,13 +479,8 @@ export function checkUiI18nGuard({
     };
   }
 
-  for (const catalog of [EN_CATALOG, DE_CATALOG]) {
-    if (!changedFileSet.has(catalog)) {
-      problems.push(
-        `UI source changed, but ${catalog} was not updated. Add English and German catalog entries for UI-facing text.`,
-      );
-    }
-  }
+  const catalogRequirement = catalogUpdateProblems(changedFileSet);
+  problems.push(...catalogRequirement.problems);
 
   const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);
 
@@ -433,6 +499,8 @@ export function checkUiI18nGuard({
       `English and German i18n catalogs must expose the same keys. Mismatched keys: ${keyMismatches.join(", ")}.`,
     );
   }
+
+  problems.push(...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs));
 
   return {
     ok: problems.length === 0,

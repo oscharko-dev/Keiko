@@ -15,8 +15,10 @@ Status: user and operator guide for Epic
 The connector's authority, credential, egress, sync-bounds, evidence, and permissions decisions are
 fixed by [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md). This guide
 restates that record for operators; where the two differ, the ADR is authoritative. Autonomy-mode
-language follows [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md): the three
-user-facing modes are **Ask for approval**, **Approve for me**, and **Full access**.
+language follows [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md), as
+amended by
+[ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md):
+the three user-facing modes are **Ask for approval**, **Supervised workspace**, and **Full access**.
 
 ## What the connector does
 
@@ -190,38 +192,39 @@ JQL.
 
 A live read is bounded: at most 100 results per call, a 15-second budget, and a fixed page ceiling.
 Because it is a Jira read, its disposition follows the read row of the mode matrix below: it is
-`review-required` in **Ask for approval** (the query is parked for approval, then executed on
-approve) and `allowed` in **Approve for me** and **Full access** when the Authority Envelope carries
-the `issue-tracker.read` scope. The raw JQL is never stored in evidence; only a SHA-256 digest of
+`review-required` in **Ask for approval** and **Supervised workspace** (the query is parked for
+approval, then executed on approve) and `allowed` in **Full access** when the Authority Envelope
+carries the `issue-tracker.read` scope. The raw JQL is never stored in evidence; only a SHA-256 digest of
 the query may be recorded for correlation (ADR-0128 D6).
 
 ## 6. How write actions behave in each mode
 
 Every governed connector operation maps to exactly one action class, one connector scope, one risk
-tier, and one disposition per mode. This is the normative mapping from ADR-0128 D4, restated:
+tier, and one disposition per mode. This is the normative mapping from ADR-0128 D4, as narrowed by
+[ADR-0138](../adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md),
+restated:
 
-| Action                | Provider   | Connector scope        | Risk   | Ask for approval | Approve for me  | Full access |
-| --------------------- | ---------- | ---------------------- | ------ | ---------------- | --------------- | ----------- |
-| `sync-space`          | Confluence | `knowledge-base.read`  | low    | review-required  | allowed         | allowed     |
-| `sync-project`        | Jira       | `issue-tracker.read`   | low    | review-required  | allowed         | allowed     |
-| `search-issues-live`  | Jira       | `issue-tracker.read`   | low    | review-required  | allowed         | allowed     |
-| `create-issue`        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required | allowed     |
-| `update-issue-fields` | Jira       | `issue-tracker.write`  | medium | review-required  | allowed         | allowed     |
-| `transition-issue`    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required | allowed     |
-| `add-issue-comment`   | Jira       | `issue-tracker.write`  | low    | review-required  | allowed         | allowed     |
-| `create-page`         | Confluence | `knowledge-base.write` | high   | review-required  | review-required | allowed     |
-| `update-page`         | Confluence | `knowledge-base.write` | medium | review-required  | allowed         | allowed     |
-| `add-page-comment`    | Confluence | `knowledge-base.write` | low    | review-required  | allowed         | allowed     |
+| Action                | Provider   | Connector scope        | Risk   | Ask for approval | Supervised workspace | Full access |
+| --------------------- | ---------- | ---------------------- | ------ | ---------------- | -------------------- | ----------- |
+| `sync-space`          | Confluence | `knowledge-base.read`  | low    | review-required  | review-required      | allowed     |
+| `sync-project`        | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `search-issues-live`  | Jira       | `issue-tracker.read`   | low    | review-required  | review-required      | allowed     |
+| `create-issue`        | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `update-issue-fields` | Jira       | `issue-tracker.write`  | medium | review-required  | review-required      | allowed     |
+| `transition-issue`    | Jira       | `issue-tracker.write`  | high   | review-required  | review-required      | allowed     |
+| `add-issue-comment`   | Jira       | `issue-tracker.write`  | low    | review-required  | review-required      | allowed     |
+| `create-page`         | Confluence | `knowledge-base.write` | high   | review-required  | review-required      | allowed     |
+| `update-page`         | Confluence | `knowledge-base.write` | medium | review-required  | review-required      | allowed     |
+| `add-page-comment`    | Confluence | `knowledge-base.write` | low    | review-required  | review-required      | allowed     |
 
 How to read this per mode:
 
 - **Ask for approval** — every connector operation, read or write, is `review-required`. Even a
   sync or a live read parks for your approval before it runs. This mode never acts on the external
   site without an explicit per-action confirmation.
-- **Approve for me** — low- and medium-risk actions proceed without interruption: syncs, live
-  reads, comments, and bounded field/page edits. High-risk actions — creating an issue, creating a
-  page, transitioning an issue — still pause for review, because they create a new externally
-  visible artifact or change workflow state with side effects Keiko does not control.
+- **Supervised workspace** — every connector operation is also `review-required`: connector calls
+  are internet effects, and under ADR-0138 the middle mode keeps unattended work inside the task
+  workspace. Anything that reaches the external site parks for your approval first.
 - **Full access** — every row is `allowed` **provided the required connector scope is present in
   the Authority Envelope**. Full access removes per-action approval; it does not remove the scope
   requirement.
