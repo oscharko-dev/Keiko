@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 
 import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
 import { hashDirectoryTree, PORTABLE_TARGET_NAMES, sha256File } from "./portable-runtime.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -195,6 +196,10 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
+function runResolvedHostExecutable(cmd, args, options = {}) {
+  return run(resolveHostExecutable(cmd), args, options);
+}
+
 function assertSafeSingleExecutableEntry(entries, executableName) {
   if (entries.length !== 1 || entries[0] !== executableName) {
     fail(`approved archive must contain exactly one entry named ${executableName}`);
@@ -205,7 +210,7 @@ export function extractApprovedExecutable(
   archivePath,
   executableName,
   destination,
-  archiveAdapter = createPortableZipAdapter(process.platform, run),
+  archiveAdapter = createPortableZipAdapter(process.platform, runResolvedHostExecutable),
 ) {
   assertSafeSingleExecutableEntry(archiveAdapter.list(archivePath), executableName);
   const extractRoot = mkdtempSync(join(tmpdir(), "keiko-sidecar-extract-"));
