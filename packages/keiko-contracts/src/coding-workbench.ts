@@ -111,7 +111,8 @@ export const CODING_WORKBENCH_RUNTIME_HEALTH_STATES: readonly CodingWorkbenchRun
     "stopped",
   ] as const satisfies readonly CodingWorkbenchRuntimeHealth[]);
 
-export type CodingWorkbenchObservationChannel = "status" | "tool" | "verification" | "permission";
+export type CodingWorkbenchObservationChannel =
+  "status" | "tool" | "verification" | "permission" | "question";
 
 export const CODING_WORKBENCH_OBSERVATION_CHANNELS: readonly CodingWorkbenchObservationChannel[] =
   Object.freeze([
@@ -119,6 +120,7 @@ export const CODING_WORKBENCH_OBSERVATION_CHANNELS: readonly CodingWorkbenchObse
     "tool",
     "verification",
     "permission",
+    "question",
   ] as const satisfies readonly CodingWorkbenchObservationChannel[]);
 
 export type CodingWorkbenchPermissionRequestKind =

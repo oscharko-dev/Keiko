@@ -25,7 +25,7 @@ function snapshot(): RunControlSnapshotV1 {
   };
 }
 
-function decideRequest(): RuntimeGovernanceRequestV1 {
+function decideRequest(): Extract<RuntimeGovernanceRequestV1, { operation: "decide" }> {
   return {
     operation: "decide",
     taskId: "task-1" as RuntimeGovernanceRequestV1["taskId"],

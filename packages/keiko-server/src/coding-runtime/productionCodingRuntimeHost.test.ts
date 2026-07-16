@@ -14,6 +14,8 @@ function qualifiedRuntime(): QualifiedProductionCodingRuntime {
         failureCode: "runtime-stopped",
         retryable: false,
       }),
+      pause: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+      resume: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
       stop: () => Promise.resolve({ ok: true, status: "stopped" }),
       takeover: () => Promise.resolve({ ok: true, status: "stopped" }),
       reconcile: () => Promise.resolve({ ok: true, status: "stopped" }),

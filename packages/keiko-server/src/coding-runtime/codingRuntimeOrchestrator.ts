@@ -88,6 +88,7 @@ export class CodingRuntimeOrchestrator {
       serial: <T>(work: () => Promise<T>): Promise<T> => this.serial(work),
       advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
         this.advanceRevision(current, eventKind),
+      publicSnapshot: (current): PublicSnapshot => this.projection.publicSnapshot(current),
       taskDispatcher: deps.taskDispatcher,
       questionPort: deps.questionPort,
       manager: deps.manager,

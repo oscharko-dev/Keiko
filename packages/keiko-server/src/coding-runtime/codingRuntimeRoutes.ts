@@ -6,6 +6,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,6 +21,7 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
+import { decideCodingRuntimeModeChange } from "./codingRuntimeModeChangeGate.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -179,13 +181,36 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
-      effectiveMode: resolveEffectiveCodingWorkbenchMode(
-        parsed.value.requestedMode,
-        deploymentCeiling,
-      ),
+      effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       runtimeAvailable: deps.codingRuntimeHostQualified === true,
     },
   };
+}
+
+/**
+ * The server-confirmed effective mode is anchored to the live run (#2386): a requested change is
+ * confirmed only when the mode-change gate admits it — while the run is idle or paused, and
+ * widening only from idle. A rejected request keeps confirming the run's own effective posture,
+ * so the browser can never display a widened authority the server did not grant.
+ */
+function confirmedEffectiveMode(
+  deps: UiHandlerDeps,
+  requestedMode: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode,
+): CodingWorkbenchMode {
+  const current = deps.codingRuntimeOrchestrator?.status();
+  if (current?.runId === undefined || current.requestedMode === undefined) {
+    return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
+  }
+  const decision = decideCodingRuntimeModeChange({
+    currentState: current.state,
+    currentRequestedMode: current.requestedMode,
+    requestedMode,
+    deploymentCeiling,
+  });
+  return decision.ok
+    ? decision.effectiveMode
+    : resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

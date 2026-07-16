@@ -231,6 +231,8 @@ describe("coding runtime routes", () => {
       runtime({
         autonomousDeliveryDeploymentCeiling: "supervised-coding",
         codingRuntimeHostQualified: true,
+        // No live run: the effective mode is the plain ceiling clamp.
+        codingRuntimeOrchestrator: undefined,
       }),
     );
 
@@ -248,6 +250,35 @@ describe("coding runtime routes", () => {
     for (const forbidden of ["workspace", "authority", "endpoint", "credential", "path"]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  // #2386 regression: the server-confirmed effective mode is anchored to the LIVE run through the
+  // mode-change gate. Requesting a wider mode while a supervised run is live must keep confirming
+  // the run's own posture; narrowing is confirmed only from the paused (or idle) state.
+  it("anchors the confirmed effective mode to the live run through the mode-change gate", () => {
+    const liveStatus = (state: "running" | "paused"): unknown => ({
+      ...snapshot,
+      state,
+      requestedMode: "supervised-coding",
+    });
+    const readiness = (state: "running" | "paused", requestedMode: string): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, `/api/coding-workbench/runtime/readiness?requestedMode=${requestedMode}`),
+        runtime({
+          autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+          codingRuntimeHostQualified: true,
+          codingRuntimeOrchestrator: { status: () => liveStatus(state) },
+        }),
+      );
+      return (result.body as { effectiveMode?: string }).effectiveMode;
+    };
+
+    // Widening past the live run is never confirmed — not even while paused.
+    expect(readiness("paused", "autonomous-delivery")).toBe("supervised-coding");
+    expect(readiness("running", "autonomous-delivery")).toBe("supervised-coding");
+    // Any change while running is deferred to the run's posture; narrowing is confirmed from paused.
+    expect(readiness("running", "governed-assist")).toBe("supervised-coding");
+    expect(readiness("paused", "governed-assist")).toBe("governed-assist");
   });
 
   it("keeps readiness independently available when the runtime is absent and rejects malformed modes", () => {

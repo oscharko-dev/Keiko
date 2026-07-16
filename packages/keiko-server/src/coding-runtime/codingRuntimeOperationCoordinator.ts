@@ -21,6 +21,9 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
     eventKind?: CodingWorkbenchRuntimeEvent["kind"],
   ) => CodingRuntimeOrchestratorResult;
+  readonly publicSnapshot: (
+    current: CodingRuntimeSnapshot,
+  ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
@@ -95,10 +98,9 @@ export class CodingRuntimeOperationCoordinator {
         return failure("authority-resolution-failed");
       }
       operation.reservation.commit();
-      const advanced = this.deps.advanceRevision(operation.current);
-      return advanced.ok
-        ? { ok: true, snapshot: advanced.snapshot, questions }
-        : failure(advanced.failureCode);
+      // Listing is a read: the revision must NOT advance, or any background question refresh
+      // would race concurrent operator actions (pause/answer/follow-up) into revision conflicts.
+      return { ok: true, snapshot: this.deps.publicSnapshot(operation.current), questions };
     });
   }
 

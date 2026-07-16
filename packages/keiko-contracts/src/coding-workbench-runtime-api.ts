@@ -2,6 +2,7 @@ import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
+  isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchMode,
@@ -287,13 +288,19 @@ export function validateCodingWorkbenchRuntimeReadiness(
   for (const field of ["requestedMode", "deploymentCeiling", "effectiveMode"] as const) {
     if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
   }
+  // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
+  // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
+  // clamp is the fail-closed contract boundary.
   if (
     isOneOf(value.requestedMode, CODING_WORKBENCH_MODES) &&
     isOneOf(value.deploymentCeiling, CODING_WORKBENCH_MODES) &&
-    value.effectiveMode !==
-      resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling)
+    isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) &&
+    isCodingWorkbenchModeWidening(
+      resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling),
+      value.effectiveMode,
+    )
   ) {
-    errors.push("effectiveMode does not match requestedMode and deploymentCeiling");
+    errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
   }
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
