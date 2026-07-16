@@ -1,4 +1,14 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -549,7 +559,10 @@ describe("desktop files browser", () => {
 
   it("rejects saving when the file changed after the editor loaded it", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
-    await writeFile(join(root, "src", "app.ts"), 'export const value = "other";\n', "utf8");
+    const filePath = join(root, "src", "app.ts");
+    await writeFile(filePath, 'export const value = "other";\n', "utf8");
+    const changedAt = new Date(initial.modifiedAt + 10_000);
+    await utimes(filePath, changedAt, changedAt);
 
     await expect(
       writeFilesContent({

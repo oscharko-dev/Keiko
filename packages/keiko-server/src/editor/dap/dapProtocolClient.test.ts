@@ -57,20 +57,20 @@ describe("dapProtocolClient", () => {
     expect(stopped).toHaveLength(1);
   });
 
-  it("reserves four of 32 request slots for controls", () => {
+  it("reserves four of 32 request slots for controls", async () => {
     const source = new PassThrough({ objectMode: true });
     const client = createDapProtocolClient({ source, sendFrame: vi.fn() });
     const inspections = Array.from({ length: 28 }, () =>
       client.request("variables", {}, { lane: "inspection", deadlineMs: 10_000 }),
     );
     expect(client.pendingCount()).toBe(28);
-    void expect(
+    await expect(
       client.request("variables", {}, { lane: "inspection", deadlineMs: 10_000 }),
     ).rejects.toMatchObject({ code: "REQUEST_LIMIT" });
     const control = client.request("disconnect", {}, { lane: "control", deadlineMs: 10_000 });
     expect(client.pendingCount()).toBe(29);
     client.dispose();
-    void Promise.allSettled([...inspections, control]);
+    await Promise.allSettled([...inspections, control]);
   });
 
   it("routes the typed control helper through the reserved control lane", async () => {
