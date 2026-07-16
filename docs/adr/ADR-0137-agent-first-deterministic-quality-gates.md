@@ -8,15 +8,15 @@ Accepted (2026-07-16).
 
 - [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) — keeps the bounded
   delivery envelope, direct-check merge authority, and advisory classification, and re-partitions
-  *which* verifications run inside the pull-request critical path.
+  _which_ verifications run inside the pull-request critical path.
 - [ADR-0042](ADR-0042-editor-architecture.md) D3.6 performance budgets stay authoritative and
-  unchanged; this record only moves *where* wall-clock budgets are enforced.
+  unchanged; this record only moves _where_ wall-clock budgets are enforced.
 
 ## Context
 
 Keiko is delivered predominantly by autonomous coding agents inside human-validated authority
 envelopes (ADR-0129, ADR-0135). The Foundation-wave integration (PR #2463) produced hard evidence
-that the gate *cost model* — not the gate *strictness* — was misfitted to that delivery mode:
+that the gate _cost model_ — not the gate _strictness_ — was misfitted to that delivery mode:
 
 1. **Whole-tree evidence binding.** The committed D12 performance comparison bound its
    `sourceTreeSha256` to effectively every tracked path (`packages/`, `scripts/`, `tests/`,
@@ -118,12 +118,22 @@ with D2 in place the evidence source-tree binding remains valid across queue int
 the queued merge does not alter measured surfaces, and the scheduled refresh (D3) corrects the
 residual drift.
 
+### D8 — The scanner-log gate exempts one benign SCM-metadata warning class
+
+`check-sonar-analysis-log.mjs` fails closed on any scanner `WARN`/`ERROR`, with one precisely
+scoped exception: `File '<path>' was detected as changed but without having changed lines`. This
+warning is SCM metadata — SonarCloud's git blame attributed zero changed lines to a file that is
+still in the changed-file set, which is routine when pull-request analysis runs against the GitHub
+merge ref. It carries no rule, coverage, or rating signal, and the SonarCloud quality gate keeps
+enforcing all of those independently. The exemption matches only that exact wording, so every other
+warning — including any real SCM failure such as a missing revision — still fails the gate.
+
 ## Invariants that do not change
 
 Performance budgets, coverage ratchet floors and per-file floors, architecture and trust-boundary
 rules, evidence redaction, signed commits, fail-closed behaviour on invalid authority or tampered
 evidence, the advisory (non-required) status of unbounded analyses, and the ADR-0135 delivery
-envelope all remain exactly as governed. This record moves *where* and *how often* verifications
+envelope all remain exactly as governed. This record moves _where_ and _how often_ verifications
 execute; it does not lower any threshold.
 
 ## Consequences
