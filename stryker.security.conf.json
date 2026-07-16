@@ -25,6 +25,7 @@
     "packages/keiko-server/src/editor/lsp/lspFrameCodec.test.ts",
     "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts",
     "packages/keiko-contracts/src/coding-workbench*.test.ts",
+    "packages/keiko-contracts/src/code-task-governance*.test.ts",
     "packages/keiko-contracts/src/debug/**/*.test.ts",
     "scripts/__tests__/keiko-for-quality-core.test.mjs",
     "scripts/__tests__/keiko-for-quality-worker.test.mjs"
@@ -70,7 +71,8 @@
     "packages/keiko-memory-vault/src/migrate-encrypt.ts",
     "scripts/keiko-for-quality-core.mjs",
     "scripts/keiko-for-quality-worker.mjs",
-    "packages/keiko-contracts/src/coding-workbench.ts"
+    "packages/keiko-contracts/src/coding-workbench.ts",
+    "packages/keiko-contracts/src/code-task-governance.ts"
   ],
   "reporters": ["html", "json", "clear-text", "progress"],
   "htmlReporter": {

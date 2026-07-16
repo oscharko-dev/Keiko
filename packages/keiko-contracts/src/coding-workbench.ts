@@ -619,6 +619,26 @@ export function resolveEffectiveCodingWorkbenchMode(
     : ceiling;
 }
 
+/**
+ * Total order over the three authority postures: negative when `left` grants strictly less
+ * authority than `right`, zero when equal, positive when more. The single source of truth for
+ * "widening" decisions on the server so Code cannot fork the ordering locally.
+ */
+export function compareCodingWorkbenchModeAuthority(
+  left: CodingWorkbenchMode,
+  right: CodingWorkbenchMode,
+): number {
+  return CODING_WORKBENCH_MODE_ORDER[left] - CODING_WORKBENCH_MODE_ORDER[right];
+}
+
+/** True when moving from `from` to `to` grants strictly more authority (a widening change). */
+export function isCodingWorkbenchModeWidening(
+  from: CodingWorkbenchMode,
+  to: CodingWorkbenchMode,
+): boolean {
+  return compareCodingWorkbenchModeAuthority(to, from) > 0;
+}
+
 export function codingWorkbenchPolicyEffectFor(
   mode: CodingWorkbenchMode,
   resourceScope: CodingWorkbenchPolicyResourceScope,
