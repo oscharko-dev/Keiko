@@ -37,4 +37,12 @@ if [[ "$invalid_status" -ne 1 ]]; then
   exit 1
 fi
 
+# Secure workspace read helper: warnings-as-errors compile with its release flag set,
+# Clang static analyzer, and the executable protocol/boundary harness.
+secure_read="$root/native/secure-workspace-read/secure_workspace_read.c"
+secure_read_flags=(-std=c11 -Wall -Wextra -Werror -O2 -D_DARWIN_C_SOURCE)
+clang "${secure_read_flags[@]}" "$secure_read" -o "$scratch/secure-workspace-read"
+clang --analyze "${secure_read_flags[@]}" "$secure_read" -o /dev/null
+node "$root/native/secure-workspace-read/test-protocol.mjs"
+
 echo "macos-native-quality: PASS - compiler, analyzer, and boundary checks completed."

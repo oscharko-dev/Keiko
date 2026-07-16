@@ -30,6 +30,35 @@ try {
   & $launcherTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows launcher behavior verification failed" }
 
+  $c11Flags = @(
+    "/nologo", "/std:c11", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0",
+    "/DUNICODE", "/D_UNICODE", "/D_CRT_SECURE_NO_WARNINGS"
+  )
+
+  $secureRead = Join-Path $root "native/secure-workspace-read/secure_workspace_read.c"
+  $secureReadOut = Join-Path $scratch "secure-workspace-read.exe"
+  $secureReadObject = Join-Path $scratch "secure-workspace-read.obj"
+  & cl.exe @c11Flags "/Fo:$secureReadObject" "/Fe:$secureReadOut" $secureRead /link ntdll.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC secure-workspace-read quality analysis failed" }
+
+  $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
+  $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
+  $supervisorObject = Join-Path $scratch "keiko-runtime-supervisor.obj"
+  & cl.exe @c11Flags "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor
+  if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
+
+  $fixture = Join-Path $root "native/runtime-supervisor/windows/qualification_fixture.c"
+  $fixtureOut = Join-Path $scratch "qualification-fixture.exe"
+  $fixtureObject = Join-Path $scratch "qualification-fixture.obj"
+  & cl.exe @c11Flags "/Fo:$fixtureObject" "/Fe:$fixtureOut" $fixture
+  if ($LASTEXITCODE -ne 0) { throw "MSVC qualification-fixture quality analysis failed" }
+
+  node (Join-Path $root "native/secure-workspace-read/test-protocol.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read boundary qualification failed" }
+
+  node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "runtime-supervisor Job Object qualification failed" }
+
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"
   $intermediate = Join-Path $scratch "obj/"
   $output = Join-Path $scratch "bin/"

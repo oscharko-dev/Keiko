@@ -36,6 +36,7 @@ const CURRENT_VERSION = rootPackage.version;
 const TARGET_VERSION = nextPatchVersion(CURRENT_VERSION);
 const RELEASE_TAG = `v${TARGET_VERSION}`;
 const RELEASE_ID = 9_940_204_100;
+const REVIEWED_NODE_VERSION = "24.18.0";
 const FIXED_NOW = "2026-07-08T00:00:00.000Z";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const HOST = "127.0.0.1";
@@ -948,7 +949,7 @@ function portableManifestArtifact(input) {
 
 function portableManifestRuntime(target) {
   return {
-    nodeVersion: "24.18.0",
+    nodeVersion: REVIEWED_NODE_VERSION,
     nodePlatform: targetByName(target).nodePlatform,
     nodeArchitecture: targetByName(target).nodeArchitecture,
     nodeDistribution: "official-nodejs-dist",
@@ -989,7 +990,7 @@ function reviewedBinding(input, security, provenance) {
     assetSizeBytes: input.archive.size,
     platformTarget: input.target,
     packageVersion: input.targetVersion,
-    nodeRuntimeIdentity: `node-v22.23.1-${target.runtimeTarget}`,
+    nodeRuntimeIdentity: `node-v${REVIEWED_NODE_VERSION}-${target.runtimeTarget}`,
     archiveSha256: input.archiveSha,
     provenanceStatementSha256: provenance.provenanceStatementSha256,
     sbomPath: "evidence/sbom.cdx.json",

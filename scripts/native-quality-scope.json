@@ -18,6 +18,24 @@
       "language": "csharp",
       "platforms": ["windows"],
       "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
+    },
+    {
+      "path": "native/secure-workspace-read/secure_workspace_read.c",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "secure-read-boundary"]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/keiko_runtime_supervisor.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "job-object-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/qualification_fixture.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "job-object-behavior"]
     }
   ]
 }
