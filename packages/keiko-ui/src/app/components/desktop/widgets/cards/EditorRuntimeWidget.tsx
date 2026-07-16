@@ -2241,6 +2241,60 @@ function EditorRuntimeWidget({
   useEffect(() => {
     dispatchExternalChange({ type: "dirtyChanged", dirty });
   }, [dirty]);
+  const resolveLocalWriteOrigin = useCallback(
+    async (
+      localWrite: RecentLocalWrite | null,
+      event: EditorM7WatchEvent,
+      generation: WorkspaceWatchReconciliationGeneration,
+      contentAtStart: string,
+    ): Promise<"abort" | { readonly originatedByKeiko: boolean }> => {
+      if (localWrite === null) return { originatedByKeiko: false };
+      if (Date.now() > localWrite.expiresAt) {
+        recentLocalWriteRef.current = null;
+        return { originatedByKeiko: false };
+      }
+      if (!localWriteTargetsEvent(localWrite, event, generation.sessionKey)) {
+        return { originatedByKeiko: false };
+      }
+      const expectedMetadata = eventMatchesSavedMetadata(event, localWrite.expectedVersion);
+      if (localWrite.externalChangeObserved && expectedMetadata) {
+        // A genuine external event already surfaced while this marker was pending. A later event
+        // carrying the exact saved metadata is the delayed self notification. It is a no-op: a
+        // self-originated reducer transition would clear the genuine warning that is already
+        // visible, violating ADR-0133 D3.
+        recentLocalWriteRef.current = null;
+        return "abort";
+      }
+      if (!expectedMetadata || root === undefined) {
+        // A path/time match is provenance only. Different metadata is a real external change and
+        // cannot consume the saved-version marker.
+        recentLocalWriteRef.current = { ...localWrite, externalChangeObserved: true };
+        return { originatedByKeiko: false };
+      }
+      let originatedByKeiko = false;
+      try {
+        const current = await fetchFilesContent(root, localWrite.path);
+        originatedByKeiko =
+          current.session.version.sizeBytes === localWrite.expectedVersion.sizeBytes &&
+          current.session.version.modifiedAt === localWrite.expectedVersion.modifiedAt &&
+          current.session.version.contentHash === localWrite.expectedVersion.contentHash;
+      } catch {
+        originatedByKeiko = false;
+      }
+      if (
+        workspaceWatchGenerationRef.current !== generation ||
+        contentRef.current !== contentAtStart ||
+        recentLocalWriteRef.current !== localWrite
+      ) {
+        return "abort";
+      }
+      recentLocalWriteRef.current = originatedByKeiko
+        ? null
+        : { ...localWrite, externalChangeObserved: true };
+      return { originatedByKeiko };
+    },
+    [root],
+  );
   const reconcileWorkspaceWatchEvent = useCallback(
     async (event: EditorM7WatchEvent): Promise<void> => {
       const generation = workspaceWatchGenerationRef.current;
@@ -2256,58 +2310,23 @@ function EditorRuntimeWidget({
         setOutlineSymbols([]);
       }
       const localWrite = recentLocalWriteRef.current;
-      let originatedByKeiko = false;
-      if (
-        localWrite !== null &&
-        Date.now() <= localWrite.expiresAt &&
-        localWriteTargetsEvent(localWrite, event, generation.sessionKey)
-      ) {
-        const expectedMetadata = eventMatchesSavedMetadata(event, localWrite.expectedVersion);
-        if (localWrite.externalChangeObserved && expectedMetadata) {
-          // A genuine external event already surfaced while this marker was pending. A later event
-          // carrying the exact saved metadata is the delayed self notification. It is a no-op: a
-          // self-originated reducer transition would clear the genuine warning that is already
-          // visible, violating ADR-0133 D3.
-          recentLocalWriteRef.current = null;
-          return;
-        } else if (expectedMetadata && root !== undefined) {
-          try {
-            const current = await fetchFilesContent(root, localWrite.path);
-            originatedByKeiko =
-              current.session.version.sizeBytes === localWrite.expectedVersion.sizeBytes &&
-              current.session.version.modifiedAt === localWrite.expectedVersion.modifiedAt &&
-              current.session.version.contentHash === localWrite.expectedVersion.contentHash;
-          } catch {
-            originatedByKeiko = false;
-          }
-          if (
-            workspaceWatchGenerationRef.current !== generation ||
-            contentRef.current !== contentAtStart ||
-            recentLocalWriteRef.current !== localWrite
-          ) {
-            return;
-          }
-          recentLocalWriteRef.current = originatedByKeiko
-            ? null
-            : { ...localWrite, externalChangeObserved: true };
-        } else {
-          // A path/time match is provenance only. Different metadata is a real external change and
-          // cannot consume the saved-version marker.
-          recentLocalWriteRef.current = { ...localWrite, externalChangeObserved: true };
-        }
-      } else if (localWrite !== null && Date.now() > localWrite.expiresAt) {
-        recentLocalWriteRef.current = null;
-      }
+      const originResult = await resolveLocalWriteOrigin(
+        localWrite,
+        event,
+        generation,
+        contentAtStart,
+      );
+      if (originResult === "abort") return;
       dispatchExternalChange({
         type: "observed",
         event,
         activePath: file,
         dirty: dirtyRef.current,
         saving: savingRef.current,
-        originatedByKeiko,
+        originatedByKeiko: originResult.originatedByKeiko,
       });
     },
-    [diagnosticsProducerId, file, root],
+    [diagnosticsProducerId, file, resolveLocalWriteOrigin, root],
   );
   const handleWorkspaceWatchEvent = useCallback(
     (event: EditorM7WatchEvent): void => {

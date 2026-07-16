@@ -488,10 +488,9 @@ export function synchronizeDebugSequence(
   if (resyncToken !== undefined) {
     const latest = state.latestStreamResync;
     if (
-      latest === null ||
-      latest.token !== resyncToken ||
-      latest.sequence !== sequence ||
-      latest.generation !== generation ||
+      latest?.token !== resyncToken ||
+      latest?.sequence !== sequence ||
+      latest?.generation !== generation ||
       state.streamGeneration !== generation
     ) {
       return false;
@@ -514,10 +513,9 @@ export function abandonDebugStreamResync(
   const state = stateFor(workspaceId);
   const latest = state.latestStreamResync;
   if (
-    latest === null ||
-    latest.token !== resyncToken ||
-    latest.sequence !== sequence ||
-    latest.generation !== generation
+    latest?.token !== resyncToken ||
+    latest?.sequence !== sequence ||
+    latest?.generation !== generation
   ) {
     return false;
   }
@@ -533,10 +531,9 @@ export function exhaustDebugStreamResync(
   const state = stateFor(workspaceId);
   const latest = state.latestStreamResync;
   if (
-    latest === null ||
-    latest.generation !== generation ||
-    latest.sequence !== sequence ||
-    latest.status !== "failed"
+    latest?.generation !== generation ||
+    latest?.sequence !== sequence ||
+    latest?.status !== "failed"
   ) {
     return false;
   }

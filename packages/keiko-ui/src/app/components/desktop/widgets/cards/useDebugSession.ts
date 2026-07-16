@@ -774,14 +774,13 @@ function parseStack(value: unknown): DebugStackPage | null {
   const omittedCount = numberValue(value.omittedCount);
   const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : undefined;
   if (value.nextCursor !== undefined && nextCursor === undefined) return null;
-  return omittedCount === null
-    ? null
-    : {
-        frames: value.frames,
-        truncated: value.truncated,
-        omittedCount,
-        ...(nextCursor === undefined ? {} : { nextCursor }),
-      };
+  if (omittedCount === null) return null;
+  return {
+    frames: value.frames,
+    truncated: value.truncated,
+    omittedCount,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  };
 }
 
 function appendStackPage(current: DebugStackSnapshot, page: DebugStackPage): DebugStackSnapshot {
@@ -932,7 +931,7 @@ async function runTrackedAbortable<T>(
 function abortOwnedRequests(workspaceId: string, owner: Set<AbortController>): void {
   const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId);
   if (workspaceRequests === undefined) return;
-  for (const request of [...workspaceRequests]) {
+  for (const request of workspaceRequests) {
     if (request.owner !== owner) continue;
     request.controller.abort();
     removeTrackedRequest(workspaceId, request);
@@ -942,7 +941,7 @@ function abortOwnedRequests(workspaceId: string, owner: Set<AbortController>): v
 function abortTrackedRequestsOutsideFence(workspaceId: string, currentFence: symbol): void {
   const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId);
   if (workspaceRequests === undefined) return;
-  for (const request of [...workspaceRequests]) {
+  for (const request of workspaceRequests) {
     if (request.lifecycleFence === currentFence) continue;
     request.controller.abort();
     removeTrackedRequest(workspaceId, request);
@@ -951,7 +950,7 @@ function abortTrackedRequestsOutsideFence(workspaceId: string, currentFence: sym
 
 function abortAllTrackedRequests(): void {
   for (const [workspaceId, requests] of trackedRequestsByWorkspace) {
-    for (const request of [...requests]) {
+    for (const request of requests) {
       request.controller.abort();
       removeTrackedRequest(workspaceId, request);
     }

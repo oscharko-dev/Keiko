@@ -140,7 +140,6 @@ import type {
   ManagedLspControlRequest,
   ManagedLspControlResponse,
   ManagedLspControlSuccessResult,
-  ManagedLspLanguage,
   ManagedLspSemanticTokenResponse,
   EditorM7SettingsMutation,
   EditorM7SettingsMutationOk,

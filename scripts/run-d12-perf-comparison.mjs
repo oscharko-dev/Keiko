@@ -119,8 +119,9 @@ function parseArgument(options, argv, index) {
 
 function parseArguments(argv) {
   const options = { selfCheck: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    index = parseArgument(options, argv, index);
+  let index = 0;
+  while (index < argv.length) {
+    index = parseArgument(options, argv, index) + 1;
   }
   for (const name of [
     "baseline-root",
@@ -241,9 +242,11 @@ function generatedOutputPaths(root) {
   if (!existsSync(packagesRoot)) return paths;
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    paths.push(join(packagesRoot, entry.name, ".next"));
-    paths.push(join(packagesRoot, entry.name, "dist"));
-    paths.push(join(packagesRoot, entry.name, "out"));
+    paths.push(
+      join(packagesRoot, entry.name, ".next"),
+      join(packagesRoot, entry.name, "dist"),
+      join(packagesRoot, entry.name, "out"),
+    );
   }
   return paths;
 }

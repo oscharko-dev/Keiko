@@ -92,11 +92,18 @@ function comparisonCommand(baseline, candidate, out) {
   return {
     args: [
       "scripts/run-d12-perf-comparison.mjs",
-      ...["--baseline-root", baseline, "--candidate-root", candidate],
-      ...["--baseline-bundle", join(out, "baseline-bundle.json")],
-      ...["--candidate-bundle", join(out, "candidate-bundle.json")],
-      ...["--artifacts-root", join(out, "d12-perf-runs")],
-      ...["--output", join(candidate, "docs/release/1209-perf-evidence.json")],
+      "--baseline-root",
+      baseline,
+      "--candidate-root",
+      candidate,
+      "--baseline-bundle",
+      join(out, "baseline-bundle.json"),
+      "--candidate-bundle",
+      join(out, "candidate-bundle.json"),
+      "--artifacts-root",
+      join(out, "d12-perf-runs"),
+      "--output",
+      join(candidate, "docs/release/1209-perf-evidence.json"),
     ],
     cwd: candidate,
   };

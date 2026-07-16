@@ -142,7 +142,7 @@ function sortPaths(paths) {
 
 export function selectPerformanceSubjectPaths(trackedPaths) {
   const normalized = trackedPaths.map((path) => normalizeTrackedPath(path));
-  if (normalized.some((path) => path === undefined)) {
+  if (normalized.includes(undefined)) {
     throw new Error("tracked performance subject contains an invalid repository-relative path");
   }
   return sortPaths(normalized.filter((path) => isPerformanceSubjectPath(path)));
@@ -1750,8 +1750,10 @@ function evaluateD12Measurement(measurement, expectedCommit, revision, label) {
   ) {
     failures.push(`${label}: measuredAtIso is not parseable`);
   }
-  failures.push(...evaluateD12Provenance(measurement.provenance, label));
-  failures.push(...evaluateD12MeasurementBinding(measurement, revision, label));
+  failures.push(
+    ...evaluateD12Provenance(measurement.provenance, label),
+    ...evaluateD12MeasurementBinding(measurement, revision, label),
+  );
   if (isPositiveInteger(measurement.perfRuns)) {
     failures.push(
       ...evaluateD12Metrics(measurement.metrics, measurement.perfRuns, revision, label),
@@ -1838,8 +1840,11 @@ function orderedD12Measurements(repetitions) {
 function evaluateD12ArtifactUniqueness(repetitions) {
   const digests = [];
   for (const repetition of repetitions) {
-    digests.push(repetition.baseline.artifactSha256, repetition.candidate.artifactSha256);
-    digests.push(repetition.candidate.metrics.capScenarios.artifactSha256);
+    digests.push(
+      repetition.baseline.artifactSha256,
+      repetition.candidate.artifactSha256,
+      repetition.candidate.metrics.capScenarios.artifactSha256,
+    );
   }
   return new Set(digests).size === digests.length
     ? []

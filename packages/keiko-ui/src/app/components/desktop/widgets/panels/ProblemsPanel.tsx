@@ -282,6 +282,11 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
     }
   };
 
+  const emptyStateContent =
+    verificationSourceHealth === "healthy" ? (
+      <p data-testid="problems-empty">{t("problems.empty")}</p>
+    ) : null;
+
   return (
     <section aria-label={t("problems.panelLabel")} style={PANEL_STYLE}>
       <div role="group" aria-label={t("problems.filterGroup")} style={FILTER_ROW_STYLE}>
@@ -301,9 +306,7 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
       </p>
       <VerificationSourceHealth health={verificationSourceHealth} t={t} />
       {allProblems.length === 0 ? (
-        verificationSourceHealth === "healthy" ? (
-          <p data-testid="problems-empty">{t("problems.empty")}</p>
-        ) : null
+        emptyStateContent
       ) : snapshot.problems.length === 0 ? (
         <p data-testid="problems-no-match">{t("problems.noMatch")}</p>
       ) : (

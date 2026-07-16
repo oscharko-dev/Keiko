@@ -600,7 +600,7 @@ function buildCommonMetrics(raw, revision, bytes, perfRuns, label) {
   };
 }
 
-function buildMeasurement(rawValue, capRawValue, run, revision, commit, bytes, warmUp, label) {
+function buildMeasurement(rawValue, capRawValue, run, revision, commit, { bytes, warmUp, label }) {
   const raw = object(rawValue, label);
   validateRunBinding(raw, run, revision, commit, label);
   const perfRuns = finiteSamples(raw.b4ColdStartMs?.samples, MIN_PERF_RUNS, `${label} B4`).length;
@@ -857,9 +857,11 @@ function buildRepetition(entry, index, context) {
       run,
       revision,
       context.commits[revision],
-      context.bytes[revision],
-      context.warmUp,
-      `repetition ${index + 1} ${revision}`,
+      {
+        bytes: context.bytes[revision],
+        warmUp: context.warmUp,
+        label: `repetition ${index + 1} ${revision}`,
+      },
     );
   }
   return { order: [...entry.order], ...measurements };

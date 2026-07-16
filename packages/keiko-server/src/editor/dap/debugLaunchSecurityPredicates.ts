@@ -1,5 +1,6 @@
 function isAsciiAlphaNumeric(character: string): boolean {
-  const code = character.charCodeAt(0);
+  const code = character.codePointAt(0);
+  if (code === undefined) return false;
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
@@ -11,7 +12,8 @@ function everyCharacter(value: string, predicate: (character: string) => boolean
 }
 
 function isLowercaseHex(character: string): boolean {
-  const code = character.charCodeAt(0);
+  const code = character.codePointAt(0);
+  if (code === undefined) return false;
   return (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
 }
 
