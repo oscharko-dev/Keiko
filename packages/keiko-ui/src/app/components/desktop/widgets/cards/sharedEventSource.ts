@@ -1,6 +1,7 @@
 "use client";
 
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import { secureRandomInt } from "../../../../../lib/secure-random";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -47,7 +48,7 @@ function reconnectDelay(entry: SharedEventSourceEntry): number {
     RECONNECT_INITIAL_DELAY_MS * 2 ** entry.reconnectAttempts,
   );
   entry.reconnectAttempts += 1;
-  return base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
+  return base + secureRandomInt(RECONNECT_JITTER_MS);
 }
 
 function recordLastEventId(

@@ -83,7 +83,7 @@ describe("validateCandidates", () => {
       baseCandidate({
         steps: [
           "Open login page",
-          "Open‎ login page", // U+200E LEFT-TO-RIGHT MARK injected — canonically identical after strip
+          ["Open", String.fromCodePoint(0x200e), " login page"].join(""),
           "Submit",
         ],
       }),

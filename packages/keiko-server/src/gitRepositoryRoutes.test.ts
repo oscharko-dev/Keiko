@@ -75,8 +75,9 @@ describe("git repository routes", () => {
   it("uses the shared hardened network git env for the clone spawn boundary", async () => {
     const destination = join(tmp, "app");
     const capturePath = join(tmp, "clone-env.json");
+    const trustedBin = mkdtempSync(join(tmpdir(), "keiko-repo-route-bin-"));
     writeNodeExecutableFixture(
-      tmp,
+      trustedBin,
       "git",
       [
         'const fs = require("node:fs");',
@@ -85,7 +86,7 @@ describe("git repository routes", () => {
         "process.exit(0);",
       ].join("\n"),
     );
-    vi.stubEnv("PATH", `${tmp}${delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("PATH", `${trustedBin}${delimiter}${process.env.PATH ?? ""}`);
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
     vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
@@ -114,6 +115,7 @@ describe("git repository routes", () => {
       expect(capture.env.GIT_CONFIG_GLOBAL).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
+      rmSync(trustedBin, { recursive: true, force: true });
     }
   });
 

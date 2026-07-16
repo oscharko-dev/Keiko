@@ -23,6 +23,7 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { computeD12MeasurementToolchainDigest } from "./d12-measurement-toolchain.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
@@ -151,7 +152,7 @@ export function selectPerformanceSubjectPaths(trackedPaths) {
 
 function listTrackedPaths(root) {
   return parseGitPathList(
-    execFileSync("git", ["ls-files", "--cached", "-z", "--"], {
+    execFileSync(resolveHostExecutable("git"), ["ls-files", "--cached", "-z", "--"], {
       cwd: root,
       encoding: "utf8",
     }),
@@ -181,16 +182,20 @@ export function computePerformanceSubjectDigest(options = {}) {
 
 function listTrackedPathsAtCommit(root, commit) {
   return parseGitPathList(
-    execFileSync("git", ["ls-tree", "-r", "--name-only", "-z", commit, "--"], {
-      cwd: root,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    }),
+    execFileSync(
+      resolveHostExecutable("git"),
+      ["ls-tree", "-r", "--name-only", "-z", commit, "--"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ),
   );
 }
 
 function readTrackedFileAtCommit(root, commit, path) {
-  return execFileSync("git", ["show", `${commit}:${path}`], {
+  return execFileSync(resolveHostExecutable("git"), ["show", `${commit}:${path}`], {
     cwd: root,
     encoding: null,
     maxBuffer: 64 * 1024 * 1024,
@@ -211,12 +216,16 @@ export function computePerformanceSubjectDigestAtCommit(options = {}) {
 }
 
 export function listDirtyPerformanceSubjectPaths(root = repoRoot) {
-  const trackedOutput = execFileSync("git", ["diff", "--name-only", "-z", "HEAD", "--"], {
-    cwd: root,
-    encoding: "utf8",
-  });
+  const trackedOutput = execFileSync(
+    resolveHostExecutable("git"),
+    ["diff", "--name-only", "-z", "HEAD", "--"],
+    {
+      cwd: root,
+      encoding: "utf8",
+    },
+  );
   const untrackedOutput = execFileSync(
-    "git",
+    resolveHostExecutable("git"),
     ["ls-files", "--others", "--exclude-standard", "-z", "--"],
     {
       cwd: root,
@@ -2530,7 +2539,7 @@ function evaluateD12FinalEvidenceEnvelope(evidence) {
 
 function defaultIsAncestor(sha) {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+    execFileSync(resolveHostExecutable("git"), ["merge-base", "--is-ancestor", sha, "HEAD"], {
       cwd: repoRoot,
       stdio: "ignore",
     });
@@ -2566,7 +2575,7 @@ function evaluateCurrentSourceTreeDigest(recordedDigest, computeSourceTreeSha256
 
 function defaultComputeMeasurementHarnessSha256() {
   return computeD12MeasurementToolchainDigest((path) =>
-    execFileSync("git", ["show", `HEAD:${path}`], {
+    execFileSync(resolveHostExecutable("git"), ["show", `HEAD:${path}`], {
       cwd: repoRoot,
       encoding: null,
       maxBuffer: 64 * 1024 * 1024,

@@ -87,7 +87,6 @@ describe("subscribeSharedEventSource", () => {
 
   it("preserves the highest event id across an owned reconnect", () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.stubGlobal("EventSource", FakeEventSource);
     const unsubscribe = subscribeSharedEventSource(
       "/api/editor/debug/events?workspaceId=workspace-1",
@@ -102,7 +101,7 @@ describe("subscribeSharedEventSource", () => {
       listener(new MessageEvent("editor-debug:output", { data: "{}", lastEventId: "7" }));
     }
     first.onerror?.();
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_500);
 
     expect(FakeEventSource.instances[1]?.url).toBe(
       "/api/editor/debug/events?workspaceId=workspace-1&lastEventId=7",
@@ -113,7 +112,6 @@ describe("subscribeSharedEventSource", () => {
 
   it("resets a stale resume cursor to a snapshot-required event id", () => {
     vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.stubGlobal("EventSource", FakeEventSource);
     const unsubscribe = subscribeSharedEventSource(
       "/api/editor/debug/events?workspaceId=workspace-1",
@@ -127,7 +125,7 @@ describe("subscribeSharedEventSource", () => {
       listener(new MessageEvent("editor-debug:output", { data: "{}", lastEventId: "7" }));
     }
     first.onerror?.();
-    vi.advanceTimersByTime(1_000);
+    vi.advanceTimersByTime(1_500);
     const second = FakeEventSource.instances[1];
     const required = second?.listeners.get("editor-debug:snapshot-required");
     if (second === undefined || required === undefined) throw new Error("Expected resumed stream.");
@@ -137,7 +135,7 @@ describe("subscribeSharedEventSource", () => {
       );
     }
     second.onerror?.();
-    vi.advanceTimersByTime(2_000);
+    vi.advanceTimersByTime(2_500);
 
     expect(FakeEventSource.instances[2]?.url).toBe(
       "/api/editor/debug/events?workspaceId=workspace-1&lastEventId=2",

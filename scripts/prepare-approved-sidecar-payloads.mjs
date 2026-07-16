@@ -20,6 +20,7 @@ import {
   loadPortableRuntimeApprovals,
 } from "./portable-runtime-approvals.mjs";
 import { hashDirectoryTree, PORTABLE_TARGET_NAMES, sha256File } from "./portable-runtime.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -109,9 +110,13 @@ function run(cmd, args, options = {}) {
 }
 
 function listZipEntries(archivePath) {
-  const probe = spawnSync("unzip", ["-Z1", archivePath], { encoding: "utf8" });
+  const probe = spawnSync(resolveHostExecutable("unzip"), ["-Z1", archivePath], {
+    encoding: "utf8",
+  });
   const output =
-    probe.error === undefined && probe.status === 0 ? probe : run("tar", ["-tf", archivePath], {});
+    probe.error === undefined && probe.status === 0
+      ? probe
+      : run(resolveHostExecutable("tar"), ["-tf", archivePath], {});
   return output.stdout
     .split(/\r?\n/u)
     .map((entry) => entry.trim())
@@ -119,9 +124,11 @@ function listZipEntries(archivePath) {
 }
 
 function extractZip(archivePath, extractRoot) {
-  const probe = spawnSync("unzip", ["-q", archivePath, "-d", extractRoot], { encoding: "utf8" });
+  const probe = spawnSync(resolveHostExecutable("unzip"), ["-q", archivePath, "-d", extractRoot], {
+    encoding: "utf8",
+  });
   if (probe.error === undefined && probe.status === 0) return;
-  run("tar", ["-xf", archivePath, "-C", extractRoot], {});
+  run(resolveHostExecutable("tar"), ["-xf", archivePath, "-C", extractRoot], {});
 }
 
 function assertSafeSingleExecutableEntry(entries, executableName) {

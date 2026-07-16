@@ -38,10 +38,10 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Build internal packages
         run: npm run build:packages
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: node node_modules/playwright/cli.js install --with-deps chromium
       - name: Run ${{ matrix.suite }}
         run: npm run ${{ matrix.suite }}

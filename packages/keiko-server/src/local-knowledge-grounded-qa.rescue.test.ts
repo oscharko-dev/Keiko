@@ -525,7 +525,7 @@ describe("redactText fallback — non-string redactor output strips unsafe chars
     });
 
     // The bidi char that must be stripped by the fallback.
-    const RLO = "‮"; // RIGHT-TO-LEFT OVERRIDE — unsafe format char
+    const RLO = String.fromCodePoint(0x202e); // RIGHT-TO-LEFT OVERRIDE — unsafe format char
     const questionWithBidi = `What is${RLO}alpha?`;
 
     // Model returns the canonical no-evidence sentence so persistGroundedExchange is called.

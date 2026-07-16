@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
@@ -177,7 +178,7 @@ function changedLinesFromPatch(patch) {
 function gitChangedLinesForFile(repoRoot, file, env = process.env) {
   for (const range of diffRangesFromEnv(env)) {
     const result = spawnSync(
-      "git",
+      resolveHostExecutable("git"),
       ["diff", "--unified=0", "--diff-filter=ACMRT", range, "--", file],
       {
         cwd: repoRoot,
@@ -245,11 +246,15 @@ function isSafeGitRef(value) {
 }
 
 function diffNameOnly(repoRoot, range) {
-  const result = spawnSync("git", ["diff", "--name-only", "--diff-filter=ACMRT", range, "--"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const result = spawnSync(
+    resolveHostExecutable("git"),
+    ["diff", "--name-only", "--diff-filter=ACMRT", range, "--"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
 
   if (result.status !== 0) {
     return {
