@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { assertD12BundleMeasurementFingerprint } from "./build-d12-bundle-input.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
   canonicalD12ArtifactBytes,
   computeD12RawInputSha256,
@@ -57,24 +58,35 @@ function parseNullSeparated(value) {
 export function listExactDirtyPerformanceSubjectPaths(root) {
   const tracked = listDirtyPerformanceSubjectPaths(root);
   const untracked = parseNullSeparated(
-    execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z", "--"], {
-      cwd: root,
-      encoding: "utf8",
-    }),
+    execFileSync(
+      resolveHostExecutable("git"),
+      ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    ),
   ).filter((path) => isPerformanceSubjectPath(path));
   return [...new Set([...tracked, ...untracked])].sort();
 }
 
 function checkoutHead(root) {
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
 }
 
 export function commitIsAncestor(root, ancestor, descendant) {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
-      cwd: root,
-      stdio: "ignore",
-    });
+    execFileSync(
+      resolveHostExecutable("git"),
+      ["merge-base", "--is-ancestor", ancestor, descendant],
+      {
+        cwd: root,
+        stdio: "ignore",
+      },
+    );
     return true;
   } catch {
     return false;
@@ -1263,7 +1275,7 @@ function computeCheckoutDigests(roots, listDirtyPaths, computeDigest) {
 
 function computeCommittedMeasurementHarnessSha256(root, commit) {
   return computeD12MeasurementToolchainDigest((path) =>
-    execFileSync("git", ["show", `${commit}:${path}`], {
+    execFileSync(resolveHostExecutable("git"), ["show", `${commit}:${path}`], {
       cwd: root,
       encoding: null,
       maxBuffer: 64 * 1024 * 1024,

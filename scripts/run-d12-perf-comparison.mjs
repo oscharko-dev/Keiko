@@ -28,6 +28,7 @@ import {
   selectD12MeasurementToolchainPaths,
 } from "./d12-measurement-toolchain.mjs";
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const BASELINE_COMMIT = "bbda3c43c39fabe6c743b8be5d144abccd866397";
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
@@ -59,7 +60,7 @@ function parseNullSeparated(value) {
 
 function gitPathList(root, args) {
   return parseNullSeparated(
-    execFileSync("git", args, {
+    execFileSync(resolveHostExecutable("git"), args, {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
@@ -82,7 +83,7 @@ function listDirtyD12MeasurementToolchainPaths(root) {
 }
 
 function readCommittedToolchainPath(root, path) {
-  return execFileSync("git", ["show", `HEAD:${path}`], {
+  return execFileSync(resolveHostExecutable("git"), ["show", `HEAD:${path}`], {
     cwd: root,
     encoding: null,
     maxBuffer: 64 * 1024 * 1024,
@@ -134,7 +135,10 @@ function parseArguments(argv) {
 }
 
 function checkoutHead(root) {
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
 }
 
 function validateCheckout(revision, root, head, dirtyPaths) {
@@ -218,7 +222,7 @@ function lockfileSha256(root) {
 }
 
 function defaultDependencyProvisioner(plan) {
-  const result = spawnSync(plan.command, plan.args, {
+  const result = spawnSync(resolveHostExecutable(plan.command), plan.args, {
     cwd: plan.root,
     env: createD12RuntimeEnvironment(),
     stdio: "inherit",
@@ -245,7 +249,7 @@ function generatedOutputPaths(root) {
 }
 
 function defaultCheckoutCleaner(plan) {
-  const result = spawnSync("npm", ["run", "clean"], {
+  const result = spawnSync(resolveHostExecutable("npm"), ["run", "clean"], {
     cwd: plan.root,
     env: createD12RuntimeEnvironment(),
     stdio: "inherit",

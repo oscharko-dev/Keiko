@@ -18,6 +18,7 @@ import {
   computeD12MeasurementToolchainDigest,
   D12_MEASUREMENT_TOOLCHAIN_PATHS,
 } from "./d12-measurement-toolchain.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
 
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
@@ -145,8 +146,15 @@ export function buildD12BundleInput({
   };
 }
 
+function hostExecFileSync(command, args, options) {
+  return execFileSync(resolveHostExecutable(command), args, options);
+}
+
 function checkoutCommit(root) {
-  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
 }
 
 function measurementHarnessSha256(root) {
@@ -158,7 +166,7 @@ function measurementHarnessSha256(root) {
 
 function listDirtyPaths(root) {
   return execFileSync(
-    "git",
+    resolveHostExecutable("git"),
     ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
     { cwd: root, encoding: "utf8" },
   )
@@ -167,7 +175,7 @@ function listDirtyPaths(root) {
     .map((line) => line.slice(3));
 }
 
-export function prepareProductionBundle(root, execute = execFileSync) {
+export function prepareProductionBundle(root, execute = hostExecFileSync) {
   const environment = createD12RuntimeEnvironment();
   execute("npm", ["ci", "--ignore-scripts"], {
     cwd: root,
@@ -179,7 +187,7 @@ export function prepareProductionBundle(root, execute = execFileSync) {
   }
 }
 
-function bundleRuntimeProvenance(execute = execFileSync) {
+function bundleRuntimeProvenance(execute = hostExecFileSync) {
   const environment = createD12RuntimeEnvironment();
   const npmVersion = execute("npm", ["--version"], {
     encoding: "utf8",
