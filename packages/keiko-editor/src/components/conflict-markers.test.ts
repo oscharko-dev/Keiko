@@ -77,4 +77,15 @@ describe("parseConflictMarkers", () => {
       }
     }
   });
+
+  it("keeps CRLF-vs-LF detection correct when a supplementary-plane character precedes the line ending", () => {
+    const text = "<<<<<<< ours\nours 😀\n=======\ntheirs\n>>>>>>> theirs\n";
+    const model = parseConflictMarkers(text);
+    expect(model).toMatchObject({ total: 1, truncated: false, malformed: false });
+    const [conflict] = model.conflicts;
+    expect(conflict).toBeDefined();
+    if (conflict === undefined) return;
+    expect(conflictReplacement(text, conflict, "ours")).toBe("ours 😀\n");
+    expect(conflictReplacement(text, conflict, "theirs")).toBe("theirs\n");
+  });
 });

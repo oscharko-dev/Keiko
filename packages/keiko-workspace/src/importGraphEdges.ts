@@ -96,7 +96,7 @@ function normalizeScopePath(scopePath: string): string {
 function lineNumberOf(text: string, charIndex: number): number {
   let line = 1;
   for (let i = 0; i < charIndex && i < text.length; i += 1) {
-    if (text.charCodeAt(i) === 10) line += 1;
+    if (text.codePointAt(i) === 10) line += 1;
   }
   return line;
 }

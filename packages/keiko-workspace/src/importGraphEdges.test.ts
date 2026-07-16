@@ -49,6 +49,16 @@ describe("collectImportSpecifiers", () => {
       ["dynamic-import", "./d", 4],
     ]);
   });
+
+  it("counts lines correctly when a supplementary-plane character precedes an import", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758). "😀" is 2 UTF-16
+    // code units; neither unit's code point ever equals the ASCII line-feed (10), so the line
+    // count for the import below is unaffected by the emoji on the preceding line.
+    const hits = collectImportSpecifiers(["// 😀 note", 'import { a } from "./a";'].join("\n"));
+    expect(hits.map((hit) => [hit.kind, hit.specifier, hit.line])).toEqual([
+      ["static-import", "./a", 2],
+    ]);
+  });
 });
 
 describe("buildImportGraph", () => {

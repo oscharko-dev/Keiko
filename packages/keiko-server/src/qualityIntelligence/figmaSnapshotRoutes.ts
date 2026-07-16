@@ -1204,7 +1204,7 @@ interface ParsedSnapshotMetadataPatch {
 
 function hasControlCharacter(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i) ?? 0;
     if (code <= 0x1f || code === 0x7f) return true;
   }
   return false;

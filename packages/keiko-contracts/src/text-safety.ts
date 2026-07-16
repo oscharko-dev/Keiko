@@ -159,7 +159,7 @@ function startsWithAsciiInsensitive(
 
 function hasAsciiWordBoundary(value: string, cursor: number, end: number): boolean {
   if (cursor >= end) return true;
-  const code = value.charCodeAt(cursor);
+  const code = value.codePointAt(cursor) ?? 0;
   return (
     !(code >= 48 && code <= 57) &&
     !(code >= 65 && code <= 90) &&

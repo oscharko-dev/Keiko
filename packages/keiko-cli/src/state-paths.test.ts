@@ -335,6 +335,29 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(retainedNames).toContain("keiko-ui.dbackup");
   });
 
+  it("retains a tool-result lookalike whose id contains a supplementary-plane character", () => {
+    // Regression for the S7758 codePointAt() rename in isSha256Hex(): the artifact id
+    // below is 62 ASCII hex chars plus one emoji ("\u{1F600}", a 2-UTF-16-code-unit
+    // supplementary-plane character), which is exactly 64 UTF-16 code units — the same
+    // length as a real sha256 hex digest — but is not valid hex. Both surrogate halves
+    // of the emoji must still fail the digit/lower-hex range check, so this must be
+    // retained as a customer file rather than misclassified as an owned tool-result
+    // artifact.
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
+    const lookalikeId = `${"a".repeat(62)}\u{1F600}`;
+    expect(lookalikeId.length).toBe(64);
+    const relPath = `evidence/tool-results/${lookalikeId}.tool-result.txt`;
+    touch(join(stateDir, "evidence", "tool-results", `${lookalikeId}.tool-result.txt`));
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, relPath)).toBeUndefined();
+    const retained = scan.retained.find((r) => r.relPath === relPath);
+    expect(retained).toBeDefined();
+    expect(retained?.owned).toBe(false);
+  });
+
   it("retains a customer file and never claims it as Keiko-owned", () => {
     const stateDir = seedRuntimeState(makeRoot());
     const scan = scanRuntimeState(stateDir);

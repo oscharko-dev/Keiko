@@ -52,6 +52,19 @@ describe("createNodeToolResultArtifactStore", () => {
     }).toThrow(/disallowed/);
   });
 
+  it("rejects an artifact id containing a supplementary-plane character", () => {
+    // "😀" (U+1F600) is a 2-code-unit surrogate pair in UTF-16, so this keeps artifactId.length at
+    // exactly 64 while the last two code units are the lone surrogate halves — neither of which is
+    // ASCII lower-hex. Regression guard for the charCodeAt -> codePointAt rename: both surrogate
+    // halves must still be rejected as disallowed characters, same as before the rename.
+    const store = createNodeToolResultArtifactStore(join(tempRoot(), ".keiko", "evidence"));
+    const artifactIdWithEmoji = `${"a".repeat(62)}😀`;
+    expect(artifactIdWithEmoji.length).toBe(64);
+    expect(() => {
+      store.read(artifactIdWithEmoji);
+    }).toThrow(/disallowed/);
+  });
+
   it("refuses a symlinked tool-results sub-store directory", () => {
     if (process.platform === "win32") return;
     const root = tempRoot();

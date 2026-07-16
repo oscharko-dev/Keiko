@@ -243,7 +243,9 @@ function isEvidenceRecord(name: string): boolean {
 function isSha256Hex(value: string): boolean {
   if (value.length !== 64) return false;
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+    // `i` is always a valid index (bounded by the loop condition above), so
+    // `codePointAt` always resolves to a code point here.
+    const code = value.codePointAt(i) ?? -1;
     const isDigit = code >= 48 && code <= 57;
     const isLowerHex = code >= 97 && code <= 102;
     if (!isDigit && !isLowerHex) return false;

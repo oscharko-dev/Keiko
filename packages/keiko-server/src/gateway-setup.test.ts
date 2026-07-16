@@ -1606,6 +1606,12 @@ describe("modelIdFromDiscoveryItem", () => {
     expect(modelIdFromDiscoveryItem("not-an-object")).toBeUndefined();
     expect(modelIdFromDiscoveryItem(null)).toBeUndefined();
   });
+
+  it("accepts a model id containing a supplementary-plane character (not a control character)", () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair; the disallowed-character scan must
+    // keep treating it as ordinary text (codes <= 31 or === 127), not reject it as unusable.
+    expect(modelIdFromDiscoveryItem({ id: "gpt-😀-mini" })).toBe("gpt-😀-mini");
+  });
 });
 
 describe("isExplicitlyNonChatModel", () => {

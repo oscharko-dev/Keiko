@@ -644,7 +644,7 @@ function apiKeyHeaders(apiKey: string, apiKeyHeaderName: string): Record<string,
 
 function hasDisallowedModelIdCharacter(id: string): boolean {
   for (let index = 0; index < id.length; index += 1) {
-    const code = id.charCodeAt(index);
+    const code = id.codePointAt(index) ?? 0;
     if (code <= 31 || code === 127) {
       return true;
     }

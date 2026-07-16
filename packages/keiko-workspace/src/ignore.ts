@@ -112,7 +112,7 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
 // inputs with many consecutive trailing slashes (CodeQL js/polynomial-redos).
 function stripTrailingSlashes(value: string): string {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) {
+  while (end > 0 && value.codePointAt(end - 1) === 47 /* "/" */) {
     end -= 1;
   }
   return value.slice(0, end);

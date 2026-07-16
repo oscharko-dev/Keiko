@@ -53,7 +53,9 @@ const stripControlCharacters = (value: string): { value: string; stripped: boole
   let out = "";
   let stripped = false;
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+    // `i` is always a valid position (bounded by the loop condition), so
+    // `codePointAt` always resolves to a code point here.
+    const code = value.codePointAt(i) ?? -1;
     if (isControlCodePoint(code)) {
       stripped = true;
       continue;

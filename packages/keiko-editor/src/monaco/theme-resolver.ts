@@ -159,7 +159,7 @@ function splitCssWhitespace(text: string): string[] {
   const parts: string[] = [];
   let partStart = -1;
   for (let i = 0; i < text.length; i += 1) {
-    if (cssWhitespace(text.charCodeAt(i))) {
+    if (cssWhitespace(text.codePointAt(i) ?? -1)) {
       if (partStart !== -1) {
         parts.push(text.slice(partStart, i));
         partStart = -1;

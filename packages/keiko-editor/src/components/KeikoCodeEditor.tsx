@@ -63,11 +63,11 @@ function EditorRuntimeErrorBox(props: { readonly message: string }): ReactElemen
   );
 }
 
-function countLines(text: string): number {
+export function countLines(text: string): number {
   if (text.length === 0) return 1;
   let lines = 1;
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) lines += 1;
+    if (text.codePointAt(index) === 10) lines += 1;
   }
   return lines;
 }

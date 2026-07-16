@@ -79,6 +79,12 @@ describe("prompt enhancer branded id constructors", () => {
     expect(asEnhancedPromptId("ep_42")).toBe("ep_42");
   });
 
+  it("accepts a supplementary-plane character without mistaking it for a control character", () => {
+    // A lone surrogate's code unit (and a real supplementary-plane code point) always falls well
+    // outside the C0/DEL/C1 control ranges the id validator checks, so an emoji must pass through.
+    expect(asPromptEnhancementRequestId("req-😀-1")).toBe("req-😀-1");
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace only", "   "],
@@ -89,6 +95,10 @@ describe("prompt enhancer branded id constructors", () => {
     ["control character", `a${String.fromCharCode(0)}b`],
     ["unsafe format character", `a${String.fromCharCode(0x202e)}b`],
     ["over length", "x".repeat(257)],
+    [
+      "a real control character after a supplementary-plane character",
+      `😀${String.fromCharCode(0)}`,
+    ],
   ])("rejects an id that is %s", (_label, value) => {
     expect(() => asPromptEnhancementRequestId(value)).toThrow(TypeError);
   });

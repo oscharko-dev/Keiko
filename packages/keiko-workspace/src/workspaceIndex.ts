@@ -631,7 +631,7 @@ function isRuntimeDirMarker(value: string): boolean {
     return false;
   }
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
     const isHyphen = [8, 13, 18, 23].includes(index) && code === 45;
     const isHex = (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
     if (!isHyphen && !isHex) {
@@ -1218,17 +1218,17 @@ const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE = 16;
 const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE = 512;
 
 function isAsciiUpper(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 65 && code <= 90;
 }
 
 function isAsciiLower(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 97 && code <= 122;
 }
 
 function isAsciiDigit(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 48 && code <= 57;
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -511,6 +512,23 @@ describe("workspaceIndex", () => {
       },
     });
     expect("fingerprint" in record).toBe(false);
+  });
+
+  it("tokenizes a supplementary-plane character in an identifier without corrupting it", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758) in isAsciiUpper /
+    // isAsciiLower / isAsciiDigit, which drive camelCase splitting. "𝐀" (U+1D400 MATHEMATICAL
+    // BOLD CAPITAL A) is a real \p{L} letter outside the BMP (2 UTF-16 code units), so it survives
+    // the lexical tokenizer's \p{L}\p{N} filter and reaches camelParts, unlike an emoji. Neither
+    // of its surrogate halves ever falls in the ASCII upper/lower/digit ranges, so it must not
+    // trigger a camelCase split and must not be dropped or corrupted in the resulting term.
+    const record = buildWorkspaceIndexLexicalRecord("get𝐀Alpha handled");
+    const expectedHashes = [
+      createHash("sha256").update("get𝐀alpha").digest("hex"),
+      createHash("sha256").update("handled").digest("hex"),
+    ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(record.truncated).toBe(false);
+    expect(record.lines).toEqual([{ startLine: 1, endLine: 1, termHashes: expectedHashes }]);
+    expect(record.termHashes).toEqual(expectedHashes);
   });
 
   it("reports directory freshness and changed-directory deltas from cached snapshots", async () => {

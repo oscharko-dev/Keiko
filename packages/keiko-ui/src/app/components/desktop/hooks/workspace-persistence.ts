@@ -220,7 +220,7 @@ function containsTraversalSegment(value: string): boolean {
 }
 
 function isAllowedReferenceChar(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   const isDigit = code >= 48 && code <= 57;
   const isUpper = code >= 65 && code <= 90;
   const isLower = code >= 97 && code <= 122;
@@ -242,7 +242,7 @@ function isSafeFigmaScreenId(value: string): boolean {
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH) return false;
   if (value.trim() !== value || isSecretShapedString(value)) return false;
   for (const char of value) {
-    const code = char.charCodeAt(0);
+    const code = char.codePointAt(0) ?? 0;
     const isDigit = code >= 48 && code <= 57;
     const isUpper = code >= 65 && code <= 90;
     const isLower = code >= 97 && code <= 122;

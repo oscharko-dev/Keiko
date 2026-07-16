@@ -346,6 +346,27 @@ describe("createNodeFigmaSnapshotStore", () => {
     ).toThrow(EvidenceWriteError);
   });
 
+  it("accepts a display name containing a supplementary-plane character", () => {
+    // "😀" (U+1F600) is a 2-code-unit UTF-16 surrogate pair. Regression guard for the
+    // charCodeAt -> codePointAt rename in hasControlCharacter: neither surrogate half is a
+    // C0/DEL control code, so an emoji must still be accepted (not misclassified as a control
+    // character), and the stored display name must round-trip byte-for-byte since JS string
+    // length/indexing is UTF-16-unit based regardless of which of the two APIs is used to read it.
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "Release 😀 baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release 😀 baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
   it("ignores malformed mutable management sidecars on read", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());

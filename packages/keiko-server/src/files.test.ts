@@ -910,6 +910,20 @@ describe("desktop files browser", () => {
     expect(await readFile(join(root, "bad.txt"))).toEqual(badBytes);
   });
 
+  it("treats a mostly-printable file containing a supplementary-plane character as editable text", async () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The printable-ratio scan iterates by
+    // Unicode code point and must not misclassify it as a non-printable control character (which
+    // would push the ratio below the 0.85 editable threshold and reject the file as binary).
+    const content = "Hello 😀 world, this is plain UTF-8 text with an emoji in it.\n";
+    await writeFile(join(root, "greeting"), content, "utf8");
+
+    const preview = await readFilesPreview(store, root, "greeting", buildRedactor({}));
+    expect(preview.kind).toBe("text");
+
+    const opened = await readFilesContent(store, root, "greeting");
+    expect(opened.content).toBe(content);
+  });
+
   it("caps large text previews", async () => {
     const content = `${"a".repeat(1_000_050)}tail`;
     await writeFile(join(root, "large.txt"), content);

@@ -83,6 +83,16 @@ describe("startsWithFormulaLead", () => {
   it("L1: returns false when whitespace is followed by a safe character", () => {
     expect(startsWithFormulaLead(" hello")).toBe(false);
   });
+
+  // Regression (S7758): the leading-whitespace scan reads code points via
+  // `codePointAt`, not UTF-16 code units via `charCodeAt`. A supplementary-plane
+  // character (e.g. an emoji, encoded as a 2-code-unit surrogate pair) must never
+  // be mistaken for whitespace, and the scan must correctly halt AT the emoji
+  // rather than skipping past it into the formula lead that follows.
+  it("L1: treats a supplementary-plane character (emoji) as non-whitespace, halting the scan before a later formula lead", () => {
+    expect(startsWithFormulaLead(" 😀=SUM")).toBe(false);
+    expect(encodeSpreadsheetSafeCell(" 😀=SUM")).toBe(" 😀=SUM");
+  });
 });
 
 // ---------------------------------------------------------------------------

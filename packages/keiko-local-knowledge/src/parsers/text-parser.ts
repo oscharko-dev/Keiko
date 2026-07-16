@@ -110,28 +110,28 @@ function isHSpace(code: number): boolean {
 
 function countHashes(line: string): number {
   let i = 0;
-  while (i < line.length && line.charCodeAt(i) === HASH && i < 6) i += 1;
+  while (i < line.length && line.codePointAt(i) === HASH && i < 6) i += 1;
   return i;
 }
 
 function skipHSpace(line: string, from: number): number {
   let i = from;
-  while (i < line.length && isHSpace(line.charCodeAt(i))) i += 1;
+  while (i < line.length && isHSpace(line.codePointAt(i) ?? 0)) i += 1;
   return i;
 }
 
 function trimAtxTrailing(line: string, start: number): number {
   let end = line.length;
-  while (end > start && isHSpace(line.charCodeAt(end - 1))) end -= 1;
-  while (end > start && line.charCodeAt(end - 1) === HASH) end -= 1;
-  while (end > start && isHSpace(line.charCodeAt(end - 1))) end -= 1;
+  while (end > start && isHSpace(line.codePointAt(end - 1) ?? 0)) end -= 1;
+  while (end > start && line.codePointAt(end - 1) === HASH) end -= 1;
+  while (end > start && isHSpace(line.codePointAt(end - 1) ?? 0)) end -= 1;
   return end;
 }
 
 function matchAtxHeading(line: string): { readonly level: number; readonly text: string } | null {
   const level = countHashes(line);
   if (level < 1 || level > 6) return null;
-  if (level >= line.length || !isHSpace(line.charCodeAt(level))) return null;
+  if (level >= line.length || !isHSpace(line.codePointAt(level) ?? 0)) return null;
   const textStart = skipHSpace(line, level + 1);
   const textEnd = trimAtxTrailing(line, textStart);
   if (textEnd <= textStart) return null;

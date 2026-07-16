@@ -552,13 +552,13 @@ async function loadPatchTargets(
 function positionOffset(text: string, position: LanguageRange["start"]): number | null {
   const starts = [0];
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) starts.push(index + 1);
+    if (text.codePointAt(index) === 10) starts.push(index + 1);
   }
   const start = starts[position.line];
   if (start === undefined) return null;
   const next = starts[position.line + 1];
   let end = next === undefined ? text.length : next - 1;
-  if (end > start && text.charCodeAt(end - 1) === 13) end -= 1;
+  if (end > start && text.codePointAt(end - 1) === 13) end -= 1;
   return position.character <= end - start ? start + position.character : null;
 }
 

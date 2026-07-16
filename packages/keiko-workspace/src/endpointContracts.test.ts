@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
+import { lineNumberOf } from "./endpointContractPaths.js";
 import {
   buildEndpointContractGraph,
   endpointContractAdapter,
@@ -43,6 +44,27 @@ describe("normalizeEndpointPath", () => {
     expect(normalizeEndpointPath("api/${tenant}/orders/${id}?expand=true")).toBe(
       "/api/:param/orders/:param",
     );
+  });
+
+  it("treats a supplementary-plane character (2 UTF-16 code units) as an ordinary path byte", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758). A lone surrogate
+    // half or a combined astral code point is never equal to the ASCII "$"/"{" the template-
+    // expression scanner looks for, so the emoji passes through untouched and the following
+    // "${id}" is still recognized and collapsed.
+    expect(normalizeEndpointPath("api/𝐀${id}/x")).toBe("/api/𝐀{param}/x");
+    // A colon segment is only a route param when every character after ":" is an identifier
+    // character; a supplementary-plane character in the middle correctly disqualifies it (its
+    // surrogate halves never fall in the ASCII identifier ranges), so the segment stays literal.
+    expect(normalizeEndpointPath("/api/:id𝐀comment/orders")).toBe("/api/:id𝐀comment/orders");
+  });
+});
+
+describe("lineNumberOf", () => {
+  it("counts newlines correctly when a supplementary-plane character sits on an earlier line", () => {
+    // "😀" is 2 UTF-16 code units; neither unit's code point ever equals the ASCII line-feed
+    // (10), so it cannot be miscounted as a newline or skipped, whether read with charCodeAt or
+    // codePointAt.
+    expect(lineNumberOf("a\n😀b\nc", 6)).toBe(3);
   });
 });
 

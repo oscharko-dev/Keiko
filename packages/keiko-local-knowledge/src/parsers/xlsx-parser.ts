@@ -397,10 +397,18 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
   return out;
 }
 
-function columnIndexFromName(column: string): number {
+// Exported (module-local only — not re-exported from the package barrel) so it can be unit
+// tested directly with a supplementary-plane `ch` (see xlsx-parser.test.ts S7758 regression).
+export function columnIndexFromName(column: string): number {
   let out = 0;
   for (const ch of column.toUpperCase()) {
-    const code = ch.charCodeAt(0);
+    // `ch` comes from a `for...of` over a string, so it is already ONE Unicode code point —
+    // 1 UTF-16 unit for a BMP letter, or a 2-unit surrogate pair for a supplementary-plane
+    // character. `codePointAt(0)` reads that whole code point in either case; a lone/derived
+    // surrogate value (0xD800-0xDFFF) and any real supplementary code point (>=0x10000) both
+    // fall well outside the 0x41-0x5a ('A'-'Z') range checked below, so such a `ch` is always
+    // (correctly) skipped rather than miscounted as a column letter.
+    const code = ch.codePointAt(0) ?? 0;
     if (code < 0x41 || code > 0x5a) continue;
     out = out * 26 + (code - 0x40);
   }

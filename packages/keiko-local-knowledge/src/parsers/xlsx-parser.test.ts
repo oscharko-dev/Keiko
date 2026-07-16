@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildParserOptions } from "./registry.js";
 import { selectionFromBytes, XLSX_SIMPLE } from "./parser-test-fixtures.js";
-import { xlsxParser } from "./xlsx-parser.js";
+import { columnIndexFromName, xlsxParser } from "./xlsx-parser.js";
 
 interface ZipEntryFixture {
   readonly name: string;
@@ -235,5 +235,19 @@ describe("xlsxParser", () => {
     expect(result.diagnostics[0]?.message).toBe(
       "xlsx parser rejected malformed or unsupported workbook",
     );
+  });
+});
+
+describe("columnIndexFromName", () => {
+  // S7758 regression: the A-Z letter check is `charCodeAt` → `codePointAt` compared against a
+  // fixed 0x41-0x5a range. `for...of` iterates a string by Unicode code point, so a
+  // supplementary-plane character (e.g. an emoji) arrives as ONE loop item of 2 UTF-16 code
+  // units; `codePointAt(0)` on it returns the combined code point (>=0x10000), which — like a
+  // lone surrogate's charCodeAt value (0xD800-0xDFFF) — is always well outside 0x41-0x5a, so
+  // it must be skipped exactly as if it were absent, never miscounted as a column letter.
+  it("ignores a supplementary-plane character in a column ref instead of miscounting it as a letter", () => {
+    expect(columnIndexFromName("😀B")).toBe(columnIndexFromName("B"));
+    expect(columnIndexFromName("A😀B")).toBe(columnIndexFromName("AB"));
+    expect(columnIndexFromName("😀")).toBe(0);
   });
 });

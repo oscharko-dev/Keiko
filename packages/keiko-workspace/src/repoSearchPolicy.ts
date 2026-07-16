@@ -234,7 +234,7 @@ function stripDotSlashPrefix(path: string): string {
 
 function stripTrailingSlashes(path: string): string {
   let end = path.length;
-  while (end > 0 && path.charCodeAt(end - 1) === 47) {
+  while (end > 0 && path.codePointAt(end - 1) === 47) {
     end -= 1;
   }
   return path.slice(0, end);

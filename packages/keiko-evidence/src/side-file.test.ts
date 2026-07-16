@@ -60,6 +60,10 @@ describe("writeSideFile name and runId guards", () => {
     "back\\slash",
     "name with space",
     "evil\0",
+    // "😀" (U+1F600) is a 2-code-unit UTF-16 surrogate pair. Regression guard for the charCodeAt ->
+    // codePointAt rename in isAllowedNameChar: a supplementary-plane character is still outside the
+    // allowed ASCII digit/letter/./_/- set and must still be rejected.
+    "emoji😀name.png",
   ])("rejects invalid name %s", (badName) => {
     expect(() => writeSideFile(baseDir, "run123", badName, Buffer.from("x"))).toThrow(
       EvidenceWriteError,
