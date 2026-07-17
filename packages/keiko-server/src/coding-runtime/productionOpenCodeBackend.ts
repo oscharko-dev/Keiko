@@ -12,6 +12,8 @@ import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox"
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import type { DevLanePortableOpenCodeRuntime } from "./devLanePortableCodingRuntime.js";
+import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import {
   createOpenCodeRuntimeComposition,
@@ -44,7 +46,9 @@ export interface FunctionalPortableOpenCodeRuntime {
 }
 
 export type ResolvedPortableOpenCodeRuntime =
-  QualifiedPortableOpenCodeRuntime | FunctionalPortableOpenCodeRuntime;
+  | QualifiedPortableOpenCodeRuntime
+  | FunctionalPortableOpenCodeRuntime
+  | DevLanePortableOpenCodeRuntime;
 
 export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
@@ -88,6 +92,7 @@ function createOpenCodeRun(
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
       target: input.portable.target,
+      admission: isDevLaneRuntime(input.portable) ? "functional-dev-lane" : "release-qualified",
     },
     stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
     capabilities: {
@@ -109,23 +114,30 @@ function createOpenCodeRun(
   });
   return {
     manager: composition.manager,
-    launch: {
-      recoveryHandle: randomBytes(16).toString("hex"),
-      adapterKind: "opencode-compatible",
-      runtimeSource: "keiko-sidecar",
-      modelSource: "keiko-model-gateway",
-      executablePath: join(input.portable.installRoot, input.portable.sidecar.executablePath),
-      managedRoot: join(input.portable.installRoot, input.portable.sidecar.payloadRootPath),
-      gatewayUrl: input.gatewayUrl,
-      modelProfileId: run.context.modelProfile.profileId,
-      args: [],
-      inheritedEnvAllowlist: [],
-      shutdownTimeoutMs: 5_000,
-      startTimeoutMs: 30_000,
-      confinement: input.portable.qualification,
-    },
+    launch: openCodeLaunchMaterial(input, run),
     turnPort: createOpenCodeRuntimeTurnPort(composition.runPort),
     questionPort: createOpenCodeRuntimeQuestionPort(composition.runPort),
+  };
+}
+
+function openCodeLaunchMaterial(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): QualifiedProductionRuntimeRun["launch"] {
+  return {
+    recoveryHandle: randomBytes(16).toString("hex"),
+    adapterKind: "opencode-compatible",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    executablePath: join(input.portable.installRoot, input.portable.sidecar.executablePath),
+    managedRoot: join(input.portable.installRoot, input.portable.sidecar.payloadRootPath),
+    gatewayUrl: input.gatewayUrl,
+    modelProfileId: run.context.modelProfile.profileId,
+    args: [],
+    inheritedEnvAllowlist: [],
+    shutdownTimeoutMs: 5_000,
+    startTimeoutMs: 30_000,
+    confinement: input.portable.qualification,
   };
 }
 
@@ -146,6 +158,7 @@ function runtimeSupervisor(
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
+  if (isDevLaneRuntime(input.portable)) return devLaneSupervisor(input.portable);
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
@@ -153,6 +166,32 @@ function runtimeSupervisor(
       workspaceRoot,
     }),
     qualifications: [input.portable.qualification],
+  });
+}
+
+/** Only the dev-lane union member carries the structural `lane` marker. */
+function isDevLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is DevLanePortableOpenCodeRuntime {
+  return "lane" in portable;
+}
+
+/**
+ * Dev-lane supervision (#2475, ADR-0140): the process backend spawns the verified staged payload
+ * directly and terminates its POSIX process group. It carries none of the release-qualified
+ * containment or orphan-reaping guarantees; the runtime's evidence class records that posture.
+ */
+function devLaneSupervisor(portable: DevLanePortableOpenCodeRuntime): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: createDevLaneRuntimeProcessBackend({
+      identity: {
+        platform: "darwin",
+        arch: portable.qualification.arch,
+        backend: "macos-app-sandbox",
+      },
+      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+    }),
+    qualifications: [portable.qualification],
   });
 }
 

@@ -3,6 +3,7 @@ import {
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
+  CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -179,6 +180,54 @@ describe("Coding Workbench runtime API contracts", () => {
     expect(
       validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeAvailable: "yes" }),
     ).toMatchObject({ ok: false });
+  });
+
+  it("binds the unavailable reason to the availability boolean in both directions", () => {
+    const available = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+    };
+    const unavailable = {
+      ...available,
+      runtimeAvailable: false,
+      runtimeUnavailableReason: "payload-missing",
+    };
+    expect(validateCodingWorkbenchRuntimeReadiness(unavailable)).toEqual({
+      ok: true,
+      value: unavailable,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...available, runtimeAvailable: false }),
+    ).toEqual({
+      ok: false,
+      errors: ["runtimeUnavailableReason is required when the runtime is unavailable"],
+    });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        ...available,
+        runtimeUnavailableReason: "payload-missing",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["runtimeUnavailableReason must be absent when the runtime is available"],
+    });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        ...unavailable,
+        runtimeUnavailableReason: "helper-exploded",
+      }),
+    ).toEqual({ ok: false, errors: ["runtimeUnavailableReason is invalid"] });
+    for (const reason of CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({
+          ...unavailable,
+          runtimeUnavailableReason: reason,
+        }),
+      ).toMatchObject({ ok: true });
+    }
   });
 
   it("projects a content-free runtime snapshot with no authority details", () => {

@@ -450,9 +450,11 @@ function sessionUpdated(data: Record<string, unknown>, aggregateId: string): boo
     ]) &&
     info.id === aggregateId &&
     id(info.id, "ses_") &&
-    [info.slug, info.projectID, info.directory, info.path, info.title, info.version].every(
-      nonEmpty,
-    ) &&
+    [info.slug, info.projectID, info.directory, info.title, info.version].every(nonEmpty) &&
+    // The pinned 1.17.17 child reports `path: ""` when the session's working directory is the
+    // project root — every git-worktree task workspace. Present-but-empty is the real contract;
+    // absence stays rejected (#2475).
+    boundedString(info.path) &&
     finite(info.cost) &&
     tokenCounts(info.tokens) &&
     (info.agent === undefined || nonEmpty(info.agent)) &&
@@ -1020,6 +1022,9 @@ function parseRecord(value: string): Record<string, unknown> | undefined {
 }
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 4096;
+}
+function boundedString(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 4096;
 }
 function id(value: unknown, prefix: string): value is string {
   return nonEmpty(value) && value.startsWith(prefix) && ID.test(value);

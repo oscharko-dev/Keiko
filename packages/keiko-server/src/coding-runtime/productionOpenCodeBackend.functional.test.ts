@@ -45,9 +45,11 @@ import {
   stagedFunctionalPortable,
   type ScriptedOpenCodeHarness,
 } from "./opencodeFunctionalHarness/_support.js";
+import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
 import {
   createFunctionalRuntimeResolver,
   functionalBffDeps,
+  productionDiscoveryBffDeps,
   type ScriptState,
 } from "./productionOpenCodeBackend.functional/_support.js";
 
@@ -130,7 +132,144 @@ describe("production OpenCode backend functional pipeline", () => {
     },
     120_000,
   );
+
+  // #2475 anti-false-green acceptance: activation resolves through PRODUCTION discovery and
+  // composition — the dev lane's verified staged payload of this repository checkout — with no
+  // injected runtime seam. The staged-seam case above remains as the control.
+  it.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+    "[functional-only] activates the staged dev-lane payload through production discovery with no injected runtime seam",
+    async () => {
+      // The managed worktree root must be the one the production composition derives from the
+      // UI-store path (`<dirname(uiDbPath)>/task-workspaces`); the workspace authority re-proves
+      // every run's containment against exactly that root.
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      fixture.script.mode = "discovery";
+      const pipeline = await bootDiscoveryPipeline(fixture);
+      expect(pipeline.deps.env.KEIKO_OPENCODE_REAL_BINARY).toBeUndefined();
+      expect(pipeline.deps.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT).toBeUndefined();
+      // Asserted first: on activation failure the precise reason is the diagnostic.
+      expect(pipeline.deps.codingRuntimeUnavailableReason).toBeUndefined();
+      expect(pipeline.deps.codingRuntimeHostQualified).toBe(true);
+      await assertLiveReadiness(pipeline.baseUrl);
+      await runDiscoveryProductiveScenario(fixture, pipeline);
+      assertRedactedEvidence(fixture, pipeline, OLD);
+    },
+    120_000,
+  );
 });
+
+function devLaneDiscoveryFunctionalEnabled(): boolean {
+  return (
+    process.platform === "darwin" &&
+    devLaneEnvEnabled(process.env.KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL)
+  );
+}
+
+/**
+ * Boots the BFF with production composition only: activation must discover the dev-lane payload
+ * staged for this repository checkout (`npm run dev:coding-runtime:stage`). The absence of the
+ * resolver, ports, and supervisor seams is structural — `productionDiscoveryBffDeps` has no such
+ * inputs — and the seam environment values are asserted absent above.
+ */
+async function bootDiscoveryPipeline(
+  fixture: FunctionalWorkspaceFixture,
+): Promise<FunctionalPipeline> {
+  const verification = createVerification(fixture.workspace);
+  const port = await reserveLoopbackPort();
+  const deps = productionDiscoveryBffDeps({
+    stateRoot: join(fixture.root, "bff-state"),
+    workspaceLifecycle: fixture.lifecycle,
+    script: fixture.script,
+    uiPort: port,
+  });
+  disposers.push(async () => {
+    await deps.codingRuntimeOrchestrator?.shutdown();
+    await deps.dispose?.();
+  });
+  const server = createUiServer({
+    staticRoot: fixture.root,
+    csp: "default-src 'none'",
+    port,
+    handlerDeps: deps,
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const orchestrator = deps.codingRuntimeOrchestrator;
+  const eventHub = deps.codingRuntimeEventHub;
+  if (orchestrator === undefined || eventHub === undefined) {
+    throw new Error("functional-control-plane-missing");
+  }
+  const timeline: CodingWorkbenchRuntimeSseEvent[] = [];
+  return {
+    baseUrl: `http://${UI_HOST}:${String(port)}`,
+    deps,
+    orchestrator,
+    timeline,
+    verification,
+    evidenceBodies: new Map<string, string>(),
+    subscribeTimeline: (runId): void => {
+      const subscribed = eventHub.subscribe(runId, undefined, {
+        write: (event): boolean => {
+          timeline.push(event);
+          return true;
+        },
+        close: (): void => undefined,
+      });
+      expect(subscribed.ok).toBe(true);
+    },
+  };
+}
+
+async function assertLiveReadiness(baseUrl: string): Promise<void> {
+  const response = await fetch(
+    `${baseUrl}/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery`,
+  );
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toEqual({
+    schemaVersion: "1",
+    requestedMode: "autonomous-delivery",
+    // The explicitly configured ceiling (KEIKO_CODING_DEPLOYMENT_CEILING) is reported honestly.
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
+    runtimeAvailable: true,
+  });
+}
+
+/** The productive journey against the discovery-activated runtime (no verification fixture). */
+async function runDiscoveryProductiveScenario(
+  fixture: FunctionalWorkspaceFixture,
+  pipeline: FunctionalPipeline,
+): Promise<void> {
+  const started = await post(
+    pipeline.baseUrl,
+    "/api/coding-workbench/runtime/runs",
+    startBody("discovery-productive"),
+  );
+  expect(started.status).toBe(200);
+  const run = (await started.json()) as { runId: string; state: string; failureCode?: string };
+  pipeline.subscribeTimeline(run.runId);
+  // Snapshot and timeline are content-free by contract; on failure they are the diagnostic.
+  expect(
+    run,
+    `start snapshot: ${JSON.stringify(run)}; timeline: ${JSON.stringify(pipeline.timeline)}`,
+  ).toMatchObject({ state: "running" });
+  const question = await waitForQuestion(pipeline.orchestrator, run.runId, "discovery-question");
+  expect(question.questions[0]?.question).toBe("Approve?");
+  await expect(
+    answerQuestion(pipeline.orchestrator, run.runId, question.id, [["Approve"]]),
+  ).resolves.toBe(true);
+  // The question's arrival above already proves the full governed round-trip against the real
+  // child: gateway canary → task turn → tool bridge → dev-lane secure-read helper → scripted
+  // model → runtime question → answer. The edit and verification legs are deliberately out of
+  // this headless journey's scope (applyChangeset requires a live browser bridge — the browser
+  // owns editor state — and the verification runner requires a product-registered project); the
+  // staged-seam control and the W1.10 real-binary UI journey own them. The workspace file must
+  // remain untouched, and the run must stop under governance.
+  expect(readFile(fixture.target)).toBe(OLD);
+  const status = pipeline.orchestrator.getSnapshot(run.runId);
+  expect(status?.state).toBe("running");
+  await stopRun(pipeline.baseUrl, run.runId);
+}
 
 async function bootPipeline(
   fixture: FunctionalWorkspaceFixture,
@@ -365,6 +504,7 @@ async function runOutOfScopeScenario(
 function assertRedactedEvidence(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
+  expectedTarget: string = NEW,
 ): void {
   const workbenchStore = pipeline.deps.codingWorkbenchEvidenceStore;
   const evidence = [
@@ -376,14 +516,16 @@ function assertRedactedEvidence(
   ].join("\n");
   const snapshots = JSON.stringify(pipeline.deps.codingRuntimeSnapshotStore?.listAll() ?? []);
   expect(`${evidence}${snapshots}`).not.toMatch(new RegExp(`${SECRET}|${OLD}|${OUTSIDE}`, "u"));
-  expect(readFile(fixture.target)).toBe(NEW);
+  expect(readFile(fixture.target)).toBe(expectedTarget);
 }
 
-function setupWorkspace(): Promise<FunctionalWorkspaceFixture> {
+function setupWorkspace(
+  managedRootSegments: readonly string[] = ["managed"],
+): Promise<FunctionalWorkspaceFixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-opencode-functional-")));
   roots.push(root);
   const repository = join(root, "repository");
-  const managedRoot = join(root, "managed");
+  const managedRoot = join(root, ...managedRootSegments);
   mkdirSync(repository, { recursive: true });
   git(repository, ["init", "-q", "-b", "main"]);
   git(repository, ["config", "user.email", "functional@keiko.example"]);

@@ -29,8 +29,10 @@ import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  isCodingWorkbenchMode,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
+  type CodingWorkbenchRuntimeUnavailableReason,
   type DebugDeploymentPolicy,
   type DebugProductSupport,
   type DebugProvisioning,
@@ -44,7 +46,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
@@ -227,8 +229,11 @@ import {
 } from "./coding-runtime/productionCodingRuntimeResolver.js";
 import type { CodingRuntimeStartConfirmationConsumer } from "./coding-runtime/codingRuntimeStartConfirmation.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "./coding-runtime/codingRuntimeStartConfirmationPlane.js";
-import { createOpenCodeGatewayReadinessRegistry } from "./coding-sidecar-gateway.js";
-import { resolveProductionOpenCodePorts } from "./coding-runtime/productionOpenCodeActivation.js";
+import {
+  createOpenCodeGatewayReadinessRegistry,
+  type OpenCodeGatewayReadinessRegistry,
+} from "./coding-sidecar-gateway.js";
+import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
@@ -390,6 +395,11 @@ export interface UiHandlerDeps {
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
   readonly codingRuntimeHostQualified?: boolean | undefined;
+  /** Content-free reason naming the first failed activation prerequisite when unqualified. */
+  readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
+  // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
+  readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
   // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
   readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
@@ -659,6 +669,9 @@ export interface BuildHandlerDepsOptions {
   /** Central #2377 adapter. Absence is an intentional fail-closed production posture. */
   readonly codingRuntimeStartConfirmationConsumer?:
     CodingRuntimeStartConfirmationConsumer | undefined;
+  // Explicit deployment ceiling for coding-runtime authority. Precedence: this option, then the
+  // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the governed-assist default. An
+  // unrecognized environment value is ignored fail-closed (the narrowest posture wins).
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
@@ -2765,14 +2778,18 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   );
   const peripherals = buildAssemblyPeripherals(args, dapRuntime);
   const dapProduction = composeDapRuntime(args, peripherals, dapRuntime);
-  const defaultRuntimeResolver = productionRuntimeResolver(
+  const codingRuntimeCeiling = resolveCodingRuntimeDeploymentCeiling(args.options);
+  const runtimeComposition = productionRuntimeResolver(
     args,
     peripherals.verificationRunner,
     codingRuntimeEvidenceAggregator,
+    codingRuntimeCeiling,
   );
   const codingRuntimeHost =
     args.options.codingRuntimeHost ??
-    createProductionCodingRuntimeHost(args.options.codingRuntimeResolver ?? defaultRuntimeResolver);
+    createProductionCodingRuntimeHost(
+      args.options.codingRuntimeResolver ?? runtimeComposition.resolver,
+    );
   const codingRuntimeControlPlane =
     args.bundle.codingRuntimeSnapshotStore && args.bundle.workspaceLifecycle
       ? createCodingRuntimeControlPlane({
@@ -2797,11 +2814,18 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...codingSidecarGatewayModelSourceFields(args),
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     codingRuntimeEvidenceAggregator,
+    codingRuntimeDeploymentCeiling: codingRuntimeCeiling,
     ...(codingRuntimeControlPlane
       ? {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
           codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
           codingRuntimeHostQualified: codingRuntimeControlPlane.runtimeHostQualified,
+          ...(codingRuntimeControlPlane.runtimeHostQualified
+            ? {}
+            : {
+                codingRuntimeUnavailableReason:
+                  runtimeComposition.unavailableReason ?? "runtime-unqualified",
+              }),
           ...(codingRuntimeControlPlane.cancellationRegistry
             ? {
                 codingSidecarGatewayCancellationRegistry:
@@ -2865,52 +2889,128 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   };
 }
 
+export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
+
+/**
+ * Option precedence, then explicit deployment configuration, then the governed-assist default.
+ * An unrecognized environment value never widens anything: the narrowest posture wins, and the
+ * readiness projection makes the effective ceiling visible to the operator.
+ */
+function resolveCodingRuntimeDeploymentCeiling(
+  options: BuildHandlerDepsOptions,
+): CodingWorkbenchMode {
+  if (options.codingRuntimeDeploymentCeiling !== undefined) {
+    return options.codingRuntimeDeploymentCeiling;
+  }
+  const configured = options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
+  return isCodingWorkbenchMode(configured) ? configured : "governed-assist";
+}
+
+interface ProductionRuntimeComposition {
+  readonly resolver: ProductionCodingRuntimeResolver | undefined;
+  readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+}
+
+interface ProductionRuntimePortResolution {
+  readonly ports: ProductionCodingRuntimePorts | undefined;
+  readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  readonly activated: boolean;
+}
+
+function unqualifiedComposition(
+  unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
+): ProductionRuntimeComposition {
+  return { resolver: undefined, unavailableReason };
+}
+
+// The attested-portable activation path supplies Keiko's own confirmation plane; injected
+// ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
+function resolveProductionRuntimePorts(
+  args: UiHandlerDepsAssemblyArgs,
+  runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
+  readiness: OpenCodeGatewayReadinessRegistry,
+  workspaceLifecycle: WorkspaceLifecycleService,
+): ProductionRuntimePortResolution {
+  const injectedPorts = args.options.codingRuntimeProductionPorts;
+  if (injectedPorts !== undefined) {
+    return { ports: injectedPorts, unavailableReason: undefined, activated: false };
+  }
+  const activation = resolveProductionOpenCodeActivation({
+    env: args.options.env,
+    runtimeStateDir: dirname(args.resolvedUiDbPath),
+    runtimeEvidence,
+    gatewayReadiness: readiness,
+    resolveWorkspaceRoot: () => workspaceLifecycle.getActive()?.binding.activeRoot,
+  });
+  return {
+    ports: activation.ports,
+    unavailableReason: activation.unavailableReason,
+    activated: activation.ports !== undefined,
+  };
+}
+
+/**
+ * On a fresh installation the server-owned managed worktree root does not exist until the first
+ * task workspace is provisioned; the resolver's trusted-root check would then keep an otherwise
+ * fully activated runtime unqualified. Materialize it at composition time (#2475).
+ */
+function materializedManagedRoot(managedTaskWorkspaceRoot: string): boolean {
+  try {
+    mkdirSync(managedTaskWorkspaceRoot, { recursive: true, mode: 0o700 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
-): ProductionCodingRuntimeResolver | undefined {
+  deploymentCeiling: CodingWorkbenchMode,
+): ProductionRuntimeComposition {
   const workspaceLifecycle = args.bundle.workspaceLifecycle;
   const managedTaskWorkspaceRoot = args.bundle.managedTaskWorkspaceRoot;
   if (workspaceLifecycle === undefined || managedTaskWorkspaceRoot === undefined) {
-    return undefined;
+    return unqualifiedComposition("runtime-unqualified");
   }
-  const injectedPorts = args.options.codingRuntimeProductionPorts;
   const readiness = createOpenCodeGatewayReadinessRegistry();
-  // The attested-portable activation path supplies Keiko's own confirmation plane; injected
-  // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
-  const activatedPorts =
-    injectedPorts === undefined
-      ? resolveProductionOpenCodePorts({
-          env: args.options.env,
-          runtimeStateDir: dirname(args.resolvedUiDbPath),
-          runtimeEvidence,
-          gatewayReadiness: readiness,
-        })
-      : undefined;
-  const ports = injectedPorts ?? activatedPorts;
-  if (ports === undefined) return undefined;
+  const resolution = resolveProductionRuntimePorts(
+    args,
+    runtimeEvidence,
+    readiness,
+    workspaceLifecycle,
+  );
+  if (resolution.ports === undefined) {
+    return unqualifiedComposition(resolution.unavailableReason ?? "runtime-unqualified");
+  }
+  if (!materializedManagedRoot(managedTaskWorkspaceRoot)) {
+    return unqualifiedComposition("runtime-unqualified");
+  }
   const confirmationConsumer =
     args.options.codingRuntimeStartConfirmationConsumer ??
-    (activatedPorts === undefined ? undefined : createAuthenticatedSessionStartConfirmationPlane());
+    (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
   const resolver = createProductionCodingRuntimeResolver({
     workspaceAuthority: {
       workspaceLifecycle,
       managedTaskWorkspaceRoot,
-      deploymentCeiling: args.options.codingRuntimeDeploymentCeiling ?? "governed-assist",
+      deploymentCeiling,
       readWorkspaceHead: readProductionWorkspaceHead,
     },
-    ...ports,
+    ...resolution.ports,
     verificationRunner,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
   return {
-    resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
-      const qualified = resolver.resolve();
-      return qualified === undefined
-        ? undefined
-        : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+    resolver: {
+      resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
+        const qualified = resolver.resolve();
+        return qualified === undefined
+          ? undefined
+          : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+      },
     },
+    unavailableReason: undefined,
   };
 }
 

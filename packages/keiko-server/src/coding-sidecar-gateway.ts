@@ -401,8 +401,13 @@ function openAiToolCalls(calls: readonly NormalizedToolCall[]): readonly Record<
   }));
 }
 
+/** Single source for the `KEIKO_CODING_SIDECAR_DISABLED` kill-switch token semantics. */
+export function codingSidecarDisabledByPolicy(env: UiHandlerDeps["env"]): boolean {
+  return envEnabled(env[CODING_SIDECAR_DISABLED_ENV]);
+}
+
 function sidecarPolicyDisabled(deps: UiHandlerDeps): boolean {
-  return envEnabled(deps.env[CODING_SIDECAR_DISABLED_ENV]);
+  return codingSidecarDisabledByPolicy(deps.env);
 }
 
 function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {

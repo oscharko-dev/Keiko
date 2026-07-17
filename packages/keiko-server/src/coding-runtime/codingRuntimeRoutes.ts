@@ -174,7 +174,10 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
     return failureResult("invalid-intent");
   }
   if (!parsed.ok) return failureResult("invalid-intent");
-  const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  // The readiness projection must report the same ceiling the coding-runtime mint clamp
+  // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
+  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
+  const runtimeAvailable = deps.codingRuntimeHostQualified === true;
   return {
     status: 200,
     body: {
@@ -182,7 +185,12 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
-      runtimeAvailable: deps.codingRuntimeHostQualified === true,
+      runtimeAvailable,
+      ...(runtimeAvailable
+        ? {}
+        : {
+            runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
+          }),
     },
   };
 }
