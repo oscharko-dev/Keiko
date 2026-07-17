@@ -39,12 +39,39 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # #2485: test:e2e:editor-run-verification-2215 executes verification commands through
+          # the real verification runner, which always enforces the mandatory network:none
+          # boundary (enforce-or-fail-closed) — without the isolation backend every verification
+          # fails closed on this runner and the suite can never pass. Ubuntu 24.04 restricts
+          # unprivileged user namespaces via AppArmor, so enable the proven Bubblewrap path
+          # exactly as the required ci job and the code-task lane below do; never weaken the
+          # verification runner to inherited networking for tests.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Build internal packages
         run: npm run build:packages
       - name: Install Playwright browser
         run: node node_modules/playwright/cli.js install --with-deps chromium
       - name: Run ${{ matrix.suite }}
         run: npm run ${{ matrix.suite }}
+      # #2485: without retained traces/screenshots a nightly red is undiagnosable from logs alone
+      # (git-changes-1575 stayed unexplained for 13 nights). Retention is short: these are debug
+      # aids, not evidence artifacts.
+      - name: Derive artifact-safe suite name
+        if: failure()
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: echo "SUITE_SLUG=${SUITE//:/-}" >> "$GITHUB_ENV"
+      - name: Upload failure artifacts (traces, screenshots)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extended-e2e-failure-${{ env.SUITE_SLUG }}
+          path: test-results/
+          retention-days: 14
 
   # Issue #2474 — the Code-task journeys (#2385 tracer, #2386 authority) boot dedicated TEST-ONLY
   # server entries through owned Playwright configs and are excluded from the generic collection,
@@ -90,3 +117,11 @@ jobs:
       - name: Run test:e2e:code-task:authority
         if: ${{ !cancelled() }}
         run: npm run test:e2e:code-task:authority
+      # #2485: same failure-diagnosability aid as the extended matrix above.
+      - name: Upload failure artifacts (traces, screenshots)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: code-task-e2e-failure
+          path: test-results/
+          retention-days: 14
