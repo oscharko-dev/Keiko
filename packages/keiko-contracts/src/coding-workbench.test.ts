@@ -178,6 +178,7 @@ describe("coding-workbench constants", () => {
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
       "verification-command",
+      "research",
       "commit",
       "push",
       "pull-request",
