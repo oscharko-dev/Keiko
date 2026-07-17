@@ -55,11 +55,15 @@ const retrievalFixtures = readFileSync(
 
 // GEN-TEST-E2E-005: the editor/git/LK browser suites were wired into no workflow and could silently
 // rot. e2e-extended.yml runs them on a schedule; pin that they stay wired.
+// #2474: the Code-task journeys (#2385/#2386) joined the same workflow after shipping orphaned;
+// every Wave-1 child of epic #2473 extends them, so their wiring is pinned the same way.
 const REQUIRED_EXTENDED_SUITES = [
   "test:e2e:editor-baseline-1377",
   "test:e2e:editor-layout-1375",
   "test:e2e:git-changes-1575",
   "test:e2e:local-knowledge",
+  "test:e2e:code-task:opencode-tracer",
+  "test:e2e:code-task:authority",
 ];
 
 // Every command here must run in a GitHub workflow on the default-branch path. Each maps to a
@@ -191,7 +195,7 @@ describe("CI test/gate wiring guard", () => {
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    expect(nodeSetupCount).toBe(16);
+    expect(nodeSetupCount).toBe(17);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });

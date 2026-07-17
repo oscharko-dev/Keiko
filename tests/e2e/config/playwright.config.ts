@@ -34,6 +34,10 @@ export default defineConfig({
   // Playwright's default testMatch also collects *.test.ts, which are vitest suites here
   // (e.g. the *.static.test.ts source-shape tests) and crash at collection time.
   testMatch: "**/*.spec.ts",
+  // Issue #2474 — the Code-task journeys (#2385/#2386) boot dedicated TEST-ONLY server entries
+  // through their owned configs (playwright.code-task-*.config.ts); collected here they would run
+  // against this dev-runner server and fail. Run them via the test:e2e:code-task:* scripts.
+  testIgnore: "code-task-*.spec.ts",
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
