@@ -1276,6 +1276,44 @@ export function useDebugSession(
     [canonicalResync, stableWorkspaceId],
   );
 
+  const handleSnapshotMessage = useCallback(
+    async (message: MessageEvent<string>, generation: number): Promise<void> => {
+      const replay = parseReplaySnapshot(parseJson(message.data));
+      if (
+        replay !== null &&
+        debugStreamSnapshotRequiresCanonicalResync(
+          stableWorkspaceId,
+          generation,
+          replay.sequence,
+          message.type === "editor-debug:snapshot-required",
+        )
+      ) {
+        await resyncFromReplaySnapshot(replay, generation);
+      }
+    },
+    [resyncFromReplaySnapshot, stableWorkspaceId],
+  );
+
+  const dispatchDebugEventFollowup = useCallback(
+    async (event: DebugEvent): Promise<void> => {
+      if (event.kind === "session-stopped" || event.kind === "exited") return;
+      if (event.kind === "breakpoints-changed") {
+        if (event.workspaceId === stableWorkspaceId) {
+          await refreshInstrumentationAtLeast(event.revision);
+        }
+        return;
+      }
+      if (
+        event.kind === "session-started" ||
+        event.kind === "stopped" ||
+        event.kind === "continued"
+      ) {
+        await refreshSession(event.sessionId);
+      }
+    },
+    [refreshInstrumentationAtLeast, refreshSession, stableWorkspaceId],
+  );
+
   const handleStreamMessage = useCallback(
     async (message: MessageEvent<string>): Promise<void> => {
       const generation = sharedEventSourceGeneration(message);
@@ -1287,18 +1325,7 @@ export function useDebugSession(
         message.type === "editor-debug:snapshot" ||
         message.type === "editor-debug:snapshot-required"
       ) {
-        const replay = parseReplaySnapshot(parseJson(message.data));
-        if (
-          replay !== null &&
-          debugStreamSnapshotRequiresCanonicalResync(
-            stableWorkspaceId,
-            generation,
-            replay.sequence,
-            message.type === "editor-debug:snapshot-required",
-          )
-        ) {
-          await resyncFromReplaySnapshot(replay, generation);
-        }
+        await handleSnapshotMessage(message, generation);
         return;
       }
       if (streamResyncRequired.current) return;
@@ -1315,22 +1342,9 @@ export function useDebugSession(
         );
         abortSharedProjectionRequests(stableWorkspaceId);
       }
-      if (event.kind === "session-stopped" || event.kind === "exited") return;
-      if (event.kind === "breakpoints-changed") {
-        if (event.workspaceId === stableWorkspaceId) {
-          await refreshInstrumentationAtLeast(event.revision);
-        }
-        return;
-      }
-      if (
-        event.kind === "session-started" ||
-        event.kind === "stopped" ||
-        event.kind === "continued"
-      ) {
-        await refreshSession(event.sessionId);
-      }
+      await dispatchDebugEventFollowup(event);
     },
-    [refreshInstrumentationAtLeast, refreshSession, resyncFromReplaySnapshot, stableWorkspaceId],
+    [dispatchDebugEventFollowup, handleSnapshotMessage, stableWorkspaceId],
   );
 
   useEffect(() => {

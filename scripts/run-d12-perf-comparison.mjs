@@ -597,12 +597,13 @@ function makeRunContext(state, revision, sequence, recorded, capOrdinal = 0) {
     ? `candidate-cap-${String(capOrdinal)}.json`
     : "warm-up-candidate-cap.json";
   const root = state.roots[revision];
+  const warmupPortOffset = revision === "baseline" ? 7 : 8;
   return {
     ...state,
     capOutputPath: join(state.artifactsRoot, "runs", capName),
     head: state.heads[revision],
     outputPath,
-    portOffset: recorded ? sequence : revision === "baseline" ? 7 : 8,
+    portOffset: recorded ? sequence : warmupPortOffset,
     recorded,
     revision,
     root,
@@ -771,14 +772,13 @@ export async function runD12Comparison(argv, injected = {}) {
 
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  runD12Comparison(process.argv.slice(2))
-    .then(({ comparison }) => {
-      console.log(
-        `Wrote D12 comparison for ${comparison.d12Comparison.candidateCommit} from six orchestrated runs`,
-      );
-    })
-    .catch((error) => {
-      console.error(String(error));
-      process.exitCode = 1;
-    });
+  try {
+    const { comparison } = await runD12Comparison(process.argv.slice(2));
+    console.log(
+      `Wrote D12 comparison for ${comparison.d12Comparison.candidateCommit} from six orchestrated runs`,
+    );
+  } catch (error) {
+    console.error(String(error));
+    process.exitCode = 1;
+  }
 }
