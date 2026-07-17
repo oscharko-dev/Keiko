@@ -34,15 +34,26 @@ const I18N_USAGE_PATTERNS = [
 // line has one of the 6 attribute names followed by one of the 3 quoted-letter value shapes.
 const USER_FACING_ATTRIBUTE_NAME_RE =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*/gu;
-const USER_FACING_ATTRIBUTE_VALUE_RE =
-  /^(?:"[^"A-Za-z]*[A-Za-z][^"]*"|'[^'A-Za-z]*[A-Za-z][^']*'|`[^`A-Za-z]*[A-Za-z][^`]*`)/u;
+// Split from one 3-branch alternation into 3 separate patterns tried via `.some()`
+// (typescript:S5843 — the combined form was still over the complexity threshold even after the
+// name/value split above). Only ever used via `.test()` with no group captures, so trying the
+// three quote-shapes independently is behaviorally identical to the single combined pattern.
+const USER_FACING_ATTRIBUTE_VALUE_PATTERNS = [
+  /^"[^"A-Za-z]*[A-Za-z][^"]*"/u,
+  /^'[^'A-Za-z]*[A-Za-z][^']*'/u,
+  /^`[^`A-Za-z]*[A-Za-z][^`]*`/u,
+];
+
+function matchesUserFacingAttributeValue(text) {
+  return USER_FACING_ATTRIBUTE_VALUE_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 function hasUserFacingAttribute(line) {
   USER_FACING_ATTRIBUTE_NAME_RE.lastIndex = 0;
   let nameMatch;
   while ((nameMatch = USER_FACING_ATTRIBUTE_NAME_RE.exec(line)) !== null) {
     const valueStart = nameMatch.index + nameMatch[0].length;
-    if (USER_FACING_ATTRIBUTE_VALUE_RE.test(line.slice(valueStart))) {
+    if (matchesUserFacingAttributeValue(line.slice(valueStart))) {
       return true;
     }
   }

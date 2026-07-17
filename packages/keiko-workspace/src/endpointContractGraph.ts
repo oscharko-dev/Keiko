@@ -59,8 +59,25 @@ const JAVA_ANNOTATION_NAMES: ReadonlySet<string> = new Set([
   "DeleteMapping",
   "RequestMapping",
 ]);
-const JAVA_ROUTE =
-  /@([A-Za-z]+Mapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}(?:public|private|protected)?\s{0,200}([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/gu;
+// Split from one regex (annotation + optional access-modifier alternation + signature, all in
+// one pattern) into an annotation-scan regex, a plain-code optional-modifier skip, and a
+// signature regex (typescript:S5843 — the combined form was still over the complexity threshold).
+// A modifier-then-type ambiguity rules out folding the modifier back in as a second optional
+// identifier group in the signature regex: since "public" and a real return type are both bare
+// identifiers, an ambiguous optional-identifier-then-identifier shape would force the same kind
+// of backtracking the split is meant to remove. Checking the modifier via a plain Set membership
+// test instead (mirrors csharpPropertyFieldName's approach above) has no such ambiguity.
+const JAVA_ANNOTATION_RE = /@([A-Za-z]+Mapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}/gu;
+const JAVA_MODIFIERS: ReadonlySet<string> = new Set(["public", "private", "protected"]);
+const JAVA_SIGNATURE_RE = /^([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/u;
+
+function skipOptionalJavaModifier(text: string): string {
+  const match = /^([A-Za-z_$][\w$]*)\s{0,200}/u.exec(text);
+  if (match === null || !JAVA_MODIFIERS.has(match[1] ?? "")) {
+    return text;
+  }
+  return text.slice(match[0].length);
+}
 const JAVA_RECORD = /\brecord\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
 const TS_INTERFACE = /\binterface\s+([A-Za-z_$][\w$]*)\s*\{([^}]*)\}/gu;
 const TS_TYPE_OBJECT = /\btype\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^}]*)\}/gu;
@@ -122,12 +139,20 @@ function requestBodyType(params: string): string | undefined {
   return /@RequestBody\s+([A-Za-z_$][\w$]*(?:<[^>]+>)?)\s+[A-Za-z_$][\w$]*/u.exec(params)?.[1];
 }
 
-function addRoute(state: EndpointBuildState, file: SourceFile, match: RegExpExecArray): void {
-  const method = springMethod(match[1] ?? "RequestMapping", match[2]);
-  const routePath = joinEndpointPaths(routeBasePath(file.text), firstStringLiteral(match[2]));
-  const line = lineNumberOf(file.text, match.index);
-  const responseType = unwrapType(match[3]);
-  const requestType = unwrapType(requestBodyType(match[5] ?? ""));
+function addRoute(
+  state: EndpointBuildState,
+  file: SourceFile,
+  annotationMatch: RegExpExecArray,
+  signatureMatch: RegExpExecArray,
+): void {
+  const method = springMethod(annotationMatch[1] ?? "RequestMapping", annotationMatch[2]);
+  const routePath = joinEndpointPaths(
+    routeBasePath(file.text),
+    firstStringLiteral(annotationMatch[2]),
+  );
+  const line = lineNumberOf(file.text, annotationMatch.index);
+  const responseType = unwrapType(signatureMatch[1]);
+  const requestType = unwrapType(requestBodyType(signatureMatch[3] ?? ""));
   state.routes.push({
     stableId: hashEndpointContractId("ec-route", [method, routePath, file.scopePath, line]),
     method,
@@ -136,7 +161,7 @@ function addRoute(state: EndpointBuildState, file: SourceFile, match: RegExpExec
     scopePath: file.scopePath,
     line,
     framework: "spring",
-    handler: match[4],
+    handler: signatureMatch[2],
     requestType,
     responseType,
     confidence: 0.92,
@@ -204,13 +229,17 @@ function addDtoShape(
 }
 
 function extractJava(file: SourceFile, state: EndpointBuildState): void {
-  JAVA_ROUTE.lastIndex = 0;
-  let route: RegExpExecArray | null = JAVA_ROUTE.exec(file.text);
-  while (route !== null) {
-    if (JAVA_ANNOTATION_NAMES.has(route[1] ?? "")) {
-      addRoute(state, file, route);
+  JAVA_ANNOTATION_RE.lastIndex = 0;
+  let annotationMatch: RegExpExecArray | null = JAVA_ANNOTATION_RE.exec(file.text);
+  while (annotationMatch !== null) {
+    if (JAVA_ANNOTATION_NAMES.has(annotationMatch[1] ?? "")) {
+      const afterAnnotation = file.text.slice(annotationMatch.index + annotationMatch[0].length);
+      const signatureMatch = JAVA_SIGNATURE_RE.exec(skipOptionalJavaModifier(afterAnnotation));
+      if (signatureMatch !== null) {
+        addRoute(state, file, annotationMatch, signatureMatch);
+      }
     }
-    route = JAVA_ROUTE.exec(file.text);
+    annotationMatch = JAVA_ANNOTATION_RE.exec(file.text);
   }
   JAVA_RECORD.lastIndex = 0;
   let dto: RegExpExecArray | null = JAVA_RECORD.exec(file.text);

@@ -113,8 +113,27 @@ const REGION_KEYWORD_RE =
 const REGION_VALUE_RE = /^\s*(?:(?:is|ist|=|:|to|auf)\s*)?([a-z]{2}-[a-z]+-\d)\b/iu;
 
 const KEY_VALUE_KEYWORD_RE = /\b(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;
-const KEY_VALUE_VALUE_RE =
-  /^\s*(?:(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*)?([a-z][a-z0-9+#._-]{1,40})\b/iu;
+// Split from one regex (optional 8-branch connector alternation fused with the value atom) into a
+// connector regex plus a separate atom regex (typescript:S5843 — the combined form was still over
+// the complexity threshold even after REGION_VALUE_RE's narrower 6-branch sibling stayed under
+// it). The connector is always non-capturing and optional, so skipping it in plain code before
+// applying the atom regex is behavior-identical to the original single pattern.
+const KEY_VALUE_CONNECTOR_RE = /^\s*(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*/iu;
+const KEY_VALUE_ATOM_RE = /^\s*([a-z][a-z0-9+#._-]{1,40})\b/iu;
+
+interface KeyValueValueMatch {
+  readonly value: string;
+  readonly consumedLength: number;
+}
+
+function execKeyValueValue(text: string): KeyValueValueMatch | null {
+  const connectorLength = KEY_VALUE_CONNECTOR_RE.exec(text)?.[0].length ?? 0;
+  const atomMatch = KEY_VALUE_ATOM_RE.exec(text.slice(connectorLength));
+  if (atomMatch?.[1] === undefined) {
+    return null;
+  }
+  return { value: atomMatch[1], consumedLength: connectorLength + atomMatch[0].length };
+}
 
 const VALUE_KEY_PATTERN =
   /\b(?:uses|use|nutzt|verwenden|verwende)\s+([a-z][a-z0-9+#._-]{1,40})\s+(?:as\s+)?(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;
@@ -174,12 +193,11 @@ function collectKeyValueFacts(body: string, facts: ValueFact[]): void {
   let keyword = KEY_VALUE_KEYWORD_RE.exec(body);
   while (keyword !== null) {
     const consumedEnd = keyword.index + keyword[0].length;
-    const valueMatch = KEY_VALUE_VALUE_RE.exec(body.slice(consumedEnd));
+    const valueMatch = execKeyValueValue(body.slice(consumedEnd));
     const key = keyword[1];
-    const rawValue = valueMatch?.[1];
-    if (valueMatch !== null && key !== undefined && rawValue !== undefined) {
-      addFact(facts, key, rawValue);
-      KEY_VALUE_KEYWORD_RE.lastIndex = consumedEnd + valueMatch[0].length;
+    if (valueMatch !== null && key !== undefined) {
+      addFact(facts, key, valueMatch.value);
+      KEY_VALUE_KEYWORD_RE.lastIndex = consumedEnd + valueMatch.consumedLength;
     }
     keyword = KEY_VALUE_KEYWORD_RE.exec(body);
   }

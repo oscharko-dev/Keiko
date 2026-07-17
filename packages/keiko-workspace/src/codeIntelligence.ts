@@ -1327,16 +1327,25 @@ function collectPolyglotImportBindings(
     }
     const afterFrom = fromMatch[0].length;
     const dotsEnd = skipLeadingDots(line, afterFrom, 100);
-    const rest = /^([A-Za-z_][\w.]{0,2000})\s+import\s+(.+)$/u.exec(line.slice(dotsEnd));
-    if (rest?.[1] === undefined || rest[2] === undefined) {
+    // The trailing `(.+)$` capture is just "everything left on the line" — expressible as a plain
+    // slice with no regex needed, which also removes the SonarCloud S8786 shape flag on a bounded
+    // class immediately preceding an unbounded one (even though the required literal "import"
+    // between them already made the original safe in practice; the empirical benchmark for this
+    // exact regex showed clean linear scaling before this change too).
+    const nameMatch = /^([A-Za-z_][\w.]{0,2000})\s+import\s+/u.exec(line.slice(dotsEnd));
+    if (nameMatch?.[1] === undefined) {
       continue;
     }
-    const specifier = line.slice(afterFrom, dotsEnd) + rest[1];
+    const importListRestOfLine = line.slice(dotsEnd + nameMatch[0].length);
+    if (importListRestOfLine.length === 0) {
+      continue;
+    }
+    const specifier = line.slice(afterFrom, dotsEnd) + nameMatch[1];
     const targetPath = targetBySpecifier.get(specifier);
     if (targetPath === undefined) {
       continue;
     }
-    const importList = stripPythonLineComment(rest[2]).replace(/[()]/gu, "");
+    const importList = stripPythonLineComment(importListRestOfLine).replace(/[()]/gu, "");
     bindings.push(...collectPythonImportListBindings(file.scopePath, targetPath, importList));
   }
   return bindings;
