@@ -133,6 +133,8 @@ async function handleRuntimeGet(
       deploymentCeiling: options.deploymentCeiling,
       effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
       runtimeAvailable: options.runtimeAvailable,
+      // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
+      ...(options.runtimeAvailable ? {} : { runtimeUnavailableReason: "runtime-unqualified" }),
     };
     expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
     await fulfillJson(route, readiness);

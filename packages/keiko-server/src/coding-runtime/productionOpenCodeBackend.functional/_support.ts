@@ -36,7 +36,7 @@ import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js"
 const MAX_READ_BYTES = 65_536;
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope";
+  mode: "productive" | "out-of-scope" | "discovery";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -129,7 +129,47 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => "functional-operator",
   });
-  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(input.script));
+  return withScriptedModelSeams(deps, input.script);
+}
+
+export interface DiscoveryBffDepsInput {
+  readonly stateRoot: string;
+  readonly workspaceLifecycle: WorkspaceLifecycleService;
+  readonly script: ScriptState;
+  readonly uiPort: number;
+}
+
+/**
+ * Boots the real BFF composition with NO runtime injection seam: no `codingRuntimeResolver`, no
+ * `codingRuntimeProductionPorts`, no `createSupervisor`, and no `KEIKO_OPENCODE_REAL_*` staging
+ * seam. Coding-runtime activation must resolve through production discovery — the dev lane's
+ * staged payload of this repository checkout — exactly as `npm run dev:start` composes it. Only
+ * the model seam (scripted gateway responses) and the task-workspace fixture are replaced.
+ */
+export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHandlerDeps {
+  for (const dir of ["state", "ui-db", "evidence"]) {
+    mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
+  }
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    KEIKO_STATE_DIR: join(input.stateRoot, "state"),
+    KEIKO_UI_PORT: String(input.uiPort),
+    KEIKO_CODING_RUNTIME_DEV_LANE: "1",
+    KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
+  };
+  const deps = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: join(input.stateRoot, "evidence"),
+    env,
+    uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    workspaceLifecycle: input.workspaceLifecycle,
+    codingRuntimeServerPrincipal: () => "functional-operator",
+  });
+  return withScriptedModelSeams(deps, input.script);
+}
+
+function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHandlerDeps {
+  const chat = (): Promise<NormalizedResponse> => Promise.resolve(scriptedResponse(script));
   return {
     ...deps,
     config: functionalGatewayConfig(),
@@ -301,6 +341,14 @@ export function scriptedResponse(script: ScriptState): NormalizedResponse {
           },
         })
       : normal();
+  }
+  // The discovery journey (#2475) proves activation and the live runtime with the real secure
+  // read and the runtime question. The edit and verification legs need a live browser bridge and
+  // a product-registered project respectively; the staged-seam control and the W1.10 UI journey
+  // own them.
+  if (script.mode === "discovery") {
+    if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
+    return step === 1 ? tool("question", question()) : normal();
   }
   if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
   if (step === 1) return tool("question", question());

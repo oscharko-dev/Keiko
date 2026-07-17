@@ -102,6 +102,38 @@ describe("Node secure workspace-read process adapter", () => {
     await expect(run).rejects.toThrow("secure-workspace-read-aborted");
   });
 
+  // #2475 regression (Linux-deterministic, macOS pipe buffering masks it): a helper that exits
+  // before reading its request surfaces EPIPE on the stdin stream; without the adapter's error
+  // listener that asynchronous stream error is an uncaught exception in the server process. The
+  // run itself must settle through the close path.
+  it("registers a stdin error listener so an early helper exit cannot crash the process", async () => {
+    const stdinEvents: string[] = [];
+    const fake = fakeChild();
+    const stdin = fake.child.stdin;
+    const observed: SecureWorkspaceReadNodeChild = {
+      ...fake.child,
+      stdin: {
+        end: (data?: Uint8Array): unknown => stdin.end(data),
+        on: (event, listener): unknown => {
+          stdinEvents.push(event);
+          return stdin.on(event, listener);
+        },
+      },
+    };
+    const factory = createNodeSecureWorkspaceReadProcessFactory({
+      binding,
+      safeCwd: "/Applications/Keiko.app/Contents/Resources/runtime",
+      spawn: () => observed,
+    });
+    const run = factory.create(artifact).run({
+      stdin: Buffer.from("KSR1"),
+      signal: new AbortController().signal,
+    });
+    expect(stdinEvents).toContain("error");
+    fake.close(1);
+    await expect(run).rejects.toThrow("secure-workspace-read-process-failed");
+  });
+
   it("rejects any artifact other than the closed portable binding", () => {
     const factory = createNodeSecureWorkspaceReadProcessFactory({
       binding,

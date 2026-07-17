@@ -132,6 +132,7 @@
     "check:portable-manifest": "node scripts/check-portable-runtime-manifest.mjs --contract-example docs/release/portable-runtime-artifact-contract.md",
     "check:portable-approvals": "node scripts/check-portable-runtime-approvals.mjs",
     "portable:stage": "node scripts/stage-portable-runtime.mjs",
+    "dev:coding-runtime:stage": "node scripts/stage-dev-coding-runtime.mjs",
     "portable:prepare-sidecars": "node scripts/prepare-approved-sidecar-payloads.mjs",
     "portable:approve-runtimes": "node scripts/update-portable-runtime-approvals.mjs",
     "portable:verify-signing": "node scripts/verify-portable-runtime-signing.mjs",
