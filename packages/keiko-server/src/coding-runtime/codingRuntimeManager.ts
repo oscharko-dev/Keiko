@@ -27,7 +27,10 @@ import {
   type PortableSidecarAvailabilityInput,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
-import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
+import {
+  inspectStagedSidecarPayload,
+  type PortableSidecarDiskEvidence,
+} from "../update-portable-sidecar-staging-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
@@ -210,6 +213,7 @@ export interface CodingRuntimeManagerDeps {
             readonly verification: PortableSidecarRuntimeVerification;
             readonly resourceRoot: string;
             readonly target: PortableSidecarAvailabilityInput["target"];
+            readonly admission?: PortableRuntimeAdmissionPolicy | undefined;
           }
         | undefined)
     | undefined;
@@ -335,6 +339,7 @@ interface NormalizedCodingRuntimeManagerDeps {
             readonly verification: PortableSidecarRuntimeVerification;
             readonly resourceRoot: string;
             readonly target: PortableSidecarAvailabilityInput["target"];
+            readonly admission?: PortableRuntimeAdmissionPolicy | undefined;
           }
         | undefined)
     | undefined;
@@ -413,10 +418,20 @@ interface SupervisedRuntimeEvidenceContext {
   readonly modelSource: CodingWorkbenchModelSource;
 }
 
+/**
+ * Which admission policy vouched for the verification record (#2475, ADR-0140). The launch-time
+ * availability re-check asserts exactly the checks that policy's discovery performed: the
+ * release-qualified policy requires the complete packaged evidence set; the functional dev lane
+ * never claims platform signature or supervisor qualification, so re-asserting them would refuse
+ * an honestly weaker record. Absent markers fail closed to the release-qualified policy.
+ */
+type PortableRuntimeAdmissionPolicy = "release-qualified" | "functional-dev-lane";
+
 interface ResolvedPortableRuntime {
   readonly verification: PortableSidecarRuntimeVerification;
   readonly resourceRoot: string;
   readonly target: PortableSidecarAvailabilityInput["target"];
+  readonly admission?: PortableRuntimeAdmissionPolicy | undefined;
   readonly managedRoot: string;
   readonly executablePath: string;
 }
@@ -1274,11 +1289,41 @@ function portableAvailabilityFailure(
 ): FailureResult | undefined {
   if (resolved === undefined) return undefined;
   const disk = inspectStagedSidecarPayload(resolved.resourceRoot, resolved.verification);
+  if (resolved.admission === "functional-dev-lane") {
+    return devLaneLaunchAvailabilityFailure(resolved.verification, disk);
+  }
   const availability = evaluatePortableSidecarAvailability(resolved.verification, {
     target: resolved.target,
     ...disk,
   });
   return availability.available ? undefined : failure(availability.reason, false);
+}
+
+/**
+ * Launch gate for dev-lane-admitted records: every disk fact is recomputed (the discovery-to-
+ * launch tamper window stays fail-closed) and every stored check the lane's admission actually
+ * performs is re-asserted. Signature and supervisor qualification are out of that admission
+ * domain — they stay honestly unverified in the record and are never consulted here.
+ */
+function devLaneLaunchAvailabilityFailure(
+  verification: PortableSidecarRuntimeVerification,
+  disk: PortableSidecarDiskEvidence,
+): FailureResult | undefined {
+  if (!verification.availability.redistributionApproved) {
+    return failure("redistribution-unapproved", false);
+  }
+  if (!disk.payloadPresent) return failure("payload-missing", false);
+  if (!disk.archiveDigestVerified) return failure("archive-digest-mismatch", false);
+  if (!disk.executableTreeDigestVerified) {
+    return failure("executable-tree-digest-mismatch", false);
+  }
+  if (!verification.availability.runtimeVersionVerified) {
+    return failure("runtime-version-mismatch", false);
+  }
+  if (!verification.availability.protocolSchemaVerified) {
+    return failure("protocol-schema-mismatch", false);
+  }
+  return undefined;
 }
 
 function cancellationFailure(

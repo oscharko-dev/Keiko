@@ -1,11 +1,24 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,
 } from "@oscharko-dev/keiko-tools";
 
+import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import {
+  discoverDevLaneOpenCode,
+  type DevLaneOpenCodeDiscovery,
+  type DevLaneOpenCodeRefusalReason,
+  type DevLanePortableOpenCodeRuntime,
+} from "./devLanePortableCodingRuntime.js";
+import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import type { ResolvedPortableOpenCodeRuntime } from "./productionOpenCodeBackend.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
@@ -26,46 +39,129 @@ export interface ProductionOpenCodeActivationInput {
   /**
    * Point-of-use verified secure read port for the packaged install. The packaged platform
    * inspection (signature and immutable-tree proof) is a separately owned deliverable; until a
-   * deployment supplies this port, activation fails closed and coding readiness stays unavailable.
+   * deployment supplies this port, packaged activation fails closed. The macOS dev lane
+   * constructs its own digest-pinned port from the staged dev-lane binding (ADR-0140).
    */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
+  /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
+  readonly resolveWorkspaceRoot?:
+    (() => string | undefined | Promise<string | undefined>) | undefined;
   readonly editorAgentClient?:
     ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
 }
 
+export type ProductionOpenCodeActivationResult =
+  | { readonly ports: ProductionOpenCodePorts; readonly unavailableReason?: undefined }
+  | {
+      readonly ports?: undefined;
+      readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
+    };
+
 /**
- * Assembles the production OpenCode runtime ports from the attested portable payload. Every
- * prerequisite is mandatory: a qualified portable OpenCode artifact, a valid loopback UI port for
- * gateway and editor-agent routing, and a verified secure-read port. Any missing prerequisite
- * yields `undefined`, which keeps the runtime host unqualified and the Code surface unavailable.
+ * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
+ * packaged portable artifact where one exists, otherwise the explicitly opted-in macOS dev-lane
+ * payload. Every prerequisite is mandatory; the first missing one names the content-free
+ * unavailability reason and keeps the runtime host unqualified and the Code surface unavailable.
  */
-export function resolveProductionOpenCodePorts(
+export function resolveProductionOpenCodeActivation(
   input: ProductionOpenCodeActivationInput,
-): ProductionOpenCodePorts | undefined {
-  const portable = discoverQualifiedPortableOpenCode({ env: input.env });
+): ProductionOpenCodeActivationResult {
+  if (codingSidecarDisabledByPolicy(input.env)) {
+    return { unavailableReason: "runtime-disabled" };
+  }
+  const runtime = resolveRuntime(input.env);
+  if (runtime.unavailableReason !== undefined) {
+    return { unavailableReason: runtime.unavailableReason };
+  }
   const loopback = loopbackBaseUrl(input.env);
-  const secureWorkspaceTextRead = input.secureWorkspaceTextRead;
-  if (portable === undefined || loopback === undefined || secureWorkspaceTextRead === undefined) {
-    return undefined;
+  if (loopback === undefined) return { unavailableReason: "loopback-unavailable" };
+  const secureWorkspaceTextRead = resolveSecureRead(input, runtime.portable);
+  if (secureWorkspaceTextRead === undefined) {
+    return { unavailableReason: "secure-read-unavailable" };
   }
   return {
-    backend: createProductionOpenCodeBackend({
-      portable,
-      runtimeStateRoot: input.runtimeStateDir,
-      gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
-      runtimeEvidence: input.runtimeEvidence,
-      gatewayReadiness: input.gatewayReadiness,
-      ...(input.fetch ? { fetch: input.fetch } : {}),
-    }),
-    secureWorkspaceTextRead,
-    editorAgentClient:
-      input.editorAgentClient ??
-      new EditorAgentHttpClient({
-        baseUrl: loopback,
-        transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
+    ports: {
+      backend: createProductionOpenCodeBackend({
+        portable: runtime.portable,
+        runtimeStateRoot: input.runtimeStateDir,
+        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        runtimeEvidence: input.runtimeEvidence,
+        gatewayReadiness: input.gatewayReadiness,
+        ...(input.fetch ? { fetch: input.fetch } : {}),
       }),
+      secureWorkspaceTextRead,
+      editorAgentClient:
+        input.editorAgentClient ??
+        new EditorAgentHttpClient({
+          baseUrl: loopback,
+          transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
+        }),
+    },
   };
+}
+
+type ResolvedRuntime =
+  | { readonly portable: ResolvedPortableOpenCodeRuntime; readonly unavailableReason?: undefined }
+  | {
+      readonly portable?: undefined;
+      readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
+    };
+
+function resolveRuntime(env: NodeJS.ProcessEnv): ResolvedRuntime {
+  const packaged = discoverQualifiedPortableOpenCode({ env });
+  if (packaged !== undefined) return { portable: packaged };
+  return devLaneRuntime(discoverDevLaneOpenCode({ env }));
+}
+
+function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
+  if (discovery.outcome === "activated") return { portable: discovery.runtime };
+  if (discovery.outcome === "inactive") return { unavailableReason: "platform-unqualified" };
+  return { unavailableReason: devLaneRefusalReason(discovery.reason) };
+}
+
+function devLaneRefusalReason(
+  reason: DevLaneOpenCodeRefusalReason,
+): CodingWorkbenchRuntimeUnavailableReason {
+  switch (reason) {
+    case "platform-unsupported":
+    case "packaged-install-present":
+    case "not-a-dev-checkout":
+      return "dev-lane-refused";
+    case "secure-read-helper-missing":
+    case "secure-read-helper-stale":
+      return "secure-read-unavailable";
+    case "payload-missing":
+    case "payload-unapproved":
+    case "payload-tampered":
+      return reason;
+  }
+}
+
+function resolveSecureRead(
+  input: ProductionOpenCodeActivationInput,
+  portable: ResolvedPortableOpenCodeRuntime,
+): SecureWorkspaceTextReadPort | undefined {
+  if (input.secureWorkspaceTextRead !== undefined) return input.secureWorkspaceTextRead;
+  if (!isDevLaneRuntime(portable) || input.resolveWorkspaceRoot === undefined) return undefined;
+  try {
+    const safeCwd = join(input.runtimeStateDir, "coding-runtime", "secure-read");
+    mkdirSync(safeCwd, { recursive: true, mode: 0o700 });
+    return createDevLaneSecureWorkspaceTextReadPort({
+      binding: portable.secureRead,
+      resolveWorkspaceRoot: input.resolveWorkspaceRoot,
+      safeCwd,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** Only the dev-lane union member carries the structural `lane` marker. */
+function isDevLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is DevLanePortableOpenCodeRuntime {
+  return "lane" in portable;
 }
 
 function loopbackBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
