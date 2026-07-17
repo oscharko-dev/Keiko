@@ -1,5 +1,5 @@
 const actionsAppId = 15368;
-const gitarIdentity = { appId: 827041, userId: 159877585 };
+const qodoIdentity = { appId: 484649, userId: 151058649 };
 const socketIdentity = { appId: 156372, userId: 95510084 };
 const npmRiskPattern = /^npm\/(?:@[^/\s]+\/)?[^@\s]+@[^\s]+$/u;
 
@@ -21,7 +21,6 @@ export const requiredChecks = checks([
   ["SonarCloud Code Analysis", 12526],
   ["Socket Security: Project Report", 156372],
   ["Socket Security: Pull Request Alerts", 156372],
-  ["Gitar", 827041],
 ]);
 
 export const nativeRequiredChecks = checks([
@@ -86,16 +85,22 @@ function latestComment(comments, identity) {
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
-export function parseGitarFindings(body) {
-  const match = /\b(\d+)\s+resolved\s*\/\s*(\d+)\s+findings\b/iu.exec(body);
-  if (match !== null) {
-    const resolved = Number(match[1]);
-    const total = Number(match[2]);
-    return resolved <= total ? total - resolved : undefined;
-  }
-  const compactCleanReview =
-    /<summary>\s*<b>Code Review<\/b>\s*<kbd>✅ Approved<\/kbd>\s*<\/summary>[\s\S]*?\bNo issues found\.\s*<\/details>/iu;
-  return compactCleanReview.test(body) ? 0 : undefined;
+export function parseQodoFindings(body) {
+  if (!/Code Review by Qodo/iu.test(body)) return undefined;
+  const bugs = /Bugs\s*\((\d+)\)/iu.exec(body);
+  const rules = /Rule violations\s*\((\d+)\)/iu.exec(body);
+  const gaps = /Requirement gaps\s*\((\d+)\)/iu.exec(body);
+  if (bugs === null || rules === null || gaps === null) return undefined;
+  return Number(bugs[1]) + Number(rules[1]) + Number(gaps[1]);
+}
+
+export function latestQodoReview(comments, headSha) {
+  return comments
+    .filter((comment) => isBotEvidence(comment, qodoIdentity, true))
+    .filter(
+      (comment) => /Code Review by Qodo/iu.test(comment.body) && comment.body.includes(headSha),
+    )
+    .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
 export function packageAlerts(body) {
@@ -150,24 +155,13 @@ export function hasCurrentSocketNoAlertEvidence(checks, headSha) {
   );
 }
 
-function reviewFailures(checks, reviews, comments, headSha, socketRiskAllowlist, socketRiskActors) {
+function reviewFailures(checks, comments, headSha, socketRiskAllowlist, socketRiskActors) {
   const failures = [];
-  if (
-    reviews.some(
-      (review) =>
-        isBotEvidence(review, gitarIdentity, false) &&
-        review.commitSha === headSha &&
-        review.state === "CHANGES_REQUESTED",
-    )
-  ) {
-    failures.push("Gitar has an active CHANGES_REQUESTED review for the current head.");
-  }
-  const gitar = latestComment(comments, gitarIdentity);
-  const gitarStart = currentCheckStart(checks, headSha, ["Gitar"]);
-  const findings = commentIsCurrent(gitar, gitarStart) ? parseGitarFindings(gitar.body) : undefined;
+  const qodo = latestQodoReview(comments, headSha);
+  const findings = qodo === undefined ? undefined : parseQodoFindings(qodo.body);
   if (findings === undefined)
-    failures.push("Current Gitar finding evidence is missing or unparseable.");
-  else if (findings !== 0) failures.push(`Gitar has ${String(findings)} unresolved finding(s).`);
+    failures.push("Current Qodo finding evidence is missing or unparseable.");
+  else if (findings !== 0) failures.push(`Qodo has ${String(findings)} unresolved finding(s).`);
 
   const socket = latestComment(comments, socketIdentity);
   const socketStart = currentCheckStart(checks, headSha, [
@@ -201,15 +195,13 @@ export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
   const cleanWithoutComment =
     currentSocket === undefined && hasCurrentSocketNoAlertEvidence(checks, headSha);
   const evidenceTimes = [
-    ...checks
-      .filter((check) => check.name === "Gitar" || check.name.startsWith("Socket Security:"))
-      .map(completedAt),
-    latestComment(comments, gitarIdentity)?.updatedAt,
+    ...checks.filter((check) => check.name.startsWith("Socket Security:")).map(completedAt),
+    latestQodoReview(comments, headSha)?.updatedAt,
     currentSocket?.updatedAt,
   ]
     .map((value) => (typeof value === "number" ? value : Date.parse(value)))
     .filter(Number.isFinite);
-  if (evidenceTimes.length < (cleanWithoutComment ? 4 : 5))
+  if (evidenceTimes.length < (cleanWithoutComment ? 3 : 4))
     return ["Review-product stability evidence is incomplete."];
   return Math.max(...evidenceTimes) + stabilityMs > now
     ? ["Review-product evidence is inside the stability window."]
@@ -232,14 +224,7 @@ export function evaluateKeikoForQuality(input) {
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
   const failures = [
     ...checkFailures(input.checks, input.headSha, input.requiredChecks),
-    ...reviewFailures(
-      input.checks,
-      input.reviews,
-      input.comments,
-      input.headSha,
-      riskAllowlist,
-      riskActors,
-    ),
+    ...reviewFailures(input.checks, input.comments, input.headSha, riskAllowlist, riskActors),
     ...stabilityFailures(
       input.checks,
       input.comments,
