@@ -555,7 +555,7 @@ describe("researchEgressPort request-line binding", () => {
 describe("sanitizeVisibleText", () => {
   it("normalizes whitespace and strips control characters deterministically", () => {
     expect(sanitizeVisibleText("  react   hooks\t\n")).toBe("react hooks");
-    expect(sanitizeVisibleText("react hooks")).toBe("react hooks");
+    expect(sanitizeVisibleText("react\u0000hooks")).toBe("react hooks");
   });
 });
 
