@@ -315,6 +315,22 @@ describe("xlsxParser", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.cells).toEqual([{ column: "A", columnIndex: 0, value: "Charlie" }]);
   });
+
+  // Regression: the S8786 tag-scanning rewrite used to build a single `xml.toLowerCase()` copy
+  // and slice the ORIGINAL `xml` with indices found in that copy. `toLowerCase()` is not always
+  // length-preserving -- "İ" (U+0130, Turkish dotted capital I) lowercases to a 2-code-unit
+  // string, not 1 -- so once such a character appeared anywhere in a shared string, every
+  // subsequent tag-boundary index was off by the accumulated length difference, silently pulling
+  // in stray characters (or dropping them) from neighbouring content. Tag scanning must stay
+  // correct with no separate lowercased copy at all.
+  it("does not corrupt shared strings when a value contains a length-changing casefold character", () => {
+    const result = parseSharedStrings(
+      "<sst><si><t>İ</t></si><si><t>hello</t></si></sst>",
+      selectionFromText("", { extension: "xlsx" }),
+      buildParserOptions(),
+    );
+    expect(result.strings).toEqual(["İ", "hello"]);
+  });
 });
 
 describe("columnIndexFromName", () => {

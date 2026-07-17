@@ -106,10 +106,18 @@ function skipGreetingPrefix(text: string): number {
 const LINE_TERMINATOR_RE = /[\n\r\u2028\u2029]/u;
 // Whatever follows an embedded line break must be pure filler (blank lines / trailing
 // punctuation) for the match to still count — anything else is ordinary further chat content,
-// which the original regex could never reach past its embedded-`.`-stopping capture. A single
-// bounded-free `*` quantifier anchored at both ends over a fixed class: no adjacent/overlapping
-// quantifier, so nothing here can backtrack super-linearly either.
-const TRAILING_FILLER_RE = /^[\s.!?]*$/u;
+// which the original regex could never reach past its embedded-`.`-stopping capture. The
+// original tail was `\s*[.!?]*$`: an order-sensitive whitespace run followed by a punctuation
+// run. A same-class `[\s.!?]*` bag-of-characters check is not equivalent — it also accepts
+// punctuation *before* trailing whitespace (e.g. "!\n " after the name), which the original
+// rejected. `isPureTrailingFiller` reproduces the exact two-phase order with no regex at all, so
+// there is nothing left to backtrack on either way.
+function isPureTrailingFiller(text: string): boolean {
+  let index = 0;
+  while (index < text.length && /\s/u.test(text.charAt(index))) index += 1;
+  while (index < text.length && ".!?".includes(text.charAt(index))) index += 1;
+  return index === text.length;
+}
 const DISALLOWED_NAME_TOKENS = new Set([
   "and",
   "are",
@@ -206,7 +214,7 @@ function extractIdentityName(text: string, requireStrictName: boolean): string |
   const remainder = terminatorIndex === -1 ? "" : rest.slice(terminatorIndex);
   // Anything after the first line break must be pure filler; real further content (a second
   // chat line, another sentence, …) means this was never a single-line identity statement.
-  if (remainder.length > 0 && !TRAILING_FILLER_RE.test(remainder)) {
+  if (remainder.length > 0 && !isPureTrailingFiller(remainder)) {
     return null;
   }
   const name = normalizeCandidateName(stripIdentityCaptureTail(firstLine));

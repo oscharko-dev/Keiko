@@ -113,6 +113,16 @@ describe("tryExtractAmbientIdentity", () => {
     if (outcome?.kind !== "candidate") return;
     expect(outcome.proposal.body).toBe("The user's name is Paul.");
   });
+
+  // Regression: the original `\s*[.!?]*$` tail is order-sensitive (whitespace run, THEN a
+  // punctuation run). A same-class `[\s.!?]*` bag-of-characters rewrite loses that order and
+  // wrongly accepts punctuation followed by MORE trailing whitespace too — real further chat
+  // content (e.g. a reply starting with "!") must still be rejected the way the original was.
+  it("rejects a trailing line with punctuation followed by more whitespace (order-sensitive filler)", () => {
+    expect(tryExtractAmbientIdentity("my name is Sarah\n! ", ctx())).toBeNull();
+    expect(tryExtractAmbientIdentity("my name is Sarah\n!!! ", ctx())).toBeNull();
+    expect(tryExtractAmbientIdentity("my name is Sarah\n!\n ", ctx())).toBeNull();
+  });
 });
 
 // ─── Regex performance (SonarCloud S8786 regression) ──────────────────────────

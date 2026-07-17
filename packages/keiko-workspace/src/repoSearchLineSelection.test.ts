@@ -80,6 +80,17 @@ describe("looksLikeBlockHeader", () => {
     expect(longTypePrefix.length).toBeGreaterThan(300);
     expect(looksLikeBlockHeader(`${longTypePrefix} customBuild(int a) {`)).toBe(true);
   });
+
+  // Regression: the manual word-boundary scan used `[\w$]` to decide whether a candidate start
+  // position was preceded by a "boundary", but JS's real `\b` (which the original regex's leading
+  // `\b` relied on) is defined purely in terms of `\w` = `[A-Za-z0-9_]` and does NOT include `$`.
+  // A digit immediately followed by `$` IS a real boundary there (digit is `\w`, `$` isn't): the
+  // scan must retry starting at the `$` itself, not skip past it as if it were a continuation of
+  // the preceding digit. (Confirmed to actually discriminate: the pre-fix scan returns `false`
+  // for this exact line, since it never retries at the `$` position at all.)
+  it("recognises a signature whose type-prefix starts right after a digit-adjacent $", () => {
+    expect(looksLikeBlockHeader("9$Type getValue() {")).toBe(true);
+  });
 });
 
 describe("looksLikeSignatureStart", () => {

@@ -340,23 +340,62 @@ function xmlTextContent(value: string): string {
 // which is also the only situation where a regex-based scan could not have found a further,
 // later element either (a later element's own close token would have to live in that same,
 // entirely-empty remainder).
-function isTagNameContinuation(lower: string, index: number): boolean {
-  const ch = lower[index];
-  return ch !== undefined && /[a-z0-9_]/u.test(ch);
+// ASCII-only case fold: uppercase A-Z to lowercase, everything else (including any non-ASCII
+// character) unchanged. XML tag/attribute names in an XLSX part are always ASCII, so matching
+// them never needs `String#toLowerCase()`'s general Unicode case fold -- which is exactly what a
+// prior version of this file got wrong. `xml.toLowerCase()` is not always length-preserving (e.g.
+// "İ".toLowerCase() has length 2, not 1); once such a character appears anywhere in a shared
+// string or cell value, indices found by searching that separately-lowercased copy no longer line
+// up with the original `xml` they were later sliced from, silently corrupting every subsequent
+// tag boundary. Scanning `xml` itself, one ASCII-folded character at a time, keeps a single set
+// of indices that is always correct.
+function asciiLowerChar(ch: string): string {
+  const code = ch.codePointAt(0) ?? 0;
+  return code >= 0x41 && code <= 0x5a ? String.fromCodePoint(code + 32) : ch;
+}
+
+// Finds the first case-insensitive occurrence of `needleLower` (already ASCII-lowercase) in
+// `haystack`, starting at `fromIndex`. `needleLower.length` is always small and fixed (a literal
+// tag name or `</tag>` token), so this is linear in `haystack.length` -- the same complexity
+// class `String#indexOf` has, with no possibility of the backtracking this file's regex rewrite
+// was already built to avoid (S8786).
+function indexOfAsciiCaseInsensitive(
+  haystack: string,
+  needleLower: string,
+  fromIndex: number,
+): number {
+  const needleLength = needleLower.length;
+  const limit = haystack.length - needleLength;
+  candidate: for (let index = Math.max(fromIndex, 0); index <= limit; index += 1) {
+    for (let offset = 0; offset < needleLength; offset += 1) {
+      if (asciiLowerChar(haystack.charAt(index + offset)) !== needleLower.charAt(offset)) {
+        continue candidate;
+      }
+    }
+    return index;
+  }
+  return -1;
+}
+
+function isTagNameContinuation(xml: string, index: number): boolean {
+  const ch = xml.charAt(index);
+  if (ch === "") return false;
+  const lowerCh = asciiLowerChar(ch);
+  return (lowerCh >= "a" && lowerCh <= "z") || (ch >= "0" && ch <= "9") || ch === "_";
 }
 
 function findOpenTag(
-  lower: string,
+  xml: string,
   tagNameLower: string,
   fromIndex: number,
 ): { readonly openIndex: number; readonly afterOpen: number } | undefined {
   const openNeedle = `<${tagNameLower}`;
   let cursor = fromIndex;
-  while (cursor < lower.length) {
-    const openIndex = lower.indexOf(openNeedle, cursor);
+  while (cursor < xml.length) {
+    const openIndex = indexOfAsciiCaseInsensitive(xml, openNeedle, cursor);
     if (openIndex === -1) return undefined;
     const afterOpen = openIndex + openNeedle.length;
-    if (isTagNameContinuation(lower, afterOpen)) {
+    if (isTagNameContinuation(xml, afterOpen)) {
       cursor = openIndex + 1;
       continue;
     }
@@ -368,13 +407,12 @@ function findOpenTag(
 // Replacement for `/<tag\b[\s\S]*?<\/tag>/gi`: yields each full `<tag ...>...</tag>` element
 // (open tag through close tag, inclusive) in document order.
 function* iterateXmlElements(xml: string, tagNameLower: string): Generator<string, void, unknown> {
-  const lower = xml.toLowerCase();
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(lower, tagNameLower, cursor);
+    const open = findOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const closeIndex = lower.indexOf(closeNeedle, open.afterOpen);
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.afterOpen);
     if (closeIndex === -1) return;
     const elementEnd = closeIndex + closeNeedle.length;
     yield xml.slice(open.openIndex, elementEnd);
@@ -388,15 +426,14 @@ function* iterateXmlElementContents(
   xml: string,
   tagNameLower: string,
 ): Generator<string, void, unknown> {
-  const lower = xml.toLowerCase();
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(lower, tagNameLower, cursor);
+    const open = findOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const openTagEnd = lower.indexOf(">", open.afterOpen);
+    const openTagEnd = xml.indexOf(">", open.afterOpen);
     if (openTagEnd === -1) return;
-    const closeIndex = lower.indexOf(closeNeedle, openTagEnd + 1);
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, openTagEnd + 1);
     if (closeIndex === -1) return;
     yield xml.slice(openTagEnd + 1, closeIndex);
     cursor = closeIndex + closeNeedle.length;
@@ -406,12 +443,11 @@ function* iterateXmlElementContents(
 // Replacement for `/<tag\b[^>]*>/gi`: yields each self-contained start/self-closing tag (no
 // paired close tag required) in document order.
 function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<string, void, unknown> {
-  const lower = xml.toLowerCase();
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(lower, tagNameLower, cursor);
+    const open = findOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const tagEnd = lower.indexOf(">", open.afterOpen);
+    const tagEnd = xml.indexOf(">", open.afterOpen);
     if (tagEnd === -1) return;
     yield xml.slice(open.openIndex, tagEnd + 1);
     cursor = tagEnd + 1;

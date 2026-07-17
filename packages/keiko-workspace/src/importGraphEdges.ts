@@ -89,15 +89,88 @@ const RESOLVE_EXTENSIONS = [
 // that keeps the ambiguous-shape S8786 flags no matter how the outer bound is tuned (a bound
 // only caps the worst case, it doesn't make the two `\S+` atoms disjoint from each other).
 //
-// Every legal ES import clause (default/named/namespace/type, or none for a side-effect import)
-// is built only from identifiers, `{`/`}`/`,`/`*`/`as`/`type`, and whitespace -- none of which is
-// a quote character. That means the first quote after the `import` keyword always opens the
-// module specifier; there is no need to enumerate the clause's tokens (or find a literal "from")
-// at all. `findLineQuotedSpecifier` scans for it directly, once, with no backtracking possible --
-// and as a side effect drops the {0,50000} token-count ceiling entirely (a generated/minified
-// barrel file's named-import count can no longer silently exceed a hard bound; see the "past the
-// old bound" regression test).
+// An earlier fix for that shape ("first quote after `import` is always the specifier") was too
+// permissive in two ways, confirmed by direct review: it dropped side-effect/from-clause imports
+// whose specifier's opening quote sits on a later line (the search never looked past the current
+// line), and it fabricated `static-import` edges for ANY `import`-prefixed line that happens to
+// contain a later quote at all -- including `import someIdentifier.foo("bar")` (not an import
+// statement) and bare `import("./x")` (a dynamic-import EXPRESSION, already covered by
+// DYNAMIC_IMPORT below, and now double-counted). `scanImportClauseFrom` restores the original
+// regex's actual guarantee -- the text between `import` and the specifier's quote is provably
+// nothing but clause syntax (identifiers, `{`/`}`/`,`/`*`, and whitespace including newlines) --
+// by validating that shape character-by-character instead of assuming it. Any other character
+// aborts the match for this `import` occurrence, exactly as the original regex would simply fail
+// to match and move on to the next line.
 const ESM_IMPORT_KEYWORD = /^[ \t]*import\b/gmu;
+const IMPORT_CLAUSE_STRUCTURAL_CHARS = new Set(["{", "}", ",", "*"]);
+
+function isIdentifierChar(char: string): boolean {
+  return /[A-Za-z0-9_$]/u.test(char);
+}
+
+function skipWhitespaceRun(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && /\s/u.test(text.charAt(index))) index += 1;
+  return index;
+}
+
+// Scans a from-clause-or-none import header starting right after the required whitespace that
+// follows `import`, returning the index right after a validated `from` keyword, or `undefined` if
+// the header is not built entirely from clause syntax before either running out of text or
+// reaching a character that could never appear in one (e.g. the `.`/`(` in
+// `someIdentifier.foo(`, or the `(` that opens a dynamic-import expression).
+function scanImportClauseFrom(text: string, start: number): number | undefined {
+  let index = start;
+  for (;;) {
+    if (index >= text.length) return undefined;
+    const char = text.charAt(index);
+    if (/\s/u.test(char)) {
+      index = skipWhitespaceRun(text, index);
+      continue;
+    }
+    if (IMPORT_CLAUSE_STRUCTURAL_CHARS.has(char)) {
+      index += 1;
+      continue;
+    }
+    if (isIdentifierChar(char)) {
+      let end = index;
+      while (end < text.length && isIdentifierChar(text.charAt(end))) end += 1;
+      if (text.slice(index, end) === "from") return end;
+      index = end;
+      continue;
+    }
+    return undefined;
+  }
+}
+
+function readQuotedSpecifier(text: string, at: number): { readonly value: string } | undefined {
+  const quote = text.charAt(at);
+  if (quote !== '"' && quote !== "'") return undefined;
+  const closeIndex = text.indexOf(quote, at + 1);
+  if (closeIndex === -1) return undefined;
+  const value = text.slice(at + 1, closeIndex);
+  return value.length > 0 && !value.includes("\n") ? { value } : undefined;
+}
+
+function matchEsmStaticImportSpecifier(
+  text: string,
+  afterKeyword: number,
+): { readonly value: string } | undefined {
+  // "import" must be followed by at least one whitespace char, exactly like the original regex's
+  // mandatory `\s+` -- a bare "(" here is a dynamic-import EXPRESSION (DYNAMIC_IMPORT handles
+  // it), and nothing else can legally abut "import" either way.
+  if (afterKeyword >= text.length || !/\s/u.test(text.charAt(afterKeyword))) return undefined;
+  const afterRequiredWhitespace = skipWhitespaceRun(text, afterKeyword);
+  const nextChar = text.charAt(afterRequiredWhitespace);
+  if (nextChar === '"' || nextChar === "'") {
+    return readQuotedSpecifier(text, afterRequiredWhitespace);
+  }
+  const afterFrom = scanImportClauseFrom(text, afterRequiredWhitespace);
+  if (afterFrom === undefined) return undefined;
+  const afterFromWhitespace = skipWhitespaceRun(text, afterFrom);
+  if (afterFromWhitespace === afterFrom) return undefined;
+  return readQuotedSpecifier(text, afterFromWhitespace);
+}
 const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
 const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
@@ -114,37 +187,12 @@ function lineNumberOf(text: string, charIndex: number): number {
   return line;
 }
 
-// Finds the module specifier inside the first matching quote pair on the same line starting at
-// `from` (a single-line scan: `lineEnd` bounds the search so a specifier can never span a line
-// break, matching the original `[^"'\n]+` class).
-function findLineQuotedSpecifier(
-  text: string,
-  from: number,
-): { readonly value: string; readonly end: number } | undefined {
-  const lineEnd = text.indexOf("\n", from);
-  const searchEnd = lineEnd === -1 ? text.length : lineEnd;
-  let quoteIndex = -1;
-  for (let index = from; index < searchEnd; index += 1) {
-    const char = text.charAt(index);
-    if (char === '"' || char === "'") {
-      quoteIndex = index;
-      break;
-    }
-  }
-  if (quoteIndex === -1) return undefined;
-  const quote = text.charAt(quoteIndex);
-  const closeIndex = text.indexOf(quote, quoteIndex + 1);
-  if (closeIndex === -1 || closeIndex > searchEnd) return undefined;
-  const value = text.slice(quoteIndex + 1, closeIndex);
-  return value.length > 0 ? { value, end: closeIndex + 1 } : undefined;
-}
-
 function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void {
   ESM_IMPORT_KEYWORD.lastIndex = 0;
   let match: RegExpExecArray | null = ESM_IMPORT_KEYWORD.exec(text);
   while (match !== null) {
     const afterKeyword = match.index + match[0].length;
-    const specifier = findLineQuotedSpecifier(text, afterKeyword);
+    const specifier = matchEsmStaticImportSpecifier(text, afterKeyword);
     if (specifier !== undefined) {
       hits.push({
         specifier: specifier.value,

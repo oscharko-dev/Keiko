@@ -83,6 +83,31 @@ describe("collectImportSpecifiers", () => {
     expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "./big"]]);
   });
 
+  // Regression: an intermediate fix for the S8786 shape ("first quote after `import` is always
+  // the specifier") was too permissive in both directions -- confirmed by independent review.
+  it("still finds a static import whose specifier's quote is on a line after 'from'", () => {
+    const hits = collectImportSpecifiers('import Foo from\n  "module-a";');
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "module-a"]]);
+  });
+
+  it("still finds a bare side-effect import whose quote is on a later line", () => {
+    const hits = collectImportSpecifiers('import\n  "module-b";');
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "module-b"]]);
+  });
+
+  it("does not fabricate a static-import edge from a non-import statement", () => {
+    const hits = collectImportSpecifiers('import someIdentifier.foo("bar");');
+    expect(hits).toEqual([]);
+  });
+
+  it("does not double-count a bare dynamic-import expression as a static import too", () => {
+    const withoutSpace = collectImportSpecifiers('import("./dynamic-no-space").then(cb);');
+    expect(withoutSpace.map((hit) => hit.kind)).toEqual(["dynamic-import"]);
+
+    const withSpace = collectImportSpecifiers('import ("./dynamic-with-space").then(cb);');
+    expect(withSpace.map((hit) => hit.kind)).toEqual(["dynamic-import"]);
+  });
+
   it("completes within budget for a long token run with no closing 'from' (S8786 regression)", () => {
     // ESM_IMPORT's inner `(?:[ \t]+\S+)*` had the unbounded-nested-quantifier shape S8786
     // flags (it measured linear in practice here because `[ \t]` and `\S` are disjoint, but the

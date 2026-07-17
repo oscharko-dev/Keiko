@@ -62,14 +62,22 @@ export function looksLikeBlockHeader(line: string): boolean {
 const FUNCTION_SIGNATURE_TAIL =
   /[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]+)?\{/uy;
 
-function isIdentChar(char: string): boolean {
-  return /[\w$]/u.test(char);
+// Real `\b` (which the original pattern's leading `\b` relied on) fires at a position exactly
+// when the character before it and the character at it disagree on being a `\w` = `[A-Za-z0-9_]`
+// character — the string's start/end count as a non-word "before"/"after". `\w` does NOT include
+// `$`, even though `$` is itself a valid identifier character in JS/TS, so a `$` sitting right
+// after a digit or letter (e.g. "9$Type", "x$1") IS a real boundary (digit/letter is `\w`, `$`
+// isn't) while a `$` at the very start of the line is NOT (both "sides" are non-word).
+function isWordChar(char: string): boolean {
+  return /\w/u.test(char);
 }
 
 function looksLikeFunctionSignatureTail(trimmed: string): boolean {
   for (let index = 0; index < trimmed.length; index += 1) {
-    if (!/[A-Za-z_$]/u.test(trimmed.charAt(index))) continue;
-    if (index > 0 && isIdentChar(trimmed.charAt(index - 1))) continue;
+    const atChar = trimmed.charAt(index);
+    if (!/[A-Za-z_$]/u.test(atChar)) continue;
+    const beforeIsWord = index > 0 && isWordChar(trimmed.charAt(index - 1));
+    if (beforeIsWord === isWordChar(atChar)) continue;
     FUNCTION_SIGNATURE_TAIL.lastIndex = index;
     if (FUNCTION_SIGNATURE_TAIL.test(trimmed)) return true;
   }
