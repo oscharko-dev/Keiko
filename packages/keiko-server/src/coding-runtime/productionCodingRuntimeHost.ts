@@ -58,6 +58,7 @@ export function createProductionCodingRuntimeHost(
     approvalAuthority: runtime.approvalAuthority,
     taskDispatcher: runtime.taskDispatcher,
     ...(runtime.questionPort ? { questionPort: runtime.questionPort } : {}),
+    ...(runtime.researchGrants ? { researchGrants: runtime.researchGrants } : {}),
     cancellationRegistry: runtime.cancellationRegistry,
     ...(runtime.runtimeCapabilityAuthenticator
       ? { runtimeCapabilityAuthenticator: runtime.runtimeCapabilityAuthenticator }

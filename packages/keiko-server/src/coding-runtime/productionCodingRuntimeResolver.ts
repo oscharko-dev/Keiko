@@ -149,6 +149,7 @@ function composeRuntime(
       receiver(event);
     }),
     approvalAuthority: { issue: (request) => manager.issueApproval(request) },
+    researchGrants,
     taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
     questionPort: createProductionRuntimeQuestionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
