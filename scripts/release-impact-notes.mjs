@@ -94,7 +94,7 @@ function sanitizeUserFacingText(value) {
     .replace(/\b(?:issues?|prs?|pull requests?)\s*#\d+\b/giu, "")
     .replace(
       new RegExp(
-        `\\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}\\(#\\d+\\)\\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}`,
+        String.raw`\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}\(#\d+\)\s{0,${MAX_SANITIZED_WHITESPACE_RUN}}`,
         "gu",
       ),
       " ",

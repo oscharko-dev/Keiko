@@ -227,8 +227,8 @@ describe("update remediation manager", () => {
     expect(completed.actions[0]?.status).toBe("completed");
   });
 
-  it("repairs affected local-state artifacts without touching customer content", async () => {
-    if (process.platform === "win32") return;
+  it("repairs affected local-state artifacts without touching customer content", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = makeStateDir();
     const memoryDb = join(stateDir, "memory", "keiko-memory.db");
     touch(memoryDb, "sealed-memory");
@@ -428,8 +428,8 @@ describe("update remediation manager", () => {
     ).toBe("failed");
   });
 
-  it("treats unsupported owned runtime entries as manual review", () => {
-    if (process.platform === "win32") return;
+  it("treats unsupported owned runtime entries as manual review", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = makeStateDir();
     const target = join(tempRoots[0] ?? dirname(stateDir), "outside");
     mkdirSync(target, { recursive: true });

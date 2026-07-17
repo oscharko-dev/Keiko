@@ -34,11 +34,49 @@ describe("tryExtractAmbientIdentity", () => {
     expect(outcome.proposal.body).toBe("The user's name is Anna.");
   });
 
-  it('extracts the greeting-prefixed "hallo keiko, ich bin X" weak form when strictly capitalized', () => {
-    const outcome = tryExtractAmbientIdentity("Hallo Keiko, ich bin Paul", ctx());
+  // Trailing whitespace/punctuation handling: these encode the exact edge cases the old
+  // `\s*[.!?]*$` regex tail resolved, now handled by plain-JS stripping (see rewrite note below).
+  // The trailing-newline and trailing-blank-line cases additionally cover: a trailing newline
+  // (and nothing else after it) must still be absorbed, matching the original `.+?\s*[.!?]*$`
+  // regex's behaviour on this input; and trailing blank lines / punctuation-only lines after the
+  // name are filler, not content, which the original regex's `\s*[.!?]*$` tail (matching across
+  // embedded newlines via `\s`) accepted.
+  it.each([
+    {
+      name: 'the greeting-prefixed "hallo keiko, ich bin X" weak form when strictly capitalized',
+      text: "Hallo Keiko, ich bin Paul",
+      expectedBody: "The user's name is Paul.",
+    },
+    {
+      name: "up to the maximum number of name tokens",
+      text: "my name is Anna Maria Schmidt Meyer",
+      expectedBody: "The user's name is Anna Maria Schmidt Meyer.",
+    },
+    {
+      name: "trailing punctuation directly after the name",
+      text: "my name is Paul!!!",
+      expectedBody: "The user's name is Paul.",
+    },
+    {
+      name: "a trailing whitespace run then a trailing punctuation run",
+      text: "my name is Paul !!!",
+      expectedBody: "The user's name is Paul.",
+    },
+    {
+      name: "a name followed by a trailing newline",
+      text: "my name is Paul\n",
+      expectedBody: "The user's name is Paul.",
+    },
+    {
+      name: "purely decorative content on a trailing blank line",
+      text: "my name is Paul\n\n",
+      expectedBody: "The user's name is Paul.",
+    },
+  ])("extracts $name", ({ text, expectedBody }) => {
+    const outcome = tryExtractAmbientIdentity(text, ctx());
     expect(outcome?.kind).toBe("candidate");
     if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Paul.");
+    expect(outcome.proposal.body).toBe(expectedBody);
   });
 
   it('rejects the weak "i am X" form when X is not strictly capitalized (avoids "i am tired")', () => {
@@ -56,38 +94,6 @@ describe("tryExtractAmbientIdentity", () => {
     ).toBeNull();
   });
 
-  it("accepts up to the maximum number of name tokens", () => {
-    const outcome = tryExtractAmbientIdentity("my name is Anna Maria Schmidt Meyer", ctx());
-    expect(outcome?.kind).toBe("candidate");
-    if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Anna Maria Schmidt Meyer.");
-  });
-
-  // Trailing whitespace/punctuation handling: these encode the exact edge cases the old
-  // `\s*[.!?]*$` regex tail resolved, now handled by plain-JS stripping (see rewrite note below).
-  it("strips trailing punctuation directly after the name", () => {
-    const outcome = tryExtractAmbientIdentity("my name is Paul!!!", ctx());
-    expect(outcome?.kind).toBe("candidate");
-    if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Paul.");
-  });
-
-  it("strips a trailing whitespace run then a trailing punctuation run", () => {
-    const outcome = tryExtractAmbientIdentity("my name is Paul !!!", ctx());
-    expect(outcome?.kind).toBe("candidate");
-    if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Paul.");
-  });
-
-  it("resolves a name followed by a trailing newline", () => {
-    // A trailing newline (and nothing else after it) must still be absorbed, matching the
-    // original `.+?\s*[.!?]*$` regex's behaviour on this input.
-    const outcome = tryExtractAmbientIdentity("my name is Paul\n", ctx());
-    expect(outcome?.kind).toBe("candidate");
-    if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Paul.");
-  });
-
   it("does not cross an embedded newline into further chat content (regression)", () => {
     // The original `.`-based capture cannot match a line terminator, so a two-line message like
     // this ("my name is Sarah" followed by a second, unrelated line) never matched at all — the
@@ -102,16 +108,6 @@ describe("tryExtractAmbientIdentity", () => {
     expect(
       tryExtractAmbientIdentity("Hallo Keiko, ich bin Paul\nWie geht es dir", ctx()),
     ).toBeNull();
-  });
-
-  it("still tolerates purely decorative content on a trailing blank line", () => {
-    // Trailing blank lines / punctuation-only lines after the name are filler, not content, and
-    // the original regex's `\s*[.!?]*$` tail (which matches across embedded newlines via `\s`)
-    // accepted them.
-    const outcome = tryExtractAmbientIdentity("my name is Paul\n\n", ctx());
-    expect(outcome?.kind).toBe("candidate");
-    if (outcome?.kind !== "candidate") return;
-    expect(outcome.proposal.body).toBe("The user's name is Paul.");
   });
 
   // Regression: the original `\s*[.!?]*$` tail is order-sensitive (whitespace run, THEN a

@@ -2132,7 +2132,7 @@ describe("FilesWidget path helpers (S8786 regex-safety)", () => {
     const { parentDir } = filesWidgetTestInternals;
     expect(parentDir("/repo/src/")).toBe("/repo");
     expect(parentDir("/repo")).toBe("/");
-    expect(parentDir("/")).toBe(null);
+    expect(parentDir("/")).toBeNull();
     expect(parentDir("C:\\Users\\test\\")).toBe("C:\\Users");
     expect(parentDir("C:\\Users\\")).toBe("C:\\");
   });
@@ -2140,7 +2140,7 @@ describe("FilesWidget path helpers (S8786 regex-safety)", () => {
   it("parentRelativePath resolves the root-relative parent or null at the top", () => {
     const { parentRelativePath } = filesWidgetTestInternals;
     expect(parentRelativePath("src/nested/")).toBe("src");
-    expect(parentRelativePath("top-level/")).toBe(null);
+    expect(parentRelativePath("top-level/")).toBeNull();
     expect(parentRelativePath("a/b/c")).toBe("a/b");
   });
 

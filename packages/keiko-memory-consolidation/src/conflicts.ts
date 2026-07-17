@@ -85,21 +85,36 @@ interface ValueFact {
   readonly rawValue: string;
 }
 
-// Both patterns below wrap their optional connector token as `(?:(?:connector)\s*)?` rather than
-// the more obvious `(?:connector)?\s*` sandwiched between two independent `\s*`s. The two-`\s*`
-// form is a classic S8786 shape: when the trailing capture group never matches (the common "no
-// real fact here" case), the engine must re-try the connector at every possible split of a single
-// run of whitespace shared by *both* unbounded quantifiers, which is quadratic in the run length.
-// Folding the trailing `\s*` inside the optional connector group removes the second independent
-// backtracking site — the leading `\s*` still explores the run once, but each attempt now fails
-// fast (the connector literal never matches inside a whitespace-only or non-connector run), so the
-// whole match is linear. Verified byte-for-byte identical captures against the prior pattern across
-// realistic inputs plus a 20k/30k-case fuzz sweep of the keyword/connector/value vocabulary.
-const REGION_PATTERN =
-  /\b(?:deployment\s+region|server\s+region|aws\s+region|cloud\s+region|region)\b\s*(?:(?:is|ist|=|:|to|auf)\s*)?([a-z]{2}-[a-z]+-\d)\b/giu;
+// Both value patterns below wrap their optional connector token as `(?:(?:connector)\s*)?`
+// rather than the more obvious `(?:connector)?\s*` sandwiched between two independent `\s*`s.
+// The two-`\s*` form is a classic S8786 shape: when the trailing capture group never matches (the
+// common "no real fact here" case), the engine must re-try the connector at every possible split
+// of a single run of whitespace shared by *both* unbounded quantifiers, which is quadratic in the
+// run length. Folding the trailing `\s*` inside the optional connector group removes the second
+// independent backtracking site — the leading `\s*` still explores the run once, but each attempt
+// now fails fast (the connector literal never matches inside a whitespace-only or non-connector
+// run), so the whole match is linear. Verified byte-for-byte identical captures against the prior
+// pattern across realistic inputs plus a 20k/30k-case fuzz sweep of the keyword/connector/value
+// vocabulary.
+//
+// REGION_PATTERN and KEY_VALUE_PATTERN used to be a single regex combining a multi-branch keyword
+// alternation with the connector/value suffix above; combined, that structural complexity (nested
+// alternations x quantifiers) crossed SonarCloud S5843's threshold. Each is now a keyword-only
+// scan regex (KEYWORD_RE) paired with a small anchored value regex (VALUE_RE) applied to the text
+// immediately following each keyword occurrence — collectRegionFacts / collectKeyValueFacts below
+// replicate the original single-pass matchAll's exact consumption order: on a successful
+// keyword+value pair, the keyword regex's own `lastIndex` is advanced past the consumed value (not
+// just the keyword), so a value token that happens to look like another keyword — e.g. "database
+// is db" — is never re-scanned as a fresh occurrence, exactly reproducing what one combined regex
+// would have matched. The value regex itself is untouched byte-for-byte from the original
+// combined pattern's suffix, so the S8786 linear-time property above still holds.
+const REGION_KEYWORD_RE =
+  /\b(?:deployment\s+region|server\s+region|aws\s+region|cloud\s+region|region)\b/giu;
+const REGION_VALUE_RE = /^\s*(?:(?:is|ist|=|:|to|auf)\s*)?([a-z]{2}-[a-z]+-\d)\b/iu;
 
-const KEY_VALUE_PATTERN =
-  /\b(formatter|database|db|test\s+runner|runner|tool|model)\b\s*(?:(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*)?([a-z][a-z0-9+#._-]{1,40})\b/giu;
+const KEY_VALUE_KEYWORD_RE = /\b(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;
+const KEY_VALUE_VALUE_RE =
+  /^\s*(?:(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*)?([a-z][a-z0-9+#._-]{1,40})\b/iu;
 
 const VALUE_KEY_PATTERN =
   /\b(?:uses|use|nutzt|verwenden|verwende)\s+([a-z][a-z0-9+#._-]{1,40})\s+(?:as\s+)?(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;
@@ -134,17 +149,46 @@ function addFact(facts: ValueFact[], key: string, rawValue: string): void {
   facts.push({ key: normalizeFactKey(key), value: normalized, rawValue });
 }
 
+// Scans `body` for REGION_KEYWORD_RE occurrences and, for each one, checks whether REGION_VALUE_RE
+// matches immediately after it. On success the keyword regex's `lastIndex` is force-advanced past
+// the consumed value so the value text is never re-scanned as a fresh keyword occurrence — see the
+// comment above REGION_KEYWORD_RE for why that matters.
+function collectRegionFacts(body: string, facts: ValueFact[]): void {
+  REGION_KEYWORD_RE.lastIndex = 0;
+  let keyword = REGION_KEYWORD_RE.exec(body);
+  while (keyword !== null) {
+    const consumedEnd = keyword.index + keyword[0].length;
+    const valueMatch = REGION_VALUE_RE.exec(body.slice(consumedEnd));
+    const rawValue = valueMatch?.[1];
+    if (valueMatch !== null && rawValue !== undefined) {
+      addFact(facts, "region", rawValue);
+      REGION_KEYWORD_RE.lastIndex = consumedEnd + valueMatch[0].length;
+    }
+    keyword = REGION_KEYWORD_RE.exec(body);
+  }
+}
+
+// Same technique as collectRegionFacts, for the formatter/database/db/runner/tool/model keywords.
+function collectKeyValueFacts(body: string, facts: ValueFact[]): void {
+  KEY_VALUE_KEYWORD_RE.lastIndex = 0;
+  let keyword = KEY_VALUE_KEYWORD_RE.exec(body);
+  while (keyword !== null) {
+    const consumedEnd = keyword.index + keyword[0].length;
+    const valueMatch = KEY_VALUE_VALUE_RE.exec(body.slice(consumedEnd));
+    const key = keyword[1];
+    const rawValue = valueMatch?.[1];
+    if (valueMatch !== null && key !== undefined && rawValue !== undefined) {
+      addFact(facts, key, rawValue);
+      KEY_VALUE_KEYWORD_RE.lastIndex = consumedEnd + valueMatch[0].length;
+    }
+    keyword = KEY_VALUE_KEYWORD_RE.exec(body);
+  }
+}
+
 function extractValueFacts(body: string): readonly ValueFact[] {
   const facts: ValueFact[] = [];
-  for (const match of body.matchAll(REGION_PATTERN)) {
-    const rawValue = match[1];
-    if (rawValue !== undefined) addFact(facts, "region", rawValue);
-  }
-  for (const match of body.matchAll(KEY_VALUE_PATTERN)) {
-    const key = match[1];
-    const rawValue = match[2];
-    if (key !== undefined && rawValue !== undefined) addFact(facts, key, rawValue);
-  }
+  collectRegionFacts(body, facts);
+  collectKeyValueFacts(body, facts);
   for (const match of body.matchAll(VALUE_KEY_PATTERN)) {
     const rawValue = match[1];
     const key = match[2];

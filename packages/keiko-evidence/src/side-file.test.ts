@@ -189,9 +189,9 @@ describe("writeSideFile evidenceSchemaVersion contract", () => {
 });
 
 describe("writeSideFile POSIX permission hardening (AC1)", () => {
-  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", () => {
+  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", (ctx) => {
     // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") ctx.skip();
     const result = writeSideFile(baseDir, "run-perms", "browser-1.png", Buffer.from("acl-check"));
     const runDir = join(baseDir, "run-perms");
     expect(statSync(runDir).mode & 0o777).toBe(0o700);

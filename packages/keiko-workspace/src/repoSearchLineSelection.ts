@@ -49,9 +49,14 @@ export function looksLikeBlockHeader(line: string): boolean {
   return looksLikeFunctionSignatureTail(trimmed);
 }
 
-// Both variable-length character classes below are bounded (2000 characters is far beyond any
-// realistic single-line type prefix or parameter list — even a verbose real signature stays well
-// under it), but bounding alone doesn't change the pattern's *shape*: leading `\b` makes
+// All three variable-length character classes below are bounded (2000 characters is far beyond
+// any realistic single-line type prefix, parameter list, or throws-clause — even a verbose real
+// signature stays well under it; the trailing `throws` class was originally left unbounded and
+// SonarCloud correctly flagged it — S8786 — for exactly the same reason the other two are capped:
+// an adversarial line with many "ident ident() throws ident " units and no closing `{` anywhere
+// makes every successfully-parsed candidate rescan the rest of the line for a `{` that never
+// appears, which is quadratic without the cap). Bounding alone doesn't change the pattern's
+// *shape*: leading `\b` makes
 // `.test()` retry the whole pattern from every word-boundary start position in the line, which is
 // the unanchored-adjacent-quantifier shape S8786 flags regardless of the per-position bound. This
 // reproduces the identical `\b<pattern>` search explicitly: a manual scan over candidate
@@ -60,7 +65,7 @@ export function looksLikeBlockHeader(line: string): boolean {
 // retry-at-every-position ambiguity, and (unlike anchoring `^` and re-slicing the line per
 // candidate) no per-candidate string copy either.
 const FUNCTION_SIGNATURE_TAIL =
-  /[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]+)?\{/uy;
+  /[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]{0,500})?\{/uy;
 
 // Real `\b` (which the original pattern's leading `\b` relied on) fires at a position exactly
 // when the character before it and the character at it disagree on being a `\w` = `[A-Za-z0-9_]`

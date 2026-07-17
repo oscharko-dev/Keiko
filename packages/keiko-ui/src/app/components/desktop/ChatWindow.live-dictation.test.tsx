@@ -2,7 +2,7 @@
 // only for full-realtime + browser WebRTC posture, and the dictation mic remains separate from Voice
 // Dialogue's switch/controller.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -274,9 +274,7 @@ describe("ChatWindow live dictation mode selection", () => {
     stubCaptureBrowser();
     renderWindow();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    await screen.findByRole("button", { name: "Dictate a message" });
     expect(latestDictationOptions().realtime?.enabled).toBe(false);
     expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
@@ -286,9 +284,7 @@ describe("ChatWindow live dictation mode selection", () => {
     stubRealtimeBrowser();
     renderWindow();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    await screen.findByRole("button", { name: "Dictate a message" });
     expect(latestDictationOptions().realtime?.enabled).toBe(true);
     expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
   });
@@ -298,9 +294,7 @@ describe("ChatWindow live dictation mode selection", () => {
     stubCaptureBrowser();
     renderWindow();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    await screen.findByRole("button", { name: "Dictate a message" });
     expect(latestDictationOptions().realtime?.enabled).toBe(false);
     expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
@@ -345,9 +339,7 @@ describe("insertTranscript composer join (SonarCloud S8786 regression)", () => {
     const bigDraft = `existing draft${" ".repeat(20_000)}more text`;
     renderWindow(makeSession({ draft: bigDraft, setDraft }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
-    );
+    await screen.findByRole("button", { name: "Dictate a message" });
 
     const { onInsert } = dictationMock.options.at(-1) as UseDictationOptions;
     const start = performance.now();

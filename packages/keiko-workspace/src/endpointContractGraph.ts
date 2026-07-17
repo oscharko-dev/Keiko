@@ -40,16 +40,46 @@ const SPRING_METHODS: Readonly<Record<string, EndpointHttpMethod>> = {
 // annotation and the method signature cannot make three adjacent quantifiers backtrack against
 // each other with polynomial cost (typescript:S8786). 200 chars comfortably covers any
 // realistically formatted Java source gap.
+//
+// The annotation name used to be a 6-branch alternation
+// (GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping); combined with
+// the rest of this regex's structure, that pushed it over SonarCloud S5843's complexity
+// threshold. `[A-Za-z]+Mapping` matches the same shape generically (a Spring annotation name
+// always ends in "Mapping"), and JAVA_ANNOTATION_NAMES below gates which captured names actually
+// produce a route — extractJava only calls addRoute when the captured name is one of the 6 known
+// annotations, exactly reproducing the original alternation's accept/reject set. An unrecognized
+// "...Mapping" annotation can still structurally match this regex where the literal alternation
+// never would have, but since it's rejected before addRoute either way, the observable output
+// (the routes actually extracted) is unchanged.
+const JAVA_ANNOTATION_NAMES: ReadonlySet<string> = new Set([
+  "GetMapping",
+  "PostMapping",
+  "PutMapping",
+  "PatchMapping",
+  "DeleteMapping",
+  "RequestMapping",
+]);
 const JAVA_ROUTE =
-  /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}(?:public|private|protected)?\s{0,200}([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/gu;
+  /@([A-Za-z]+Mapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}(?:public|private|protected)?\s{0,200}([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/gu;
 const JAVA_RECORD = /\brecord\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
 const TS_INTERFACE = /\binterface\s+([A-Za-z_$][\w$]*)\s*\{([^}]*)\}/gu;
 const TS_TYPE_OBJECT = /\btype\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^}]*)\}/gu;
 // Same fix as JAVA_ROUTE: bound the whitespace runs around the optional generic-type argument so
 // the two adjacent `\s*` atoms (before/after the optional `<Type>`) cannot backtrack against each
 // other across an attacker-controlled whitespace run (typescript:S8786).
-const AXIOS_CALL =
-  /\baxios\.(get|post|put|patch|delete)\s{0,50}(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s{0,50}\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gu;
+//
+// The original AXIOS_CALL combined this call-site prefix (method alternation + optional generic
+// arg) with the quoted-string-literal alternation now in STRING_LITERAL_RE; combined, the two
+// alternations (5 branches here, 3 more-deeply-nested branches there) crossed SonarCloud S5843's
+// complexity threshold even though FETCH_CALL's use of the identical literal alternation alone
+// does not. Splitting the literal out into its own regex, applied to the text immediately
+// following each AXIOS_CALL_PREFIX match, is behaviourally identical to the original single
+// regex: extractTypeScript's exec loop already only advances past a successful prefix match
+// either way, and a prefix match whose first argument isn't a quoted literal (e.g.
+// `axios.get(someVar)`) is skipped exactly like the original's whole-match failure was.
+const AXIOS_CALL_PREFIX =
+  /\baxios\.(get|post|put|patch|delete)\s{0,50}(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s{0,50}\(\s*/gu;
+const STRING_LITERAL_RE = /^(?:`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/u;
 const FETCH_CALL =
   /\bfetch\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")(?:\s*,\s*\{([\s\S]{0,300}?)\})?/gu;
 
@@ -177,7 +207,9 @@ function extractJava(file: SourceFile, state: EndpointBuildState): void {
   JAVA_ROUTE.lastIndex = 0;
   let route: RegExpExecArray | null = JAVA_ROUTE.exec(file.text);
   while (route !== null) {
-    addRoute(state, file, route);
+    if (JAVA_ANNOTATION_NAMES.has(route[1] ?? "")) {
+      addRoute(state, file, route);
+    }
     route = JAVA_ROUTE.exec(file.text);
   }
   JAVA_RECORD.lastIndex = 0;
@@ -232,21 +264,28 @@ function addClientCall(
   });
 }
 
-function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
-  AXIOS_CALL.lastIndex = 0;
-  let axios: RegExpExecArray | null = AXIOS_CALL.exec(file.text);
-  while (axios !== null) {
-    addClientCall(
-      state,
-      file,
-      "axios",
-      (axios[1] ?? "get").toUpperCase() as EndpointHttpMethod,
-      axios[3] ?? "",
-      lineNumberOf(file.text, axios.index),
-      axios[2],
-    );
-    axios = AXIOS_CALL.exec(file.text);
+function extractAxiosCalls(file: SourceFile, state: EndpointBuildState): void {
+  AXIOS_CALL_PREFIX.lastIndex = 0;
+  let prefix: RegExpExecArray | null = AXIOS_CALL_PREFIX.exec(file.text);
+  while (prefix !== null) {
+    const literalMatch = STRING_LITERAL_RE.exec(file.text.slice(prefix.index + prefix[0].length));
+    if (literalMatch !== null) {
+      addClientCall(
+        state,
+        file,
+        "axios",
+        (prefix[1] ?? "get").toUpperCase() as EndpointHttpMethod,
+        literalMatch[0],
+        lineNumberOf(file.text, prefix.index),
+        prefix[2],
+      );
+    }
+    prefix = AXIOS_CALL_PREFIX.exec(file.text);
   }
+}
+
+function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
+  extractAxiosCalls(file, state);
   FETCH_CALL.lastIndex = 0;
   let fetchCall: RegExpExecArray | null = FETCH_CALL.exec(file.text);
   while (fetchCall !== null) {

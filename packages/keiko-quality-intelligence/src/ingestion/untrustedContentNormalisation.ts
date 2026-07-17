@@ -113,7 +113,7 @@ const escapeLinkOpens = (value: string): EscapeOutcome => {
       i += 1;
       continue;
     }
-    result += `\\[${value.slice(i + 1, closeIdx)}\\](`;
+    result += String.raw`\[${value.slice(i + 1, closeIdx)}\](`;
     count += 1;
     i = closeIdx + 2;
   }

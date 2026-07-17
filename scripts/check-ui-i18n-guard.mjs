@@ -23,8 +23,31 @@ const I18N_USAGE_PATTERNS = [
 // the engine explore every way to split the run between the two — O(n^2) worst case. Excluding
 // letters from the leading quantifier removes the ambiguous split (it can only stop at the first
 // letter) while still matching exactly when the quoted content contains at least one letter.
-const USER_FACING_ATTRIBUTE_PATTERN =
-  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"A-Za-z]*[A-Za-z][^"]*"|'[^'A-Za-z]*[A-Za-z][^']*'|`[^`A-Za-z]*[A-Za-z][^`]*`)/u;
+//
+// The attribute-name alternation (6 branches) used to live in the same regex literal as the
+// quoted-value alternation (3 branches, each with the S8786-hardened shape above); combined, that
+// crossed SonarCloud S5843's complexity threshold. Splitting the name scan from the value check
+// into two regexes applied in sequence — hasUserFacingAttribute below finds each
+// `name\s*=\s*` occurrence via USER_FACING_ATTRIBUTE_NAME_RE and then tests
+// USER_FACING_ATTRIBUTE_VALUE_RE against the text immediately following it — is behaviourally
+// identical to the single combined pattern's `.test()`: both return true iff some position in the
+// line has one of the 6 attribute names followed by one of the 3 quoted-letter value shapes.
+const USER_FACING_ATTRIBUTE_NAME_RE =
+  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*/gu;
+const USER_FACING_ATTRIBUTE_VALUE_RE =
+  /^(?:"[^"A-Za-z]*[A-Za-z][^"]*"|'[^'A-Za-z]*[A-Za-z][^']*'|`[^`A-Za-z]*[A-Za-z][^`]*`)/u;
+
+function hasUserFacingAttribute(line) {
+  USER_FACING_ATTRIBUTE_NAME_RE.lastIndex = 0;
+  let nameMatch;
+  while ((nameMatch = USER_FACING_ATTRIBUTE_NAME_RE.exec(line)) !== null) {
+    const valueStart = nameMatch.index + nameMatch[0].length;
+    if (USER_FACING_ATTRIBUTE_VALUE_RE.test(line.slice(valueStart))) {
+      return true;
+    }
+  }
+  return false;
+}
 // This used to be a single alternation of `"[^"]*\s[A-Za-z][^"]*"`-shaped branches (and similarly
 // for '...' and `...`). Unlike USER_FACING_ATTRIBUTE_PATTERN's pivot (a single [A-Za-z] class),
 // this pivot is the two-character sequence `\s[A-Za-z]`, so excluding letters alone from the
@@ -254,9 +277,7 @@ function hasUserFacingJsxText(line) {
 export function hasUserFacingTextLine(line) {
   if (isCommentLine(line)) return false;
   return (
-    hasUserFacingJsxText(line) ||
-    USER_FACING_ATTRIBUTE_PATTERN.test(line) ||
-    hasUserFacingStringReturn(line)
+    hasUserFacingJsxText(line) || hasUserFacingAttribute(line) || hasUserFacingStringReturn(line)
   );
 }
 

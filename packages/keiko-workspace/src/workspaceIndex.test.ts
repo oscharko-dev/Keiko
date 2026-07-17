@@ -799,9 +799,9 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readFileBytes).toBe(4);
   });
 
-  it("does not fingerprint selected directories that resolve to denied real paths", async () => {
+  it("does not fingerprint selected directories that resolve to denied real paths", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const workspaceRoot = tempRuntimeDir();
     try {
@@ -1272,9 +1272,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes owner-only file-backed runtime directories and snapshots", async () => {
+  it("writes owner-only file-backed runtime directories and snapshots", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     try {
@@ -1317,9 +1317,9 @@ describe("workspaceIndex", () => {
     ).not.toThrow();
   });
 
-  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", () => {
+  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const workspaceRoot = tempRuntimeDir();
     const outsideRoot = tempRuntimeDir();
@@ -1338,9 +1338,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not load symlinked file-backed snapshot paths", async () => {
+  it("does not load symlinked file-backed snapshot paths", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     const targetDir = tempRuntimeDir();
@@ -1364,9 +1364,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async () => {
+  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     const workspaceRoot = tempRuntimeDir();

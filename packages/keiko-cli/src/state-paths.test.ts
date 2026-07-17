@@ -221,8 +221,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.directories).toHaveLength(0);
   });
 
-  it("refuses a symlinked state root without following it", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked state root without following it", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const target = join(root, "outside-state");
     const stateDir = join(root, ".keiko");
@@ -346,7 +346,7 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
     const lookalikeId = `${"a".repeat(62)}\u{1F600}`;
-    expect(lookalikeId.length).toBe(64);
+    expect(lookalikeId).toHaveLength(64);
     const relPath = `evidence/tool-results/${lookalikeId}.tool-result.txt`;
     touch(join(stateDir, "evidence", "tool-results", `${lookalikeId}.tool-result.txt`));
 
@@ -376,8 +376,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(rels.indexOf("evidence/qi")).toBeLessThan(rels.indexOf("evidence/qi/figma-snapshots"));
   });
 
-  it("flags a symlink in an owned position without following it", () => {
-    if (process.platform === "win32") return;
+  it("flags a symlink in an owned position without following it", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "secret-target"), "x", "utf8");
@@ -389,8 +389,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.files.some((f) => f.relPath === "keiko-ui.db")).toBe(false);
   });
 
-  it("treats a customer symlink in an unowned position as not owned", () => {
-    if (process.platform === "win32") return;
+  it("treats a customer symlink in an unowned position as not owned", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "target"), "x", "utf8");
@@ -458,8 +458,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(retained).toContain("editor-hot-exit/.secret-vault.abc.deadbeefdeadbeef.tmp");
   });
 
-  it("retains an owned-looking hardlink without classifying it as an owned file", () => {
-    if (process.platform === "win32") return;
+  it("retains an owned-looking hardlink without classifying it as an owned file", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
     mkdirSync(stateDir, { recursive: true });

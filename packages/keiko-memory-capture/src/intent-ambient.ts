@@ -53,7 +53,7 @@ function stripIdentityCaptureTail(rawCapture: string): string {
 // failing to match, the way the original single-line-only regex did.
 const STRONG_IDENTITY_PREFIX_RE =
   /^(?:my\s+name\s+is|call\s+me|ich\s+hei(?:ß|ss)e|mein\s+name\s+ist)\s+/iu;
-const WEAK_IDENTITY_PREFIX_RE = /^(?:i\s+am|i(?:'|’)m|ich\s+bin)\s+/iu;
+const WEAK_IDENTITY_PREFIX_RE = /^(?:i\s+am|i['’]m|ich\s+bin)\s+/iu;
 const GREETING_WORDS = ["hello", "hi", "hey", "hallo"];
 const GREETING_PUNCTUATION = new Set([",", "!", ".", "-", ":"]);
 

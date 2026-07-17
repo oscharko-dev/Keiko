@@ -114,6 +114,12 @@ function skipWhitespaceRun(text: string, from: number): number {
   return index;
 }
 
+function scanIdentifierRun(text: string, from: number): number {
+  let end = from;
+  while (end < text.length && isIdentifierChar(text.charAt(end))) end += 1;
+  return end;
+}
+
 // Scans a from-clause-or-none import header starting right after the required whitespace that
 // follows `import`, returning the index right after a validated `from` keyword, or `undefined` if
 // the header is not built entirely from clause syntax before either running out of text or
@@ -133,8 +139,7 @@ function scanImportClauseFrom(text: string, start: number): number | undefined {
       continue;
     }
     if (isIdentifierChar(char)) {
-      let end = index;
-      while (end < text.length && isIdentifierChar(text.charAt(end))) end += 1;
+      const end = scanIdentifierRun(text, index);
       if (text.slice(index, end) === "from") return end;
       index = end;
       continue;

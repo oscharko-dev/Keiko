@@ -1009,8 +1009,8 @@ describe("enforceFigmaSnapshotRetention", () => {
     expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
   });
 
-  it("refuses a symlinked side-file root before deleting snapshot records", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked side-file root before deleting snapshot records", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const store = createNodeFigmaSnapshotStore(dir);
     store.record({
       ...baseInput(),
@@ -1039,8 +1039,8 @@ describe("enforceFigmaSnapshotRetention", () => {
     }
   });
 
-  it("refuses a symlinked per-run side-file dir before deleting that snapshot record", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked per-run side-file dir before deleting that snapshot record", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const store = createNodeFigmaSnapshotStore(dir);
     store.record({
       ...baseInput(),

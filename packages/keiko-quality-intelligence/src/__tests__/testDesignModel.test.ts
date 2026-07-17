@@ -311,7 +311,7 @@ describe("designTestCaseCandidates", () => {
     expect(Date.now() - start).toBeLessThan(1500);
     // No screen name could be parsed out of the header, so it falls back to the generic template
     // rather than throwing or hanging.
-    expect(candidates.length).toBe(1);
+    expect(candidates).toHaveLength(1);
   });
 });
 

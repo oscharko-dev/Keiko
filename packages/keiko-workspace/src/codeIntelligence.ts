@@ -1266,6 +1266,43 @@ function stripPythonLineComment(text: string): string {
   return text.slice(0, end);
 }
 
+function buildPythonTargetBySpecifier(
+  scopePath: string,
+  imports: readonly CodeImportEdge[],
+): ReadonlyMap<string, string> {
+  const targetBySpecifier = new Map<string, string>();
+  for (const edge of imports) {
+    if (edge.importerPath === scopePath && edge.targetPath !== undefined) {
+      targetBySpecifier.set(edge.specifier, edge.targetPath);
+    }
+  }
+  return targetBySpecifier;
+}
+
+// Parses the comma-separated `import` clause of a single resolved `from ... import ...` line
+// (already stripped of its trailing comment and any parens) into individual bindings, handling
+// the optional `as alias` form per part.
+function collectPythonImportListBindings(
+  scopePath: string,
+  targetPath: string,
+  importList: string,
+): readonly CodeImportBinding[] {
+  const bindings: CodeImportBinding[] = [];
+  for (const part of importList.split(",")) {
+    const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
+    if (importMatch?.[1] === undefined) {
+      continue;
+    }
+    bindings.push({
+      importerPath: scopePath,
+      localName: importMatch[2] ?? importMatch[1],
+      importedName: importMatch[1],
+      targetPath,
+    });
+  }
+  return bindings;
+}
+
 function collectPolyglotImportBindings(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
@@ -1273,12 +1310,7 @@ function collectPolyglotImportBindings(
   if (file.language !== "python") {
     return [];
   }
-  const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath === file.scopePath && edge.targetPath !== undefined) {
-      targetBySpecifier.set(edge.specifier, edge.targetPath);
-    }
-  }
+  const targetBySpecifier = buildPythonTargetBySpecifier(file.scopePath, imports);
   const bindings: CodeImportBinding[] = [];
   const lines = file.text.split(/\r?\n/u);
   for (const line of lines) {
@@ -1305,18 +1337,7 @@ function collectPolyglotImportBindings(
       continue;
     }
     const importList = stripPythonLineComment(rest[2]).replace(/[()]/gu, "");
-    for (const part of importList.split(",")) {
-      const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
-      if (importMatch?.[1] === undefined) {
-        continue;
-      }
-      bindings.push({
-        importerPath: file.scopePath,
-        localName: importMatch[2] ?? importMatch[1],
-        importedName: importMatch[1],
-        targetPath,
-      });
-    }
+    bindings.push(...collectPythonImportListBindings(file.scopePath, targetPath, importList));
   }
   return bindings;
 }
@@ -1965,6 +1986,75 @@ function javaLikeFieldName(line: string): string | undefined {
   return candidate !== undefined && /^[A-Za-z_$][\w$]*$/u.test(candidate) ? candidate : undefined;
 }
 
+// Modifier keywords a C#-like property declaration may repeat any number of times before its
+// type (e.g. "public required string Name {"). Used by csharpPropertyFieldName below instead of
+// folding the list into the property regex's own `(?:(?:mod1|mod2|...)\s+)*` prefix: a repeated
+// alternation of this many branches is exactly the shape SonarCloud S5843 flags as too complex —
+// nesting a 12-branch disjunction inside an unbounded repetition. A Set lookup carries the same
+// keyword list with none of that regex-structural cost.
+const CSHARP_PROPERTY_MODIFIERS = new Set([
+  "public",
+  "private",
+  "protected",
+  "internal",
+  "required",
+  "static",
+  "readonly",
+  "virtual",
+  "override",
+  "sealed",
+  "abstract",
+  "new",
+]);
+
+// Matches a single leading `identifier` + mandatory trailing whitespace — used to peel one token
+// at a time off the front of a declaration line so each can be checked against
+// CSHARP_PROPERTY_MODIFIERS in plain code rather than via a repeated regex alternation.
+const LEADING_IDENTIFIER_RE = /^([A-Za-z_$][\w$]*)\s+/u;
+
+// The type-expression run is bounded: its character class includes a literal space (to allow
+// multi-token generics like "Dictionary<string, string>"), which otherwise overlaps with the
+// mandatory `\s+` before the property name and lets the engine re-split a long run of trailing
+// spaces in O(n) different ways, giving O(n^2) backtracking. 1000 characters is far past even
+// deeply-nested real-world generic type expressions, so no legitimate declaration can be affected
+// by the cutoff. This is unchanged from before the S5843 fix — only the modifier-prefix matching
+// (now in csharpPropertyFieldName) moved out of this regex.
+const CSHARP_PROPERTY_RE = /^[A-Za-z_$][\w$<>, ?.[\]]{1,1000}\s+([A-Za-z_$][\w$]*)\s*\{/u;
+
+// Extracts a C#-like property name ("public required string Name {" -> "Name"). Splits what used
+// to be one regex (repeated modifier alternation + type + name + brace) into: (1) a plain-code
+// scan that peels off as many leading CSHARP_PROPERTY_MODIFIERS tokens as it can find, and (2) the
+// fixed CSHARP_PROPERTY_RE applied to what's left. Because the original regex's modifier-prefix
+// repetition could backtrack — giving back a token it first matched as a modifier and letting
+// CSHARP_PROPERTY_RE reinterpret it as the type when nothing else parses (e.g. a stray "static Foo
+// {" with no explicit type) — the loop below tries stripping every prefix length from "all
+// detected modifier tokens" down to "none", in that order, and returns on the first length whose
+// remainder matches. That reproduces the regex engine's own backtracking order exactly, so the
+// result is identical to the original single-regex match for every input.
+function csharpPropertyFieldName(line: string): string | undefined {
+  const leadingWhitespace = /^\s*/u.exec(line)?.[0].length ?? 0;
+  const body = line.slice(leadingWhitespace);
+  const modifierChunks: string[] = [];
+  let rest = body;
+  for (;;) {
+    const tokenMatch = LEADING_IDENTIFIER_RE.exec(rest);
+    const token = tokenMatch?.[1];
+    if (tokenMatch === null || token === undefined || !CSHARP_PROPERTY_MODIFIERS.has(token)) {
+      break;
+    }
+    modifierChunks.push(tokenMatch[0]);
+    rest = rest.slice(tokenMatch[0].length);
+  }
+  for (let keep = modifierChunks.length; keep >= 0; keep -= 1) {
+    const consumedLength = modifierChunks.slice(0, keep).join("").length;
+    const match = CSHARP_PROPERTY_RE.exec(body.slice(consumedLength));
+    if (match?.[1] !== undefined) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
 function declarationFieldNames(
   line: string,
   language: CodeLanguage,
@@ -1978,15 +2068,7 @@ function declarationFieldNames(
     /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
       declarationLine,
     )?.[1],
-    // The type-expression run is bounded: its character class includes a literal space (to
-    // allow multi-token generics like "Dictionary<string, string>"), which otherwise overlaps
-    // with the mandatory `\s+` before the property name and lets the engine re-split a long run
-    // of trailing spaces in O(n) different ways, giving O(n^2) backtracking. 1000 characters is
-    // far past even deeply-nested real-world generic type expressions, so no legitimate
-    // declaration can be affected by the cutoff.
-    /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]{1,1000}\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
-      declarationLine,
-    )?.[1],
+    csharpPropertyFieldName(declarationLine),
   ].filter((name): name is string => name !== undefined);
   if (language !== "go" || !insideBlock) return names;
   const goStructField = /^\s*([A-Za-z_][\w]*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
@@ -3243,7 +3325,7 @@ function collectGraphqlFields(segment: string): readonly string[] {
   // The leading `\s*` is nested inside the optional arg-list group rather than sitting next to
   // a second, independent `\s*` — two adjacent `\s*` runs around the same optional group let the
   // engine re-split a long whitespace-only run in O(n) ways for every position, giving O(n^2).
-  for (const match of segment.matchAll(/\b([A-Za-z_][\w]*)(?:\s*\([^)]*\))?\s*:/gu)) {
+  for (const match of segment.matchAll(/\b([A-Za-z_]\w*)(?:\s*\([^)]*\))?\s*:/gu)) {
     const name = match[1];
     if (name !== undefined && !["schema", "type", "extend"].includes(name.toLowerCase())) {
       fields.push(name);

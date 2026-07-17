@@ -66,6 +66,26 @@ describe("looksLikeBlockHeader", () => {
     expect(result).toBe(false);
   });
 
+  // Third S8786 regression: the trailing `(?:throws\s+[^{]+)?` clause was left unbounded even
+  // after the parameter-list and type-prefix classes were capped. This adversarial line never
+  // contains `{`, so every candidate that parses through to the `throws` keyword forces the
+  // engine to consume up to its cap of non-`{` characters and then backtrack it down to zero
+  // before the overall match can fail at that position — with an unbounded class that backtrack
+  // is itself unbounded, giving the same O(n^2) shape as the first two findings (confirmed via
+  // the real exported function: 170/717/2976/12085 ms at 7,500/15,000/30,000/60,000 chars, a
+  // clean ~4.2x-per-doubling quadratic curve). Bounding the throws-tail class to 500 characters
+  // (comfortably beyond any real throws-clause) keeps this linear; the wall-clock budget below
+  // carries large headroom over the bounded-linear cost while staying far below what the
+  // unbounded quadratic version took at this length.
+  it("resolves an adversarial no-brace line with a throws clause in linear time", () => {
+    const adversarialLine = "a b() throws c ".repeat(4_000);
+    const start = Date.now();
+    const result = looksLikeBlockHeader(adversarialLine);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1500);
+    expect(result).toBe(false);
+  });
+
   // Regression for the follow-up finding that a *narrow* finite bound is itself a behaviour
   // change: verbose real signatures (many parameters, long generic types, long default values)
   // can plausibly exceed a small cap like 300 characters. The bound must be generous enough that
@@ -86,6 +106,16 @@ describe("looksLikeBlockHeader", () => {
     ).join(", ")}>`;
     expect(longTypePrefix.length).toBeGreaterThan(300);
     expect(looksLikeBlockHeader(`${longTypePrefix} customBuild(int a) {`)).toBe(true);
+
+    // A verbose real Java-style throws clause stays far under the 500-character bound above.
+    const longThrowsClause = Array.from(
+      { length: 8 },
+      (_, i) => `SomeVeryDescriptiveCheckedException${String(i)}`,
+    ).join(", ");
+    expect(longThrowsClause.length).toBeLessThan(500);
+    expect(looksLikeBlockHeader(`public T method(A a, B b) throws ${longThrowsClause} {`)).toBe(
+      true,
+    );
   });
 
   // Regression: the manual word-boundary scan used `[\w$]` to decide whether a candidate start

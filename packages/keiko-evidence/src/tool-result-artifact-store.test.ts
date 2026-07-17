@@ -59,14 +59,14 @@ describe("createNodeToolResultArtifactStore", () => {
     // halves must still be rejected as disallowed characters, same as before the rename.
     const store = createNodeToolResultArtifactStore(join(tempRoot(), ".keiko", "evidence"));
     const artifactIdWithEmoji = `${"a".repeat(62)}😀`;
-    expect(artifactIdWithEmoji.length).toBe(64);
+    expect(artifactIdWithEmoji).toHaveLength(64);
     expect(() => {
       store.read(artifactIdWithEmoji);
     }).toThrow(/disallowed/);
   });
 
-  it("refuses a symlinked tool-results sub-store directory", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked tool-results sub-store directory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = tempRoot();
     const baseDir = join(root, ".keiko", "evidence");
     const outside = join(root, "outside");

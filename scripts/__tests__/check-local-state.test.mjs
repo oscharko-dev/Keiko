@@ -224,8 +224,8 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "credentials").findings.join(" ")).toContain("not valid JSON");
   });
 
-  it("fails when a sensitive artifact is group/world-readable", () => {
-    if (process.platform === "win32") return;
+  it("fails when a sensitive artifact is group/world-readable", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(root, "loose", ".keiko");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const configPath = join(stateDir, "keiko.config.json");
@@ -422,8 +422,8 @@ describe("auditLocalState — per-class failure detection", () => {
     );
   });
 
-  it("credentials: refuses symlinked credential directories without reporting targets", () => {
-    if (process.platform === "win32") return;
+  it("credentials: refuses symlinked credential directories without reporting targets", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("credentials-symlink");
     const outsideDir = join(root, "outside-credentials");
     mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
@@ -463,8 +463,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(ref);
   });
 
-  it("file-modes: detects a group/world-readable state directory", () => {
-    if (process.platform === "win32") return;
+  it("file-modes: detects a group/world-readable state directory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("loose-dir");
     chmodSync(stateDir, 0o755);
     expect(auditLocalState(stateDir).classes.find((c) => c.id === "file-modes").status).toBe(
@@ -472,8 +472,8 @@ describe("auditLocalState — per-class failure detection", () => {
     );
   });
 
-  it("file-modes: detects a group/world-readable subdirectory", () => {
-    if (process.platform === "win32") return;
+  it("file-modes: detects a group/world-readable subdirectory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("loose-subdir");
     const sub = join(stateDir, "credentials");
     mkdirSync(sub, { recursive: true, mode: 0o700 });
@@ -675,8 +675,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(integrity.findings.join(" ")).toContain("SQLite quarantine diagnostic record");
   });
 
-  it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("tool-result-symlink");
     const evidenceDir = join(stateDir, "evidence");
     const outsideDir = join(root, "outside-tool-results");
@@ -761,8 +761,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).toContain("sha256 does not match");
   });
 
-  it("evidence-qi: refuses symlinked artifacts without reporting their targets", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses symlinked artifacts without reporting their targets", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("evidence-symlink");
     const evidenceDir = join(stateDir, "evidence");
     const outsideDir = join(root, "outside-evidence");
@@ -777,8 +777,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(outsideTarget);
   });
 
-  it("evidence-qi: refuses a symlinked evidence root without reporting its target", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses a symlinked evidence root without reporting its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("evidence-root-symlink");
     const outsideDir = join(root, "outside-evidence-root");
     mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
@@ -792,8 +792,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(outsideDir);
   });
 
-  it("evidence-qi: refuses Figma image side-files through symlinked parent directories", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses Figma image side-files through symlinked parent directories", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("figma-sidefile-parent-symlink");
     const qiDir = join(stateDir, "evidence", "qi");
     const snapshotRoot = join(qiDir, "figma-snapshots");
