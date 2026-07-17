@@ -15,6 +15,11 @@ function projectPath(cfg: WindowCfgRecord): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function activeFile(cfg: WindowCfgRecord): string | undefined {
+  const value = cfg.activeFile;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 /**
  * Loads only after the Debug window itself opens. Both the capability and opaque workspace identity
  * remain server-projected by the M7 settings snapshot; this boundary only avoids charging dormant
@@ -33,7 +38,7 @@ export function DebugPanelSessionHost({
   return (
     <DebugPanel
       root={root ?? ""}
-      activeFile={ctx.linkedFilePath}
+      activeFile={ctx.linkedFilePath ?? activeFile(cfg)}
       workspaceId={editorSettings.snapshot?.debugWorkspaceId}
       activationRevision={debugging?.revision}
       debugEnabled={debugging?.state === "available"}

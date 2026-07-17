@@ -1,15 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DebugSession } from "@oscharko-dev/keiko-contracts";
 import {
+  abandonDebugStreamResync,
   applyDebugEvent,
+  beginDebugStreamResync,
   DEBUG_CONSOLE_LIMITS,
   debugSessionSnapshot,
+  debugStreamSnapshotRequiresCanonicalResync,
+  exhaustDebugStreamResync,
   resetDebugSessionStoreForTests,
   setDebugInstrumentation,
   setDebugScopes,
   setDebugSession,
   setDebugStack,
   setDebugVariables,
+  synchronizeDebugSequence,
 } from "./debugSessionStore";
 
 function session(status: "paused" | "running", pauseGeneration: number): DebugSession {
@@ -139,10 +144,101 @@ describe("debugSessionStore", () => {
       originalBytes: 4,
       omittedBytes: 0,
     };
-    applyDebugEvent("canonical-workspace-id", 2, event);
-    applyDebugEvent("canonical-workspace-id", 2, event);
+    expect(applyDebugEvent("canonical-workspace-id", 2, event)).toBe(true);
+    synchronizeDebugSequence("canonical-workspace-id", 1);
+    expect(debugSessionSnapshot("canonical-workspace-id").sequence).toBe(2);
+    expect(applyDebugEvent("canonical-workspace-id", 2, event)).toBe(false);
 
     expect(debugSessionSnapshot("canonical-workspace-id").console.entries).toHaveLength(1);
+    resetDebugSessionStoreForTests();
+  });
+
+  it("accepts the first event after a canonical lower-sequence epoch reset", () => {
+    const workspaceId = "canonical-workspace-id";
+    const event = {
+      kind: "output" as const,
+      sessionId: "session-1",
+      category: "console" as const,
+      text: "safe",
+      truncated: false,
+      originalBytes: 4,
+      omittedBytes: 0,
+    };
+    expect(applyDebugEvent(workspaceId, 7, event, 1)).toBe(true);
+    const resyncToken = beginDebugStreamResync(workspaceId, 2, 2);
+    if (resyncToken === null) throw new Error("Expected a current stream resync token.");
+    expect(synchronizeDebugSequence(workspaceId, 2, resyncToken, 2)).toBe(true);
+
+    expect(applyDebugEvent(workspaceId, 3, event, 2)).toBe(true);
+    expect(applyDebugEvent(workspaceId, 8, event, 1)).toBe(false);
+    expect(beginDebugStreamResync(workspaceId, 2, 2)).toBeNull();
+    expect(debugSessionSnapshot(workspaceId).sequence).toBe(3);
+    expect(debugSessionSnapshot(workspaceId).console.entries).toHaveLength(1);
+    resetDebugSessionStoreForTests();
+  });
+
+  it("rejects completion and events from a superseded source generation", () => {
+    const workspaceId = "canonical-workspace-id";
+    const event = {
+      kind: "output" as const,
+      sessionId: "session-1",
+      category: "console" as const,
+      text: "safe",
+      truncated: false,
+      originalBytes: 4,
+      omittedBytes: 0,
+    };
+    expect(applyDebugEvent(workspaceId, 7, event, 1)).toBe(true);
+    const staleToken = beginDebugStreamResync(workspaceId, 2, 2);
+    const currentToken = beginDebugStreamResync(workspaceId, 3, 1);
+    if (staleToken === null || currentToken === null) {
+      throw new Error("Expected ordered stream resync tokens.");
+    }
+
+    expect(synchronizeDebugSequence(workspaceId, 2, staleToken, 2)).toBe(false);
+    expect(synchronizeDebugSequence(workspaceId, 1, currentToken, 3)).toBe(true);
+    expect(applyDebugEvent(workspaceId, 100, event, 2)).toBe(false);
+    expect(applyDebugEvent(workspaceId, 2, event, 3)).toBe(true);
+    expect(debugSessionSnapshot(workspaceId).sequence).toBe(2);
+    resetDebugSessionStoreForTests();
+  });
+
+  it("keeps an exhausted snapshot terminal while admitting a newer stream generation", () => {
+    const workspaceId = "canonical-workspace-id";
+    const event = {
+      kind: "output" as const,
+      sessionId: "session-1",
+      category: "console" as const,
+      text: "safe",
+      truncated: false,
+      originalBytes: 4,
+      omittedBytes: 0,
+    };
+    const token = beginDebugStreamResync(workspaceId, 1, 20);
+    if (token === null) throw new Error("Expected a current stream resync token.");
+
+    expect(abandonDebugStreamResync(workspaceId, 20, token, 1)).toBe(true);
+    expect(exhaustDebugStreamResync(workspaceId, 1, 20)).toBe(true);
+    expect(debugStreamSnapshotRequiresCanonicalResync(workspaceId, 1, 20, true)).toBe(false);
+    expect(beginDebugStreamResync(workspaceId, 1, 20)).toBeNull();
+    expect(applyDebugEvent(workspaceId, 21, event, 1)).toBe(false);
+
+    expect(debugStreamSnapshotRequiresCanonicalResync(workspaceId, 2, 20, true)).toBe(true);
+    expect(beginDebugStreamResync(workspaceId, 2, 20)).not.toBeNull();
+    resetDebugSessionStoreForTests();
+  });
+
+  it("does not republish a structurally identical canonical session refresh", () => {
+    const workspaceId = "canonical-workspace-id";
+    setDebugSession(workspaceId, session("paused", 2));
+    const initial = debugSessionSnapshot(workspaceId);
+
+    setDebugSession(workspaceId, {
+      ...session("paused", 2),
+      output: { acceptedBytes: 0, truncated: false },
+    });
+
+    expect(debugSessionSnapshot(workspaceId)).toBe(initial);
     resetDebugSessionStoreForTests();
   });
 

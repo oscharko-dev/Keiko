@@ -84,6 +84,16 @@ describe("workspace search wire validators", () => {
     );
   });
 
+  it("accepts a bounded relative text-search scope and rejects path escape", () => {
+    expect(validateWorkspaceSearchRequest(searchRequest({ scopePath: "src/features" }))).toEqual({
+      ok: true,
+    });
+    expectInvalidWithReason(
+      validateWorkspaceSearchRequest(searchRequest({ scopePath: "../secret" })),
+      "scopePath",
+    );
+  });
+
   it("rejects empty and whitespace-only queries", () => {
     expectInvalidWithReason(validateWorkspaceSearchRequest(searchRequest({ query: "" })), "query");
     expectInvalidWithReason(

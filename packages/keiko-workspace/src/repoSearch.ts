@@ -142,6 +142,12 @@ export interface ReadExcerptResult {
 interface FacadeDeps {
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
+  readonly candidatePathGlobs?:
+    | {
+        readonly include: readonly string[];
+        readonly exclude: readonly string[];
+      }
+    | undefined;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
@@ -417,8 +423,9 @@ function buildSearchTextRunner(
   query: RetrievalQuery,
   limits: SearchLimits,
   deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> &
-    Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider">,
+    Pick<FacadeDeps, "candidatePathGlobs" | "searchHints" | "signal" | "semanticSearchProvider">,
 ): SearchTextRunner {
+  const candidatePathPredicate = buildCandidatePathPredicate(deps.candidatePathGlobs);
   return {
     scope,
     limits: {
@@ -433,7 +440,22 @@ function buildSearchTextRunner(
     fingerprint: fingerprintFor(query),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
+    ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
     semantic: createSemanticSearchSession(deps.semanticSearchProvider, query),
+  };
+}
+
+function buildCandidatePathPredicate(
+  globs: FacadeDeps["candidatePathGlobs"],
+): ((scopePath: string) => boolean) | undefined {
+  if (globs === undefined || (globs.include.length === 0 && globs.exclude.length === 0)) {
+    return undefined;
+  }
+  const includes = globs.include.map((glob) => compileGlob(glob, true));
+  const excludes = globs.exclude.map((glob) => compileGlob(glob, true));
+  return (scopePath: string): boolean => {
+    const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
+    return included && !excludes.some((pattern) => pattern.test(scopePath));
   };
 }
 
@@ -1257,6 +1279,7 @@ async function rescueLowValueEvidence(
     lowValueRunner.limits,
     runner.fs,
     lowValueRunner.policy,
+    runner.candidatePathPredicate,
   );
   const lowValueSet = lowValueOnlyCandidateSet(gatheredSet, runner.policy);
   if (lowValueSet.files.length === 0) {
@@ -1353,10 +1376,13 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
 function buildSearchTextDeps(
   deps: FacadeDeps,
 ): Required<Pick<FacadeDeps, "fs" | "nowMs">> &
-  Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider"> {
+  Pick<FacadeDeps, "candidatePathGlobs" | "searchHints" | "signal" | "semanticSearchProvider"> {
   return {
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,
+    ...(deps.candidatePathGlobs === undefined
+      ? {}
+      : { candidatePathGlobs: deps.candidatePathGlobs }),
     ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.semanticSearchProvider !== undefined
@@ -1381,7 +1407,30 @@ function candidateSetForSearch(
   runner: SearchTextRunner,
   session: SearchWorkspaceIndexSession | undefined,
 ): CandidateSet {
-  return session?.candidateSet ?? gatherCandidates(scope, query, limits, runner.fs, runner.policy);
+  if (session !== undefined) {
+    return filterCandidateSet(session.candidateSet, runner.candidatePathPredicate);
+  }
+  return gatherCandidates(
+    scope,
+    query,
+    limits,
+    runner.fs,
+    runner.policy,
+    runner.candidatePathPredicate,
+  );
+}
+
+function filterCandidateSet(
+  candidateSet: CandidateSet,
+  predicate: SearchTextRunner["candidatePathPredicate"],
+): CandidateSet {
+  if (predicate === undefined) return candidateSet;
+  const files = candidateSet.files.filter((file) => predicate(file.relativePath));
+  return {
+    ...candidateSet,
+    files,
+    diagnostics: { ...candidateSet.diagnostics, filesAfterPolicy: files.length },
+  };
 }
 
 function indexedSearchRunner(

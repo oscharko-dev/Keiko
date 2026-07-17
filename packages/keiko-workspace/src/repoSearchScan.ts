@@ -215,6 +215,7 @@ interface GatherInputs {
   readonly fs: WorkspaceFs;
   readonly policy: SearchPolicy;
   readonly prescoreContent: boolean;
+  readonly candidatePathPredicate?: ((scopePath: string) => boolean) | undefined;
 }
 
 function shouldPrescoreContent(query: RetrievalQuery): boolean {
@@ -289,6 +290,7 @@ function resolveGatherInputs(
   limitsOrFs: LimitsShape | WorkspaceFs,
   fsOrPolicy?: WorkspaceFs | SearchPolicy,
   policy?: SearchPolicy,
+  candidatePathPredicate?: (scopePath: string) => boolean,
 ): GatherInputs {
   if (isRetrievalQuery(queryOrLimits)) {
     return {
@@ -297,6 +299,7 @@ function resolveGatherInputs(
       fs: fsOrPolicy as WorkspaceFs,
       policy: policy ?? resolveSearchPolicy(scope.relativePaths.length > 0, undefined),
       prescoreContent: true,
+      ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
     };
   }
   return {
@@ -328,6 +331,7 @@ export function gatherCandidates(
   limits: LimitsShape,
   fs: WorkspaceFs,
   policy: SearchPolicy,
+  candidatePathPredicate?: (scopePath: string) => boolean,
 ): CandidateSet;
 export function gatherCandidates(
   scope: ScopeShape,
@@ -335,8 +339,16 @@ export function gatherCandidates(
   limitsOrFs: LimitsShape | WorkspaceFs,
   fsOrPolicy?: WorkspaceFs | SearchPolicy,
   policy?: SearchPolicy,
+  candidatePathPredicate?: (scopePath: string) => boolean,
 ): CandidateSet {
-  const inputs = resolveGatherInputs(scope, queryOrLimits, limitsOrFs, fsOrPolicy, policy);
+  const inputs = resolveGatherInputs(
+    scope,
+    queryOrLimits,
+    limitsOrFs,
+    fsOrPolicy,
+    policy,
+    candidatePathPredicate,
+  );
   return gatherCandidatesFromInputs(scope, inputs);
 }
 
@@ -388,9 +400,13 @@ function orderCollectedCandidates(
   ignoredByDiscovery: number,
   deniedByDiscovery: number,
 ): CandidateSet {
-  const contentScores = contentScoresForOrdering(scope, result.files, inputs);
+  const files =
+    inputs.candidatePathPredicate === undefined
+      ? result.files
+      : result.files.filter((file) => inputs.candidatePathPredicate?.(file.relativePath) === true);
+  const contentScores = contentScoresForOrdering(scope, files, inputs);
   const ordered = orderCandidatesForSearch(
-    result.files,
+    files,
     inputs.query,
     inputs.policy,
     ignoredByDiscovery,
@@ -433,6 +449,7 @@ export interface SearchTextRunner {
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
+  readonly candidatePathPredicate?: ((scopePath: string) => boolean) | undefined;
   readonly workspaceIndex?:
     | {
         readonly entries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>;

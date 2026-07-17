@@ -5,11 +5,11 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readdirSync,
   rmSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import type {
   LanguageServiceOperation,
@@ -189,18 +189,47 @@ function runtimeUsage(root: string): RuntimeUsage {
   return { files, bytes };
 }
 
-function createJavaRuntimeRoot(): {
+function pathContained(parent: string, candidate: string): boolean {
+  const path = relative(parent, candidate);
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function privateRuntimeStateRoot(input: LspSpawnPreparationInput): string {
+  if (input.privateRuntimeStateRoot === undefined) {
+    throw new Error("Java LSP private runtime-state root is unavailable");
+  }
+  const privateRoot = realpathSync(input.privateRuntimeStateRoot);
+  const workspaceRoot = realpathSync(input.workspace.root);
+  if (pathContained(workspaceRoot, privateRoot) || pathContained(privateRoot, workspaceRoot)) {
+    throw new Error("Java LSP private runtime-state root overlaps the workspace");
+  }
+  return privateRoot;
+}
+
+function createJavaRuntimeRoot(input: LspSpawnPreparationInput): {
   readonly root: string;
   readonly configuration: string;
   readonly data: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), "keiko-jdtls-"));
-  chmodSync(root, 0o700);
-  const configuration = join(root, "configuration");
-  const data = join(root, "data");
-  mkdirSync(configuration, { mode: 0o700 });
-  mkdirSync(data, { mode: 0o700 });
-  return { root, configuration, data };
+  const privateRoot = privateRuntimeStateRoot(input);
+  const root = mkdtempSync(join(privateRoot, "jdtls-"));
+  try {
+    chmodSync(root, 0o700);
+    const canonicalRoot = realpathSync(root);
+    if (!pathContained(privateRoot, canonicalRoot)) {
+      throw new Error("Java LSP runtime-state generation escaped the private root");
+    }
+    const configuration = join(canonicalRoot, "configuration");
+    const data = join(canonicalRoot, "data");
+    mkdirSync(configuration, { mode: 0o700 });
+    chmodSync(configuration, 0o700);
+    mkdirSync(data, { mode: 0o700 });
+    chmodSync(data, 0o700);
+    return { root: canonicalRoot, configuration, data };
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function nativeBackends(input: LspSpawnPreparationInput): ReturnType<typeof probeBackends> {
@@ -316,7 +345,7 @@ export function prepareJavaSpawn(
   input: LspSpawnPreparationInput,
   securityDeps: JavaSpawnSecurityDeps = {},
 ): LspSpawnPreparation {
-  const runtime = createJavaRuntimeRoot();
+  const runtime = createJavaRuntimeRoot(input);
   try {
     if (containsForbiddenProjectMetadata(input.workspace.root)) {
       throw new Error("Java standalone mode rejects project import metadata");

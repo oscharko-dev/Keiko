@@ -108,7 +108,7 @@ describe("keyboardShortcutsRegistry", () => {
       binding: "Alt+CtrlOrMeta+O",
     });
 
-    expect(replaced).toMatchObject({ ok: true, value: ["1|quick-access.files|Alt+CtrlOrMeta+O"] });
+    expect(replaced).toMatchObject({ ok: true, value: ["1|quick-access.files|CtrlOrMeta+Alt+O"] });
     expect(bindingToWorkspaceChord("CtrlOrMeta+Alt+ArrowLeft")).toEqual({
       key: "arrowleft",
       mod: ["cmd", "alt"],
@@ -121,9 +121,9 @@ describe("keyboardShortcutsRegistry", () => {
     expect(bindingFromKeyboardEvent(new KeyboardEvent("keydown", { key: "😀" }))).toBeNull();
   });
 
-  // Covers bindingToWorkspaceChord's "unknown modifier → null" branch: an
-  // unknown prefix like "Foo+" filters out and yields an empty modifier list.
-  it("drops unknown modifiers when mapping a binding to a workspace chord", () => {
-    expect(bindingToWorkspaceChord("Foo+ArrowLeft")).toEqual({ key: "arrowleft", mod: [] });
+  it("rejects unknown and duplicate modifiers when projecting workspace chords", () => {
+    expect(bindingToWorkspaceChord("Foo+ArrowLeft")).toBeNull();
+    expect(bindingToWorkspaceChord("Alt+Alt+ArrowLeft")).toBeNull();
+    expect(bindingToWorkspaceChord("CtrlOrMeta+Ctrl+ArrowLeft")).toBeNull();
   });
 });

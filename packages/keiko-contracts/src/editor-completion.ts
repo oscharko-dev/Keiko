@@ -25,6 +25,8 @@ import {
   type LanguageDocumentOverlay,
   type LanguagePosition,
 } from "./language-service.js";
+import { isBoundedEditorSessionId } from "./coding-context.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 import type { CompletionDegradeReason, CompletionInteractionMode, CostClass } from "./gateway.js";
 
 // Schema version for the completion-gateway envelope. Bump as a new string member when the shape
@@ -131,6 +133,7 @@ export interface EditorCompletionContextSelectors {
 export interface EditorCompletionWireRequest {
   readonly schemaVersion: typeof EDITOR_COMPLETION_SCHEMA_VERSION;
   readonly root: string;
+  readonly editorSessionId?: string;
   readonly document: LanguageDocumentOverlay;
   readonly position: LanguagePosition;
   readonly triggerKind: EditorCompletionWireTriggerKind;
@@ -163,6 +166,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function collectEditorSessionIdError(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isBoundedEditorSessionId(value)) {
+    errors.push(
+      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+    );
+  }
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -225,6 +236,7 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
+  collectEditorSessionIdError(value.editorSessionId, errors);
   if (!isLanguageDocumentOverlay(value.document)) {
     errors.push("document must be { path, languageId, text }");
   }
@@ -263,6 +275,9 @@ export function parseEditorCompletionRequest(value: unknown): EditorCompletionPa
     value: {
       schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
       root: value.root as string,
+      ...(isBoundedEditorSessionId(value.editorSessionId)
+        ? { editorSessionId: value.editorSessionId }
+        : {}),
       document: value.document as LanguageDocumentOverlay,
       position: value.position as LanguagePosition,
       triggerKind: value.triggerKind as EditorCompletionWireTriggerKind,

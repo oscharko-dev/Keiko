@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   type LanguageDiagnostic,
@@ -373,6 +373,123 @@ describe("typescript refactoring provider", () => {
     }
   });
 
+  it("backfills rename file and edit caps after an unreadable workspace file", () => {
+    const paths = {
+      unreadable: `${ROOT}/src/unreadable.ts`,
+      first: `${ROOT}/src/first.ts`,
+      second: `${ROOT}/src/second.ts`,
+      beyondCap: `${ROOT}/src/beyond-cap.ts`,
+    };
+    const locations: readonly ts.RenameLocation[] = [
+      { fileName: paths.unreadable, textSpan: { start: 0, length: 6 } },
+      { fileName: "/outside/escape.ts", textSpan: { start: 0, length: 6 } },
+      { fileName: paths.first, textSpan: { start: 0, length: 6 } },
+      { fileName: paths.second, textSpan: { start: 0, length: 6 } },
+      { fileName: paths.beyondCap, textSpan: { start: 0, length: 6 } },
+    ];
+    const sourceByFile: Readonly<Record<string, string>> = {
+      [`${ROOT}/src/main.ts`]: "target",
+      [paths.first]: "target",
+      [paths.second]: "target",
+      [paths.beyondCap]: "target",
+    };
+    const sourceText = vi.fn((fileName: string): string | undefined => sourceByFile[fileName]);
+    const handle = fakeProject(
+      { getRenameInfo: renameableInfo, findRenameLocations: () => locations },
+      sourceByFile,
+      {
+        ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+        maxRenameChangesetFiles: 2,
+        maxRenameChangesetEdits: 2,
+      },
+    );
+
+    const rename = resolveTypescriptRenameApply(
+      { ...handle, sourceText },
+      { line: 0, character: 0 },
+      "renamed",
+    );
+
+    expect(rename.kind).toBe("result");
+    if (rename.kind === "result") {
+      expect(rename.result).toMatchObject({
+        files: [{ path: "src/first.ts" }, { path: "src/second.ts" }],
+        truncated: true,
+        filesTruncated: true,
+        returnedFileCount: 2,
+        totalFileCount: 4,
+        returnedEditCount: 2,
+        totalEditCount: 4,
+      });
+    }
+    expect(sourceText.mock.calls.map(([fileName]) => fileName)).toEqual([
+      paths.unreadable,
+      paths.first,
+      paths.second,
+    ]);
+  });
+
+  it("bounds high-fan-out rename source reads while preserving exact totals", () => {
+    const locationCount = 1_000;
+    const locations = Array.from({ length: locationCount }, (_, index): ts.RenameLocation => ({
+      fileName: `${ROOT}/src/use-${String(index)}.ts`,
+      textSpan: { start: 0, length: 6 },
+    }));
+    const sourceText = vi.fn(() => "target");
+    const handle = fakeProject(
+      {
+        getRenameInfo: renameableInfo,
+        findRenameLocations: () => locations,
+      },
+      { [`${ROOT}/src/main.ts`]: "target" },
+      {
+        ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+        maxRenameChangesetFiles: 2,
+        maxRenameChangesetEdits: 3,
+      },
+    );
+    const boundedHandle = { ...handle, sourceText };
+
+    const rename = resolveTypescriptRenameApply(
+      boundedHandle,
+      { line: 0, character: 0 },
+      "renamed",
+    );
+
+    expect(rename.kind).toBe("result");
+    if (rename.kind === "result") {
+      expect(rename.result).toMatchObject({
+        truncated: true,
+        filesTruncated: true,
+        returnedFileCount: 2,
+        totalFileCount: locationCount,
+        returnedEditCount: 2,
+        totalEditCount: locationCount,
+      });
+    }
+    expect(sourceText).toHaveBeenCalledTimes(2);
+  });
+
+  it("polls cancellation after rename fan-out before reading source text", () => {
+    let tick = 0;
+    const cancellation = createDeadlineCancellation({ deadlineMs: 3, now: () => tick++ });
+    const sourceText = vi.fn(() => "target");
+    const findRenameLocations = vi.fn((): readonly ts.RenameLocation[] => [
+      { fileName: `${ROOT}/src/main.ts`, textSpan: { start: 0, length: 6 } },
+    ]);
+    const handle = fakeProject(
+      { getRenameInfo: renameableInfo, findRenameLocations },
+      { [`${ROOT}/src/main.ts`]: "target" },
+    );
+    const cancellableHandle = { ...handle, cancellation, sourceText };
+
+    expect(() =>
+      resolveTypescriptRenameApply(cancellableHandle, { line: 0, character: 0 }, "renamed"),
+    ).toThrow("language operation cancelled");
+    expect(findRenameLocations).toHaveBeenCalledOnce();
+    expect(sourceText).not.toHaveBeenCalled();
+  });
+
   it("excludes rename and code-action edit locations outside the workspace root", () => {
     const rename = resolveTypescriptRenameApply(
       fakeOutsideRenameProject(),
@@ -393,6 +510,17 @@ describe("typescript refactoring provider", () => {
     expect(actions.actions[0]?.edits?.[0]?.newText).toBe("inside");
   });
 });
+
+function renameableInfo(): ts.RenameInfoSuccess {
+  return {
+    canRename: true,
+    displayName: "target",
+    fullDisplayName: "target",
+    kind: ts.ScriptElementKind.constElement,
+    kindModifiers: "",
+    triggerSpan: { start: 0, length: 6 },
+  };
+}
 
 function fakeCodeActionProject(limits: LanguageServiceLimits): TypescriptProjectHandle {
   const source = { [`${ROOT}/src/main.ts`]: "missing" };
@@ -444,14 +572,7 @@ function fakeSignatureProject(limits: LanguageServiceLimits): TypescriptProjectH
 function fakeOutsideRenameProject(): TypescriptProjectHandle {
   return fakeProject(
     {
-      getRenameInfo: () => ({
-        canRename: true,
-        displayName: "target",
-        fullDisplayName: "target",
-        kind: ts.ScriptElementKind.constElement,
-        kindModifiers: "",
-        triggerSpan: { start: 0, length: 6 },
-      }),
+      getRenameInfo: renameableInfo,
       findRenameLocations: () => [
         { fileName: `${ROOT}/src/main.ts`, textSpan: { start: 0, length: 6 } },
         { fileName: "/outside/escape.ts", textSpan: { start: 0, length: 6 } },

@@ -38,7 +38,8 @@ import {
   type LanguageRange,
 } from "./language-service.js";
 import type { EditorCompletionContextSelectors } from "./editor-completion.js";
-import type { CodingContextWirePack } from "./coding-context.js";
+import { isBoundedEditorSessionId, type CodingContextWirePack } from "./coding-context.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 // Schema version for the test-generation envelope. Bump as a new string member when the shape changes
 // incompatibly; consumers pin against the literal to detect skew.
@@ -97,6 +98,7 @@ export type EditorTestGenerationWireTarget =
 export interface EditorTestGenerationWireRequest {
   readonly schemaVersion: typeof EDITOR_TEST_GENERATION_SCHEMA_VERSION;
   readonly root: string;
+  readonly editorSessionId?: string;
   readonly target: EditorTestGenerationWireTarget;
   // Advisory budget (bytes) the host suggests for assembled coding context; the route clamps it to the
   // server-owned `test-generation` purpose budget. A non-negative integer.
@@ -358,6 +360,11 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
+  if (value.editorSessionId !== undefined && !isBoundedEditorSessionId(value.editorSessionId)) {
+    errors.push(
+      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+    );
+  }
   collectTargetErrors(value.target, errors);
   if (!isNonNegativeInteger(value.contextBudgetBytes)) {
     errors.push("contextBudgetBytes must be a non-negative integer");
@@ -393,6 +400,9 @@ export function parseEditorTestGenerationRequest(value: unknown): EditorTestGene
     value: {
       schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
       root: value.root as string,
+      ...(isBoundedEditorSessionId(value.editorSessionId)
+        ? { editorSessionId: value.editorSessionId }
+        : {}),
       target: value.target as EditorTestGenerationWireTarget,
       contextBudgetBytes: value.contextBudgetBytes as number,
       ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),

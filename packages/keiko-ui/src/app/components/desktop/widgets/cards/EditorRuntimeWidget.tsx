@@ -52,6 +52,7 @@ import {
   deriveEditorStatusBar,
   describeTestGenerationStatus,
   disposeAllUnattachedEditorModels,
+  disposeEditorModelRegistryRoot,
   editorFileModelReducer,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
@@ -135,10 +136,14 @@ import {
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
+  EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SCHEMA_VERSION,
+  type EditorAgentDiagnosticsDetail,
   isEditorAgentActiveBufferActionType,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 import conflictStyles from "./EditorConflicts.module.css";
+import runtimeStyles from "./EditorRuntimeWidget.module.css";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
@@ -841,6 +846,39 @@ function promptRenameSymbol(placeholder: string): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
+function diagnosticMessagePrefix(message: string): {
+  readonly text: string;
+  readonly truncated: boolean;
+} {
+  const characters = [...message];
+  if (characters.length <= EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS) {
+    return { text: message, truncated: false };
+  }
+  return {
+    text: characters.slice(0, EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS).join(""),
+    truncated: true,
+  };
+}
+
+function agentDiagnosticsDetail(
+  diagnostics: readonly EditorDiagnostic[],
+): EditorAgentDiagnosticsDetail {
+  let truncated = diagnostics.length > EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS;
+  const items = diagnostics.slice(0, EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).map((diagnostic) => {
+    const message = diagnosticMessagePrefix(diagnostic.message);
+    truncated ||= message.truncated;
+    return {
+      severity: diagnostic.severity,
+      range: {
+        start: { line: diagnostic.range.start.line, character: diagnostic.range.start.column },
+        end: { line: diagnostic.range.end.line, character: diagnostic.range.end.column },
+      },
+      message: message.text,
+    };
+  });
+  return { items, truncated };
+}
+
 interface EditorFileSessionSnapshot {
   readonly content: string;
   readonly fileModel: EditorFileModel | null;
@@ -1217,12 +1255,42 @@ function externalChangeCanCompare(state: EditorExternalChangeState): boolean {
   return state.status === "cleanChanged" || state.status === "dirtyChanged";
 }
 
-function localWriteMatchesEvent(
-  localWrite: { readonly path: string; readonly expiresAt: number } | null,
+interface RecentLocalWrite {
+  readonly sessionKey: string;
+  readonly path: string;
+  readonly expiresAt: number;
+  readonly expectedVersion: EditorDocumentVersion;
+  readonly externalChangeObserved: boolean;
+}
+
+interface WorkspaceWatchReconciliationGeneration {
+  readonly root: string | undefined;
+  readonly file: string | undefined;
+  readonly sessionKey: string | null;
+  readonly documentVersion: EditorDocumentVersion | null;
+  readonly editorVersion: number | null;
+}
+
+function localWriteTargetsEvent(
+  localWrite: RecentLocalWrite,
   event: EditorM7WatchEvent,
+  sessionKey: string | null,
 ): boolean {
-  if (localWrite === null || Date.now() > localWrite.expiresAt) return false;
-  return localWrite.path === event.relativePath || localWrite.path === event.oldRelativePath;
+  return (
+    localWrite.sessionKey === sessionKey &&
+    (localWrite.path === event.relativePath || localWrite.path === event.oldRelativePath)
+  );
+}
+
+function eventMatchesSavedMetadata(
+  event: EditorM7WatchEvent,
+  expectedVersion: EditorDocumentVersion,
+): boolean {
+  return (
+    event.kind === "changed" &&
+    event.sizeBytes === expectedVersion.sizeBytes &&
+    event.modifiedAt === expectedVersion.modifiedAt
+  );
 }
 
 type AgentPreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
@@ -1408,12 +1476,8 @@ function changesetSourceExceedsLimit(content: string, maxBytes: number | null): 
   return maxBytes !== null && UTF8_ENCODER.encode(content).length > maxBytes;
 }
 
-// Every editor pane mounts its own EditorRuntimeWidget instance, but disposeAllUnattachedEditorModels
-// clears the *shared* registry with no per-root scoping. Gating it behind this live-instance count
-// keeps a single pane's unmount/root-change from evicting the retained-but-inactive models that
-// sibling panes (split view, multiple windows) are still keeping warm — eager cleanup only fires
-// when this is the sole surviving instance; otherwise the registry's own count/byte-budget eviction
-// still reclaims abandoned entries the next time any pane attaches or detaches a model.
+// Every editor pane mounts its own EditorRuntimeWidget instance. Root switches use root-scoped model
+// ownership; this count reserves the registry-wide shutdown cleanup for the last surviving pane.
 let liveEditorRuntimeInstances = 0;
 
 function nonEmptyEditorFile(file: string | undefined): string | null {
@@ -1711,18 +1775,16 @@ function EditorRuntimeWidget({
       byteBudget: editorSettings.applied.modelRetentionBytes,
     });
   }, [editorSettings.applied.modelRetentionCount, editorSettings.applied.modelRetentionBytes]);
-  // AC7: releases retained-but-inactive Monaco models when this pane's root changes (the pane
-  // itself is keyed by pane id, not root, so it stays mounted across a root switch) or when the
-  // pane closes/the window unmounts. Only eager when no sibling pane is alive to depend on the
-  // shared registry — see the liveEditorRuntimeInstances comment above.
+  // AC7: release only clean, inactive models owned by the previous canonical root. Sibling panes
+  // keep attached models protected, and entries owned by other roots are never considered.
   const previousRuntimeRootRef = useRef(root);
   useEffect(() => {
-    if (previousRuntimeRootRef.current !== root) {
-      if (liveEditorRuntimeInstances <= 1) {
-        disposeAllUnattachedEditorModels("root-disposed");
-      }
-      previousRuntimeRootRef.current = root;
+    const previousRoot = previousRuntimeRootRef.current;
+    if (previousRoot === root) return;
+    if (previousRoot !== undefined) {
+      disposeEditorModelRegistryRoot(previousRoot, "root-disposed");
     }
+    previousRuntimeRootRef.current = root;
   }, [root]);
   useEffect(() => {
     liveEditorRuntimeInstances += 1;
@@ -1743,6 +1805,11 @@ function EditorRuntimeWidget({
   const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
   const generatedId = useId();
   const diagnosticsProducerId = definedOr(windowId, generatedId);
+  const agentSessionId = useMemo(
+    () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
+    [generatedId, root, windowId],
+  );
+  const [diagnosticsDetail, setDiagnosticsDetail] = useState<EditorAgentDiagnosticsDetail>();
   // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
   // active review surface is actually reviewing, never to the pane's currently active file. This
   // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
@@ -1773,6 +1840,7 @@ function EditorRuntimeWidget({
     (diagnostics: readonly EditorDiagnostic[]): void => {
       if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
         setPaneDiagnostics(root, diagnosticsProducerId, file, diagnostics);
+        setDiagnosticsDetail(agentDiagnosticsDetail(diagnostics));
       }
     },
     [diagnosticsProducerId, root, file],
@@ -2063,11 +2131,22 @@ function EditorRuntimeWidget({
   // optimistic-concurrency token (Issue #1197) is the token the save sends to the BFF.
   const versionRef = useRef<EditorDocumentVersion | null>(null);
   versionRef.current = version;
+  const workspaceWatchGeneration = useMemo<WorkspaceWatchReconciliationGeneration>(
+    () => ({
+      root,
+      file,
+      sessionKey: editorSessionKeyOrNull(root, file),
+      documentVersion: version,
+      editorVersion: fileModel?.identity.version ?? null,
+    }),
+    [file, fileModel?.identity.version, root, version],
+  );
+  const workspaceWatchGenerationRef = useRef(workspaceWatchGeneration);
+  workspaceWatchGenerationRef.current = workspaceWatchGeneration;
   const savingRef = useRef(false);
   savingRef.current = saveStatus === "saving";
-  const recentLocalWriteRef = useRef<{ readonly path: string; readonly expiresAt: number } | null>(
-    null,
-  );
+  const recentLocalWriteRef = useRef<RecentLocalWrite | null>(null);
+  const workspaceWatchReconciliationRef = useRef<Promise<void>>(Promise.resolve());
   // The editor stays editable during a save; this ref lets the success handler tell whether the
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
@@ -2092,6 +2171,7 @@ function EditorRuntimeWidget({
     setCurrentSelection(null);
     setCursor(null);
     setDiagnosticsSummary(null);
+    setDiagnosticsDetail(undefined);
     setOutlineSymbols([]);
     setOutlineLoading(false);
     setSymbolRevealRequest(undefined);
@@ -2161,31 +2241,101 @@ function EditorRuntimeWidget({
   useEffect(() => {
     dispatchExternalChange({ type: "dirtyChanged", dirty });
   }, [dirty]);
-  const handleWorkspaceWatchEvent = useCallback(
-    (event: EditorM7WatchEvent): void => {
+  const resolveLocalWriteOrigin = useCallback(
+    async (
+      localWrite: RecentLocalWrite | null,
+      event: EditorM7WatchEvent,
+      generation: WorkspaceWatchReconciliationGeneration,
+      contentAtStart: string,
+    ): Promise<"abort" | { readonly originatedByKeiko: boolean }> => {
+      if (localWrite === null) return { originatedByKeiko: false };
+      if (Date.now() > localWrite.expiresAt) {
+        recentLocalWriteRef.current = null;
+        return { originatedByKeiko: false };
+      }
+      if (!localWriteTargetsEvent(localWrite, event, generation.sessionKey)) {
+        return { originatedByKeiko: false };
+      }
+      const expectedMetadata = eventMatchesSavedMetadata(event, localWrite.expectedVersion);
+      if (localWrite.externalChangeObserved && expectedMetadata) {
+        // A genuine external event already surfaced while this marker was pending. A later event
+        // carrying the exact saved metadata is the delayed self notification. It is a no-op: a
+        // self-originated reducer transition would clear the genuine warning that is already
+        // visible, violating ADR-0133 D3.
+        recentLocalWriteRef.current = null;
+        return "abort";
+      }
+      if (!expectedMetadata || root === undefined) {
+        // A path/time match is provenance only. Different metadata is a real external change and
+        // cannot consume the saved-version marker.
+        recentLocalWriteRef.current = { ...localWrite, externalChangeObserved: true };
+        return { originatedByKeiko: false };
+      }
+      let originatedByKeiko = false;
+      try {
+        const current = await fetchFilesContent(root, localWrite.path);
+        originatedByKeiko =
+          current.session.version.sizeBytes === localWrite.expectedVersion.sizeBytes &&
+          current.session.version.modifiedAt === localWrite.expectedVersion.modifiedAt &&
+          current.session.version.contentHash === localWrite.expectedVersion.contentHash;
+      } catch {
+        originatedByKeiko = false;
+      }
+      if (
+        workspaceWatchGenerationRef.current !== generation ||
+        contentRef.current !== contentAtStart ||
+        recentLocalWriteRef.current !== localWrite
+      ) {
+        return "abort";
+      }
+      recentLocalWriteRef.current = originatedByKeiko
+        ? null
+        : { ...localWrite, externalChangeObserved: true };
+      return { originatedByKeiko };
+    },
+    [root],
+  );
+  const reconcileWorkspaceWatchEvent = useCallback(
+    async (event: EditorM7WatchEvent): Promise<void> => {
+      const generation = workspaceWatchGenerationRef.current;
+      if (generation.root !== root || generation.file !== file) return;
+      const contentAtStart = contentRef.current;
       if (root !== undefined && file !== undefined && workspaceWatchEventTouchesPath(event, file)) {
         setGitGutterPeek(null);
         setGitGutterRefreshNonce((value) => value + 1);
         setDiagnosticsSummary(null);
+        setDiagnosticsDetail(undefined);
         removePaneDiagnostics(root, diagnosticsProducerId, file);
         symbolCacheRef.current = null;
         setOutlineSymbols([]);
       }
-      // Consume the local-write marker on first match: a save produces exactly one reconciling
-      // watch event, so leaving the marker live for its full window would let an unrelated
-      // third-party write to the same path within that window be silently treated as Keiko's own.
-      const originatedByKeiko = localWriteMatchesEvent(recentLocalWriteRef.current, event);
-      if (originatedByKeiko) recentLocalWriteRef.current = null;
+      const localWrite = recentLocalWriteRef.current;
+      const originResult = await resolveLocalWriteOrigin(
+        localWrite,
+        event,
+        generation,
+        contentAtStart,
+      );
+      if (originResult === "abort") return;
       dispatchExternalChange({
         type: "observed",
         event,
         activePath: file,
         dirty: dirtyRef.current,
         saving: savingRef.current,
-        originatedByKeiko,
+        originatedByKeiko: originResult.originatedByKeiko,
       });
     },
-    [diagnosticsProducerId, file, root],
+    [diagnosticsProducerId, file, resolveLocalWriteOrigin, root],
+  );
+  const handleWorkspaceWatchEvent = useCallback(
+    (event: EditorM7WatchEvent): void => {
+      workspaceWatchReconciliationRef.current = workspaceWatchReconciliationRef.current.then(
+        () => reconcileWorkspaceWatchEvent(event),
+        () => reconcileWorkspaceWatchEvent(event),
+      );
+    },
+    [reconcileWorkspaceWatchEvent],
   );
   const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
   useEffect(() => {
@@ -2603,7 +2753,13 @@ function EditorRuntimeWidget({
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
         });
-        recentLocalWriteRef.current = { path: file, expiresAt: Date.now() + 2_000 };
+        recentLocalWriteRef.current = {
+          sessionKey: saveSessionKey,
+          path: file,
+          expiresAt: Date.now() + 2_000,
+          expectedVersion: response.session.version,
+          externalChangeObserved: false,
+        };
         notifyWorkspaceFileMutated(root, {
           kind: "changed",
           relativePath: file,
@@ -2742,6 +2898,7 @@ function EditorRuntimeWidget({
       const wire = await requestEditorCompletion(
         {
           root,
+          editorSessionId: agentSessionId,
           path: file,
           languageId: query.request.document.language,
           text: query.documentText,
@@ -2797,6 +2954,7 @@ function EditorRuntimeWidget({
     },
     [
       file,
+      agentSessionId,
       hasTarget,
       linkedCapsuleIds,
       linkedCapsuleSetIds,
@@ -2820,6 +2978,7 @@ function EditorRuntimeWidget({
       const wire = await requestEditorInlineCompletion(
         {
           root,
+          editorSessionId: agentSessionId,
           path: file,
           languageId: query.request.document.language,
           text: query.documentText,
@@ -2850,7 +3009,16 @@ function EditorRuntimeWidget({
         Date.now(),
       );
     },
-    [file, hasTarget, linkedCapsuleIds, linkedCapsuleSetIds, linkedFilePath, linkedRoot, root],
+    [
+      agentSessionId,
+      file,
+      hasTarget,
+      linkedCapsuleIds,
+      linkedCapsuleSetIds,
+      linkedFilePath,
+      linkedRoot,
+      root,
+    ],
   );
 
   // Issue #1200 (AC6): forward content-free acceptance/rejection counts to the governed telemetry
@@ -2934,6 +3102,7 @@ function EditorRuntimeWidget({
     void requestEditorTestGeneration(
       {
         root,
+        editorSessionId: agentSessionId,
         target,
         contextBudgetBytes: TEST_GENERATION_CONTEXT_BUDGET_BYTES,
         ...(selectors === undefined ? {} : { context: selectors }),
@@ -2959,6 +3128,7 @@ function EditorRuntimeWidget({
         }
       });
   }, [
+    agentSessionId,
     currentSelection,
     file,
     fileModel,
@@ -3369,8 +3539,15 @@ function EditorRuntimeWidget({
   const largeFilePolicy = largeFileSettings(largeFileMode, preferenceLargeFileMode);
   const largeFileDegraded = largeFilePolicy.degraded;
   const editorReadOnlyBySettings = largeFilePolicy.readOnly;
-  const editorConflicts = useMemo<NonNullable<EditorSurfaceProps["editorConflicts"]>>(
-    () => ({
+  useEffect(() => {
+    if (!largeFileDegraded) return;
+    setMergeConflicts((current) =>
+      current.count === 0 && !current.truncated ? current : { count: 0, truncated: false },
+    );
+  }, [largeFileDegraded]);
+  const editorConflicts = useMemo<EditorSurfaceProps["editorConflicts"]>(() => {
+    if (largeFileDegraded) return undefined;
+    return {
       labels: {
         next: sourceControlT("conflicts.next"),
         previous: sourceControlT("conflicts.previous"),
@@ -3380,9 +3557,8 @@ function EditorRuntimeWidget({
       },
       onChange: (count, truncated) => setMergeConflicts({ count, truncated }),
       onStale: () => setToolbarNotice(sourceControlT("conflicts.stale")),
-    }),
-    [sourceControlT],
-  );
+    };
+  }, [largeFileDegraded, sourceControlT]);
   const editorGitGutter = useMemo<EditorGitGutterHost | undefined>(() => {
     if (root === undefined || file === undefined || largeFileDegraded) return undefined;
     return {
@@ -3516,6 +3692,9 @@ function EditorRuntimeWidget({
     "diagnostics",
     largeFileDegraded,
   );
+  useEffect(() => {
+    if (!diagnosticsEnabled) setDiagnosticsDetail(undefined);
+  }, [diagnosticsEnabled]);
   const hoverEnabled = editorProviderFeatureEnabled(languageProvider, "hover", largeFileDegraded);
   const symbolsEnabled = editorProviderFeatureEnabled(
     languageProvider,
@@ -4133,10 +4312,6 @@ function EditorRuntimeWidget({
     [handleSelectTab],
   );
 
-  const agentSessionId = useMemo(
-    () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
-    [generatedId, root, windowId],
-  );
   const effectiveAgentPaneId = definedOr(activePaneId, definedOr(paneId, "pane-1"));
   const shouldSubscribeToAgentActions = paneCanSubscribe(activePaneId, paneId);
   const agentDocumentVersion = useMemo(
@@ -4179,6 +4354,7 @@ function EditorRuntimeWidget({
         cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
         selection: rangeToAgentRange(currentSelection),
         diagnosticsSummary,
+        ...(diagnosticsDetail === undefined ? {} : { diagnosticsDetail }),
         // Issue #1379 AC4 (ADR-0067 D6): content-free language-provider availability for the active
         // file, derived from the descriptor we already computed. The synthetic id:"none" maps to
         // providerId:null for honesty; null overall when there is no active language.
@@ -4232,6 +4408,7 @@ function EditorRuntimeWidget({
       cursor,
       completionLanguage,
       diagnosticsSummary,
+      diagnosticsDetail,
       documentTabs,
       effectiveAgentPaneId,
       effectiveDirtyFiles,
@@ -5561,6 +5738,7 @@ function EditorRuntimeWidget({
             maxSizeBytes={nullToUndefined(maxBytes)}
             themeVariant={themeVariant}
             editorPreferences={editorSettings.applied}
+            modelRootKey={root}
             modelViewStateKey={modelViewStateKey}
             modelRetentionProtection={{
               hotExitRecovery: recoverySnapshot !== null,
@@ -6043,7 +6221,7 @@ function EditorRuntimeWidget({
   );
 
   const renderEditorChrome = (): ReactNode => (
-    <div className="editor">
+    <div className={`editor ${runtimeStyles.themeTokens}`}>
       <div className="ed-tabs mono">
         {renderOpenDocumentTabs()}
         {renderEditorToolbar()}

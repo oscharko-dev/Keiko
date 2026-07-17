@@ -451,10 +451,11 @@ function unavailableBranchList(repo: GitRepositoryStatusResponse): GitBranchList
 
 // Issue #2228 defect fix (Epic #2093 audit): GitEditorDiffResponse/GitEditorBlameResponse (unlike
 // GitRepositoryStatusResponse/GitBranchListResponse) carry no "unavailable" state fields at all —
-// they are pure success shapes. When the folder is not a repository, has unsafe ownership, or its
-// repository root falls outside the selected root, the correct representation is a schema-valid,
-// zero-value response (no changes to show), mirroring unavailableBranchList's role for the other
-// git-editor routes rather than leaking the raw GitRepositoryStatusResponse shape.
+// they are pure success shapes. Membership failures are projected before these handlers run. If an
+// admitted repository subsequently fails Git's unsafe-ownership check, the correct representation
+// is a schema-valid zero-value response rather than a GitRepositoryStatusResponse. Operational
+// failures such as a missing Git binary or timeout remain correlated 500s so the UI cannot mistake
+// an incomplete read for a clean result.
 function unavailableStructuredDiff(scope: GitEditorDiffScope): GitEditorDiffResponse {
   return {
     schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
@@ -831,22 +832,8 @@ function boundedProcessOutput(
   };
 }
 
-function unavailableReadResult(
-  repo: RepositoryContext,
-  result: GitProcessResult,
-  deps: UiHandlerDeps,
-  message: string,
-): RouteResult | undefined {
-  const reason = classifyFailure(result);
-  if (reason !== "unsafe-repository" && reason !== "git-missing" && !result.timedOut) {
-    return undefined;
-  }
-  const body = {
-    ...genericUnavailable(repo.root, reason, message),
-    repositoryRoot: repo.repositoryRoot,
-    truncated: result.truncated,
-  };
-  return { status: 200, body: redacted(deps, body) };
+function isUnavailableReadFailure(result: GitProcessResult): boolean {
+  return classifyGitFailure(result) === "unsafe-repository";
 }
 
 function correlatedGitError(ctx: RouteContext, code: string, message: string): RouteResult {
@@ -901,10 +888,10 @@ export async function handleGitStructuredDiff(
       GIT_EDITOR_DIFF_MAX_BYTES,
     );
     if (result.exitCode !== 0) {
-      return (
-        unavailableReadResult(repo, result, deps, "Git diff is unavailable for this folder.") ??
-        correlatedGitError(ctx, "GIT_DIFF_FAILED", "Git diff is unavailable for this folder.")
-      );
+      if (isUnavailableReadFailure(result)) {
+        return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
+      }
+      return correlatedGitError(ctx, "GIT_DIFF_FAILED", "Git diff is unavailable for this folder.");
     }
     return { status: 200, body: redacted(deps, structuredDiffBody(scope, repo, result)) };
   });
@@ -994,9 +981,13 @@ export async function handleGitBlame(
     await assertContainedGitPath(repo, request.path);
     const result = await runBlame(repo, options, request);
     if (result.exitCode !== 0) {
-      return (
-        unavailableReadResult(repo, result, deps, "Git blame is unavailable for this folder.") ??
-        correlatedGitError(ctx, "GIT_BLAME_FAILED", "Git blame is unavailable for this folder.")
+      if (isUnavailableReadFailure(result)) {
+        return { status: 200, body: redacted(deps, unavailableBlame(request)) };
+      }
+      return correlatedGitError(
+        ctx,
+        "GIT_BLAME_FAILED",
+        "Git blame is unavailable for this folder.",
       );
     }
     return { status: 200, body: redacted(deps, blameBody(request, result)) };

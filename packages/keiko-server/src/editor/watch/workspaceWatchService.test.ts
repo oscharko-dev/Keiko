@@ -1,4 +1,17 @@
-import { mkdir, mkdtemp, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import type { Dirent, Stats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -7,11 +20,47 @@ import type { EditorM7WatchEvent } from "@oscharko-dev/keiko-contracts";
 
 import {
   createWorkspaceWatchService,
+  type WorkspaceWatchFileSystem,
   type WorkspaceNativeWatchHandle,
   type WorkspaceWatchAdapter,
   type WorkspaceWatchAdapterArgs,
   type WorkspaceWatchRawEvent,
 } from "./workspaceWatchService.js";
+
+function errno(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(code), { code });
+}
+
+class InjectedFileSystem implements WorkspaceWatchFileSystem {
+  public lstatFailure: { readonly path: string; readonly code: string } | null = null;
+  public readdirFailureCode: string | null = null;
+  public sortEntries = false;
+
+  public readonly lstat = vi.fn(async (path: string): Promise<Stats> => {
+    if (this.lstatFailure?.path === path) {
+      const { code } = this.lstatFailure;
+      this.lstatFailure = null;
+      throw errno(code);
+    }
+    return lstat(path);
+  });
+
+  public readonly realpath = vi.fn(async (path: string): Promise<string> => realpath(path));
+
+  public readonly stat = vi.fn(async (path: string): Promise<Stats> => stat(path));
+
+  public readonly readdir = vi.fn(async (path: string): Promise<readonly Dirent[]> => {
+    if (this.readdirFailureCode !== null) {
+      const code = this.readdirFailureCode;
+      this.readdirFailureCode = null;
+      throw errno(code);
+    }
+    const entries = await readdir(path, { withFileTypes: true });
+    return this.sortEntries
+      ? entries.sort((left: Dirent, right: Dirent) => left.name.localeCompare(right.name))
+      : entries;
+  });
+}
 
 interface FakeHandle extends WorkspaceNativeWatchHandle {
   readonly close: Mock<() => void>;
@@ -308,6 +357,30 @@ describe("workspace watch service", () => {
     expect(secondEvents.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
   });
 
+  it("keeps exclusions fixed when a subscriber reconnects during idle retention", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const first = manager.subscribe({
+      root,
+      onEvent: vi.fn(),
+      additionalExclusions: ["generated"],
+    });
+    await drainInitialBaseline(manager, adapter);
+    if (first.kind !== "ok") throw new Error("Expected first subscription");
+    first.unsubscribe();
+
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event), additionalExclusions: [] });
+    await mkdir(join(root, "generated"), { recursive: true });
+    await writeFile(join(root, "generated", "file.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "generated/file.txt" });
+    await writeFile(join(root, "allowed.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "allowed.txt" });
+    await waitForCondition(() => events.some((event) => event.relativePath === "allowed.txt"));
+
+    expect(events.some((event) => event.relativePath.startsWith("generated"))).toBe(false);
+  });
+
   it("does not fabricate deleted events when a fallback rescan is truncated by maxScanEntries", async () => {
     const adapter = new FakeAdapter();
     await mkdir(join(root, "dirA"), { recursive: true });
@@ -334,6 +407,145 @@ describe("workspace watch service", () => {
 
     expect(events.some((event) => event.kind === "deleted")).toBe(false);
   });
+
+  it("bounds flat-directory fallback scans and emits one overflow without inferred deletions", async () => {
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    fileSystem.sortEntries = true;
+    await writeFile(join(root, "z-known.txt"), "known", "utf8");
+    const events: EditorM7WatchEvent[] = [];
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+      maxQueueDepth: 16,
+      replayCapacity: 8,
+      maxScanEntries: 2,
+    });
+    manager.subscribe({
+      root,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.kind === "overflow") manager.disposeAll();
+      },
+    });
+    await drainInitialBaseline(manager, adapter);
+
+    fileSystem.lstat.mockClear();
+    fileSystem.realpath.mockClear();
+    fileSystem.stat.mockClear();
+    fileSystem.readdir.mockClear();
+    for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"])
+      await writeFile(join(root, name), name, "utf8");
+
+    adapter.fail();
+    await waitForCondition(() => events.some((event) => event.kind === "overflow"));
+
+    expect(events.filter((event) => event.kind === "overflow")).toHaveLength(1);
+    expect(events.some((event) => event.kind === "deleted")).toBe(false);
+    expect(fileSystem.readdir).toHaveBeenCalledTimes(1);
+    expect(fileSystem.lstat).toHaveBeenCalledTimes(2);
+    expect(fileSystem.realpath).toHaveBeenCalledTimes(2);
+    expect(fileSystem.stat).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["ENOENT", "ENOTDIR"])(
+    "treats confirmed %s metadata absence as deletion without degradation",
+    async (code) => {
+      const adapter = new FakeAdapter();
+      const fileSystem = new InjectedFileSystem();
+      const target = join(root, "known.txt");
+      await writeFile(target, "known", "utf8");
+      const manager = createWorkspaceWatchService({
+        adapter,
+        fileSystem,
+        coalesceMs: 0,
+        fallbackPollMs: 5,
+        idleTearDownMs: 0,
+      });
+      const events: EditorM7WatchEvent[] = [];
+      manager.subscribe({ root, onEvent: (event) => events.push(event) });
+      await drainInitialBaseline(manager, adapter);
+
+      fileSystem.lstatFailure = { path: target, code };
+      adapter.emit({ eventType: "rename", filename: "known.txt" });
+      await waitForCondition(() => events.some((event) => event.kind === "deleted"));
+
+      expect(events).toHaveLength(1);
+      expect(manager.snapshot(root)).toMatchObject({ health: "healthy", degradedReasons: [] });
+      manager.disposeAll();
+    },
+  );
+
+  it("suppresses targeted deletion inference on EACCES and recovers after a complete rescan", async () => {
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const target = join(root, "protected.txt");
+    await writeFile(target, "protected", "utf8");
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem,
+      coalesceMs: 0,
+      fallbackPollMs: 5,
+      idleTearDownMs: 0,
+    });
+    const events: EditorM7WatchEvent[] = [];
+    manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
+
+    fileSystem.lstatFailure = { path: target, code: "EACCES" };
+    adapter.emit({ eventType: "change", filename: "protected.txt" });
+    await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+    expect(events.find((event) => event.kind === "rescan")).toMatchObject({
+      reason: "ambiguous-event",
+      health: "rescanRequired",
+    });
+    expect(events.some((event) => event.kind === "deleted")).toBe(false);
+
+    await waitForCondition(() => manager.snapshot(root).health === "healthy");
+    const completedScans = fileSystem.readdir.mock.calls.length;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(fileSystem.readdir).toHaveBeenCalledTimes(completedScans);
+    expect(events.filter((event) => event.kind === "rescan")).toHaveLength(1);
+    expect(manager.snapshot(root).degradedReasons).toEqual([]);
+    manager.disposeAll();
+  });
+
+  it.each(["EPERM", "EIO"])(
+    "suppresses fallback deletion inference on %s readdir failure and recovers",
+    async (code) => {
+      const adapter = new FakeAdapter();
+      const fileSystem = new InjectedFileSystem();
+      await writeFile(join(root, "known.txt"), "known", "utf8");
+      const manager = createWorkspaceWatchService({
+        adapter,
+        fileSystem,
+        coalesceMs: 0,
+        fallbackPollMs: 5,
+        idleTearDownMs: 0,
+      });
+      const events: EditorM7WatchEvent[] = [];
+      manager.subscribe({ root, onEvent: (event) => events.push(event) });
+      await drainInitialBaseline(manager, adapter);
+
+      fileSystem.readdirFailureCode = code;
+      adapter.fail();
+      await waitForCondition(() => events.some((event) => event.kind === "rescan"));
+      await waitForCondition(
+        () => !manager.snapshot(root).degradedReasons.includes("ambiguous-event"),
+      );
+
+      expect(events.filter((event) => event.kind === "rescan")).toHaveLength(1);
+      expect(events.some((event) => event.kind === "deleted")).toBe(false);
+      expect(manager.snapshot(root)).toMatchObject({
+        health: "degraded",
+        degradedReasons: ["native-watch-unavailable"],
+      });
+      manager.disposeAll();
+    },
+  );
 
   it("signals a root-replaced rescan when the watched root is moved out from under the watcher", async () => {
     const adapter = new FakeAdapter();

@@ -60,6 +60,7 @@ export interface RetainedEditorModelAttachInput {
 
 export interface RetainedEditorModelAttachment {
   readonly key: string;
+  readonly rootKey: string;
   readonly model: RetainedEditorModel;
   detach(): void;
 }
@@ -93,6 +94,7 @@ export interface EditorModelRegistryDiagnostics {
 }
 
 interface RegistryEntry {
+  readonly identity: string;
   readonly key: string;
   readonly rootKey: string;
   readonly uriString: string;
@@ -111,6 +113,13 @@ const DEFAULT_COUNT_BUDGET = 16;
 const DEFAULT_BYTE_BUDGET = 128 * 1024 * 1024;
 const MODEL_METADATA_OVERHEAD_BYTES = 8 * 1024;
 const LARGE_FILE_MINIMUM_COST_BYTES = 8 * 1024 * 1024;
+
+export class EditorModelOwnershipError extends Error {
+  constructor() {
+    super("Retained editor model ownership conflicts with the workspace root.");
+    this.name = "EditorModelOwnershipError";
+  }
+}
 
 export const DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS: EditorModelRegistryOptions = Object.freeze({
   countBudget: DEFAULT_COUNT_BUDGET,
@@ -176,7 +185,11 @@ function protectedEntry(entry: RegistryEntry): boolean {
 
 function compareEvictionCandidates(left: RegistryEntry, right: RegistryEntry): number {
   if (left.lastAccess !== right.lastAccess) return left.lastAccess - right.lastAccess;
-  return left.key.localeCompare(right.key);
+  return left.identity.localeCompare(right.identity);
+}
+
+function registryIdentity(rootKey: string, key: string): string {
+  return `${String(rootKey.length)}:${rootKey}${key}`;
 }
 
 export class EditorModelRegistry {
@@ -205,7 +218,14 @@ export class EditorModelRegistry {
   }
 
   attach(input: RetainedEditorModelAttachInput): RetainedEditorModelAttachment {
-    const entry = this.entryFor(input);
+    let entry: RegistryEntry;
+    try {
+      entry = this.entryFor(input);
+    } catch (error: unknown) {
+      if (!(error instanceof EditorModelOwnershipError)) throw error;
+      input.editor.setModel?.(null);
+      throw error;
+    }
     entry.attachmentCount += 1;
     entry.lastAccess = this.nextAccess();
     entry.protection = { ...input.protection, active: true };
@@ -213,15 +233,16 @@ export class EditorModelRegistry {
     this.enforceBudgets();
     return {
       key: input.key,
+      rootKey: input.rootKey,
       model: entry.model,
       detach: (): void => {
-        this.detach(input.key, input.editor, input.viewStateKey);
+        this.detach(entry.identity, input.editor, input.viewStateKey);
       },
     };
   }
 
-  updateProtection(key: string, protection: EditorModelProtection): void {
-    const entry = this.entries.get(key);
+  updateProtection(key: string, protection: EditorModelProtection, rootKey?: string): void {
+    const entry = this.entryForProtectionUpdate(key, rootKey);
     if (entry === undefined || entry.disposed) return;
     entry.protection = { ...protection, active: entry.attachmentCount > 0 || protection.active };
     entry.lastAccess = this.nextAccess();
@@ -230,7 +251,7 @@ export class EditorModelRegistry {
 
   disposeRoot(rootKey: string, reason: EditorModelDisposalReason = "root-disposed"): void {
     for (const entry of this.entries.values()) {
-      if (entry.rootKey === rootKey && entry.attachmentCount === 0) {
+      if (entry.rootKey === rootKey && !protectedEntry(entry)) {
         this.disposeEntry(entry, reason);
       }
     }
@@ -268,25 +289,32 @@ export class EditorModelRegistry {
   }
 
   private entryFor(input: RetainedEditorModelAttachInput): RegistryEntry {
-    const existing = this.entries.get(input.key);
+    const identity = registryIdentity(input.rootKey, input.key);
+    const existing = this.entries.get(identity);
     if (existing !== undefined && !existing.disposed) {
       this.updateEntry(existing, input);
       return existing;
     }
+    this.releaseSafeUriConflicts(input.uri.toString(), identity);
+    const namespaceModel = input.namespace.getModel(input.uri);
+    if (namespaceModel !== null && input.editor.getModel?.() !== namespaceModel) {
+      throw new EditorModelOwnershipError();
+    }
     const model =
-      input.namespace.getModel(input.uri) ??
-      input.namespace.createModel(input.text, input.language, input.uri);
+      namespaceModel ?? input.namespace.createModel(input.text, input.language, input.uri);
     if (model.getValue() !== input.text) model.setValue?.(input.text);
-    const entry = this.createEntry(input, model);
-    this.entries.set(input.key, entry);
+    const entry = this.createEntry(identity, input, model);
+    this.entries.set(identity, entry);
     return entry;
   }
 
   private createEntry(
+    identity: string,
     input: RetainedEditorModelAttachInput,
     model: RetainedEditorModel,
   ): RegistryEntry {
     return {
+      identity,
       key: input.key,
       rootKey: input.rootKey,
       uriString: input.uri.toString(),
@@ -300,6 +328,23 @@ export class EditorModelRegistry {
       disposed: false,
       disposalReason: null,
     };
+  }
+
+  private releaseSafeUriConflicts(uriString: string, identity: string): void {
+    const conflicts = this.liveEntries().filter(
+      (entry) => entry.identity !== identity && entry.uriString === uriString,
+    );
+    if (conflicts.some(protectedEntry)) throw new EditorModelOwnershipError();
+    for (const conflict of conflicts) this.disposeEntry(conflict, "identity-reused");
+  }
+
+  private entryForProtectionUpdate(
+    key: string,
+    rootKey: string | undefined,
+  ): RegistryEntry | undefined {
+    if (rootKey !== undefined) return this.entries.get(registryIdentity(rootKey, key));
+    const matches = this.liveEntries().filter((entry) => entry.key === key);
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private updateEntry(entry: RegistryEntry, input: RetainedEditorModelAttachInput): void {
@@ -328,12 +373,15 @@ export class EditorModelRegistry {
     if (viewState !== undefined) editor.restoreViewState(viewState);
   }
 
-  private detach(key: string, editor: RetainedEditorModelEditor, viewStateKey: string): void {
-    const entry = this.entries.get(key);
+  private detach(identity: string, editor: RetainedEditorModelEditor, viewStateKey: string): void {
+    const entry = this.entries.get(identity);
     if (entry === undefined || entry.disposed) return;
-    const viewState = editor.saveViewState();
-    if (viewState !== null) entry.viewStates.set(viewStateKey, viewState);
-    if (editor.getModel?.() === entry.model) editor.setModel?.(null);
+    const stillBound = editor.getModel?.() === entry.model;
+    if (stillBound) {
+      const viewState = editor.saveViewState();
+      if (viewState !== null) entry.viewStates.set(viewStateKey, viewState);
+      editor.setModel?.(null);
+    }
     entry.attachmentCount = Math.max(0, entry.attachmentCount - 1);
     entry.protection = { ...entry.protection, active: entry.attachmentCount > 0 };
     entry.lastAccess = this.nextAccess();
@@ -384,7 +432,7 @@ export class EditorModelRegistry {
     if (entry.disposed) return;
     entry.disposed = true;
     entry.disposalReason = reason;
-    this.entries.delete(entry.key);
+    this.entries.delete(entry.identity);
     if (!modelDisposed(entry.model)) entry.model.dispose();
   }
 }
@@ -400,8 +448,9 @@ export function attachRetainedEditorModel(
 export function updateRetainedEditorModelProtection(
   key: string,
   protection: EditorModelProtection,
+  rootKey?: string,
 ): void {
-  sharedRegistry.updateProtection(key, protection);
+  sharedRegistry.updateProtection(key, protection, rootKey);
 }
 
 export function getEditorModelRegistryDiagnostics(): EditorModelRegistryDiagnostics {
@@ -424,11 +473,8 @@ export function disposeEditorModelRegistryRoot(
   sharedRegistry.disposeRoot(rootKey, reason);
 }
 
-// Releases every currently unattached model regardless of root. `modelRootKey` (use-editor-
-// handlers.ts) derives a per-directory, not per-workspace, key, so `disposeEditorModelRegistryRoot`
-// cannot reliably clear "everything for the workspace that just closed" in one call; disposing
-// every unattached model on root-change/shutdown is the safe, granularity-independent equivalent
-// (attached/dirty/pinned models remain protected, and clean ones simply recreate on next visit).
+// Releases every currently unattached model regardless of root at final editor-window shutdown.
+// Root switches use `disposeEditorModelRegistryRoot` so sibling workspace ownership remains intact.
 export function disposeAllUnattachedEditorModels(
   reason: EditorModelDisposalReason = "root-disposed",
 ): void {

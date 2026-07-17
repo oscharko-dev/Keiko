@@ -36,10 +36,20 @@ describe("dev quality workflows", () => {
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
   });
 
+  it("checks out complete history before validating immutable editor evidence", () => {
+    const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const checkoutStep = uiJob?.match(
+      /- uses: actions\/checkout@[^\n]+\n[\s\S]*?(?=\n\s+- uses: actions\/setup-node)/u,
+    )?.[0];
+    expect(checkoutStep).toBeDefined();
+    expect(checkoutStep).toContain("fetch-depth: 0");
+    expect(uiJob).toContain("npm run check:perf-evidence:editor");
+  });
+
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
     const performanceStep = uiJob?.match(
-      /- name: Release performance E2E evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
+      /- name: Refresh workspace performance evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
     )?.[0];
     const freshnessStep = uiJob?.match(
       /- name: Performance evidence freshness \+ budget gate\n[\s\S]*?(?=\n\s+- name: Build package and UI assets)/u,
@@ -48,15 +58,32 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("Test UI with coverage (jsdom + axe a11y)");
     expect(uiJob).toContain("UI coverage ratchet");
     expect(uiJob).toContain("Release smoke E2E");
-    expect(performanceStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
-    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
-    expect(performanceStep).toContain("rm -f docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("Upload redacted performance evidence");
-    expect(performanceStep).toContain("if: ${{ always() && github.event_name != 'pull_request' }}");
-    expect(performanceStep).toContain("docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("docs/release/1580-workspace-perf-evidence.json");
-    expect(performanceStep).toContain("if-no-files-found: warn");
-    expect(freshnessStep).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    // ADR-0139 D7: hosted workspace-perf refresh and the freshness gate run post-merge only
+    // (push/dispatch), while the immutable editor D12 evidence is validated on PRs and merge groups.
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
+    );
+    expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
+    expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
+    expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
+    expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
+    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
+    expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
+    );
+    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(freshnessStep).toContain(
+      "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
+    );
+    expect(freshnessStep).toContain("Upload redacted performance evidence");
+    expect(freshnessStep).not.toContain("always()");
+    expect(freshnessStep).toContain("docs/release/1209-perf-evidence.json");
+    expect(freshnessStep).toContain("docs/release/1580-workspace-perf-evidence.json");
+    expect(freshnessStep).toContain("if-no-files-found: warn");
+    expect(freshnessStep.indexOf("npm run check:perf-evidence")).toBeLessThan(
+      freshnessStep.indexOf("Upload redacted performance evidence"),
+    );
   });
 
   it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {
@@ -83,6 +110,12 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");
     expect(ci).toContain('-Dsonar.projectBaseDir="$GITHUB_WORKSPACE"');
     expect(ci).toContain('-Dsonar.working.directory="$RUNNER_TEMP/sonar-work"');
+    // Pin the analysis revision to the pull-request head so the merge-ref checkout does not trip the
+    // SonarCloud "detected as changed but without having changed lines" SCM warning.
+    expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
+    expect(ci).toContain(
+      "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
+    );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
     expect(ci).toContain(

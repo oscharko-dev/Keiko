@@ -8,6 +8,7 @@ export const WORKSPACE_SEARCH_MODES: readonly WorkspaceSearchMode[] = ["literal"
 
 export interface WorkspaceSearchRequest {
   readonly root: string;
+  readonly scopePath?: string | undefined;
   readonly query: string;
   readonly mode: WorkspaceSearchMode;
   readonly caseSensitive: boolean;
@@ -323,6 +324,12 @@ export function validateWorkspaceSearchRequest(value: unknown): ValidationResult
     }
     if (value.wholeWord !== undefined && typeof value.wholeWord !== "boolean") {
       reasons.push("wholeWord invalid");
+    }
+    if (
+      value.scopePath !== undefined &&
+      (typeof value.scopePath !== "string" || !isRelativeWorkspacePathShape(value.scopePath))
+    ) {
+      reasons.push("scopePath invalid");
     }
   }
   return buildResult(reasons);

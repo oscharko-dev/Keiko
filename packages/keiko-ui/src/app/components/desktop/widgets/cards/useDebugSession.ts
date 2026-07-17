@@ -18,11 +18,15 @@ import {
   type WatchEvaluationResult,
   type WatchExpression,
 } from "@oscharko-dev/keiko-contracts";
-import { subscribeSharedEventSource } from "./sharedEventSource";
+import { sharedEventSourceGeneration, subscribeSharedEventSource } from "./sharedEventSource";
 import {
+  abandonDebugStreamResync,
   applyDebugEvent,
   beginDebugStreamResync,
+  captureDebugSessionLifecycleFence,
   debugSessionSnapshot,
+  debugStreamSnapshotRequiresCanonicalResync,
+  exhaustDebugStreamResync,
   invalidateDebugPausedProjections,
   markDebugStreamReady,
   replaceDebugExceptionFilters,
@@ -31,6 +35,7 @@ import {
   setDebugInstrumentation,
   setDebugScopes,
   setDebugSession,
+  setDebugSessionIfLifecycleCurrent,
   setDebugStack,
   setDebugVariables,
   setDebugWatchResult,
@@ -93,6 +98,92 @@ const DEBUG_EVENTS = Object.freeze([
 const bootstrapRequests = new Map<string, Promise<void>>();
 const instrumentationRequests = new Map<string, Promise<InstrumentationSnapshot | null>>();
 
+interface SharedSessionRequest {
+  readonly lifecycleFence: symbol;
+  readonly promise: Promise<DebugSession | null>;
+}
+
+const sessionRequests = new Map<string, SharedSessionRequest>();
+
+interface SharedProjectionRequest<T> {
+  readonly controller: AbortController;
+  readonly promise: Promise<T | null>;
+  readonly workspaceId: string;
+}
+
+type SharedProjectionRequests<T> = Map<string, SharedProjectionRequest<T>>;
+
+const stackProjectionRequests: SharedProjectionRequests<DebugStackSnapshot> = new Map();
+const scopeProjectionRequests: SharedProjectionRequests<DebugScopeSnapshot> = new Map();
+const variableProjectionRequests: SharedProjectionRequests<DebugVariableSnapshot> = new Map();
+const projectionConsumerCounts = new Map<string, number>();
+const MAX_CANONICAL_RESYNC_ATTEMPTS = 2;
+
+interface SharedStreamResync {
+  readonly generation: number;
+  readonly sequence: number;
+  readonly promise: Promise<void>;
+}
+
+const streamResyncRequests = new Map<string, SharedStreamResync>();
+
+interface TrackedRequestRecord {
+  readonly controller: AbortController;
+  readonly lifecycleFence: symbol;
+  readonly owner: Set<AbortController>;
+}
+
+const trackedRequestsByWorkspace = new Map<string, Set<TrackedRequestRecord>>();
+
+async function runCanonicalResyncAttempts(
+  workspaceId: string,
+  generation: number,
+  sequence: number,
+  task: () => Promise<void>,
+): Promise<void> {
+  for (let attempt = 0; attempt < MAX_CANONICAL_RESYNC_ATTEMPTS; attempt += 1) {
+    try {
+      await task();
+      return;
+    } catch (error: unknown) {
+      if (attempt !== MAX_CANONICAL_RESYNC_ATTEMPTS - 1) continue;
+      exhaustDebugStreamResync(workspaceId, generation, sequence);
+      throw error;
+    }
+  }
+}
+
+function sharedStreamResync(
+  workspaceId: string,
+  generation: number,
+  sequence: number,
+  task: () => Promise<void>,
+): Promise<void> {
+  const current = streamResyncRequests.get(workspaceId);
+  if (
+    current !== undefined &&
+    (generation < current.generation ||
+      (generation === current.generation && sequence <= current.sequence))
+  ) {
+    return current.promise;
+  }
+  let promise: Promise<void>;
+  promise = Promise.resolve()
+    .then(() => runCanonicalResyncAttempts(workspaceId, generation, sequence, task))
+    .finally(() => {
+      if (streamResyncRequests.get(workspaceId)?.promise === promise) {
+        streamResyncRequests.delete(workspaceId);
+      }
+    });
+  streamResyncRequests.set(workspaceId, { generation, sequence, promise });
+  return promise;
+}
+
+async function awaitSharedStreamResync(workspaceId: string, generation: number): Promise<void> {
+  const current = streamResyncRequests.get(workspaceId);
+  if (current !== undefined && generation <= current.generation) await current.promise;
+}
+
 function debugUrl(workspaceId: string, suffix: string): string {
   return `/api/editor/debug/${suffix}?workspaceId=${encodeURIComponent(workspaceId)}`;
 }
@@ -119,6 +210,15 @@ function sharedBootstrap(workspaceId: string): Promise<void> {
 export function resetDebugBootstrapRequestsForTests(): void {
   bootstrapRequests.clear();
   instrumentationRequests.clear();
+  sessionRequests.clear();
+  abortSharedProjectionRequests();
+  projectionConsumerCounts.clear();
+  streamResyncRequests.clear();
+  abortAllTrackedRequests();
+}
+
+export function pendingDebugStreamResyncRequestsForTests(): number {
+  return streamResyncRequests.size;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -304,6 +404,96 @@ function parseSession(value: unknown): DebugSession | null {
     wallDeadlineMs,
     inactivityDeadlineMs,
     output: { acceptedBytes: output.acceptedBytes as number, truncated: output.truncated },
+  };
+}
+
+function sharedSession(
+  workspaceId: string,
+  sessionId: string,
+  lifecycleFence: symbol,
+): Promise<DebugSession | null> {
+  const key = `${workspaceId}\u0000${sessionId}`;
+  const pending = sessionRequests.get(key);
+  if (pending?.lifecycleFence === lifecycleFence) return pending.promise;
+  const request = requestJson(`/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: { "x-keiko-csrf": "1" },
+  })
+    .then(parseSession)
+    .finally(() => {
+      if (sessionRequests.get(key)?.promise === request) sessionRequests.delete(key);
+    });
+  sessionRequests.set(key, { lifecycleFence, promise: request });
+  return request;
+}
+
+function projectionRequestKey(
+  workspaceId: string,
+  identity: DebugPauseIdentity,
+  reference = "",
+): string {
+  return JSON.stringify([workspaceId, identity.sessionId, identity.pauseGeneration, reference]);
+}
+
+async function runSharedProjectionTask<T>(
+  controller: AbortController,
+  task: (signal: AbortSignal) => Promise<T | null>,
+): Promise<T | null> {
+  try {
+    const result = await task(controller.signal);
+    return controller.signal.aborted ? null : result;
+  } catch (error: unknown) {
+    if (controller.signal.aborted) return null;
+    throw error;
+  }
+}
+
+function sharedProjection<T>(
+  requests: SharedProjectionRequests<T>,
+  key: string,
+  workspaceId: string,
+  task: (signal: AbortSignal) => Promise<T | null>,
+): Promise<T | null> {
+  const pending = requests.get(key);
+  if (pending !== undefined) return pending.promise;
+  const controller = new AbortController();
+  let promise: Promise<T | null>;
+  promise = runSharedProjectionTask(controller, task).finally(() => {
+    if (requests.get(key)?.promise === promise) requests.delete(key);
+  });
+  requests.set(key, { controller, promise, workspaceId });
+  return promise;
+}
+
+function abortProjectionRequests<T>(
+  requests: SharedProjectionRequests<T>,
+  workspaceId?: string,
+): void {
+  for (const [key, request] of requests) {
+    if (workspaceId !== undefined && request.workspaceId !== workspaceId) continue;
+    request.controller.abort();
+    requests.delete(key);
+  }
+}
+
+function abortSharedProjectionRequests(workspaceId?: string): void {
+  abortProjectionRequests(stackProjectionRequests, workspaceId);
+  abortProjectionRequests(scopeProjectionRequests, workspaceId);
+  abortProjectionRequests(variableProjectionRequests, workspaceId);
+}
+
+function retainProjectionConsumer(workspaceId: string): () => void {
+  projectionConsumerCounts.set(workspaceId, (projectionConsumerCounts.get(workspaceId) ?? 0) + 1);
+  let retained = true;
+  return (): void => {
+    if (!retained) return;
+    retained = false;
+    const remaining = (projectionConsumerCounts.get(workspaceId) ?? 1) - 1;
+    if (remaining > 0) {
+      projectionConsumerCounts.set(workspaceId, remaining);
+      return;
+    }
+    projectionConsumerCounts.delete(workspaceId);
+    abortSharedProjectionRequests(workspaceId);
   };
 }
 
@@ -565,11 +755,16 @@ function mutationProjection(value: unknown): MutationProjection | null {
   return snapshot === null ? null : { snapshot };
 }
 
-function parseStack(value: unknown): {
-  readonly frames: readonly StackFrame[];
-  readonly truncated: boolean;
-  readonly omittedCount: number;
-} | null {
+interface DebugStackPage extends DebugStackSnapshot {
+  readonly nextCursor?: string | undefined;
+}
+
+// The BFF shrinks each stack page until it fits maxHttpResponseBytes, so a page can carry
+// fewer than maxFramesPerPage frames while still advancing a cursor. Bound the paging loop
+// by the worst case of one frame per page; zero-frame pages with a cursor fail closed below.
+const MAX_DEBUG_STACK_PAGE_REQUESTS = DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames;
+
+function parseStack(value: unknown): DebugStackPage | null {
   if (
     !isRecord(value) ||
     !arrayOf(value.frames, stackFrame) ||
@@ -577,9 +772,26 @@ function parseStack(value: unknown): {
   )
     return null;
   const omittedCount = numberValue(value.omittedCount);
-  return omittedCount === null
-    ? null
-    : { frames: value.frames, truncated: value.truncated, omittedCount };
+  const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : undefined;
+  if (value.nextCursor !== undefined && nextCursor === undefined) return null;
+  if (omittedCount === null) return null;
+  return {
+    frames: value.frames,
+    truncated: value.truncated,
+    omittedCount,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  };
+}
+
+function appendStackPage(current: DebugStackSnapshot, page: DebugStackPage): DebugStackSnapshot {
+  return {
+    frames: [...current.frames, ...page.frames].slice(
+      0,
+      DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames,
+    ),
+    truncated: page.truncated,
+    omittedCount: page.omittedCount,
+  };
 }
 
 function parseScopes(value: unknown, frameRef: string): DebugScopeSnapshot | null {
@@ -683,12 +895,28 @@ function expandedFramePlan(snapshot: DebugSessionSnapshot): readonly ExpandedFra
   });
 }
 
-async function runAbortable<T>(
-  requests: Set<AbortController>,
+function removeTrackedRequest(workspaceId: string, request: TrackedRequestRecord): void {
+  request.owner.delete(request.controller);
+  const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId);
+  workspaceRequests?.delete(request);
+  if (workspaceRequests?.size === 0) trackedRequestsByWorkspace.delete(workspaceId);
+}
+
+async function runTrackedAbortable<T>(
+  workspaceId: string,
+  owner: Set<AbortController>,
   task: (signal: AbortSignal) => Promise<T>,
 ): Promise<T | undefined> {
   const controller = new AbortController();
-  requests.add(controller);
+  const request: TrackedRequestRecord = {
+    controller,
+    lifecycleFence: captureDebugSessionLifecycleFence(workspaceId),
+    owner,
+  };
+  owner.add(controller);
+  const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId) ?? new Set();
+  workspaceRequests.add(request);
+  trackedRequestsByWorkspace.set(workspaceId, workspaceRequests);
   try {
     const result = await task(controller.signal);
     return controller.signal.aborted ? undefined : result;
@@ -696,13 +924,37 @@ async function runAbortable<T>(
     if (controller.signal.aborted) return undefined;
     throw error;
   } finally {
-    requests.delete(controller);
+    removeTrackedRequest(workspaceId, request);
   }
 }
 
-function abortRequests(requests: Set<AbortController>): void {
-  for (const controller of requests) controller.abort();
-  requests.clear();
+function abortOwnedRequests(workspaceId: string, owner: Set<AbortController>): void {
+  const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId);
+  if (workspaceRequests === undefined) return;
+  for (const request of workspaceRequests) {
+    if (request.owner !== owner) continue;
+    request.controller.abort();
+    removeTrackedRequest(workspaceId, request);
+  }
+}
+
+function abortTrackedRequestsOutsideFence(workspaceId: string, currentFence: symbol): void {
+  const workspaceRequests = trackedRequestsByWorkspace.get(workspaceId);
+  if (workspaceRequests === undefined) return;
+  for (const request of workspaceRequests) {
+    if (request.lifecycleFence === currentFence) continue;
+    request.controller.abort();
+    removeTrackedRequest(workspaceId, request);
+  }
+}
+
+function abortAllTrackedRequests(): void {
+  for (const [workspaceId, requests] of trackedRequestsByWorkspace) {
+    for (const request of requests) {
+      request.controller.abort();
+      removeTrackedRequest(workspaceId, request);
+    }
+  }
 }
 
 function inspectionMutation(identity: DebugPauseIdentity, extra: object): RequestInit {
@@ -725,7 +977,34 @@ async function requestStackProjection(
     }),
     signal,
   });
-  return parseStack(response);
+  const first = parseStack(response);
+  if (first === null) return null;
+  let stack: DebugStackSnapshot = first;
+  let cursor = first.nextCursor;
+  let pageRequests = 1;
+  while (
+    cursor !== undefined &&
+    stack.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames &&
+    pageRequests < MAX_DEBUG_STACK_PAGE_REQUESTS
+  ) {
+    const next = parseStack(
+      await requestJson("/api/editor/debug/stack", {
+        ...inspectionMutation(identity, {
+          cursor,
+          levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+        }),
+        signal,
+      }),
+    );
+    if (next === null || (next.frames.length === 0 && next.nextCursor !== undefined)) return null;
+    stack = appendStackPage(stack, next);
+    cursor = next.nextCursor;
+    pageRequests += 1;
+  }
+  return cursor === undefined ||
+    stack.frames.length >= DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames
+    ? stack
+    : null;
 }
 
 async function requestScopeProjection(
@@ -856,15 +1135,20 @@ export function useDebugSession(
   const streamResyncRequired = useRef(false);
 
   const abortPendingRequests = useCallback((): void => {
-    abortRequests(requestControllers.current);
-  }, []);
+    abortOwnedRequests(stableWorkspaceId, requestControllers.current);
+  }, [stableWorkspaceId]);
 
-  const trackedRequest = useCallback(async (url: string, init?: RequestInit): Promise<unknown> => {
-    const response = await runAbortable(requestControllers.current, (signal) =>
-      requestJson(url, { ...init, signal }),
-    );
-    return response ?? null;
-  }, []);
+  const trackedRequest = useCallback(
+    async (url: string, init?: RequestInit): Promise<unknown> => {
+      const response = await runTrackedAbortable(
+        stableWorkspaceId,
+        requestControllers.current,
+        (signal) => requestJson(url, { ...init, signal }),
+      );
+      return response ?? null;
+    },
+    [stableWorkspaceId],
+  );
 
   const bootstrap = useCallback(async (): Promise<void> => {
     if (!enabled || stableWorkspaceId.length === 0) return;
@@ -903,14 +1187,10 @@ export function useDebugSession(
     return refreshed;
   }, [bootstrap, enabled, refreshInstrumentationAtLeast, stableWorkspaceId]);
 
-  const refreshSession = useCallback(
-    async (sessionId: string): Promise<void> => {
-      if (!enabled) return;
-      const response = await trackedRequest(
-        `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
-        { headers: { "x-keiko-csrf": "1" } },
-      );
-      const session = parseSession(response);
+  const refreshSessionAtFence = useCallback(
+    async (sessionId: string, lifecycleFence: symbol): Promise<boolean> => {
+      if (!enabled) return false;
+      const session = await sharedSession(stableWorkspaceId, sessionId, lifecycleFence);
       const current = debugSessionSnapshot(stableWorkspaceId).session;
       if (
         session !== null &&
@@ -918,51 +1198,104 @@ export function useDebugSession(
         session.sessionId === sessionId &&
         (current === null || current.sessionId === sessionId)
       ) {
-        setDebugSession(stableWorkspaceId, session);
+        return setDebugSessionIfLifecycleCurrent(stableWorkspaceId, lifecycleFence, session);
+      }
+      return false;
+    },
+    [enabled, stableWorkspaceId],
+  );
+
+  const refreshSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      const lifecycleFence = captureDebugSessionLifecycleFence(stableWorkspaceId);
+      await refreshSessionAtFence(sessionId, lifecycleFence);
+    },
+    [refreshSessionAtFence, stableWorkspaceId],
+  );
+
+  const refreshOrClearResyncSession = useCallback(
+    async (sessionId: string, lifecycleFence: symbol): Promise<void> => {
+      let refreshed = false;
+      try {
+        refreshed = await refreshSessionAtFence(sessionId, lifecycleFence);
+      } catch {
+        // Canonical recovery must not retain a session the server can no longer project.
+        refreshed = false;
+      }
+      if (!refreshed && captureDebugSessionLifecycleFence(stableWorkspaceId) === lifecycleFence) {
+        setDebugSession(stableWorkspaceId, null);
       }
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [refreshSessionAtFence, stableWorkspaceId],
   );
+
+  useEffect(() => {
+    if (!enabled || stableWorkspaceId.length === 0) return;
+    return retainProjectionConsumer(stableWorkspaceId);
+  }, [enabled, stableWorkspaceId]);
 
   useEffect(() => (): void => abortPendingRequests(), [abortPendingRequests, stableWorkspaceId]);
 
   const canonicalResync = useCallback(
-    async (sequence: number): Promise<void> => {
+    async (sequence: number, generation: number): Promise<void> => {
       const current = debugSessionSnapshot(stableWorkspaceId).session;
-      abortPendingRequests();
-      beginDebugStreamResync(stableWorkspaceId);
-      const refreshed = await refreshInstrumentationAtLeast();
-      if (!refreshed) throw new Error("Debug instrumentation resync was rejected.");
-      if (current !== null) await refreshSession(current.sessionId);
-      synchronizeDebugSequence(stableWorkspaceId, sequence);
+      const resyncToken = beginDebugStreamResync(stableWorkspaceId, generation, sequence);
+      if (resyncToken === null) return;
+      const resyncFence = captureDebugSessionLifecycleFence(stableWorkspaceId);
+      abortTrackedRequestsOutsideFence(stableWorkspaceId, resyncFence);
+      abortSharedProjectionRequests(stableWorkspaceId);
+      try {
+        const refreshed = await refreshInstrumentationAtLeast();
+        if (!refreshed) throw new Error("Debug instrumentation resync was rejected.");
+        if (
+          current !== null &&
+          captureDebugSessionLifecycleFence(stableWorkspaceId) === resyncFence
+        ) {
+          await refreshOrClearResyncSession(current.sessionId, resyncFence);
+        }
+        synchronizeDebugSequence(stableWorkspaceId, sequence, resyncToken, generation);
+      } catch (error: unknown) {
+        abandonDebugStreamResync(stableWorkspaceId, sequence, resyncToken, generation);
+        throw error;
+      }
     },
-    [abortPendingRequests, refreshInstrumentationAtLeast, refreshSession, stableWorkspaceId],
+    [refreshInstrumentationAtLeast, refreshOrClearResyncSession, stableWorkspaceId],
   );
 
-  const handleStreamMessage = useCallback(
-    async (message: MessageEvent<string>): Promise<void> => {
-      if (message.type === "ready") {
-        if (!streamResyncRequired.current) markDebugStreamReady(stableWorkspaceId);
-        return;
+  const resyncFromReplaySnapshot = useCallback(
+    async (replay: DebugReplaySnapshot, generation: number): Promise<void> => {
+      streamResyncRequired.current = true;
+      try {
+        await sharedStreamResync(stableWorkspaceId, generation, replay.sequence, () =>
+          canonicalResync(replay.sequence, generation),
+        );
+      } finally {
+        streamResyncRequired.current = false;
       }
-      if (message.type === "editor-debug:snapshot") {
-        return;
+    },
+    [canonicalResync, stableWorkspaceId],
+  );
+
+  const handleSnapshotMessage = useCallback(
+    async (message: MessageEvent<string>, generation: number): Promise<void> => {
+      const replay = parseReplaySnapshot(parseJson(message.data));
+      if (
+        replay !== null &&
+        debugStreamSnapshotRequiresCanonicalResync(
+          stableWorkspaceId,
+          generation,
+          replay.sequence,
+          message.type === "editor-debug:snapshot-required",
+        )
+      ) {
+        await resyncFromReplaySnapshot(replay, generation);
       }
-      if (message.type === "editor-debug:snapshot-required") {
-        const replay = parseReplaySnapshot(parseJson(message.data));
-        if (replay !== null) {
-          streamResyncRequired.current = true;
-          await canonicalResync(replay.sequence);
-          streamResyncRequired.current = false;
-        }
-        return;
-      }
-      if (streamResyncRequired.current) return;
-      const parsed = parseEnvelope(parseJson(message.data));
-      if (parsed === null) return;
-      const event = parsed.event;
-      if (ABORTING_EVENT_KINDS.has(event.kind)) abortPendingRequests();
-      applyDebugEvent(stableWorkspaceId, parsed.sequence, event);
+    },
+    [resyncFromReplaySnapshot, stableWorkspaceId],
+  );
+
+  const dispatchDebugEventFollowup = useCallback(
+    async (event: DebugEvent): Promise<void> => {
       if (event.kind === "session-stopped" || event.kind === "exited") return;
       if (event.kind === "breakpoints-changed") {
         if (event.workspaceId === stableWorkspaceId) {
@@ -978,13 +1311,40 @@ export function useDebugSession(
         await refreshSession(event.sessionId);
       }
     },
-    [
-      abortPendingRequests,
-      canonicalResync,
-      refreshInstrumentationAtLeast,
-      refreshSession,
-      stableWorkspaceId,
-    ],
+    [refreshInstrumentationAtLeast, refreshSession, stableWorkspaceId],
+  );
+
+  const handleStreamMessage = useCallback(
+    async (message: MessageEvent<string>): Promise<void> => {
+      const generation = sharedEventSourceGeneration(message);
+      if (message.type === "ready") {
+        if (!streamResyncRequired.current) markDebugStreamReady(stableWorkspaceId, generation);
+        return;
+      }
+      if (
+        message.type === "editor-debug:snapshot" ||
+        message.type === "editor-debug:snapshot-required"
+      ) {
+        await handleSnapshotMessage(message, generation);
+        return;
+      }
+      if (streamResyncRequired.current) return;
+      await awaitSharedStreamResync(stableWorkspaceId, generation);
+      const parsed = parseEnvelope(parseJson(message.data));
+      if (parsed === null) return;
+      const event = parsed.event;
+      const aborting = ABORTING_EVENT_KINDS.has(event.kind);
+      if (!applyDebugEvent(stableWorkspaceId, parsed.sequence, event, generation)) return;
+      if (aborting) {
+        abortTrackedRequestsOutsideFence(
+          stableWorkspaceId,
+          captureDebugSessionLifecycleFence(stableWorkspaceId),
+        );
+        abortSharedProjectionRequests(stableWorkspaceId);
+      }
+      await dispatchDebugEventFollowup(event);
+    },
+    [dispatchDebugEventFollowup, handleSnapshotMessage, stableWorkspaceId],
   );
 
   useEffect(() => {
@@ -1083,6 +1443,7 @@ export function useDebugSession(
       );
       if (response !== null && action !== "pause") {
         abortPendingRequests();
+        abortSharedProjectionRequests(stableWorkspaceId);
         setDebugSession(
           stableWorkspaceId,
           action === "stop" ? null : { ...session, status: "running" },
@@ -1094,7 +1455,7 @@ export function useDebugSession(
   );
 
   const loadStackProjection = useCallback(
-    async (session: DebugSession): Promise<DebugStackSnapshot | null> => {
+    async (session: DebugSession, signal: AbortSignal): Promise<DebugStackSnapshot | null> => {
       const identity = pauseIdentity(session);
       if (
         !enabled ||
@@ -1103,31 +1464,74 @@ export function useDebugSession(
       ) {
         return null;
       }
-      const response = await trackedRequest(
-        "/api/editor/debug/stack",
-        debugMutation({
-          schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-          sessionId: session.sessionId,
-          pauseGeneration: session.pauseGeneration,
+      const response = await requestJson("/api/editor/debug/stack", {
+        ...inspectionMutation(identity, {
           startFrame: 0,
           levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
         }),
-      );
-      const parsed = parseStack(response);
-      return parsed !== null && setDebugStack(stableWorkspaceId, identity, parsed) ? parsed : null;
+        signal,
+      });
+      const first = parseStack(response);
+      if (first === null) return null;
+      let parsed: DebugStackSnapshot = first;
+      let cursor = first.nextCursor;
+      let pageRequests = 1;
+      while (
+        cursor !== undefined &&
+        parsed.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames &&
+        pageRequests < MAX_DEBUG_STACK_PAGE_REQUESTS
+      ) {
+        const next = parseStack(
+          await requestJson("/api/editor/debug/stack", {
+            ...inspectionMutation(identity, {
+              cursor,
+              levels: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxFramesPerPage,
+            }),
+            signal,
+          }),
+        );
+        if (
+          next === null ||
+          (next.frames.length === 0 && next.nextCursor !== undefined) ||
+          !currentPauseMatches(stableWorkspaceId, identity)
+        )
+          return null;
+        parsed = appendStackPage(parsed, next);
+        cursor = next.nextCursor;
+        pageRequests += 1;
+      }
+      if (
+        cursor !== undefined &&
+        parsed.frames.length < DEFAULT_DEBUG_PAYLOAD_LIMITS.maxRetainedFrames
+      )
+        return null;
+      if (signal.aborted || !currentPauseMatches(stableWorkspaceId, identity)) return null;
+      return setDebugStack(stableWorkspaceId, identity, parsed) ? parsed : null;
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [enabled, stableWorkspaceId],
   );
 
   const loadStack = useCallback(
     async (session: DebugSession): Promise<void> => {
-      await loadStackProjection(session);
+      const identity = pauseIdentity(session);
+      const current = debugSessionSnapshot(stableWorkspaceId);
+      if (!currentPauseMatches(stableWorkspaceId, identity) || current.stack !== null) return;
+      await sharedProjection(
+        stackProjectionRequests,
+        projectionRequestKey(stableWorkspaceId, identity),
+        stableWorkspaceId,
+        (signal) => loadStackProjection(session, signal),
+      );
     },
-    [loadStackProjection],
+    [loadStackProjection, stableWorkspaceId],
   );
 
   const loadScopesProjection = useCallback(
-    async (session: DebugSession, frameRef: string): Promise<DebugScopeSnapshot | null> => {
+    async (
+      session: DebugSession,
+      frameRef: string,
+      signal: AbortSignal,
+    ): Promise<DebugScopeSnapshot | null> => {
       const identity = pauseIdentity(session);
       if (
         !enabled ||
@@ -1136,30 +1540,43 @@ export function useDebugSession(
       ) {
         return null;
       }
-      const response = await trackedRequest(
-        "/api/editor/debug/scopes",
-        debugMutation({
-          schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-          sessionId: session.sessionId,
-          pauseGeneration: session.pauseGeneration,
-          frameRef,
-        }),
-      );
+      const response = await requestJson("/api/editor/debug/scopes", {
+        ...inspectionMutation(identity, { frameRef }),
+        signal,
+      });
       const parsed = parseScopes(response, frameRef);
-      return parsed !== null && setDebugScopes(stableWorkspaceId, identity, parsed) ? parsed : null;
+      return parsed !== null &&
+        !signal.aborted &&
+        currentPauseMatches(stableWorkspaceId, identity) &&
+        setDebugScopes(stableWorkspaceId, identity, parsed)
+        ? parsed
+        : null;
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [enabled, stableWorkspaceId],
   );
 
   const loadScopes = useCallback(
     async (session: DebugSession, frameRef: string): Promise<void> => {
-      await loadScopesProjection(session, frameRef);
+      const identity = pauseIdentity(session);
+      const current = debugSessionSnapshot(stableWorkspaceId);
+      if (!currentPauseMatches(stableWorkspaceId, identity) || current.scopesByFrame.has(frameRef))
+        return;
+      await sharedProjection(
+        scopeProjectionRequests,
+        projectionRequestKey(stableWorkspaceId, identity, frameRef),
+        stableWorkspaceId,
+        (signal) => loadScopesProjection(session, frameRef, signal),
+      );
     },
-    [loadScopesProjection],
+    [loadScopesProjection, stableWorkspaceId],
   );
 
   const loadVariablesProjection = useCallback(
-    async (session: DebugSession, variableRef: string): Promise<DebugVariableSnapshot | null> => {
+    async (
+      session: DebugSession,
+      variableRef: string,
+      signal: AbortSignal,
+    ): Promise<DebugVariableSnapshot | null> => {
       const identity = pauseIdentity(session);
       if (
         !enabled ||
@@ -1168,28 +1585,38 @@ export function useDebugSession(
       ) {
         return null;
       }
-      const response = await trackedRequest(
-        "/api/editor/debug/variables",
-        debugMutation({
-          schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-          sessionId: session.sessionId,
-          pauseGeneration: session.pauseGeneration,
-          variableRef,
-        }),
-      );
+      const response = await requestJson("/api/editor/debug/variables", {
+        ...inspectionMutation(identity, { variableRef }),
+        signal,
+      });
       const parsed = parseVariables(response, variableRef);
-      return parsed !== null && setDebugVariables(stableWorkspaceId, identity, parsed)
+      return parsed !== null &&
+        !signal.aborted &&
+        currentPauseMatches(stableWorkspaceId, identity) &&
+        setDebugVariables(stableWorkspaceId, identity, parsed)
         ? parsed
         : null;
     },
-    [enabled, stableWorkspaceId, trackedRequest],
+    [enabled, stableWorkspaceId],
   );
 
   const loadVariables = useCallback(
     async (session: DebugSession, variableRef: string): Promise<void> => {
-      await loadVariablesProjection(session, variableRef);
+      const identity = pauseIdentity(session);
+      const current = debugSessionSnapshot(stableWorkspaceId);
+      if (
+        !currentPauseMatches(stableWorkspaceId, identity) ||
+        current.variablesByParent.has(variableRef)
+      )
+        return;
+      await sharedProjection(
+        variableProjectionRequests,
+        projectionRequestKey(stableWorkspaceId, identity, variableRef),
+        stableWorkspaceId,
+        (signal) => loadVariablesProjection(session, variableRef, signal),
+      );
     },
-    [loadVariablesProjection],
+    [loadVariablesProjection, stableWorkspaceId],
   );
 
   const saveWatches = useCallback(
@@ -1312,9 +1739,12 @@ export function useDebugSession(
         throw new Error("Debug variable projection was invalid.");
       }
       abortPendingRequests();
+      abortSharedProjectionRequests(stableWorkspaceId);
       if (!invalidateDebugPausedProjections(stableWorkspaceId, identity)) return;
-      const rebuilt = await runAbortable(requestControllers.current, (signal) =>
-        rebuildPausedProjection(identity, plan, signal),
+      const rebuilt = await runTrackedAbortable(
+        stableWorkspaceId,
+        requestControllers.current,
+        (signal) => rebuildPausedProjection(identity, plan, signal),
       );
       if (rebuilt !== undefined) {
         replaceDebugPausedProjections(stableWorkspaceId, identity, rebuilt);

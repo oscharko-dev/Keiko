@@ -75,10 +75,12 @@ import {
 } from "./editorHotExitStore";
 
 const disposeAllUnattachedEditorModels = vi.hoisted(() => vi.fn());
+const disposeEditorModelRegistryRoot = vi.hoisted(() => vi.fn());
 
 vi.mock("@oscharko-dev/keiko-editor", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   disposeAllUnattachedEditorModels,
+  disposeEditorModelRegistryRoot,
 }));
 
 vi.mock("../../../../../lib/api", async () => {
@@ -369,6 +371,25 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
   };
 }
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value): void => {
+      if (resolvePromise === undefined) throw new Error("deferred promise was not initialized");
+      resolvePromise(value);
+    },
+  };
+}
+
 function editorSettingsSnapshot(
   values: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> = {},
 ): EditorM7SettingsSnapshot {
@@ -488,6 +509,49 @@ async function renderLoaded(
   );
   await screen.findByTestId("editor-surface");
   return view;
+}
+
+interface DeferredWatchReconciliation {
+  readonly pendingRead: Deferred<FilesContentResponse>;
+  readonly saved: FilesContentResponse;
+  readonly view: ReturnType<typeof render>;
+}
+
+async function beginDeferredWatchReconciliation(): Promise<DeferredWatchReconciliation> {
+  const FakeSource = installFakeEventSource();
+  const view = await renderLoaded();
+  await waitFor(() => expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1));
+  const saved = fileResponse({
+    modifiedAt: 2,
+    sizeBytes: 17,
+    content: "const value = 2;\n",
+    session: {
+      schemaVersion: "1",
+      version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+    },
+  });
+  vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
+  act(() => {
+    surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+  });
+  await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
+
+  const pendingRead = deferred<FilesContentResponse>();
+  vi.mocked(fetchFilesContent).mockReturnValueOnce(pendingRead.promise);
+  act(() => {
+    workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+      schemaVersion: "1",
+      sequence: 5,
+      kind: "changed",
+      relativePath: "src/app.ts",
+      sizeBytes: 17,
+      modifiedAt: 2,
+      metadataHash: "0011223344556677",
+    });
+  });
+  await waitFor(() => expect(fetchFilesContent).toHaveBeenLastCalledWith("/repo", "src/app.ts"));
+  return { pendingRead, saved, view };
 }
 
 type ReplaceBufferRegistry = NonNullable<ReturnType<typeof useWorkspaceReplaceBuffers>>;
@@ -754,6 +818,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     expect(requestEditorTestGeneration).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/repo",
+        editorSessionId: expect.any(String),
         target: expect.objectContaining({ kind: "file" }),
       }),
       expect.any(AbortSignal),
@@ -1055,13 +1120,16 @@ describe("EditorWidget — edit and save", () => {
   it("releases retained-but-inactive Monaco models when this pane's root changes", async () => {
     const view = await renderLoaded();
     disposeAllUnattachedEditorModels.mockClear();
+    disposeEditorModelRegistryRoot.mockClear();
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
 
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
 
     await waitFor(() => {
-      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("root-disposed");
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
     });
+    expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
+    expect(surface.props?.modelRootKey).toBe("/next");
   });
 
   it("releases retained-but-inactive Monaco models when the pane unmounts", async () => {
@@ -1073,7 +1141,7 @@ describe("EditorWidget — edit and save", () => {
     expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
   });
 
-  it("does not release retained models on root-change while a sibling pane is still mounted", async () => {
+  it("releases only the previous root's inactive models while a sibling pane stays mounted", async () => {
     const view = await renderLoaded();
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
     const sibling = render(
@@ -1081,6 +1149,7 @@ describe("EditorWidget — edit and save", () => {
     );
     await screen.findAllByTestId("editor-surface");
     disposeAllUnattachedEditorModels.mockClear();
+    disposeEditorModelRegistryRoot.mockClear();
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
 
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
@@ -1088,6 +1157,30 @@ describe("EditorWidget — edit and save", () => {
       expect(screen.getAllByTestId("editor-surface")).toHaveLength(2);
     });
 
+    expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+    expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
+
+    sibling.unmount();
+    view.unmount();
+  });
+
+  it("does not dispose a sibling root when another pane switches roots", async () => {
+    const view = await renderLoaded();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ root: "/sibling" }));
+    const sibling = render(
+      <EditorRuntimeWidget windowId="editor-sibling" root="/sibling" file="src/other.ts" />,
+    );
+    await screen.findAllByTestId("editor-surface");
+    disposeAllUnattachedEditorModels.mockClear();
+    disposeEditorModelRegistryRoot.mockClear();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ root: "/next" }));
+
+    view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
+
+    await waitFor(() => {
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+    });
+    expect(disposeEditorModelRegistryRoot).not.toHaveBeenCalledWith("/sibling", "root-disposed");
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     sibling.unmount();
@@ -1161,9 +1254,16 @@ describe("EditorWidget — edit and save", () => {
     await waitFor(() => {
       expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
     });
-    vi.mocked(saveFilesContent).mockResolvedValueOnce(
-      fileResponse({ modifiedAt: 2, content: "const value = 2;\n" }),
-    );
+    const saved = fileResponse({
+      modifiedAt: 2,
+      sizeBytes: 17,
+      content: "const value = 2;\n",
+      session: {
+        schemaVersion: "1",
+        version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+      },
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
 
     act(() => {
       surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
@@ -1173,14 +1273,18 @@ describe("EditorWidget — edit and save", () => {
       expect(surface.props?.saveStatus).toBe("saved");
     });
 
-    act(() => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(saved);
+    await act(async () => {
       workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
         schemaVersion: "1",
         sequence: 5,
         kind: "changed",
         relativePath: "src/app.ts",
+        sizeBytes: 17,
+        modifiedAt: 2,
         metadataHash: "0011223344556677",
       });
+      await Promise.resolve();
     });
 
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
@@ -1192,9 +1296,16 @@ describe("EditorWidget — edit and save", () => {
     await waitFor(() => {
       expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
     });
-    vi.mocked(saveFilesContent).mockResolvedValueOnce(
-      fileResponse({ modifiedAt: 2, content: "const value = 2;\n" }),
-    );
+    const saved = fileResponse({
+      modifiedAt: 2,
+      sizeBytes: 17,
+      content: "const value = 2;\n",
+      session: {
+        schemaVersion: "1",
+        version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+      },
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
 
     act(() => {
       surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
@@ -1204,14 +1315,18 @@ describe("EditorWidget — edit and save", () => {
       expect(surface.props?.saveStatus).toBe("saved");
     });
 
-    act(() => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(saved);
+    await act(async () => {
       workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
         schemaVersion: "1",
         sequence: 5,
         kind: "changed",
         relativePath: "src/app.ts",
+        sizeBytes: 17,
+        modifiedAt: 2,
         metadataHash: "0011223344556677",
       });
+      await Promise.resolve();
     });
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
 
@@ -1231,6 +1346,172 @@ describe("EditorWidget — edit and save", () => {
     expect(await screen.findByTestId("editor-external-change-banner")).toHaveTextContent(
       "The file changed on disk: src/app.ts.",
     );
+  });
+
+  it("does not consume an external write that arrives before the delayed self event", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => {
+      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
+    });
+    const saved = fileResponse({
+      modifiedAt: 2,
+      sizeBytes: 17,
+      content: "const value = 2;\n",
+      session: {
+        schemaVersion: "1",
+        version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+      },
+    });
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 5,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        sizeBytes: 19,
+        modifiedAt: 3,
+        metadataHash: "7766554433221100",
+      });
+    });
+    const banner = await screen.findByTestId("editor-external-change-banner");
+    expect(banner).toHaveTextContent("The file changed on disk: src/app.ts.");
+
+    await act(async () => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 6,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        sizeBytes: 17,
+        modifiedAt: 2,
+        metadataHash: "0011223344556677",
+      });
+      // The widget serializes watch reconciliation through a promise chain. Let that queued
+      // transition settle before asserting that the delayed self notification preserved the
+      // already-surfaced genuine external-change warning.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getAllByTestId("editor-external-change-banner")).toHaveLength(1);
+    expect(screen.getByTestId("editor-external-change-banner")).toHaveTextContent(
+      "The file changed on disk: src/app.ts.",
+    );
+  });
+
+  it("discards deferred watch reconciliation after typing advances the document version", async () => {
+    const { pendingRead, saved } = await beginDeferredWatchReconciliation();
+
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 3;\n", sizeBytes: 17 }, "human");
+    });
+    await act(async () => {
+      pendingRead.resolve(saved);
+      await pendingRead.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(surface.props?.buffer.content.text).toBe("const value = 3;\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+  });
+
+  it.each([
+    ["tab", "/repo", "src/other.ts"],
+    ["root", "/next", "src/app.ts"],
+  ] as const)(
+    "discards deferred watch reconciliation after a %s switch",
+    async (_kind, nextRoot, nextFile) => {
+      const { pendingRead, saved, view } = await beginDeferredWatchReconciliation();
+      const nextContent = saved.content;
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+        fileResponse({
+          root: nextRoot,
+          path: nextFile,
+          name: nextFile.split("/").at(-1) ?? nextFile,
+          content: nextContent,
+          sizeBytes: nextContent.length,
+          modifiedAt: 3,
+          session: {
+            schemaVersion: "1",
+            version: {
+              sizeBytes: nextContent.length,
+              modifiedAt: 3,
+              contentHash: "c".repeat(64),
+            },
+          },
+        }),
+      );
+
+      view.rerender(<EditorRuntimeWidget windowId="editor-test" root={nextRoot} file={nextFile} />);
+      await waitFor(() => {
+        expect(surface.props?.modelRootKey).toBe(nextRoot);
+        expect(surface.props?.buffer.content.relativePath).toBe(nextFile);
+      });
+      act(() => {
+        surface.props?.onContentChange({ text: "const value = 3;\n", sizeBytes: 17 }, "human");
+        surface.props?.onContentChange({ text: nextContent, sizeBytes: 17 }, "human");
+      });
+      await waitFor(() => expect(surface.props?.fileModel.dirty).toBe(true));
+      await act(async () => {
+        pendingRead.resolve(saved);
+        await pendingRead.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(surface.props?.buffer.content.relativePath).toBe(nextFile);
+      expect(surface.props?.buffer.content.text).toBe(nextContent);
+      expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+    },
+  );
+
+  it("clears diagnostic detail when a watch event invalidates its summary", async () => {
+    const FakeSource = installFakeEventSource();
+    await renderLoaded();
+    await waitFor(() => expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1));
+    act(() => {
+      surface.props?.onDiagnosticsSummary?.({ errors: 1, warnings: 0, infos: 0 });
+      surface.props?.onDiagnostics?.([
+        {
+          severity: "error",
+          range: {
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 5 },
+          },
+          message: "stale diagnostic",
+        },
+      ]);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0]).toHaveProperty(
+        "diagnosticsDetail",
+      );
+    });
+
+    act(() => {
+      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 6,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "7766554433221100",
+      });
+    });
+
+    await waitFor(() => {
+      const latest = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(latest?.diagnosticsSummary).toBeNull();
+      expect(latest).not.toHaveProperty("diagnosticsDetail");
+    });
   });
 
   it("formats once through the governed formatter before format-on-save persists", async () => {
@@ -1696,6 +1977,7 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     expect(requestEditorCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/repo",
+        editorSessionId: expect.any(String),
         path: "src/app.ts",
         languageId: "typescript",
         text: "const value = {};\nvalue.\n",
@@ -1908,6 +2190,7 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     expect(requestEditorInlineCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/repo",
+        editorSessionId: expect.any(String),
         path: "src/app.ts",
         languageId: "typescript",
         text: "function add(a, b) {\n  return \n}\n",
@@ -3737,6 +4020,16 @@ describe("EditorWidget — agent bridge", () => {
         end: { line: 3, column: 5 },
       });
       surface.props?.onDiagnosticsSummary?.({ errors: 1, warnings: 0, infos: 2 });
+      surface.props?.onDiagnostics?.([
+        {
+          severity: "error",
+          range: {
+            start: { line: 2, column: 1 },
+            end: { line: 2, column: 5 },
+          },
+          message: "x".repeat(1_025),
+        },
+      ]);
       surface.props?.onContentChange({ text: "const changed = true;\n", sizeBytes: 22 }, "human");
     });
 
@@ -3751,6 +4044,19 @@ describe("EditorWidget — agent bridge", () => {
             end: { line: 3, character: 5 },
           },
           diagnosticsSummary: { errors: 1, warnings: 0, infos: 2 },
+          diagnosticsDetail: {
+            items: [
+              {
+                severity: "error",
+                range: {
+                  start: { line: 2, character: 1 },
+                  end: { line: 2, character: 5 },
+                },
+                message: "x".repeat(1_024),
+              },
+            ],
+            truncated: true,
+          },
           languageCapability: {
             languageId: "typescript",
             providerId: "typescript",

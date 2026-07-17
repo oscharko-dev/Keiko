@@ -4,6 +4,25 @@ import { createServer } from "node:net";
 
 const delimiter = Buffer.from("\r\n\r\n", "ascii");
 const socketPath = socketArgument(process.argv.slice(2));
+const CAP_STACK_FRAME_COUNT = 128;
+const CAP_SCOPE_COUNT = 32;
+const CAP_VARIABLE_COUNT = 200;
+const CAP_GRAPH_NODE_COUNT = 1_000;
+const CAP_OUTPUT_BYTES = 1_048_576;
+const CAP_OUTPUT_EVENT_BYTES = 16 * 1_024;
+const CAP_OUTPUT_EVENT_COUNT = CAP_OUTPUT_BYTES / CAP_OUTPUT_EVENT_BYTES;
+// Keep eight exact 16 KiB events between the 896 KiB Stop checkpoint and the 1 MiB terminal cap.
+// A 600 ms window remains under continuous output pressure while leaving enough Linux scheduling
+// reserve for the browser's binding 200 ms Stop budget after the explicit 10 ms harness poll.
+const CAP_OUTPUT_INTERVAL_MS = 75;
+const ROOT_VARIABLE_REFERENCE = 2_000;
+const GRAPH_REFERENCES = new Map([
+  [ROOT_VARIABLE_REFERENCE, { layer: 1, childReferences: [3_000, 6_000] }],
+  [3_000, { layer: 2, childReferences: [4_000] }],
+  [4_000, { layer: 3, childReferences: [5_000] }],
+  [5_000, { layer: 4, childReferences: [7_000] }],
+  [6_000, { layer: 2, childReferences: [] }],
+]);
 let sequence = 1;
 
 if (socketPath === undefined) process.exit(2);
@@ -11,13 +30,12 @@ rmSync(socketPath, { force: true });
 
 const server = createServer((connection) => {
   let pending = Buffer.alloc(0);
-  let exceptionBreakpointsEnabled = false;
+  const state = { exceptionBreakpointsEnabled: false, mode: "standard", outputTimer: undefined };
   connection.on("data", (chunk) => {
     pending = Buffer.concat([pending, chunk]);
-    pending = drain(connection, pending, (request) => {
-      exceptionBreakpointsEnabled = dispatch(request, connection, exceptionBreakpointsEnabled);
-    });
+    pending = drain(connection, pending, (request) => dispatch(request, connection, state));
   });
+  connection.on("close", () => clearInterval(state.outputTimer));
 });
 
 server.listen(socketPath);
@@ -63,10 +81,93 @@ function continueAndStop(connection) {
   setImmediate(() => stop(connection, "step"));
 }
 
-function dispatch(request, connection, exceptionBreakpointsEnabled) {
-  if (request?.type !== "request" || !Number.isSafeInteger(request.seq)) {
-    return exceptionBreakpointsEnabled;
-  }
+function selectedMode(request) {
+  const program = request.arguments?.program;
+  if (typeof program !== "string") return "standard";
+  if (program.endsWith("/cap-stopped.ts")) return "cap-stopped";
+  if (program.endsWith("/cap-output.ts")) return "cap-output";
+  return "standard";
+}
+
+function startOutputFlood(connection, state) {
+  let emitted = 0;
+  const output = "x".repeat(CAP_OUTPUT_EVENT_BYTES);
+  state.outputTimer = setInterval(() => {
+    if (connection.destroyed || emitted >= CAP_OUTPUT_EVENT_COUNT) {
+      clearInterval(state.outputTimer);
+      state.outputTimer = undefined;
+      return;
+    }
+    event(connection, "output", { category: "stdout", output });
+    emitted += 1;
+  }, CAP_OUTPUT_INTERVAL_MS);
+}
+
+function capStackFrames(request) {
+  const startFrame = Number.isSafeInteger(request.arguments?.startFrame)
+    ? request.arguments.startFrame
+    : 0;
+  const levels = Number.isSafeInteger(request.arguments?.levels) ? request.arguments.levels : 64;
+  const end = Math.min(CAP_STACK_FRAME_COUNT, startFrame + levels);
+  return Array.from({ length: Math.max(0, end - startFrame) }, (_, offset) => {
+    const index = startFrame + offset;
+    return {
+      id: index + 1,
+      name: `capFrame${String(index + 1).padStart(3, "0")}`,
+      source: { path: "/keiko-execution-root/src/cap-stopped.ts" },
+      line: (index % CAP_VARIABLE_COUNT) + 1,
+      column: 1,
+    };
+  });
+}
+
+function capScopes() {
+  return Array.from({ length: CAP_SCOPE_COUNT }, (_, index) => ({
+    name: `Cap scope ${String(index + 1).padStart(2, "0")}`,
+    variablesReference: ROOT_VARIABLE_REFERENCE + index,
+    namedVariables: index === 0 ? CAP_VARIABLE_COUNT : 0,
+    expensive: false,
+  }));
+}
+
+function graphVariables(reference) {
+  const graph = GRAPH_REFERENCES.get(reference);
+  if (graph === undefined) return [];
+  return Array.from({ length: CAP_VARIABLE_COUNT }, (_, index) => ({
+    name:
+      graph.layer === 1
+        ? `inline1_${String(index + 1).padStart(3, "0")}`
+        : index < graph.childReferences.length
+          ? `graph${String(graph.layer)}_branch_${String(index + 1)}`
+          : `graph${String(graph.layer)}_leaf`,
+    value: String(graph.layer * CAP_GRAPH_NODE_COUNT + index),
+    type: "number",
+    variablesReference: graph.childReferences[index] ?? 0,
+  }));
+}
+
+function standardStackTrace(state) {
+  const exception = state.exceptionBreakpointsEnabled;
+  return {
+    stackFrames: [
+      {
+        id: 1,
+        name: exception ? "throwsFixture" : "breakpointFixture",
+        source: {
+          path: exception
+            ? "/keiko-execution-root/src/throws.ts"
+            : "/keiko-execution-root/src/program.ts",
+        },
+        line: exception ? 8 : 4,
+        column: 1,
+      },
+    ],
+    totalFrames: 1,
+  };
+}
+
+function dispatch(request, connection, state) {
+  if (request?.type !== "request" || !Number.isSafeInteger(request.seq)) return;
   if (request.command === "initialize") {
     response(connection, request, {
       supportsConfigurationDoneRequest: true,
@@ -74,16 +175,21 @@ function dispatch(request, connection, exceptionBreakpointsEnabled) {
       supportsTerminateRequest: true,
     });
     event(connection, "initialized");
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "launch") {
+    state.mode = selectedMode(request);
     response(connection, request);
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "configurationDone") {
     response(connection, request);
-    setImmediate(() => stop(connection, exceptionBreakpointsEnabled ? "exception" : "breakpoint"));
-    return exceptionBreakpointsEnabled;
+    if (state.mode === "cap-output") startOutputFlood(connection, state);
+    else
+      setImmediate(() =>
+        stop(connection, state.exceptionBreakpointsEnabled ? "exception" : "breakpoint"),
+      );
+    return;
   }
   if (request.command === "setBreakpoints") {
     const breakpoints = Array.isArray(request.arguments?.breakpoints)
@@ -92,55 +198,52 @@ function dispatch(request, connection, exceptionBreakpointsEnabled) {
     response(connection, request, {
       breakpoints: breakpoints.map((breakpoint) => ({ ...breakpoint, verified: true })),
     });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "setExceptionBreakpoints") {
     const filters = Array.isArray(request.arguments?.filters) ? request.arguments.filters : [];
     response(connection, request, { breakpoints: [] });
-    return filters.includes("uncaught");
+    state.exceptionBreakpointsEnabled = filters.includes("uncaught");
+    return;
   }
   if (request.command === "threads") {
     response(connection, request, { threads: [{ id: 1, name: "fixture-main" }] });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "stackTrace") {
-    const exception = exceptionBreakpointsEnabled;
-    response(connection, request, {
-      stackFrames: [
-        {
-          id: 1,
-          name: exception ? "throwsFixture" : "breakpointFixture",
-          source: {
-            path: exception
-              ? "/keiko-execution-root/src/throws.ts"
-              : "/keiko-execution-root/src/program.ts",
-          },
-          line: exception ? 8 : 4,
-          column: 1,
-        },
-      ],
-      totalFrames: 1,
-    });
-    return exceptionBreakpointsEnabled;
+    response(
+      connection,
+      request,
+      state.mode === "cap-stopped"
+        ? { stackFrames: capStackFrames(request), totalFrames: CAP_STACK_FRAME_COUNT }
+        : standardStackTrace(state),
+    );
+    return;
   }
   if (request.command === "scopes") {
     response(connection, request, {
-      scopes: [{ name: "Local", variablesReference: 1, expensive: false }],
+      scopes:
+        state.mode === "cap-stopped"
+          ? capScopes()
+          : [{ name: "Local", variablesReference: 1, expensive: false }],
     });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "variables") {
     response(connection, request, {
-      variables: [
-        { name: "total", value: "2", type: "number", variablesReference: 0 },
-        { name: "message", value: "safe fixture", type: "string", variablesReference: 0 },
-      ],
+      variables:
+        state.mode === "cap-stopped"
+          ? graphVariables(request.arguments?.variablesReference)
+          : [
+              { name: "total", value: "2", type: "number", variablesReference: 0 },
+              { name: "message", value: "safe fixture", type: "string", variablesReference: 0 },
+            ],
     });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "evaluate") {
     response(connection, request, { result: "2", type: "number", variablesReference: 0 });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "setVariable") {
     response(connection, request, {
@@ -148,23 +251,24 @@ function dispatch(request, connection, exceptionBreakpointsEnabled) {
       type: "number",
       variablesReference: 0,
     });
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (["continue", "next", "stepIn", "stepOut"].includes(request.command)) {
     response(connection, request);
     continueAndStop(connection);
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "pause") {
     response(connection, request);
     setImmediate(() => stop(connection, "pause"));
-    return exceptionBreakpointsEnabled;
+    return;
   }
   if (request.command === "disconnect") {
+    clearInterval(state.outputTimer);
     response(connection, request);
     connection.end();
     server.close(() => process.exit(0));
-    return exceptionBreakpointsEnabled;
+    return;
   }
   frame(connection, {
     type: "response",
@@ -173,7 +277,6 @@ function dispatch(request, connection, exceptionBreakpointsEnabled) {
     command: request.command,
     message: "UNSUPPORTED",
   });
-  return exceptionBreakpointsEnabled;
 }
 
 function drain(connection, pending, handle) {

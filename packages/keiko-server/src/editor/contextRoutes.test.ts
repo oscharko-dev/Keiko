@@ -159,6 +159,7 @@ describe("POST /api/editor/context", () => {
 
   it("preserves editorSessionId for same-root context assembly", async () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot());
+    editorAgentRegistry.connect("editor-session-route", () => undefined);
     const result = await handleEditorContext(
       postContext({
         schemaVersion: "1",
@@ -174,6 +175,43 @@ describe("POST /api/editor/context", () => {
     const serialized = JSON.stringify(result.body);
     expect(serialized).toContain('"sourceKind":"editor-state"');
     expect(serialized).not.toContain("editor-session-route");
+  });
+
+  it("returns only a content-free unavailable omission for a disconnected editor session", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        editorSessionId: "editor-session-route",
+        root,
+        documentPath: "src/a.ts",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).toContain('{"sourceKind":"editor-state","reason":"unavailable"}');
+    expect(serialized).not.toContain('"sourceKind":"editor-state","sourceTier"');
+    expect(serialized).not.toContain("editor-session-route");
+    expect(serialized).not.toContain("diagnosticsDetail");
+  });
+
+  it("rejects an editor session id above the shared UTF-8 byte cap", async () => {
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        editorSessionId: "\u{1f600}".repeat(65),
+        root,
+        documentPath: "src/a.ts",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
   });
 
   it("rejects an invalid request body with 400 INVALID_REQUEST", async () => {

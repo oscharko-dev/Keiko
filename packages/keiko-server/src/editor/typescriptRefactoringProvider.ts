@@ -13,6 +13,7 @@ import type {
   LanguagePosition,
   LanguageRange,
   LanguageRenameApplyResult,
+  LanguageRenameChangesetFile,
   LanguageRenamePrepareResult,
   LanguageServiceErrorCode,
   LanguageSignatureHelpResult,
@@ -40,11 +41,16 @@ export type TypescriptRenameApplyResolution =
   | { readonly kind: "result"; readonly result: LanguageRenameApplyResult }
   | TypescriptRefactoringError;
 
-interface RenameEditCandidate {
+interface SelectedRenameFile {
   readonly path: string;
-  readonly fileName: string;
   readonly text: string;
-  readonly edit: LanguageTextEdit;
+  readonly locations: ts.RenameLocation[];
+}
+
+interface RenameSelection {
+  readonly selectedFiles: readonly SelectedRenameFile[];
+  readonly totalFileCount: number;
+  readonly totalEditCount: number;
 }
 
 interface CodeActionCandidate {
@@ -156,65 +162,87 @@ export function resolveTypescriptRenamePrepare(
   };
 }
 
-function renameCandidates(
+function selectRenameLocations(
   project: TypescriptProjectHandle,
   locations: readonly ts.RenameLocation[],
-  newName: string,
-): readonly RenameEditCandidate[] {
-  return locations.flatMap((location): readonly RenameEditCandidate[] => {
+): RenameSelection {
+  const selectedByPath = new Map<string, SelectedRenameFile>();
+  const unreadablePaths = new Set<string>();
+  const allPaths = new Set<string>();
+  let selectedEditCount = 0;
+  let totalEditCount = 0;
+  for (const location of locations) {
+    project.cancellation.throwIfCancellationRequested();
     const path = project.workspaceRelativePath(location.fileName);
-    const text = project.sourceText(location.fileName);
-    if (path === undefined || text === undefined) return [];
-    return [
-      {
-        path,
-        fileName: location.fileName,
-        text,
-        edit: {
-          range: spanToRange(
-            text,
-            computeLineStarts(text),
-            location.textSpan.start,
-            location.textSpan.length,
-          ),
-          newText: `${location.prefixText ?? ""}${newName}${location.suffixText ?? ""}`,
-        },
-      },
-    ];
-  });
+    if (path === undefined) continue;
+    totalEditCount += 1;
+    allPaths.add(path);
+    if (selectedEditCount >= project.limits.maxRenameChangesetEdits) continue;
+    const selected = selectedByPath.get(path);
+    if (selected !== undefined) {
+      selected.locations.push(location);
+      selectedEditCount += 1;
+    } else if (
+      selectedByPath.size < project.limits.maxRenameChangesetFiles &&
+      !unreadablePaths.has(path)
+    ) {
+      project.cancellation.throwIfCancellationRequested();
+      const text = project.sourceText(location.fileName);
+      project.cancellation.throwIfCancellationRequested();
+      if (text === undefined) unreadablePaths.add(path);
+      else {
+        selectedByPath.set(path, { path, text, locations: [location] });
+        selectedEditCount += 1;
+      }
+    }
+  }
+  return {
+    selectedFiles: [...selectedByPath.values()],
+    totalFileCount: allPaths.size,
+    totalEditCount,
+  };
 }
 
-function groupRenameCandidates(
-  candidates: readonly RenameEditCandidate[],
+function materializeRenameFile(
   project: TypescriptProjectHandle,
+  file: SelectedRenameFile,
+  newName: string,
+): LanguageRenameChangesetFile {
+  const lineStarts = computeLineStarts(file.text);
+  const edits = file.locations.map((location): LanguageTextEdit => {
+    project.cancellation.throwIfCancellationRequested();
+    return {
+      range: spanToRange(file.text, lineStarts, location.textSpan.start, location.textSpan.length),
+      newText: `${location.prefixText ?? ""}${newName}${location.suffixText ?? ""}`,
+    };
+  });
+  return { path: file.path, edits, expectedContentHash: sha256Hex(file.text) };
+}
+
+function materializeRenameFiles(
+  project: TypescriptProjectHandle,
+  selectedFiles: readonly SelectedRenameFile[],
+  newName: string,
+): readonly LanguageRenameChangesetFile[] {
+  return selectedFiles.map((file) => materializeRenameFile(project, file, newName));
+}
+
+function renameResult(
+  project: TypescriptProjectHandle,
+  selection: RenameSelection,
+  newName: string,
 ): LanguageRenameApplyResult {
-  const maxFiles = project.limits.maxRenameChangesetFiles;
-  const maxEdits = project.limits.maxRenameChangesetEdits;
-  const byPath = new Map<string, { readonly text: string; readonly edits: LanguageTextEdit[] }>();
-  let returnedEditCount = 0;
-  for (const candidate of candidates) {
-    const existing = byPath.get(candidate.path);
-    const canOpenFile = existing !== undefined || byPath.size < maxFiles;
-    if (!canOpenFile || returnedEditCount >= maxEdits) continue;
-    const group = existing ?? { text: candidate.text, edits: [] };
-    group.edits.push(candidate.edit);
-    byPath.set(candidate.path, group);
-    returnedEditCount += 1;
-  }
-  const totalFileCount = new Set(candidates.map((candidate) => candidate.path)).size;
+  const files = materializeRenameFiles(project, selection.selectedFiles, newName);
+  const returnedEditCount = files.reduce((count, file) => count + file.edits.length, 0);
   return {
     schemaVersion: LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
-    files: [...byPath.entries()].map(([path, group]) => ({
-      path,
-      edits: group.edits,
-      expectedContentHash: sha256Hex(group.text),
-    })),
-    truncated: project.truncated || returnedEditCount < candidates.length,
-    filesTruncated: byPath.size < totalFileCount,
-    returnedFileCount: byPath.size,
-    totalFileCount,
+    files,
+    truncated: project.truncated || returnedEditCount < selection.totalEditCount,
+    filesTruncated: files.length < selection.totalFileCount,
+    returnedFileCount: files.length,
+    totalFileCount: selection.totalFileCount,
     returnedEditCount,
-    totalEditCount: candidates.length,
+    totalEditCount: selection.totalEditCount,
   };
 }
 
@@ -231,6 +259,7 @@ export function resolveTypescriptRenameApply(
   if (!info.canRename || info.fileToRename !== undefined || newName.length === 0) {
     return error("INVALID_REQUEST", "No renameable symbol is available at this position.");
   }
+  project.cancellation.throwIfCancellationRequested();
   const locations = project.service.findRenameLocations(
     project.overlayPath,
     offset,
@@ -241,9 +270,11 @@ export function resolveTypescriptRenameApply(
   if (locations === undefined || locations.length === 0) {
     return error("INVALID_REQUEST", "No renameable symbol is available at this position.");
   }
+  project.cancellation.throwIfCancellationRequested();
+  const selection = selectRenameLocations(project, locations);
   return {
     kind: "result",
-    result: groupRenameCandidates(renameCandidates(project, locations, newName), project),
+    result: renameResult(project, selection, newName),
   };
 }
 

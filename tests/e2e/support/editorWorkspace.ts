@@ -34,7 +34,7 @@ export const EDITOR_SELECTORS = {
   splitSeparatorName: "Resize editor split",
   dirtyDialog: ".ed-dirty-dialog[role='dialog'][aria-modal='true']",
   dirtyDialogTitleId: "editor-dirty-close-title",
-  recovery: ".ed-recovery[role='status']",
+  recovery: "output.ed-recovery",
   empty: ".ed-empty[role='note']",
   host: ".ed-host[role='tabpanel']",
   monaco: ".monaco-editor",

@@ -1,11 +1,15 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const SCRIPTS_DIR = join(ROOT, "scripts");
 const MARKER = "SECURITY-SHELL-OK:";
 const MARKER_LOOKBACK_LINES = 8;
-const SHELL_OPTION_RE = /\bshell\s*:\s*(?!false\b)[^,}\n]+/u;
+// ADR-0139 D5: the negative lookahead sits directly behind the colon so backtracking through
+// the whitespace quantifier cannot bypass it — `shell: false` never matches in any spacing,
+// while every other shell option value still requires a nearby SECURITY-SHELL-OK justification.
+const SHELL_OPTION_RE = /\bshell\s*:(?!\s*false\b)\s*[^,}\n]+/u;
 
 function isScannedScript(path) {
   return /\.(?:mjs|js)$/u.test(path) && !/(?:^|\/)__tests__\//u.test(path);
@@ -38,18 +42,21 @@ function hasNearbyMarker(lines, index) {
   return false;
 }
 
-function scanFile(path) {
-  const text = readFileSync(path, "utf8");
+export function scanSource(text, displayPath) {
   const lines = text.split(/\r?\n/u);
   const failures = [];
   for (let index = 0; index < lines.length; index += 1) {
     if (SHELL_OPTION_RE.test(lines[index] ?? "") && !hasNearbyMarker(lines, index)) {
       failures.push(
-        `${relative(ROOT, path)}:${String(index + 1)} uses a shell spawn option without ${MARKER}`,
+        `${displayPath}:${String(index + 1)} uses a shell spawn option without ${MARKER}`,
       );
     }
   }
   return failures;
+}
+
+function scanFile(path) {
+  return scanSource(readFileSync(path, "utf8"), relative(ROOT, path));
 }
 
 function main() {
@@ -70,4 +77,7 @@ function main() {
   console.log("Shell spawn guardrail check passed.");
 }
 
-main();
+const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  main();
+}

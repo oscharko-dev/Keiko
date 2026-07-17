@@ -20,7 +20,10 @@
 // @oscharko-dev/keiko-editor so a host maps these server citations onto the editor context port 1:1
 // without a translation table; this package never imports the editor package (wrong tier direction).
 
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+
 export const CODING_CONTEXT_SCHEMA_VERSION = "1" as const;
+const EDITOR_SESSION_ID_TEXT_ENCODER = new TextEncoder();
 
 // ─── Purpose ────────────────────────────────────────────────────────────────────
 // Drives provider eligibility and the latency/cost budget. `inline` (as-you-type ghost text) and
@@ -204,6 +207,15 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+// One owning validator for every coding-context entry point. The cap is shared with the editor-agent
+// session contract and is measured after UTF-8 encoding so multi-byte identifiers cannot bypass it.
+export function isBoundedEditorSessionId(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    EDITOR_SESSION_ID_TEXT_ENCODER.encode(value).length <= EDITOR_AGENT_SESSION_ID_MAX_BYTES
+  );
+}
+
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
@@ -279,7 +291,7 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
     [value.schemaVersion === CODING_CONTEXT_SCHEMA_VERSION, "request.schemaVersion invalid"],
     [isCodingContextPurpose(value.purpose), "request.purpose invalid"],
     [
-      value.editorSessionId === undefined || isNonEmptyString(value.editorSessionId),
+      value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId),
       "request.editorSessionId invalid",
     ],
     [isNonEmptyString(value.documentPath), "request.documentPath empty"],

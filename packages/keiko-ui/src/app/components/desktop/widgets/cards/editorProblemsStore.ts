@@ -148,11 +148,24 @@ interface ProjectProblemsState {
   diagnosticsByProducer: Map<string, Map<string, readonly EditorDiagnostic[]>>;
   latestReport: VerificationReport | null;
   problems: readonly EditorProblem[];
+  verificationSourceHealth: EditorProblemsSourceHealth;
+  snapshot: EditorProblemsStoreSnapshot;
   readonly listeners: Set<() => void>;
+}
+
+export type EditorProblemsSourceHealth = "healthy" | "reconnecting" | "failed";
+
+export interface EditorProblemsStoreSnapshot {
+  readonly problems: readonly EditorProblem[];
+  readonly verificationSourceHealth: EditorProblemsSourceHealth;
 }
 
 const projectStates = new Map<string, ProjectProblemsState>();
 const EMPTY_PROBLEMS: readonly EditorProblem[] = Object.freeze([]);
+const EMPTY_SNAPSHOT: EditorProblemsStoreSnapshot = Object.freeze({
+  problems: EMPTY_PROBLEMS,
+  verificationSourceHealth: "healthy",
+});
 
 function projectState(root: string): ProjectProblemsState {
   let entry = projectStates.get(root);
@@ -160,7 +173,9 @@ function projectState(root: string): ProjectProblemsState {
     entry = {
       diagnosticsByProducer: new Map(),
       latestReport: null,
-      problems: [],
+      problems: EMPTY_PROBLEMS,
+      verificationSourceHealth: "healthy",
+      snapshot: EMPTY_SNAPSHOT,
       listeners: new Set(),
     };
     projectStates.set(root, entry);
@@ -168,9 +183,33 @@ function projectState(root: string): ProjectProblemsState {
   return entry;
 }
 
-function rebuild(entry: ProjectProblemsState): void {
-  entry.problems = buildAllProblems(entry.diagnosticsByProducer, entry.latestReport);
+function notify(entry: ProjectProblemsState): void {
   for (const listener of [...entry.listeners]) listener();
+}
+
+function pruneIfEmpty(root: string, entry: ProjectProblemsState): void {
+  if (
+    entry.listeners.size === 0 &&
+    entry.diagnosticsByProducer.size === 0 &&
+    entry.latestReport === null &&
+    entry.verificationSourceHealth === "healthy"
+  ) {
+    projectStates.delete(root);
+  }
+}
+
+function updateSnapshot(entry: ProjectProblemsState): void {
+  entry.snapshot = {
+    problems: entry.problems,
+    verificationSourceHealth: entry.verificationSourceHealth,
+  };
+}
+
+function rebuild(root: string, entry: ProjectProblemsState): void {
+  entry.problems = buildAllProblems(entry.diagnosticsByProducer, entry.latestReport);
+  updateSnapshot(entry);
+  notify(entry);
+  pruneIfEmpty(root, entry);
 }
 
 export function setPaneDiagnostics(
@@ -187,7 +226,7 @@ export function setPaneDiagnostics(
   if (byPath.size === 0) next.delete(producerId);
   else next.set(producerId, byPath);
   entry.diagnosticsByProducer = next;
-  rebuild(entry);
+  rebuild(root, entry);
 }
 
 export function removePaneDiagnostics(root: string, producerId: string, path: string): void {
@@ -200,13 +239,30 @@ export function removePaneDiagnostics(root: string, producerId: string, path: st
   if (byPath.size === 0) next.delete(producerId);
   else next.set(producerId, byPath);
   entry.diagnosticsByProducer = next;
-  rebuild(entry);
+  rebuild(root, entry);
 }
 
 export function setVerificationReport(root: string, report: VerificationReport | null): void {
   const entry = projectState(root);
   entry.latestReport = report;
-  rebuild(entry);
+  rebuild(root, entry);
+}
+
+export function setVerificationSourceHealth(
+  root: string,
+  health: EditorProblemsSourceHealth,
+): void {
+  const existing = projectStates.get(root);
+  if (existing === undefined && health === "healthy") return;
+  const entry = existing ?? projectState(root);
+  if (entry.verificationSourceHealth === health) {
+    pruneIfEmpty(root, entry);
+    return;
+  }
+  entry.verificationSourceHealth = health;
+  updateSnapshot(entry);
+  notify(entry);
+  pruneIfEmpty(root, entry);
 }
 
 export function subscribeEditorProblems(root: string, listener: () => void): () => void {
@@ -214,18 +270,20 @@ export function subscribeEditorProblems(root: string, listener: () => void): () 
   entry.listeners.add(listener);
   return (): void => {
     entry.listeners.delete(listener);
-    if (
-      entry.listeners.size === 0 &&
-      entry.diagnosticsByProducer.size === 0 &&
-      entry.latestReport === null
-    ) {
-      projectStates.delete(root);
-    }
+    pruneIfEmpty(root, entry);
   };
 }
 
 export function getEditorProblems(root: string): readonly EditorProblem[] {
   return projectStates.get(root)?.problems ?? EMPTY_PROBLEMS;
+}
+
+export function getEditorProblemsSourceHealth(root: string): EditorProblemsSourceHealth {
+  return projectStates.get(root)?.verificationSourceHealth ?? "healthy";
+}
+
+export function getEditorProblemsStoreSnapshot(root: string): EditorProblemsStoreSnapshot {
+  return projectStates.get(root)?.snapshot ?? EMPTY_SNAPSHOT;
 }
 
 export function resetEditorProblemsStoreForTests(): void {

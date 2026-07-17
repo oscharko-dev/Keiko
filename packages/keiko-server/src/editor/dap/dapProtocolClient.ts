@@ -82,9 +82,7 @@ export function createDapProtocolClient(deps: DapProtocolClientDeps): DapProtoco
     lastIncomingSeq: 0,
     disposed: false,
   };
-  consume(runtime, deps).catch(() => {
-    dispose(runtime);
-  });
+  void consume(runtime, deps).catch(ignoreFatalObserverFailure);
   return {
     request: <T>(command: string, args: unknown, options: DapRequestOptions): Promise<T> =>
       request<T>(runtime, deps.sendFrame, command, args, options),
@@ -148,9 +146,7 @@ async function request<T>(
     send(JSON.stringify({ seq: requestSequence, type: "request", command, arguments: args }));
   } catch {
     settleRejected(runtime, requestSequence, "WRITE_FAILED");
-    fatal(runtime, "WRITE_FAILED").catch(() => {
-      dispose(runtime);
-    });
+    void fatal(runtime, "WRITE_FAILED").catch(ignoreFatalObserverFailure);
   }
   return pending;
 }
@@ -271,6 +267,10 @@ function noopFatal(): void {
   // The closed protocol state is still disposed in fatal() when no observer is installed.
 }
 
+function ignoreFatalObserverFailure(): void {
+  // fatal() disposes in its finally block; an observer rejection cannot reopen the client.
+}
+
 function settleResponse(runtime: Runtime, message: Record<string, unknown>): boolean {
   const requestSeq = message.request_seq;
   if (
@@ -379,9 +379,7 @@ function rejectReverse(
       }),
     );
   } catch {
-    fatal(runtime, "WRITE_FAILED").catch(() => {
-      dispose(runtime);
-    });
+    void fatal(runtime, "WRITE_FAILED").catch(ignoreFatalObserverFailure);
   }
   return Promise.resolve(true);
 }

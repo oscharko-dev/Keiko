@@ -346,7 +346,26 @@ describe("EditorRuntimeWidget Git gutter", () => {
   it("does not expose gutter work for a degraded large file", async () => {
     await renderEditor("line\n".repeat(10_001));
     expect(surface.props?.editorGitGutter).toBeUndefined();
+    expect(surface.props?.editorConflicts).toBeUndefined();
     expect(fetchGitStructuredDiff).not.toHaveBeenCalled();
+  });
+
+  it("clears stale conflict state when the editor enters degraded large-file mode", async () => {
+    const rendered = await renderEditor("<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n");
+    act(() => surface.props?.editorConflicts?.onChange(2, true));
+    expect(screen.getByRole("tab", { name: "src/app.ts, 2 merge conflicts" })).toBeInTheDocument();
+
+    vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse("line\n".repeat(10_001)));
+    rendered.rerender(
+      <EditorRuntimeWidget windowId="git-gutter" root="/repo" file="src/large.ts" />,
+    );
+
+    await waitFor(() => expect(surface.props?.editorConflicts).toBeUndefined());
+    expect(screen.getByRole("tab", { name: "src/large.ts" })).toHaveAttribute(
+      "data-merge-conflicts",
+      "0",
+    );
+    expect(screen.getByTestId("editor-status-bar-live")).not.toHaveTextContent("merge conflict");
   });
 
   it("keeps blame strictly on demand and links only the selected root and commit", async () => {

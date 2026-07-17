@@ -57,20 +57,20 @@ describe("dapProtocolClient", () => {
     expect(stopped).toHaveLength(1);
   });
 
-  it("reserves four of 32 request slots for controls", () => {
+  it("reserves four of 32 request slots for controls", async () => {
     const source = new PassThrough({ objectMode: true });
     const client = createDapProtocolClient({ source, sendFrame: vi.fn() });
     const inspections = Array.from({ length: 28 }, () =>
       client.request("variables", {}, { lane: "inspection", deadlineMs: 10_000 }),
     );
     expect(client.pendingCount()).toBe(28);
-    void expect(
+    await expect(
       client.request("variables", {}, { lane: "inspection", deadlineMs: 10_000 }),
     ).rejects.toMatchObject({ code: "REQUEST_LIMIT" });
     const control = client.request("disconnect", {}, { lane: "control", deadlineMs: 10_000 });
     expect(client.pendingCount()).toBe(29);
     client.dispose();
-    void Promise.allSettled([...inspections, control]);
+    await Promise.allSettled([...inspections, control]);
   });
 
   it("routes the typed control helper through the reserved control lane", async () => {
@@ -965,6 +965,70 @@ describe("dapProtocolClient", () => {
     createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
     await vi.waitFor(() => {
       expect(fatal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code }));
+    });
+  });
+
+  it("disposes after both source consumption and the fatal observer fail", async () => {
+    const source: AsyncIterable<Buffer> = {
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new Error("private source")) }),
+    };
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({ source, sendFrame: vi.fn(), onFatalError: fatal });
+
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: "UNEXPECTED_EOF" }),
+      );
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    });
+  });
+
+  it("disposes after both request writing and the fatal observer fail", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: () => {
+        throw new Error("private write");
+      },
+      onFatalError: fatal,
+    });
+
+    await expect(
+      client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+    ).rejects.toMatchObject({ code: "WRITE_FAILED" });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
+    });
+  });
+
+  it("disposes after both reverse-response writing and the fatal observer fail", async () => {
+    const source = new PassThrough({ objectMode: true });
+    const fatal = vi.fn(() => Promise.reject(new Error("private observer")));
+    const client = createDapProtocolClient({
+      source,
+      sendFrame: () => {
+        throw new Error("private write");
+      },
+      onFatalError: fatal,
+    });
+    source.write(Buffer.from(JSON.stringify({ seq: 1, type: "request", command: "unknown" })));
+
+    await vi.waitFor(() => {
+      expect(fatal).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: "WRITE_FAILED" }),
+      );
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        client.request("threads", {}, { lane: "inspection", deadlineMs: 100 }),
+      ).rejects.toMatchObject({ code: "CLIENT_DISPOSED" });
     });
   });
 
