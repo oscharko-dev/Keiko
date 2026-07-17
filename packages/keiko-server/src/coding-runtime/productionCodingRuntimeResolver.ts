@@ -262,8 +262,13 @@ function createRunRecord(
     context,
     minted,
     toolFacade,
-    authorityLifecycle: authorityLifecycle(authority, controller, invocationRegistry, leases, () =>
-      runtimeNow(input),
+    authorityLifecycle: authorityLifecycle(
+      authority,
+      controller,
+      invocationRegistry,
+      leases,
+      researchGrants,
+      () => runtimeNow(input),
     ),
     onRuntimeEvent,
   });
@@ -371,6 +376,7 @@ function authorityLifecycle(
   controller: AbortController,
   invocations: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  researchGrants: ResearchGrantRegistry,
   now: () => Date,
 ): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
@@ -378,6 +384,9 @@ function authorityLifecycle(
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
+      // Drop every read-only research grant for the run so a terminate/revoke leaves no orphaned
+      // internet reach for the parent or any child (#2387).
+      researchGrants.invalidateRun(runId);
       return authority.revokeBeforeTerminate(runId);
     },
     abortInFlightActions: (runId) => invocations.revokeRun(runId) >= 0,
