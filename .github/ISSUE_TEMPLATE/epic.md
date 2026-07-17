@@ -85,7 +85,7 @@ Summarize expected release-impact metadata for the epic. Child issues and PRs ow
 - [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
 - [ ] When implementation starts, fill the `Branch` field with the active branch name.
 - [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `No`.
-- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while Gitar repairs or deterministic gates settle.
+- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while review findings or deterministic gates settle.
 - [ ] Only after merge and closure evidence, set the issue label to `status: done`, project `Status` to `Done`, and project `Workflow State` to `Done`.
 
 ## Agent Execution Mode

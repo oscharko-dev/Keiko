@@ -33,14 +33,15 @@ A check belongs in branch protection only when it is emitted for every eligible 
 machine-readable, bound to a stable producer App ID, and bounded by a repository-owned runtime.
 The following analysis remains valuable but is not merge-critical:
 
-- `Gitar` review may be absent when automatic processing is paused by plan pacing. Its comments and
-  fixes remain advisory until the service proves current-head check emission within a bounded SLO.
+- `Qodo` review is comment-only; its summary comment may be absent when automatic processing is
+  paused. The comment remains advisory, and evidence currency is the head SHA embedded in it rather
+  than a check-run emission SLO.
 - `Keiko for Quality` is advisory and non-required. The external aggregate cannot safely control
   the same protection path needed to repair its own evaluator.
 - Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
   remains required engineering evidence for tractable trust-boundary changes.
-- The per-pull aggregate mirrors the protected direct checks plus Gitar. It does not wait for the
-  scheduled/manual full mutation lane, which does not emit a pull-request check.
+- The per-pull aggregate mirrors the protected direct checks plus the Qodo review comment. It does
+  not wait for the scheduled/manual full mutation lane, which does not emit a pull-request check.
 - Hosted-runner performance evidence uses ten samples after merge or on a release lane. Functional
   UI build, lint, typecheck, coverage, accessibility, smoke, editor E2E, and package checks remain in
   the required `ui` job.

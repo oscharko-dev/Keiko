@@ -3,7 +3,7 @@
 ## Status
 
 Accepted (maintainer decision, 2026-07-13); operationally amended after the 2026-07-14 liveness
-incident.
+incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar.
 
 ## Amends
 
@@ -82,12 +82,18 @@ smoke E2E, editor E2E, package surface, and deterministic budget checks.
 
 ### D5 — Unbounded and quota-dependent analysis remains advisory
 
-Gitar remains an independent review and repair aid, but is not required while its current plan can
-pause automatic processing or omit a check. `Keiko for Quality` may run as an advisory external
-aggregate but remains non-required; its check and dashboard are not merge authority. Either product
-may become required only after a live availability probe proves current-head emission, bounded
-settlement, stable machine-readable evidence, and a failure mode that cannot deadlock its own repair
-path.
+Qodo Code Review is the advisory review product. It is comment-only: it posts a single summary
+review comment — the Bugs, Rule violations, and Requirement gaps counts — updated in place per head,
+and never a check-run or a merge-authority approval. `Keiko for Quality` reads that comment, verifies
+the producing GitHub App id on it (`performed_via_github_app`), and binds it to the head SHA embedded
+in the comment body; missing, wrong-head, wrong-producer, or unparseable review evidence is treated
+as absent. Qodo replaces Gitar, whose check-run once reported success while an unresolved finding
+remained; Gitar stays installed and advisory only until Qodo proves green on live pull requests, then
+is retired, and the swap changes no required check. `Keiko for Quality` may run as an advisory
+external aggregate but remains non-required; its check and dashboard are not merge authority. Either
+product may become required only after a live availability probe proves current-head emission,
+bounded settlement, stable machine-readable evidence, and a failure mode that cannot deadlock its own
+repair path.
 
 Full mutation testing remains strict but runs daily and through explicit dispatch. Focused mutation
 is a pre-publication tool for critical changes when its scope is tractable. The synchronous PR path
@@ -123,11 +129,14 @@ uninvestigated product failure.
   does not masquerade as a product defect.
 - Re-adding an advisory product to branch protection requires explicit live availability and
   negative/positive activation evidence.
+- The advisory review product is Qodo (comment-only, app-id-verified, head-SHA-bound); Gitar is
+  retained only until Qodo proves green on live pull requests, then retired, and the swap changes no
+  required check.
 
 ## References
 
 - [Keiko quality-gate policy](../qa/keiko-for-quality.md)
-- [Gitar review policy](../qa/gitar-review-policy.md)
+- [Qodo review policy](../qa/qodo-review-policy.md)
 - [Mutation testing policy](../qa/mutation-testing.md)
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md)
 - [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md)

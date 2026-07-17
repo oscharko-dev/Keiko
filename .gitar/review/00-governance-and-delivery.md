@@ -1,7 +1,7 @@
 @AGENTS.md
 @CONTRIBUTING.md
 @docs/qa/keiko-for-quality.md
-@docs/qa/gitar-review-policy.md
+@docs/qa/qodo-review-policy.md
 @docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md
 @docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md
 
