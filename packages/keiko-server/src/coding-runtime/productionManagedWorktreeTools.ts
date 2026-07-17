@@ -52,6 +52,9 @@ export interface ProductionManagedWorktreeToolInput {
   // authority stays the fail-closed stub, so a run without research can never reach the internet.
   readonly researchGrantRegistry?: ResearchGrantRegistry | undefined;
   readonly gatewayEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
+  // Raises the #2387 approval ask for a research URL that no live grant covers. Optional: without
+  // it the egress port still fails closed, it just cannot open the approval loop.
+  readonly requestResearchApproval?: ((url: URL) => void) | undefined;
 }
 
 export function createProductionManagedWorktreeToolFacade(
@@ -157,6 +160,7 @@ function buildEgressAuthority(
     resolveRunId: (): string => input.authorityRef.runId,
     gatewayEgress: (): OutboundHttpEgressConfig | undefined => gatewayEgress(),
     emitEvent: input.onRuntimeEvent,
+    ...(input.requestResearchApproval ? { onGrantMissing: input.requestResearchApproval } : {}),
     now: (): number => Date.now(),
   });
 }

@@ -26,6 +26,12 @@ import type {
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import {
+  buildResearchPermissionEvent,
+  createPendingResearchApprovals,
+  registerApprovedResearchGrant,
+  type PendingResearchApprovals,
+} from "./researchApprovalIssuance.js";
+import {
   createResearchGrantRegistry,
   type ResearchGrantRegistry,
 } from "./researchGrantRegistry.js";
@@ -105,6 +111,34 @@ interface ResolverRunRecord extends ProductionRuntimeRunRecord {
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
 }
 
+/** The two server-level #2387 research stores threaded together through the run composition. */
+interface ResearchComposition {
+  readonly grants: ResearchGrantRegistry;
+  readonly pending: PendingResearchApprovals;
+}
+
+/** Wraps the manager's approval issuance with the #2387 research grant minting hook. */
+function researchIssuingApprovalAuthority(
+  manager: CodingRuntimeManager,
+  research: ResearchComposition,
+  now: () => Date,
+): QualifiedProductionCodingRuntime["approvalAuthority"] {
+  return {
+    issue: (request): ReturnType<CodingRuntimeManager["issueApproval"]> => {
+      const issued = manager.issueApproval(request);
+      if (issued.ok && request.actionKind === "research") {
+        registerApprovedResearchGrant(
+          { pending: research.pending, registry: research.grants, now },
+          request,
+          issued.approvalDigest,
+          issued.expiresAtMs,
+        );
+      }
+      return issued;
+    },
+  };
+}
+
 export function createProductionCodingRuntimeResolver(
   input: ProductionCodingRuntimeResolverInput,
 ): ProductionCodingRuntimeResolver {
@@ -138,17 +172,23 @@ function composeRuntime(
   // facade (which the egress port reads), the revoke route, and revoke-before-terminate, so a grant
   // never outlives its run and revocation reaches the parent and every child at once.
   const researchGrants = createResearchGrantRegistry();
+  // Transient URL retention between "the model asked for this URL" and "the operator approved it".
+  // In memory only; invalidated with the run.
+  const pendingResearch = createPendingResearchApprovals();
   let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
+  const research: ResearchComposition = { grants: researchGrants, pending: pendingResearch };
   return {
     createManager: (onRuntimeEvent): CodingRuntimeManager => {
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(input, authority, runs, researchGrants, (event): void => {
+    mintLaunch: launchResolver(input, authority, runs, research, (event): void => {
       receiver(event);
     }),
-    approvalAuthority: { issue: (request) => manager.issueApproval(request) },
+    // The approved `research` action mints its grant here — the one seam that sees both the
+    // manager's approval issuance (approval digest + expiry) and the retained approved URL.
+    approvalAuthority: researchIssuingApprovalAuthority(manager, research, () => runtimeNow(input)),
     researchGrants,
     taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
     questionPort: createProductionRuntimeQuestionPort(runs),
@@ -164,7 +204,7 @@ function launchResolver(
   input: ProductionCodingRuntimeResolverInput,
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
-  researchGrants: ResearchGrantRegistry,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   return {
@@ -196,7 +236,7 @@ function launchResolver(
           context,
           minted,
           authority,
-          researchGrants,
+          research,
           onRuntimeEvent,
         );
         runs.set(request.runId, record);
@@ -239,7 +279,7 @@ function createRunRecord(
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
-  researchGrants: ResearchGrantRegistry,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): ResolverRunRecord {
   const controller = new AbortController();
@@ -255,7 +295,7 @@ function createRunRecord(
     authority,
     invocationRegistry,
     leases,
-    researchGrants,
+    research,
     onRuntimeEvent,
   );
   const backend = input.backend.createRun({
@@ -268,7 +308,7 @@ function createRunRecord(
       controller,
       invocationRegistry,
       leases,
-      researchGrants,
+      research,
       () => runtimeNow(input),
     ),
     onRuntimeEvent,
@@ -324,7 +364,7 @@ function createManagedToolFacade(
   authority: CodingRuntimeAuthorityService,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  researchGrants: ResearchGrantRegistry,
+  research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): CodingToolFacade {
   return createProductionManagedWorktreeToolFacade({
@@ -332,11 +372,18 @@ function createManagedToolFacade(
     authorityRef: minted.authorityRef,
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
-    researchGrantRegistry: researchGrants,
+    researchGrantRegistry: research.grants,
     // No proxy/CA is threaded from the model gateway here; research egress connects directly and
     // its dedicated config always denies loopback regardless. A proxied deployment would supply a
     // real accessor. Absent domains in the registry keep the egress port fail-closed.
     gatewayEgress: (): undefined => undefined,
+    requestResearchApproval: researchApprovalRequester(
+      input,
+      context,
+      minted.authorityRef.runId,
+      research.pending,
+      onRuntimeEvent,
+    ),
     authorityExpiresAt: context.expiresAt,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
@@ -347,6 +394,33 @@ function createManagedToolFacade(
     verificationRunner: input.verificationRunner,
     onRuntimeEvent,
   });
+}
+
+// Opens the #2387 approval loop for a research URL no grant covers: retain the URL transiently and
+// raise the content-free `network-egress` permission request. One ask per run at a time; a refused
+// or invalid ask emits nothing and the fetch stays failed closed.
+function researchApprovalRequester(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  runId: string,
+  pending: PendingResearchApprovals,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): (url: URL) => void {
+  let sequence = 0;
+  return (url: URL): void => {
+    const nowMs = runtimeNow(input).getTime();
+    const requestId = pending.request({
+      runId,
+      url,
+      taskId: context.taskId,
+      workspaceId: context.workspaceId,
+      nowMs,
+    });
+    if (requestId === undefined) return;
+    sequence += 1;
+    const event = buildResearchPermissionEvent({ runId, requestId, sequence, nowMs });
+    if (event !== undefined) onRuntimeEvent(event);
+  };
 }
 
 function runtimeAuthorityLive(
@@ -377,7 +451,7 @@ function authorityLifecycle(
   controller: AbortController,
   invocations: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  researchGrants: ResearchGrantRegistry,
+  research: ResearchComposition,
   now: () => Date,
 ): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
@@ -385,9 +459,10 @@ function authorityLifecycle(
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
-      // Drop every read-only research grant for the run so a terminate/revoke leaves no orphaned
-      // internet reach for the parent or any child (#2387).
-      researchGrants.invalidateRun(runId);
+      // Drop every read-only research grant AND any unanswered research ask for the run so a
+      // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
+      research.grants.invalidateRun(runId);
+      research.pending.invalidateRun(runId);
       return authority.revokeBeforeTerminate(runId);
     },
     abortInFlightActions: (runId) => invocations.revokeRun(runId) >= 0,

@@ -62,6 +62,7 @@ interface Harness {
   readonly charges: { grantId: string; bytes: number }[];
   readonly reserves: { grantId: string }[];
   readonly calls: FetchCall[];
+  readonly grantMissing: URL[];
 }
 
 interface HarnessConfig {
@@ -83,6 +84,7 @@ function harness(config: HarnessConfig): Harness {
   const charges: { grantId: string; bytes: number }[] = [];
   const reserves: { grantId: string }[] = [];
   const calls: FetchCall[] = [];
+  const grantMissing: URL[] = [];
   const queue = [...(config.responses ?? [])];
   const registry: ResearchGrantRegistry = {
     register: () => undefined,
@@ -114,9 +116,17 @@ function harness(config: HarnessConfig): Harness {
       if (next === undefined) return Promise.reject(new Error("no scripted response"));
       return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
     },
+    onGrantMissing: (url) => grantMissing.push(url),
     ...(config.portConfig === undefined ? {} : { config: config.portConfig }),
   };
-  return { execute: createResearchEgressPort(deps).execute, events, charges, reserves, calls };
+  return {
+    execute: createResearchEgressPort(deps).execute,
+    events,
+    charges,
+    reserves,
+    calls,
+    grantMissing,
+  };
 }
 
 function redirect(location: string, status = 302): Response {
@@ -546,5 +556,94 @@ describe("sanitizeVisibleText", () => {
   it("normalizes whitespace and strips control characters deterministically", () => {
     expect(sanitizeVisibleText("  react   hooks\t\n")).toBe("react hooks");
     expect(sanitizeVisibleText("react hooks")).toBe("react hooks");
+  });
+});
+
+describe("researchEgressPort grant-missing approval loop (#2387)", () => {
+  it("hands the URL to onGrantMissing and fails closed when no grant exists at all", async () => {
+    const test = harness({ grants: [] });
+
+    const result = await test.execute(
+      egressRequest("https://docs.example.com/guide"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toEqual({ status: "failed" });
+    expect(test.grantMissing.map((url) => url.toString())).toEqual([
+      "https://docs.example.com/guide",
+    ]);
+    expect(test.calls).toHaveLength(0);
+    expect(test.events).toHaveLength(0);
+  });
+
+  it("hands the URL to onGrantMissing when no grant covers the requested host", async () => {
+    const test = harness({ grants: [makeGrant({ domains: ["other.example.net"] })] });
+
+    const result = await test.execute(
+      egressRequest("https://docs.example.com/"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toEqual({ status: "failed" });
+    expect(test.grantMissing).toHaveLength(1);
+    expect(test.calls).toHaveLength(0);
+  });
+
+  it("never opens the approval loop for a malformed or non-https target", async () => {
+    const test = harness({ grants: [] });
+
+    for (const target of ["http://docs.example.com/", "not-a-url", "https://u:p@x.example/"]) {
+      expect(await test.execute(egressRequest(target), undefined, LIVE_GUARD)).toEqual({
+        status: "failed",
+      });
+    }
+
+    expect(test.grantMissing).toHaveLength(0);
+  });
+});
+
+describe("researchEgressPort binding-aware grant selection (#2387)", () => {
+  const digestFor = (path: string, query = ""): string =>
+    sha256Hex(sanitizeVisibleText(`${path} ${query}`));
+
+  it("selects the grant whose bound request line admits this request among same-host grants", async () => {
+    const first = makeGrant({ grantId: "grant-a", queryTextDigest: digestFor("/a") });
+    const second = makeGrant({ grantId: "grant-b", queryTextDigest: digestFor("/b") });
+    const test = harness({ grants: [first, second], responses: [ok("b-page"), ok("a-page")] });
+
+    const forB = await test.execute(
+      egressRequest("https://docs.example.com/b"),
+      undefined,
+      LIVE_GUARD,
+    );
+    const forA = await test.execute(
+      egressRequest("https://docs.example.com/a"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(forB).toMatchObject({ status: "completed" });
+    expect(forA).toMatchObject({ status: "completed" });
+    expect(test.charges.map(({ grantId }) => grantId)).toEqual(["grant-b", "grant-a"]);
+  });
+
+  it("still fails closed with an audited denial when no same-host grant binds the request line", async () => {
+    const test = harness({
+      grants: [makeGrant({ grantId: "grant-a", queryTextDigest: digestFor("/a") })],
+    });
+
+    const result = await test.execute(
+      egressRequest("https://docs.example.com/other"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toEqual({ status: "failed" });
+    expect(test.events).toHaveLength(1);
+    expect(test.events[0]?.auxiliaryOutcome).toBe("denied");
+    expect(test.grantMissing).toHaveLength(0);
+    expect(test.calls).toHaveLength(0);
   });
 });

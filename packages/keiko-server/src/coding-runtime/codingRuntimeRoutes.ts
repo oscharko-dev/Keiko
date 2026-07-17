@@ -286,6 +286,19 @@ export function handleCodingRuntimeResume(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
 }
 
+// Revoking the #2387 internet research grant drops it for the parent run and every child in one
+// revision bump; the response is the revision-bumped, grant-absent snapshot. A stale revision or a
+// grant id the server does not hold fails closed as invalid intent.
+export function handleCodingRuntimeResearchRevoke(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
+}
+
 // Inline follow-up: a drafted message is admitted while the run is running or paused; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
 // admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
@@ -452,6 +465,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
     handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/research/revoke",
+    handler: handleCodingRuntimeResearchRevoke,
   },
   {
     method: "POST",

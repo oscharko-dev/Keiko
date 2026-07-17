@@ -770,10 +770,18 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
+function toolDescription(action: "read" | "edit" | "verification" | "egress"): string {
+  if (action === "read") return "Read a bounded repository text file through Keiko governance.";
+  if (action === "egress") {
+    return "Fetch one approved public https URL through governed read-only research (#2387).";
+  }
+  return "Submit a bounded changeset through Keiko governance.";
+}
+
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
 function toolSource(
-  action: "read" | "edit" | "verification",
-  argument: "relativePath" | "changeset" | "verifierId",
+  action: "read" | "edit" | "verification" | "egress",
+  argument: "relativePath" | "changeset" | "verifierId" | "target",
   inputSchema: Readonly<Record<string, unknown>>,
 ): string {
   return [
@@ -785,12 +793,12 @@ function toolSource(
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
     '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
-    '  if (action !== "read" || value.status !== "completed") return true;',
+    '  if ((action !== "read" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  return !!read && typeof read === "object" && !Array.isArray(read) && typeof read.text === "string" && Number.isSafeInteger(read.byteCount) && /^[a-f0-9]{64}$/.test(read.digest);',
     "}",
     "export default {",
-    `  description: ${JSON.stringify(action === "read" ? "Read a bounded repository text file through Keiko governance." : "Submit a bounded changeset through Keiko governance.")},`,
+    `  description: ${JSON.stringify(toolDescription(action))},`,
     `  args: { ${argument}: inputSchema },`,
     "  async execute(args, context) {",
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",

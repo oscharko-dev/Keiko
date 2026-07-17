@@ -523,6 +523,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
   keiko_workspace_read: { action: "read", argument: "relativePath" },
   keiko_changeset_edit: { action: "edit", argument: "changeset" },
   keiko_verification: { action: "verification", argument: "verifierId" },
+  keiko_research_fetch: { action: "egress", argument: "target" },
 };
 
 /**

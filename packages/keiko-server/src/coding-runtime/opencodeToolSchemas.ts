@@ -89,11 +89,27 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId"],
 } as const;
 
+// #2387 read-only public research: one exact https URL per call. The server side enforces the real
+// policy (grant, host allowlist, request-line binding, budgets); this schema only bounds the shape.
+const RESEARCH_FETCH_SCHEMA = {
+  type: "object",
+  properties: {
+    target: {
+      type: "string",
+      minLength: 9,
+      maxLength: 512,
+      pattern: "^https://",
+    },
+  },
+  required: ["target"],
+} as const;
+
 export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
+  { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
 ] as const;
 
 export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.map(
@@ -118,6 +134,12 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     action: "verification",
     argument: "verifierId",
     inputSchema: VERIFICATION_SCHEMA.properties.verifierId,
+  },
+  {
+    name: "keiko_research_fetch",
+    action: "egress",
+    argument: "target",
+    inputSchema: RESEARCH_FETCH_SCHEMA.properties.target,
   },
 ] as const;
 

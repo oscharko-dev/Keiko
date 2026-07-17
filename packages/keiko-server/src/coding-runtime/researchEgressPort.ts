@@ -90,6 +90,10 @@ export interface ResearchEgressPortDeps {
   // `denyLoopback`. Resolved per request so runtime config updates are honored immediately.
   readonly gatewayEgress: () => OutboundHttpEgressConfig | undefined;
   readonly emitEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  // Invoked when no live grant covers the requested host (#2387 approval loop): the composition
+  // raises a `network-egress` permission request for the exact URL so an operator approval can mint
+  // the grant. The fetch itself still fails closed on this call — the model retries after approval.
+  readonly onGrantMissing?: ((url: URL) => void) | undefined;
   readonly now?: (() => number) | undefined;
   readonly fetchImpl?: ResearchFetch | undefined;
   readonly config?: ResearchEgressPortConfig | undefined;
@@ -134,6 +138,15 @@ export function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/**
+ * The canonical request-line digest for a research URL: `sha256Hex(sanitizeVisibleText(<decoded
+ * pathname> + " " + <decoded query>))`. The grant-minting side (approval issuance) and the
+ * executor's request-line binding MUST both call this function so an approved URL always verifies.
+ */
+export function researchRequestLineDigest(url: URL): string {
+  return sha256Hex(sanitizeVisibleText(decodeRequestLine(url)));
+}
+
 // ─── Executor ───────────────────────────────────────────────────────────────────────
 
 export function createResearchEgressPort(
@@ -173,9 +186,12 @@ function runResearchEgress(
   if (url === undefined) return failedResult();
   const runId = ctx.deps.resolveRunId();
   const grants = ctx.deps.registry.activeGrants(runId, ctx.now());
-  if (grants.length === 0) return failedResult();
-  const grant = grantForHost(grants, url);
-  if (grant === undefined) return failedResult();
+  const grant = grantForRequest(grants, url);
+  if (grant === undefined) {
+    // No live grant covers this host: hand the URL to the approval loop and fail this call closed.
+    ctx.deps.onGrantMissing?.(url);
+    return failedResult();
+  }
   if (!requestLineBindingOk(url, grant)) return denyResearch(ctx, runId, "denied");
   const cfg = researchEgressConfig(ctx.deps.gatewayEgress());
   return followResearch(ctx, url, { grant, runId, cfg, signal, guard });
@@ -228,12 +244,17 @@ function isAllowedResearchUrlShape(url: URL): boolean {
   return url.protocol === "https:" && url.username === "" && url.password === "" && url.port === "";
 }
 
-function grantForHost(
+// Selects the grant for a request binding-aware: among the grants covering the host, prefer one
+// whose bound request-line digest admits THIS request line, so several per-URL approvals on the
+// same host coexist (each approval mints its own grant). When none binds, the first host-covering
+// grant is returned so the subsequent binding check fails closed with an audited denial.
+function grantForRequest(
   grants: readonly ResolvedResearchGrant[],
   url: URL,
 ): ResolvedResearchGrant | undefined {
   const host = normalizeResearchHost(url.hostname);
-  return grants.find((grant) => grant.domains.includes(host));
+  const covering = grants.filter((grant) => grant.domains.includes(host));
+  return covering.find((grant) => requestLineBindingOk(url, grant)) ?? covering[0];
 }
 
 // A root path ("/" or "") with an empty query carries no repository-derived text and is always
@@ -245,8 +266,7 @@ function grantForHost(
 function requestLineBindingOk(url: URL, grant: ResolvedResearchGrant): boolean {
   if (isRootResearchPath(url.pathname) && url.search === "") return true;
   if (grant.queryTextDigest === undefined) return false;
-  const recomputed = sha256Hex(sanitizeVisibleText(decodeRequestLine(url)));
-  return digestsEqual(recomputed, grant.queryTextDigest);
+  return digestsEqual(researchRequestLineDigest(url), grant.queryTextDigest);
 }
 
 function isRootResearchPath(pathname: string): boolean {

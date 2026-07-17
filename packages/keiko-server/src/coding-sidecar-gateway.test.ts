@@ -243,11 +243,25 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId"],
 } as const;
 
+const RESEARCH_FETCH_SCHEMA = {
+  type: "object",
+  properties: {
+    target: {
+      type: "string",
+      minLength: 9,
+      maxLength: 512,
+      pattern: "^https://",
+    },
+  },
+  required: ["target"],
+} as const;
+
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
+  { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
 ] as const;
 
 function stableJson(value: unknown): string {
@@ -360,6 +374,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
       ["keiko_changeset_edit", "720fa492da7b2ff3cb0f6c3c19e1cf68d714d850207d1c614c37c8b6499c0089"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+      ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -559,6 +574,14 @@ describe("coding-sidecar gateway", () => {
             parameters: {
               required: ["verifierId"],
               properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_research_fetch",
+            parameters: {
+              required: ["target"],
+              properties: { ...RESEARCH_FETCH_SCHEMA.properties },
               type: "object",
             },
           },

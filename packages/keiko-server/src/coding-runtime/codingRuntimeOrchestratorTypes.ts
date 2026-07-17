@@ -17,6 +17,7 @@ import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAgg
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 
 export interface CodingRuntimeLaunchResolver {
   /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
@@ -50,6 +51,12 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly serverPrincipal: () => string | undefined;
+  /**
+   * Server-level read-only research grant registry (#2387). When present, the snapshot projection
+   * carries the run's live grant and the revoke operation drops it; when absent (no qualified
+   * runtime host), the snapshot never shows a grant and revoke fails closed.
+   */
+  readonly researchGrants?: ResearchGrantRegistry | undefined;
   readonly now?: () => Date;
   readonly newRunId?: () => string;
 }

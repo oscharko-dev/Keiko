@@ -160,13 +160,19 @@ function wipeAndReturn<T extends CodingToolResult>(payload: Buffer, result: T): 
 function project(request: CodingToolActionRequest, value: unknown): CodingToolResult {
   if (!isRecord(value) || (value.outcome !== "completed" && value.outcome !== "failed"))
     return projected("failed");
-  const read =
-    request.action === "read" && value.outcome === "completed"
-      ? projectRead(value.read)
-      : undefined;
+  const read = value.outcome === "completed" ? projectPayload(request, value.read) : undefined;
   return read === undefined
     ? projected(value.outcome)
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+}
+
+function projectPayload(
+  request: CodingToolActionRequest,
+  value: unknown,
+): { readonly text: string; readonly byteCount: number; readonly digest: string } | undefined {
+  if (request.action === "read") return projectRead(value);
+  if (request.action === "egress") return projectEgressRead(value);
+  return undefined;
 }
 
 function projectRead(
@@ -177,6 +183,26 @@ function projectRead(
   if (bytes.length > CODING_TOOL_MAX_READ_BYTES || !isUtf8(bytes)) return undefined;
   return {
     text: value.text,
+    byteCount: bytes.length,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
+// A research page (#2387) may exceed the IPC read ceiling; unlike a repository read it is
+// truncated at the last complete UTF-8 boundary instead of dropped, so the model always receives
+// the bounded head of the page it was granted. Digest and byte count cover the returned bytes.
+function projectEgressRead(
+  value: unknown,
+): { readonly text: string; readonly byteCount: number; readonly digest: string } | undefined {
+  if (!isRecord(value) || typeof value.text !== "string") return undefined;
+  let bytes: Buffer = Buffer.from(value.text, "utf8");
+  if (bytes.length > CODING_TOOL_MAX_READ_BYTES) {
+    bytes = bytes.subarray(0, CODING_TOOL_MAX_READ_BYTES);
+    while (bytes.length > 0 && !isUtf8(bytes)) bytes = bytes.subarray(0, bytes.length - 1);
+  }
+  if (!isUtf8(bytes)) return undefined;
+  return {
+    text: bytes.toString("utf8"),
     byteCount: bytes.length,
     digest: createHash("sha256").update(bytes).digest("hex"),
   };

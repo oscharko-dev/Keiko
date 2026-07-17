@@ -171,6 +171,12 @@ export interface CodingRuntimeApprovalIssueRequest {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly approvedByUserId: string;
   readonly ttlMs?: number | undefined;
+  /**
+   * The runtime revision the operator's decision was bound to (#2387). Informational for
+   * downstream governed-action projections; deliberately NOT part of the approval scope digest,
+   * so issue/consume binding semantics are unchanged.
+   */
+  readonly boundRevision?: number | undefined;
 }
 
 export type CodingRuntimeApprovalIssueResult =

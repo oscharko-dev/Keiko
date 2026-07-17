@@ -42,7 +42,11 @@ export function createCodingToolGovernedDelegate(
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const result = await dispatch(ports, request, signal, mutationGuard);
-      return request.action === "read" && result.status === "completed" && result.read !== undefined
+      // Repository reads AND research fetches (#2387) carry their governed payload back; every
+      // other action returns only the bare outcome.
+      return (request.action === "read" || request.action === "egress") &&
+        result.status === "completed" &&
+        result.read !== undefined
         ? { outcome: "completed", read: result.read }
         : { outcome: result.status };
     },

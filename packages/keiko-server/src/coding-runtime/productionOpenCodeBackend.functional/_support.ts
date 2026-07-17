@@ -353,7 +353,12 @@ function normal(): NormalizedResponse {
 let scriptedToolCallSequence = 0;
 
 function tool(
-  name: "keiko_workspace_read" | "keiko_changeset_edit" | "keiko_verification" | "question",
+  name:
+    | "keiko_workspace_read"
+    | "keiko_changeset_edit"
+    | "keiko_verification"
+    | "keiko_research_fetch"
+    | "question",
   args: Record<string, unknown>,
 ): NormalizedResponse {
   scriptedToolCallSequence += 1;

@@ -96,6 +96,9 @@ export function createCodingRuntimeControlPlane(
     taskDispatcher: input.runtimeHost?.taskDispatcher ?? unavailableTaskDispatcher(),
     questionPort: input.runtimeHost?.questionPort ?? unavailableQuestionPort(),
     serverPrincipal: input.serverPrincipal,
+    ...(input.runtimeHost?.researchGrants
+      ? { researchGrants: input.runtimeHost.researchGrants }
+      : {}),
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
     void orchestrator.ingest(event);
