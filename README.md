@@ -18,7 +18,7 @@
   <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml/badge.svg?branch=dev"></a>
   <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
   <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
-  <img alt="SonarCloud" src="https://sonarcloud.io/images/project_badges/sonarcloud-highlight.svg">
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
 </p>
 
 <p align="center">
