@@ -4,13 +4,12 @@
 // re-verifies fail-closed at every start. Dev checkouts only; packaged installs never use this.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
-import { hashDirectoryTree } from "./portable-runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STAGED_ROOT = ".portable-sidecar-payloads";
@@ -31,9 +30,33 @@ export function devLaneManifestDocument({ target, helperSha256, helperSizeBytes,
       sha256: helperSha256,
       sizeBytes: helperSizeBytes,
       sourceCommit,
-      sourceTreeSha256: hashDirectoryTree(join(repoRoot, HELPER_SOURCE_DIR)),
+      sourceTreeSha256: hashHelperSourceTree(join(repoRoot, HELPER_SOURCE_DIR)),
     },
   };
+}
+
+// Server discovery re-derives this digest in a different process; ordering is plain code-unit
+// comparison so no locale/ICU collation can diverge between staging and discovery. Mirrors
+// `hashHelperSourceTree` in devLanePortableCodingRuntime.ts.
+function hashHelperSourceTree(root) {
+  const files = listFilesSorted(root);
+  const hash = createHash("sha256");
+  for (const file of files) {
+    const rel = relative(root, file).split(sep).join("/");
+    const digest = createHash("sha256").update(readFileSync(file)).digest("hex");
+    hash.update(`${rel}\0${digest}\0`);
+  }
+  return hash.digest("hex");
+}
+
+function listFilesSorted(root) {
+  const out = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) out.push(...listFilesSorted(full));
+    else if (entry.isFile()) out.push(resolve(full));
+  }
+  return out.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 async function buildHelper(target, helperPath) {

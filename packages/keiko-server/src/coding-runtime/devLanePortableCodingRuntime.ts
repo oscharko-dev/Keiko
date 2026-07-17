@@ -302,7 +302,7 @@ function verifiedSecureRead(
   if (
     sha256File(helperPath) !== manifest.sha256 ||
     helperStat.size !== manifest.sizeBytes ||
-    hashDirectoryTree(join(checkoutRoot, HELPER_SOURCE_DIR)) !== manifest.sourceTreeSha256
+    hashHelperSourceTree(join(checkoutRoot, HELPER_SOURCE_DIR)) !== manifest.sourceTreeSha256
   ) {
     return { ok: false, refusal: "secure-read-helper-stale" };
   }
@@ -403,24 +403,51 @@ function digestText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/**
+ * In-process payload digest. Mirrors `inspectStagedSidecarPayload`'s tree walk — including its
+ * `localeCompare` ordering — because the launch-time re-check recomputes this digest in the same
+ * server process and must agree byte-for-byte with the discovery-recorded summary.
+ */
 function hashDirectoryTree(root: string): string {
+  return hashTree(root, (left, right) => left.localeCompare(right));
+}
+
+/**
+ * Cross-process helper-source digest. The staging script records `sourceTreeSha256` in one
+ * process and discovery re-derives it in another; a locale-dependent collation could diverge
+ * between those processes and report a false stale helper, so this ordering is plain
+ * code-unit comparison — locale-independent by construction. The staging script mirrors it.
+ */
+function hashHelperSourceTree(root: string): string {
+  return hashTree(root, compareCodeUnits);
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+function hashTree(root: string, order: (left: string, right: string) => number): string {
   const hash = createHash("sha256");
-  for (const file of listFiles(root)) {
+  for (const file of listFiles(root, order)) {
     const rel = relative(root, file).split(sep).join("/");
     hash.update(`${rel}\0${sha256File(file)}\0`);
   }
   return hash.digest("hex");
 }
 
-function listFiles(root: string): readonly string[] {
+function listFiles(
+  root: string,
+  order: (left: string, right: string) => number,
+): readonly string[] {
   const out: string[] = [];
   if (!existsSync(root)) return out;
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const full = join(root, entry.name);
-    if (entry.isDirectory()) out.push(...listFiles(full));
+    if (entry.isDirectory()) out.push(...listFiles(full, order));
     else if (entry.isFile()) out.push(resolve(full));
   }
-  return out.sort((left, right) => left.localeCompare(right));
+  return out.sort(order);
 }
 
 function readRecord(path: string): Record<string, unknown> | undefined {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -152,6 +153,45 @@ describe("dev-lane OpenCode discovery", () => {
     runtime.releaseApproval = { redistribution: { status: "revoked" } };
     writeFileSync(revoked.paths.catalog, JSON.stringify(catalog));
     expectRefusal(discover(revoked), "payload-unapproved");
+  });
+
+  // Gitar finding (#2475 review): the helper source-tree digest crosses a process boundary
+  // (staging writes it, discovery re-derives it), so its file ordering must be plain code-unit
+  // comparison — never locale collation. "B.c" and "a.c" order differently under ICU collation
+  // ("a.c" < "B.c") than by code units ("B.c" < "a.c"), so a locale-ordered digest is refused.
+  it("derives the helper source digest with locale-independent ordering", () => {
+    const staged = fixture();
+    const first = join(staged.paths.helperSourceDir, "B.c");
+    const second = join(staged.paths.helperSourceDir, "a.c");
+    writeFileSync(first, "/* B */\n");
+    writeFileSync(second, "/* a */\n");
+    const entries = ["B.c", "a.c", "secure_workspace_read.c"].map(
+      (name) =>
+        [
+          name,
+          createHash("sha256")
+            .update(readFileSync(join(staged.paths.helperSourceDir, name)))
+            .digest("hex"),
+        ] as const,
+    );
+    const digestFor = (order: readonly string[]): string => {
+      const hash = createHash("sha256");
+      for (const name of order) {
+        const digest = entries.find(([entry]) => entry === name)?.[1] ?? "";
+        hash.update(`${name}\0${digest}\0`);
+      }
+      return hash.digest("hex");
+    };
+    const manifest = JSON.parse(readFileSync(staged.paths.helperManifest, "utf8")) as {
+      helper: { sourceTreeSha256: string };
+    };
+    manifest.helper.sourceTreeSha256 = digestFor(["B.c", "a.c", "secure_workspace_read.c"]);
+    writeFileSync(staged.paths.helperManifest, JSON.stringify(manifest));
+    expect(discover(staged).outcome).toBe("activated");
+
+    manifest.helper.sourceTreeSha256 = digestFor(["a.c", "B.c", "secure_workspace_read.c"]);
+    writeFileSync(staged.paths.helperManifest, JSON.stringify(manifest));
+    expectRefusal(discover(staged), "secure-read-helper-stale");
   });
 
   it("refuses a missing or stale secure-read helper with the precise reason", () => {

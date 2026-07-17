@@ -23,18 +23,22 @@ const roots: string[] = [];
 interface FakeChild extends DevLaneRuntimeChildProcess {
   readonly emitter: EventEmitter;
   readonly kills: NodeJS.Signals[];
+  /** Marks the synchronous exit fact without dispatching the async exit event. */
+  reapWithoutEvent(): void;
   settle(code: number | null): void;
 }
 
 function fakeChild(pid: number | undefined): FakeChild {
   const emitter = new EventEmitter();
   const kills: NodeJS.Signals[] = [];
+  let reaped = false;
   return {
     pid,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     emitter,
     kills,
+    settled: (): boolean => reaped,
     kill: (signal): boolean => {
       kills.push(signal);
       return true;
@@ -45,7 +49,11 @@ function fakeChild(pid: number | undefined): FakeChild {
     onError: (listener): void => {
       emitter.once("error", listener);
     },
+    reapWithoutEvent: (): void => {
+      reaped = true;
+    },
     settle: (code): void => {
+      reaped = true;
       emitter.emit("exit", code);
     },
   };
@@ -165,6 +173,29 @@ describe("dev-lane runtime process backend", () => {
     child.settle(null);
     backend.signalTree(tree, "force");
     expect(child.kills).toEqual(["SIGKILL"]);
+  });
+
+  // Gitar finding (#2475 review): once the OS has reaped the child its process-group id may be
+  // reused; the synchronous exit fact must suppress every signal even before Node dispatches
+  // the async exit event.
+  it("never signals a group whose leader is already reaped but not yet event-dispatched", () => {
+    const fixture = stageFixture();
+    const child = fakeChild(4711);
+    const groupKills: NodeJS.Signals[] = [];
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      spawnRuntime: () => child,
+      killProcessGroup: (_pid, signal) => {
+        groupKills.push(signal);
+      },
+    });
+    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    child.reapWithoutEvent();
+    backend.signalTree(tree, "force");
+    backend.signalTree(tree, "graceful");
+    expect(groupKills).toEqual([]);
+    expect(child.kills).toEqual([]);
   });
 
   it("signals the direct child when the platform reports no pid", () => {

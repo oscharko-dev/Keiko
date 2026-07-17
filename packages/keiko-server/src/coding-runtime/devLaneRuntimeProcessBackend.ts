@@ -34,6 +34,8 @@ export interface DevLaneRuntimeChildProcess {
   readonly pid: number | undefined;
   readonly stdout: Readable;
   readonly stderr: Readable;
+  /** Synchronous exit fact (Node sets exitCode/signalCode before the async exit event fires). */
+  settled(): boolean;
   kill(signal: NodeJS.Signals): boolean;
   onExit(listener: (code: number | null) => void): void;
   onError(listener: () => void): void;
@@ -104,7 +106,11 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
 
   public signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void {
     const owned = this.ownedTree(tree);
-    if (owned.exited) return;
+    // `settled()` is the synchronous exit fact: once the runtime has been reaped its process
+    // group id may already be reused, and a group kill would target an unrelated process tree.
+    // The remaining OS-level reuse window before Node observes the exit is part of the
+    // documented best-effort dev-lane posture (ADR-0140 D3).
+    if (owned.exited || owned.child.settled()) return;
     const posixSignal: NodeJS.Signals = signal === "graceful" ? "SIGTERM" : "SIGKILL";
     if (owned.child.pid !== undefined) {
       try {
@@ -188,6 +194,7 @@ function spawnDevLaneChild(
     pid: child.pid,
     stdout: child.stdout,
     stderr: child.stderr,
+    settled: (): boolean => child.exitCode !== null || child.signalCode !== null,
     kill: (signal): boolean => child.kill(signal),
     onExit: (listener): void => {
       child.once("exit", listener);
