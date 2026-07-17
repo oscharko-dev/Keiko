@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STAGED_ROOT = ".portable-sidecar-payloads";
@@ -88,7 +89,9 @@ async function stageDevCodingRuntime(argv) {
     target,
     helperSha256: createHash("sha256").update(helperBytes).digest("hex"),
     helperSizeBytes: statSync(helperPath).size,
-    sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+    // Resolve git to an absolute, non-writable trusted path (no bare-name PATH lookup) — the
+    // repo-wide convention for script git invocations.
+    sourceCommit: execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf8",
     }).trim(),
