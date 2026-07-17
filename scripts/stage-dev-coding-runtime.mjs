@@ -16,6 +16,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STAGED_ROOT = ".portable-sidecar-payloads";
 const HELPER_RELATIVE = "native/keiko-secure-workspace-read";
 const HELPER_SOURCE_DIR = "native/secure-workspace-read";
+const MANIFEST_FILE = "dev-lane-manifest.json";
 
 export function hostDevLaneTarget(platform = process.platform, arch = process.arch) {
   if (platform !== "darwin") return undefined;
@@ -23,7 +24,10 @@ export function hostDevLaneTarget(platform = process.platform, arch = process.ar
   return arch === "x64" ? "macos-x64" : undefined;
 }
 
-export function devLaneManifestDocument({ target, helperSha256, helperSizeBytes, sourceCommit }) {
+export function devLaneManifestDocument(
+  { target, helperSha256, helperSizeBytes, sourceCommit },
+  root = repoRoot,
+) {
   return {
     schemaVersion: 1,
     target,
@@ -31,7 +35,7 @@ export function devLaneManifestDocument({ target, helperSha256, helperSizeBytes,
       sha256: helperSha256,
       sizeBytes: helperSizeBytes,
       sourceCommit,
-      sourceTreeSha256: hashHelperSourceTree(join(repoRoot, HELPER_SOURCE_DIR)),
+      sourceTreeSha256: hashHelperSourceTree(join(root, HELPER_SOURCE_DIR)),
     },
   };
 }
@@ -39,10 +43,9 @@ export function devLaneManifestDocument({ target, helperSha256, helperSizeBytes,
 // Server discovery re-derives this digest in a different process; ordering is plain code-unit
 // comparison so no locale/ICU collation can diverge between staging and discovery. Mirrors
 // `hashHelperSourceTree` in devLanePortableCodingRuntime.ts.
-function hashHelperSourceTree(root) {
-  const files = listFilesSorted(root);
+export function hashHelperSourceTree(root) {
   const hash = createHash("sha256");
-  for (const file of files) {
+  for (const file of listFilesSorted(root)) {
     const rel = relative(root, file).split(sep).join("/");
     const digest = createHash("sha256").update(readFileSync(file)).digest("hex");
     hash.update(`${rel}\0${digest}\0`);
@@ -50,67 +53,99 @@ function hashHelperSourceTree(root) {
   return hash.digest("hex");
 }
 
-function listFilesSorted(root) {
+export function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+export function listFilesSorted(root) {
   const out = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const full = join(root, entry.name);
     if (entry.isDirectory()) out.push(...listFilesSorted(full));
     else if (entry.isFile()) out.push(resolve(full));
   }
-  return out.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  return out.sort(compareCodeUnits);
 }
 
-async function buildHelper(target, helperPath) {
-  const buildScript = join(repoRoot, "scripts", "build-secure-workspace-read.mjs");
-  const status = await runSecureWorkspaceReadBuild({
-    argv: [process.execPath, buildScript, target, helperPath],
-  });
+async function buildHelper(target, helperPath, root, runBuild) {
+  const buildScript = join(root, "scripts", "build-secure-workspace-read.mjs");
+  const status = await runBuild({ argv: [process.execPath, buildScript, target, helperPath] });
   if (status !== 0) {
     throw new Error(`secure-workspace-read build failed with status ${String(status)}`);
   }
 }
 
-async function stageDevCodingRuntime(argv) {
-  const target = hostDevLaneTarget();
+export function resolveStageDeps(deps) {
+  return {
+    root: deps.root ?? repoRoot,
+    prepareSidecars: deps.prepareSidecars ?? prepareApprovedSidecarPayloads,
+    runBuild: deps.runBuild ?? runSecureWorkspaceReadBuild,
+    resolveGit: deps.resolveGit ?? (() => resolveHostExecutable("git")),
+    exec: deps.exec ?? execFileSync,
+    log: deps.log ?? console.log,
+    target:
+      deps.target ??
+      hostDevLaneTarget(deps.platform ?? process.platform, deps.arch ?? process.arch),
+  };
+}
+
+function stagedManifest({ target, helperPath, root, exec, resolveGit }) {
+  return devLaneManifestDocument(
+    {
+      target,
+      helperSha256: createHash("sha256").update(readFileSync(helperPath)).digest("hex"),
+      helperSizeBytes: statSync(helperPath).size,
+      // Resolve git to an absolute, non-writable trusted path (no bare-name PATH lookup) — the
+      // repo-wide convention for script git invocations.
+      sourceCommit: exec(resolveGit(), ["rev-parse", "HEAD"], {
+        cwd: root,
+        encoding: "utf8",
+      }).trim(),
+    },
+    root,
+  );
+}
+
+/**
+ * Stages the dev lane. The I/O boundary is injectable so the orchestration is testable on any
+ * host; production invocation supplies the real payload preparer, native builder, and git.
+ */
+export async function stageDevCodingRuntime(argv, deps = {}) {
+  const { root, prepareSidecars, runBuild, resolveGit, exec, log, target } = resolveStageDeps(deps);
   if (target === undefined) {
     throw new Error(
       "The coding-runtime dev lane supports macOS (arm64/x64) checkouts only; " +
         `this host is ${process.platform}/${process.arch}.`,
     );
   }
-  console.log(`[dev-lane] preparing approved sidecar payload for ${target} …`);
-  await prepareApprovedSidecarPayloads(["--target", target, ...argv]);
-  const stagedTargetRoot = join(repoRoot, STAGED_ROOT, target);
+  log(`[dev-lane] preparing approved sidecar payload for ${target} …`);
+  await prepareSidecars(["--target", target, ...argv]);
+  const stagedTargetRoot = join(root, STAGED_ROOT, target);
   const helperPath = join(stagedTargetRoot, HELPER_RELATIVE);
-  console.log("[dev-lane] building the secure-workspace-read helper …");
-  await buildHelper(target, helperPath);
-  const helperBytes = readFileSync(helperPath);
-  const manifest = devLaneManifestDocument({
-    target,
-    helperSha256: createHash("sha256").update(helperBytes).digest("hex"),
-    helperSizeBytes: statSync(helperPath).size,
-    // Resolve git to an absolute, non-writable trusted path (no bare-name PATH lookup) — the
-    // repo-wide convention for script git invocations.
-    sourceCommit: execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    }).trim(),
-  });
-  writeFileSync(
-    join(stagedTargetRoot, "dev-lane-manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
-  console.log(`[dev-lane] staged ${target} under ${join(STAGED_ROOT, target)}.`);
-  console.log(
+  log("[dev-lane] building the secure-workspace-read helper …");
+  await buildHelper(target, helperPath, root, runBuild);
+  const manifest = stagedManifest({ target, helperPath, root, exec, resolveGit });
+  const manifestPath = join(stagedTargetRoot, MANIFEST_FILE);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`[dev-lane] staged ${target} under ${join(STAGED_ROOT, target)}.`);
+  log(
     "[dev-lane] start the dev server with the lane enabled:\n" +
       "  KEIKO_CODING_RUNTIME_DEV_LANE=1 npm run dev:start\n" +
       "See docs/coding-runtime/dev-lane.md for the full posture and verification notes.",
   );
+  return manifestPath;
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  stageDevCodingRuntime(process.argv.slice(2)).catch((error) => {
+export function isDirectInvocation(argv1 = process.argv[1], moduleUrl = import.meta.url) {
+  return argv1 !== undefined && resolve(argv1) === fileURLToPath(moduleUrl);
+}
+
+if (isDirectInvocation()) {
+  try {
+    await stageDevCodingRuntime(process.argv.slice(2));
+  } catch (error) {
     console.error(`[dev-lane] staging failed: ${error instanceof Error ? error.message : error}`);
     process.exitCode = 1;
-  });
+  }
 }
