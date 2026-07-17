@@ -213,6 +213,26 @@ async function monacoClickPoint(line: Locator, textOffset: number): Promise<Mona
   }, textOffset);
 }
 
+// #2485: Monaco virtualizes view-lines, and under CI font metrics the target line can fall
+// entirely outside the rendered viewport (the element never appears, no matter the timeout).
+// When the line is absent, reveal the end of the buffer first, then wait with a bounded budget.
+async function revealLine(scope: Locator, line: Locator): Promise<void> {
+  try {
+    await expect(line).toBeVisible({ timeout: 20_000 });
+    return;
+  } catch {
+    // Fall through to an explicit reveal below: under CI font metrics the virtualized line can
+    // sit outside the rendered viewport entirely and never appear on its own.
+  }
+  await scope.locator(".monaco-editor").first().click();
+  await line.page().keyboard.press("ControlOrMeta+End");
+  const rendered = await scope.locator(".monaco-editor .view-lines .view-line").allInnerTexts();
+  await expect(
+    line,
+    `line still absent after the end-of-buffer reveal; rendered view-lines: ${JSON.stringify(rendered)}`,
+  ).toBeVisible({ timeout: 60_000 });
+}
+
 async function placeCursorOnSymbol(
   workspace: Locator,
   lineNeedle: string,
@@ -223,7 +243,7 @@ async function placeCursorOnSymbol(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  await revealLine(workspace, line);
   const text = await lineText(line);
   const offset = occurrenceOffset(text, symbol, occurrence);
   await line.click({
@@ -255,7 +275,7 @@ async function placeCursorOnSymbolWithKeyboard(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  await revealLine(pane, line);
   const offset = occurrenceOffset(await lineText(line), symbol, 0) + Math.floor(symbol.length / 2);
   await moveCursorFromLineStart(page, line, offset);
   const expectedLabel =
@@ -279,7 +299,7 @@ async function placeCursorAfterSymbolWithKeyboard(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  await revealLine(pane, line);
   const offset = occurrenceOffset(await lineText(line), symbol, 0) + symbol.length;
   await moveCursorFromLineStart(page, line, offset);
   await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(

@@ -40,7 +40,9 @@ const EVIDENCE = {
     requiredRoutes: [
       "/api/git/status",
       "/api/git/branches",
-      "/api/git/diff",
+      // #2485: the diff pane moved to the structured endpoint; the realigned #1575 spec
+      // intercepts and documents /api/git/diff/structured.
+      "/api/git/diff/structured",
       "/api/projects",
       "/api/git-delivery/staging/stage",
       "/api/git-delivery/staging/unstage",
