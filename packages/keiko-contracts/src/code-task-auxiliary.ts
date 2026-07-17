@@ -51,7 +51,12 @@ const CHILD_RUN_ID_PATTERN = /^chr_[A-Za-z0-9_-]{1,251}$/u;
 // IP literals and loopback names are rejected here so a grant can only ever name a public host; the
 // server still re-validates the resolved address at fetch time (SSRF defence in depth).
 const PUBLIC_DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$/u;
-const IP_LITERAL_PATTERN = /^(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[0-9a-f:]*:[0-9a-f:]*)$/u;
+// IPv4 dotted-quad only, with a fixed (non-backtracking) structure. An IPv6 literal contains ":",
+// which PUBLIC_DOMAIN_PATTERN (letters, digits, hyphen, dot only) already rejects before this check
+// runs, so no separate IPv6 alternative is needed here — and including one (`[0-9a-f:]*:[0-9a-f:]*`)
+// introduced a polynomial-time ReDoS on ":"-heavy input flagged by CodeQL. This pattern cannot
+// backtrack super-linearly.
+const IP_LITERAL_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u;
 const RESERVED_DOMAIN_NAMES = Object.freeze(["localhost", "localhost.localdomain"]);
 // Content-free bounded reason code (mirrors the code-task-governance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
