@@ -36,7 +36,7 @@ import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js"
 const MAX_READ_BYTES = 65_536;
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope";
+  mode: "productive" | "out-of-scope" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -56,6 +56,10 @@ export interface FunctionalRuntimeResolverInput {
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
+  /** #2387: opens the network-egress class so the research approval loop is reachable. */
+  readonly researchEgressEnabled?: boolean | undefined;
+  /** #2387 hermetic research transport; tests never touch the real network. */
+  readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
 }
 
 /**
@@ -75,7 +79,11 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
+      ...(input.researchEgressEnabled === undefined
+        ? {}
+        : { researchEgressEnabled: input.researchEgressEnabled }),
     },
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,
@@ -289,8 +297,27 @@ function workspace(root: string): WorkspaceInfo {
   };
 }
 
+/** The exact URL the #2387 research journey asks for; the request line binds the minted grant. */
+export const RESEARCH_JOURNEY_URL = "https://docs.example.org/guide/streams?topic=backpressure";
+
+// #2387 journey turns. The blocking `question` steps are the halt points that keep every governed
+// fetch inside a RUNNING run (a paused run's sticky ingest guard would drop the content-free
+// research events): step 0 asks for the URL (no grant → permission request, fetch fails closed),
+// step 1 blocks on a question until the operator has approved, step 2 performs the governed fetch
+// under the minted grant, step 3 ends turn 1; step 4 (turn 2, after the operator revoke) blocks
+// again, step 5 retries the fetch — the grant is gone, so a FRESH permission request is raised and
+// the fetch fails closed; step 6 ends the turn.
+function researchScriptedResponse(step: number): NormalizedResponse {
+  if (step === 0 || step === 2 || step === 5) {
+    return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
+  }
+  if (step === 1 || step === 4) return tool("question", question());
+  return normal();
+}
+
 export function scriptedResponse(script: ScriptState): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "research") return researchScriptedResponse(step);
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {

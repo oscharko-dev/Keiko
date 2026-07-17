@@ -20,7 +20,7 @@ import type {
   GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { createResearchEgressPort } from "./researchEgressPort.js";
+import { createResearchEgressPort, type ResearchFetch } from "./researchEgressPort.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import {
   createCodingToolReadEditPorts,
@@ -55,6 +55,8 @@ export interface ProductionManagedWorktreeToolInput {
   // Raises the #2387 approval ask for a research URL that no live grant covers. Optional: without
   // it the egress port still fails closed, it just cannot open the approval loop.
   readonly requestResearchApproval?: ((url: URL) => void) | undefined;
+  /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
+  readonly researchFetchImpl?: ResearchFetch | undefined;
 }
 
 export function createProductionManagedWorktreeToolFacade(
@@ -161,6 +163,7 @@ function buildEgressAuthority(
     gatewayEgress: (): OutboundHttpEgressConfig | undefined => gatewayEgress(),
     emitEvent: input.onRuntimeEvent,
     ...(input.requestResearchApproval ? { onGrantMissing: input.requestResearchApproval } : {}),
+    ...(input.researchFetchImpl ? { fetchImpl: input.researchFetchImpl } : {}),
     now: (): number => Date.now(),
   });
 }

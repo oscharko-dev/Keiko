@@ -1,12 +1,12 @@
 # Handoff — Issue #2387 (governed research, skills, read-only subagents)
 
-**Status: partially implemented, NOT functional end-to-end. Do not merge as a finished feature.**
-This document is a clean handoff so a successor can continue without repeating dead ends. It states
-exactly what is done and verified, the one design decision already made, and the precise remaining
-wiring with concrete file:line seams.
+**Status: the RESEARCH capability is functional end-to-end (approval → grant → governed fetch →
+revoke → fresh-approval-required) and covered by an owned Playwright journey. The skill and
+read-only-child SERVER MODULES are complete and unit-tested but not yet reachable from the model
+(no model-facing tool declaration). Remaining work is listed in §4.**
 
-Branch: `claude/issue-2387-research-skills` (draft PR #2472 → `dev`). Base of this branch: dev
-`fa6fc15c` plus the merged #2386 governance surface.
+Branch: `claude/issue-2387-research-skills` (draft PR #2472 → `dev`). Base: dev `fa6fc15c` plus the
+merged #2386 governance surface.
 
 ---
 
@@ -18,134 +18,119 @@ authority. Owns `tests/e2e/config/playwright.code-task-research-skills-subagents
 journey, emits `CodeTaskAcceptanceContributionV1` for #2396, produces `AuxiliaryCapabilityPortV1`
 for #2388, consumes #2386 `GovernedActionV1`.
 
-## 2. What is implemented, verified, and pushed
+## 2. What is implemented and verified
 
-All of the following is committed on the branch, and each piece passed local `typecheck` +
-`lint --max-warnings=0` + `prettier` + its unit tests at the stated commit.
+Everything below passed root `typecheck`, `lint --max-warnings=0`, `prettier`, and its unit suites.
 
-### Contracts (`packages/keiko-contracts`)
+### Contracts (`packages/keiko-contracts`) — unchanged from the first handoff
 
-- `code-task-auxiliary.ts` — `AuxiliaryCapabilityPortV1`, `AuxiliaryCapabilityRequestV1`
-  (discriminated on `capability: research|skill|child-agent`), `AuxiliaryCapabilityOutcomeV1`,
-  `AuxiliaryResearchScopeV1`, and the SSRF-safe `isCodeTaskPublicDomain` / `isCodeTaskSkillId` /
-  `isCodeTaskChildRunId` predicates. (The IP-literal regex was fixed for a CodeQL ReDoS finding —
-  IPv4-only fixed pattern; IPv6 is already rejected upstream by `PUBLIC_DOMAIN_PATTERN`.)
-- `coding-workbench.ts` — 4 runtime event kinds (`research-performed`, `skill-invoked`,
-  `child-run-started`, `child-run-completed`), the canonical `CodingWorkbenchAuxiliaryStatus` enum
-  (accepted|denied|unavailable|limit-reached|stopped) carried on the SSE `runtime-event` frame as
-  `auxiliaryOutcome`, the `research` supervised-action kind → `network-egress` permission.
-- `coding-workbench-runtime-api.ts` — `researchGrant` snapshot field (`{ grantId, domains[],
-expiresAt }`, no query digest) + `validateResearchGrant` (fails closed on empty domains, IP
-  literals, smuggled sub-keys) + exactKeys allowlist entry; `parseCodingWorkbenchRuntimeResearchRevokeRequest`.
-- `coding-workbench-validation.ts` — per-kind allowlist + required-field validators for the 4 event
-  kinds. `coding-workbench-evidence.ts` — `research`/`skill`/`child` added to the approved evidence
-  vocabulary (so `event-research-N` style ids pass the content-free evidence check).
-- 3919 contract tests green.
+`code-task-auxiliary.ts` (AuxiliaryCapabilityPortV1 + SSRF-safe predicates), the 4 runtime event
+kinds + `CodingWorkbenchAuxiliaryStatus`, the `researchGrant` snapshot field +
+`parseCodingWorkbenchRuntimeResearchRevokeRequest`, per-kind event validators, and the
+research/skill/child evidence vocabulary. 3919 contract tests green.
 
-### UI vertical (`packages/keiko-ui`) — merged commit `888e0d39`
+### UI vertical (`packages/keiko-ui`) — unchanged (commit `888e0d39`)
 
-`Internet · Research only` chip in the readiness grid, timeline rendering for the new event kinds,
-the revoke client wiring (`postSnapshot('/research/revoke')`), and both en/de i18n catalogs. 5355
-UI tests green. **Note:** any keiko-ui change invalidates `check:editor-release-evidence` — that
-fingerprint must be regenerated on CI/Linux (it is platform-specific; a macOS value is rejected).
-This is why the `ui` gate is red on the draft PR.
+`Internet · Research only` chip, timeline rendering, revoke client wiring, en/de catalogs.
+**Note:** the keiko-ui change invalidates `check:editor-release-evidence` — regenerate the
+fingerprint on CI/Linux before the `ui` gate can go green.
 
-### Server modules (`packages/keiko-server/src/coding-runtime`) — commit `62c91559`
+### Server modules — hardened (commit `62c91559`), still current
 
-Three modules, each adversarially security-reviewed and hardened; 129 focused unit tests green.
+`researchEgressPort` + `researchGrantRegistry` (GET-only, redirect re-validation, request-line
+binding, pre-flight budget reservation), `skillCatalog` + `skillInvocationPort` (exact id@version,
+injected authority re-evaluator), `readOnlyChildEnvelope` + `readOnlyChildOrchestrator`
+(strictly-narrower envelope, one-layer, parent budget, cascaded stop + post-run re-check).
 
-- `researchEgressPort.ts` + `researchGrantRegistry.ts` — GET-only through `gatewayFetch`,
-  named-domain allowlist re-validated on the initial host **and every redirect hop**, request-line
-  binding (decoded path + visible query must hash to the grant's digest — neither path nor query can
-  smuggle repository text), fetch/byte budget **reserved before each hop** (an exhausted grant makes
-  zero network calls), a dedicated egress config that denies loopback and inherits no
-  private-network/credential allowance, content-free `research-performed` event on success and on
-  every fail-closed denial.
-- `skillCatalog.ts` + `skillInvocationPort.ts` — exact server-approved `id@version` only, implicit
-  invocation catalog-gated, every produced tool request re-evaluated through an injected authority
-  re-evaluator (no self-widening), identical content-free `skill-invoked` audit event for
-  explicit / implicit / denied.
-- `readOnlyChildEnvelope.ts` + `readOnlyChildOrchestrator.ts` — strictly-narrower read-only derived
-  envelope, one-layer enforcement (a child cannot spawn a child), every child tool call charged to
-  the parent budget, parent stop/revocation/timeout cascaded with a deadline-backed abort **and a
-  post-run stop re-check** (a mid-run revocation can never surface as `accepted`), denied spawns
-  audited too.
+### NEW in this continuation — the research capability wired end-to-end
 
-### Runtime foundations (composition) — commits `43059cce`, `37cbb47f`, `5de648ac`, `dca53543`, `977c3385`
+- **Snapshot projection**: `CodingRuntimeOrchestrator` takes an optional `researchGrants` registry
+  (`codingRuntimeOrchestratorTypes.ts`) and projects the aggregated live grant
+  (`projectedResearchGrant`, newest grant id, sorted domain union, max expiry) through
+  `CodingRuntimeOrchestratorState` — never on terminal/recovery states. Control plane threads
+  `runtimeHost.researchGrants` through.
+- **Revoke route**: `POST /api/coding-workbench/runtime/runs/:runId/research/revoke`
+  (`codingRuntimeRoutes.ts`) → `orchestrator.revokeResearch`: bound to the observed revision AND a
+  live grant id, fail-closed otherwise; drops every grant for the run in one revision bump.
+- **Approval-driven grant issuance** (`researchApprovalIssuance.ts`): the egress port's new
+  `onGrantMissing` seam hands an uncovered URL to `PendingResearchApprovals` (one transient,
+  TTL-bound, one-shot ask per run; https + public-domain validated) and raises a content-free
+  `permission-requested` runtime event (`network-egress`/`research`,
+  reasonCode `research-approval-required`). The resolver wraps `approvalAuthority.issue`
+  (`researchIssuingApprovalAuthority` in `productionCodingRuntimeResolver.ts`): an approved
+  `research` action consumes the retained URL and mints a grant whose `queryTextDigest` is computed
+  by the SHARED `researchRequestLineDigest` export — issuance and executor can never diverge. The
+  validated `read-only-research` `GovernedActionV1` (grant known/once, `stateRevision` = the
+  approval challenge's bound revision, threaded as `boundRevision` through
+  `CodingRuntimeApprovalIssueRequest`) is produced for an optional sink (`onGovernedAction`,
+  unwired until #2388 consumes the port).
+- **Binding-aware grant selection** (`grantForRequest` in `researchEgressPort.ts`): among same-host
+  grants the one whose digest admits THIS request line wins, so several per-URL approvals coexist;
+  no binding → audited denial (fixes the first-grant-wins defect).
+- **Model-facing tool**: `keiko_research_fetch` (action `egress`, argument `target`) declared in
+  `OPENCODE_MODEL_VISIBLE_TOOLS` + `OPENCODE_TOOL_SOURCE_DEFINITIONS`; generated tool source,
+  launch-profile allow/deny maps, gateway digest pins (`coding-sidecar-gateway.test.ts`), protocol
+  allowlists, and the functional harness (`FAKE_TOOL_ACTIONS`, scripted turn union) all updated in
+  lockstep. The governed delegate and facade now carry the egress payload back to the model
+  (UTF-8-safe truncation at the 64 KiB IPC cap — `projectEgressRead` in `codingToolFacade.ts`).
+- **Activation**: `codingRuntimeResearchEgressEnabled` server option (default **true**) opens only
+  the `network-egress` action CLASS (`deps.ts` → `productionRuntimeWorkspaceAuthority`); every
+  fetch still requires an operator-approved grant, so no approval ⇒ no outbound request.
+- **Owned e2e journey**: `tests/e2e/config/playwright.code-task-research-skills-subagents.config.ts`
+  - `tests/e2e/servers/coding-runtime-2387-server.mts` (real buildUiHandlerDeps composition, script
+    mode `research`, hermetic `researchFetchImpl` test seam — no real network) +
+    `tests/e2e/code-task-research-skills-subagents.spec.ts`: ask → approve → chip → governed fetch
+    ("Research performed") → stale revoke 400 → revoke → fresh ask required → deny settles
+    failed/revoked. npm script: `test:e2e:code-task-research-2387`.
 
-- `denyLoopback` egress posture (`keiko-model-gateway`) with a focused test.
-- `productionRuntimeWorkspaceAuthority.ts` — base envelope moves to `governed-egress` +
-  `network-egress` when `researchEgressEnabled`.
-- `productionManagedWorktreeTools.ts` — the egress port is **mounted** behind the fail-closed stub
-  (`buildEgressAuthority`): a real `createResearchEgressPort` when a registry + gateway-egress are
-  injected, else the fail-closed stub.
-- `productionCodingRuntimeResolver.ts` — one server-level `ResearchGrantRegistry` created in
-  `composeRuntime`, threaded to the tool facade, and **invalidated on runtime revoke/terminate**
-  (`authorityLifecycle.revokeRuntime` → `researchGrants.invalidateRun`).
-- `codingRuntimeControlPlane.ts` / `productionCodingRuntimeHost.ts` — the registry is exposed on the
-  `CodingRuntimeHost` surface as an optional `researchGrants` field, reachable by the control plane.
+## 3. Design decisions already made (do not re-litigate)
 
-## 3. Design decision already made (do not re-litigate)
+1. **Research grants are request-scoped, bound via the #2386 approval flow** (first handoff §3).
+   Implemented exactly that way; both sides use `researchRequestLineDigest`.
+2. **The approval loop lives at the egress-port/resolver seam, not inside `codingRuntimeManager`.**
+   The manager's `issueApproval` stays untouched; the resolver wrapper is the one place that sees
+   both the approval issuance result and the retained URL. (Deviation from the first handoff's
+   letter, same semantics, smaller trust surface.)
+3. **Research asks are approval-gated in EVERY mode, including autonomous-delivery** (narrower than
+   the ADR-0129 ceiling, never wider; revisit when task-activation envelopes can carry pre-granted
+   domains).
+4. **Skill/child model tools need a real IPC vocabulary extension** (`codingToolIpc.ts` has no
+   `skill`/`child` action) — deliberately NOT bolted onto `egress`. See §4.
 
-**Research grants are request-scoped, bound via the #2386 approval flow — not activation-scoped.**
-The egress port binds the request line (`sha256Hex(sanitizeVisibleText(decodedPath + " " +
-decodedQuery))`) to `grant.queryTextDigest`. A purely activation-scoped domain grant (domains +
-expiry, no query digest) would therefore only permit root-path fetches — too restrictive for real
-doc research, and loosening the binding would reopen the path/query smuggling channel. So: the model
-requests an egress action (a URL) → `network-egress` permission-request (approval-required in
-supervised/governed per the effect matrix) → on approval the server computes the request-line digest
-of the approved URL and registers a grant for that host. Use the exported `sanitizeVisibleText` +
-`sha256Hex` from `researchEgressPort.ts` — the issuance side and the port MUST compute the digest
-identically or every fetch fails closed.
+## 4. Remaining work, in order
 
-## 4. Remaining work, in order (with concrete seams)
+1. **Skill + child model-facing tools.** Extend `CodingToolAction`/`CodingToolActionRequest`
+   (`codingToolIpc.ts`) with `skill` (argument `skillId`) and `child` (argument `objective` or a
+   bounded request object), add the two `GovernedCodingToolPort`s to `CodingToolGovernedPorts`
+   (`codingToolGovernedDelegate.ts`) and mount `skillInvocationPort` / `readOnlyChildOrchestrator`
+   in `productionManagedWorktreeTools.governedPorts` (they need: the skill catalog, an authority
+   re-evaluator over `resolveCapabilityForDelegation`, a child runner, and the parent budget
+   charger — see each module's Deps interface). Declare `keiko_skill` / `keiko_child_agent` in
+   `OPENCODE_MODEL_VISIBLE_TOOLS` + `OPENCODE_TOOL_SOURCE_DEFINITIONS` and update the SAME pin
+   set as `keiko_research_fetch` (gateway digests, adapter unions, harness `FAKE_TOOL_ACTIONS`,
+   adapter/launch/gateway tests). Then extend the owned e2e journey with the skill + child
+   observation steps ("observe a skill and a child" from the issue).
+2. **`CodeTaskAcceptanceContributionV1` for #2396.** No producer precedent exists anywhere in the
+   repo yet (neither #2385 nor #2386 shipped one). The contract + consumer-side qualification rules
+   live in `packages/keiko-contracts/src/code-task-acceptance.ts`. Coordinate the artifact shape
+   with #2396 (likely generated at PR time — `sourceCommitSha` cannot be committed by the commit it
+   names).
+3. **`npm run test:mutation:security`** focused on the new authority/parser/containment code — run
+   in CI, NOT locally in a loop (the security mutation gate OOMs local machines; see the repo's
+   mutation-gate history).
+4. **CI/PR hygiene**: regenerate the editor-release-evidence fingerprint on Linux (`ui` gate), and
+   note the new-code coverage gate now sees the wired modules (unit suites exist for all of them).
 
-1. **Thread the registry into the orchestrator + project the grant onto the snapshot.**
-   The registry is on `CodingRuntimeHost.researchGrants` (`codingRuntimeControlPlane.ts`). Pass it
-   into `createCodingRuntimeOrchestrator({...})` deps, and have the orchestrator's snapshot
-   projection (`this.projection.publicSnapshot`, `codingRuntimeOrchestrator.ts` ~line 91/126) add
-   `researchGrant` from `registry.activeGrants(runId, now)`. Consider instead storing `researchGrant`
-   on the snapshot _record_ at issue/revoke time so the projection just passes it through — that
-   avoids threading the registry into the projection. Decide and document.
-2. **Revoke route.** Add `POST /api/coding-workbench/runtime/runs/:runId/research/revoke` in
-   `codingRuntimeRoutes.ts` (mirror the `pause`/`resume` mutation handlers ~line 276/286), parse via
-   `parseCodingWorkbenchRuntimeResearchRevokeRequest`, add a `revokeResearch(runId, body)` method to
-   the orchestrator that calls `registry.invalidateRun(runId)` (cascades to children) and returns the
-   revision-bumped, grant-absent snapshot. The UI already calls this route.
-3. **Grant issuance hook.** In `codingRuntimeManager.ts` `issueApproval` (~line 665), when the
-   approved action is a `research`/`network-egress` request, build `AuxiliaryResearchScopeV1` from the
-   requested URL's host + the request-line digest, register it in the registry, and emit the
-   `read-only-research` `GovernedActionV1`. Wire `researchGrantRegistry` + `gatewayEgress` +
-   `researchEgressEnabled` into `createProductionManagedWorktreeToolFacade` (resolver already has the
-   registry in scope; `gatewayEgress` can be `() => undefined` for direct connections).
-4. **Model-facing tool declaration.** Declare `research.search`/`research.fetch`, `$skill`, and the
-   child-agent tool in `OPENCODE_MODEL_VISIBLE_TOOLS` (`opencodeToolSchemas.ts:92`) and dispatch them
-   in `EditorAgentToolHost` (`editor-agent-tool-host.ts:486`) / `EDITOR_AGENT_TOOL_DEFINITIONS`
-   (`editor-agent-schemas.ts:238`); mediate at the `toolFacade`/`governedEventSink` seam
-   (`productionOpenCodeBackend.ts:95`). Use `event-child-N`-style ids for child events (the evidence
-   vocabulary now allows `child`).
-5. **E2E** — create the owned config `tests/e2e/config/playwright.code-task-research-skills-subagents.config.ts`
-   - a test-server harness (mirror `playwright.code-task-authority.config.ts` and the #2386 server)
-   - the real journey (grant research → observe a skill and a child → revoke → next request denied).
-6. **`npm run test:mutation:security`** focused coverage on the new authority/parser/redaction/
-   containment/lifecycle code, and emit `CodeTaskAcceptanceContributionV1`.
+## 5. Verify locally
 
-## 5. Known CI state on the draft PR (#2472)
+`npm run typecheck` (root; includes tests), `npm run lint`, `npm run format:check`,
+`npx vitest run packages/keiko-server/src/coding-runtime packages/keiko-server/src/coding-sidecar-gateway.test.ts`
+(916+ tests), `npm run test:e2e:code-task-research-2387` (the owned journey), and
+`npm run agent:pre-pr` before any push.
 
-Red and **expected** for this unfinished state: `ci`/`Coverage and SonarCloud` (new modules not yet
-integrated → new-code coverage/quality gate), `ui` (stale editor-release-evidence fingerprint —
-regenerate on CI/Linux), `Keiko for Quality` (aggregates the above). The CodeQL ReDoS finding is
-**fixed** in this handoff.
+## 6. Rest of Epic #2384 (honest scope)
 
-## 6. Verify locally
-
-`npm run typecheck` (root; includes tests — package-level tsc does NOT), `npm run lint`
-(`--max-warnings=0`), `npm run format:check`, and the coding-runtime + contracts unit suites. Run
-`npm run agent:pre-pr` for the full pre-PR gate before any real (non-draft) push.
-
-## 7. Rest of Epic #2384 (honest scope)
-
-12 children #2385–#2396. Only **#2386 is closed**. **#2385 is still OPEN** (its work is on the
-branch but the issue was never closed — verify state, don't assume merged). **#2387** is this
-partial branch. **#2388–#2396 are not started.** Epics **#1982** and **#2384** remain OPEN. Continue
-strictly **one child per PR into the epic branch, in order**, per the epic dependency table.
+12 children #2385–#2396. Only **#2386 is closed**. **#2385 is still OPEN** (work merged, issue not
+closed — verify, don't assume). **#2387 is this branch** (research done end-to-end; skills/children
+per §4.1). **#2388–#2396 are not started.** Epics **#1982** and **#2384** remain OPEN. Continue
+strictly one child per PR into `dev`, in order, per the epic dependency table.

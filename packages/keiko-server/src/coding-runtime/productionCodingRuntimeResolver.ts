@@ -104,6 +104,8 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
+  /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
+  readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -384,6 +386,7 @@ function createManagedToolFacade(
       research.pending,
       onRuntimeEvent,
     ),
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     authorityExpiresAt: context.expiresAt,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
