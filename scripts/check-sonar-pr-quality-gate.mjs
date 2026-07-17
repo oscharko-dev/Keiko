@@ -71,13 +71,13 @@ function violationFailures(measures) {
 }
 
 function lineCountFailures(measures) {
-  // Skip line count check for documentation-only changes (no new code to report)
-  return [];
+  return measures.new_lines === undefined ? ["New-code line count metric is missing."] : [];
 }
 
 function coverageFailures(measures) {
-  // Skip coverage check for documentation-only changes (no new code lines reported by SonarCloud)
-  if (measures.new_lines === undefined || measures.new_lines === 0) return [];
+  if (measures.new_lines === undefined)
+    return ["Cannot evaluate new-code coverage: Sonar did not report a new-code line count."];
+  if (measures.new_lines === 0) return []; // documentation-only PR: no new code lines
   return countAwareRateFailures({
     count: measures.new_lines_to_cover,
     label: "New-code coverage",
@@ -87,8 +87,9 @@ function coverageFailures(measures) {
 }
 
 function duplicationFailures(measures) {
-  // Skip duplication check for documentation-only changes (no new code lines reported by SonarCloud)
-  if (measures.new_lines === undefined || measures.new_lines === 0) return [];
+  if (measures.new_lines === undefined)
+    return ["Cannot evaluate new-code duplication: Sonar did not report a new-code line count."];
+  if (measures.new_lines === 0) return []; // documentation-only PR: no new code lines
   return countAwareRateFailures({
     count: measures.new_duplicated_lines,
     label: "New-code duplication",
