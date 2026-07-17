@@ -68,16 +68,34 @@ const FUNCTION_SIGNATURE_TAIL =
 // `$`, even though `$` is itself a valid identifier character in JS/TS, so a `$` sitting right
 // after a digit or letter (e.g. "9$Type", "x$1") IS a real boundary (digit/letter is `\w`, `$`
 // isn't) while a `$` at the very start of the line is NOT (both "sides" are non-word).
+//
+// Plain char-range comparisons instead of `/\w/u`/`/[A-Za-z_$]/u` regex calls, and reusing the
+// previous iteration's word-ness instead of recomputing it for both sides of every candidate:
+// this scan already runs once per character of a potentially huge adversarial line (S8786), so
+// per-character constant-factor cost matters here in a way it doesn't elsewhere in this file.
 function isWordChar(char: string): boolean {
-  return /\w/u.test(char);
+  return (
+    (char >= "a" && char <= "z") ||
+    (char >= "A" && char <= "Z") ||
+    (char >= "0" && char <= "9") ||
+    char === "_"
+  );
+}
+
+function isIdentStartChar(char: string): boolean {
+  return (
+    (char >= "a" && char <= "z") || (char >= "A" && char <= "Z") || char === "_" || char === "$"
+  );
 }
 
 function looksLikeFunctionSignatureTail(trimmed: string): boolean {
+  let previousWasWord = false;
   for (let index = 0; index < trimmed.length; index += 1) {
     const atChar = trimmed.charAt(index);
-    if (!/[A-Za-z_$]/u.test(atChar)) continue;
-    const beforeIsWord = index > 0 && isWordChar(trimmed.charAt(index - 1));
-    if (beforeIsWord === isWordChar(atChar)) continue;
+    const atIsWord = isWordChar(atChar);
+    const isBoundary = previousWasWord !== atIsWord;
+    previousWasWord = atIsWord;
+    if (!isBoundary || !isIdentStartChar(atChar)) continue;
     FUNCTION_SIGNATURE_TAIL.lastIndex = index;
     if (FUNCTION_SIGNATURE_TAIL.test(trimmed)) return true;
   }
