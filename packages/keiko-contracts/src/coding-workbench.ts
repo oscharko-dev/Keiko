@@ -142,6 +142,7 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "verification-command"
+  | "research"
   | "commit"
   | "push"
   | "pull-request"
@@ -154,6 +155,7 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
   Object.freeze([
     "file-edit",
     "verification-command",
+    "research",
     "commit",
     "push",
     "pull-request",
@@ -719,6 +721,7 @@ export function permissionKindForSupervisedCodingAction(
 ): CodingWorkbenchPermissionRequestKind {
   if (actionKind === "file-edit") return "workspace-write";
   if (actionKind === "verification-command") return "command-execution";
+  if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";
   }
