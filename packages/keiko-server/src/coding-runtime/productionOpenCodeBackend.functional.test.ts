@@ -215,6 +215,18 @@ async function runProductiveScenario(
   const question = await waitForQuestion(pipeline.orchestrator, run.runId, "productive-question");
   expect(question.questions).toHaveLength(1);
   expect(question.questions[0]?.question).toBe("Approve?");
+  // #2386: the question's arrival must surface on the workbench event stream as a content-free
+  // observation signal — pull-based clients re-list on it instead of hanging on a stale empty list.
+  await vi.waitFor(
+    () => {
+      expect(
+        pipeline.timeline.some(
+          (event) => event.kind === "runtime-event" && event.eventKind === "observation-streamed",
+        ),
+      ).toBe(true);
+    },
+    { timeout: 30_000, interval: 100 },
+  );
   const answered = await answerQuestion(pipeline.orchestrator, run.runId, question.id, [
     ["Approve"],
   ]);
@@ -531,7 +543,7 @@ async function waitForQuestion(
         requestId: `${tag}-${String(questionPollSequence)}`,
         expectedRevision: snapshot?.revision ?? -1,
       });
-      expect(listed.ok).toBe(true);
+      expect(listed.ok, `question listing failed for ${tag}`).toBe(true);
       if (listed.ok) found = listed.questions.questions;
       expect(found).toHaveLength(1);
     },

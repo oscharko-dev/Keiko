@@ -129,11 +129,23 @@ describe("Coding Workbench runtime contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("defines all twelve states and only explicit transitions", () => {
-    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
+  it("defines all thirteen states and only explicit transitions", () => {
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(13);
+    expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toContain("paused");
     expect(isLegalCodingWorkbenchRuntimeTransition("idle", "starting")).toBe(true);
     expect(isLegalCodingWorkbenchRuntimeTransition("running", "idle")).toBe(false);
     expect(isLegalCodingWorkbenchRuntimeTransition("taken-over", "idle")).toBe(true);
+  });
+
+  it("pauses and resumes only through the explicit paused transitions", () => {
+    expect(isLegalCodingWorkbenchRuntimeTransition("running", "paused")).toBe(true);
+    expect(isLegalCodingWorkbenchRuntimeTransition("paused", "running")).toBe(true);
+    expect(isLegalCodingWorkbenchRuntimeTransition("paused", "awaiting-approval")).toBe(true);
+    expect(isLegalCodingWorkbenchRuntimeTransition("paused", "stopping")).toBe(true);
+    // Paused is a run-bound halt, never a direct terminal-success or idle transition.
+    expect(isLegalCodingWorkbenchRuntimeTransition("paused", "succeeded")).toBe(false);
+    expect(isLegalCodingWorkbenchRuntimeTransition("paused", "idle")).toBe(false);
+    expect(isLegalCodingWorkbenchRuntimeTransition("idle", "paused")).toBe(false);
   });
 
   it("validates the server-owned binding and rejects content-bearing or mismatched fields", () => {

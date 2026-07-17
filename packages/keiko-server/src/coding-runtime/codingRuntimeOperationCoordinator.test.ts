@@ -86,6 +86,13 @@ function coordinator(input: {
     current: () => runningSnapshot(),
     serial: (work) => work(),
     advanceRevision: () => ({ ok: true, snapshot: publicSnapshot() }),
+    publicSnapshot: (current) => ({
+      schemaVersion: "1",
+      state: current.state,
+      revision: current.revision,
+      updatedAt: current.updatedAt,
+      runId: current.runId,
+    }),
     taskDispatcher: input.taskDispatcher ?? dispatcher(),
     questionPort: input.port ?? questionPort(),
     manager: manager(

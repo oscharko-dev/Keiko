@@ -114,6 +114,8 @@ describe("production coding runtime BFF", () => {
           return { ok: true, runId: request.runId, status: "ready" };
         },
         issueApproval: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+        pause: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+        resume: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
         stop: (runId) => {
           order.push(`reaped:${runId}`);
           completions.get(runId)?.("cancelled");

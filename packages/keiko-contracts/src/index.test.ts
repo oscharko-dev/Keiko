@@ -798,6 +798,54 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").CodeTaskIsoInstant>();
   });
 
+  it("code task governance contracts are reachable through the barrel (#2386)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.CODE_TASK_GOVERNANCE_SCHEMA_VERSION).toBe(1);
+    expect(mod.CODE_TASK_GRANT_SCOPES).toEqual(["once", "task"]);
+    expect(mod.GOVERNED_ACTION_KIND).toBe("governed-action");
+    expect(mod.GOVERNED_ACTION_DECISIONS).toContain("approval-required");
+    expect(mod.GOVERNED_ACTION_ACTION_KINDS).toContain("authority-widening");
+    expect(mod.GOVERNED_ACTION_UNGRANTABLE_KINDS).toContain("delivery");
+    expect(mod.CODE_TASK_EXECUTION_KIND).toBe("code-task-execution");
+    expect(mod.RUNTIME_GOVERNANCE_OPERATIONS).toContain("revoke");
+    expect(mod.RUNTIME_GOVERNANCE_OUTCOME_STATUSES).toContain("unsupported");
+    expect(mod.RUNTIME_GOVERNANCE_LIFECYCLE_KINDS).toContain("mutation-halted");
+    expect(mod.RUN_CONTROL_SNAPSHOT_KIND).toBe("run-control-snapshot");
+    expect(mod.resolveCodeTaskGrantScope(undefined)).toEqual({ ok: true, value: "once" });
+    expect(mod.resolveCodeTaskGrantScope("forever").ok).toBe(false);
+    expect(mod.isGovernedActionGrantable("dependency-operation")).toBe(false);
+    expect(mod.isCodeTaskGrantScope("task")).toBe(true);
+    expect(mod.isCodeTaskRunId("run-1")).toBe(true);
+    expect(mod.isCodeTaskQuestionId("que_1")).toBe(true);
+    expect(mod.isCodeTaskPolicyVersion("v1")).toBe(true);
+    expect(mod.validateGovernedActionV1({}).ok).toBe(false);
+    expect(mod.validateCodeTaskExecutionV1({}).ok).toBe(false);
+    expect(mod.validateRunControlSnapshotV1({}).ok).toBe(false);
+    expect(mod.validateRuntimeGovernanceRequestV1({}).ok).toBe(false);
+    expect(mod.validateRuntimeGovernanceOutcomeV1({}).ok).toBe(false);
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").GovernedActionV1>();
+    pin<import("./index.js").GovernedActionActionKind>();
+    pin<import("./index.js").GovernedActionDecision>();
+    pin<import("./index.js").GovernedActionGrantRef>();
+    pin<import("./index.js").GovernedActionQuestionRef>();
+    pin<import("./index.js").CodeTaskExecutionV1>();
+    pin<import("./index.js").CodeTaskGrantScope>();
+    pin<import("./index.js").CodeTaskGrantId>();
+    pin<import("./index.js").CodeTaskRunId>();
+    pin<import("./index.js").CodeTaskTaskId>();
+    pin<import("./index.js").CodeTaskWorkspaceId>();
+    pin<import("./index.js").CodeTaskIdempotencyKey>();
+    pin<import("./index.js").CodeTaskPolicyVersion>();
+    pin<import("./index.js").RunControlSnapshotV1>();
+    pin<import("./index.js").RunControlGrantRefV1>();
+    pin<import("./index.js").RuntimeGovernancePortV1>();
+    pin<import("./index.js").RuntimeGovernanceRequestV1>();
+    pin<import("./index.js").RuntimeGovernanceOutcomeV1>();
+    pin<import("./index.js").RuntimeGovernanceLifecycleEventV1>();
+  });
+
   it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
     // Schema versions.
     expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");

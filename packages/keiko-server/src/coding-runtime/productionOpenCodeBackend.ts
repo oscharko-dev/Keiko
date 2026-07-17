@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  validateCodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchRuntimeEvent,
+  type UpdatePortableTarget,
+} from "@oscharko-dev/keiko-contracts";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
@@ -94,6 +99,7 @@ function createOpenCodeRun(
       run.minted.authorityRef.runId,
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
+      run.onRuntimeEvent,
     ),
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
@@ -154,8 +160,10 @@ function idempotentEventSink(
   runId: string,
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
   const identities = new Set<string>();
+  let questionSignalSequence = 0;
   return {
     execute: (identity, event): Promise<"duplicate" | "applied"> => {
       const duplicate = identities.has(identity);
@@ -166,8 +174,33 @@ function idempotentEventSink(
           state: "running",
           authorityDigest,
         });
+        // A question raised (or settled) inside the managed child is invisible to pull-based
+        // clients until they re-list; publish a content-free observation so the workbench event
+        // stream signals "question state changed" without retaining any question content (#2386).
+        if (event.kind === "question") {
+          emitQuestionSignal(runId, ++questionSignalSequence, onRuntimeEvent);
+        }
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
   };
+}
+
+function emitQuestionSignal(
+  runId: string,
+  sequence: number,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): void {
+  const signal: CodingWorkbenchRuntimeEvent = {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    eventId: `event-question-${String(sequence)}`,
+    runId,
+    occurredAt: new Date().toISOString(),
+    kind: "observation-streamed",
+    channel: "question",
+    sequence,
+    byteCount: 0,
+    truncated: false,
+  };
+  if (validateCodingWorkbenchRuntimeEvent(signal).ok) onRuntimeEvent(signal);
 }

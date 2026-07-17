@@ -109,6 +109,35 @@ describe("production coding runtime turn ports", () => {
     expect(submitTurn).toHaveBeenCalledTimes(2);
   });
 
+  // #2386 regression: question listing is a read — it must stay repeatable at an unchanged
+  // revision (background refreshes re-list on runtime events) without consuming the
+  // one-turn-per-revision slot a concurrent operator mutation (pause/answer/follow-up) needs.
+  it("keeps read reservations repeatable while mutations still consume the revision", () => {
+    const guard = createProductionRuntimeOperationGuard("run-reads", () => true);
+    const read = (requestId: string, expectedRevision: number) =>
+      guard.reserve({ runId: "run-reads", requestId, expectedRevision }, "read");
+    const first = read("read-1", 3);
+    expect(first?.commit()).toBe(true);
+    const second = read("read-2", 3);
+    expect(second?.commit()).toBe(true);
+    // Replay of a committed read id stays rejected.
+    expect(read("read-1", 3)).toBeUndefined();
+
+    const mutation = guard.reserve({
+      runId: "run-reads",
+      requestId: "mutation-1",
+      expectedRevision: 3,
+    });
+    expect(mutation?.commit()).toBe(true);
+    // The mutation consumed revision 3: stale reads and stale mutations both stay rejected.
+    expect(read("read-3", 3)).toBeUndefined();
+    expect(
+      guard.reserve({ runId: "run-reads", requestId: "mutation-2", expectedRevision: 3 }),
+    ).toBeUndefined();
+    const advanced = read("read-4", 4);
+    expect(advanced?.commit()).toBe(true);
+  });
+
   it("aborts the run signal even when backend interruption rejects", async () => {
     const controller = new AbortController();
     const dispatcher = createProductionRuntimeTaskDispatcher(

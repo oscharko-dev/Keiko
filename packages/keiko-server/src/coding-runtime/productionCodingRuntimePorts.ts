@@ -33,6 +33,7 @@ export interface ProductionRuntimeRunRecord {
 export interface ProductionRuntimeOperationGuard {
   readonly reserve: (
     request: CodingRuntimeRunOperation,
+    mode?: "mutation" | "read",
   ) => ProductionRuntimeOperationReservation | undefined;
 }
 
@@ -52,13 +53,9 @@ export function createProductionRuntimeOperationGuard(
   let pending:
     { readonly requestId: string; readonly expectedRevision: number; active: boolean } | undefined;
   return {
-    reserve: (request): ProductionRuntimeOperationReservation | undefined => {
+    reserve: (request, mode = "mutation"): ProductionRuntimeOperationReservation | undefined => {
       if (
-        request.runId !== runId ||
-        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.requestId) ||
-        !Number.isSafeInteger(request.expectedRevision) ||
-        request.expectedRevision < 0 ||
-        request.expectedRevision <= lastRevision ||
+        inadmissibleOperation(request, runId, lastRevision) ||
         usedRequestIds.has(request.requestId) ||
         pending !== undefined
       ) {
@@ -84,7 +81,12 @@ export function createProductionRuntimeOperationGuard(
         commit: (): boolean => {
           if (!reservation.active || pending !== reservation) return false;
           usedRequestIds.add(reservation.requestId);
-          lastRevision = reservation.expectedRevision;
+          // A read (question listing) never consumes the one-turn-per-revision slot: it must stay
+          // repeatable at an unchanged revision, or background question refreshes would exhaust
+          // the revision and race concurrent operator mutations into conflicts. Replay identity
+          // (one-use request id) still applies, and anything older than a consumed revision stays
+          // rejected above.
+          if (mode === "mutation") lastRevision = reservation.expectedRevision;
           release();
           return true;
         },
@@ -92,6 +94,20 @@ export function createProductionRuntimeOperationGuard(
       };
     },
   };
+}
+
+function inadmissibleOperation(
+  request: CodingRuntimeRunOperation,
+  runId: string,
+  lastRevision: number,
+): boolean {
+  return (
+    request.runId !== runId ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.requestId) ||
+    !Number.isSafeInteger(request.expectedRevision) ||
+    request.expectedRevision < 0 ||
+    request.expectedRevision <= lastRevision
+  );
 }
 
 export function createProductionRuntimeManager(
@@ -131,12 +147,9 @@ export function createProductionRuntimeManager(
       }
       return result;
     },
-    issueApproval: (request) =>
-      active()?.issueApproval(request) ?? {
-        ok: false,
-        failureCode: "runtime-stopped",
-        retryable: false,
-      },
+    issueApproval: (request) => active()?.issueApproval(request) ?? stoppedApprovalIssue(),
+    pause: (runId) => active()?.pause(runId) ?? pauseRunMismatch(),
+    resume: (runId) => active()?.resume(runId) ?? pauseRunMismatch(),
     stop: (runId) => settle(runId, "stop"),
     takeover: (runId) => settle(runId, "takeover"),
     reconcile: (runId) => settle(runId, "reconcile"),
@@ -152,6 +165,14 @@ async function cleanupRun(
   record?.controller.abort();
   await record?.dispose?.();
   runs.delete(runId);
+}
+
+function stoppedApprovalIssue(): ReturnType<CodingRuntimeManager["issueApproval"]> {
+  return { ok: false, failureCode: "runtime-stopped", retryable: false };
+}
+
+function pauseRunMismatch(): ReturnType<CodingRuntimeManager["pause"]> {
+  return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
 }
 
 function startMismatch(): CodingRuntimeStartResult {

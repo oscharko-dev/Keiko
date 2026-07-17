@@ -860,10 +860,12 @@ export {
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
   codingWorkbenchPolicyEffectFor,
+  compareCodingWorkbenchModeAuthority,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchModelSource,
   isCodingWorkbenchMode,
+  isCodingWorkbenchModeWidening,
   isCodingWorkbenchRuntimeSource,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
@@ -920,6 +922,75 @@ export {
   isCodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
 } from "./code-task-acceptance.js";
+
+// ─── Code-task governance contracts (Issue #2386, Epic #2384) ──────────────────────
+// Grant scope, the produced GovernedActionV1 (#2387), and the consumed CodeTaskExecutionV1
+// projection (#2385). Content-free discriminated unions over branded ids.
+export type {
+  CodeTaskExecutionV1,
+  CodeTaskGovernanceBranded,
+  CodeTaskGrantId,
+  CodeTaskGrantScope,
+  CodeTaskIdempotencyKey,
+  CodeTaskPolicyVersion,
+  CodeTaskQuestionId,
+  CodeTaskRunId,
+  CodeTaskTaskId,
+  CodeTaskWorkspaceId,
+  GovernedActionActionKind,
+  GovernedActionAbsent,
+  GovernedActionDecision,
+  GovernedActionEnvelope,
+  GovernedActionGrantRef,
+  GovernedActionQuestionRef,
+  GovernedActionV1,
+} from "./code-task-governance.js";
+export {
+  CODE_TASK_EXECUTION_KIND,
+  CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+  CODE_TASK_GRANT_SCOPES,
+  GOVERNED_ACTION_ACTION_KINDS,
+  GOVERNED_ACTION_DECISIONS,
+  GOVERNED_ACTION_KIND,
+  GOVERNED_ACTION_UNGRANTABLE_KINDS,
+  isCodeTaskGrantId,
+  isCodeTaskGrantScope,
+  isCodeTaskIdempotencyKey,
+  isCodeTaskPolicyVersion,
+  isCodeTaskQuestionId,
+  isCodeTaskRunId,
+  isCodeTaskTaskId,
+  isCodeTaskWorkspaceId,
+  isGovernedActionGrantable,
+  resolveCodeTaskGrantScope,
+  validateCodeTaskExecutionV1,
+  validateGovernedActionV1,
+} from "./code-task-governance.js";
+
+// ─── Code-task run-control contracts (Issue #2386, Epic #2384) ─────────────────────
+// RunControlSnapshotV1 (#2389) and the RuntimeGovernancePortV1 request/outcome value types
+// (#2388). A missing runtime capability resolves to unsupported or denied, never allowed.
+export type {
+  RunControlGrantRefV1,
+  RunControlSnapshotV1,
+  RuntimeGovernanceLifecycleEventV1,
+  RuntimeGovernanceLifecycleKind,
+  RuntimeGovernanceOperation,
+  RuntimeGovernanceOutcomeStatus,
+  RuntimeGovernanceOutcomeV1,
+  RuntimeGovernancePortV1,
+  RuntimeGovernanceRequestV1,
+  RuntimeGovernanceTarget,
+} from "./code-task-run-control.js";
+export {
+  RUN_CONTROL_SNAPSHOT_KIND,
+  RUNTIME_GOVERNANCE_LIFECYCLE_KINDS,
+  RUNTIME_GOVERNANCE_OPERATIONS,
+  RUNTIME_GOVERNANCE_OUTCOME_STATUSES,
+  validateRunControlSnapshotV1,
+  validateRuntimeGovernanceOutcomeV1,
+  validateRuntimeGovernanceRequestV1,
+} from "./code-task-run-control.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded

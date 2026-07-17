@@ -1,0 +1,189 @@
+// Issue #2386 — Code Task real-authority journey: the browser drives the mounted question / pause /
+// resume / follow-up surfaces against the REAL coding runtime composition. The webServer entry
+// (tests/e2e/servers/coding-runtime-2386-server.mts) boots the real buildUiHandlerDeps/createUiServer
+// wiring with the scripted OpenCode harness injected at the production `codingRuntimeResolver` seam —
+// unlike the #2385 tracer entry, the scripted `question` turn is NOT skipped, so the required
+// question must reach the browser for real and halt the agent loop until answered.
+//
+// The journey proves, over live routes only:
+//   the workbench defaults to the supervised-coding mode (#2386 default) → bind + reconcile the
+//   fixture checkout → start a supervised run → the scripted required question surfaces in the
+//   "Runtime questions" section and is answered → the contained edit lands in the managed worktree
+//   and the vetted verification is summarized → Pause flips the run to the sticky paused state →
+//   requesting a WIDER mode while the run is live is rejected against the server-confirmed
+//   effective mode → a follow-up sent while paused is admitted as a new task turn WITHOUT
+//   auto-resuming the run (pause stays sticky) → Resume returns the run to running → Stop settles
+//   the durable snapshot as cancelled.
+//
+// The negative test proves the surface is live, not static: intercepting only the readiness route
+// with a contract-valid `runtimeAvailable: false` body must flip the workbench to "Runtime not
+// confirmed" and disable Start.
+
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import {
+  AUTHORITY_EDITED_CONTENT,
+  AUTHORITY_TARGET_RELATIVE_PATH,
+  authorityManagedWorkspaceRoot,
+  authorityRepositoryRoot,
+  authorityStateDir,
+} from "./support/coding-runtime-2386-authority.js";
+
+const stateDir = authorityStateDir();
+const repositoryRoot = authorityRepositoryRoot(stateDir);
+const managedRoot = authorityManagedWorkspaceRoot(stateDir);
+
+function workbench(page: Page): Locator {
+  return page.locator('section[aria-label="Coding Workbench"][data-state]');
+}
+
+async function openWorkbench(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Coding Workbench" }).click();
+  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+}
+
+// Drives the "Code setup" section: bind the fixture checkout as a managed task workspace.
+async function bindFixtureWorkspace(page: Page): Promise<void> {
+  const setup = page.getByRole("region", { name: "Code setup" });
+  await expect(setup).toBeVisible();
+  await setup.getByLabel("Repository path").fill(repositoryRoot);
+  await setup.getByLabel("Target branch").fill("main");
+  await setup.getByRole("button", { name: "Bind workspace" }).click();
+  await expect(setup).toHaveCount(0);
+}
+
+// A fresh binding has no verified head yet — run the REAL #447 reconciliation route so the runtime
+// authority can prove the managed worktree head before the run starts.
+async function reconcileBoundWorkspace(page: Page): Promise<void> {
+  const response = await page.request.post("/api/task-workspaces/reconciliation", {
+    headers: { "X-Keiko-CSRF": "1" },
+    data: { root: repositoryRoot },
+  });
+  expect(response.ok()).toBe(true);
+}
+
+// Locates the file the scripted runtime edited inside the Keiko-managed worktree root. The worktree
+// directory name is a content-free derived id, so the fixture file is found by bounded search.
+function findManagedTargetFiles(dir: string, depth: number): readonly string[] {
+  if (depth < 0) return [];
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...findManagedTargetFiles(full, depth - 1));
+  }
+  const candidate = join(dir, AUTHORITY_TARGET_RELATIVE_PATH);
+  try {
+    readFileSync(candidate);
+    found.push(candidate);
+  } catch {
+    // Not a worktree root; keep searching.
+  }
+  return found;
+}
+
+// The live run id, read from the REAL status route (the same truth the workbench polls).
+async function currentRunId(page: Page): Promise<string> {
+  const response = await page.request.get("/api/coding-workbench/runtime/status");
+  expect(response.ok()).toBe(true);
+  const body = (await response.json()) as { readonly runId?: string };
+  expect(typeof body.runId).toBe("string");
+  return body.runId ?? "";
+}
+
+// The scripted required question halts the agent loop server-side until the browser answers it
+// through the mounted question routes. The single scripted option is labelled "Approve".
+async function answerRequiredQuestion(page: Page): Promise<void> {
+  const questions = page.getByRole("region", { name: "Runtime questions" });
+  await expect(questions.getByRole("heading", { name: "Runtime needs your input" })).toBeVisible({
+    timeout: 90_000,
+  });
+  await questions.getByRole("radio", { name: /Approve/u }).check();
+  await questions.getByRole("button", { name: "Send answer" }).click();
+}
+
+test("#2386 authority: question, sticky pause, widening rejection, follow-up, settle", async ({
+  page,
+}) => {
+  await openWorkbench(page);
+  await bindFixtureWorkspace(page);
+  await reconcileBoundWorkspace(page);
+
+  // #2386 changed the workbench default from full access to the supervised middle mode.
+  await expect(page.getByRole("radio", { name: /Supervised workspace/u })).toBeChecked();
+  await page.getByLabel("Task instructions").fill("Rename the authority constant under src/");
+  const start = page.getByRole("button", { name: "Start coding run" });
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+  const runId = await currentRunId(page);
+
+  // The required question must surface in the browser and unblock the run when answered; the
+  // scripted contained edit and vetted verification then complete against the managed worktree.
+  await answerRequiredQuestion(page);
+  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
+  await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+  const edited = findManagedTargetFiles(managedRoot, 4);
+  expect(edited).toHaveLength(1);
+  expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
+
+  // Pause is sticky: the run must stay paused across runtime activity until an explicit Resume.
+  await page.getByRole("button", { name: "Pause run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+
+  // Widening past the server-confirmed effective mode while the run is live is rejected; the
+  // paused run keeps its authority. Restoring the supervised request clears the rejection.
+  await page.getByRole("radio", { name: /Full access/u }).check();
+  await expect(
+    page.getByText("The server rejected this change: widening authority requires stopping", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+  await page.getByRole("radio", { name: /Supervised workspace/u }).check();
+
+  // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
+  const taskSubmitted = timeline.getByText("Task submitted", { exact: true });
+  const submittedBefore = await taskSubmitted.count();
+  await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
+  await page.getByRole("button", { name: "Send follow-up" }).click();
+  await expect(taskSubmitted).toHaveCount(submittedBefore + 1, { timeout: 90_000 });
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+
+  await page.getByRole("button", { name: "Resume run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+
+  // Settle through Stop: the orchestrator releases the active slot and the durable per-run
+  // snapshot records the terminal cancelled state.
+  await page.getByRole("button", { name: "Stop run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "idle");
+  const settled = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
+  expect(settled.ok()).toBe(true);
+  expect(((await settled.json()) as { readonly state?: string }).state).toBe("cancelled");
+});
+
+test("#2386 authority: the workbench readiness surface is live, not static", async ({ page }) => {
+  await page.route("**/api/coding-workbench/runtime/readiness*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        requestedMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        runtimeAvailable: false,
+      }),
+    }),
+  );
+  await openWorkbench(page);
+
+  await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
+  await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
+  await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
+});

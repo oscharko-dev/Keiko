@@ -94,6 +94,8 @@ function fixture() {
       approvalDigest: "d",
       expiresAtMs: 1,
     })),
+    pause: vi.fn<CodingRuntimeManager["pause"]>(() => ({ ok: true, paused: true })),
+    resume: vi.fn<CodingRuntimeManager["resume"]>(() => ({ ok: true, paused: false })),
     reconcile: vi.fn<CodingRuntimeManager["reconcile"]>(() =>
       Promise.resolve({
         ok: true,
@@ -258,24 +260,26 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     await f.orchestrator.start(start);
 
+    // Listing is a read: the revision must stay stable so background question refreshes never
+    // race a concurrent operator action (pause/answer/follow-up) into a revision conflict.
     const listed = await f.orchestrator.listQuestions("run-1", {
       requestId: "question-list-1",
       expectedRevision: 3,
     });
-    expect(listed).toMatchObject({ ok: true, snapshot: { revision: 4 } });
+    expect(listed).toMatchObject({ ok: true, snapshot: { revision: 3 } });
     expect(JSON.stringify([...f.rows.values()])).not.toContain("Private?");
     expect(
       await f.orchestrator.answerQuestion("run-1", {
         requestId: "question-answer-1",
-        expectedRevision: 4,
+        expectedRevision: 3,
         questionId: "que_1",
         answers: [["Continue"]],
       }),
-    ).toMatchObject({ ok: true, snapshot: { revision: 5 } });
+    ).toMatchObject({ ok: true, snapshot: { revision: 4 } });
     expect(
       await f.orchestrator.rejectQuestion("run-1", {
         requestId: "question-answer-1",
-        expectedRevision: 5,
+        expectedRevision: 4,
         questionId: "que_1",
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
@@ -298,13 +302,13 @@ describe("CodingRuntimeOrchestrator", () => {
         requestId: "question-list-retry",
         expectedRevision: 3,
       }),
-    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 4 } });
+    ).resolves.toMatchObject({ ok: true, snapshot: { revision: 3 } });
 
     f.questionPort.answer.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const answer = (requestId: string) =>
       f.orchestrator.answerQuestion("run-1", {
         requestId,
-        expectedRevision: 4,
+        expectedRevision: 3,
         questionId: "que_1",
         answers: [["Continue"]],
       });
@@ -312,10 +316,10 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: false,
       failureCode: "authority-resolution-failed",
     });
-    expect(f.orchestrator.status().revision).toBe(4);
+    expect(f.orchestrator.status().revision).toBe(3);
     await expect(answer("question-answer-retry")).resolves.toMatchObject({
       ok: true,
-      snapshot: { revision: 5 },
+      snapshot: { revision: 4 },
     });
   });
 
@@ -611,5 +615,86 @@ describe("CodingRuntimeOrchestrator", () => {
     f.orchestrator.startupReconcileNow();
     expect(f.evidence.deletePruned).toHaveBeenLastCalledWith(["run-old"]);
     expect(f.deletePruned).toHaveBeenCalledWith(["run-old"]);
+  });
+});
+
+describe("pause and resume (#2386 adversarial-review regressions)", () => {
+  async function runningFixture(): Promise<ReturnType<typeof fixture>> {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-0",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    return f;
+  }
+
+  it("propagates pause and resume to the manager admission gate", async () => {
+    const f = await runningFixture();
+    const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(paused).state).toBe("paused");
+    expect(f.manager.pause).toHaveBeenCalledWith("run-1");
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(resumed).state).toBe("running");
+    expect(f.manager.resume).toHaveBeenCalledWith("run-1");
+  });
+
+  it("keeps a paused run paused when adapter events arrive", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    const afterSubmit = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-1",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:01.000Z",
+      kind: "task-submitted",
+    });
+    expect(successfulSnapshot(afterSubmit).state).toBe("paused");
+    const afterPermission = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-2",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:02.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-paused",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    expect(successfulSnapshot(afterPermission).state).toBe("paused");
+    const decided = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-paused",
+      decision: "approved",
+      expectedRevision: 5,
+    });
+    expect(decided.ok).toBe(false);
+  });
+
+  it("still terminates a paused run on a redacted runtime failure", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    const failed = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-3",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:03.000Z",
+      kind: "failure-redacted",
+    });
+    expect(successfulSnapshot(failed).state).toBe("failed");
+  });
+
+  it("allows an explicit stop of a paused run", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    const stopped = await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    expect(stopped.ok).toBe(true);
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
   });
 });

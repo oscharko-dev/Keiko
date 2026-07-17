@@ -26,6 +26,9 @@ export interface CodingWorkbenchRuntimeActions {
   readonly takeover: () => Promise<void>;
   readonly retry: (taskIntent: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
+  readonly pause: () => Promise<void>;
+  readonly resume: () => Promise<void>;
+  readonly submitFollowUp: (taskIntent: string) => Promise<void>;
 }
 
 interface RuntimeActionInput {
@@ -50,7 +53,17 @@ function createCodingWorkbenchRuntimeActions({
     refreshSource,
     sourceSequence,
   } = resources;
-  const { acknowledgeRecovery, decideApproval, retry, start, stop, takeover } = mutations;
+  const {
+    acknowledgeRecovery,
+    decideApproval,
+    pause,
+    resume,
+    retry,
+    start,
+    stop,
+    submitFollowUp,
+    takeover,
+  } = mutations;
   return {
     setRequestedMode: (mode) => dispatch({ kind: "select-mode", mode }),
     setRuntimePreference: (preference) => {
@@ -70,6 +83,9 @@ function createCodingWorkbenchRuntimeActions({
     takeover,
     retry,
     acknowledgeRecovery,
+    pause,
+    resume,
+    submitFollowUp,
   };
 }
 
@@ -86,7 +102,17 @@ export function useCodingWorkbenchRuntimeActions(
     refreshSource,
     sourceSequence,
   } = resources;
-  const { acknowledgeRecovery, decideApproval, retry, start, stop, takeover } = mutations;
+  const {
+    acknowledgeRecovery,
+    decideApproval,
+    pause,
+    resume,
+    retry,
+    start,
+    stop,
+    submitFollowUp,
+    takeover,
+  } = mutations;
   return useMemo(
     () =>
       createCodingWorkbenchRuntimeActions({
@@ -101,23 +127,36 @@ export function useCodingWorkbenchRuntimeActions(
           refreshSource,
           sourceSequence,
         },
-        mutations: { acknowledgeRecovery, decideApproval, retry, start, stop, takeover },
+        mutations: {
+          acknowledgeRecovery,
+          decideApproval,
+          pause,
+          resume,
+          retry,
+          start,
+          stop,
+          submitFollowUp,
+          takeover,
+        },
       }),
     [
       acknowledgeRecovery,
       decideApproval,
       dispatch,
+      pause,
       prepareCodexSetup,
       profileSequence,
       refreshProfile,
       refreshRun,
       refreshRuntime,
       refreshSource,
+      resume,
       retry,
       sourceSequence,
       start,
       stateRef,
       stop,
+      submitFollowUp,
       takeover,
     ],
   );

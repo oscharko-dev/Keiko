@@ -273,3 +273,72 @@
 .timelineSpacer {
   pointer-events: none;
 }
+
+.questionStatus {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+}
+
+.questionRequests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.questionRequest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--surface-primary);
+}
+
+.questionFieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.questionPrompt {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.questionOptions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.questionOption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.questionOptionText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.questionInput {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+}

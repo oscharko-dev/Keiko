@@ -88,6 +88,10 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   // `isCodingWorkbenchEvidenceSafeText` regardless of token approval.
   "base",
   "knowledge",
+  // Issue #2386: the runtime-question surface labels its content-free signal events (e.g.
+  // `event-question-1`). "question" is an inert product vocabulary word — question text itself
+  // never enters evidence, and the label still passes every secret/URL/path detector.
+  "question",
   "branch",
   "browser",
   "busy",

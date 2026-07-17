@@ -53,9 +53,9 @@ function event(sequence: number): CodingWorkbenchRuntimeSseEvent {
 function readiness(): CodingWorkbenchRuntimeReadiness {
   return {
     schemaVersion: "1",
-    requestedMode: "governed-assist",
+    requestedMode: "supervised-coding",
     deploymentCeiling: "autonomous-delivery",
-    effectiveMode: "governed-assist",
+    effectiveMode: "supervised-coding",
     runtimeAvailable: true,
   };
 }
@@ -226,16 +226,16 @@ describe("mode selection, setup plans, and mutation failures", () => {
   it("keeps the state identity when the requested mode does not change", () => {
     const state = readyState();
     expect(
-      codingWorkbenchRuntimeReducer(state, { kind: "select-mode", mode: "governed-assist" }),
+      codingWorkbenchRuntimeReducer(state, { kind: "select-mode", mode: "supervised-coding" }),
     ).toBe(state);
   });
 
   it("resets runtime readiness when the requested mode changes", () => {
     const state = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "select-mode",
-      mode: "supervised-coding",
+      mode: "governed-assist",
     });
-    expect(state.requestedMode).toBe("supervised-coding");
+    expect(state.requestedMode).toBe("governed-assist");
     expect(state.runtime).toMatchObject({ status: "idle", value: null });
     expect(state.canStart).toBe(false);
   });

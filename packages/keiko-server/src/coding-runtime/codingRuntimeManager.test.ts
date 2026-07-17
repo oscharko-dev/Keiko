@@ -2007,6 +2007,52 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(events)).not.toMatch(/stdout|stderr|npm run typecheck/u);
   });
 
+  it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      now: () => 1_000,
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(manager.pause("run-1988")).toEqual({ ok: true, paused: true });
+    expect(
+      manager.issueApproval({
+        runId: "run-1988",
+        requestId: "perm-paused-denied",
+        actionKind: "push",
+        approvedByUserId: "operator",
+      }),
+    ).toEqual({ ok: false, failureCode: "runtime-stopped", retryable: false });
+
+    expect(manager.resume("run-1988")).toEqual({ ok: true, paused: false });
+    expect(
+      manager.issueApproval({
+        runId: "run-1988",
+        requestId: "perm-resumed-allowed",
+        actionKind: "push",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+
+    expect(manager.pause("run-other")).toEqual({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+      retryable: false,
+    });
+    expect(manager.resume("run-other")).toEqual({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+      retryable: false,
+    });
+    await manager.stop("run-1988");
+  });
+
   it("enforces supervised delivery approval provenance before allowing mutations", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

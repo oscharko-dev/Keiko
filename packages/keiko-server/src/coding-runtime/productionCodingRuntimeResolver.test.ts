@@ -310,6 +310,16 @@ function runtimeManager(runId: string) {
       failureCode: "runtime-stopped" as const,
       retryable: false as const,
     }),
+    pause: () => ({
+      ok: false as const,
+      failureCode: "runtime-run-mismatch" as const,
+      retryable: false as const,
+    }),
+    resume: () => ({
+      ok: false as const,
+      failureCode: "runtime-run-mismatch" as const,
+      retryable: false as const,
+    }),
     stop: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
     takeover: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
     reconcile: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
