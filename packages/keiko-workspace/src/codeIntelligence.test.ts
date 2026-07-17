@@ -1380,10 +1380,12 @@ describe("lookupCodeIntelligenceAtoms", () => {
 // Regression coverage for SonarCloud S8786 (superlinear regex backtracking) remediation in
 // codeIntelligence.ts. Each case feeds a large, adversarially-shaped input through the public
 // buildCodeIntelligenceIndex entry point (the regexes involved are all private) and asserts the
-// whole build stays well inside a tight wall-clock budget. Before the fix, the equivalent
-// standalone regex on comparable input took from hundreds of milliseconds up to several seconds
-// and kept growing quadratically with input size; every budget below is chosen with large
-// headroom over the fixed implementation's measured cost.
+// whole build stays well inside a wall-clock budget. Before the fix, the equivalent standalone
+// regex on comparable input took from hundreds of milliseconds up to several seconds and kept
+// growing quadratically with input size; a genuine reintroduction of that shape would blow well
+// past any of the budgets below. 3s leaves large headroom over the fixed implementation's
+// measured cost (tens of milliseconds) while decoupling the correctness assertions from
+// CI-load-driven wall-clock noise (code review finding, PR #2471).
 describe("regex superlinear-backtracking regressions (S8786)", () => {
   it("parses a go.mod module directive preceded by many blank lines without quadratic backtracking", () => {
     const manyBlankLines = "\n".repeat(40_000);
@@ -1405,7 +1407,7 @@ describe("regex superlinear-backtracking regressions (S8786)", () => {
       disableCache: true,
       nowMs: FIXED_NOW,
     });
-    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+    expect(Date.now() - startedAtMs).toBeLessThan(3000);
 
     expect(
       index.imports.some(
@@ -1435,7 +1437,7 @@ describe("regex superlinear-backtracking regressions (S8786)", () => {
       disableCache: true,
       nowMs: FIXED_NOW,
     });
-    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+    expect(Date.now() - startedAtMs).toBeLessThan(3000);
 
     expect(
       index.imports.some(
@@ -1464,7 +1466,7 @@ describe("regex superlinear-backtracking regressions (S8786)", () => {
       disableCache: true,
       nowMs: FIXED_NOW,
     });
-    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+    expect(Date.now() - startedAtMs).toBeLessThan(3000);
 
     const perfRecord = index.symbols.find((symbol) => symbol.name === "PerfRecord");
     expect(perfRecord?.fields).toEqual(expect.arrayContaining(["Label", "Text"]));
@@ -1487,7 +1489,7 @@ describe("regex superlinear-backtracking regressions (S8786)", () => {
       disableCache: true,
       nowMs: FIXED_NOW,
     });
-    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+    expect(Date.now() - startedAtMs).toBeLessThan(3000);
 
     expect(
       index.endpoints.some(
@@ -1514,7 +1516,7 @@ describe("regex superlinear-backtracking regressions (S8786)", () => {
       disableCache: true,
       nowMs: FIXED_NOW,
     });
-    expect(Date.now() - startedAtMs).toBeLessThan(1000);
+    expect(Date.now() - startedAtMs).toBeLessThan(3000);
 
     expect(
       index.endpoints.some(

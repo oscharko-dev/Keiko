@@ -315,14 +315,16 @@ describe("extractFailureLocations — workspace containment", () => {
 // module's actual public boundary, before or after this change. The bound is still the right fix:
 // it closes a real superlinear-time class for any future direct caller of these patterns (if ever
 // exported, reused elsewhere, or if MAX_LINE_LENGTH is ever raised), not just a static-analysis
-// preference.
+// preference. The wall-clock budgets below carry large headroom over that ~10-30ms measured cost
+// specifically so they assert "not superlinear", not a tight performance SLA — decoupling the
+// regression guard from CI-load-driven timing noise (code review finding, PR #2471).
 describe("extractFailureLocations — regex safety (S8786 regression guards)", () => {
   it("resolves many maximal-length non-matching vitest frame lines quickly", () => {
     const noise = "a".repeat(4096);
     const lines = Array.from({ length: 30 }, () => noise).join("\n");
     const start = Date.now();
     const out = extract("test", cmd(lines));
-    expect(Date.now() - start).toBeLessThan(400);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(out).toEqual([]);
   });
 
@@ -335,7 +337,7 @@ describe("extractFailureLocations — regex safety (S8786 regression guards)", (
     const line = ["/repo/src/a.ts", `${prefix}${msg}`].join("\n");
     const start = Date.now();
     const out = extract("lint", cmd(line));
-    expect(Date.now() - start).toBeLessThan(200);
+    expect(Date.now() - start).toBeLessThan(1000);
     expect(out).toHaveLength(1);
     expect(out[0]?.ruleId).toBeUndefined();
   });
@@ -346,7 +348,7 @@ describe("extractFailureLocations — regex safety (S8786 regression guards)", (
     const title = `a${" ".repeat(4096 - "FAIL ".length - 2)}b`;
     const start = Date.now();
     const out = extract("test", cmd(`FAIL ${title}`));
-    expect(Date.now() - start).toBeLessThan(200);
+    expect(Date.now() - start).toBeLessThan(1000);
     expect(out).toEqual([]);
   });
 

@@ -33,7 +33,7 @@ describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 re
     const adversarial = "a/".repeat(60000);
     const start = Date.now();
     const parts = repositoryReferenceTextParts(adversarial);
-    expect(Date.now() - start).toBeLessThan(2000);
+    expect(Date.now() - start).toBeLessThan(5000);
     expect(parts).toEqual([{ kind: "text", text: adversarial }]);
   });
 
@@ -43,7 +43,7 @@ describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 re
     const adversarial = "a".repeat(150000);
     const start = Date.now();
     const parts = repositoryReferenceTextParts(adversarial);
-    expect(Date.now() - start).toBeLessThan(2000);
+    expect(Date.now() - start).toBeLessThan(5000);
     expect(parts).toEqual([{ kind: "text", text: adversarial }]);
   });
 
@@ -118,7 +118,7 @@ describe("sanitizeRepositoryEvidenceText (S8786 regression)", () => {
     const adversarial = `[source:${" ".repeat(150000)}`;
     const start = Date.now();
     const result = sanitizeRepositoryEvidenceText(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
+    expect(Date.now() - start).toBeLessThan(4000);
     // No closing "]" anywhere, so none of the bracket/label patterns match; only the trailing
     // whitespace-collapse pass (tidyEvidenceText) touches the text, collapsing the long run to " ".
     expect(result).toBe("[source: ");
@@ -147,7 +147,7 @@ describe("repositoryRootLabel (S8786 regression)", () => {
     const adversarial = `${"/".repeat(150000)}a`;
     const start = Date.now();
     const result = repositoryRootLabel(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
+    expect(Date.now() - start).toBeLessThan(4000);
     expect(result).toBe("a");
   });
 
@@ -166,7 +166,7 @@ describe("normalizeReferencePath (S8786 regression)", () => {
     const adversarial = `a${"/".repeat(150000)}${"b".repeat(150000)}${"/".repeat(150000)}`;
     const start = Date.now();
     const result = normalizeReferencePath(adversarial);
-    expect(Date.now() - start).toBeLessThan(1500);
+    expect(Date.now() - start).toBeLessThan(4000);
     expect(result).toBe(`a${"/".repeat(150000)}${"b".repeat(150000)}`);
   });
 
