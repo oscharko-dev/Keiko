@@ -118,9 +118,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();
   await start.click();
-  // #2474 acceptance proof (temporary, reverted in the next commit): a deliberately impossible
-  // expectation MUST turn the code-task-e2e lane red.
-  await expect(workbench(page)).toHaveAttribute("data-state", "deliberately-broken-2474-proof");
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
   const runId = await currentRunId(page);
 
   // The required question must surface in the browser and unblock the run when answered; the
