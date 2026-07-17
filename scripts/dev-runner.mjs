@@ -310,11 +310,18 @@ async function waitForPublicReadiness() {
 function startBff() {
   spawnChild("bff", process.execPath, bffProcessArgs(bffScript, !skipBffWatchForTest), {
     cwd: repoRoot,
-    env: {
-      KEIKO_DEV_BFF_PORT: String(bffPort),
-      KEIKO_STATE_DIR: stateDir,
-    },
+    env: bffChildEnv(bffPort, publicPort, stateDir),
   });
+}
+
+// The packaged CLI exports the public loopback port to the server; the dev lane mirrors it so
+// coding-runtime activation can compose gateway and editor-agent loopback URLs (#2475).
+export function bffChildEnv(bffListenPort, publicUiPort, keikoStateDir) {
+  return {
+    KEIKO_DEV_BFF_PORT: String(bffListenPort),
+    KEIKO_UI_PORT: String(publicUiPort),
+    KEIKO_STATE_DIR: keikoStateDir,
+  };
 }
 
 export function bffProcessArgs(scriptPath, watchEnabled) {

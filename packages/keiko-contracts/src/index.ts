@@ -1165,6 +1165,7 @@ export type {
   CodingWorkbenchRuntimeStatus,
   CodingWorkbenchRuntimeStopRequest,
   CodingWorkbenchRuntimeTakeoverRequest,
+  CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
 export {
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
@@ -1172,6 +1173,7 @@ export {
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
+  CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
