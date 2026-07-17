@@ -9,6 +9,7 @@ import {
   createFollowUpMutation,
   createLifecycleMutation,
   createRecoveryAcknowledgementMutation,
+  createResearchRevokeMutation,
   createRetryMutation,
   createRunBoundMutation,
   createStartMutation,
@@ -26,6 +27,7 @@ const apiMocks = vi.hoisted(() => ({
   pauseCodingWorkbenchRuntime: vi.fn(),
   resumeCodingWorkbenchRuntime: vi.fn(),
   submitCodingWorkbenchRuntimeFollowUp: vi.fn(),
+  revokeCodingWorkbenchRuntimeResearchGrant: vi.fn(),
 }));
 
 vi.mock("./coding-workbench-runtime-api", async (importOriginal) => ({
@@ -251,6 +253,31 @@ describe("createFollowUpMutation", () => {
       requestId: mutation.requestId,
       expectedRevision: 4,
       taskIntent: "add a test",
+    });
+  });
+});
+
+describe("createResearchRevokeMutation", () => {
+  const grant = { grantId: "grant-1", domains: ["nodejs.org"], expiresAt: UPDATED_AT } as const;
+
+  it("requires a run that still carries a live research grant", () => {
+    expect(() => createResearchRevokeMutation(stateWithRun(snapshot()))).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
+    expect(() => createResearchRevokeMutation(stateWithRun(null))).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
+  });
+
+  it("posts a revision-bound revoke carrying the grant id", async () => {
+    const mutation = createResearchRevokeMutation(stateWithRun(snapshot({ researchGrant: grant })));
+    expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+    expect(mutation.mayInstallNewRun).toBe(false);
+    await mutation.run();
+    expect(apiMocks.revokeCodingWorkbenchRuntimeResearchGrant).toHaveBeenCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      grantId: "grant-1",
     });
   });
 });

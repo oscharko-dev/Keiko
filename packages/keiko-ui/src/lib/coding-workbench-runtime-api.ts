@@ -10,6 +10,7 @@ import {
   type CodingWorkbenchRuntimeQuestionsResponse,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  type CodingWorkbenchRuntimeResearchRevokeRequest,
   type CodingWorkbenchRuntimeRetryRequest,
   type CodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeSseEvent,
@@ -221,6 +222,17 @@ export function submitCodingWorkbenchRuntimeFollowUp(
   input: CodingWorkbenchRuntimeFollowUpBody,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/follow-up"), input);
+}
+
+/**
+ * #2387 — revoke the live internet research grant. The server drops the grant for the parent run
+ * and every child in one revision bump; the returned snapshot no longer carries `researchGrant`.
+ */
+export function revokeCodingWorkbenchRuntimeResearchGrant(
+  runId: string,
+  input: CodingWorkbenchRuntimeResearchRevokeRequest,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/research/revoke"), input);
 }
 
 /**

@@ -79,7 +79,8 @@ export type CodingWorkbenchMutationKind =
   | "recovery-ack"
   | "pause"
   | "resume"
-  | "follow-up";
+  | "follow-up"
+  | "research-revoke";
 
 export interface CodingWorkbenchMutationState {
   readonly status: "idle" | "pending" | "error";

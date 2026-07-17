@@ -99,6 +99,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
 
