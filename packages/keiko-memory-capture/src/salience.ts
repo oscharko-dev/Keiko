@@ -117,7 +117,7 @@ async function callSalienceModel(input: SalienceInput, deps: SalienceDeps): Prom
 
 // ─── Defensive JSON parsing (never throws) ───────────────────────────────────
 function stripCodeFences(raw: string): string {
-  return raw.replaceAll(/```[a-zA-Z]*\n?/g, "").replaceAll(/```/g, "");
+  return raw.replaceAll(/```[a-zA-Z]*\n?/g, "").replaceAll("```", "");
 }
 
 // Scan state for firstBalancedArray: bracket nesting depth plus the string/escape tracking that

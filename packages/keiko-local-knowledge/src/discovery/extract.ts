@@ -126,7 +126,7 @@ export interface ExtractDocumentDeps {
 // (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
 // containment checks work cross-platform.
 function normaliseSep(p: string): string {
-  return p.replaceAll(/\\/g, "/");
+  return p.replaceAll("\\", "/");
 }
 
 function isContained(absoluteRoot: string, absolutePath: string): boolean {

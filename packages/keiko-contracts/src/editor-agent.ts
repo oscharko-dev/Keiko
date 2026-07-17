@@ -756,7 +756,7 @@ function changesetFileHasPrecondition(file: EditorAgentChangesetFile): boolean {
 
 function normalizeAgentPath(path: string): string {
   return path
-    .replaceAll(/\\/gu, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join("/");

@@ -119,7 +119,7 @@ function stripTrailingSlashes(value: string): string {
 }
 
 function normalize(relPath: string): string {
-  return stripTrailingSlashes(relPath.replaceAll(/\\/g, "/").replace(/^\.\//, ""));
+  return stripTrailingSlashes(relPath.replaceAll("\\", "/").replace(/^\.\//, ""));
 }
 
 function segments(relPath: string): readonly string[] {

@@ -12,7 +12,7 @@ const WINDOWS_DRIVE_RE = /^[A-Za-z]:/;
 const ROOT_MARKERS = new Set<string>(["/", "\\", "~", "."]);
 
 function hasTraversalSegment(path: string): boolean {
-  const normalized = path.replaceAll(/\\/g, "/");
+  const normalized = path.replaceAll("\\", "/");
   for (const segment of normalized.split("/")) {
     if (segment === "..") {
       return true;

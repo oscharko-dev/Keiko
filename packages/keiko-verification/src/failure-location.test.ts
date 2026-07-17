@@ -357,11 +357,14 @@ describe("extractFailureLocations — regex safety (S8786 regression guards)", (
   });
 
   // Empirical evidence for the block comment above: isolated copies of the pre-fix ("OLD") and
-  // current ("NEW", mirroring ESLINT_ROW/VITEST_TITLE in ./failure-location.ts exactly) patterns,
-  // exercised directly (bypassing extractFailureLocations' MAX_LINE_LENGTH filter, which is what
-  // makes this class unreachable in production) against the anchor + large-ambiguous-run +
-  // non-absorbable-terminator shape. This proves the closed class is real, not just SonarCloud
-  // preference, and would fail if the bound were ever removed from the shipped regexes.
+  // bounded-but-still-ambiguous ("NEW") patterns, exercised directly (bypassing
+  // extractFailureLocations' MAX_LINE_LENGTH filter, which is what makes this class unreachable
+  // in production) against the anchor + large-ambiguous-run + non-absorbable-terminator shape.
+  // This proves the closed class is real, not just SonarCloud preference, and would fail if the
+  // bound were ever removed. NEW_ESLINT_ROW mirrors the shipped ESLINT_ROW exactly; NEW_VITEST_TITLE
+  // mirrors what VITEST_TITLE looked like before its trailing `\s*$` was dropped entirely (a
+  // second SonarCloud pass kept flagging the bounded-but-still-adjacent shape) — kept here as a
+  // second, independent data point for the same underlying pattern family.
   it("demonstrates the closed polynomial blowup for ESLINT_ROW's pre-fix shape", () => {
     const OLD_ESLINT_ROW =
       /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.+?)(?:\s{2,}(?<rule>[\w@/.-]+))?\s*$/u;

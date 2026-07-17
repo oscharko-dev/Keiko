@@ -229,16 +229,15 @@ const stripAtxClosingHashes = (value: string): string => {
   return value.slice(0, end);
 };
 
-// The trailing text is captured as `(.*\S)` (must end on a non-whitespace char) rather than the
-// original `(.+?)\s*$` — a lazy dot-star immediately followed by a trailing `\s*` lets the engine
-// split an arbitrarily long run of trailing whitespace between the two in exponentially many ways
-// once the overall match fails, which is quadratic in practice (S8786). Requiring the capture to
-// end on `\S` makes the split point unambiguous (the two atoms are now disjoint), which keeps this
-// linear while matching/capturing identically for every input this function is designed to handle.
+// Only the marker's hash count is actually consumed below (`heading` is computed separately,
+// from `line.trim()`, not from a capture) — so the marker-only regex below needs nothing past the
+// bounded `#{1,6}` MARKDOWN_HEADING already validated. The former `(.*\S)\s*$` tail captured text
+// nothing read, purely to double as a shape check, and paid for it: a lazy dot-star immediately
+// followed by a trailing `\s*` lets the engine split an arbitrarily long run of trailing
+// whitespace between the two in exponentially many ways once the overall match fails (S8786).
 const parseMarkdownHeading = (line: string): MarkdownHeadingContext | undefined => {
   if (!MARKDOWN_HEADING.test(line)) return undefined;
-  const match = /^\s{0,3}(#{1,6})\s+(.*\S)\s*$/u.exec(line);
-  const marker = match?.[1];
+  const marker = /^\s{0,3}(#{1,6})/u.exec(line)?.[1];
   if (marker === undefined) return undefined;
   const heading = normaliseStatement(stripAtxClosingHashes(line.trim()));
   return { level: marker.length, text: heading };

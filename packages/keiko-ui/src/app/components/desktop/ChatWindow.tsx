@@ -1227,7 +1227,7 @@ function trimTrailingSlashes(value: string): string {
 // Exported test-referenced helper (same rationale as `copyableMessageText` above): pure,
 // DOM-free, and otherwise only reachable through full ChatWindow rendering.
 export function rootDisplayName(root: string): string {
-  const normalized = trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
+  const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }

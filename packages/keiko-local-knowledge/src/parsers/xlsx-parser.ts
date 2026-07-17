@@ -367,7 +367,7 @@ function findOpenTag(
 
 // Replacement for `/<tag\b[\s\S]*?<\/tag>/gi`: yields each full `<tag ...>...</tag>` element
 // (open tag through close tag, inclusive) in document order.
-function* iterateXmlElements(xml: string, tagNameLower: string): Generator<string> {
+function* iterateXmlElements(xml: string, tagNameLower: string): Generator<string, void, unknown> {
   const lower = xml.toLowerCase();
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
@@ -384,7 +384,10 @@ function* iterateXmlElements(xml: string, tagNameLower: string): Generator<strin
 
 // Replacement for `/<tag\b[^>]*>([\s\S]*?)<\/tag>/gi`: yields each element's inner content
 // (between the open tag's `>` and the matching `</tag>`) in document order.
-function* iterateXmlElementContents(xml: string, tagNameLower: string): Generator<string> {
+function* iterateXmlElementContents(
+  xml: string,
+  tagNameLower: string,
+): Generator<string, void, unknown> {
   const lower = xml.toLowerCase();
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
@@ -402,7 +405,7 @@ function* iterateXmlElementContents(xml: string, tagNameLower: string): Generato
 
 // Replacement for `/<tag\b[^>]*>/gi`: yields each self-contained start/self-closing tag (no
 // paired close tag required) in document order.
-function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<string> {
+function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<string, void, unknown> {
   const lower = xml.toLowerCase();
   let cursor = 0;
   for (;;) {
@@ -416,13 +419,11 @@ function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<stri
 }
 
 function firstXmlElement(xml: string, tagNameLower: string): string | undefined {
-  for (const element of iterateXmlElements(xml, tagNameLower)) return element;
-  return undefined;
+  return iterateXmlElements(xml, tagNameLower).next().value ?? undefined;
 }
 
 function firstXmlElementContent(xml: string, tagNameLower: string): string | undefined {
-  for (const content of iterateXmlElementContents(xml, tagNameLower)) return content;
-  return undefined;
+  return iterateXmlElementContents(xml, tagNameLower).next().value ?? undefined;
 }
 
 // Exported (module-local only — not re-exported from the package barrel) so the S8786

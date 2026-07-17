@@ -83,7 +83,7 @@ const ATX_HEADING_PREFIX = /^#{1,6}\s+/;
 function stripTrailingAtxMarkup(text) {
   const trimmed = text.trimEnd();
   let end = trimmed.length;
-  while (end > 0 && trimmed.charCodeAt(end - 1) === 35 /* '#' */) end -= 1;
+  while (end > 0 && trimmed.codePointAt(end - 1) === 35 /* '#' */) end -= 1;
   return trimmed.slice(0, end).trimEnd();
 }
 

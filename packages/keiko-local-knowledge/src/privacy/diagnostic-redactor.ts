@@ -121,7 +121,7 @@ function redactCandidate(candidate: string, homePrefix: string): string {
 }
 
 function toForwardSlash(value: string): string {
-  return value.replaceAll(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 function basenameOf(value: string): string {

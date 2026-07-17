@@ -907,7 +907,7 @@ function archiveEntryInsideRoot(entry, expectedRoot) {
 // O(n^2) overall. Trailing-slash stripping never needs backtracking at all.
 function stripTrailingSlashes(value) {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  while (end > 0 && value.codePointAt(end - 1) === 47 /* '/' */) end -= 1;
   return value.slice(0, end);
 }
 

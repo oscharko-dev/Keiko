@@ -79,7 +79,7 @@ function stripTrailingSlashes(value: string): string {
 }
 
 function normalizeEditorOpenRoot(root: string): string {
-  return stripTrailingSlashes(root.trim().replaceAll(/\\/gu, "/"));
+  return stripTrailingSlashes(root.trim().replaceAll("\\", "/"));
 }
 
 // Root-relative file-identifier contract (Issue #1374): coerce a repository reference / persisted
@@ -1527,8 +1527,8 @@ function isAbsoluteRoot(root: string): boolean {
  */
 function normaliseRoot(root: string): string {
   // Windows drive root: keep the trailing slash that follows the colon (C:/ or C:\).
-  if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replaceAll(/\\/gu, "/");
-  return stripTrailingSlashes(root.replaceAll(/\\/gu, "/"));
+  if (/^[A-Za-z]:[/\\]?$/u.test(root)) return root.replaceAll("\\", "/");
+  return stripTrailingSlashes(root.replaceAll("\\", "/"));
 }
 
 /**
@@ -1550,7 +1550,7 @@ export function resolvedFilesRoot(w: AppWindow): string | null {
 }
 
 function normaliseRelativePath(path: string): string {
-  return stripTrailingSlashes(path.replaceAll(/\\/gu, "/").replace(/^\/+/u, ""));
+  return stripTrailingSlashes(path.replaceAll("\\", "/").replace(/^\/+/u, ""));
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {

@@ -166,4 +166,30 @@ describe("regex performance (SonarCloud S8786 regression)", () => {
     // The token starts with "!", not a letter, so NAME_TOKEN_RE rejects it.
     expect(outcome).toBeNull();
   });
+
+  // The greeting prefix ("hello|hi|hey|hallo" + "keiko" + optional punctuation) used to be
+  // matched inline by the identity regexes via `\s+keiko\s*[,!.\-:]?\s*`: two `\s`-matching
+  // quantifiers either side of a possibly-empty optional group, which is the same
+  // overlapping-adjacent-quantifier shape the trailing tail (above) had. A "hello keiko" body
+  // followed by a long space run and no valid identity keyword forces the engine to retry every
+  // split of that run before giving up — empirically quadratic (~80ms at 10k spaces growing to
+  // ~4.4s at 80k). `skipGreetingPrefix` scans the identical shape once, with no backtracking.
+  it("resolves a large space run after a greeting prefix quickly (no matching keyword follows)", () => {
+    const adversarialBody = " ".repeat(20_000);
+    const start = Date.now();
+    const outcome = tryExtractAmbientIdentity(`hello keiko${adversarialBody}`, ctx());
+    expect(Date.now() - start).toBeLessThan(PERFORMANCE_BUDGET_MS);
+    expect(outcome).toBeNull();
+  });
+
+  it("still extracts the name through a greeting prefix with punctuation and extra whitespace", () => {
+    const outcome = tryExtractAmbientIdentity("hey   keiko  ,   my name is Paul", ctx());
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind !== "candidate") return;
+    expect(outcome.proposal.body).toBe("The user's name is Paul.");
+  });
+
+  it("does not consume a greeting-shaped prefix that never resolves to keiko", () => {
+    expect(tryExtractAmbientIdentity("hello there, my name is Paul", ctx())).toBeNull();
+  });
 });

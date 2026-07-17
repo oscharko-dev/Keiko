@@ -99,7 +99,7 @@ export function buildLastGroundedBudgetStatus(
 // Exported for the co-located regression test only.
 export function stripTrailingSlashes(path: string): string {
   let end = path.length;
-  while (end > 0 && path.charCodeAt(end - 1) === 0x2f /* "/" */) {
+  while (end > 0 && path.codePointAt(end - 1) === 0x2f /* "/" */) {
     end -= 1;
   }
   return path.slice(0, end);

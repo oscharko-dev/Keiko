@@ -122,8 +122,12 @@ function extractNotes(body: string): readonly string[] {
 
 // The original /^#{2,6}\s+(.+?)\s*#*$/u chained a lazy wildcard capture into a trailing \s*#*
 // run anchored on $ — three quantifiers whose character classes all overlap (`.` matches
-// whitespace and `#`), so the engine can retry many splits between them.
-const HEADING_PREFIX_PATTERN = /^#{2,6}\s+(.+)$/u;
+// whitespace and `#`), so the engine can retry many splits between them. The intermediate
+// `/^#{2,6}\s+(.+)$/u` fix removed the trailing run but kept `\s+` directly adjacent to `(.+)$`
+// — `.` also matches whitespace, so the boundary between them is still ambiguous (S8786). The
+// marker regex below captures nothing past the required leading `\s+`; the body is then read via
+// a plain slice, which has no adjacent-quantifier boundary left to be ambiguous about.
+const HEADING_MARKER_PATTERN = /^#{2,6}\s+/u;
 const SINGLE_CHAR_WHITESPACE_PATTERN = /\s/u;
 
 // Strips a trailing "whitespace-run then hash-run" suffix (mirroring \s*#*$) using a manual
@@ -146,9 +150,10 @@ function stripHeadingTrailingRun(body: string): string {
 }
 
 function normalizeHeading(line: string): string | undefined {
-  const match = HEADING_PREFIX_PATTERN.exec(line.trim());
+  const trimmed = line.trim();
+  const match = HEADING_MARKER_PATTERN.exec(trimmed);
   if (match === null) return undefined;
-  const body = match[1] ?? "";
+  const body = trimmed.slice(match[0].length);
   // Matching identical output to the original's one-character-minimum quirk of the lazy `+`
   // capture when the whole body is itself a trailing-run (e.g. "## ###" still yields "#").
   const stripped = stripHeadingTrailingRun(body);

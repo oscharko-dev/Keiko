@@ -78,7 +78,7 @@ const GERMAN_PHONE_RE = /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){
 // linear even on an adversarially long path.
 function stripTrailingSlashes(value: string): string {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 0x2f /* "/" */) {
+  while (end > 0 && value.codePointAt(end - 1) === 0x2f /* "/" */) {
     end -= 1;
   }
   return value.slice(0, end);

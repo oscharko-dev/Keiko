@@ -98,7 +98,7 @@ function stripControls(value: string): string {
 }
 
 function normalizeSeparators(value: string): string {
-  return value.replaceAll(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 function trimTrailingSlashes(value: string): string {

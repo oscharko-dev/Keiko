@@ -1189,7 +1189,7 @@ function stripTrailingSlashes(value: string): string {
 }
 
 function normalizeWorkspacePattern(pattern: string): string | undefined {
-  let normalized = pattern.trim().replaceAll(/\\/gu, "/");
+  let normalized = pattern.trim().replaceAll("\\", "/");
   while (normalized.startsWith("./")) {
     normalized = normalized.slice(2);
   }
@@ -1837,7 +1837,7 @@ function selectedFileScopeAtoms(
     if (!isValidScopePath(entry, { mustBeRelative: true })) {
       continue;
     }
-    const scopePath = entry.replaceAll(/\\/gu, "/");
+    const scopePath = entry.replaceAll("\\", "/");
     if (seen.has(scopePath)) {
       continue;
     }

@@ -45,16 +45,60 @@ function stripIdentityCaptureTail(rawCapture: string): string {
 }
 
 // The identity regexes below intentionally match ONLY the fixed-alternation prefix ("my name
-// is", "ich bin", the optional greeting, …) and stop — no capture group, no `$`. The name itself
-// is never extracted by regex backtracking; it is sliced out manually below. This is what the
-// original `.`-based capture ("cannot cross a line terminator") structurally guaranteed, and what
-// a bare `[\s\S]+` capture would silently give up: without this split, a two-line chat message
-// like "my name is Sarah\nNice to chat" would merge the unrelated second line into the captured
-// name instead of failing to match, the way the original single-line-only regex did.
+// is", "ich bin", …) and stop — no capture group, no `$`. The name itself is never extracted by
+// regex backtracking; it is sliced out manually below. This is what the original `.`-based
+// capture ("cannot cross a line terminator") structurally guaranteed, and what a bare `[\s\S]+`
+// capture would silently give up: without this split, a two-line chat message like "my name is
+// Sarah\nNice to chat" would merge the unrelated second line into the captured name instead of
+// failing to match, the way the original single-line-only regex did.
 const STRONG_IDENTITY_PREFIX_RE =
-  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:my\s+name\s+is|call\s+me|ich\s+hei(?:ß|ss)e|mein\s+name\s+ist)\s+/iu;
-const WEAK_IDENTITY_PREFIX_RE =
-  /^(?:(?:hello|hi|hey|hallo)\s+keiko\s*[,!.\-:]?\s*)?(?:i\s+am|i(?:'|’)m|ich\s+bin)\s+/iu;
+  /^(?:my\s+name\s+is|call\s+me|ich\s+hei(?:ß|ss)e|mein\s+name\s+ist)\s+/iu;
+const WEAK_IDENTITY_PREFIX_RE = /^(?:i\s+am|i(?:'|’)m|ich\s+bin)\s+/iu;
+const GREETING_WORDS = ["hello", "hi", "hey", "hallo"];
+const GREETING_PUNCTUATION = new Set([",", "!", ".", "-", ":"]);
+
+function greetingWordLength(lowerText: string): number {
+  for (const word of GREETING_WORDS) {
+    if (lowerText.startsWith(word)) {
+      return word.length;
+    }
+  }
+  return 0;
+}
+
+function skipWhitespaceRun(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && /\s/u.test(text.charAt(index))) {
+    index += 1;
+  }
+  return index;
+}
+
+// Consumes an optional "hello keiko, " (or hi/hey/hallo, one optional punctuation char,
+// surrounding whitespace) greeting prefix, returning the index right after it (0 if no greeting
+// is present). The original regex spelled this as `\s+keiko\s*[,!.\-:]?\s*` inside an outer
+// optional group: two `\s`-matching quantifiers sitting on either side of an optional
+// possibly-empty character class, which is the overlapping-adjacent-quantifier shape S8786
+// flags — confirmed empirically quadratic (a "hello keiko" + N spaces body that never completes
+// the match went from ~80ms at 10k spaces to ~4.4s at 80k, a clean ~4x-per-doubling curve). This
+// scans the identical shape once, left to right, with no backtracking possible.
+function skipGreetingPrefix(text: string): number {
+  const lower = text.toLowerCase();
+  const wordLength = greetingWordLength(lower);
+  if (wordLength === 0 || !/\s/u.test(text.charAt(wordLength))) {
+    return 0;
+  }
+  const afterGreetingWord = skipWhitespaceRun(text, wordLength);
+  if (!lower.startsWith("keiko", afterGreetingWord)) {
+    return 0;
+  }
+  let index = afterGreetingWord + "keiko".length;
+  index = skipWhitespaceRun(text, index);
+  if (GREETING_PUNCTUATION.has(text.charAt(index))) {
+    index += 1;
+  }
+  return skipWhitespaceRun(text, index);
+}
 // JS `.` (no `s`/dotAll flag) stops at any of these four LineTerminator code points, not just
 // `\n` (ECMA-262 LineTerminator = LF | CR | LS | PS). A plain `indexOf("\n")` would therefore be
 // narrower than the original's line boundary; this class matches it exactly. It carries no
@@ -151,11 +195,12 @@ function buildIdentityCandidate(
 
 function extractIdentityName(text: string, requireStrictName: boolean): string | null {
   const prefixRe = requireStrictName ? WEAK_IDENTITY_PREFIX_RE : STRONG_IDENTITY_PREFIX_RE;
-  const prefixMatch = prefixRe.exec(text);
+  const afterGreeting = text.slice(skipGreetingPrefix(text));
+  const prefixMatch = prefixRe.exec(afterGreeting);
   if (prefixMatch === null) {
     return null;
   }
-  const rest = text.slice(prefixMatch[0].length);
+  const rest = afterGreeting.slice(prefixMatch[0].length);
   const terminatorIndex = rest.search(LINE_TERMINATOR_RE);
   const firstLine = terminatorIndex === -1 ? rest : rest.slice(0, terminatorIndex);
   const remainder = terminatorIndex === -1 ? "" : rest.slice(terminatorIndex);

@@ -153,7 +153,7 @@ function trimLeadingSlashes(value: string): string {
 }
 
 export function normalizeReferencePath(path: string): string {
-  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll(/\\/gu, "/")));
+  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll("\\", "/")));
 }
 
 function referenceIdentity(reference: RepositoryReference | null): string | null {
@@ -274,7 +274,7 @@ export function parseExactRepositoryReference(source: string): RepositoryReferen
 }
 
 export function repositoryRootLabel(root: string): string {
-  const normalized = trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
+  const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }
@@ -320,7 +320,7 @@ function referencePathForRoot(referencePath: string, root: string): string {
 }
 
 function repositoryRootSuffix(root: string): string {
-  const normalized = trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
+  const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts.slice(-2).join("/");
 }

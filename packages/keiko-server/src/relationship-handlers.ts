@@ -2017,7 +2017,7 @@ export interface CreateRelationshipStorePortOptions {
 
 function defaultEtag(updatedAt: number): string {
   const hex = updatedAt.toString(16).padStart(16, "0");
-  const tail = randomUUID().replaceAll(/-/g, "").slice(0, 6);
+  const tail = randomUUID().replaceAll("-", "").slice(0, 6);
   return `${hex}-${tail}`;
 }
 

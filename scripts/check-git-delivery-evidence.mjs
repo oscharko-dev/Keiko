@@ -150,22 +150,26 @@ function slugHeading(heading) {
   return heading
     .trim()
     .toLowerCase()
-    .replaceAll(/`/g, "")
+    .replaceAll("`", "")
     .replace(/[^a-z0-9 -]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 }
 
+const HEADING_MARKER = /^(#{1,6})\s+/;
+
 export function markdownAnchors(markdown) {
   const anchors = new Set();
   for (const line of markdown.split(/\r?\n/)) {
-    // Greedy `.+` (not lazy `.+?` followed by a separate `\s*$`) removes the overlapping-quantifier
-    // shape that made this superlinear (S8786): `slugHeading` already trims, so trailing whitespace
-    // doesn't need stripping here too.
-    const match = /^(#{1,6})\s+(.+)$/.exec(line);
+    // The marker regex captures nothing past the required `\s+`; the body is a plain slice.
+    // A prior `(.+)$` right after `\s+` was still ambiguous (`.` also matches whitespace, so the
+    // boundary between the two is not unique) even though it's a single greedy pass (S8786 flags
+    // the shape regardless of whether backtracking is ever actually triggered). `slugHeading`
+    // already trims, so trailing whitespace doesn't need stripping here either way.
+    const match = HEADING_MARKER.exec(line);
     if (match) {
-      anchors.add(slugHeading(match[2]));
+      anchors.add(slugHeading(line.slice(match[0].length)));
     }
   }
   return anchors;

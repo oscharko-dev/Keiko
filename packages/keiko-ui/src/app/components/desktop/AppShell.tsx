@@ -209,13 +209,34 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
     : "Review window open";
 }
 
+// `/\/+$/u`, `/^\/+/u`, `/^\/+|\/+$/gu`, and `/^\/+$/u` (leading/trailing slash-run stripping,
+// used throughout this file) each chain a quantified character class directly against an anchor
+// with nothing fixed in between — SonarCloud's S8786 flags that shape regardless of the fact that
+// `^`/`$` anchoring already keeps real-world matching linear. These scans reproduce the identical
+// "strip a run of `/` at the start and/or end, nothing in the middle" behavior with no regex.
+function stripLeadingSlashRun(value: string): string {
+  let start = 0;
+  while (start < value.length && value.charAt(start) === "/") start += 1;
+  return value.slice(start);
+}
+
+function stripTrailingSlashRun(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charAt(end - 1) === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function isOnlySlashes(value: string): boolean {
+  return value.length > 0 && stripLeadingSlashRun(value).length === 0;
+}
+
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
   if (scope?.root === undefined) return null;
   return [
-    scope.root.replaceAll(/\\/gu, "/").replace(/\/+$/u, ""),
+    stripTrailingSlashRun(scope.root.replaceAll("\\", "/")),
     scope.kind,
     ...scope.relativePaths.map((path) =>
-      path.replaceAll(/\\/gu, "/").replaceAll(/^\/+|\/+$/gu, ""),
+      stripTrailingSlashRun(stripLeadingSlashRun(path.replaceAll("\\", "/"))),
     ),
   ].join("\u0000");
 }
@@ -228,9 +249,13 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
 
 function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   if (scope.root === undefined) return null;
-  const relativePath = scope.relativePaths[0]?.replaceAll(/\\/gu, "/").replace(/^\/+/u, "");
+  const firstRelativePath = scope.relativePaths[0];
+  const relativePath =
+    firstRelativePath === undefined
+      ? undefined
+      : stripLeadingSlashRun(firstRelativePath.replaceAll("\\", "/"));
   if (relativePath === undefined || relativePath.length === 0) return scope.root;
-  const root = scope.root.replaceAll(/\\/gu, "/").replace(/\/+$/u, "");
+  const root = stripTrailingSlashRun(scope.root.replaceAll("\\", "/"));
   return `${root}/${relativePath}`;
 }
 
@@ -246,10 +271,10 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
 function editorCfgRelativePath(root: string, file: string): string | null {
   // Filesystem-root ("/") workspace edge: every absolute path is "under" it, so strip the leading
   // slash. The contract folds a "/" root to empty/outside-root, so this one intentional, tested case
-  // (a whole-disk editor root) is handled locally. `^\/+$` is anchored at both ends — linear.
-  if (/^\/+$/u.test(root.trim().replaceAll(/\\/gu, "/"))) {
-    const comparableFile = file.trim().replaceAll(/\\/gu, "/");
-    return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
+  // (a whole-disk editor root) is handled locally.
+  if (isOnlySlashes(root.trim().replaceAll("\\", "/"))) {
+    const comparableFile = file.trim().replaceAll("\\", "/");
+    return comparableFile.length === 0 ? "" : stripLeadingSlashRun(comparableFile);
   }
   const resolution = resolveWorkspaceFileIdentifier(root, file);
   if (resolution.kind === "relative") return resolution.path;

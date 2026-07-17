@@ -110,7 +110,7 @@ function documentBindingForPath(scopePath: string): FormatBinding | undefined {
 }
 
 function normalizeScopePath(scopePath: string): string {
-  return scopePath.replaceAll(/\\/gu, "/");
+  return scopePath.replaceAll("\\", "/");
 }
 
 function isWithinSelectedScope(searchScope: SearchScope, realRelativePath: string): boolean {
@@ -525,7 +525,7 @@ async function processConnectedEntry(
   if (!isValidScopePath(entry, { mustBeRelative: true })) {
     return;
   }
-  const scopePath = entry.replaceAll(/\\/gu, "/");
+  const scopePath = entry.replaceAll("\\", "/");
   if (seen.has(scopePath)) {
     return;
   }

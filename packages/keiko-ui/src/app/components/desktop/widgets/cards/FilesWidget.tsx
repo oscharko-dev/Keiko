@@ -100,7 +100,7 @@ function parentRelativePath(path: string): string | null {
 function displayPath(root: string, relativePath: string | null): string {
   if (relativePath === null || relativePath.length === 0) return root;
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  const normalizedRelativePath = relativePath.replaceAll(/\//gu, separator);
+  const normalizedRelativePath = relativePath.replaceAll("/", separator);
   return `${trimTrailingSeparators(root, "/\\")}${separator}${normalizedRelativePath}`;
 }
 
@@ -293,7 +293,7 @@ function errorMessage(error: unknown, t: I18nTranslate): string {
 // escaping quotes/backslashes is enough for an attribute-value selector.
 function cssEscape(value: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
-  return value.replaceAll(/\\/g, "\\\\").replaceAll(/"/g, '\\"');
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 // Indent per tree depth. The step equals the caret column (11px caret + 7px row gap), so a

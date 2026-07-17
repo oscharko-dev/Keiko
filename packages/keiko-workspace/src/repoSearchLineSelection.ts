@@ -46,22 +46,34 @@ export function looksLikeBlockHeader(line: string): boolean {
   ) {
     return true;
   }
-  // Both variable-length character classes in this pattern are bounded (typescript/javascript:
-  // S8786), not just the parameter-list one. On a dead-end line (no `{` anywhere), `.test()`
-  // tries every start position in the line, and the type-prefix class `[\w$<>,.[\]?]*` includes
-  // `,` and `.`, so it overlaps with comma/dot-separated content (e.g. "a,a,a,..."): each comma
-  // creates its own word-boundary start position, and from every one of those the engine can
-  // greedily consume the rest of the line before backtracking off looking for the required
-  // `\s+`, which is O(remaining length) per start position and therefore quadratic overall — the
-  // same failure shape as the parameter-list class, just one token earlier in the pattern.
-  // Bounding both classes caps the worst-case work at each start position to a constant, making
-  // the whole scan linear in line length. 2000 characters is far beyond any realistic single-line
-  // type prefix or parameter list — even a verbose real signature (many parameters, long generic
-  // types, long default values, or a deeply nested return type) stays well under it — so the
-  // bound does not change matching for legitimate source lines.
-  return /\b[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]+)?\{/u.test(
-    trimmed,
-  );
+  return looksLikeFunctionSignatureTail(trimmed);
+}
+
+// Both variable-length character classes below are bounded (2000 characters is far beyond any
+// realistic single-line type prefix or parameter list — even a verbose real signature stays well
+// under it), but bounding alone doesn't change the pattern's *shape*: leading `\b` makes
+// `.test()` retry the whole pattern from every word-boundary start position in the line, which is
+// the unanchored-adjacent-quantifier shape S8786 flags regardless of the per-position bound. This
+// reproduces the identical `\b<pattern>` search explicitly: a manual scan over candidate
+// word-boundary starts, each checked with a *sticky* (`y`-flagged) copy of the pattern pinned to
+// that exact index via `lastIndex` — a single bounded pass per candidate with no
+// retry-at-every-position ambiguity, and (unlike anchoring `^` and re-slicing the line per
+// candidate) no per-candidate string copy either.
+const FUNCTION_SIGNATURE_TAIL =
+  /[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]+)?\{/uy;
+
+function isIdentChar(char: string): boolean {
+  return /[\w$]/u.test(char);
+}
+
+function looksLikeFunctionSignatureTail(trimmed: string): boolean {
+  for (let index = 0; index < trimmed.length; index += 1) {
+    if (!/[A-Za-z_$]/u.test(trimmed.charAt(index))) continue;
+    if (index > 0 && isIdentChar(trimmed.charAt(index - 1))) continue;
+    FUNCTION_SIGNATURE_TAIL.lastIndex = index;
+    if (FUNCTION_SIGNATURE_TAIL.test(trimmed)) return true;
+  }
+  return false;
 }
 
 function looksLikeControlFlowHeader(trimmedLine: string): boolean {

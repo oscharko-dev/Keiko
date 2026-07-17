@@ -55,7 +55,11 @@ const VITEST_FRAME =
 // Bounded for the same reason as ESLINT_ROW above: the lazy title capture and the trailing
 // `\s*$` both match whitespace, so an unbounded title is a genuine (line-length-capped, but
 // otherwise real) polynomial-backtracking shape, not just an S8786 static-analysis preference.
-const VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.{1,4096}?)\s*$/u;
+// The bound alone doesn't remove the *shape* the analyzer flags, though (a capped ambiguity is
+// still ambiguity) — so the trailing `\s*$` is dropped entirely: the capture is greedy and
+// unconditionally reaches `$` in one pass (nothing left to backtrack against), and the title is
+// trimmed in code (`trimEnd`) instead, which can never backtrack.
+const VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.{1,4096})$/u;
 
 function toInt(value: string): number {
   return Number.parseInt(value, 10);
@@ -136,7 +140,7 @@ function extractVitest(lines: readonly string[]): VerificationFailureLocation[] 
   for (const line of lines) {
     const titleMatch = VITEST_TITLE.exec(line)?.groups?.title;
     if (titleMatch !== undefined) {
-      title = titleMatch;
+      title = titleMatch.trimEnd();
       continue;
     }
     const location = matchVitestFrame(line, title);

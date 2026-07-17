@@ -324,7 +324,7 @@ function describePlan(plan: InstallPlan, explain: boolean): string {
   lines.push(`mode:     0o${plan.fileMode.toString(8)}`);
   if (explain) {
     lines.push("--- begin generated content ---");
-    lines.push(plan.content.replaceAll(/\r\n/g, "\n"));
+    lines.push(plan.content.replaceAll("\r\n", "\n"));
     lines.push("--- end generated content ---");
     lines.push("Remove with: keiko launcher remove");
   }

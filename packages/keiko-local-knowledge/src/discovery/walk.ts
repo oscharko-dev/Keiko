@@ -49,7 +49,7 @@ interface ScopeBounds {
 // (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
 // containment checks and relative-path derivation work cross-platform.
 function normaliseSep(p: string): string {
-  return p.replaceAll(/\\/g, "/");
+  return p.replaceAll("\\", "/");
 }
 
 function toPosixRelative(absoluteRoot: string, absolutePath: string): string {

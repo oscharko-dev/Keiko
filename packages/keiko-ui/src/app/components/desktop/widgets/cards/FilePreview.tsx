@@ -88,7 +88,7 @@ function stripTrailingPathSeparators(value: string): string {
 
 export function fullPreviewPath(root: string, relativePath: string): string {
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  const normalizedRelativePath = relativePath.replaceAll(/\//gu, separator);
+  const normalizedRelativePath = relativePath.replaceAll("/", separator);
   return `${stripTrailingPathSeparators(root)}${separator}${normalizedRelativePath}`;
 }
 

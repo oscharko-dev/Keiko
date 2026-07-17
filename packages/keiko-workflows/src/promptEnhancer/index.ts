@@ -356,7 +356,7 @@ const MODEL_SYSTEM_PROMPT = [
 ].join("\n");
 
 function fencedText(label: string, value: string): string {
-  return [`${label}:`, "```text", value.replaceAll(/```/gu, "`\u200b``"), "```"].join("\n");
+  return [`${label}:`, "```text", value.replaceAll("```", "`\u200b``"), "```"].join("\n");
 }
 
 function modelUserPayload(options: {

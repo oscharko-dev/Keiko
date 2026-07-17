@@ -541,7 +541,7 @@ function queryKeyContainsTokenName(key: string): boolean {
 
 function safeDecodeUriComponent(value: string): string {
   try {
-    return decodeURIComponent(value.replaceAll(/\+/gu, " "));
+    return decodeURIComponent(value.replaceAll("+", " "));
   } catch {
     return value;
   }

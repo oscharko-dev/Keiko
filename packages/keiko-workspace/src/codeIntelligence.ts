@@ -747,7 +747,7 @@ function wildcardSubstitution(pattern: string, value: string): string | undefine
 }
 
 function applyWildcard(target: string, substitution: string): string {
-  return target.includes("*") ? target.replaceAll(/\*/gu, substitution) : target;
+  return target.includes("*") ? target.replaceAll("*", substitution) : target;
 }
 
 function aliasBase(alias: TsPathAlias, target: string): string {
@@ -890,7 +890,7 @@ function resolvePythonRelativeImport(
   }
   return resolveCandidate(
     pathSet,
-    posix.join(baseDir, moduleName.replaceAll(/\./gu, "/")),
+    posix.join(baseDir, moduleName.replaceAll(".", "/")),
     PY_EXTENSIONS,
   );
 }
@@ -1082,7 +1082,7 @@ function collectImportEdges(
       (inGoImportBlock ? /^\s*(?:\w+\s+)?["']([^"']+)["']/u.exec(line) : null);
     if (goImport?.[1] !== undefined) emit("import", goImport[1]);
     const rustUse = /^\s*(?:pub\s+)?(?:use|mod)\s+([A-Za-z_][\w:]*)/u.exec(line);
-    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replaceAll(/::/gu, "/"));
+    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replaceAll("::", "/"));
     const csharpUsing = /^\s*using\s+([A-Za-z_][\w.]*)\s*;/u.exec(line);
     if (csharpUsing?.[1] !== undefined) emit("import", csharpUsing[1]);
   });
@@ -1246,6 +1246,14 @@ function collectTypescriptImportBindings(
  * leading `\s*` backtrack at every character position, giving O(n^2) behavior on long
  * whitespace-heavy input.
  */
+function skipLeadingDots(line: string, start: number, max: number): number {
+  let index = start;
+  while (index < line.length && index - start < max && line.charAt(index) === ".") {
+    index += 1;
+  }
+  return index;
+}
+
 function stripPythonLineComment(text: string): string {
   const hashIndex = text.indexOf("#");
   if (hashIndex < 0) {
@@ -1274,20 +1282,29 @@ function collectPolyglotImportBindings(
   const bindings: CodeImportBinding[] = [];
   const lines = file.text.split(/\r?\n/u);
   for (const line of lines) {
-    // The dotted-name segments are bounded so the (already low-risk, single-line,
-    // fully-anchored) pattern cannot be flagged for unbounded superlinear backtracking.
-    // 100 leading dots and a 2000-char dotted path are both far past any realistic Python
-    // relative-import depth or module path length, so no legitimate `from X import Y`
-    // statement can ever be affected by the cutoff.
-    const match = /^\s*from\s+(\.{0,100}[A-Za-z_][\w.]{0,2000})\s+import\s+(.+)$/u.exec(line);
-    if (match?.[1] === undefined || match[2] === undefined) {
+    // The former single regex let `\.{0,100}` (leading relative-import dots) and the trailing
+    // `[\w.]{0,2000}` (rest of the dotted name) both claim the same `.` characters — bounding
+    // each side caps the *worst-case* cost but doesn't remove that overlap, which is the shape
+    // S8786 flags regardless of the bound. Consuming the leading dots with a manual, deterministic
+    // scan first (still capped at 100, matching the original's realistic-depth ceiling) leaves the
+    // regex below with disjoint atoms: `[\w.]{0,2000}` no longer shares any character with what
+    // precedes it, so there is nothing left to backtrack between.
+    const fromMatch = /^\s*from\s+/u.exec(line);
+    if (fromMatch === null) {
       continue;
     }
-    const targetPath = targetBySpecifier.get(match[1]);
+    const afterFrom = fromMatch[0].length;
+    const dotsEnd = skipLeadingDots(line, afterFrom, 100);
+    const rest = /^([A-Za-z_][\w.]{0,2000})\s+import\s+(.+)$/u.exec(line.slice(dotsEnd));
+    if (rest?.[1] === undefined || rest[2] === undefined) {
+      continue;
+    }
+    const specifier = line.slice(afterFrom, dotsEnd) + rest[1];
+    const targetPath = targetBySpecifier.get(specifier);
     if (targetPath === undefined) {
       continue;
     }
-    const importList = stripPythonLineComment(match[2]).replace(/[()]/gu, "");
+    const importList = stripPythonLineComment(rest[2]).replace(/[()]/gu, "");
     for (const part of importList.split(",")) {
       const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
       if (importMatch?.[1] === undefined) {

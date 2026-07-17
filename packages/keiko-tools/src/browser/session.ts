@@ -613,8 +613,8 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       targetId: "",
       client: fakeClient,
       cdpSessionId: "",
-      runId: id.replaceAll(/-/g, ""),
-      fingerprint: `browser-${id.replaceAll(/-/g, "")}`,
+      runId: id.replaceAll("-", ""),
+      fingerprint: `browser-${id.replaceAll("-", "")}`,
       startedAt: now,
       closedAt: undefined,
       closeReason: undefined,
@@ -728,7 +728,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     cdpSessionId: string,
     id: string = randomUUID(),
   ): SessionRecord {
-    const runId = id.replaceAll(/-/g, "");
+    const runId = id.replaceAll("-", "");
     const now = this.nowMs();
     return {
       id,

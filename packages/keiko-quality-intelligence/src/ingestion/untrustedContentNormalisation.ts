@@ -80,15 +80,15 @@ const BANG = 0x21; // "!"
 function nextCloseBracketIndex(value: string): readonly number[] {
   const table = new Array<number>(value.length + 1).fill(-1);
   for (let idx = value.length - 1; idx >= 0; idx -= 1) {
-    table[idx] = value.charCodeAt(idx) === CLOSE_BRACKET ? idx : (table[idx + 1] ?? -1);
+    table[idx] = value.codePointAt(idx) === CLOSE_BRACKET ? idx : (table[idx + 1] ?? -1);
   }
   return table;
 }
 
 function isUnescapedOpenBracket(value: string, index: number): boolean {
   return (
-    value.charCodeAt(index) === OPEN_BRACKET &&
-    (index === 0 || value.charCodeAt(index - 1) !== BANG)
+    value.codePointAt(index) === OPEN_BRACKET &&
+    (index === 0 || value.codePointAt(index - 1) !== BANG)
   );
 }
 
@@ -107,7 +107,7 @@ const escapeLinkOpens = (value: string): EscapeOutcome => {
   let i = 0;
   while (i < value.length) {
     const closeIdx = isUnescapedOpenBracket(value, i) ? (nextCloseBracket[i + 1] ?? -1) : -1;
-    const isLinkOpen = closeIdx !== -1 && value.charCodeAt(closeIdx + 1) === OPEN_PAREN;
+    const isLinkOpen = closeIdx !== -1 && value.codePointAt(closeIdx + 1) === OPEN_PAREN;
     if (!isLinkOpen) {
       result += value.charAt(i);
       i += 1;

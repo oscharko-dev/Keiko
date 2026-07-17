@@ -40,7 +40,7 @@ function isJson(input: ParserSelectionInput): boolean {
 
 function encodePointerSegment(key: string): string {
   // RFC 6901: `~` -> `~0`, `/` -> `~1`. Order matters: replace `~` first.
-  return key.replaceAll(/~/g, "~0").replaceAll(/\//g, "~1");
+  return key.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 function joinPointer(parent: string, segment: string): string {

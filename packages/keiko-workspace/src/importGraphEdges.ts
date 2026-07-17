@@ -84,23 +84,20 @@ const RESOLVE_EXTENSIONS = [
   ".vue",
   ".json",
 ];
-// The inner `(?:[ \t]+\S+)*` is bounded ({0,50000} instead of unbounded `*`) so the pattern no
-// longer has the unbounded-nested-quantifier shape S8786 flags. The disjoint `[ \t]` / `\S`
-// character classes already made matching linear in practice regardless of the bound
-// (empirically verified up to 160k adversarial characters, including at this bound), so the
-// bound is not a performance mitigation -- it exists purely to change the pattern's *syntactic*
-// shape for Sonar's static check.
+// The former `(?:[ \t]+\S+(?:[ \t]+\S+){0,50000}[ \t]+from)?` clause tried to enumerate every
+// whitespace-separated token of the import clause before "from" -- a nested repetition group
+// that keeps the ambiguous-shape S8786 flags no matter how the outer bound is tuned (a bound
+// only caps the worst case, it doesn't make the two `\S+` atoms disjoint from each other).
 //
-// A bound this low WAS previously behavior-changing: an earlier {0,2000} bound silently dropped
-// the import edge for any single-line clause with >= ~2000 whitespace-separated tokens (e.g. a
-// generated/minified barrel file with 2000+ named specifiers on one line matched with the old
-// unbounded `*` but not with {0,2000} -- see the boundary regression test below). 50000 tokens is
-// far beyond any realistic single-line import clause -- even the largest published all-icons
-// barrel re-exports (icon-library "import everything" files) stay in the low thousands of named
-// specifiers -- so this bound is not expected to ever be reached by real code, while still being
-// finite so the S8786 shape check is satisfied.
-const ESM_IMPORT =
-  /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+){0,50000}[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
+// Every legal ES import clause (default/named/namespace/type, or none for a side-effect import)
+// is built only from identifiers, `{`/`}`/`,`/`*`/`as`/`type`, and whitespace -- none of which is
+// a quote character. That means the first quote after the `import` keyword always opens the
+// module specifier; there is no need to enumerate the clause's tokens (or find a literal "from")
+// at all. `findLineQuotedSpecifier` scans for it directly, once, with no backtracking possible --
+// and as a side effect drops the {0,50000} token-count ceiling entirely (a generated/minified
+// barrel file's named-import count can no longer silently exceed a hard bound; see the "past the
+// old bound" regression test).
+const ESM_IMPORT_KEYWORD = /^[ \t]*import\b/gmu;
 const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
 const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
@@ -115,6 +112,50 @@ function lineNumberOf(text: string, charIndex: number): number {
     if (text.codePointAt(i) === 10) line += 1;
   }
   return line;
+}
+
+// Finds the module specifier inside the first matching quote pair on the same line starting at
+// `from` (a single-line scan: `lineEnd` bounds the search so a specifier can never span a line
+// break, matching the original `[^"'\n]+` class).
+function findLineQuotedSpecifier(
+  text: string,
+  from: number,
+): { readonly value: string; readonly end: number } | undefined {
+  const lineEnd = text.indexOf("\n", from);
+  const searchEnd = lineEnd === -1 ? text.length : lineEnd;
+  let quoteIndex = -1;
+  for (let index = from; index < searchEnd; index += 1) {
+    const char = text.charAt(index);
+    if (char === '"' || char === "'") {
+      quoteIndex = index;
+      break;
+    }
+  }
+  if (quoteIndex === -1) return undefined;
+  const quote = text.charAt(quoteIndex);
+  const closeIndex = text.indexOf(quote, quoteIndex + 1);
+  if (closeIndex === -1 || closeIndex > searchEnd) return undefined;
+  const value = text.slice(quoteIndex + 1, closeIndex);
+  return value.length > 0 ? { value, end: closeIndex + 1 } : undefined;
+}
+
+function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void {
+  ESM_IMPORT_KEYWORD.lastIndex = 0;
+  let match: RegExpExecArray | null = ESM_IMPORT_KEYWORD.exec(text);
+  while (match !== null) {
+    const afterKeyword = match.index + match[0].length;
+    const specifier = findLineQuotedSpecifier(text, afterKeyword);
+    if (specifier !== undefined) {
+      hits.push({
+        specifier: specifier.value,
+        kind: "static-import",
+        line: lineNumberOf(text, match.index),
+        ordinal: hits.length,
+      });
+    }
+    ESM_IMPORT_KEYWORD.lastIndex = afterKeyword;
+    match = ESM_IMPORT_KEYWORD.exec(text);
+  }
 }
 
 function collectWithRegex(
@@ -141,7 +182,7 @@ function collectWithRegex(
 
 export function collectImportSpecifiers(text: string): readonly ImportSpecifierHit[] {
   const hits: ImportSpecifierHit[] = [];
-  collectWithRegex(text, ESM_IMPORT, "static-import", hits);
+  collectEsmStaticImports(text, hits);
   collectWithRegex(text, ESM_REEXPORT, "re-export", hits);
   collectWithRegex(text, CJS_REQUIRE, "commonjs-require", hits);
   collectWithRegex(text, DYNAMIC_IMPORT, "dynamic-import", hits);

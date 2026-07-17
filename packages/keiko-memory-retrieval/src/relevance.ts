@@ -84,7 +84,7 @@ function normalizeText(text: string): string {
   return text
     .normalize("NFKD")
     .replace(COMBINING_MARKS, "")
-    .replaceAll(/ß/gu, "ss")
+    .replaceAll("ß", "ss")
     .toLocaleLowerCase("und");
 }
 

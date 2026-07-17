@@ -20,7 +20,7 @@ function trimLeadingSlashes(value: string): string {
 }
 
 export function normalizedRepositoryRoot(root: string): string {
-  return trimTrailingSlashes(root.replaceAll(/\\/gu, "/"));
+  return trimTrailingSlashes(root.replaceAll("\\", "/"));
 }
 
 export function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
@@ -45,7 +45,7 @@ export function omitAncestorRepositoryRoots(roots: readonly string[]): readonly 
 }
 
 export function normalizedRepositoryPath(path: string): string {
-  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll(/\\/gu, "/")));
+  return trimTrailingSlashes(trimLeadingSlashes(path.replaceAll("\\", "/")));
 }
 
 export function appendRepositoryReference(draft: string, path: string): string {

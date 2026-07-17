@@ -146,7 +146,7 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
   // `join` yields backslashes, so TS would look up `C:/.../probe.ts` while the host holds
   // `C:\...\probe.ts` → no match → "probe file not found". Use a forward-slash path so the host and
   // `program.getSourceFile` agree with TS's normalisation on every OS (POSIX is already `/`).
-  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts").replaceAll(/\\/gu, "/");
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts").replaceAll("\\", "/");
   const probeText =
     `export * from ${JSON.stringify(specifier)};\n` +
     `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
@@ -478,7 +478,7 @@ async function assertRepositoryPickerSearchRebasesNestedRepo(baseUrl, tmp) {
 function comparableWindowsPath(value) {
   return String(value)
     .replace(/^\\\\\?\\/u, "")
-    .replaceAll(/\\/gu, "/")
+    .replaceAll("\\", "/")
     .toLowerCase();
 }
 

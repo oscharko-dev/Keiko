@@ -43,10 +43,10 @@ function extractSvgInner(svg) {
 
 function xmlEscape(value) {
   return value
-    .replaceAll(/&/gu, "&amp;")
-    .replaceAll(/</gu, "&lt;")
-    .replaceAll(/>/gu, "&gt;")
-    .replaceAll(/"/gu, "&quot;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function withFill(svg, fill) {

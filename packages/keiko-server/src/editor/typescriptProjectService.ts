@@ -126,7 +126,7 @@ interface BoundedReadState {
 }
 
 function normalizeSlashes(value: string): string {
-  return value.replaceAll(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 function defaultCompilerOptions(): ts.CompilerOptions {
