@@ -8,9 +8,10 @@ import {
   evaluateKeikoForQuality,
   hasCurrentSocketNoAlertEvidence,
   isBotEvidence,
+  latestQodoReview,
   nativeRequiredChecks,
   packageAlerts,
-  parseGitarFindings,
+  parseQodoFindings,
   requiredChecks,
   requiredChecksForProfile,
   stabilityFailures,
@@ -22,6 +23,35 @@ const headSha = "a".repeat(40);
 const completedAt = "2026-07-11T10:00:00.000Z";
 const now = Date.parse("2026-07-11T10:02:00.000Z");
 const risk = "npm/execa@9.6.1";
+const qodoAuthorId = 151058649;
+const qodoAppId = 484649;
+
+// Faithful reproduction of Qodo's summary comment: an <h3> header, the exact
+// emoji/HTML counts line (Bugs/Rule violations/Requirement gaps/Skill insights),
+// and a full 40-hex blob permalink that anchors the review to its reviewed head.
+function qodoBody({ bugs = 0, rules = 0, gaps = 0, skills = 0, sha = headSha } = {}) {
+  return [
+    "<h3>Code Review by Qodo</h3>",
+    "",
+    `<code>🐞 Bugs (${String(bugs)})</code>  <code>📘 Rule violations (${String(rules)})</code>  ` +
+      `<code>📎 Requirement gaps (${String(gaps)})</code>  <code>📜 Skill insights (${String(skills)})</code>`,
+    "",
+    `<code>[scripts/x.mjs](https://github.com/oscharko-dev/Keiko/blob/${sha}/scripts/x.mjs#L1-L2)</code>`,
+  ].join("\n");
+}
+
+function qodoComment(overrides = {}) {
+  return {
+    author: "qodo-code-review[bot]",
+    appId: qodoAppId,
+    authorAssociation: "NONE",
+    authorId: qodoAuthorId,
+    authorType: "Bot",
+    body: qodoBody(),
+    updatedAt: completedAt,
+    ...overrides,
+  };
+}
 
 function passingInput() {
   return {
@@ -35,15 +65,7 @@ function passingInput() {
       status: "completed",
     })),
     comments: [
-      {
-        author: "gitar-bot",
-        appId: 827041,
-        authorAssociation: "NONE",
-        authorId: 159877585,
-        authorType: "Bot",
-        body: "0 resolved / 0 findings",
-        updatedAt: completedAt,
-      },
+      qodoComment(),
       {
         author: "socket-security",
         appId: 156372,
@@ -62,7 +84,6 @@ function passingInput() {
     ],
     headSha,
     now,
-    reviews: [{ authorId: 159877585, authorType: "Bot", commitSha: headSha, state: "COMMENTED" }],
     socketRiskAllowlist: [risk],
     socketRiskActors: ["oscharko"],
   };
@@ -88,7 +109,6 @@ describe("Keiko for Quality core", () => {
       { appId: 12526, name: "SonarCloud Code Analysis" },
       { appId: 156372, name: "Socket Security: Project Report" },
       { appId: 156372, name: "Socket Security: Pull Request Alerts" },
-      { appId: 827041, name: "Gitar" },
     ]);
   });
 
@@ -118,11 +138,7 @@ describe("Keiko for Quality core", () => {
     input.requiredChecks = nativeRequiredChecks;
     input.checks = [
       ...input.checks.filter(({ name }) =>
-        [
-          "Gitar",
-          "Socket Security: Project Report",
-          "Socket Security: Pull Request Alerts",
-        ].includes(name),
+        ["Socket Security: Project Report", "Socket Security: Pull Request Alerts"].includes(name),
       ),
       ...nativeRequiredChecks.map(({ appId, name }) => ({
         appId,
@@ -166,36 +182,37 @@ describe("Keiko for Quality core", () => {
     expect(isBotEvidence({ ...exact, appId: 8 }, identity, false)).toBe(true);
   });
 
-  it("parses Gitar totals only from the exact bounded review format", () => {
-    expect(parseGitarFindings("12 resolved / 15 findings")).toBe(3);
-    expect(parseGitarFindings("12  resolved /  15  findings")).toBe(3);
-    expect(parseGitarFindings("12 resolved/15 findings")).toBe(3);
-    expect(parseGitarFindings("2 resolved / 1 findings")).toBeUndefined();
-    expect(parseGitarFindings("12 resolved / findings")).toBeUndefined();
+  it("sums Qodo findings from the exact counts line and excludes skill insights", () => {
+    // The exact emoji/HTML counts line Qodo posts (captured from a real /review).
+    const realCountsLine =
+      "<h3>Code Review by Qodo</h3>\n\n" +
+      "<code>🐞 Bugs (2)</code>  <code>📘 Rule violations (1)</code>  " +
+      "<code>📎 Requirement gaps (3)</code>  <code>📜 Skill insights (4)</code>";
+    expect(parseQodoFindings(realCountsLine)).toBe(6);
+    expect(parseQodoFindings(qodoBody({ bugs: 1, rules: 2, gaps: 3, skills: 9 }))).toBe(6);
+    expect(parseQodoFindings(qodoBody())).toBe(0);
+    expect(parseQodoFindings(qodoBody({ skills: 7 }))).toBe(0);
   });
 
-  it("accepts only Gitar's exact compact clean-review evidence", () => {
-    const compact = [
-      "<details>",
-      "<summary><b>Code Review</b> <kbd>✅ Approved</kbd></summary>",
-      "",
-      "Reviewed the current head. No issues found.",
-      "",
-      "</details>",
-    ].join("\n");
-    expect(parseGitarFindings(compact)).toBe(0);
-    expect(parseGitarFindings(compact.replace("<summary><b>", "<summary>\n<b>"))).toBe(0);
-    expect(parseGitarFindings(compact.replace("</b> <kbd>", "</b>  <kbd>"))).toBe(0);
-    expect(parseGitarFindings(compact.replace("</kbd></summary>", "</kbd>\n</summary>"))).toBe(0);
-    for (const ambiguous of [
-      compact.replace("✅ Approved", "👍 Approved with suggestions"),
-      compact.replace("No issues found.", "No blocking issues found."),
-      compact.replace("No issues found.", "Review completed."),
-      "✅ Approved — No issues found.",
-      `${compact}\n0 resolved / 1 findings`,
-    ]) {
-      expect(parseGitarFindings(ambiguous)).not.toBe(0);
-    }
+  it("rejects Qodo bodies missing the header or any finding category", () => {
+    const header = "<h3>Code Review by Qodo</h3>\n";
+    expect(parseQodoFindings("Bugs (1) Rule violations (0) Requirement gaps (0)")).toBeUndefined();
+    expect(parseQodoFindings(`${header}Rule violations (0) Requirement gaps (0)`)).toBeUndefined();
+    expect(parseQodoFindings(`${header}Bugs (1) Requirement gaps (0)`)).toBeUndefined();
+    expect(parseQodoFindings(`${header}Bugs (1) Rule violations (0)`)).toBeUndefined();
+  });
+
+  it("selects the newest current-head Qodo review and rejects wrong head or producer", () => {
+    const base = { appId: qodoAppId, authorAssociation: "NONE", authorId: qodoAuthorId };
+    const older = qodoComment({ ...base, body: qodoBody({ bugs: 5 }), updatedAt: completedAt });
+    const newer = qodoComment({ body: qodoBody(), updatedAt: "2026-07-11T10:01:00.000Z" });
+    const wrongHead = qodoComment({ body: qodoBody({ sha: "b".repeat(40) }) });
+    const wrongApp = qodoComment({ appId: 1 });
+    const noHeader = qodoComment({ body: `no header ${headSha}` });
+    expect(latestQodoReview([older, newer, wrongHead, wrongApp, noHeader], headSha)).toBe(newer);
+    expect(latestQodoReview([wrongHead], headSha)).toBeUndefined();
+    expect(latestQodoReview([wrongApp], headSha)).toBeUndefined();
+    expect(latestQodoReview([noHeader], headSha)).toBeUndefined();
   });
 
   it("extracts and deduplicates exact Socket package versions", () => {
@@ -249,14 +266,15 @@ describe("Keiko for Quality core", () => {
   });
 
   it("selects only the latest current-head start and exact current comment boundary", () => {
+    const name = "Socket Security: Pull Request Alerts";
     const checks = [
-      { headSha, name: "Gitar", startedAt: "2026-07-11T09:00:00.000Z" },
-      { headSha, name: "Gitar", started_at: "2026-07-11T09:30:00.000Z" },
-      { headSha, name: "Gitar", startedAt: "invalid" },
-      { headSha: "b".repeat(40), name: "Gitar", startedAt: completedAt },
+      { headSha, name, startedAt: "2026-07-11T09:00:00.000Z" },
+      { headSha, name, started_at: "2026-07-11T09:30:00.000Z" },
+      { headSha, name, startedAt: "invalid" },
+      { headSha: "b".repeat(40), name, startedAt: completedAt },
       { headSha, name: "Other", startedAt: completedAt },
     ];
-    const start = currentCheckStart(checks, headSha, ["Gitar"]);
+    const start = currentCheckStart(checks, headSha, [name]);
     expect(start).toBe(Date.parse("2026-07-11T09:30:00.000Z"));
     expect(commentIsCurrent({ updatedAt: "2026-07-11T09:30:00.000Z" }, start)).toBe(true);
     expect(commentIsCurrent({ updatedAt: "2026-07-11T09:29:59.999Z" }, start)).toBe(false);
@@ -314,13 +332,15 @@ describe("Keiko for Quality core", () => {
 
   it("uses the newest review-product evidence and an inclusive stability boundary", () => {
     const input = passingInput();
-    const checks = input.checks.map((check) =>
-      check.name === "Gitar" ? { ...check, completedAt: "2026-07-11T10:01:00.000Z" } : check,
+    const comments = input.comments.map((comment) =>
+      comment.authorId === qodoAuthorId
+        ? { ...comment, updatedAt: "2026-07-11T10:01:00.000Z" }
+        : comment,
     );
     expect(
       stabilityFailures(
-        checks,
-        input.comments,
+        input.checks,
+        comments,
         Date.parse("2026-07-11T10:02:00.000Z"),
         60_000,
         headSha,
@@ -328,8 +348,8 @@ describe("Keiko for Quality core", () => {
     ).toEqual([]);
     expect(
       stabilityFailures(
-        checks,
-        input.comments,
+        input.checks,
+        comments,
         Date.parse("2026-07-11T10:01:59.999Z"),
         60_000,
         headSha,
@@ -338,7 +358,7 @@ describe("Keiko for Quality core", () => {
     expect(
       stabilityFailures(
         [...input.checks, { completedAt: "2026-07-11T10:01:59.999Z", name: "Untrusted check" }],
-        input.comments,
+        comments,
         now,
         60_000,
         headSha,
@@ -456,78 +476,50 @@ describe("Keiko for Quality core", () => {
     expect(evaluate({ checks: mutate(input) }).failures.join(" ")).toContain(message);
   });
 
-  it("rejects current-head Gitar change requests and unresolved findings", () => {
+  it("rejects unresolved current-head Qodo findings", () => {
     const comments = passingInput().comments.map((comment) =>
-      comment.authorId === 159877585 ? { ...comment, body: "0 resolved / 2 findings" } : comment,
+      comment.authorId === qodoAuthorId ? { ...comment, body: qodoBody({ bugs: 2 }) } : comment,
     );
-    const reviews = [
-      {
-        authorId: 159877585,
-        authorType: "Bot",
-        commitSha: headSha,
-        state: "CHANGES_REQUESTED",
-      },
-    ];
-    expect(evaluate({ comments, reviews }).failures).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("CHANGES_REQUESTED"),
-        expect.stringContaining("2 unresolved"),
-      ]),
-    );
+    expect(evaluate({ comments }).failures).toContain("Qodo has 2 unresolved finding(s).");
   });
 
-  it("blocks only an exact current-head Gitar bot change request among mixed reviews", () => {
-    const harmless = {
-      authorId: 2,
-      authorType: "User",
-      commitSha: headSha,
-      state: "CHANGES_REQUESTED",
-    };
-    const stale = {
-      authorId: 159877585,
-      authorType: "Bot",
-      commitSha: "b".repeat(40),
-      state: "CHANGES_REQUESTED",
-    };
-    const current = { ...stale, commitSha: headSha };
-    expect(evaluate({ reviews: [harmless, stale] }).passed).toBe(true);
-    expect(evaluate({ reviews: [harmless, stale, current] }).failures).toContain(
-      "Gitar has an active CHANGES_REQUESTED review for the current head.",
-    );
-  });
-
-  it("rejects dismissed or stale Gitar evidence and changed formats", () => {
+  it("fails closed when current-head Qodo evidence is absent", () => {
     expect(
       evaluate({
-        comments: passingInput().comments.filter((comment) => comment.authorId !== 159877585),
-        reviews: [],
+        comments: passingInput().comments.filter((comment) => comment.authorId !== qodoAuthorId),
       }).failures,
-    ).toContain("Current Gitar finding evidence is missing or unparseable.");
+    ).toContain("Current Qodo finding evidence is missing or unparseable.");
   });
 
-  it("derives unresolved Gitar findings from resolved and total counts", () => {
-    const comments = passingInput().comments.map((comment) =>
-      comment.authorId === 159877585 ? { ...comment, body: "2 resolved / 2 findings" } : comment,
+  it("passes on skill-only Qodo output and fails closed on malformed counts", () => {
+    const skillOnly = passingInput().comments.map((comment) =>
+      comment.authorId === qodoAuthorId ? { ...comment, body: qodoBody({ skills: 7 }) } : comment,
     );
-    expect(evaluate({ comments }).passed).toBe(true);
+    expect(evaluate({ comments: skillOnly }).passed).toBe(true);
 
-    const invalid = comments.map((comment) =>
-      comment.authorId === 159877585 ? { ...comment, body: "3 resolved / 2 findings" } : comment,
+    const malformed = passingInput().comments.map((comment) =>
+      comment.authorId === qodoAuthorId
+        ? { ...comment, body: `<h3>Code Review by Qodo</h3>\nBugs (0) ${headSha}` }
+        : comment,
     );
-    expect(evaluate({ comments: invalid }).failures).toContain(
-      "Current Gitar finding evidence is missing or unparseable.",
+    expect(evaluate({ comments: malformed }).failures).toContain(
+      "Current Qodo finding evidence is missing or unparseable.",
     );
   });
 
-  it("rejects review-product comments that predate the current-head checks", () => {
-    const comments = passingInput().comments.map((comment) =>
-      comment.author === "oscharko"
-        ? comment
-        : { ...comment, updatedAt: "2026-07-11T08:58:00.000Z" },
-    );
+  it("rejects review-product evidence that is not bound to the current head", () => {
+    const comments = passingInput().comments.map((comment) => {
+      if (comment.authorId === qodoAuthorId) {
+        return { ...comment, body: qodoBody({ sha: "b".repeat(40) }) };
+      }
+      if (comment.authorId === 95510084) {
+        return { ...comment, updatedAt: "2026-07-11T08:58:00.000Z" };
+      }
+      return comment;
+    });
     expect(evaluate({ comments }).failures).toEqual(
       expect.arrayContaining([
-        "Current Gitar finding evidence is missing or unparseable.",
+        "Current Qodo finding evidence is missing or unparseable.",
         "Current Socket alert evidence is missing.",
       ]),
     );
@@ -610,15 +602,7 @@ describe("Keiko for Quality core", () => {
       started_at: "2026-07-11T07:59:00.000Z",
     }));
     const comments = [
-      {
-        author: "gitar-bot",
-        appId: 827041,
-        authorAssociation: "NONE",
-        authorId: 159877585,
-        authorType: "Bot",
-        body: "0 resolved / 9 findings",
-        updatedAt: "2026-07-11T08:00:00.000Z",
-      },
+      qodoComment({ body: qodoBody({ bugs: 9 }), updatedAt: "2026-07-11T08:00:00.000Z" }),
       ...input.comments,
     ];
     expect(evaluate({ checks: [...olderChecks, ...input.checks], comments }).passed).toBe(true);
@@ -668,7 +652,7 @@ describe("Keiko for Quality core", () => {
 
   it("rejects spoofed human and wrong-app review-product evidence", () => {
     const comments = passingInput().comments.map((comment) =>
-      comment.authorId === 159877585
+      comment.authorId === qodoAuthorId
         ? { ...comment, authorId: 1, authorType: "User" }
         : comment.authorId === 95510084
           ? { ...comment, appId: 1 }
@@ -676,7 +660,7 @@ describe("Keiko for Quality core", () => {
     );
     expect(evaluate({ comments }).failures).toEqual(
       expect.arrayContaining([
-        "Current Gitar finding evidence is missing or unparseable.",
+        "Current Qodo finding evidence is missing or unparseable.",
         "Current Socket alert evidence is missing.",
       ]),
     );
