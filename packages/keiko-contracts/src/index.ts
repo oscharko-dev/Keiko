@@ -992,6 +992,32 @@ export {
   validateRuntimeGovernanceRequestV1,
 } from "./code-task-run-control.js";
 
+// ─── Auxiliary-capability contract (Issue #2387, produced for #2388) ───────────────
+// Governed read-only research / approved skills / one-layer read-only child agents: the strictly
+// narrower companion to GovernedActionV1 — bounded scope, derived authority, content-free outcome.
+export type {
+  AuxiliaryCapability,
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityPortV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryOutcomeStatus,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskSkillId,
+} from "./code-task-auxiliary.js";
+export {
+  AUXILIARY_CAPABILITIES,
+  AUXILIARY_INVOCATIONS,
+  AUXILIARY_OUTCOME_STATUSES,
+  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+  isCodeTaskChildRunId,
+  isCodeTaskPublicDomain,
+  isCodeTaskSkillId,
+  validateAuxiliaryCapabilityOutcomeV1,
+  validateAuxiliaryCapabilityRequestV1,
+} from "./code-task-auxiliary.js";
+
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded
 // sync scopes and job lifecycle, the D4 action-class mapping table with its pure per-mode decision
