@@ -17,6 +17,7 @@ const STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "starting",
   "ready",
   "running",
+  "paused",
   "awaiting-approval",
   "stopping",
   "succeeded",

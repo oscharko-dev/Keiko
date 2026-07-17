@@ -36,7 +36,7 @@ import {
 } from "../editor/agentAuthorityRegistry.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
-  type SupervisedCodingApprovalBinding,
+  type SupervisedCodingApprovalBindingOnce,
   type SupervisedCodingApprovalStore,
 } from "./supervisedCodingApprovalStore.js";
 import {
@@ -508,6 +508,7 @@ const REAP_SETTLEMENT_TRANSITIONS: Partial<
   starting: ["cancelled"],
   ready: ["stopping", "cancelled"],
   running: ["stopping", "cancelled"],
+  paused: ["stopping", "cancelled"],
   "awaiting-approval": ["stopping", "cancelled"],
   stopping: ["cancelled"],
   succeeded: [],
@@ -592,8 +593,9 @@ function mintApprovalBinding(
   intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
   taskId: string,
   operatorId: string,
-): SupervisedCodingApprovalBinding {
+): SupervisedCodingApprovalBindingOnce {
   return {
+    grantScope: "once",
     runId: "coding-runtime-mint",
     requestId: intent.requestId,
     actionKind: "system-mutation",

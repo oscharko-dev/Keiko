@@ -50,7 +50,8 @@ async function listRuntimeQuestions(
   request: CodingRuntimeRunOperation,
 ): ReturnType<CodingRuntimeQuestionPort["list"]> {
   const record = runs.get(request.runId);
-  const reservation = record?.operationGuard.reserve(request);
+  // Reads stay repeatable at an unchanged revision; only mutations consume the revision slot.
+  const reservation = record?.operationGuard.reserve(request, "read");
   if (reservation === undefined) return undefined;
   if (record?.questionPort === undefined) {
     reservation.release();

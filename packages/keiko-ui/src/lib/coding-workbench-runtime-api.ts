@@ -1,11 +1,13 @@
 "use client";
 
 import {
+  validateCodingWorkbenchRuntimeQuestionsResponse,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
+  type CodingWorkbenchRuntimeQuestionsResponse,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   type CodingWorkbenchRuntimeRetryRequest,
@@ -81,20 +83,53 @@ function readinessValidator(path: string, value: unknown): CodingWorkbenchRuntim
   return validated(path, value, validateCodingWorkbenchRuntimeReadiness);
 }
 
+function questionsValidator(path: string, value: unknown): CodingWorkbenchRuntimeQuestionsResponse {
+  return validated(path, value, validateCodingWorkbenchRuntimeQuestionsResponse);
+}
+
 function runPath(runId: string, suffix = ""): string {
   return `${RUNTIME_ROOT}/runs/${encodeURIComponent(runId)}${suffix}`;
 }
 
-function postSnapshot<T>(path: string, body: T): Promise<CodingWorkbenchRuntimeSnapshot> {
+function postSnapshot<T>(
+  path: string,
+  body: T,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
   return bffFetchJson(
     path,
     {
       method: "POST",
       cache: "no-store",
       body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
     },
     { validator: snapshotValidator },
   );
+}
+
+/** The revision-bound envelope shared by every serialized inline runtime operation. */
+export interface CodingWorkbenchRuntimeOperationRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+}
+
+export interface CodingWorkbenchRuntimeQuestionAnswerBody extends CodingWorkbenchRuntimeOperationRequest {
+  readonly questionId: string;
+  readonly answers: readonly (readonly string[])[];
+}
+
+export interface CodingWorkbenchRuntimeQuestionRejectBody extends CodingWorkbenchRuntimeOperationRequest {
+  readonly questionId: string;
+}
+
+export interface CodingWorkbenchRuntimeFollowUpBody extends CodingWorkbenchRuntimeOperationRequest {
+  readonly taskIntent: string;
+}
+
+/** Pause and resume bind to the run by id only; the server owns the transition guard. */
+export interface CodingWorkbenchRuntimeLifecycleBody {
+  readonly requestId: string;
 }
 
 export function getCodingWorkbenchRuntimeReadiness(
@@ -165,6 +200,64 @@ export function acknowledgeCodingWorkbenchRuntimeRecovery(
   input: CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/recovery-ack"), input);
+}
+
+export function pauseCodingWorkbenchRuntime(
+  runId: string,
+  input: CodingWorkbenchRuntimeLifecycleBody,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/pause"), input);
+}
+
+export function resumeCodingWorkbenchRuntime(
+  runId: string,
+  input: CodingWorkbenchRuntimeLifecycleBody,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/resume"), input);
+}
+
+export function submitCodingWorkbenchRuntimeFollowUp(
+  runId: string,
+  input: CodingWorkbenchRuntimeFollowUpBody,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/follow-up"), input);
+}
+
+/**
+ * List the run's required questions. The server advances its own revision on each list, so callers
+ * must re-anchor to a fresh snapshot before the next revision-bound operation.
+ */
+export function listCodingWorkbenchRuntimeQuestions(
+  runId: string,
+  input: CodingWorkbenchRuntimeOperationRequest,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeQuestionsResponse> {
+  return bffFetchJson(
+    runPath(runId, "/questions"),
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify(input),
+      ...(signal ? { signal } : {}),
+    },
+    { validator: questionsValidator },
+  );
+}
+
+export function answerCodingWorkbenchRuntimeQuestion(
+  runId: string,
+  input: CodingWorkbenchRuntimeQuestionAnswerBody,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/questions/answer"), input, signal);
+}
+
+export function rejectCodingWorkbenchRuntimeQuestion(
+  runId: string,
+  input: CodingWorkbenchRuntimeQuestionRejectBody,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeSnapshot> {
+  return postSnapshot(runPath(runId, "/questions/reject"), input, signal);
 }
 
 export function createCodingWorkbenchRuntimeEventSource(runId: string): EventSource {

@@ -86,12 +86,29 @@ describe("production coding runtime question port", () => {
     await expect(port.list(denied)).resolves.toBeUndefined();
     live = true;
     await expect(port.list(denied)).resolves.toEqual({ questions: [] });
+    // Replay of a committed request id stays rejected.
     await expect(port.list(denied)).resolves.toBeUndefined();
-    await expect(port.list(operation("run-guarded", "question-stale", 1))).resolves.toBeUndefined();
+    // #2386: listing is a read — a fresh request id at the unchanged revision stays listable so
+    // background refreshes never exhaust the one-turn-per-revision mutation slot.
+    await expect(port.list(operation("run-guarded", "question-again", 1))).resolves.toEqual({
+      questions: [],
+    });
     await expect(port.list(operation("run-guarded", "question-live", 2))).resolves.toEqual({
       questions: [],
     });
-    expect(list).toHaveBeenCalledTimes(2);
+    // A mutation consumes the revision slot: reads at or below it are rejected as stale.
+    await expect(
+      port.answer({
+        ...operation("run-guarded", "answer-live", 2),
+        questionId: "que_1",
+        answers: [],
+      }),
+    ).resolves.toBe(true);
+    await expect(port.list(operation("run-guarded", "question-stale", 2))).resolves.toBeUndefined();
+    await expect(port.list(operation("run-guarded", "question-next", 3))).resolves.toEqual({
+      questions: [],
+    });
+    expect(list).toHaveBeenCalledTimes(4);
   });
 });
 

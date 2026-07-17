@@ -26,6 +26,7 @@ import {
   WorkbenchHeader,
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
+import { CodingWorkbenchQuestions } from "./CodingWorkbenchQuestions";
 import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
 import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -158,9 +159,16 @@ function WorkbenchColumns({
         <TaskStartSection
           taskIntent={taskIntent}
           onTaskIntentChange={onTaskIntentChange}
-          onStart={() => void actions.start(taskIntent.trim())}
+          actions={{
+            onStart: () => void actions.start(taskIntent.trim()),
+            onPause: () => void actions.pause(),
+            onResume: () => void actions.resume(),
+            onSend: () => void actions.submitFollowUp(taskIntent.trim()),
+          }}
           canStart={state.canStart}
-          busy={state.mutation.kind === "start" && state.mutation.status === "pending"}
+          runState={state.run.value?.state}
+          mutationPending={state.mutation.status === "pending"}
+          startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
         />
         <ModeAuthority state={state} onModeChange={actions.setRequestedMode} locked={locked} />
         <ModelRuntimeStatus state={state} actions={actions} locked={locked} />
@@ -172,6 +180,13 @@ function WorkbenchColumns({
       </div>
       <div className={styles.stack}>
         <PermissionPrompt state={state} onDecision={onDecision} />
+        <CodingWorkbenchQuestions
+          runId={state.run.value?.runId}
+          revision={state.run.value?.revision}
+          runState={state.run.value?.state}
+          runtimeEventCount={state.events.filter((event) => event.kind === "runtime-event").length}
+          refreshSnapshot={actions.refreshRun}
+        />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <RuntimeControls state={state} actions={actions} />
         <Timeline events={state.events} />

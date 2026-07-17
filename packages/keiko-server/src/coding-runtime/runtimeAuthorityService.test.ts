@@ -815,6 +815,7 @@ describe("CodingRuntimeAuthorityService", () => {
     });
     if (!capability.ok) throw new Error("expected capability");
     const approvalBinding = {
+      grantScope: "once" as const,
       runId: minted.authorityRef.runId,
       requestId: "action-1",
       actionKind: "system-mutation" as const,

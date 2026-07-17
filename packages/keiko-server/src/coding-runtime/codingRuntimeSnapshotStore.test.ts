@@ -84,6 +84,22 @@ describe("CodingRuntimeSnapshotStore", () => {
 });
 
 describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
+  // #2386 regression: "paused" is a persistable lifecycle state. The store's own state allowlist
+  // silently rejected it (throw → opaque 400 at the route), so a green contract-level state
+  // machine still could not pause a real run.
+  it("persists the paused state through a running round-trip", () => {
+    const s = store();
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    expect(s.transition("run-1", { state: "paused", revision: 2, updatedAt: at }).state).toBe(
+      "paused",
+    );
+    expect(s.get("run-1")?.state).toBe("paused");
+    expect(s.transition("run-1", { state: "running", revision: 3, updatedAt: at }).state).toBe(
+      "running",
+    );
+  });
+
   it("rejects a transition that does not increase the revision", () => {
     const s = store();
     s.create(snapshot());

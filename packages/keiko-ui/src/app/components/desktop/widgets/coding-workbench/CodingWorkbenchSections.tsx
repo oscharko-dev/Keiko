@@ -1,5 +1,10 @@
 import { type ReactNode, type RefObject } from "react";
-import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_MODES,
+  isCodingWorkbenchModeWidening,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeStateName,
+} from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
   useCodingWorkbenchTranslate,
@@ -68,7 +73,17 @@ export function ModeAuthority({
   readonly locked: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const ceiling = state.runtime.value?.deploymentCeiling;
+  const readiness = state.runtime.value;
+  const ceiling = readiness?.deploymentCeiling;
+  const runState = state.run.value?.state;
+  const runLive = runState === "running" || runState === "paused";
+  // The server owns the effective mode; while a run is live, a request that widens past that
+  // effective mode is rejected until the run is stopped. Reflect that server decision, never
+  // re-derive the ordering — it comes from the shared contract predicate.
+  const wideningRejected =
+    readiness !== null &&
+    runLive &&
+    isCodingWorkbenchModeWidening(readiness.effectiveMode, state.requestedMode);
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-mode-title">
       <PanelTitle eyebrow={t("codingWorkbench.mode.eyebrow")} id="coding-workbench-mode-title">
@@ -94,11 +109,17 @@ export function ModeAuthority({
           );
         })}
       </div>
-      {state.runtime.value ? (
+      {locked ? <p className={styles.helpText}>{t("codingWorkbench.mode.locked")}</p> : null}
+      {wideningRejected ? (
+        <p className={styles.alert} role="alert">
+          {t("codingWorkbench.mode.wideningRejected")}
+        </p>
+      ) : null}
+      {readiness ? (
         <p className={styles.boundaryNote}>
           {t("codingWorkbench.mode.boundary", {
-            effectiveMode: modeLabel(state.runtime.value.effectiveMode, t),
-            deploymentCeiling: modeLabel(state.runtime.value.deploymentCeiling, t),
+            effectiveMode: modeLabel(readiness.effectiveMode, t),
+            deploymentCeiling: modeLabel(readiness.deploymentCeiling, t),
           })}
         </p>
       ) : null}
@@ -143,21 +164,31 @@ function ModeOption({
   );
 }
 
+export interface TaskComposerActions {
+  readonly onStart: () => void;
+  readonly onPause: () => void;
+  readonly onResume: () => void;
+  readonly onSend: () => void;
+}
+
 export function TaskStartSection({
   taskIntent,
   onTaskIntentChange,
-  onStart,
+  actions,
   canStart,
-  busy,
+  runState,
+  mutationPending,
+  startBusy,
 }: {
   readonly taskIntent: string;
   readonly onTaskIntentChange: (value: string) => void;
-  readonly onStart: () => void;
+  readonly actions: TaskComposerActions;
   readonly canStart: boolean;
-  readonly busy: boolean;
+  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
+  readonly mutationPending: boolean;
+  readonly startBusy: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const startDisabled = busy || !canStart || taskIntent.trim().length === 0;
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-task-title">
       <PanelTitle eyebrow={t("codingWorkbench.task.eyebrow")} id="coding-workbench-task-title">
@@ -171,22 +202,89 @@ export function TaskStartSection({
         className={styles.taskInput}
         value={taskIntent}
         maxLength={65_536}
-        disabled={busy}
+        disabled={mutationPending}
         aria-describedby="coding-workbench-task-help"
         onChange={(event) => onTaskIntentChange(event.target.value)}
       />
       <p id="coding-workbench-task-help" className={styles.helpText}>
         {t("codingWorkbench.task.help")}
       </p>
-      <button
-        className={cx(styles.button, styles.buttonPrimary)}
-        type="button"
-        disabled={startDisabled}
-        onClick={onStart}
-      >
-        {busy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
-      </button>
+      <ComposerControls
+        taskIntent={taskIntent}
+        actions={actions}
+        canStart={canStart}
+        runState={runState}
+        mutationPending={mutationPending}
+        startBusy={startBusy}
+        t={t}
+      />
     </section>
+  );
+}
+
+function ComposerControls({
+  taskIntent,
+  actions,
+  canStart,
+  runState,
+  mutationPending,
+  startBusy,
+  t,
+}: {
+  readonly taskIntent: string;
+  readonly actions: TaskComposerActions;
+  readonly canStart: boolean;
+  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
+  readonly mutationPending: boolean;
+  readonly startBusy: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const empty = taskIntent.trim().length === 0;
+  if (runState === "running") {
+    return (
+      <div className={styles.controls}>
+        <button
+          className={styles.button}
+          type="button"
+          disabled={mutationPending}
+          onClick={actions.onPause}
+        >
+          {t("codingWorkbench.composer.pause")}
+        </button>
+      </div>
+    );
+  }
+  if (runState === "paused") {
+    return (
+      <div className={styles.controls}>
+        <button
+          className={cx(styles.button, styles.buttonPrimary)}
+          type="button"
+          disabled={mutationPending || empty}
+          onClick={actions.onSend}
+        >
+          {t("codingWorkbench.composer.send")}
+        </button>
+        <button
+          className={styles.button}
+          type="button"
+          disabled={mutationPending}
+          onClick={actions.onResume}
+        >
+          {t("codingWorkbench.composer.resume")}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button
+      className={cx(styles.button, styles.buttonPrimary)}
+      type="button"
+      disabled={startBusy || !canStart || empty}
+      onClick={actions.onStart}
+    >
+      {startBusy ? t("codingWorkbench.task.starting") : t("codingWorkbench.task.start")}
+    </button>
   );
 }
 

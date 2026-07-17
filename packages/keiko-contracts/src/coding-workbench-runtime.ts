@@ -45,6 +45,7 @@ export type CodingWorkbenchRuntimeStateName =
   | "starting"
   | "ready"
   | "running"
+  | "paused"
   | "awaiting-approval"
   | "stopping"
   | "succeeded"
@@ -60,6 +61,7 @@ export const CODING_WORKBENCH_RUNTIME_STATE_NAMES: readonly CodingWorkbenchRunti
     "starting",
     "ready",
     "running",
+    "paused",
     "awaiting-approval",
     "stopping",
     "succeeded",
@@ -192,6 +194,7 @@ const LEGAL_TRANSITIONS: Readonly<
   starting: ["ready", "failed", "cancelled", "taken-over", "recovery-required"],
   ready: ["running", "stopping", "failed", "taken-over", "recovery-required"],
   running: [
+    "paused",
     "awaiting-approval",
     "stopping",
     "succeeded",
@@ -199,6 +202,7 @@ const LEGAL_TRANSITIONS: Readonly<
     "taken-over",
     "recovery-required",
   ],
+  paused: ["running", "awaiting-approval", "stopping", "failed", "taken-over", "recovery-required"],
   "awaiting-approval": ["running", "stopping", "failed", "taken-over", "recovery-required"],
   stopping: ["cancelled", "succeeded", "failed", "recovery-required"],
   succeeded: ["idle", "recovery-required"],

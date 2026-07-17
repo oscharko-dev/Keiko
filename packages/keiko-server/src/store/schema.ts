@@ -303,7 +303,7 @@ CREATE TABLE coding_runtime_snapshots (
   recovery_handle TEXT,
   CHECK (
     schema_version = '1'
-    AND state IN ('starting','ready','running','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
+    AND state IN ('starting','ready','running','paused','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
     AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
     AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
     AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')

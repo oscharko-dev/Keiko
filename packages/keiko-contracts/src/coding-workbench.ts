@@ -111,7 +111,8 @@ export const CODING_WORKBENCH_RUNTIME_HEALTH_STATES: readonly CodingWorkbenchRun
     "stopped",
   ] as const satisfies readonly CodingWorkbenchRuntimeHealth[]);
 
-export type CodingWorkbenchObservationChannel = "status" | "tool" | "verification" | "permission";
+export type CodingWorkbenchObservationChannel =
+  "status" | "tool" | "verification" | "permission" | "question";
 
 export const CODING_WORKBENCH_OBSERVATION_CHANNELS: readonly CodingWorkbenchObservationChannel[] =
   Object.freeze([
@@ -119,6 +120,7 @@ export const CODING_WORKBENCH_OBSERVATION_CHANNELS: readonly CodingWorkbenchObse
     "tool",
     "verification",
     "permission",
+    "question",
   ] as const satisfies readonly CodingWorkbenchObservationChannel[]);
 
 export type CodingWorkbenchPermissionRequestKind =
@@ -617,6 +619,26 @@ export function resolveEffectiveCodingWorkbenchMode(
   return CODING_WORKBENCH_MODE_ORDER[requested] <= CODING_WORKBENCH_MODE_ORDER[ceiling]
     ? requested
     : ceiling;
+}
+
+/**
+ * Total order over the three authority postures: negative when `left` grants strictly less
+ * authority than `right`, zero when equal, positive when more. The single source of truth for
+ * "widening" decisions on the server so Code cannot fork the ordering locally.
+ */
+export function compareCodingWorkbenchModeAuthority(
+  left: CodingWorkbenchMode,
+  right: CodingWorkbenchMode,
+): number {
+  return CODING_WORKBENCH_MODE_ORDER[left] - CODING_WORKBENCH_MODE_ORDER[right];
+}
+
+/** True when moving from `from` to `to` grants strictly more authority (a widening change). */
+export function isCodingWorkbenchModeWidening(
+  from: CodingWorkbenchMode,
+  to: CodingWorkbenchMode,
+): boolean {
+  return compareCodingWorkbenchModeAuthority(to, from) > 0;
 }
 
 export function codingWorkbenchPolicyEffectFor(

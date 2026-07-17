@@ -7,9 +7,12 @@ import {
   codingWorkbenchRuntimeActionError,
   decideCodingWorkbenchRuntimeApproval,
   newCodingWorkbenchRuntimeRequestId,
+  pauseCodingWorkbenchRuntime,
+  resumeCodingWorkbenchRuntime,
   retryCodingWorkbenchRuntime,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
+  submitCodingWorkbenchRuntimeFollowUp,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
 import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
@@ -90,6 +93,52 @@ export function createRunBoundMutation(
       kind === "stop"
         ? stopCodingWorkbenchRuntime(runId, { requestId: runId })
         : takeOverCodingWorkbenchRuntime(runId, { requestId: runId }),
+  };
+}
+
+export function createLifecycleMutation(
+  kind: "pause" | "resume",
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  const admissible =
+    kind === "pause" ? snapshot?.state === "running" : snapshot?.state === "paused";
+  if (!runId || snapshot === null || !admissible)
+    throw codingWorkbenchRuntimeActionError("The run cannot change lifecycle state right now.");
+  return {
+    requestId: runId,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      kind === "pause"
+        ? pauseCodingWorkbenchRuntime(runId, { requestId: runId })
+        : resumeCodingWorkbenchRuntime(runId, { requestId: runId }),
+  };
+}
+
+export function createFollowUpMutation(
+  taskIntent: string,
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  // No hidden prompt queue: a drafted follow-up is only ever admitted against a paused run.
+  if (!runId || snapshot?.state !== "paused" || taskIntent.length === 0)
+    throw codingWorkbenchRuntimeActionError(
+      "A follow-up can only be sent while the run is paused.",
+    );
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      submitCodingWorkbenchRuntimeFollowUp(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        taskIntent,
+      }),
   };
 }
 

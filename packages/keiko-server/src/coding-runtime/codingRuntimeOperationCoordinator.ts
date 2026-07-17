@@ -21,6 +21,9 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
     eventKind?: CodingWorkbenchRuntimeEvent["kind"],
   ) => CodingRuntimeOrchestratorResult;
+  readonly publicSnapshot: (
+    current: CodingRuntimeSnapshot,
+  ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
@@ -95,10 +98,9 @@ export class CodingRuntimeOperationCoordinator {
         return failure("authority-resolution-failed");
       }
       operation.reservation.commit();
-      const advanced = this.deps.advanceRevision(operation.current);
-      return advanced.ok
-        ? { ok: true, snapshot: advanced.snapshot, questions }
-        : failure(advanced.failureCode);
+      // Listing is a read: the revision must NOT advance, or any background question refresh
+      // would race concurrent operator actions (pause/answer/follow-up) into revision conflicts.
+      return { ok: true, snapshot: this.deps.publicSnapshot(operation.current), questions };
     });
   }
 
@@ -196,7 +198,15 @@ export class CodingRuntimeOperationCoordinator {
     keys: readonly string[],
   ): PreparedRuntimeOperation {
     const current = this.deps.current();
-    if (!isExactRecord(input, keys) || current?.runId !== runId || current.state !== "running") {
+    // Inline human-interaction (answer/reject/follow-up) is admitted while the run is running or
+    // paused; every other lifecycle state fails closed. No hidden prompt queue is possible: the
+    // one-use request id plus monotonic revision reservation admit exactly one turn per revision,
+    // so a second concurrent follow-up fails closed rather than queueing behind the active one.
+    if (
+      !isExactRecord(input, keys) ||
+      current?.runId !== runId ||
+      !(current.state === "running" || current.state === "paused")
+    ) {
       return { ok: false };
     }
     if (

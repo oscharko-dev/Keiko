@@ -163,6 +163,8 @@ function unavailableManager(): CodingRuntimeManager {
       failureCode: "runtime-stopped",
       retryable: false,
     }),
+    pause: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
+    resume: () => ({ ok: false, failureCode: "runtime-run-mismatch", retryable: false }),
     stop: stopped,
     takeover: stopped,
     reconcile: stopped,

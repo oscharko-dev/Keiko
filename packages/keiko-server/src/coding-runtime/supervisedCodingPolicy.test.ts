@@ -17,6 +17,7 @@ import {
   createInMemorySupervisedCodingApprovalStore,
   supervisedCodingApprovalScopeDigest,
   type SupervisedCodingApprovalBinding,
+  type SupervisedCodingApprovalBindingOnce,
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingConsumedApproval,
 } from "./supervisedCodingApprovalStore.js";
@@ -107,14 +108,16 @@ function consumedApproval(
     approvedByUserId: "operator",
     approvedAtMs: 1_000,
     expiresAtMs: 2_000,
+    grantScope: "once",
     ...patch,
   };
 }
 
 function approvalBinding(
-  patch: Partial<SupervisedCodingApprovalBinding> = {},
-): SupervisedCodingApprovalBinding {
+  patch: Partial<SupervisedCodingApprovalBindingOnce> = {},
+): SupervisedCodingApprovalBindingOnce {
   const base = {
+    grantScope: "once",
     runId: "run-1992",
     requestId: "perm-1992",
     actionKind: "push",

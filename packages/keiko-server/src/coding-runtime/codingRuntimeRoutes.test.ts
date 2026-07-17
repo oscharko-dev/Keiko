@@ -12,7 +12,13 @@ import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeApproval,
   handleCodingRuntimeEvents,
+  handleCodingRuntimeFollowUp,
+  handleCodingRuntimePause,
+  handleCodingRuntimeQuestionAnswer,
+  handleCodingRuntimeQuestionList,
+  handleCodingRuntimeQuestionReject,
   handleCodingRuntimeRecoveryAcknowledgement,
+  handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
   handleCodingRuntimeStatus,
   handleCodingRuntimeStop,
@@ -84,6 +90,23 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
     stop: () => Promise.resolve({ ok: true as const, snapshot }),
     takeover: () => Promise.resolve({ ok: true as const, snapshot }),
     acknowledgeRecovery: () => Promise.resolve({ ok: true as const, snapshot }),
+    pause: () => Promise.resolve({ ok: true as const, snapshot }),
+    resume: () => Promise.resolve({ ok: true as const, snapshot }),
+    submitFollowUp: (_runId: string, body: unknown) => {
+      calls.push(body);
+      return Promise.resolve({ ok: true as const, snapshot });
+    },
+    answerQuestion: (_runId: string, body: unknown) => {
+      calls.push(body);
+      return Promise.resolve({ ok: true as const, snapshot });
+    },
+    rejectQuestion: () => Promise.resolve({ ok: true as const, snapshot }),
+    listQuestions: () =>
+      Promise.resolve({
+        ok: true as const,
+        snapshot,
+        questions: { schemaVersion: "1" as const, questions: [] },
+      }),
     status: () => snapshot,
     getSnapshot: (runId: string) => (runId === "run-1" ? snapshot : undefined),
   };
@@ -115,13 +138,19 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
 }
 
 describe("coding runtime routes", () => {
-  it("does not mount content-bearing follow-up or question operations", () => {
+  it("mounts the inline follow-up, question, and pause/resume operations behind the runtime group", () => {
     const patterns = API_ROUTES.map(({ pattern }) => pattern);
-    expect(patterns.some((pattern) => pattern.includes("/questions"))).toBe(false);
-    expect(patterns.some((pattern) => pattern.includes("/follow-up"))).toBe(false);
+    // #2386: these operations ARE now mounted — behind the same loopback+CSRF+serverPrincipal
+    // boundary that already guards the runtime group (POST + JSON + CSRF enforced in server.ts).
+    expect(patterns.some((pattern) => pattern.endsWith("/questions"))).toBe(true);
+    expect(patterns.some((pattern) => pattern.endsWith("/questions/answer"))).toBe(true);
+    expect(patterns.some((pattern) => pattern.endsWith("/questions/reject"))).toBe(true);
+    expect(patterns.some((pattern) => pattern.endsWith("/follow-up"))).toBe(true);
+    expect(patterns.some((pattern) => pattern.endsWith("/pause"))).toBe(true);
+    expect(patterns.some((pattern) => pattern.endsWith("/resume"))).toBe(true);
   });
 
-  it("declares only the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
+  it("declares the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
     expect(CODING_RUNTIME_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`)).toEqual(
       [
         "POST /api/coding-workbench/runtime/runs",
@@ -133,6 +162,12 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
         "POST /api/coding-workbench/runtime/runs/:runId/retry",
         "POST /api/coding-workbench/runtime/runs/:runId/recovery-ack",
+        "POST /api/coding-workbench/runtime/runs/:runId/pause",
+        "POST /api/coding-workbench/runtime/runs/:runId/resume",
+        "POST /api/coding-workbench/runtime/runs/:runId/follow-up",
+        "POST /api/coding-workbench/runtime/runs/:runId/questions",
+        "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
+        "POST /api/coding-workbench/runtime/runs/:runId/questions/reject",
         "GET /api/coding-workbench/runtime/runs/:runId",
       ],
     );
@@ -143,12 +178,61 @@ describe("coding runtime routes", () => {
     expect(matchRoute("GET", "/api/coding-workbench/runtime/nope")).toBeUndefined();
   });
 
+  it("routes pause, resume, follow-up, and question mutations to the live run only", async () => {
+    const handlers = [
+      handleCodingRuntimePause,
+      handleCodingRuntimeResume,
+      handleCodingRuntimeFollowUp,
+      handleCodingRuntimeQuestionAnswer,
+      handleCodingRuntimeQuestionReject,
+      handleCodingRuntimeQuestionList,
+    ];
+    for (const handler of handlers) {
+      await expect(handler(context("{}", { runId: "run-1" }), runtime())).resolves.toMatchObject({
+        status: 200,
+      });
+      await expect(handler(context("{}", { runId: "run-9" }), runtime())).resolves.toMatchObject({
+        status: 404,
+      });
+      await expect(handler(context("{}"), runtime())).resolves.toMatchObject({ status: 404 });
+    }
+  });
+
+  it("caps a question answer body at 64KB and never echoes its untrusted text", async () => {
+    const oversized = "x".repeat(64 * 1024 + 1);
+    const tooLarge = await handleCodingRuntimeQuestionAnswer(
+      context(JSON.stringify({ padding: oversized }), { runId: "run-1" }),
+      runtime(),
+    );
+    expect(tooLarge).toMatchObject({ status: 413 });
+    expect(JSON.stringify(tooLarge.body)).not.toContain("xxxx");
+
+    const deps = runtime();
+    const answered = await handleCodingRuntimeQuestionAnswer(
+      context(
+        JSON.stringify({
+          requestId: "req-1",
+          expectedRevision: 2,
+          questionId: "que_1",
+          answers: [["untrusted-answer-text"]],
+        }),
+        { runId: "run-1" },
+      ),
+      deps,
+    );
+    expect(answered).toMatchObject({ status: 200, body: snapshot });
+    // The route response projects only the content-free snapshot, never the answer text.
+    expect(JSON.stringify(answered.body)).not.toContain("untrusted-answer-text");
+  });
+
   it("projects only server-owned readiness facts and computes the effective mode fail-closed", () => {
     const result = handleCodingRuntimeReadiness(
       context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery"),
       runtime({
         autonomousDeliveryDeploymentCeiling: "supervised-coding",
         codingRuntimeHostQualified: true,
+        // No live run: the effective mode is the plain ceiling clamp.
+        codingRuntimeOrchestrator: undefined,
       }),
     );
 
@@ -166,6 +250,35 @@ describe("coding runtime routes", () => {
     for (const forbidden of ["workspace", "authority", "endpoint", "credential", "path"]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  // #2386 regression: the server-confirmed effective mode is anchored to the LIVE run through the
+  // mode-change gate. Requesting a wider mode while a supervised run is live must keep confirming
+  // the run's own posture; narrowing is confirmed only from the paused (or idle) state.
+  it("anchors the confirmed effective mode to the live run through the mode-change gate", () => {
+    const liveStatus = (state: "running" | "paused"): unknown => ({
+      ...snapshot,
+      state,
+      requestedMode: "supervised-coding",
+    });
+    const readiness = (state: "running" | "paused", requestedMode: string): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, `/api/coding-workbench/runtime/readiness?requestedMode=${requestedMode}`),
+        runtime({
+          autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+          codingRuntimeHostQualified: true,
+          codingRuntimeOrchestrator: { status: () => liveStatus(state) },
+        }),
+      );
+      return (result.body as { effectiveMode?: string }).effectiveMode;
+    };
+
+    // Widening past the live run is never confirmed — not even while paused.
+    expect(readiness("paused", "autonomous-delivery")).toBe("supervised-coding");
+    expect(readiness("running", "autonomous-delivery")).toBe("supervised-coding");
+    // Any change while running is deferred to the run's posture; narrowing is confirmed from paused.
+    expect(readiness("running", "governed-assist")).toBe("supervised-coding");
+    expect(readiness("paused", "governed-assist")).toBe("governed-assist");
   });
 
   it("keeps readiness independently available when the runtime is absent and rejects malformed modes", () => {

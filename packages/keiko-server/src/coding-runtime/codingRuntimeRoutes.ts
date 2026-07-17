@@ -6,6 +6,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,6 +21,7 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
+import { decideCodingRuntimeModeChange } from "./codingRuntimeModeChangeGate.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -179,13 +181,36 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
-      effectiveMode: resolveEffectiveCodingWorkbenchMode(
-        parsed.value.requestedMode,
-        deploymentCeiling,
-      ),
+      effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       runtimeAvailable: deps.codingRuntimeHostQualified === true,
     },
   };
+}
+
+/**
+ * The server-confirmed effective mode is anchored to the live run (#2386): a requested change is
+ * confirmed only when the mode-change gate admits it — while the run is idle or paused, and
+ * widening only from idle. A rejected request keeps confirming the run's own effective posture,
+ * so the browser can never display a widened authority the server did not grant.
+ */
+function confirmedEffectiveMode(
+  deps: UiHandlerDeps,
+  requestedMode: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode,
+): CodingWorkbenchMode {
+  const current = deps.codingRuntimeOrchestrator?.status();
+  if (current?.runId === undefined || current.requestedMode === undefined) {
+    return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
+  }
+  const decision = decideCodingRuntimeModeChange({
+    currentState: current.state,
+    currentRequestedMode: current.requestedMode,
+    requestedMode,
+    deploymentCeiling,
+  });
+  return decision.ok
+    ? decision.effectiveMode
+    : resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -239,6 +264,79 @@ export function handleCodingRuntimeRecoveryAcknowledgement(
   return runId === undefined
     ? Promise.resolve(notFound())
     : mutation(ctx, deps, runId, (runtime, body) => runtime.acknowledgeRecovery(runId, body));
+}
+
+export function handleCodingRuntimePause(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.pause(runId, body));
+}
+
+export function handleCodingRuntimeResume(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.resume(runId, body));
+}
+
+// Inline follow-up: a drafted message is admitted while the run is running or paused; the
+// orchestrator's operation coordinator enforces the revision and one-use request-id serial
+// admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
+export function handleCodingRuntimeFollowUp(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.submitFollowUp(runId, body));
+}
+
+// Required-question surface. Question text is browser-rendered untrusted content: it never enters
+// snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
+// server-owned revision through the same serialized coordinator as every other mutation.
+export function handleCodingRuntimeQuestionAnswer(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.answerQuestion(runId, body));
+}
+
+export function handleCodingRuntimeQuestionReject(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  return runId === undefined
+    ? Promise.resolve(notFound())
+    : mutation(ctx, deps, runId, (runtime, body) => runtime.rejectQuestion(runId, body));
+}
+
+export function handleCodingRuntimeQuestionList(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  if (runId === undefined) return Promise.resolve(notFound());
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return Promise.resolve(required);
+  if (!required.orchestrator.getSnapshot(runId)) return Promise.resolve(notFound());
+  return withBody(async () => {
+    const body = await readBody(ctx.req);
+    if (body === undefined) return failureResult("invalid-intent");
+    const result = await required.orchestrator.listQuestions(runId, body);
+    return result.ok ? { status: 200, body: result.questions } : failureResult(result.failureCode);
+  });
 }
 
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
@@ -339,6 +437,36 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs/:runId/recovery-ack",
     handler: handleCodingRuntimeRecoveryAcknowledgement,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/pause",
+    handler: handleCodingRuntimePause,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/resume",
+    handler: handleCodingRuntimeResume,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/follow-up",
+    handler: handleCodingRuntimeFollowUp,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions",
+    handler: handleCodingRuntimeQuestionList,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions/answer",
+    handler: handleCodingRuntimeQuestionAnswer,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/questions/reject",
+    handler: handleCodingRuntimeQuestionReject,
   },
   {
     method: "GET",

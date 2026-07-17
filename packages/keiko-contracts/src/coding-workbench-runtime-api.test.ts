@@ -165,6 +165,17 @@ describe("Coding Workbench runtime API contracts", () => {
         effectiveMode: "supervised-coding",
       }),
     ).toMatchObject({ ok: false });
+    // #2386: the server may confirm a NARROWER effective mode than the request/ceiling clamp —
+    // the mode-change gate anchors it to the live run — but never a wider one.
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        schemaVersion: "1",
+        requestedMode: "autonomous-delivery",
+        deploymentCeiling: "autonomous-delivery",
+        effectiveMode: "supervised-coding",
+        runtimeAvailable: true,
+      }),
+    ).toMatchObject({ ok: true });
     expect(
       validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeAvailable: "yes" }),
     ).toMatchObject({ ok: false });
