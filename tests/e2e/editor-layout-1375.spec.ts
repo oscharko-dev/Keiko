@@ -173,15 +173,26 @@ test("splits a pane and resizes the two-pane split from the keyboard (AC5)", asy
   await separator.press("ArrowRight");
   await expect(separator).toHaveAttribute("aria-valuenow", "52");
 
-  // The alternate split button switches orientation without creating orphan panes.
+  // #2131 split semantics (#2485): a split MOVES the file into the new pane, so the one-file
+  // right pane cannot be split again — the request is a no-op instead of leaving an orphan empty
+  // pane, and the existing split keeps its orientation and resize position untouched.
   await workspace
     .getByRole("button", { name: `Split ${ACTIVE_FILE} down` })
     .first()
     .click();
   await expect(workspace.locator(".ed-pane")).toHaveCount(2);
   await expect(workspace.getByRole("separator", { name: "Resize editor split" })).toHaveCount(1);
-  await expect(separator).toHaveAttribute("aria-orientation", "horizontal");
-  await expect(separator).toHaveAttribute("aria-valuenow", "50");
+  await expect(separator).toHaveAttribute("aria-orientation", "vertical");
+  await expect(separator).toHaveAttribute("aria-valuenow", "52");
+
+  // A pane that still holds two files splits downward for real: the nested column split adds a
+  // third pane and a second resizer whose orientation is horizontal.
+  await workspace.getByRole("button", { name: "Split src/utils.ts down" }).first().click();
+  await expect(workspace.locator(".ed-pane")).toHaveCount(3);
+  await expect(workspace.getByRole("separator", { name: "Resize editor split" })).toHaveCount(2);
+  await expect(
+    workspace.locator('[aria-label="Resize editor split"][aria-orientation="horizontal"]'),
+  ).toHaveCount(1);
 });
 
 test("reorders and moves tabs through the keyboard fallback (AC1/AC3)", async ({ page }) => {
@@ -193,7 +204,7 @@ test("reorders and moves tabs through the keyboard fallback (AC1/AC3)", async ({
   await firstPane.locator(`.ed-tab-hit[data-tip="${ACTIVE_FILE}"]`).press("Alt+ArrowRight");
   expect(await tabLabels(firstPane)).toEqual(["src/utils.ts", ACTIVE_FILE, "README.md"]);
 
-  // Alt+Shift+ArrowLeft moves a tab from the adjacent pane into the first pane.
+  // #2131 split semantics (#2485): the split MOVES the active file into the new right pane.
   await workspace
     .getByRole("button", { name: `Split ${ACTIVE_FILE} right` })
     .first()
@@ -202,8 +213,16 @@ test("reorders and moves tabs through the keyboard fallback (AC1/AC3)", async ({
 
   const leftPane = workspace.locator(".ed-pane").first();
   const rightPane = workspace.locator(".ed-pane").nth(1);
-  await rightPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`).press("Alt+Shift+ArrowLeft");
+  await expect(rightPane.locator(`.ed-tab-hit[data-tip="${ACTIVE_FILE}"]`)).toBeVisible();
 
+  // Alt+Shift+ArrowRight moves a tab into the adjacent right pane…
+  await leftPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`).press("Alt+Shift+ArrowRight");
+  await expect(rightPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`)).toBeVisible();
+  await expect(workspace.locator(".ed-pane")).toHaveCount(2);
+
+  // …and Alt+Shift+ArrowLeft moves it back into the first pane; both panes survive the round
+  // trip because neither move empties its source pane.
+  await rightPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`).press("Alt+Shift+ArrowLeft");
   await expect(leftPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`)).toBeVisible();
   await expect(workspace.locator(".ed-pane")).toHaveCount(2);
 });
