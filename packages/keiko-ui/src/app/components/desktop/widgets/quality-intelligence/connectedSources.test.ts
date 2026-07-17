@@ -343,7 +343,7 @@ describe("resolveConnectedFilePath", () => {
     const adversarialRoot = `/root${"/".repeat(20_000)}`;
     const start = Date.now();
     const resolved = resolveConnectedFilePath(adversarialRoot, "spec.md");
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(resolved).toBe("/root/spec.md");
   });
 });

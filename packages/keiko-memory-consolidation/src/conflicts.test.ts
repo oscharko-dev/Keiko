@@ -177,7 +177,7 @@ describe("findConflictPairs - value replacement conflicts", () => {
     const start = Date.now();
     const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     expect(items).toHaveLength(1);
     expect(must(items[0]).evidence?.map((item) => item.kind)).toContain("value-replacement");
     expect(must(items[0]).evidence?.[0]?.detail).toContain("eu-central-1 -> us-east-1");

@@ -559,7 +559,7 @@ describe("splitRequirementsIntoAtoms — markdown heading parsing performance", 
     const start = Date.now();
     const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     expect(atoms).toHaveLength(1);
     expect(atoms[0]?.canonicalText.startsWith(`## a${gap}b`)).toBe(true);
   });

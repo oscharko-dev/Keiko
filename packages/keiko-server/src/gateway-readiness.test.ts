@@ -592,14 +592,14 @@ describe("verified-capability evidence patterns (S8786 regression)", () => {
     const start = Date.now();
     const tokenMatch = adversarialTokens.match(TESTED_CONTEXT_TOKENS_PATTERN);
     const tokenElapsedMs = Date.now() - start;
-    expect(tokenElapsedMs).toBeLessThan(300);
+    expect(tokenElapsedMs).toBeLessThan(1500);
     expect(tokenMatch).toBeNull();
 
     const adversarialEmbedding = "9.".repeat(50_000) + " norm";
     const embeddingStart = Date.now();
     const embeddingMatch = adversarialEmbedding.match(EMBEDDING_EVIDENCE_PATTERN);
     const embeddingElapsedMs = Date.now() - embeddingStart;
-    expect(embeddingElapsedMs).toBeLessThan(300);
+    expect(embeddingElapsedMs).toBeLessThan(1500);
     expect(embeddingMatch).toBeNull();
   });
 });

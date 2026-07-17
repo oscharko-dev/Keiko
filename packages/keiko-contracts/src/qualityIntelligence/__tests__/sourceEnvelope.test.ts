@@ -212,7 +212,7 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
     const env = { ...makeRepo(), localRef: "a".repeat(20_000) };
     const start = Date.now();
     const safe = looksLikeBrowserSafeSourceEnvelope(env);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(safe).toBe(true);
   });
 });

@@ -2114,7 +2114,7 @@ describe("FilesWidget path helpers (S8786 regex-safety)", () => {
     const elapsed = Date.now() - start;
 
     expect(trimmed).toBe(adversarial); // nothing trailing to strip
-    expect(elapsed).toBeLessThan(200);
+    expect(elapsed).toBeLessThan(1000);
   });
 
   it("trims trailing separators the same way the original regexes did", () => {

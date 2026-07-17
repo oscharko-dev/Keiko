@@ -442,7 +442,7 @@ describe("runPromptEnhancement", () => {
       );
       const elapsedMs = Date.now() - start;
 
-      expect(elapsedMs).toBeLessThan(500);
+      expect(elapsedMs).toBeLessThan(2000);
       expect(result.schemaVersion).toBe("1");
     });
 

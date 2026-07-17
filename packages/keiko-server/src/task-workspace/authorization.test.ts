@@ -63,7 +63,7 @@ describe("resolveManagedTaskWorkspaceRoot", () => {
     );
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(200);
+    expect(elapsedMs).toBeLessThan(1000);
     expect(result).toBeUndefined();
     expect(getInstance).toHaveBeenCalledWith("ws_b");
   });

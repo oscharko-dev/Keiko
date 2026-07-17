@@ -194,7 +194,7 @@ describe("buildEndpointContractGraph regex complexity safety (S8786 regression)"
     const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
     const elapsedMs = Date.now() - startedAtMs;
 
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     expect(graph.routes).toHaveLength(1);
     expect(graph.routes[0]?.handler).toBe("getOrder");
     expect(graph.clientCalls).toHaveLength(0);

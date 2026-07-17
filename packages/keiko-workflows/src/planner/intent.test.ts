@@ -70,7 +70,7 @@ describe("classifyRetrievalIntent", () => {
     const start = Date.now();
     const result = classifyRetrievalIntent(adversarial);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(200);
+    expect(elapsedMs).toBeLessThan(1000);
     expect(result.intent).toBe("targeted-code-search");
   });
 

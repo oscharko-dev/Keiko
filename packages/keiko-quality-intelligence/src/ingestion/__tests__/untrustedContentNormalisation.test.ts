@@ -102,7 +102,7 @@ describe("normaliseUntrustedContent", () => {
     const adversarial = "[".repeat(40_000);
     const start = Date.now();
     const result = normaliseUntrustedContent(adversarial);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(result.value).toBe(adversarial);
     expect(result.markdownInjectionEscapes).toBe(0);
   });

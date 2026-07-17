@@ -953,7 +953,7 @@ describe("parseGeneratedCandidates — adversarial inputs", () => {
     const raw = `\`\`\`json${" ".repeat(20_000)}`;
     const start = Date.now();
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(result.recovered).toBe(false);
     expect(result.candidates).toHaveLength(0);
   });

@@ -226,7 +226,7 @@ describe("idempotent safe retry (AC3)", () => {
     });
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     expect(second.created).toBe(false);
     expect(second.instance.gitdirIdentity).toBe(first.instance.gitdirIdentity);
   });

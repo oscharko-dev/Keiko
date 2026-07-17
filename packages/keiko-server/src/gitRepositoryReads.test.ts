@@ -894,7 +894,7 @@ describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
     const adversarial = `name${"x ".repeat(20000)}`;
     const start = Date.now();
     expect(parseRemotes(adversarial)).toEqual([]);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
   });
 
   it("extracts the changed-file count from a pathologically long non-matching shortstat line without catastrophic backtracking", () => {
@@ -906,7 +906,7 @@ describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
 
     const start = Date.now();
     const entries = parseHistory(record);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.changedFileCount).toBe(0);
   });

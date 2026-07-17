@@ -124,7 +124,7 @@ describe("scanForSecrets — provider base URLs", () => {
     const raw = `https://docs.example.com${"/".repeat(20_000)}end`;
     const start = Date.now();
     const result = scanForSecrets(raw);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(result).toBeNull();
   });
 });

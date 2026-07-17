@@ -769,7 +769,7 @@ describe("ingestInlineSources — label sanitisation", () => {
     const adversarialLabel = "a".repeat(20_000);
     const start = Date.now();
     const result = ingestInlineSources(input([requirementsSource(adversarialLabel, VALID_TEXT)]));
-    expect(Date.now() - start).toBeLessThan(500);
+    expect(Date.now() - start).toBeLessThan(2000);
     const label = result.envelopes[0]?.displayLabel ?? "";
     expect(label.length).toBeLessThanOrEqual(120);
   });

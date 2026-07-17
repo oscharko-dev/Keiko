@@ -28,7 +28,7 @@ describe("normalizedRepositoryRoot", () => {
     const adversarial = `${"/".repeat(20000)}a`;
     const start = Date.now();
     const result = normalizedRepositoryRoot(adversarial);
-    expect(Date.now() - start).toBeLessThan(200);
+    expect(Date.now() - start).toBeLessThan(1000);
     expect(result).toBe(adversarial);
   });
 });

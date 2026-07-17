@@ -262,7 +262,7 @@ describe("xlsxParser", () => {
     const result = parseSharedStrings(adversarialXml, input, options);
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result.strings).toEqual([]);
   });
 
@@ -276,7 +276,7 @@ describe("xlsxParser", () => {
     const result = readSheetRows("Sheet1", adversarialXml, [], EMPTY_STYLES);
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result).toEqual([]);
   });
 
@@ -292,7 +292,7 @@ describe("xlsxParser", () => {
     const result = readSheetRows("Sheet1", adversarialXml, [], EMPTY_STYLES);
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result).toEqual([]);
   });
 

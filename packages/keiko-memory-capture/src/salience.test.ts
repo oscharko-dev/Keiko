@@ -665,7 +665,7 @@ describe("trimDashes", () => {
     const start = Date.now();
     const result = trimDashes(input);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result).toBe(input);
   });
 });

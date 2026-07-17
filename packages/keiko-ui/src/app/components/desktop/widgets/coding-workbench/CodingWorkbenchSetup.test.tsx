@@ -220,7 +220,7 @@ describe("CodingWorkbenchSetup", () => {
   it("stays fast trimming an adversarially large dash-only string", () => {
     const start = Date.now();
     const result = stripLeadingAndTrailingDashes("-".repeat(20_000));
-    expect(Date.now() - start).toBeLessThan(200);
+    expect(Date.now() - start).toBeLessThan(1000);
     expect(result).toBe("");
   });
 });

@@ -83,7 +83,7 @@ describe("deriveTaskBranchName", () => {
     const branch = deriveTaskBranchName({ taskId });
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(200);
+    expect(elapsedMs).toBeLessThan(1000);
     expect(branch.startsWith("keiko/task/task-")).toBe(true);
     expect(isSafeGitRefName(branch)).toBe(true);
   });

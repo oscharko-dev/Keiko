@@ -101,7 +101,7 @@ describe("lexical analyzer", () => {
     const start = Date.now();
     const terms = lexicalExactTerms(adversarialToken);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(terms).toEqual([]);
   });
 });

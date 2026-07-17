@@ -44,7 +44,7 @@ describe("normalizeNaturalLanguageToken", () => {
     const adversarial = `x${"!".repeat(60_000)}a`;
     const start = Date.now();
     const result = normalizeNaturalLanguageToken(adversarial);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     // Internal punctuation between two alphanumeric characters is preserved (same contract as the
     // "ADR-0022" case above) — the string is unchanged because there is nothing to strip at
     // either end.

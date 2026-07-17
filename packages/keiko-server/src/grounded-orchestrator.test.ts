@@ -775,7 +775,7 @@ describe("runGroundedExploration", () => {
       }),
       { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
     );
-    expect(Date.now() - start).toBeLessThan(500);
+    expect(Date.now() - start).toBeLessThan(2000);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

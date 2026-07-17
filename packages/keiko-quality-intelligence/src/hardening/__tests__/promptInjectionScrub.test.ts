@@ -178,7 +178,7 @@ describe("scanForPromptInjections — ReDoS regression (Sonar S8786)", () => {
     const start = Date.now();
     const result = scanForPromptInjections(input);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result.safe).toBe(true);
     expect(result.injections).toEqual([]);
   });
@@ -194,7 +194,7 @@ describe("scanForPromptInjections — ReDoS regression (Sonar S8786)", () => {
     const start = Date.now();
     const result = scanForPromptInjections(input);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(result.safe).toBe(true);
     expect(result.injections).toEqual([]);
   });

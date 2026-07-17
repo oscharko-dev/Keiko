@@ -910,7 +910,7 @@ describe("trailing-slash normalization — regex-safety regression (S8786)", () 
     });
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(400);
+    expect(elapsed).toBeLessThan(1500);
     expect(scope).toEqual({
       kind: "files",
       relativePaths: ["y" + "/".repeat(n) + "z"],

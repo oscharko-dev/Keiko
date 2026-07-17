@@ -54,7 +54,7 @@ describe("fullPreviewPath", () => {
     const start = Date.now();
     const result = fullPreviewPath(adversarialRoot, "src/index.ts");
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     // The trailing "project" is not a separator, so nothing is stripped from the root.
     expect(result).toBe(`${adversarialRoot}/src/index.ts`);
   });

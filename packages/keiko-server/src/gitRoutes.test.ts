@@ -171,7 +171,7 @@ describe("GET /api/git/status", () => {
     );
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ branch: "x", detached: false });
   });

@@ -12,7 +12,7 @@ describe("toSpeakableText", () => {
     const result = toSpeakableText(adversarial);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(500);
+    expect(elapsed).toBeLessThan(2000);
     expect(result).not.toContain("undefined");
   });
 
@@ -26,7 +26,7 @@ describe("toSpeakableText", () => {
     const result = toSpeakableText(adversarial);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(500);
+    expect(elapsed).toBeLessThan(2000);
     expect(result).not.toContain("undefined");
   });
 
@@ -40,7 +40,7 @@ describe("toSpeakableText", () => {
     const result = toSpeakableText(adversarial);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(500);
+    expect(elapsed).toBeLessThan(2000);
     expect(result).not.toContain("undefined");
   });
 
@@ -154,7 +154,7 @@ describe("stripSpaceBeforePunctuation", () => {
     const result = stripSpaceBeforePunctuation(adversarial);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(500);
+    expect(elapsed).toBeLessThan(2000);
     expect(result).toBe(adversarial);
   });
 

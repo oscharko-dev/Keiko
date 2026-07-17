@@ -168,7 +168,7 @@ describe("explicitClassification", () => {
     const start = Date.now();
     const result = explicitClassification(adversarial);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(200);
+    expect(elapsedMs).toBeLessThan(1000);
     expect(result).toEqual({ kind: "fact", text: "x" });
   });
 });

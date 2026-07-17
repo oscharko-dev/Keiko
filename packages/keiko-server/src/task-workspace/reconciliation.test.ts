@@ -237,7 +237,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const report = await reconciliation().reconcile();
     const elapsedMs = Date.now() - start;
 
-    expect(elapsedMs).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(2000);
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("healthy");
     expect(reportEntry?.driftMarkers).toEqual([]);

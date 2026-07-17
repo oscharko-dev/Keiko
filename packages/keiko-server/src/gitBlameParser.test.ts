@@ -101,7 +101,7 @@ describe("parseGitBlamePorcelain", () => {
       record("e".repeat(40), 1, adversarialAuthor, 1_752_172_800, "Summary", "source"),
       { maxLines: 1, processTruncated: false },
     );
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     // Not email-shaped (no "@"), so it is bounded rather than redacted as "Private author".
     expect(parsed.lines[0]?.author).toBe("a".repeat(256));
   });

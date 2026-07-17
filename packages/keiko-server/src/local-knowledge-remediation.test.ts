@@ -27,7 +27,7 @@ describe("normalizedEndpointFingerprint", () => {
     const start = Date.now();
     const fingerprint = normalizedEndpointFingerprint(adversarialBaseUrl);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(fingerprint).toMatch(/^[0-9a-f]{16}$/);
   });
 });

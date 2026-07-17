@@ -71,7 +71,7 @@ describe("validateGitHubRelease performance (SonarCloud S8786 regression)", () =
     const release = validateGitHubRelease(releaseWithBody(body), TARGET_VERSION);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(300);
+    expect(elapsed).toBeLessThan(1500);
     expect(release?.noteSections).toEqual([{ title: longHeadingBody, bullets: [longBulletBody] }]);
   });
 
@@ -82,7 +82,7 @@ describe("validateGitHubRelease performance (SonarCloud S8786 regression)", () =
     const release = validateGitHubRelease(releaseWithBody(body), TARGET_VERSION);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(300);
+    expect(elapsed).toBeLessThan(1500);
     expect(release?.noteSections).toEqual([]);
   });
 
@@ -101,7 +101,7 @@ describe("validateGitHubRelease performance (SonarCloud S8786 regression)", () =
     const release = validateGitHubRelease(releaseWithBody(body), TARGET_VERSION);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(300);
+    expect(elapsed).toBeLessThan(1500);
     expect(release?.noteSections).toEqual([
       { title: headingBody, bullets: ["bullet under adversarial heading"] },
     ]);

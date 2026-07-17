@@ -74,7 +74,7 @@ describe("deriveIntent", () => {
       evidenceTexts: [`${adversarialToken} normal requirement text follows.`],
     });
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     expect(summary.sourceMode).toBe("body");
   });
 

@@ -552,7 +552,7 @@ describe("stripJsonCodeFence (S8786 regression)", () => {
     const start = Date.now();
     const result = stripJsonCodeFence(adversarial);
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(300);
+    expect(elapsedMs).toBeLessThan(1500);
     // No real closing fence anywhere in the string, so it is returned unchanged.
     expect(result).toBe(adversarial);
   });

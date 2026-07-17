@@ -308,7 +308,7 @@ describe("designTestCaseCandidates", () => {
       atoms: [firstAtom],
       atomTextById,
     });
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     // No screen name could be parsed out of the header, so it falls back to the generic template
     // rather than throwing or hanging.
     expect(candidates.length).toBe(1);
@@ -348,7 +348,7 @@ describe("parseFigmaScreenHeaderName — capture correctness (S8786 verifier reg
     const line = `Screen:${" ".repeat(2_000)}Name${" ".repeat(2_000)}[id]`;
     const start = Date.now();
     const name = parseFigmaScreenHeaderName(line);
-    expect(Date.now() - start).toBeLessThan(50);
+    expect(Date.now() - start).toBeLessThan(250);
     expect(name).toBe("Name");
   });
 

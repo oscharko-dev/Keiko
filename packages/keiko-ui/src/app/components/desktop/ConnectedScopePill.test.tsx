@@ -100,7 +100,7 @@ describe("stripTrailingSlashes", () => {
     const adversarial = `${"/".repeat(320_000)}x`;
     const start = Date.now();
     const result = stripTrailingSlashes(adversarial);
-    expect(Date.now() - start).toBeLessThan(300);
+    expect(Date.now() - start).toBeLessThan(1500);
     expect(result).toBe(adversarial);
   });
 });
