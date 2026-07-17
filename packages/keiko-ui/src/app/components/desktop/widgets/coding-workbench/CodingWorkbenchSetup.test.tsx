@@ -205,6 +205,44 @@ describe("CodingWorkbenchSetup", () => {
     expect(setupSection()).toBeInTheDocument();
   });
 
+  it("treats a reconciliation error as a content-free verify failure and never activates", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockRejectedValue(new Error("RECONCILIATION_UNAVAILABLE"));
+    renderWorkbench(api);
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The workspace could not be verified.");
+    expect(alert).not.toHaveTextContent("RECONCILIATION_UNAVAILABLE");
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(setupSection()).toBeInTheDocument();
+  });
+
+  it("surfaces a content-free bind failure when activation fails after a healthy reconcile", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockRejectedValue(new Error("ACTIVATION_FAILED"));
+    renderWorkbench(api);
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The workspace could not be bound. Review the repository path and target branch.",
+    );
+    expect(alert).not.toHaveTextContent("ACTIVATION_FAILED");
+    // Activation ran (reconcile verified) but failed before the refresh; no bound surface flips.
+    expect(setActiveMock).toHaveBeenCalledTimes(1);
+    expect(api.refresh).not.toHaveBeenCalled();
+  });
+
   it("surfaces a content-free alert when the bind fails and never activates", async () => {
     const user = userEvent.setup();
     provisionMock.mockRejectedValue(new Error("WORKSPACE_ROOT_INVALID"));
