@@ -226,7 +226,11 @@ async function revealLine(scope: Locator, line: Locator): Promise<void> {
   }
   await scope.locator(".monaco-editor").first().click();
   await line.page().keyboard.press("ControlOrMeta+End");
-  await expect(line).toBeVisible({ timeout: 60_000 });
+  const rendered = await scope.locator(".monaco-editor .view-lines .view-line").allInnerTexts();
+  await expect(
+    line,
+    `line still absent after the end-of-buffer reveal; rendered view-lines: ${JSON.stringify(rendered)}`,
+  ).toBeVisible({ timeout: 60_000 });
 }
 
 async function placeCursorOnSymbol(
