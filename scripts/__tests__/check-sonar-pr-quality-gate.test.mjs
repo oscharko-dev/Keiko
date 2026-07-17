@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   evaluateSonarPullRequest,
   executeSonarPullRequestGateCli,
+  isAnalyzableChange,
   measuresFromPayload,
   runSonarPullRequestGate,
   runSonarPullRequestGateCli,
@@ -164,6 +165,111 @@ describe("SonarCloud PR quality gate", () => {
       ]),
     );
     expect(failures).not.toContain(expect.stringContaining("undefined"));
+  });
+
+  it("skips the redundant new-code re-checks when the change touches no coverable product source", () => {
+    // A documentation/workflow-only PR: SonarCloud reports no new-code line, coverage, duplication,
+    // or new-hotspot metrics. With analyzable=false these re-checks are not applicable and the gate
+    // relies on the native gate status, gate contract, unresolved issues, and new violations.
+    expect(evaluate({ analyzable: false, measures: { new_violations: 0 } })).toEqual([]);
+  });
+
+  it("keeps the always-on checks failing closed even when the change is not analyzable", () => {
+    expect(
+      evaluate({
+        analysis: { commitSha: "a".repeat(40), qualityGateStatus: "ERROR" },
+        analyzable: false,
+        measures: { new_violations: 0 },
+      }),
+    ).toContain("SonarCloud native quality gate is ERROR.");
+    expect(evaluate({ analyzable: false, measures: {} })).toContain(
+      "New-code violation metric is missing.",
+    );
+    expect(
+      evaluate({ analyzable: false, issuesTotal: 1, measures: { new_violations: 0 } }),
+    ).toContain("SonarCloud reports 1 unresolved issue(s).");
+    expect(
+      evaluate({
+        analyzable: false,
+        measures: { new_violations: 0 },
+        overallMeasures: { security_hotspots: 1, security_hotspots_reviewed: 99 },
+      }),
+    ).toContain("Overall security-hotspot review condition failed at 99%.");
+  });
+
+  it("still fails closed on absent new_lines for an analyzable change (no fail-open regression)", () => {
+    expect(
+      evaluate({
+        analyzable: true,
+        measures: { ...passingMeasures, new_lines: undefined, new_lines_to_cover: undefined },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "New-code line count metric is missing.",
+        "Cannot evaluate new-code coverage: Sonar did not report a new-code line count.",
+      ]),
+    );
+  });
+
+  it("classifies changed files to decide analyzability and fails closed without a base", () => {
+    const diff = (output) => () => output;
+    const base = "b".repeat(40);
+    const head = "h".repeat(40);
+    expect(
+      isAnalyzableChange({ base, execute: diff("M\tREADME.md\nA\tdocs/adr/ADR-0140.md"), head }),
+    ).toBe(false);
+    expect(
+      isAnalyzableChange({
+        base,
+        execute: diff("M\tscripts/check-sonar-pr-quality-gate.mjs"),
+        head,
+      }),
+    ).toBe(true);
+    expect(
+      isAnalyzableChange({ base, execute: diff("M\tpackages/keiko-ui/src/app.test.ts"), head }),
+    ).toBe(false);
+    // Without a base revision the diff cannot be computed, so the change is treated as analyzable
+    // and the full new-code evidence stays required.
+    expect(isAnalyzableChange({ execute: diff("M\tREADME.md"), head })).toBe(true);
+    expect(isAnalyzableChange()).toBe(true);
+  });
+
+  it("passes the live-shaped gate for a documentation-only PR with no coverable source", async () => {
+    const headSha = "a".repeat(40);
+    const logs = [];
+    const load = async (path) => {
+      if (path.includes("project_pull_requests"))
+        return {
+          pullRequests: [
+            { commit: { sha: headSha }, key: "2490", status: { qualityGateStatus: "OK" } },
+          ],
+        };
+      if (path.includes("issues/search")) return { total: 0 };
+      if (path.includes("qualitygates/show")) return passingGate;
+      if (path.includes("metricKeys=security_hotspots"))
+        return {
+          component: {
+            measures: Object.entries(passingOverallMeasures).map(([metric, measure]) => ({
+              metric,
+              value: String(measure),
+            })),
+          },
+        };
+      // Documentation-only PR: SonarCloud reports only the new-code violation count.
+      return { component: { measures: [{ metric: "new_violations", value: "0" }] } };
+    };
+    await expect(
+      runSonarPullRequestGate({
+        base: "b".repeat(40),
+        execute: () => "M\tREADME.md",
+        headSha,
+        load,
+        log: (message) => logs.push(message),
+        pullRequest: "2490",
+        token: "redacted",
+      }),
+    ).resolves.toBeUndefined();
+    expect(logs).toEqual([`sonar-pr-quality-gate: PASS - PR #2490 is clean at ${headSha}.`]);
   });
 
   it("still fails closed on missing violation metric or unresolved issue total regardless of analyzability", () => {
