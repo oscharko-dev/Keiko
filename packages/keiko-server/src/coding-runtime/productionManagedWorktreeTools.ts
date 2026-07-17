@@ -10,11 +10,18 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
-import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
+import type {
+  CodingToolGovernedPorts,
+  GovernedCodingToolPort,
+} from "./codingToolGovernedDelegate.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { createResearchEgressPort } from "./researchEgressPort.js";
+import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import {
   createCodingToolReadEditPorts,
   type CodingToolReadEditPortDeps,
@@ -40,6 +47,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly invocationRegistry: CodingToolInvocationRegistry;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  // Present only when read-only public research (#2387) is activated for this run: the run-bound
+  // grant registry and the gateway's outbound egress config (proxy/CA). When absent, the egress
+  // authority stays the fail-closed stub, so a run without research can never reach the internet.
+  readonly researchGrantRegistry?: ResearchGrantRegistry | undefined;
+  readonly gatewayEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
 }
 
 export function createProductionManagedWorktreeToolFacade(
@@ -124,8 +136,29 @@ function governedPorts(
     gitAuthority: { execute: failed },
     deliveryAuthority: { execute: failed },
     connectorAuthority: { execute: failed },
-    egressAuthority: { execute: failed },
+    egressAuthority: buildEgressAuthority(input, failed),
   };
+}
+
+// Mounts the real research-egress executor only when the run activated read-only research (registry
+// and gateway egress both present); otherwise the egress authority stays the fail-closed stub, so a
+// run without a research grant can never reach the internet.
+function buildEgressAuthority(
+  input: ProductionManagedWorktreeToolInput,
+  failed: () => Promise<{ readonly status: "failed" }>,
+): GovernedCodingToolPort<"egress"> {
+  const registry = input.researchGrantRegistry;
+  const gatewayEgress = input.gatewayEgress;
+  if (registry === undefined || gatewayEgress === undefined) {
+    return { execute: failed };
+  }
+  return createResearchEgressPort({
+    registry,
+    resolveRunId: (): string => input.authorityRef.runId,
+    gatewayEgress: (): OutboundHttpEgressConfig | undefined => gatewayEgress(),
+    emitEvent: input.onRuntimeEvent,
+    now: (): number => Date.now(),
+  });
 }
 
 function live(input: ProductionManagedWorktreeToolInput): boolean {
