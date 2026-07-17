@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import type { DebugVariableNode, SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
+import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { resolveDebugLaunchTarget } from "./debugLaunchTarget";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -44,7 +44,7 @@ type DebugHost = NonNullable<EditorSurfaceProps["debug"]>;
 type BreakpointContext = Parameters<DebugHost["gutter"]["onOpenContextMenu"]>[0];
 type BreakpointAction = BreakpointContext["actions"][number];
 
-const MAX_INLINE_SUMMARY_VALUES = 20;
+const MAX_INLINE_VALUES = 200;
 const MAX_INLINE_SUMMARY_CHARS = 320;
 const ACTIVE_SESSION_STATES = new Set<DebugSessionState>([
   "reserved",
@@ -85,33 +85,28 @@ export interface TextPromptRequest {
   readonly line: number;
 }
 
-function variableValues(nodes: readonly DebugVariableNode[]): readonly string[] {
-  return nodes
-    .filter(
-      (node): node is Extract<DebugVariableNode, { readonly kind: "variable" }> =>
-        node.kind === "variable",
-    )
-    .slice(0, MAX_INLINE_SUMMARY_VALUES)
-    .map((node) => `${node.name.value}: ${node.value.value}`);
-}
-
 function boundedInlineSummary(value: string): string {
   if (value.length <= MAX_INLINE_SUMMARY_CHARS) return value;
   return `${value.slice(0, MAX_INLINE_SUMMARY_CHARS - 1)}…`;
 }
 
-function pausedValueSummary(
+function pausedValueEntries(
   snapshot: ReturnType<typeof useDebugSession>["snapshot"],
   frameRef: string,
-): string | undefined {
+): readonly string[] {
   const scopes = snapshot.scopesByFrame.get(frameRef)?.scopes ?? [];
-  const values = scopes.flatMap((scope) =>
-    variableValues(snapshot.variablesByParent.get(scope.scopeRef)?.nodes ?? []).map(
-      (value) => `${scope.name.value}: ${value}`,
-    ),
-  );
-  if (values.length === 0) return undefined;
-  return boundedInlineSummary(values.slice(0, MAX_INLINE_SUMMARY_VALUES).join(" · "));
+  const values: string[] = [];
+  for (const scope of scopes) {
+    const nodes = snapshot.variablesByParent.get(scope.scopeRef)?.nodes ?? [];
+    for (const node of nodes) {
+      if (node.kind !== "variable") continue;
+      values.push(
+        boundedInlineSummary(`${scope.name.value}: ${node.name.value}: ${node.value.value}`),
+      );
+      if (values.length === MAX_INLINE_VALUES) return values;
+    }
+  }
+  return values;
 }
 
 export function derivePausedDebugValues(
@@ -140,14 +135,19 @@ export function derivePausedDebugValues(
       values: [],
     };
   }
-  const summary = pausedValueSummary(snapshot, frame.frameRef);
+  const values = pausedValueEntries(snapshot, frame.frameRef);
   return {
     paused: true,
     pauseGeneration: snapshot.session.pauseGeneration,
     documentUri,
     description,
-    values:
-      summary === undefined ? [] : [{ line: frame.line, column: frame.column, value: summary }],
+    // DAP variables carry no source location. Keep every bounded decoration anchored to the one
+    // authoritative paused-frame position instead of fabricating lines for unrelated statements.
+    values: values.map((value) => ({
+      line: frame.line,
+      column: frame.column,
+      value,
+    })),
   };
 }
 
@@ -351,8 +351,10 @@ export function EditorDebugSessionHost({
   }, [loadScopes, pausedFrame, pausedSession]);
   useEffect(() => {
     if (pausedSession === null) return;
-    for (const scope of pausedScopes)
+    for (const scope of pausedScopes) {
+      if (scope.variableCount === 0) continue;
       void loadVariables(pausedSession, scope.scopeRef).catch(() => setActionError(true));
+    }
   }, [loadVariables, pausedScopes, pausedSession]);
   const breakpoints = useMemo(
     () =>

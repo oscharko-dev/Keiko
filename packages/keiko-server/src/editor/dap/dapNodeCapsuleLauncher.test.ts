@@ -937,6 +937,22 @@ describe("production debug capsule launcher", () => {
     await expect(handle.terminateContainment("SIGKILL")).resolves.toBeUndefined();
   });
 
+  it("terminates without reading the process table when no descendant was observed", async () => {
+    const current = fixture();
+    const child = fakeChild();
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const launcher = createProductionDebugCapsuleLauncher(
+      dependencies({
+        procRoot: join(temporary(), "missing-proc"),
+        spawnProcess: spawnReturning(child.child),
+      }),
+    );
+    const handle = await launcher(current.envelope, new AbortController().signal);
+
+    await expect(handle.terminateContainment("SIGKILL")).resolves.toBeUndefined();
+    expect(kill).toHaveBeenCalledWith(-42_424, "SIGKILL");
+  });
+
   it.each([
     ["pid", { pid: undefined }],
     ["stdin", { stdin: null }],
@@ -1002,6 +1018,16 @@ describe("production debug capsule launcher", () => {
     writeProcStat(missingParentsRoot, "701", "998");
     writeProcStat(missingParentsRoot, "702", "997");
     expect(debugCapsuleLauncherInternals.descendantCount(missingParentsRoot, 1)).toBe(0);
+  });
+
+  it("fails closed when a process table contains an invalid ancestor identity", () => {
+    const processes = new Map([
+      [Number.NaN, { pid: Number.NaN, parentPid: 1, startTime: "invalid", state: "S" }],
+      [2, { pid: 2, parentPid: 1, startTime: "200", state: "S" }],
+      [1, { pid: 1, parentPid: 0, startTime: "100", state: "S" }],
+    ]);
+
+    expect(debugCapsuleLauncherInternals.descendantIdentities(processes, 1)).toStrictEqual([]);
   });
 
   it("parses exact Linux PID and start-time boundaries from variable stat whitespace", () => {
@@ -1220,6 +1246,37 @@ describe("production debug capsule launcher", () => {
 
     expect(kill).toHaveBeenCalledTimes(1);
     expect(kill).toHaveBeenCalledWith(42_425, "SIGKILL");
+  });
+
+  it("bounds the settle wait when a killed descendant remains visible", async () => {
+    vi.useFakeTimers();
+    try {
+      const current = fixture();
+      const child = fakeChild();
+      const procRoot = temporary();
+      writeProcStat(procRoot, "42424", "1", "100");
+      writeProcStat(procRoot, "42425", "42424", "200");
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const launcher = createProductionDebugCapsuleLauncher(
+        dependencies({ procRoot, spawnProcess: spawnReturning(child.child) }),
+      );
+      const handle = await launcher(current.envelope, new AbortController().signal);
+      let settled = false;
+      const terminating = handle.terminateContainment("SIGKILL").then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await terminating;
+
+      expect(settled).toBe(true);
+      expect(kill).toHaveBeenCalledWith(-42_424, "SIGKILL");
+      expect(kill).toHaveBeenCalledWith(42_425, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not dereference a disappeared observed PID while terminating matching identities", async () => {

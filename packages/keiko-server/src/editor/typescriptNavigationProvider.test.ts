@@ -1,13 +1,14 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   type LanguagePosition,
   type LanguageServiceLimits,
 } from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import ts from "typescript";
 import { createDeadlineCancellation } from "./languageCancellation.js";
 import type { LanguageProviderContext } from "./languageProvider.js";
 import {
@@ -75,7 +76,93 @@ function project(
   return result.project;
 }
 
+function fakeProject(
+  service: Partial<ts.LanguageService>,
+  options: {
+    readonly truncated?: boolean;
+    readonly limits?: LanguageServiceLimits;
+    readonly cancellation?: TypescriptProjectHandle["cancellation"];
+    readonly sourceText?: TypescriptProjectHandle["sourceText"];
+  } = {},
+): TypescriptProjectHandle {
+  const overlayPath = join(root, "src", "main.ts");
+  const limits = options.limits ?? DEFAULT_LANGUAGE_SERVICE_LIMITS;
+  return {
+    service: service as ts.LanguageService,
+    configPath: join(root, "tsconfig.json"),
+    projectKey: "fake",
+    rootFileNames: [overlayPath],
+    limits,
+    cancellation:
+      options.cancellation ??
+      createDeadlineCancellation({ deadlineMs: limits.deadlineMs, now: () => 0 }),
+    overlayPath,
+    overlayText: "target",
+    wasReused: false,
+    truncated: options.truncated ?? false,
+    sourceText: options.sourceText ?? ((): string => "target"),
+    workspaceRelativePath: (fileName: string): string | undefined =>
+      fileName.startsWith(`${root}/`) ? fileName.slice(root.length + 1) : undefined,
+  };
+}
+
+function referencedSymbol(referenceCount: number): {
+  readonly accesses: { count: number };
+  readonly symbol: ts.ReferencedSymbol;
+} {
+  const accesses = { count: 0 };
+  const fileName = join(root, "src", "main.ts");
+  const references = new Proxy(
+    Array.from({ length: referenceCount }, (): ts.ReferencedSymbolEntry => ({
+      fileName,
+      textSpan: { start: 0, length: 6 },
+      isWriteAccess: false,
+    })),
+    {
+      get: (target, property, receiver): unknown => {
+        if (typeof property === "string" && /^\d+$/u.test(property)) accesses.count += 1;
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    },
+  );
+  return {
+    accesses,
+    symbol: {
+      definition: {
+        fileName,
+        textSpan: { start: 0, length: 6 },
+        kind: ts.ScriptElementKind.constElement,
+        name: "target",
+        containerKind: ts.ScriptElementKind.unknown,
+        containerName: "",
+        displayParts: [],
+      },
+      references,
+    },
+  };
+}
+
 describe("typescript navigation provider", () => {
+  it.each([false, true])(
+    "preserves project truncation for empty definition and reference results (%s)",
+    (truncated) => {
+      const handle = fakeProject(
+        { getDefinitionAtPosition: () => undefined, findReferences: () => undefined },
+        { truncated },
+      );
+
+      const definition = resolveTypescriptDefinition(handle, { line: 0, character: 0 });
+      const references = resolveTypescriptReferences(handle, { line: 0, character: 0 });
+
+      expect(definition).toEqual({ locations: [], truncated });
+      expect(references).toEqual({
+        locations: [],
+        includesDeclaration: false,
+        truncated,
+      });
+    },
+  );
+
   it("resolves type definitions separately from value definitions", () => {
     const text =
       "interface Service { run(): string; }\n" +
@@ -244,5 +331,89 @@ describe("typescript navigation provider", () => {
 
     expect(result.locations).toHaveLength(2);
     expect(result.truncated).toBe(true);
+  });
+
+  it("backfills the reference cap after invalid, outside, and unreadable candidates", () => {
+    const paths = {
+      unreadable: join(root, "src", "unreadable.ts"),
+      first: join(root, "src", "first.ts"),
+      second: join(root, "src", "second.ts"),
+      beyondCap: join(root, "src", "beyond-cap.ts"),
+    };
+    const entry = (fileName: string): ts.ReferencedSymbolEntry => ({
+      fileName,
+      textSpan: { start: 0, length: 6 },
+      isWriteAccess: false,
+    });
+    const base = referencedSymbol(0).symbol;
+    const symbol: ts.ReferencedSymbol = {
+      ...base,
+      definition: { ...base.definition, fileName: "" },
+      references: [
+        entry("/outside/reference.ts"),
+        entry(paths.unreadable),
+        entry(paths.first),
+        entry(paths.second),
+        entry(paths.beyondCap),
+      ],
+    };
+    const sourceByFile: Readonly<Record<string, string>> = {
+      [paths.first]: "target",
+      [paths.second]: "target",
+      [paths.beyondCap]: "target",
+    };
+    const sourceText = vi.fn((fileName: string): string | undefined => sourceByFile[fileName]);
+    const handle = fakeProject(
+      { findReferences: () => [symbol] },
+      {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxReferenceLocations: 2 },
+        sourceText,
+      },
+    );
+
+    const result = resolveTypescriptReferences(handle, { line: 0, character: 0 });
+
+    expect(result).toMatchObject({
+      locations: [{ path: "src/first.ts" }, { path: "src/second.ts" }],
+      includesDeclaration: false,
+      truncated: true,
+    });
+    expect(sourceText.mock.calls.map(([fileName]) => fileName)).toEqual([
+      paths.unreadable,
+      paths.first,
+      paths.second,
+    ]);
+  });
+
+  it("bounds high-fan-out reference traversal before source and range materialization", () => {
+    const { accesses, symbol } = referencedSymbol(1_000);
+    const sourceText = vi.fn(() => "target");
+    const handle = fakeProject(
+      { findReferences: () => [symbol] },
+      {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxReferenceLocations: 3 },
+        sourceText,
+      },
+    );
+
+    const result = resolveTypescriptReferences(handle, { line: 0, character: 0 });
+
+    expect(result.locations).toHaveLength(3);
+    expect(result.truncated).toBe(true);
+    expect(accesses.count).toBeLessThanOrEqual(2);
+    expect(sourceText).toHaveBeenCalledTimes(3);
+  });
+
+  it("polls cancellation after reference fan-out before reading source text", () => {
+    const { symbol } = referencedSymbol(10);
+    let tick = 0;
+    const cancellation = createDeadlineCancellation({ deadlineMs: 2, now: () => tick++ });
+    const sourceText = vi.fn(() => "target");
+    const handle = fakeProject({ findReferences: () => [symbol] }, { cancellation, sourceText });
+
+    expect(() => resolveTypescriptReferences(handle, { line: 0, character: 0 })).toThrow(
+      "language operation cancelled",
+    );
+    expect(sourceText).not.toHaveBeenCalled();
   });
 });

@@ -221,6 +221,26 @@ describe("managed LSP activation control service", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a malformed revision ETag without state, evidence, or process side effects", async () => {
+    const root = temporaryDirectory("workspace-invalid-etag");
+    const dispose = vi.fn(() => Promise.resolve());
+    const service = createManagedLspControlService(serviceOptions({ dispose }));
+
+    const result = await service.mutate({
+      action: "activate",
+      actorClass: "localHuman",
+      expectedRevision: 0,
+      expectedEtag: '"lspcfg-0-short"',
+      idempotencyKey: "invalid-etag",
+      language: "python",
+      root,
+    });
+
+    expect(result).toStrictEqual({ kind: "invalid", code: "INVALID_REQUEST" });
+    expect(await service.read(root)).toMatchObject({ storeState: "absent", evidenceCount: 0 });
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
   it("serializes concurrent writers so a stale revision changes no state, evidence, or process", async () => {
     const root = temporaryDirectory("workspace-concurrency");
     const dispose = vi.fn(() => Promise.resolve());
@@ -565,7 +585,10 @@ describe("managed LSP activation control service", () => {
     expect(persisted.languages.shell.configuration.settings.dialect).toBe("bash");
     expect(await service.readConfiguration(root, "shell")).toMatchObject({
       language: "shell",
-      revision: 1,
+      revision: 3,
+      etag: rollback.kind === "ok" ? rollback.etag : "unreachable",
+      restartRequired: true,
+      restartFields: ["runtime", "settings"],
       settings: { dialect: "bash" },
     });
     expect(await service.readConfiguration(root, "python")).toBeUndefined();

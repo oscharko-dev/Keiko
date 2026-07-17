@@ -323,9 +323,15 @@ export function sourceEncodingFailures({ files, nativeEntries, readText }) {
     if (!codeExtensions.has(fileExtension(path)) || isGeneratedOrBinaryPath(path)) return [];
     const scope = classifyAnalysisPath(path, nativeSources);
     if (scope !== "source" && scope !== "test") return [];
-    return readText(path).includes("\uFFFD")
-      ? [`analyzable text contains a Unicode replacement character: ${normalizePath(path)}`]
-      : [];
+    const text = readText(path);
+    return [
+      ...(text.includes("\uFFFD")
+        ? [`analyzable text contains a Unicode replacement character: ${normalizePath(path)}`]
+        : []),
+      ...(text.includes("\0")
+        ? [`analyzable text contains a NUL byte: ${normalizePath(path)}`]
+        : []),
+    ];
   });
 }
 

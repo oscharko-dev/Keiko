@@ -6,12 +6,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
   type EditorM7SettingId,
   type EditorM7SettingValue,
   type EditorM7SettingsSnapshot,
+  type EditorAgentSessionSnapshot,
   type EditorTestGenerationWireResponse,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
@@ -27,6 +29,7 @@ import {
 import type { TestGenerationRunner } from "./testGenerationRunner.js";
 import type { AssuredPreFilterPort } from "./assuredPreFilterRunner.js";
 import type { EditorTestGenerationFunnel } from "@oscharko-dev/keiko-contracts";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 
 let root: string;
 let store: UiStore;
@@ -119,6 +122,24 @@ function fileBody(overrides: Record<string, unknown> = {}): Record<string, unkno
     },
     contextBudgetBytes: 4_096,
     ...overrides,
+  };
+}
+
+function editorSnapshot(): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-1",
+    windowId: "window-1",
+    workspaceRoot: root,
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: [],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1_000,
   };
 }
 
@@ -240,6 +261,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  editorAgentRegistry.reset();
   store.close();
   await rm(root, { recursive: true, force: true });
 });
@@ -326,6 +348,19 @@ describe("POST /api/editor/test-generation — enabled, egress not enforced (def
     // Reuse of the governed retrieval substrate (#1211) is proven by the content-free context pack.
     expect(body.context?.purpose).toBe("test-generation");
     expect(body.funnel.executionEnabled).toBe(false);
+  });
+
+  it("threads a same-root editor session into the existing context collector", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    editorAgentRegistry.connect("editor-session-1", () => undefined);
+    const result = await handleEditorTestGeneration(
+      postContext(fileBody({ editorSessionId: "editor-session-1" })),
+      deps({ env: ENABLED }),
+    );
+    expect(result.status).toBe(200);
+    expect(wire(result).context?.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ sourceKind: "editor-state" })]),
+    );
   });
 
   it("omits embedding-backed providers while deferred before the egress boundary", async () => {

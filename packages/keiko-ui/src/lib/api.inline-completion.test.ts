@@ -37,6 +37,7 @@ describe("requestEditorInlineCompletion (Issue #1200)", () => {
       position: { line: 1, character: 9 },
       triggerKind: "automatic",
       contextBudgetBytes: 8_192,
+      editorSessionId: "editor-session-1",
       maxOutputTokens: 64,
     });
 
@@ -60,6 +61,7 @@ describe("requestEditorInlineCompletion (Issue #1200)", () => {
           position: { line: 1, character: 9 },
           triggerKind: "automatic",
           contextBudgetBytes: 8_192,
+          editorSessionId: "editor-session-1",
           maxOutputTokens: 64,
         }),
       }),

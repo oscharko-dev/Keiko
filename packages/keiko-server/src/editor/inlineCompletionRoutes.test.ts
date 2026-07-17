@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
@@ -15,6 +16,7 @@ import {
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type {
   CostClass,
+  EditorAgentSessionSnapshot,
   EditorM7SettingId,
   EditorM7SettingValue,
   EditorM7SettingsSnapshot,
@@ -34,6 +36,7 @@ import {
 } from "./inlineCompletionRoutes.js";
 import { createInlineCompletionRateLimiter } from "./inlineCompletionRateLimiter.js";
 import { createEditorModelTokenBudget } from "./editorModelTokenBudget.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 
 function postContext(body: unknown): RouteContext {
   const req = Readable.from([
@@ -163,6 +166,24 @@ function inlineBody(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+function editorSnapshot(): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-1",
+    windowId: "window-1",
+    workspaceRoot: root,
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: [],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1_000,
+  };
+}
+
 function completionBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     root,
@@ -208,6 +229,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  editorAgentRegistry.reset();
   store.close();
   await rm(root, { recursive: true, force: true });
 });
@@ -488,6 +510,24 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     expect(modelRecord).toBeDefined();
     expect(modelRecord).not.toContain("function add");
     expect(modelRecord).not.toContain("a + b;");
+  });
+
+  it("threads a same-root editor session into the existing context collector", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    editorAgentRegistry.connect("editor-session-1", () => undefined);
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody({ editorSessionId: "editor-session-1" })),
+      deps({ config: fimConfig("fast"), evidenceStore }),
+      permissiveOptions(),
+    );
+    expect(result.status).toBe(200);
+    const manifest = evidenceStore
+      .list()
+      .filter((runId) => runId.startsWith("coding-context-"))
+      .map((runId) => evidenceStore.get(runId) ?? "")
+      .join("\n");
+    expect(manifest).toContain('"sourceKind":"editor-state"');
   });
 
   it("redacts overlay secrets before the model prompt is sent", async () => {

@@ -8,6 +8,7 @@ import {
   notRunTestGenerationFunnel,
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 const OVERLAY = { path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" };
 const RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } };
@@ -57,6 +58,16 @@ describe("parseEditorTestGenerationRequest — valid targets", () => {
     expect(emptyContext.ok).toBe(true);
     if (emptyContext.ok) {
       expect(emptyContext.value.context).toBeUndefined();
+    }
+  });
+
+  it("retains a bounded editor session id when provided", () => {
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ editorSessionId: "editor-session-1" }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.editorSessionId).toBe("editor-session-1");
     }
   });
 });
@@ -123,6 +134,22 @@ describe("parseEditorTestGenerationRequest — rejections", () => {
         fileRequest({ context: { capsuleId: "a", capsuleSetId: "b" } }),
       ).ok,
     ).toBe(false);
+  });
+
+  it("rejects malformed or oversized editor session ids", () => {
+    for (const editorSessionId of [
+      "",
+      "   ",
+      null,
+      "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1),
+    ]) {
+      const parsed = parseEditorTestGenerationRequest(fileRequest({ editorSessionId }));
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.errors).toContain(
+        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+      );
+    }
   });
 });
 

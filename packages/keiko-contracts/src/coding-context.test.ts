@@ -7,6 +7,7 @@ import {
   CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   CODING_CONTEXT_SOURCE_TIERS,
   embeddingProvidersAllowed,
+  isBoundedEditorSessionId,
   isCodingContextCitation,
   isCodingContextPurpose,
   tierForCodingContextSource,
@@ -186,6 +187,18 @@ describe("validateCodingContextRequest", () => {
 
     expect(request.schemaVersion).toBe("1");
     expect(validateCodingContextRequest(request)).toEqual({ ok: true });
+  });
+
+  it("bounds editor session links by UTF-8 bytes", () => {
+    expect(isBoundedEditorSessionId("a".repeat(256))).toBe(true);
+    expect(isBoundedEditorSessionId("\u{1f600}".repeat(64))).toBe(true);
+    expect(isBoundedEditorSessionId("\u{1f600}".repeat(65))).toBe(false);
+    expect(
+      validateCodingContextRequest({
+        ...validRequest(),
+        editorSessionId: "\u{1f600}".repeat(65),
+      }),
+    ).toEqual({ ok: false, reasons: ["request.editorSessionId invalid"] });
   });
 
   it("rejects empty and non-string editor session links", () => {

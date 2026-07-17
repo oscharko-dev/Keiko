@@ -27,6 +27,11 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-opencode-codex
       - "release/**"
+  # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
+  # enable GitHub's merge queue without agents re-racing a moving dev branch.
+  merge_group:
+    branches:
+      - dev
   workflow_dispatch:
 
 permissions: {}
@@ -225,16 +230,36 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           STEPS_SONAR_VERSION_OUTPUTS_VERSION: ${{ steps.sonar-version.outputs.version }}
+          # Pull-request runs analyze the GitHub-provided merge ref (refs/pull/N/merge), whose commit
+          # SHA differs from the pull-request head. Pin the analysis revision to the head commit so the
+          # SonarCloud SCM sensor attributes changed lines to the real head instead of warning "detected
+          # as changed but without having changed lines". Push/dispatch runs analyze their own head.
+          SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}
         run: |
-          set +e
-          "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
-            -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
-            -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
-            -Dsonar.qualitygate.wait=true \
-            -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
-            2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
-          scanner_status=${PIPESTATUS[0]}
-          set -e
+          # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
+          # backoff before failing closed; genuine quality-gate failures are never retried.
+          for attempt in 1 2 3; do
+            set +e
+            "$SONAR_SCANNER_HOME/bin/sonar-scanner" \
+              -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
+              -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
+              -Dsonar.scm.revision="${SONAR_HEAD_SHA}" \
+              -Dsonar.qualitygate.wait=true \
+              -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
+              2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
+            scanner_status=${PIPESTATUS[0]}
+            set -e
+            if [ "$scanner_status" -eq 0 ]; then
+              break
+            fi
+            if ! grep -qE "Gateway Timeout|Bad Gateway|Service Unavailable|Failed to query JRE metadata|connect timed out|Connection reset" "$RUNNER_TEMP/sonar-scanner.log"; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Transient SonarCloud failure (attempt $attempt); retrying after backoff."
+              sleep $((attempt * 30))
+            fi
+          done
           node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
           echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -324,7 +349,7 @@ jobs:
 
   zizmor:
     name: zizmor
-    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -512,6 +537,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # The immutable D12 evidence gate recomputes the subject for its pinned baseline commit.
+          # Keep that commit reachable instead of relying on the default single-commit checkout.
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -565,18 +593,24 @@ jobs:
       - name: Governed editor debugging E2E (#2348)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-debugging-2348
-      - name: Release performance E2E evidence
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          KEIKO_PERF_RUNS: "10"
+      - name: Refresh workspace performance evidence
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
-          rm -f docs/release/1209-perf-evidence.json docs/release/1580-workspace-perf-evidence.json
-          npm run test:e2e:editor-perf
+          rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
-      # Upload only the body-free metric documents. Raw traces can contain workspace fixture text
-      # and therefore remain outside the artifact boundary.
+      # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
+      # candidate. Its source-tree and toolchain bindings (ADR-0139 D2: measured surfaces only)
+      # make it valid across the signed squash and across merge-queue integration.
+      - name: Validate immutable editor D12 performance evidence
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: npm run check:perf-evidence:editor
+      - name: Performance evidence freshness + budget gate
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        run: npm run check:perf-evidence
+      # Upload only metric documents that passed the redaction-closing schema and canonical-byte
+      # gate above. Raw traces can contain workspace fixture text and remain outside this boundary.
       - name: Upload redacted performance evidence
-        if: ${{ always() && github.event_name != 'pull_request' }}
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: performance-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -585,9 +619,6 @@ jobs:
             docs/release/1580-workspace-perf-evidence.json
           if-no-files-found: warn
           retention-days: 30
-      - name: Performance evidence freshness + budget gate
-        if: ${{ github.event_name != 'pull_request' }}
-        run: npm run check:perf-evidence
       - name: Build package and UI assets
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |

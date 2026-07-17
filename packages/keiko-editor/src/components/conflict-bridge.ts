@@ -211,7 +211,8 @@ class ConflictController implements ConflictBridge {
   }
 
   private acceptanceTarget(): ConflictAcceptanceTarget | null {
-    const index = Math.max(0, this.currentIndex());
+    const index = this.currentIndex();
+    if (index < 0) return null;
     const conflict = this.blocks[index];
     const expected = this.tokens[index];
     const model = this.args.editor.getModel();

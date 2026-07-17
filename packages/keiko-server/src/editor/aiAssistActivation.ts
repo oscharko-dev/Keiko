@@ -84,7 +84,12 @@ export function editorAiPolicyCeilingLocks(
   env: Env | undefined,
 ): Readonly<Partial<Record<EditorM7SettingId, EditorM7ReasonCode>>> {
   const locked: Partial<Record<EditorM7SettingId, EditorM7ReasonCode>> = {};
-  for (const feature of ["inlineCompletion", "testGeneration", "patchApply"] as const) {
+  for (const feature of [
+    "inlineCompletion",
+    "testGeneration",
+    "patchApply",
+    "verification",
+  ] as const) {
     if (editorAiOperatorCeiling(env, feature) === "denied") {
       locked[FEATURE_SETTINGS[feature]] = "OPERATOR_CEILING_DENIED";
     }
@@ -103,7 +108,7 @@ function modelCapability(
   feature: EditorM7AiFeature,
   gatewayConfigured: boolean,
 ): EditorM7AiActivationInput["modelCapability"] {
-  if (feature !== "inlineCompletion" && feature !== "testGeneration") return "available";
+  if (feature === "patchApply") return "available";
   return gatewayConfigured ? "available" : "missing";
 }
 
@@ -114,20 +119,21 @@ export function resolveEditorAiAssistStatuses(args: {
   readonly settings: readonly EditorM7ResolvedSetting[];
 }): EditorM7AiActivationSummary {
   const gatewayConfigured = args.gatewayConfigured ?? true;
-  const statuses = (["inlineCompletion", "testGeneration", "patchApply"] as const).map(
-    (feature): EditorM7AiActivationStatus =>
-      resolveEditorM7AiActivation({
-        schemaVersion: EDITOR_M7_SCHEMA_VERSION,
-        feature,
-        productSupported: true,
-        operatorCeiling: editorAiOperatorCeiling(args.env, feature),
-        explicitOptIn: explicitOptIn(args.settings, feature),
-        modelCapability: modelCapability(feature, gatewayConfigured),
-        budget: "available",
-        providerHealth: "healthy",
-        securityPrerequisites: "satisfied",
-        legacyFlag: editorAiLegacyFlag(args.env, feature),
-      }),
+  const statuses = (
+    ["inlineCompletion", "testGeneration", "patchApply", "verification"] as const
+  ).map((feature): EditorM7AiActivationStatus =>
+    resolveEditorM7AiActivation({
+      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+      feature,
+      productSupported: true,
+      operatorCeiling: editorAiOperatorCeiling(args.env, feature),
+      explicitOptIn: explicitOptIn(args.settings, feature),
+      modelCapability: modelCapability(feature, gatewayConfigured),
+      budget: "available",
+      providerHealth: "healthy",
+      securityPrerequisites: "satisfied",
+      legacyFlag: editorAiLegacyFlag(args.env, feature),
+    }),
   );
   return { revision: args.revision, statuses };
 }

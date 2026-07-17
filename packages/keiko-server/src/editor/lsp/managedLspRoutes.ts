@@ -1,21 +1,17 @@
 import {
-  MANAGED_LSP_LANGUAGES,
-  parseManagedLspRuntimeConfiguration,
+  parseManagedLspControlRequest,
+  parseManagedLspRevisionEtag,
   resolveManagedLspActivation,
-  type ManagedLspLanguage,
+  type ManagedLspControlMutation,
+  type ManagedLspControlResponse,
+  type ManagedLspControlResult,
+  type ManagedLspControlSnapshot,
   type ManagedLspProcessHealthSnapshot,
-  type ManagedLspRuntimeConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
-import type {
-  ManagedLspControlAction,
-  ManagedLspControlMutation,
-  ManagedLspControlResult,
-  ManagedLspControlSnapshot,
-} from "./managedLspControl.js";
 import { listHostLspHealthSnapshotsForRoot } from "./hostLanguageOperation.js";
 import {
   detectPythonConfigurationPrecedence,
@@ -23,26 +19,9 @@ import {
 } from "./providers/pythonProvider.js";
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
-const MAX_ROOT_CHARS = 4_096;
 const MAX_IDEMPOTENCY_KEY_CHARS = 128;
-const ACTIONS: ReadonlySet<ManagedLspControlAction> = new Set([
-  "activate",
-  "deactivate",
-  "configure",
-  "reset",
-  "rollback",
-  "restart",
-]);
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
-
-interface ParsedMutationBody {
-  readonly action: ManagedLspControlAction;
-  readonly expectedRevision: number;
-  readonly language: ManagedLspLanguage;
-  readonly root: string;
-  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
-}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -50,46 +29,6 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-function parseConfiguration(
-  action: ManagedLspControlAction,
-  value: unknown,
-): ManagedLspRuntimeConfiguration | undefined | null {
-  if (action !== "configure") return value === undefined ? undefined : null;
-  const parsed = parseManagedLspRuntimeConfiguration(value);
-  return parsed.ok ? parsed.value : null;
-}
-
-function parseMutationBody(value: unknown): ParsedMutationBody | undefined {
-  if (!isRecord(value)) return undefined;
-  if (!validMutationScalars(value)) return undefined;
-  const action = value.action as ManagedLspControlAction;
-  const configuration = parseConfiguration(action, value.configuration);
-  if (configuration === null) return undefined;
-  return {
-    root: value.root as string,
-    language: value.language as ManagedLspLanguage,
-    action,
-    expectedRevision: value.expectedRevision as number,
-    ...(configuration === undefined ? {} : { configuration }),
-  };
-}
-
-function validMutationScalars(value: UnknownRecord): boolean {
-  return [
-    hasOnlyKeys(value, ["root", "language", "action", "expectedRevision", "configuration"]),
-    typeof value.root === "string" && value.root.length > 0 && value.root.length <= MAX_ROOT_CHARS,
-    MANAGED_LSP_LANGUAGES.includes(value.language as ManagedLspLanguage),
-    ACTIONS.has(value.action as ManagedLspControlAction),
-    typeof value.expectedRevision === "number" &&
-      Number.isSafeInteger(value.expectedRevision) &&
-      value.expectedRevision >= 0,
-  ].every(Boolean);
 }
 
 function singleHeader(ctx: RouteContext, name: "idempotency-key" | "if-match"): string | undefined {
@@ -114,10 +53,8 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-function hasRevisionPrecondition(ctx: RouteContext, expectedRevision: number): boolean {
-  const value = singleHeader(ctx, "if-match");
-  const match = value === undefined ? null : /^"lspcfg-(\d+)-[A-Za-z0-9_-]{16,64}"$/u.exec(value);
-  return match !== null && Number(match[1]) === expectedRevision;
+function revisionPrecondition(ctx: RouteContext, expectedRevision: number): string | undefined {
+  return parseManagedLspRevisionEtag(singleHeader(ctx, "if-match"), expectedRevision);
 }
 
 function resultToRoute(result: ManagedLspControlResult): RouteResult {
@@ -179,20 +116,21 @@ export async function handleGetManagedLspControl(
     const snapshot = await deps.managedLspControl?.read(resolved.realRoot);
     if (snapshot === undefined) throw new Error("managed LSP control disappeared");
     const health = listHostLspHealthSnapshotsForRoot(resolved.realRoot);
+    const response = {
+      ...snapshot,
+      languages: projectManagedLspLiveLanguages(snapshot, health),
+      health,
+      providerMetadata: [
+        {
+          language: "python",
+          configurationSource: detectPythonConfigurationPrecedence(resolved.realRoot),
+          runtimeIdentitySource: pythonRuntimeIdentitySourceFor(snapshot),
+        },
+      ],
+    } satisfies ManagedLspControlResponse;
     return {
       status: 200,
-      body: {
-        ...snapshot,
-        languages: liveLanguages(snapshot, health),
-        health,
-        providerMetadata: [
-          {
-            language: "python",
-            configurationSource: detectPythonConfigurationPrecedence(resolved.realRoot),
-            runtimeIdentitySource: pythonRuntimeIdentitySourceFor(snapshot),
-          },
-        ],
-      },
+      body: response,
       headers: { ETag: snapshot.etag, "Cache-Control": "no-store" },
     };
   });
@@ -207,7 +145,7 @@ function pythonRuntimeIdentitySourceFor(
     : "interpreter";
 }
 
-function liveLanguages(
+export function projectManagedLspLiveLanguages(
   snapshot: ManagedLspControlSnapshot,
   health: readonly ManagedLspProcessHealthSnapshot[],
 ): ManagedLspControlSnapshot["languages"] {
@@ -232,8 +170,8 @@ function liveLanguage(
     provisioning: "provisioned",
     workspaceActivation: settings?.workspaceActivation === "enabled" ? "enabled" : "unset",
     legacyEnvironment: "unset",
-    negotiation: restartRequired ? "negotiated" : negotiationState(runtime),
-    runtimeHealth: restartRequired ? "healthy" : runtimeHealth(runtime),
+    negotiation: negotiationState(runtime),
+    runtimeHealth: runtimeHealth(runtime),
     restartRequired,
   });
 }
@@ -277,13 +215,12 @@ export async function handlePutManagedLspControl(
   }
   const raw = await readJsonObject(ctx.req, MAX_CONTROL_BODY_BYTES);
   if (isRouteResult(raw)) return raw;
-  const body = parseMutationBody(raw);
+  const parsedBody = parseManagedLspControlRequest(raw);
+  const body = parsedBody.ok ? parsedBody.value : undefined;
   const key = idempotencyKey(ctx);
-  if (
-    body === undefined ||
-    key === undefined ||
-    !hasRevisionPrecondition(ctx, body.expectedRevision)
-  ) {
+  const expectedEtag =
+    body === undefined ? undefined : revisionPrecondition(ctx, body.expectedRevision);
+  if (body === undefined || key === undefined || expectedEtag === undefined) {
     return {
       status: 400,
       body: errorBody("INVALID_REQUEST", "The managed language request is invalid."),
@@ -294,6 +231,7 @@ export async function handlePutManagedLspControl(
     const mutation: ManagedLspControlMutation = {
       ...body,
       root: resolved.realRoot,
+      expectedEtag,
       idempotencyKey: key,
       actorClass: "localHuman",
     };

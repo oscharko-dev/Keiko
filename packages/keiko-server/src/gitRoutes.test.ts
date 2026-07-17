@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GIT_EDITOR_BLAME_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_LINES,
+  GIT_EDITOR_DIFF_MAX_BYTES,
+  GIT_EDITOR_DIFF_MAX_FILES,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
@@ -67,6 +71,28 @@ const fail = (stderr: string, exitCode = 128): Awaited<ReturnType<GitProcessRunn
   stderr,
   truncated: false,
 });
+
+const structuredUnavailableFailures = [
+  {
+    name: "is blocked by unsafe ownership",
+    result: fail("fatal: detected dubious ownership in repository at '/private/repository'"),
+  },
+] as const;
+
+const structuredOperationalFailures = [
+  {
+    name: "times out",
+    result: {
+      ...fail("timed out while reading /private/repository"),
+      timedOut: true,
+      truncated: true,
+    },
+  },
+  {
+    name: "cannot spawn Git",
+    result: fail("spawn git ENOENT for /private/repository", 127),
+  },
+] as const;
 
 async function runRealGit(args: readonly string[]): Promise<void> {
   const result = await defaultGitProcessRunner(args, {
@@ -867,6 +893,59 @@ describe("GET /api/git/diff/structured", () => {
     });
   });
 
+  it.each(structuredUnavailableFailures)(
+    "returns the route-specific empty response when diff $name after membership",
+    async ({ result: failure }) => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(failure);
+
+      const result = await handleGitStructuredDiff(
+        ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged`),
+        deps(runner),
+      );
+
+      expect(result.status).toBe(200);
+      expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+      expect(result.body).toEqual({
+        schemaVersion: "1",
+        scope: "unstaged",
+        files: [],
+        truncated: false,
+        totalFiles: 0,
+        totalBytes: 0,
+        maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
+        maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
+      });
+      expect(JSON.stringify(result.body)).not.toContain("private/repository");
+    },
+  );
+
+  it.each(structuredOperationalFailures)(
+    "returns a correlated failure when diff $name after membership",
+    async ({ result: failure }) => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(failure);
+
+      const result = await handleGitStructuredDiff(
+        ctx(
+          `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged`,
+          "cid-diff-operational",
+        ),
+        deps(runner),
+      );
+
+      expect(result).toMatchObject({
+        status: 500,
+        body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-diff-operational" } },
+      });
+      expect(JSON.stringify(result.body)).not.toContain("private/repository");
+    },
+  );
+
   it("rejects a symlink escape through the diff route's path parameter before diffing", async () => {
     const outside = await mkdtemp(join(tmpdir(), "keiko-git-route-outside-"));
     await symlink(outside, join(root, "escape"));
@@ -1026,4 +1105,60 @@ describe("GET /api/git/blame", () => {
       truncated: false,
     });
   });
+
+  it.each(structuredUnavailableFailures)(
+    "returns the route-specific empty response when blame $name after membership",
+    async ({ result: failure }) => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(failure);
+
+      const result = await handleGitBlame(
+        ctx(
+          `/api/git/blame?root=${encodeURIComponent(root)}&path=src%2Fboundary.ts&startLine=7&maxLines=10`,
+        ),
+        deps(runner),
+      );
+
+      expect(result.status).toBe(200);
+      expect(parseGitEditorBlameResponse(result.body)).toMatchObject({ ok: true });
+      expect(result.body).toEqual({
+        schemaVersion: "1",
+        path: "src/boundary.ts",
+        startLine: 7,
+        lines: [],
+        truncated: false,
+        totalLines: 0,
+        totalBytes: 0,
+        maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
+        maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+      });
+      expect(JSON.stringify(result.body)).not.toContain("private/repository");
+    },
+  );
+
+  it.each(structuredOperationalFailures)(
+    "returns a correlated failure when blame $name after membership",
+    async ({ result: failure }) => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(failure);
+
+      const result = await handleGitBlame(
+        ctx(
+          `/api/git/blame?root=${encodeURIComponent(root)}&path=src%2Fboundary.ts&startLine=7&maxLines=10`,
+          "cid-blame-operational",
+        ),
+        deps(runner),
+      );
+
+      expect(result).toMatchObject({
+        status: 500,
+        body: { error: { code: "GIT_BLAME_FAILED", correlationId: "cid-blame-operational" } },
+      });
+      expect(JSON.stringify(result.body)).not.toContain("private/repository");
+    },
+  );
 });

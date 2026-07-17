@@ -191,14 +191,15 @@ function walkFiles(dir, predicate) {
   return out;
 }
 
-function measureOwnCode(repoRoot, ceilingBytes) {
+export function measureEditorOwnCode(repoRoot, ceilingBytes) {
+  const effectiveCeiling = ceilingBytes ?? readBudget(repoRoot).editorOwnCodeGzipBytesCeiling;
   const distDir = join(repoRoot, "packages", "keiko-editor", "dist");
   const jsFiles = walkFiles(distDir, (p) => p.endsWith(".js"));
   const files = jsFiles.map((path) => ({
     path,
     gzipBytes: gzipSizeBytes(readFileSync(path)),
   }));
-  return evaluateOwnCodeBudget({ files, ceilingBytes });
+  return evaluateOwnCodeBudget({ files, ceilingBytes: effectiveCeiling });
 }
 
 function assertMonacoVersionPin(repoRoot, expectedVersion, fail) {
@@ -343,7 +344,7 @@ function readBudget(root, budgetOverride) {
 }
 
 function assertOwnCodeBudget(root, budget, fail) {
-  const ownCode = measureOwnCode(root, budget.editorOwnCodeGzipBytesCeiling);
+  const ownCode = measureEditorOwnCode(root, budget.editorOwnCodeGzipBytesCeiling);
   if (!ownCode.ok) {
     fail(
       `editor own-code gzip footprint ${String(ownCode.totalGzipBytes)} B exceeds the ceiling ` +

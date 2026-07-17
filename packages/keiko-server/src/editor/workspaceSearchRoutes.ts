@@ -27,7 +27,6 @@ import {
   RepoSearchUnsupportedFileError,
   buildSymbolGraph,
   detectWorkspaceAt,
-  findFiles,
   readExcerpt,
   readWorkspaceFile,
   searchText,
@@ -112,6 +111,13 @@ function assertAllowedGlobScopes(
       throw new FilesError(403, "DENIED", DENIED_MESSAGE);
     }
   }
+  if (
+    "scopePath" in request &&
+    request.scopePath !== undefined &&
+    pathIsDenied(request.scopePath)
+  ) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
 }
 
 function assertAllowedApplyFiles(request: WorkspaceReplaceApplyRequest): void {
@@ -162,43 +168,13 @@ function queryForRequest(
   };
 }
 
-async function filesForGlobs(
-  scope: SearchScope,
-  globs: readonly string[],
-  signal: AbortSignal,
-): Promise<ReadonlySet<string> | undefined> {
-  if (globs.length === 0) return undefined;
-  const paths = new Set<string>();
-  for (const glob of globs) {
-    const result = await findFiles(
-      scope,
-      {
-        kind: "file-pattern",
-        text: glob,
-        caseSensitive: true,
-        maxResults: DEFAULT_SEARCH_LIMITS.maxMatchesReturned,
-        emittedAtMs: Date.now(),
-      },
-      DEFAULT_SEARCH_LIMITS,
-      { signal },
-    );
-    for (const atom of result.atoms) {
-      paths.add(atom.scopePath);
-    }
-  }
-  return paths;
-}
-
-async function buildGlobFilter(
-  scope: SearchScope,
-  request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest,
-  signal: AbortSignal,
-): Promise<(path: string) => boolean> {
-  const include = await filesForGlobs(scope, request.includeGlobs, signal);
-  const exclude = await filesForGlobs(scope, request.excludeGlobs, signal);
-  return (path: string): boolean => {
-    if (include !== undefined && !include.has(path)) return false;
-    return !exclude?.has(path);
+function candidatePathGlobs(request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest): {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+} {
+  return {
+    include: request.includeGlobs,
+    exclude: request.excludeGlobs,
   };
 }
 
@@ -256,12 +232,14 @@ async function buildSearchResponse(
   signal: AbortSignal,
 ): Promise<WorkspaceSearchResponse> {
   const query = queryForRequest(request, request.maxResults);
-  const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, { signal });
-  const keepPath = await buildGlobFilter(scope, request, signal);
+  const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
+    signal,
+    candidatePathGlobs: candidatePathGlobs(request),
+  });
   const matches = [];
   for (const atom of result.atoms) {
     if (matches.length >= request.maxResults) break;
-    if (atom.lineRange === undefined || !keepPath(atom.scopePath)) continue;
+    if (atom.lineRange === undefined) continue;
     matches.push({
       path: atom.scopePath,
       lineRange: atom.lineRange,
@@ -389,12 +367,11 @@ function buildReplaceFileEdit(
 // trusting the search engine's per-line sampling.
 function collectMatchedPaths(
   atoms: Awaited<ReturnType<typeof searchText>>["atoms"],
-  keepPath: (path: string) => boolean,
 ): readonly string[] {
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const atom of atoms) {
-    if (atom.lineRange === undefined || !keepPath(atom.scopePath)) continue;
+    if (atom.lineRange === undefined) continue;
     if (seen.has(atom.scopePath)) continue;
     seen.add(atom.scopePath);
     paths.push(atom.scopePath);
@@ -429,9 +406,11 @@ async function buildReplacePreviewResponse(
   signal: AbortSignal,
 ): Promise<WorkspaceReplacePreviewResponse> {
   const query = queryForRequest(request, DEFAULT_SEARCH_LIMITS.maxMatchesReturned);
-  const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, { signal });
-  const keepPath = await buildGlobFilter(scope, request, signal);
-  const paths = collectMatchedPaths(result.atoms, keepPath);
+  const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
+    signal,
+    candidatePathGlobs: candidatePathGlobs(request),
+  });
+  const paths = collectMatchedPaths(result.atoms);
   const files = buildReplacePreviewFiles(scope, request, paths);
   const editCount = files.reduce((total, file) => total + file.edits.length, 0);
   const omittedFileCount = Math.max(0, paths.length - files.length);
@@ -447,6 +426,7 @@ async function buildReplacePreviewResponse(
 function parseWorkspaceSearchRequest(body: Record<string, unknown>): WorkspaceSearchRequest {
   return {
     root: rootFieldOf(body) ?? "",
+    ...(body.scopePath === undefined ? {} : { scopePath: body.scopePath as string }),
     query: body.query as string,
     mode: body.mode as WorkspaceSearchRequest["mode"],
     caseSensitive: body.caseSensitive as boolean,
@@ -724,7 +704,10 @@ export async function handleEditorWorkspaceSearch(
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     assertAllowedGlobScopes(request);
-    const scope = buildSearchScope(root.realRoot);
+    const scope = buildSearchScope(
+      root.realRoot,
+      request.scopePath === undefined ? [] : [request.scopePath],
+    );
     try {
       const response = await buildSearchResponse(scope, request, clientAbortSignal(ctx));
       return { status: 200, body: deps.redactor(response) };

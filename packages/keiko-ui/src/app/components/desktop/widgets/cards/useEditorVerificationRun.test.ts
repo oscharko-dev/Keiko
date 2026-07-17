@@ -5,6 +5,13 @@ import {
   resetEditorVerificationRunStateForTests,
   useEditorVerificationRun,
 } from "./useEditorVerificationRun";
+import {
+  getEditorProblems,
+  getEditorProblemsSourceHealth,
+  resetEditorProblemsStoreForTests,
+  setVerificationReport,
+  subscribeEditorProblems,
+} from "./editorProblemsStore";
 
 const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
 
@@ -79,6 +86,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetEditorVerificationRunStateForTests();
+  resetEditorProblemsStoreForTests();
   FakeEventSource.instances = [];
   FakeEventSource.autoOpen = true;
   fetchMock = vi.fn((url: string, init?: RequestInit) => {
@@ -111,6 +119,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetEditorVerificationRunStateForTests();
+  resetEditorProblemsStoreForTests();
 });
 
 function render(activeFile: string | null = "src/a.ts") {
@@ -222,7 +231,7 @@ describe("useEditorVerificationRun", () => {
     }
   });
 
-  it("does not close an active run stream when another project's reconnect handshake times out", async () => {
+  it("keeps an active run tracked while another project joins the recovered shared stream", async () => {
     vi.useFakeTimers();
     try {
       const hookA = renderHook(() =>
@@ -249,21 +258,286 @@ describe("useEditorVerificationRun", () => {
 
       act(() => hookB.result.current.runWorkspaceVerification("lint"));
       await act(async () => {
+        vi.advanceTimersByTime(1_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const recoveredSource = FakeEventSource.instances[1];
+      expect(source?.closed).toBe(true);
+      expect(recoveredSource?.closed).toBe(false);
+      expect(hookA.result.current.verificationRunning).toBe(true);
+      expect(hookB.result.current.verificationRunning).toBe(true);
+
+      await act(async () => {
+        recoveredSource?.emit("run-completed", { runId: "run-a", ...completed("passed") });
+        recoveredSource?.emit("run-completed", { runId: "run-1", ...completed("passed") });
+        await Promise.resolve();
+      });
+      expect(hookA.result.current.statusBarRun?.label).toContain("passed");
+      expect(hookB.result.current.statusBarRun?.label).toContain("passed");
+      expect(recoveredSource?.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reopens the one shared stream and restores root health after a fresh terminal event", async () => {
+    vi.useFakeTimers();
+    const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    try {
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      const first = FakeEventSource.instances[0];
+      FakeEventSource.autoOpen = false;
+
+      act(() => first?.emitError());
+      expect(first?.closed).toBe(true);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(1);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
+
+      act(() => FakeEventSource.instances[1]?.emitOpen());
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+
+      act(() =>
+        FakeEventSource.instances[1]?.emit("run-completed", {
+          runId: "run-1",
+          ...completed("passed"),
+        }),
+      );
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when the terminal event is lost during a successful reconnect", async () => {
+    vi.useFakeTimers();
+    const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    try {
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      const first = FakeEventSource.instances[0];
+      FakeEventSource.autoOpen = false;
+
+      act(() => first?.emitError());
+      act(() => vi.advanceTimersByTime(1_000));
+      const replacement = FakeEventSource.instances[1];
+      act(() => replacement?.emitOpen());
+
+      expect(result.current.verificationRunning).toBe(true);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+
+      await act(async () => {
         vi.advanceTimersByTime(10_000);
         await Promise.resolve();
       });
 
-      expect(source?.closed).toBe(false);
-      expect(hookA.result.current.verificationRunning).toBe(true);
-      expect(hookB.result.current.statusBarRun?.label).toBe("Verification: failed to start");
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: status unknown");
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+      expect(replacement?.closed).toBe(true);
 
+      FakeEventSource.autoOpen = true;
+      act(() => result.current.runWorkspaceVerification("lint"));
+      await tick();
+      expect(
+        fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            url === "/api/editor/verification/runs" &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toHaveLength(2);
       await act(async () => {
-        source?.emitOpen();
-        source?.emit("run-completed", { runId: "run-a", ...completed("passed") });
+        vi.advanceTimersByTime(10_000);
         await Promise.resolve();
       });
-      expect(hookA.result.current.statusBarRun?.label).toContain("passed");
-      expect(source?.closed).toBe(true);
+      expect(result.current.verificationRunning).toBe(true);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms terminal reconciliation while a recovered stream delivers fresh activity", async () => {
+    vi.useFakeTimers();
+    const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    try {
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      FakeEventSource.autoOpen = false;
+
+      act(() => FakeEventSource.instances[0]?.emitError());
+      act(() => vi.advanceTimersByTime(1_000));
+      const replacement = FakeEventSource.instances[1];
+      act(() => replacement?.emitOpen());
+
+      await act(async () => {
+        vi.advanceTimersByTime(9_000);
+        replacement?.emit("step-started", { runId: "run-1", stepKind: "typecheck" });
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(9_000);
+        await Promise.resolve();
+      });
+
+      expect(result.current.verificationRunning).toBe(true);
+      expect(result.current.statusBarRun?.label).toBe("Verification: typecheck…");
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+
+      await act(async () => {
+        replacement?.emit("step-completed", {
+          runId: "run-1",
+          stepKind: "typecheck",
+          status: "passed",
+          durationMs: 18_000,
+        });
+        vi.advanceTimersByTime(9_000);
+        replacement?.emit("run-completed", { runId: "run-1", ...completed("passed") });
+        await Promise.resolve();
+      });
+
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: passed");
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a replacement that never opens as failed instead of reconnecting forever", async () => {
+    vi.useFakeTimers();
+    let unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    try {
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      FakeEventSource.autoOpen = false;
+
+      act(() => FakeEventSource.instances[0]?.emitError());
+      act(() => vi.advanceTimersByTime(1_000));
+      const replacement = FakeEventSource.instances[1];
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
+
+      act(() => vi.advanceTimersByTime(10_000));
+      await tick();
+      expect(replacement?.closed).toBe(true);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: status unknown");
+
+      unsubscribe();
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+      unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+      FakeEventSource.autoOpen = true;
+      act(() => result.current.runWorkspaceVerification("lint"));
+      await tick();
+      expect(result.current.verificationRunning).toBe(true);
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+      expect(
+        fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            url === "/api/editor/verification/runs" &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toHaveLength(2);
+      act(() =>
+        FakeEventSource.instances.at(-1)?.emit("run-completed", {
+          runId: "run-1",
+          ...completed("passed"),
+        }),
+      );
+      expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks only affected roots failed after bounded reopen attempts and retains stale rows", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookA = renderHook(() =>
+        useEditorVerificationRun({ root: "/project-a", activeFile: null }),
+      );
+      renderHook(() => useEditorVerificationRun({ root: "/project-b", activeFile: null }));
+      await tick();
+      setVerificationReport("/project-a", {
+        workspaceRoot: "/project-a",
+        results: [
+          {
+            kind: "typecheck",
+            scriptName: "typecheck",
+            command: "npm",
+            args: [],
+            status: "failed",
+            exitCode: 2,
+            signal: null,
+            durationMs: 1,
+            truncated: false,
+            redacted: true,
+            outputSummary: "stale",
+            appliedLimits: [],
+            locations: [{ file: "src/stale.ts", line: 7, message: "stale" }],
+          },
+        ],
+        overallStatus: "failed",
+        startedAtMs: 1,
+        durationMs: 2,
+        counts: {
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          denied: 0,
+          "timed-out": 0,
+          cancelled: 0,
+          "resource-exceeded": 0,
+        },
+      });
+      act(() => hookA.result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      FakeEventSource.autoOpen = false;
+
+      for (const delay of [1_000, 2_000, 4_000]) {
+        act(() => FakeEventSource.instances.at(-1)?.emitError());
+        expect(getEditorProblemsSourceHealth("/project-a")).toBe("reconnecting");
+        act(() => vi.advanceTimersByTime(delay));
+      }
+      act(() => FakeEventSource.instances.at(-1)?.emitError());
+      await tick();
+
+      expect(FakeEventSource.instances).toHaveLength(4);
+      expect(getEditorProblemsSourceHealth("/project-a")).toBe("failed");
+      expect(hookA.result.current.verificationRunning).toBe(false);
+      expect(hookA.result.current.statusBarRun?.label).toBe("Verification: status unknown");
+      expect(getEditorProblems("/project-a").map((problem) => problem.file)).toEqual([
+        "src/stale.ts",
+      ]);
+      expect(getEditorProblemsSourceHealth("/project-b")).toBe("healthy");
+
+      FakeEventSource.autoOpen = true;
+      act(() => hookA.result.current.runWorkspaceVerification("lint"));
+      await tick();
+      expect(hookA.result.current.verificationRunning).toBe(true);
+      expect(getEditorProblemsSourceHealth("/project-a")).toBe("failed");
+      expect(getEditorProblems("/project-a").map((problem) => problem.file)).toEqual([
+        "src/stale.ts",
+      ]);
     } finally {
       vi.useRealTimers();
     }

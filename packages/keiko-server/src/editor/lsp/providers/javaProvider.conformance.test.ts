@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LanguageServiceRequest, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
 import type { LspSpawnFn } from "../lspNodeAdapter.js";
+import type { LspSpawnPreparation } from "../lspProcessManager.js";
 import {
   runHostLanguageOperation,
   shutdownHostLspPool,
@@ -22,6 +23,8 @@ import { JAVA_PROVIDER_SPEC } from "./javaProvider.js";
 const SENTINEL = "KEIKO_JAVA_IMPORT_MUST_NOT_EXECUTE";
 let binDir = "";
 let root = "";
+let runtimeStateRoot = "";
+let preparedRuntimeStateRoot: string | undefined;
 
 function executable(name: string): void {
   const path = join(binDir, name);
@@ -32,6 +35,8 @@ function executable(name: string): void {
 beforeEach(() => {
   binDir = mkdtempSync(join(tmpdir(), "keiko-java-bin-"));
   root = mkdtempSync(join(tmpdir(), "keiko-java-workspace-"));
+  runtimeStateRoot = mkdtempSync(join(tmpdir(), "keiko-java-runtime-state-"));
+  preparedRuntimeStateRoot = undefined;
   for (const name of ["java", "jdtls", "python3", "mvn", "gradle", "gradlew"]) executable(name);
   writeFileSync(join(root, "Main.java"), "final class Main { static int value() { return 1; } }\n");
 });
@@ -40,6 +45,7 @@ afterEach(async () => {
   await shutdownHostLspPool();
   rmSync(binDir, { recursive: true, force: true });
   rmSync(root, { recursive: true, force: true });
+  rmSync(runtimeStateRoot, { recursive: true, force: true });
 });
 
 function workspace(): WorkspaceInfo {
@@ -73,7 +79,11 @@ function options(spawn: LspSpawnFn): HostLanguageOperationOptions {
     overlayAbsolutePath: join(root, "Main.java"),
     signal: new AbortController().signal,
     spawn,
-    prepareSpawn: (input) => ({ ...input, executable: "/usr/bin/true" }),
+    prepareSpawn: (input): LspSpawnPreparation => {
+      preparedRuntimeStateRoot = input.privateRuntimeStateRoot;
+      return { ...input, executable: "/usr/bin/true" };
+    },
+    privateRuntimeStateRoot: runtimeStateRoot,
     activationAuthorized: true,
     protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
   };
@@ -102,6 +112,7 @@ describe("Eclipse JDT LS fake-protocol security conformance", () => {
     expect(childEnv).not.toHaveProperty("HOME");
     expect(childEnv).not.toHaveProperty("JAVA_HOME");
     expect(childEnv).not.toHaveProperty("MAVEN_OPTS");
+    expect(preparedRuntimeStateRoot).toBe(runtimeStateRoot);
     expect(childEnv.PATH === undefined ? [] : readFileNames(childEnv.PATH)).toEqual([
       "java",
       "python3",

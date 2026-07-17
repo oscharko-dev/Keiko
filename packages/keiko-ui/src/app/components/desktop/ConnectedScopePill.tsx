@@ -253,7 +253,7 @@ function ScopePillItem({
 // bind the same-shaped scopes produce the same signature, so switching between them is a routine
 // re-render and does not re-announce; a connect/disconnect changes the label set and does.
 function scopesSignature(scopes: readonly ChatConnectedScope[], t: I18nTranslate): string {
-  return scopes.map((scope) => pillLabel(scope, t)).join(" ");
+  return scopes.map((scope) => pillLabel(scope, t)).join("\0");
 }
 
 function pressureLabel(pressure: GroundedBudgetPressure, t: I18nTranslate): string {

@@ -73,16 +73,19 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   applyPatch: "content-mutation",
   applyChangeset: "content-mutation",
   requestVerification: "execution",
-  navigateSymbol: "navigation",
-  searchWorkspace: "navigation",
+  // These handlers resolve repository-backed data in the BFF, so they share queryGit's existing
+  // workspace-read authority, containment, sensitive-path, and budget posture. Pure browser editor
+  // navigation (openFile/focusTab/setSelection) remains exempt.
+  navigateSymbol: "workspace-read",
+  searchWorkspace: "workspace-read",
   // Issue #2298 amendment: bounded local repository reads require workspace-read authority and
   // budget reservation, but remain distinct from mutation, external effect, and delivery.
   queryGit: "workspace-read",
 };
 
-// Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
-// external effects map onto the existing Workbench classes; no editor-specific policy vocabulary is
-// introduced (Issue #2121, ADR-0125).
+// Pure browser editor navigation and layout do not consume workspace or delivery authority.
+// Repository-backed reads, mutations, and external effects map onto the existing Workbench classes;
+// no editor-specific policy vocabulary is introduced (Issue #2121, ADR-0125).
 export const EDITOR_AGENT_WORKBENCH_ACTION_CLASS: Readonly<
   Record<EditorAgentActionEffectClass, CodingWorkbenchActionClass | null>
 > = {

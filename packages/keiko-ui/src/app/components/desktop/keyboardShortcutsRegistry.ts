@@ -44,7 +44,6 @@ export interface EffectiveKeyboardShortcutRegistry {
 }
 
 const MODIFIER_ORDER = Object.freeze(["CtrlOrMeta", "Ctrl", "Meta", "Alt", "Shift"] as const);
-const MODIFIER_SET = new Set<string>(MODIFIER_ORDER);
 
 function settingArray(value: EditorM7SettingValue | undefined): readonly string[] {
   return Array.isArray(value) ? value : [];
@@ -173,18 +172,29 @@ function activeBindingsWithOverrides(
 export function bindingToWorkspaceChord(binding: string): WorkspaceKeyChord | null {
   const parts = binding.split("+");
   const key = parts.at(-1);
-  if (key === undefined || key.length === 0 || MODIFIER_SET.has(key)) return null;
-  const mod = parts
-    .slice(0, -1)
-    .map((part): WorkspaceKeyChordModifier | null => {
-      if (part === "CtrlOrMeta" || part === "Meta") return "cmd";
-      if (part === "Ctrl") return "ctrl";
-      if (part === "Alt") return "alt";
-      if (part === "Shift") return "shift";
-      return null;
-    })
-    .filter((part): part is WorkspaceKeyChordModifier => part !== null);
+  if (key === undefined || key.length === 0 || workspaceModifier(key) !== null) return null;
+  const mod: WorkspaceKeyChordModifier[] = [];
+  const sourceModifiers = parts.slice(0, -1);
+  if (
+    sourceModifiers.includes("CtrlOrMeta") &&
+    (sourceModifiers.includes("Ctrl") || sourceModifiers.includes("Meta"))
+  ) {
+    return null;
+  }
+  for (const part of sourceModifiers) {
+    const modifier = workspaceModifier(part);
+    if (modifier === null || mod.includes(modifier)) return null;
+    mod.push(modifier);
+  }
   return { key: keyForWorkspace(key), mod };
+}
+
+function workspaceModifier(part: string): WorkspaceKeyChordModifier | null {
+  if (part === "CtrlOrMeta" || part === "Meta") return "cmd";
+  if (part === "Ctrl") return "ctrl";
+  if (part === "Alt") return "alt";
+  if (part === "Shift") return "shift";
+  return null;
 }
 
 function keyForWorkspace(key: string): string {

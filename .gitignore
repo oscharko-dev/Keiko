@@ -106,6 +106,7 @@ Temporary Items
 .apdisk
 
 # Local, per-contributor agent/IDE state — never shared.
+/.agent/
 /.claude/
 /.codex/
 /.air/

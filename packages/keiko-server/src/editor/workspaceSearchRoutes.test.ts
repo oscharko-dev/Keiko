@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { DEFAULT_SEARCH_LIMITS } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
@@ -228,6 +229,72 @@ describe("POST /api/editor/workspace-search", () => {
     const excludedBody = excluded.body as { results: { path: string }[] };
     expect(new Set(includedBody.results.map((entry) => entry.path))).toEqual(new Set(["src/a.ts"]));
     expect(excludedBody.results.every((entry) => entry.path !== "src/a.ts")).toBe(true);
+  });
+
+  it("searches only within the validated text-search scope", async () => {
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ scopePath: "src/scoped" })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const paths = (result.body as { results: { path: string }[] }).results.map(
+      (entry) => entry.path,
+    );
+    expect(paths).toContain("src/scoped/c.ts");
+    expect(paths.every((path) => path.startsWith("src/scoped/"))).toBe(true);
+
+    const malformed = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ scopePath: 42 })),
+      deps(),
+    );
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("never searches, previews, or applies an excluded path beyond the glob result cap", async () => {
+    const excludedRoot = join(root, "excluded");
+    await mkdir(excludedRoot, { recursive: true });
+    await Promise.all(
+      Array.from({ length: DEFAULT_SEARCH_LIMITS.maxMatchesReturned }, async (_, index) => {
+        const name = `${String(index).padStart(3, "0")}.ts`;
+        await writeFile(join(excludedRoot, name), "export const filler = true;\n", "utf8");
+      }),
+    );
+    const targetPath = "excluded/zzz-target.ts";
+    const targetAbsolutePath = join(root, targetPath);
+    const original = 'export const target = excludedNeedle("excluded");\n';
+    await writeFile(targetAbsolutePath, original, "utf8");
+    const excludeGlobs = ["excluded/**/*.ts"];
+
+    const search = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "excludedNeedle", excludeGlobs })),
+      deps(),
+    );
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "excludedNeedle",
+          replacement: "replacementNeedle",
+          excludeGlobs,
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const previewBody = preview.body as { files: readonly unknown[] };
+    const apply = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: previewBody.files }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+
+    expect(search.status).toBe(200);
+    expect(search.body).toMatchObject({ results: [] });
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({ files: [], fileCount: 0, editCount: 0 });
+    expect(apply.status).toBe(400);
+    expect(apply.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    await expect(readFile(targetAbsolutePath, "utf8")).resolves.toBe(original);
   });
 
   it("reports truncation when the requested cap is smaller than the true match set", async () => {

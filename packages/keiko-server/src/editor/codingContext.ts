@@ -21,6 +21,7 @@ import {
 import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  acquireEditorStateContextLease,
   runEditorStateProvider,
   runGitContextProvider,
   runLocalKnowledgeProvider,
@@ -30,6 +31,7 @@ import {
   type ProviderOutcome,
   type RawExcerpt,
   type GitContextReader,
+  type EditorStateContextLease,
 } from "./codingContextProviders.js";
 
 const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextOmission["sourceKind"][] = [
@@ -43,6 +45,7 @@ export interface AssembleCodingContextDeps {
   readonly realRoot: string;
   readonly signal: AbortSignal;
   readonly nowMs: number;
+  readonly currentTimeMs?: (() => number) | undefined;
   readonly budgetBytes?: number | undefined;
   readonly allowEmbeddingProviders?: boolean | undefined;
   readonly gitContextReader?: GitContextReader | undefined;
@@ -122,22 +125,34 @@ async function collectEmbeddingProviderContext(
   }
 }
 
+function acquireRequestEditorStateLease(
+  request: CodingContextRequest,
+  currentTimeMs: () => number,
+): EditorStateContextLease | undefined {
+  return request.editorSessionId === undefined
+    ? undefined
+    : acquireEditorStateContextLease(request.editorSessionId, currentTimeMs());
+}
+
 export async function assembleCodingContext(
   request: CodingContextRequest,
   context: AssembleCodingContextDeps,
 ): Promise<CodingContextPack> {
   const budget = effectiveCodingContextBudget(request.purpose, context.budgetBytes);
+  const currentTimeMs = context.currentTimeMs ?? Date.now;
   const providerCtx: ProviderContext = {
     deps: context.deps,
     realRoot: context.realRoot,
     signal: context.signal,
     maxBytesPerExcerpt: budget.maxBytesPerSource,
+    currentTimeMs,
     nowMs: context.nowMs,
     gitContextReader: context.gitContextReader,
   };
 
   const candidates: RawExcerpt[] = [];
   const omissions: CodingContextOmission[] = [];
+  const editorStateLease = acquireRequestEditorStateLease(request, currentTimeMs);
 
   const repo = await runRepoSearchProvider(providerCtx, {
     documentPath: request.documentPath,
@@ -147,8 +162,8 @@ export async function assembleCodingContext(
   });
   collect(repo, candidates, omissions);
 
-  collectEditorStateContext(request, providerCtx, candidates, omissions);
-  await collectGitContext(request, providerCtx, candidates, omissions);
+  collectEditorStateContext(request, providerCtx, editorStateLease, candidates, omissions);
+  await collectGitContext(request, providerCtx, editorStateLease, candidates, omissions);
 
   const allowEmbeddingProviders =
     context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
@@ -176,6 +191,7 @@ export async function assembleCodingContext(
 async function collectGitContext(
   request: CodingContextRequest,
   providerCtx: ProviderContext,
+  lease: EditorStateContextLease | undefined,
   candidates: RawExcerpt[],
   omissions: CodingContextOmission[],
 ): Promise<void> {
@@ -183,7 +199,7 @@ async function collectGitContext(
     return;
   }
   collect(
-    await runGitContextProvider(providerCtx, { sessionId: request.editorSessionId }),
+    await runGitContextProvider(providerCtx, { sessionId: request.editorSessionId, lease }),
     candidates,
     omissions,
   );
@@ -192,6 +208,7 @@ async function collectGitContext(
 function collectEditorStateContext(
   request: CodingContextRequest,
   providerCtx: ProviderContext,
+  lease: EditorStateContextLease | undefined,
   candidates: RawExcerpt[],
   omissions: CodingContextOmission[],
 ): void {
@@ -199,7 +216,7 @@ function collectEditorStateContext(
     return;
   }
   collect(
-    runEditorStateProvider(providerCtx, { sessionId: request.editorSessionId }),
+    runEditorStateProvider(providerCtx, { sessionId: request.editorSessionId, lease }),
     candidates,
     omissions,
   );

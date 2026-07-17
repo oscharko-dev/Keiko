@@ -59,6 +59,7 @@ describe("requestEditorTestGeneration", () => {
         document: { path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" },
       },
       contextBudgetBytes: 65_536,
+      editorSessionId: "editor-session-1",
     });
     expect(response.status).toBe("disabled");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -66,6 +67,20 @@ describe("requestEditorTestGeneration", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          root: "/repo",
+          target: {
+            kind: "file",
+            document: {
+              path: "src/a.ts",
+              languageId: "typescript",
+              text: "export const a = 1;\n",
+            },
+          },
+          contextBudgetBytes: 65_536,
+          editorSessionId: "editor-session-1",
+        }),
       }),
     );
   });

@@ -210,7 +210,7 @@ function renderHost(): {
 }
 
 describe("derivePausedDebugValues", () => {
-  it("projects bounded local values only for the active paused source frame", () => {
+  it("projects source-ordered local values only for the active paused source frame", () => {
     expect(derivePausedDebugValues(snapshot(), "src/program.ts", "keiko://program")).toMatchObject({
       paused: true,
       pauseGeneration: 3,
@@ -219,17 +219,65 @@ describe("derivePausedDebugValues", () => {
         {
           line: 7,
           column: 2,
-          value: "Local: count: 2 · Arguments: input: x",
+          value: "Local: count: 2",
+        },
+        {
+          line: 7,
+          column: 2,
+          value: "Arguments: input: x",
         },
       ],
     });
   });
 
-  it("emits exactly one bounded summary instead of overlapping per-variable decorations", () => {
-    const values = derivePausedDebugValues(snapshot(), "src/program.ts", "keiko://program").values;
+  it("emits exactly 200 bounded source-ordered decorations and drops values beyond the cap", () => {
+    const current = snapshot();
+    const frame = current.stack?.frames[0];
+    const scope = current.scopesByFrame.get("frame-1")?.scopes[0];
+    const template = current.variablesByParent.get("scope-1")?.nodes[0];
+    if (frame === undefined || scope === undefined || template?.kind !== "variable") {
+      throw new Error("Expected paused debug projection fixture");
+    }
+    const variables = Array.from({ length: 201 }, (_, index) => ({
+      ...template,
+      name: { ...template.name, value: `inline_${String(index + 1).padStart(3, "0")}` },
+      value: { ...template.value, value: String(index + 1) },
+    }));
+    const capped = {
+      ...current,
+      scopesByFrame: new Map([
+        [
+          frame.frameRef,
+          {
+            frameRef: frame.frameRef,
+            scopes: [scope],
+            truncated: false,
+            omittedCount: 0,
+          },
+        ],
+      ]),
+      variablesByParent: new Map([
+        [
+          scope.scopeRef,
+          {
+            parentRef: scope.scopeRef,
+            nodes: variables,
+            truncated: true,
+            omittedCount: 1,
+          },
+        ],
+      ]),
+    } satisfies DebugSessionSnapshot;
 
-    expect(values).toHaveLength(1);
-    expect(values[0]?.value.length).toBeLessThanOrEqual(320);
+    const values = derivePausedDebugValues(capped, "src/program.ts", "keiko://program").values;
+
+    expect(values).toHaveLength(200);
+    expect(values[0]).toMatchObject({ line: 7, value: "Local: inline_001: 1" });
+    expect(values[199]).toMatchObject({ line: 7, column: 2, value: "Local: inline_200: 200" });
+    expect(
+      values.every((value) => value.line === frame.line && value.column === frame.column),
+    ).toBe(true);
+    expect(values.every((value) => value.value.length <= 320)).toBe(true);
   });
 
   it("fails closed when the paused frame belongs to another file", () => {
@@ -252,6 +300,40 @@ describe("debug editor localization", () => {
 });
 
 describe("EditorDebugSessionHost", () => {
+  it("does not request variables for scopes whose canonical count is zero", async () => {
+    const current = snapshot();
+    const scopes = current.scopesByFrame.get("frame-1");
+    if (scopes === undefined) throw new Error("Expected scope fixture");
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: {
+        ...current,
+        scopesByFrame: new Map([
+          [
+            "frame-1",
+            {
+              ...scopes,
+              scopes: scopes.scopes.map((scope, index) => ({
+                ...scope,
+                ...(index === 0 ? { variableCount: 1 } : { variableCount: 0 }),
+              })),
+            },
+          ],
+        ]),
+      },
+      actions,
+    });
+
+    renderHost();
+
+    await waitFor(() => {
+      expect(actions.loadVariables).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "session-1" }),
+        "scope-1",
+      );
+    });
+    expect(actions.loadVariables).not.toHaveBeenCalledWith(expect.anything(), "scope-2");
+  });
+
   it("sends only paused-state controls and blocks Pause while already paused", async () => {
     const rendered = renderHost();
     await waitFor(() => expect(rendered.host()).toBeDefined());

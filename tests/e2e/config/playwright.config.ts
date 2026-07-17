@@ -31,6 +31,9 @@ const prepareRuntimeConfig = [
 
 export default defineConfig({
   testDir: join(root, "tests", "e2e"),
+  // Playwright's default testMatch also collects *.test.ts, which are vitest suites here
+  // (e.g. the *.static.test.ts source-shape tests) and crash at collection time.
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,

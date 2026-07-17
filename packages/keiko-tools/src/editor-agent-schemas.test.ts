@@ -100,6 +100,23 @@ describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
     });
   });
 
+  it("describes symbol navigation without restricting managed language providers", () => {
+    const tool = EDITOR_AGENT_TOOL_DEFINITIONS.find(
+      (definition) => definition.name === "editor_navigate_symbol",
+    );
+    expect(tool?.description).toMatch(/negotiated language/u);
+    expect(tool?.description).toMatch(/active provider capabilities/u);
+    expect(tool?.description).not.toMatch(/TypeScript|JavaScript/u);
+    expect(tool?.parameters).toMatchObject({
+      properties: { languageId: { type: "string", minLength: 1 } },
+    });
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.filter((definition) =>
+        definition.name.startsWith("editor_navigate_symbol"),
+      ),
+    ).toHaveLength(1);
+  });
+
   // Issue #2298 — the read-only git-query tool exposes a bounded, strict, aspect-enum schema.
   it("exposes editor_git_context with a bounded read-only git-aspect schema", () => {
     expect(

@@ -93,12 +93,12 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     }
   });
 
-  it("classifies navigation and layout actions correctly", () => {
+  it("classifies pure navigation, layout, and repository-read actions correctly", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.openFile).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.focusTab).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.setSelection).toBe("navigation");
-    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("navigation");
-    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("workspace-read");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("workspace-read");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.queryGit).toBe("workspace-read");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
@@ -110,13 +110,37 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     for (const type of NON_MUTATING) expect(isMutatingEditorAgentAction(type)).toBe(false);
   });
 
-  it("keeps server-resolved navigation actions baseline-allowed", () => {
+  it("gates server-resolved repository reads through workspace-read authority", () => {
     for (const type of ["navigateSymbol", "searchWorkspace"] as const) {
-      const decision = classifyEditorAgentAction(type, ctx());
-      expect(decision.disposition).toBe("allowed");
+      const baseline = classifyEditorAgentAction(type, ctx());
+      expect(baseline.disposition).toBe("allowed");
+      // ADR-0138's monotonic matrix gates workspace-contained actions behind approval under
+      // governed-assist; the supervised middle mode admits the repository-backed read directly.
       expect(
-        composeEditorAgentActionPolicyDecision(decision, authority("governed-assist"), "low"),
-      ).toMatchObject({ disposition: "allowed", effectClass: "navigation" });
+        composeEditorAgentActionPolicyDecision(
+          baseline,
+          authority("governed-assist", { actionClasses: ["workspace-read"] }),
+          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
+        ),
+      ).toMatchObject({ disposition: "review-required", effectClass: "workspace-read" });
+      expect(
+        composeEditorAgentActionPolicyDecision(
+          baseline,
+          authority("supervised-coding", { actionClasses: ["workspace-read"] }),
+          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
+        ),
+      ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+      expect(
+        composeEditorAgentActionPolicyDecision(
+          baseline,
+          authority("governed-assist", { actionClasses: [] }),
+          EDITOR_AGENT_ACTION_APPROVAL_RISK[type],
+        ),
+      ).toMatchObject({
+        disposition: "denied",
+        effectClass: "workspace-read",
+        denyReason: "mode-policy-denied",
+      });
     }
   });
 });
@@ -255,8 +279,8 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     expect(decision.denyReason).toBe("denied-sensitive-path");
   });
 
-  it("exempts navigation and layout and keeps external delivery review-required", () => {
-    for (const type of ["openFile", "moveTab"] as const) {
+  it("exempts pure navigation and layout and keeps external delivery review-required", () => {
+    for (const type of ["openFile", "focusTab", "setSelection", "moveTab", "splitPane"] as const) {
       const baseline = classifyEditorAgentAction(type, ctx());
       expect(
         composeEditorAgentActionPolicyDecision(

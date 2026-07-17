@@ -1794,7 +1794,11 @@ function qualifiedArtifactFile(
 interface StatSignature {
   readonly dev: bigint;
   readonly ino: bigint;
+  readonly size: bigint;
+  readonly mode: bigint;
+  readonly uid: bigint;
   readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
 }
 
 interface ArtifactWalkCacheEntry extends StatSignature {
@@ -1809,7 +1813,8 @@ interface ArtifactWalkCacheEntry extends StatSignature {
  * always defined there, so `qualifiedArtifact` never consults or populates this cache in that
  * mode; that expensive path keeps running in full every time it is invoked, unchanged).
  *
- * A hit means this exact filesystem object (same dev/ino/mtimeNs) was already fully validated on
+ * A hit means this exact filesystem object (same dev/ino/size/mode/uid/mtime/ctime) was already
+ * fully validated on
  * a prior call. Reusing it lets an unchanged directory skip `realpathSync` and `readdirSync`
  * entirely and an unchanged file skip re-deriving its identity -- but every cached node is still
  * freshly `lstat`ed on every call, and every cached directory still recurses into its (cached)
@@ -1831,12 +1836,22 @@ function approvedRootUnchanged(cache: ArtifactWalkCache, approvedRoot: string): 
   const current = lstatSync(approvedRoot, { bigint: true });
   const cached = cache.approvedRoots.get(approvedRoot);
   const unchanged =
-    cached?.dev === current.dev && cached.ino === current.ino && cached.mtimeNs === current.mtimeNs;
+    cached?.dev === current.dev &&
+    cached.ino === current.ino &&
+    cached.size === current.size &&
+    cached.mode === current.mode &&
+    cached.uid === current.uid &&
+    cached.mtimeNs === current.mtimeNs &&
+    cached.ctimeNs === current.ctimeNs;
   if (!unchanged) {
     cache.approvedRoots.set(approvedRoot, {
       dev: current.dev,
       ino: current.ino,
+      size: current.size,
+      mode: current.mode,
+      uid: current.uid,
       mtimeNs: current.mtimeNs,
+      ctimeNs: current.ctimeNs,
     });
   }
   return unchanged;
@@ -1850,11 +1865,20 @@ function freshCacheEntry(
   const cached = cache?.artifacts.get(artifact.hostPath);
   if (cached === undefined || cache === undefined) return undefined;
   const unchanged =
-    cached.dev === supplied.dev &&
-    cached.ino === supplied.ino &&
-    cached.mtimeNs === supplied.mtimeNs &&
-    approvedRootUnchanged(cache, artifact.approvedRoot);
+    statSignatureMatches(cached, supplied) && approvedRootUnchanged(cache, artifact.approvedRoot);
   return unchanged ? cached : undefined;
+}
+
+function statSignatureMatches(left: StatSignature, right: BigIntStats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 function directoryChildren(
@@ -1881,7 +1905,11 @@ function rememberArtifact(
   cache?.artifacts.set(hostPath, {
     dev: supplied.dev,
     ino: supplied.ino,
+    size: supplied.size,
+    mode: supplied.mode,
+    uid: supplied.uid,
     mtimeNs: supplied.mtimeNs,
+    ctimeNs: supplied.ctimeNs,
     kind,
     identity,
     children,

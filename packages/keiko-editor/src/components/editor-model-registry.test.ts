@@ -110,17 +110,19 @@ function attach(
   registry: EditorModelRegistry,
   namespace: FakeNamespace,
   path: string,
+  rootKey = "scope:/repo",
+  viewStateKey = `pane:${path}`,
 ): { readonly attachment: ReturnType<EditorModelRegistry["attach"]>; readonly editor: FakeEditor } {
   const editor = new FakeEditor();
   const attachment = registry.attach({
-    key: `scope:/repo:${path}`,
-    rootKey: "scope:/repo",
+    key: `${rootKey}:${path}`,
+    rootKey,
     uri: uri(path),
     language: "typescript",
     text: `// ${path}\n`,
     sizeBytes: 32,
     degraded: false,
-    viewStateKey: `pane:${path}`,
+    viewStateKey,
     namespace,
     editor,
     protection: UNPROTECTED_EDITOR_MODEL,
@@ -230,6 +232,21 @@ describe("EditorModelRegistry", () => {
     expect(JSON.stringify(registry.diagnostics())).not.toContain("src/app.ts");
   });
 
+  it("does not save another model's view state while detaching a stale attachment", () => {
+    const registry = new EditorModelRegistry({ countBudget: 4, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const stale = attach(registry, namespace, "src/old.ts");
+    const replacement = namespace.createModel("new\n", "typescript", uri("src/new.ts"));
+    stale.editor.model = replacement;
+    stale.editor.viewState = { cursor: 99 };
+
+    stale.attachment.detach();
+    const reopened = attach(registry, namespace, "src/old.ts");
+
+    expect(reopened.editor.viewState).toBeNull();
+    expect(stale.editor.model).toBe(replacement);
+  });
+
   it("falls back to safe budgets and survives stale protection updates", () => {
     const registry = new EditorModelRegistry({ countBudget: 0, byteBudget: Number.NaN });
     registry.updateProtection("missing", { ...UNPROTECTED_EDITOR_MODEL, dirty: true });
@@ -309,6 +326,8 @@ describe("EditorModelRegistry", () => {
     const namespace = new FakeNamespace();
     const modelUri = uri("adopted.ts");
     const existing = namespace.createModel("stale namespace text\n", "typescript", modelUri);
+    const editor = new FakeEditor();
+    editor.model = existing;
 
     const attachment = registry.attach({
       key: "scope:/repo:adopted.ts",
@@ -320,12 +339,99 @@ describe("EditorModelRegistry", () => {
       degraded: false,
       viewStateKey: "pane:adopted",
       namespace,
-      editor: new FakeEditor(),
+      editor,
       protection: UNPROTECTED_EDITOR_MODEL,
     });
 
     expect(attachment.model).toBe(existing);
     expect(existing.getValue()).toBe("host text\n");
+  });
+
+  it("fails closed when a dirty retained model collides with another root's public URI", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const sharedUri = uri("collision/src/app.ts");
+    const oldEditor = new FakeEditor();
+    const oldRoot = registry.attach({
+      key: sharedUri.toString(),
+      rootKey: "/workspace/root-a",
+      uri: sharedUri,
+      language: "typescript",
+      text: "dirty root A\n",
+      sizeBytes: 13,
+      degraded: false,
+      viewStateKey: "pane:a",
+      namespace,
+      editor: oldEditor,
+      protection: { ...UNPROTECTED_EDITOR_MODEL, dirty: true },
+    });
+    oldRoot.detach();
+    const newEditor = new FakeEditor();
+    newEditor.model = oldRoot.model;
+
+    expect(() =>
+      registry.attach({
+        key: sharedUri.toString(),
+        rootKey: "/workspace/root-b",
+        uri: sharedUri,
+        language: "typescript",
+        text: "clean root B\n",
+        sizeBytes: 13,
+        degraded: false,
+        viewStateKey: "pane:b",
+        namespace,
+        editor: newEditor,
+        protection: UNPROTECTED_EDITOR_MODEL,
+      }),
+    ).toThrow(/workspace root/iu);
+
+    expect(newEditor.model).toBeNull();
+    expect(oldRoot.model.getValue()).toBe("dirty root A\n");
+    expect(namespace.created[0]?.dispose).not.toHaveBeenCalled();
+    expect(registry.diagnostics()).toMatchObject({ liveModelCount: 1, attachedModelCount: 0 });
+  });
+
+  it("recreates a clean retained model before reusing a colliding URI for another root", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const sharedUri = uri("collision/src/app.ts");
+    const oldRoot = registry.attach({
+      key: sharedUri.toString(),
+      rootKey: "/workspace/root-a",
+      uri: sharedUri,
+      language: "typescript",
+      text: "clean root A\n",
+      sizeBytes: 13,
+      degraded: false,
+      viewStateKey: "pane:a",
+      namespace,
+      editor: new FakeEditor(),
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+    oldRoot.detach();
+    const newEditor = new FakeEditor();
+    newEditor.model = oldRoot.model;
+
+    const newRoot = registry.attach({
+      key: sharedUri.toString(),
+      rootKey: "/workspace/root-b",
+      uri: sharedUri,
+      language: "typescript",
+      text: "clean root B\n",
+      sizeBytes: 13,
+      degraded: false,
+      viewStateKey: "pane:b",
+      namespace,
+      editor: newEditor,
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+    expect(newRoot.model).not.toBe(oldRoot.model);
+    expect(newEditor.model).toBe(newRoot.model);
+    expect(newRoot.model.getValue()).toBe("clean root B\n");
+    expect(namespace.created).toHaveLength(2);
+    expect(registry.diagnostics()).toMatchObject({ liveModelCount: 1, attachedModelCount: 1 });
   });
 
   it("disposes by root and all inactive models with default reasons", () => {
@@ -345,6 +451,48 @@ describe("EditorModelRegistry", () => {
     attached.attachment.detach();
     registry.disposeAll();
     expect(namespace.created[2]?.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes only clean unattached models owned by a switched root across sibling panes", () => {
+    const registry = new EditorModelRegistry({ countBudget: 16, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const clean = attach(registry, namespace, "clean.ts", "scope:/repo-a");
+    clean.attachment.detach();
+    const dirty = attach(registry, namespace, "dirty.ts", "scope:/repo-a");
+    registry.updateProtection(dirty.attachment.key, {
+      ...UNPROTECTED_EDITOR_MODEL,
+      dirty: true,
+    });
+    dirty.attachment.detach();
+    const pinned = attach(registry, namespace, "pinned.ts", "scope:/repo-a");
+    registry.updateProtection(pinned.attachment.key, {
+      ...UNPROTECTED_EDITOR_MODEL,
+      pinned: true,
+    });
+    pinned.attachment.detach();
+    const firstPane = attach(registry, namespace, "shared.ts", "scope:/repo-a", "pane:first");
+    const siblingPane = attach(registry, namespace, "shared.ts", "scope:/repo-a", "pane:sibling");
+    firstPane.attachment.detach();
+    const siblingRoot = attach(registry, namespace, "other.ts", "scope:/repo-b");
+    siblingRoot.attachment.detach();
+
+    registry.disposeRoot("scope:/repo-a");
+
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+    expect(namespace.created[1]?.dispose).not.toHaveBeenCalled();
+    expect(namespace.created[2]?.dispose).not.toHaveBeenCalled();
+    expect(namespace.created[3]?.dispose).not.toHaveBeenCalled();
+    expect(namespace.created[4]?.dispose).not.toHaveBeenCalled();
+    expect(registry.diagnostics()).toMatchObject({
+      liveModelCount: 4,
+      attachedModelCount: 1,
+    });
+
+    siblingPane.attachment.detach();
+    registry.disposeRoot("scope:/repo-a");
+
+    expect(namespace.created[3]?.dispose).toHaveBeenCalledOnce();
+    expect(namespace.created[4]?.dispose).not.toHaveBeenCalled();
   });
 
   it("evicts by byte budget and disposes minimal models without optional status hooks", () => {

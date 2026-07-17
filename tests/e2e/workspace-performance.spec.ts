@@ -4,6 +4,26 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const SHA_256 = /^[0-9a-f]{64}$/u;
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+function resolveSourceTreeSha256(): string {
+  const fromEnv = process.env.KEIKO_PERF_SOURCE_TREE_SHA256;
+  if (fromEnv !== undefined) {
+    if (!SHA_256.test(fromEnv)) {
+      throw new Error("KEIKO_PERF_SOURCE_TREE_SHA256 must be a lowercase SHA-256 digest");
+    }
+    return fromEnv;
+  }
+  const digest = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, "scripts", "check-perf-evidence.mjs"), "--print-source-tree-sha256"],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  ).trim();
+  if (!SHA_256.test(digest)) throw new Error("performance subject digest is invalid");
+  return digest;
+}
+
 // Stamp the commit the evidence was measured at so the freshness gate
 // (scripts/check-perf-evidence.mjs, GEN-PERF-BENCHMARK-001) can prove the committed evidence
 // belongs to this history. CI provides GITHUB_SHA; locally we fall back to `git rev-parse HEAD`.
@@ -11,7 +31,10 @@ function resolveCommit(): string {
   const fromEnv = process.env.GITHUB_SHA ?? process.env.KEIKO_PERF_COMMIT;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -386,6 +409,8 @@ function writeMergedEvidence(projectEvidence: ProjectEvidence): Record<string, u
   const evidence = {
     measuredAtIso: new Date().toISOString(),
     commit: resolveCommit(),
+    freshnessBinding: "source-tree-v1",
+    sourceTreeSha256: resolveSourceTreeSha256(),
     harness:
       "packaged CLI serving the production static UI via tests/e2e/config/playwright.workspace-performance.config.ts",
     runs: {

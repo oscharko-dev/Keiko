@@ -29,6 +29,26 @@ describe("Sonar scanner warning gate", () => {
     ]);
   });
 
+  it("exempts only the benign SCM 'changed but without having changed lines' metadata warning", () => {
+    const benign =
+      "12:00:00.000 WARN  File '/w/packages/keiko-server/src/task-workspace/naming.ts' " +
+      "was detected as changed but without having changed lines";
+    expect(sonarLogFailures(`INFO Analysis successful\n${benign}\n`)).toEqual([]);
+  });
+
+  it("still fails on other warnings emitted alongside the exempt SCM metadata warning", () => {
+    const benign =
+      "12:00:00.000 WARN  File '/w/a.ts' was detected as changed but without having changed lines";
+    const real = "12:00:01.000 WARN Invalid character in source";
+    expect(sonarLogFailures(`${benign}\n${real}\n`)).toEqual([
+      "scanner warning: 12:00:01.000 WARN Invalid character in source",
+    ]);
+  });
+
+  it("does not let the SCM exemption swallow a real SCM revision warning", () => {
+    expect(sonarLogFailures("WARN SCM revision is missing\n")).not.toEqual([]);
+  });
+
   it("rejects dangerous analyzer states even when the scanner logs them as INFO", () => {
     expect(
       sonarLogFailures(
