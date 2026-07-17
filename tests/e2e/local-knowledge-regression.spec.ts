@@ -101,6 +101,44 @@ function copyIfExists(from: string, to: string): boolean {
   return true;
 }
 
+// #2485: the campaign's required small PDF was previously copied from an absolute owner-machine
+// path, so on CI the copy silently skipped and the corpus assertion failed on every nightly.
+// Generate it deterministically instead (same in-repo approach as writeSmallXlsx and the parser
+// PDF fixtures): page 1 carries a real extractable text layer (text windows + chunks), page 2 has
+// no text layer at all, so extraction raises OCR_CAPABILITY_UNAVAILABLE and the document
+// deterministically lands in the partial-coverage + multimodal-warning state the campaign asserts.
+// The body stays above the 1024-byte KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES policy so the bounded
+// large-document path engages. Pure ASCII, so string offsets are byte-exact xref offsets.
+function writeSmallTextLayerPdf(path: string): void {
+  if (existsSync(path)) return;
+  const textLines = Array.from(
+    { length: 18 },
+    (_, index) =>
+      `(Keiko Local Knowledge persistent regression fixture, text line ${String(index + 1).padStart(2, "0")}.) Tj 0 -14 Td`,
+  );
+  const pageOneStream = `BT /F1 12 Tf 54 700 Td\n${textLines.join("\n")}\nET`;
+  const objects: readonly string[] = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${String(pageOneStream.length)} >> stream\n${pageOneStream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R >>",
+    "<< /Length 0 >> stream\n\nendstream",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((object, index) => {
+    offsets.push(body.length);
+    body += `${String(index + 1)} 0 obj ${object} endobj\n`;
+  });
+  const xrefOffset = body.length;
+  const entries = offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n `);
+  body += `xref\n0 ${String(objects.length + 1)}\n0000000000 65535 f \n${entries.join("\n")}\n`;
+  body += `trailer << /Root 1 0 R /Size ${String(objects.length + 1)} >>\nstartxref\n${String(xrefOffset)}\n%%EOF\n`;
+  writeFileSync(path, body, "latin1");
+}
+
 function writeSmallXlsx(path: string): void {
   if (existsSync(path)) return;
   const script = `
@@ -216,10 +254,7 @@ function ensureCorpus(): CorpusPaths {
     join(paths.officeFiles, "neuroai.docx"),
   );
   writeSmallXlsx(join(paths.officeFiles, "ledger.xlsx"));
-  copyIfExists(
-    "/Users/oscharko-dev/Keiko-Test-Data/AI-Foundry/test-data/Ratgeber_Krankenversicherung.pdf",
-    join(paths.pdfSmall, "small-text-layer.pdf"),
-  );
+  writeSmallTextLayerPdf(join(paths.pdfSmall, "small-text-layer.pdf"));
   copyIfExists(
     "/Users/oscharko-dev/Keiko-Test-Data/AI-Foundry/img/Was ist Foundry Agent Service.png",
     join(paths.mixedFolder, "foundry-agent-service.png"),
@@ -485,6 +520,12 @@ async function expectIndexed(
   return current;
 }
 
+// #2485: the large-documents section moved inside the collapsed "Status, sources, and
+// diagnostics" disclosure on the pod detail page — open it before asserting the region.
+async function openAdvancedDiagnostics(page: Page): Promise<void> {
+  await page.getByText("Status, sources, and diagnostics").click();
+}
+
 async function assertSmallPdfLargeDocumentEvidence(
   request: APIRequestContext,
   page: Page,
@@ -511,6 +552,7 @@ async function assertSmallPdfLargeDocumentEvidence(
   expect(countRows("document_text_windows", smallPdfId)).toBeGreaterThan(0);
   expect(countRows("extraction_checkpoints", smallPdfId)).toBeGreaterThan(0);
   await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
+  await openAdvancedDiagnostics(page);
   const largeDocuments = page.getByRole("region", { name: "Large documents" });
   await expect(largeDocuments.getByRole("heading", { name: "Large documents" })).toBeVisible();
   await expect(largeDocuments.getByRole("status")).toHaveText("Idle");
@@ -545,6 +587,7 @@ async function assertLargeDocumentResumeControl(
   expect(interruptedProgress?.resumable).toBe(true);
   expect(interruptedDetail.largeDocumentHealth?.resumableDocuments.length ?? 0).toBeGreaterThan(0);
   await page.goto(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(smallPdfId)}`);
+  await openAdvancedDiagnostics(page);
   await expect(largeDocuments.getByText("Cancelled")).toBeVisible();
   await expect(largeDocuments.getByText(/resumable/u)).toBeVisible();
   await expect(
@@ -599,7 +642,14 @@ async function uiRenameCapsule(page: Page, fromName: string, toName: string): Pr
   await expect(page.getByRole("article", { name: `Knowledge Pod: ${toName}` })).toBeVisible();
 }
 
-// Epic #1941 (ADR-0118) — Browse opens the NATIVE OS dialog through the BFF. Real OS dialogs are
+// #2485: the limit summary, refresh/repair/rebuild, and delete controls live inside the collapsed
+// "Maintenance and deletion" disclosure on the pod detail page — open it before using them.
+async function openMaintenanceSection(page: Page): Promise<void> {
+  await page.getByText("Maintenance and deletion").click();
+}
+
+// Epic #1941 (ADR-0118) — the picker buttons open the NATIVE OS dialog through the BFF. Real OS
+// dialogs are
 // never allowed in deterministic CI, so both native-dialog endpoints are stubbed at the browser
 // network layer: the capability answers "supported" (CI runs on Linux where the real BFF answers
 // false), and the open route first reports a user cancellation, then a validated two-file pick.
@@ -629,24 +679,26 @@ async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> 
   });
 
   await page.getByRole("button", { name: `Open details for Knowledge Pod ${capsuleName}` }).click();
-  await expect(page.getByText("Maximum single file size: 1.0 GB")).toBeVisible();
-  await page.getByRole("combobox", { name: "Connect source" }).click();
-  await page.getByRole("option", { name: /^Files\b/u }).click();
+  // #2485: ca64b217 (#2155) reformatted the limit copy from "1.0 GB" to "1 GB"; the summary sits
+  // in the maintenance disclosure.
+  await openMaintenanceSection(page);
+  await expect(page.getByText(/Maximum single file size: 1 GB/u)).toBeVisible();
+  // #2485: Epic #1941/#2097 replaced the source combobox + Browse flow with the native-dialog
+  // picker buttons ("Select folder" / "Select documents") feeding the shared "Source path" +
+  // specific-documents scope. The stubbed endpoints above still prove the same UI contract.
+  const selectDocuments = page.getByRole("button", { name: "Select documents" });
+  await expect(selectDocuments).toBeEnabled();
+  // First pick: the user cancels the native dialog — a non-event that changes no field.
+  await selectDocuments.click();
+  await expect(page.getByLabel("Source path")).toHaveValue("");
 
-  const browse = page.getByRole("button", { name: "Browse" });
-  await expect(browse).toBeEnabled();
-  // First Browse: the user cancels the native dialog — a non-event that changes no field.
-  await browse.click();
-  await expect(page.getByLabel("Absolute root path for the selected files")).toHaveValue("");
-
-  // Second Browse: the native dialog returns two validated files under one folder.
-  await browse.click();
-  await expect(page.getByLabel("Absolute root path for the selected files")).toHaveValue(
-    smallFilesRoot,
-  );
-  await expect(page.getByLabel("Relative files to connect")).toHaveValue(/readme\.md/u);
-  await expect(page.getByLabel("Relative files to connect")).toHaveValue(/notes\.txt/u);
-  await expect(page.getByRole("combobox", { name: "Connect source" })).toContainText("Files");
+  // Second pick: the native dialog returns two validated files under one folder, folded into the
+  // shared root plus relative files (specific-documents scope expands to show them).
+  await selectDocuments.click();
+  await expect(page.getByLabel("Source path")).toHaveValue(smallFilesRoot);
+  const relativeDocuments = page.getByLabel("Relative document paths");
+  await expect(relativeDocuments).toHaveValue(/readme\.md/u);
+  await expect(relativeDocuments).toHaveValue(/notes\.txt/u);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("button", { name: "Index this Knowledge Pod now" })).toBeVisible();
   await page.getByRole("button", { name: "Back to Knowledge Pods" }).click();
@@ -656,6 +708,7 @@ async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> 
 
 async function uiDeleteCapsule(page: Page, displayName: string): Promise<void> {
   await page.getByRole("button", { name: `Open details for Knowledge Pod ${displayName}` }).click();
+  await openMaintenanceSection(page);
   await page.getByRole("button", { name: `Delete Knowledge Pod ${displayName}` }).click();
   await expect(page.getByRole("dialog", { name: "Delete Knowledge Pod" })).toBeVisible();
   await page.getByLabel("Type the pod name to confirm").fill("wrong name");
@@ -918,6 +971,11 @@ test.describe.serial("Local Knowledge full regression campaign", () => {
   test("runs the persistent Local Knowledge regression plan", async ({ page, request }) => {
     test.setTimeout(Math.max(90 * 60_000, PASS_COUNT * 25 * 60_000));
     const assertNoPageErrors = collectPageErrors(page);
+    // #2485: the webServer readiness URL answers before every BFF route has settled; poll the
+    // health route with a bounded budget instead of asserting the very first response.
+    await expect
+      .poll(async () => (await request.get("/api/health")).status(), { timeout: 30_000 })
+      .toBe(200);
     const health = await request.get("/api/health");
     expect(health.ok()).toBe(true);
     await expect(health.json()).resolves.toMatchObject({ status: "ok" });

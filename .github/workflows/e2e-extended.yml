@@ -18,6 +18,12 @@ jobs:
   extended-e2e:
     name: extended e2e (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    env:
+      # #2485: the Local Knowledge campaign's large-PDF passes bind a curated multi-hundred-page
+      # document that only exists on the maintainer corpus machine; the hermetic generated corpus
+      # covers the bounded large-document path via the 1024-byte threshold policy instead. Only
+      # the local-knowledge suite reads this variable.
+      KEIKO_LK_INCLUDE_LARGE_PDF: "0"
     strategy:
       fail-fast: false
       matrix:

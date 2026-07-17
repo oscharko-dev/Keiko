@@ -13,14 +13,15 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 // Issue #1575 (Epic #1571) — browser evidence that the Git "Changes" view correctly renders all six
-// file states against a REAL local git fixture. The spec proves:
-//   • Changed-file list (nav[aria-label="Changed files"]) shows one row per change, with the correct
-//     badge (Conflict | Untracked | Partially staged | Staged) and checkbox aria-labels.
-//   • Header reads "{N} changed · {M} staged" and "Stage all" / "Unstage all" are present.
+// file states against a REAL local git fixture. The spec proves (#2485 realigned the assertions
+// with the shipped UI copy and the structured diff contract):
+//   • Changed-file list (nav[aria-label="Changed files"]) shows one row per change; each row
+//     button's accessible name carries "path, status" (status word also present sr-only), and the
+//     stage/unstage checkboxes carry their aria-labels.
+//   • Summary strip reads "{M} of {N} files staged" and "Stage all" / "Unstage all" are present.
 //   • Clicking a path button loads the diff; the diff pane shows role=group[aria-label="Diff scope"]
 //     with "Worktree" and "Staged" buttons.
 //   • Diff pane empty state ("No diff content") when the selected change has no text diff.
-//   • Binary file message ("Binary file — no text diff to display.") when the diff is binary.
 //   • section[aria-label="Commit"] with "Summary" input, "Description" textarea, and "Commit" button.
 //   • [data-testid="git-commit-preview"] appears after the debounced policy preview fires.
 //
@@ -212,15 +213,33 @@ const STATUS_FIXTURE = {
   maxChanges: 500,
 } as const;
 
-// Minimal text diff for app.ts (modified file) — enough to render a diff hunk in the pane.
-const APP_TS_DIFF =
-  "diff --git a/src/app.ts b/src/app.ts\n" +
-  "index abcdef1..1234567 100644\n" +
-  "--- a/src/app.ts\n" +
-  "+++ b/src/app.ts\n" +
-  "@@ -1 +1 @@\n" +
-  "-export const version = 1;\n" +
-  "+export const version = 2;\n";
+// #2485: the shipped diff pane requests /api/git/diff/structured and validates the response
+// against the keiko-contracts GitEditorDiffResponse shape (unknown fields fail closed), so the
+// fixture speaks exactly that contract: one modified-file hunk for src/app.ts carrying the
+// "+export const version = 2;" line.
+const APP_TS_STRUCTURED_FILE = {
+  path: "src/app.ts",
+  layer: "worktree",
+  status: "modified",
+  binary: false,
+  addedLines: 1,
+  removedLines: 1,
+  truncated: false,
+  hunks: [
+    {
+      header: "@@ -1,1 +1,1 @@",
+      oldStart: 1,
+      oldCount: 1,
+      newStart: 1,
+      newCount: 1,
+      truncated: false,
+      lines: [
+        { kind: "del", oldLine: 1, newLine: null, text: "export const version = 1;" },
+        { kind: "add", oldLine: null, newLine: 1, text: "export const version = 2;" },
+      ],
+    },
+  ],
+} as const;
 
 // Deterministic stage/unstage governed responses (success outcome — content-free).
 const STAGE_SUCCESS_BODY = {
@@ -341,23 +360,25 @@ async function interceptRemotesRoute(page: Page): Promise<void> {
 }
 
 async function interceptDiffRoute(page: Page): Promise<void> {
-  await page.route("**/api/git/diff**", async (route) => {
+  await page.route("**/api/git/diff/structured**", async (route) => {
     const url = new URL(route.request().url());
-    const rootParam = url.searchParams.get("root") ?? "";
     const pathParam = url.searchParams.get("path") ?? "";
-    const scope = url.searchParams.get("scope") ?? "worktree";
+    const scope = url.searchParams.get("scope") === "staged" ? "staged" : "unstaged";
+    // src/app.ts answers with the modified-file hunk on the unstaged scope; every other path (and
+    // the staged scope) answers with zero files, which the pane renders as the
+    // "No diff content for this change." empty state.
+    const files =
+      pathParam === "src/app.ts" && scope === "unstaged" ? [APP_TS_STRUCTURED_FILE] : [];
     await route.fulfill(
       jsonBody({
         schemaVersion: "1",
-        root: rootParam,
-        repositoryRoot: rootParam,
-        state: "available",
-        available: true,
-        path: pathParam,
         scope,
-        diff: pathParam === "src/app.ts" ? APP_TS_DIFF : "",
+        files,
         truncated: false,
-        maxBytes: 131072,
+        totalFiles: files.length,
+        totalBytes: 128,
+        maxBytes: 512 * 1024,
+        maxFiles: 400,
       }),
     );
   });
@@ -475,7 +496,7 @@ const MANIFEST_ROUTES = [
   "/api/git/summary",
   "/api/git/history",
   "/api/git/remotes",
-  "/api/git/diff",
+  "/api/git/diff/structured",
   "/api/projects",
   "/api/git-delivery/staging/stage",
   "/api/git-delivery/staging/unstage",
@@ -534,8 +555,9 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
   await expect(nav).toBeVisible();
   await expect(nav.locator("li")).toHaveCount(6);
 
-  // Header counter (6 changes, 3 staged) and the stage-all / unstage-all actions.
-  await expect(gitWindow.getByText(/6 changed · 3 staged/u)).toBeVisible();
+  // Header counter and the stage-all / unstage-all actions. #2485: the summary strip reads
+  // "N of M files staged" (ChangesPane), not the pre-ship "6 changed · 3 staged" draft copy.
+  await expect(gitWindow.getByText("3 of 6 files staged")).toBeVisible();
   await expect(gitWindow.getByRole("button", { name: "Stage all", exact: true })).toBeVisible();
   await expect(gitWindow.getByRole("button", { name: "Unstage all", exact: true })).toBeVisible();
 
@@ -552,11 +574,12 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
   ).toBeVisible();
 
   // Word indicators (never colour alone) for the staged / untracked / conflicted states.
-  // Exact, case-sensitive match targets the visible badge text only — the rows also carry a
-  // lowercase screen-reader status label (e.g. "untracked") that a loose match would collide with.
-  await expect(nav.getByText("Staged", { exact: true }).first()).toBeVisible();
-  await expect(nav.getByText("Untracked", { exact: true })).toBeVisible();
-  await expect(nav.getByText("Conflict", { exact: true })).toBeVisible();
+  // #2485: the shipped rows carry the status word in the row button's accessible name
+  // ("path, status") plus an sr-only word next to the visible glyph — assert the accessible
+  // name instead of the pre-ship visible badge copy.
+  await expect(nav.getByRole("button", { name: "src/new-feature.ts, staged added" })).toBeVisible();
+  await expect(nav.getByRole("button", { name: "notes.txt, untracked" })).toBeVisible();
+  await expect(nav.getByRole("button", { name: "src/shared.ts, conflicted" })).toBeVisible();
   return nav;
 }
 
@@ -570,15 +593,26 @@ async function assertDiffAndCommitComposer(
   await expect(gitWindow.getByRole("group", { name: "Diff scope" })).toHaveCount(0);
 
   // Select the MODIFIED file → scope toggle + a rendered hunk ("+export const version = 2;").
-  await nav.getByRole("button").filter({ hasText: "src/app.ts" }).click();
+  // #2485: the row's visible text is "status name dir" — the full path lives in the accessible
+  // name ("path, status"), so target that instead of a hasText innerText filter.
+  await nav.getByRole("button", { name: "src/app.ts, modified" }).click();
   const scopeGroup = gitWindow.getByRole("group", { name: "Diff scope" });
   await expect(scopeGroup).toBeVisible();
   await expect(scopeGroup.getByRole("button", { name: "Worktree", exact: true })).toBeVisible();
   await expect(scopeGroup.getByRole("button", { name: "Staged", exact: true })).toBeVisible();
   await expect(gitWindow.getByText(/version = 2/u)).toBeVisible();
 
+  // #2485: selecting a change row now also REVEALS the file in an editor window at its first
+  // changed line (revealRequestId -> onRevealFile -> onOpenEditorFile). Assert the shipped
+  // behavior, then close the revealed window: it stacks above the maximized Git window and would
+  // otherwise intercept the next file-list click.
+  const revealedEditor = page.locator('[data-window-id^="editor-"]');
+  await expect(revealedEditor).toBeVisible();
+  await revealedEditor.getByRole("button", { name: /^Close .+ window$/u }).click();
+  await expect(revealedEditor).toHaveCount(0);
+
   // Select the RENAMED file (no text diff) → the no-diff empty state.
-  await nav.getByRole("button").filter({ hasText: "docs/OVERVIEW.md" }).click();
+  await nav.getByRole("button", { name: "docs/OVERVIEW.md, staged renamed" }).click();
   await expect(gitWindow.getByText("No diff content for this change.")).toBeVisible();
 
   // Commit composer: labelled Summary + Description, a Commit button, and a debounced policy preview.
@@ -696,7 +730,7 @@ test("Issue #1575 — Switching diff scope from Worktree to Staged changes aria-
 
   // Select the modified file so the diff pane activates.
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
-  await nav.getByRole("button").filter({ hasText: "src/app.ts" }).click();
+  await nav.getByRole("button", { name: "src/app.ts, modified" }).click();
 
   const scopeGroup = gitWindow.getByRole("group", { name: "Diff scope" });
   const worktreeBtn = scopeGroup.getByRole("button", { name: "Worktree", exact: true });

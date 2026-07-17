@@ -223,7 +223,9 @@ async function placeCursorOnSymbol(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  // #2485: the first paint of a virtualized Monaco view-line can exceed the 20 s expect default
+  // under CI software rendering; give the initial reveal a bounded larger budget.
+  await expect(line).toBeVisible({ timeout: 60_000 });
   const text = await lineText(line);
   const offset = occurrenceOffset(text, symbol, occurrence);
   await line.click({
@@ -255,7 +257,9 @@ async function placeCursorOnSymbolWithKeyboard(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  // #2485: the first paint of a virtualized Monaco view-line can exceed the 20 s expect default
+  // under CI software rendering; give the initial reveal a bounded larger budget.
+  await expect(line).toBeVisible({ timeout: 60_000 });
   const offset = occurrenceOffset(await lineText(line), symbol, 0) + Math.floor(symbol.length / 2);
   await moveCursorFromLineStart(page, line, offset);
   const expectedLabel =
@@ -279,7 +283,9 @@ async function placeCursorAfterSymbolWithKeyboard(
     .locator(".monaco-editor .view-lines .view-line")
     .filter({ hasText: lineNeedle })
     .first();
-  await expect(line).toBeVisible();
+  // #2485: the first paint of a virtualized Monaco view-line can exceed the 20 s expect default
+  // under CI software rendering; give the initial reveal a bounded larger budget.
+  await expect(line).toBeVisible({ timeout: 60_000 });
   const offset = occurrenceOffset(await lineText(line), symbol, 0) + symbol.length;
   await moveCursorFromLineStart(page, line, offset);
   await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(

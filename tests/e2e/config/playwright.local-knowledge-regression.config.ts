@@ -17,6 +17,24 @@ const corpusRoot = process.env.KEIKO_LK_E2E_CORPUS;
 const corpusDataRoot = join(corpusRoot, "fixtures");
 const stateDir = process.env.KEIKO_LK_E2E_STATE_DIR ?? join(corpusRoot, "state");
 
+// #2485: hand the server a COPY of the checked-in fixture config, mirroring the generic e2e
+// config. The BFF's credential migration rewrites the config file it is given (apiKey →
+// apiKeySecretRef + vault sibling directory); pointed at the repository file it mutates the
+// working tree on every boot.
+const fixtureConfigPath = join(
+  root,
+  "tests",
+  "e2e",
+  "fixtures",
+  "keiko.local-knowledge.e2e.config.json",
+);
+const runtimeConfigPath = join(stateDir, "keiko.local-knowledge.e2e.config.json");
+const prepareRuntimeConfig = [
+  "const fs = require('node:fs');",
+  `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
+  `fs.copyFileSync(${JSON.stringify(fixtureConfigPath)}, ${JSON.stringify(runtimeConfigPath)});`,
+].join(" ");
+
 export default defineConfig({
   testDir: join(root, "tests", "e2e"),
   testMatch: /local-knowledge-regression\.spec\.ts/u,
@@ -40,7 +58,9 @@ export default defineConfig({
   ],
   webServer: {
     cwd: root,
-    command: "npm run build:packages && node tests/e2e/fixtures/local-knowledge-e2e-server.js",
+    command:
+      `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
+      "npm run build:packages && node tests/e2e/fixtures/local-knowledge-e2e-server.js",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
     timeout: 180_000,
@@ -49,18 +69,18 @@ export default defineConfig({
       KEIKO_DEV_BFF_PORT: String(bffPort),
       KEIKO_DEV_NEXT_PORT: String(nextPort),
       KEIKO_DEV_MAX_RESTARTS: "0",
+      // #2485: same hermetic-boot flags as the generic e2e config — the dev runner's package
+      // watch can rewrite packages/*/dist while the BFF serves, producing transient API 502s
+      // (observed as a 502 on the first capsule-create POST of the campaign), and a BFF watch
+      // restart leaves the proxy claiming ready while the port is briefly unavailable.
+      KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
+      KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1",
       KEIKO_DEV_NEXT_BUNDLER: "webpack",
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_INITIAL_PROJECT_PATH: corpusDataRoot,
-      KEIKO_CONFIG_FILE: join(
-        root,
-        "tests",
-        "e2e",
-        "fixtures",
-        "keiko.local-knowledge.e2e.config.json",
-      ),
+      KEIKO_CONFIG_FILE: runtimeConfigPath,
       KEIKO_LK_E2E_MOCK_GATEWAY_PORT: "42186",
       // Issue #1286: drive the bounded large-document path for any PDF so the regression exercises
       // progressive extraction + bounded chunk/embed + the large-document health UI without needing
