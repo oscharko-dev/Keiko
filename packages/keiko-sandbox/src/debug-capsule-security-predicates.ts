@@ -1,6 +1,7 @@
 function isLowercaseHex(character: string): boolean {
   const code = character.codePointAt(0);
-  return code !== undefined && ((code >= 48 && code <= 57) || (code >= 97 && code <= 102));
+  if (code === undefined) return false;
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
 }
 
 export function isSha256Digest(value: string): boolean {

@@ -74,8 +74,8 @@ const REQUIRED_CI_COMMANDS = [
   "npm run test:e2e:smoke",
   "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
-  "npm run test:e2e:editor-perf",
   "npm run test:e2e:workspace-perf",
+  "npm run check:perf-evidence:editor",
   "npm run check:perf-evidence",
   // Grounding/retrieval release gates (Step 05, RB-4/RB-5).
   "npm run check:retrieval-quality",
@@ -125,15 +125,27 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
-  it("uses the documented stable sample count for CI editor performance evidence", () => {
+  it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
     const performanceStep = ci.slice(
-      ci.indexOf("      - name: Release performance E2E evidence"),
-      ci.indexOf("      - name: Performance evidence freshness + budget gate"),
+      ci.indexOf("      - name: Refresh workspace performance evidence"),
+      ci.indexOf("      - name: Build package and UI assets"),
     );
-    expect(performanceStep).toContain('KEIKO_PERF_RUNS: "10"');
+    expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
+    expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
+    expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
+    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
+    // ADR-0139 D7: the immutable editor evidence is validated on pull requests and merge groups;
+    // the workspace refresh and freshness gate stay on push/dispatch (post-merge) only.
+    expect(performanceStep).toContain(
+      "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
+    );
+    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
     expect(performanceStep).toContain("Upload redacted performance evidence");
     expect(performanceStep).toContain("if-no-files-found: warn");
-    expect(performanceStep).toContain("npm run test:e2e:editor-perf");
+    expect(performanceStep).not.toContain("always()");
+    expect(performanceStep.indexOf("npm run check:perf-evidence")).toBeLessThan(
+      performanceStep.indexOf("Upload redacted performance evidence"),
+    );
   });
 
   it("keeps Keiko native warnings strict while treating MSVC SDK headers as external", () => {

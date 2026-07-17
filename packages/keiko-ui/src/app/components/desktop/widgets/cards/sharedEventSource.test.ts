@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetSharedEventSourcesForTests, subscribeSharedEventSource } from "./sharedEventSource";
+import {
+  resetSharedEventSourcesForTests,
+  sharedEventSourceGeneration,
+  subscribeSharedEventSource,
+} from "./sharedEventSource";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -137,6 +141,40 @@ describe("subscribeSharedEventSource", () => {
       "/api/editor/debug/events?workspaceId=workspace-1&lastEventId=2",
     );
     unsubscribe();
+    vi.useRealTimers();
+  });
+
+  it("shares one source generation per dispatch and advances it after reconnect", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const generations: number[] = [];
+    const subscribe = (): (() => void) =>
+      subscribeSharedEventSource(
+        "/api/editor/debug/events?workspaceId=workspace-1",
+        ["editor-debug:output"],
+        (event) => generations.push(sharedEventSourceGeneration(event)),
+      );
+    const unsubscribeFirst = subscribe();
+    const unsubscribeSecond = subscribe();
+    const first = FakeEventSource.instances[0];
+    const firstOutput = first?.listeners.get("editor-debug:output");
+    if (first === undefined || firstOutput === undefined) throw new Error("Expected first stream.");
+    for (const listener of firstOutput) {
+      listener(new MessageEvent("editor-debug:output", { data: "{}", lastEventId: "1" }));
+    }
+    expect(generations).toEqual([1, 1]);
+
+    first.onerror?.();
+    vi.advanceTimersByTime(1_500);
+    const secondOutput = FakeEventSource.instances[1]?.listeners.get("editor-debug:output");
+    if (secondOutput === undefined) throw new Error("Expected reconnected stream.");
+    for (const listener of secondOutput) {
+      listener(new MessageEvent("editor-debug:output", { data: "{}", lastEventId: "2" }));
+    }
+    expect(generations).toEqual([1, 1, 2, 2]);
+
+    unsubscribeFirst();
+    unsubscribeSecond();
     vi.useRealTimers();
   });
 });

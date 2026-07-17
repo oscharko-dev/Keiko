@@ -25,11 +25,6 @@ interface LocationCandidate {
   readonly textSpan: ts.TextSpan;
 }
 
-interface ReferenceCandidate {
-  readonly candidate: LocationCandidate;
-  readonly isDeclaration: boolean;
-}
-
 interface HierarchyBudget {
   itemCount: number;
   callSiteCount: number;
@@ -60,10 +55,13 @@ function locationFromCandidate(
   project: TypescriptProjectHandle,
   candidate: LocationCandidate,
 ): LanguageLocation | null {
+  project.cancellation.throwIfCancellationRequested();
   const path = project.workspaceRelativePath(candidate.fileName);
   if (path === undefined) return null;
+  project.cancellation.throwIfCancellationRequested();
   const text = project.sourceText(candidate.fileName);
   if (text === undefined) return null;
+  project.cancellation.throwIfCancellationRequested();
   return {
     path,
     range: spanToRange(
@@ -103,7 +101,7 @@ export function resolveTypescriptDefinition(
     offsetFor(project, position),
   );
   if (results === undefined || results.length === 0) {
-    return { locations: [], truncated: false };
+    return { locations: [], truncated: project.truncated };
   }
   return containedLocations(project, results, project.limits.maxDefinitionLocations);
 }
@@ -255,33 +253,62 @@ export function resolveTypescriptReferences(
     offsetFor(project, position),
   );
   if (referencedSymbols === undefined || referencedSymbols.length === 0) {
-    return { locations: [], includesDeclaration: false, truncated: false };
+    return { locations: [], includesDeclaration: false, truncated: project.truncated };
   }
-  const items: readonly ReferenceCandidate[] = referencedSymbols.flatMap(
-    (symbol): readonly ReferenceCandidate[] => [
-      { candidate: symbol.definition, isDeclaration: true },
-      ...symbol.references.map((reference): ReferenceCandidate => ({
-        candidate: reference,
-        isDeclaration: false,
-      })),
-    ],
-  );
+  project.cancellation.throwIfCancellationRequested();
+  const totalCandidateCount = referenceCandidateCount(project, referencedSymbols);
+  const materialized = materializeReferenceCandidates(project, referencedSymbols);
+  return {
+    locations: materialized.locations,
+    includesDeclaration: materialized.includesDeclaration,
+    truncated: project.truncated || materialized.visitedCandidateCount < totalCandidateCount,
+  };
+}
+
+function referenceCandidateCount(
+  project: TypescriptProjectHandle,
+  symbols: readonly ts.ReferencedSymbol[],
+): number {
+  let count = 0;
+  for (const symbol of symbols) {
+    project.cancellation.throwIfCancellationRequested();
+    count += 1 + symbol.references.length;
+  }
+  return count;
+}
+
+interface MaterializedReferences {
+  readonly locations: readonly LanguageLocation[];
+  readonly includesDeclaration: boolean;
+  readonly visitedCandidateCount: number;
+}
+
+function materializeReferenceCandidates(
+  project: TypescriptProjectHandle,
+  symbols: readonly ts.ReferencedSymbol[],
+): MaterializedReferences {
   const locations: LanguageLocation[] = [];
   let includesDeclaration = false;
-  let capped = false;
-  for (const item of items) {
-    if (locations.length >= project.limits.maxReferenceLocations) {
-      capped = true;
-      break;
+  let visitedCandidateCount = 0;
+  const limit = project.limits.maxReferenceLocations;
+  for (const symbol of symbols) {
+    project.cancellation.throwIfCancellationRequested();
+    if (locations.length >= limit) break;
+    visitedCandidateCount += 1;
+    const definition = locationFromCandidate(project, symbol.definition);
+    if (definition !== null) {
+      locations.push(definition);
+      includesDeclaration = true;
     }
-    const location = locationFromCandidate(project, item.candidate);
-    if (location === null) continue;
-    locations.push(location);
-    // Only report the declaration as included if the declaration location actually survived
-    // workspace-containment filtering and the result cap into the returned set (Issue #2101):
-    // a reference query whose declaration lives outside the workspace (e.g. a lib .d.ts) must not
-    // claim `includesDeclaration: true`.
-    if (item.isDeclaration) includesDeclaration = true;
+    for (let index = 0; index < symbol.references.length && locations.length < limit; index += 1) {
+      project.cancellation.throwIfCancellationRequested();
+      visitedCandidateCount += 1;
+      const reference = symbol.references[index];
+      if (reference !== undefined) {
+        const location = locationFromCandidate(project, reference);
+        if (location !== null) locations.push(location);
+      }
+    }
   }
-  return { locations, includesDeclaration, truncated: project.truncated || capped };
+  return { locations, includesDeclaration, visitedCandidateCount };
 }

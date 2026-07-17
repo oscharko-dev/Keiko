@@ -1,10 +1,16 @@
-import { render, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
-import { resetEditorProblemsStoreForTests, setPaneDiagnostics } from "../cards/editorProblemsStore";
+import {
+  resetEditorProblemsStoreForTests,
+  setPaneDiagnostics,
+  setVerificationReport,
+  setVerificationSourceHealth,
+} from "../cards/editorProblemsStore";
 import { ProblemsPanel } from "./ProblemsPanel";
+import { translateProblems } from "./problems-i18n";
 
 function diagnostic(
   severity: EditorDiagnostic["severity"],
@@ -27,6 +33,63 @@ describe("ProblemsPanel", () => {
     render(<ProblemsPanel root="/ws" />);
     expect(screen.getByTestId("problems-empty")).toBeInTheDocument();
     expect(screen.getByText(/currently open files only/i)).toBeInTheDocument();
+  });
+
+  it("does not claim there are no problems while verification updates are reconnecting", () => {
+    render(<ProblemsPanel root="/ws" />);
+    act(() => setVerificationSourceHealth("/ws", "reconnecting"));
+
+    expect(screen.getByTestId("problems-source-health")).toHaveTextContent(/reconnecting/i);
+    expect(screen.queryByTestId("problems-empty")).not.toBeInTheDocument();
+  });
+
+  it("retains stale verification rows with a distinct failed source state", () => {
+    setVerificationReport("/ws", {
+      workspaceRoot: "/ws",
+      results: [
+        {
+          kind: "lint",
+          scriptName: "lint",
+          command: "npm",
+          args: [],
+          status: "failed",
+          exitCode: 1,
+          signal: null,
+          durationMs: 1,
+          truncated: false,
+          redacted: true,
+          outputSummary: "lint failed",
+          appliedLimits: [],
+          locations: [{ file: "src/stale.ts", line: 3, message: "stale lint failure" }],
+        },
+      ],
+      overallStatus: "failed",
+      startedAtMs: 1,
+      durationMs: 2,
+      counts: {
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        denied: 0,
+        "timed-out": 0,
+        cancelled: 0,
+        "resource-exceeded": 0,
+      },
+    });
+    setVerificationSourceHealth("/ws", "failed");
+    render(<ProblemsPanel root="/ws" />);
+
+    expect(screen.getByTestId("problems-source-health")).toHaveTextContent(/freshness/i);
+    expect(screen.getByTestId("problems-row")).toHaveTextContent("stale lint failure");
+  });
+
+  it("localizes both degraded source-health states", () => {
+    expect(translateProblems("de", "problems.sourceHealth.reconnecting")).toMatch(
+      /wiederhergestellt/i,
+    );
+    expect(translateProblems("de", "problems.sourceHealth.failed")).toMatch(
+      /nicht wiederhergestellt/i,
+    );
   });
 
   it("aggregates open-file diagnostics into a sorted list", () => {
@@ -84,6 +147,15 @@ describe("ProblemsPanel", () => {
       target: { value: "verification" },
     });
     expect(screen.getByTestId("problems-no-match")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations with stale rows and a reconnecting source status", async () => {
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [diagnostic("error", 1)]);
+    setVerificationSourceHealth("/ws", "reconnecting");
+    const { container } = render(<ProblemsPanel root="/ws" />);
+
+    expect(screen.getByTestId("problems-source-health")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 

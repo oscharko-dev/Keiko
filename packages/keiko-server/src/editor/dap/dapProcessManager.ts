@@ -199,8 +199,13 @@ async function stopAndPublish(
   reason: DebugSessionStopReason,
 ): Promise<void> {
   const binding = requiredBinding(deps, sessionId);
-  await (status === "revoked" ? deps.registry.revoke(sessionId) : deps.registry.stop(sessionId));
-  publishEvent(deps, binding, { kind: "session-stopped", sessionId, status, reason });
+  await transitionAndPublish(
+    deps,
+    binding,
+    sessionId,
+    status === "revoked" ? "activationRevoked" : "stopped",
+    { kind: "session-stopped", sessionId, status, reason },
+  );
 }
 
 async function failMalformedAndPublish(
@@ -208,8 +213,7 @@ async function failMalformedAndPublish(
   sessionId: string,
 ): Promise<void> {
   const binding = requiredBinding(deps, sessionId);
-  await deps.registry.teardown(sessionId, "malformedFrame");
-  publishEvent(deps, binding, {
+  await transitionAndPublish(deps, binding, sessionId, "malformedFrame", {
     kind: "session-stopped",
     sessionId,
     status: "failed",
@@ -415,10 +419,8 @@ async function handleCapsuleExit(
   attemptId: number,
 ): Promise<void> {
   const binding = deps.registry.sessionBinding(sessionId);
-  const state = deps.registry.session(sessionId)?.state;
-  const expected = state === "stopping" || state === "terminationPending";
-  await deps.registry.capsuleExited(sessionId, attemptId);
-  if (binding !== undefined && !expected) {
+  const owner = await deps.registry.capsuleExited(sessionId, attemptId);
+  if (binding !== undefined && owner) {
     publishEvent(deps, binding, {
       kind: "session-stopped",
       sessionId,
@@ -537,8 +539,7 @@ function createManagedClient(
     sendFrame: endpoint.sendFrame,
     onFatalError: async (error) => {
       if (registry.isAttemptCurrent(sessionId, attemptId)) {
-        await registry.teardown(sessionId, terminalReason(error.code));
-        publishEvent(deps, binding, {
+        await transitionAndPublish(deps, binding, sessionId, terminalReason(error.code), {
           kind: "session-stopped",
           sessionId,
           status: "failed",
@@ -596,6 +597,14 @@ async function handleOutputEvent(
     originalBytes: bytes.length,
     omittedBytes: accepted.omittedBytes,
   });
+  if (accepted.terminalOwner === true) {
+    publishEvent(deps, binding, {
+      kind: "session-stopped",
+      sessionId,
+      status: "stopped",
+      reason: "limit",
+    });
+  }
 }
 
 function outputCategory(value: unknown): DebugOutputCategory {
@@ -635,11 +644,7 @@ async function handleExitedEvent(
   if (typeof exitCode === "number" && Number.isSafeInteger(exitCode)) {
     publishEvent(deps, binding, { kind: "exited", sessionId, exitCode });
   }
-  // Stryker disable next-line ConditionalExpression: terminal DAP handlers run only while their
-  // live protocol binding exists; teardown disposes that protocol before a later frame can dispatch.
-  if (deps.registry.sessionBinding(sessionId) === undefined) return;
-  await deps.registry.teardown(sessionId, "debuggeeExit");
-  publishEvent(deps, binding, {
+  await transitionAndPublish(deps, binding, sessionId, "debuggeeExit", {
     kind: "session-stopped",
     sessionId,
     status: "stopped",
@@ -652,16 +657,25 @@ async function handleTerminatedEvent(
   binding: DebugEventChannel,
   sessionId: string,
 ): Promise<void> {
-  // Stryker disable next-line ConditionalExpression: terminal DAP handlers run only while their
-  // live protocol binding exists; teardown disposes that protocol before a later frame can dispatch.
-  if (deps.registry.sessionBinding(sessionId) === undefined) return;
-  await deps.registry.teardown(sessionId, "debuggeeExit");
-  publishEvent(deps, binding, {
+  await transitionAndPublish(deps, binding, sessionId, "debuggeeExit", {
     kind: "session-stopped",
     sessionId,
     status: "stopped",
     reason: "exited",
   });
+}
+
+async function transitionAndPublish(
+  deps: DapProcessManagerDeps,
+  binding: DebugEventChannel,
+  sessionId: string,
+  lifecycleReason: DebugLifecycleReason,
+  event: DebugEvent,
+): Promise<boolean> {
+  const transition = deps.registry.transitionTerminal(sessionId, lifecycleReason);
+  await transition.completion;
+  if (transition.owner) publishEvent(deps, binding, event);
+  return transition.owner;
 }
 
 function handleStoppedEvent(

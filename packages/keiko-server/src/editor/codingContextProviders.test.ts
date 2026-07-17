@@ -19,6 +19,8 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import {
+  acquireEditorStateContextLease,
+  EDITOR_STATE_CONTEXT_LEASE_TTL_MS,
   runEditorStateProvider,
   runGitContextProvider,
   runLocalKnowledgeProvider,
@@ -77,12 +79,14 @@ function baseDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
 }
 
 function providerCtx(overrides: Partial<ProviderContext> = {}): ProviderContext {
+  const nowMs = overrides.nowMs ?? 1_700_000_000_000;
   return {
     deps: baseDeps(),
     realRoot: "/tmp/does-not-exist",
     signal: new AbortController().signal,
     maxBytesPerExcerpt: 8192,
-    nowMs: 1_700_000_000_000,
+    currentTimeMs: () => nowMs,
+    nowMs,
     ...overrides,
   };
 }
@@ -117,6 +121,10 @@ function editorSnapshot(
     updatedAt: 1_700_000_000_000,
     ...overrides,
   };
+}
+
+function connectEditorBridge(sessionId = "editor-session-1"): () => void {
+  return editorAgentRegistry.connect(sessionId, () => undefined);
 }
 
 interface ParsedEditorState {
@@ -236,6 +244,42 @@ afterEach(() => {
 });
 
 describe("runEditorStateProvider", () => {
+  it("treats a retained snapshot without a live bridge as unavailable", () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot({ updatedAt: Number.MAX_SAFE_INTEGER }));
+    const outcome = runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
+      sessionId: "editor-session-1",
+    });
+
+    expect(outcome).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "editor-state", reason: "unavailable" },
+    });
+    expect(JSON.stringify(outcome)).not.toContain("src/main.ts");
+  });
+
+  it("accepts only a server-owned, non-expired lease after bridge disconnect", () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const disconnect = connectEditorBridge();
+    const lease = acquireEditorStateContextLease("editor-session-1", 100);
+    disconnect();
+    if (lease === undefined) throw new Error("expected editor-state lease");
+
+    const leased = runEditorStateProvider(providerCtx({ realRoot: "/workspace", nowMs: 100 }), {
+      sessionId: "editor-session-1",
+      lease,
+    });
+    const expired = runEditorStateProvider(
+      providerCtx({ realRoot: "/workspace", nowMs: 100 + EDITOR_STATE_CONTEXT_LEASE_TTL_MS }),
+      { sessionId: "editor-session-1", lease },
+    );
+
+    expect(leased.excerpts).toHaveLength(1);
+    expect(expired).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "editor-state", reason: "unavailable" },
+    });
+  });
+
   it("returns one same-root excerpt with active state and every diagnostic severity", () => {
     const hintWithExtraMetadata = {
       ...diagnostic("hint", "Hint detail"),
@@ -255,6 +299,7 @@ describe("runEditorStateProvider", () => {
         },
       }),
     );
+    connectEditorBridge();
     const outcome = runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
       sessionId: "editor-session-1",
     });
@@ -298,6 +343,7 @@ describe("runEditorStateProvider", () => {
 
   it("denies a snapshot from a different workspace without returning text", () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: "/other-workspace" }));
+    connectEditorBridge();
     const outcome = runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
       sessionId: "editor-session-1",
     });
@@ -324,6 +370,7 @@ describe("runEditorStateProvider", () => {
         },
       }),
     );
+    connectEditorBridge();
     const context = providerCtx({
       realRoot: "/workspace",
       deps: baseDeps({ redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }) }),
@@ -347,6 +394,7 @@ describe("runEditorStateProvider", () => {
     editorAgentRegistry.registerSnapshot(
       editorSnapshot({ dirtyFiles, diagnosticsDetail: { items, truncated: true } }),
     );
+    connectEditorBridge();
     const outcome = runEditorStateProvider(
       providerCtx({ realRoot: "/workspace", maxBytesPerExcerpt: 65_536 }),
       { sessionId: "editor-session-1" },
@@ -370,6 +418,7 @@ describe("runEditorStateProvider", () => {
         },
       }),
     );
+    connectEditorBridge();
     const outcome = runEditorStateProvider(
       providerCtx({ realRoot: "/workspace", maxBytesPerExcerpt: 96 }),
       { sessionId: "editor-session-1" },
@@ -382,8 +431,53 @@ describe("runEditorStateProvider", () => {
 });
 
 describe("runGitContextProvider", () => {
+  it("does not read Git context from a retained snapshot without a live bridge", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const reader = vi.fn().mockResolvedValue(gitReadResult());
+    const outcome = await runGitContextProvider(
+      providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
+      { sessionId: "editor-session-1" },
+    );
+
+    expect(reader).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "git-context", reason: "unavailable" },
+    });
+  });
+
+  it("uses the request lease only until its live-clock expiry", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const disconnect = connectEditorBridge();
+    const lease = acquireEditorStateContextLease("editor-session-1", 100);
+    disconnect();
+    if (lease === undefined) throw new Error("expected Git-context lease");
+    const reader = vi.fn().mockResolvedValue(gitReadResult());
+
+    const leased = await runGitContextProvider(
+      providerCtx({ realRoot: "/workspace", gitContextReader: reader, nowMs: 100 }),
+      { sessionId: "editor-session-1", lease },
+    );
+    const expired = await runGitContextProvider(
+      providerCtx({
+        realRoot: "/workspace",
+        gitContextReader: reader,
+        nowMs: 100 + EDITOR_STATE_CONTEXT_LEASE_TTL_MS,
+      }),
+      { sessionId: "editor-session-1", lease },
+    );
+
+    expect(leased.excerpts.length).toBeGreaterThan(0);
+    expect(expired).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "git-context", reason: "unavailable" },
+    });
+    expect(reader).toHaveBeenCalledOnce();
+  });
+
   it("returns bounded conflict, diff, and blame context with first-party-safe citations", async () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot());
+    connectEditorBridge();
     const reader = vi.fn().mockResolvedValue(gitReadResult());
     const outcome = await runGitContextProvider(
       providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
@@ -406,6 +500,7 @@ describe("runGitContextProvider", () => {
 
   it("denies a root mismatch before any Git read", async () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: "/other-workspace" }));
+    connectEditorBridge();
     const reader = vi.fn().mockResolvedValue(gitReadResult());
     const outcome = await runGitContextProvider(
       providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
@@ -421,6 +516,7 @@ describe("runGitContextProvider", () => {
 
   it("reports unavailable without leaking details when the Git reads fail", async () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot());
+    connectEditorBridge();
     const reader = vi.fn().mockResolvedValue(undefined);
     const outcome = await runGitContextProvider(
       providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
@@ -436,6 +532,7 @@ describe("runGitContextProvider", () => {
 
   it("caps files, hunks, blame, and bytes with auditable omission accounting", async () => {
     editorAgentRegistry.registerSnapshot(editorSnapshot());
+    connectEditorBridge();
     const base = gitReadResult();
     const file = base.diffs[0]?.files[0];
     const hunk = file?.hunks[0];
@@ -505,6 +602,7 @@ describe("runGitContextProvider", () => {
     const email = "author@example.invalid";
     const absolutePath = "/workspace/private/main.ts";
     editorAgentRegistry.registerSnapshot(editorSnapshot());
+    connectEditorBridge();
     const base = gitReadResult();
     const diff = base.diffs[0];
     const file = diff?.files[0];

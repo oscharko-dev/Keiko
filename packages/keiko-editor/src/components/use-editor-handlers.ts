@@ -79,6 +79,7 @@ import {
 import { deriveLargeFileMode } from "./large-file-mode.js";
 import {
   attachRetainedEditorModel,
+  EditorModelOwnershipError,
   updateRetainedEditorModelProtection,
   type EditorModelProtection,
   type RetainedEditorModelAttachment,
@@ -945,8 +946,7 @@ function modelProtectionForProps(props: KeikoCodeEditorProps): EditorModelProtec
 }
 
 function modelRootKey(props: KeikoCodeEditorProps): string {
-  const root = props.fileModel.identity.uri.split("/").slice(0, -1).join("/");
-  return root.length === 0 ? props.fileModel.identity.uri : root;
+  return props.modelRootKey ?? props.fileModel.identity.uri;
 }
 
 function modelViewStateKey(props: KeikoCodeEditorProps): string {
@@ -1005,19 +1005,29 @@ function attachRegistryModel(args: {
   if (namespace === null || uri === undefined || args.editor.setModel === undefined) return null;
   const content = args.props.buffer.content;
   const degraded = deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text });
-  return attachRetainedEditorModel({
-    key: args.props.fileModel.identity.uri,
-    rootKey: modelRootKey(args.props),
-    uri,
-    language: args.props.fileModel.identity.language,
-    text: content.text,
-    sizeBytes: content.sizeBytes,
-    degraded: degraded === "degraded",
-    viewStateKey: modelViewStateKey(args.props),
-    namespace,
-    editor: retainedModelEditor(args.editor),
-    protection: modelProtectionForProps(args.props),
-  });
+  const retainedEditor = retainedModelEditor(args.editor);
+  try {
+    return attachRetainedEditorModel({
+      key: args.props.fileModel.identity.uri,
+      rootKey: modelRootKey(args.props),
+      uri,
+      language: args.props.fileModel.identity.language,
+      text: content.text,
+      sizeBytes: content.sizeBytes,
+      degraded: degraded === "degraded",
+      viewStateKey: modelViewStateKey(args.props),
+      namespace,
+      editor: retainedEditor,
+      protection: modelProtectionForProps(args.props),
+    });
+  } catch (error: unknown) {
+    if (!(error instanceof EditorModelOwnershipError)) throw error;
+    retainedEditor.setModel?.(null);
+    args.props.onRuntimeError?.(
+      "Editor model ownership changed; the previous workspace buffer was not reused.",
+    );
+    return null;
+  }
 }
 
 function attachModelOnMount(args: MountRuntimeArgs, monaco: MountMonaco): void {
@@ -1028,6 +1038,23 @@ function attachModelOnMount(args: MountRuntimeArgs, monaco: MountMonaco): void {
   });
   args.refs.modelAttachmentRef.current = modelAttachment;
   if (modelAttachment === null) applyViewState(args.editor, args.refs.viewStateRef.current);
+}
+
+function syncRegistryModelAttachment(props: KeikoCodeEditorProps, refs: EditorRefs): void {
+  const editor = refs.editorRef.current;
+  const monaco = refs.monacoRef.current;
+  if (editor === null || monaco === null) return;
+  const current = refs.modelAttachmentRef.current;
+  const nextRootKey = modelRootKey(props);
+  if (current?.key === props.fileModel.identity.uri && current.rootKey === nextRootKey) return;
+  current?.detach();
+  refs.modelAttachmentRef.current = attachRegistryModel({ editor, monaco, props });
+}
+
+function useModelAttachmentSync(props: KeikoCodeEditorProps, refs: EditorRefs): void {
+  useEffect(() => {
+    syncRegistryModelAttachment(props, refs);
+  }, [props.fileModel.identity.uri, props.modelRootKey, refs]);
 }
 
 interface MountRuntimeArgs {
@@ -1260,19 +1287,23 @@ function useThemeReapply(props: KeikoCodeEditorProps, refs: EditorRefs): void {
   }, [themeVariant, onRuntimeError, refs.monacoRef, refs.containerRef]);
 }
 
-function useModelProtectionSync(props: KeikoCodeEditorProps): void {
+function useModelProtectionSync(props: KeikoCodeEditorProps, refs: EditorRefs): void {
   useEffect(() => {
+    const attachment = refs.modelAttachmentRef.current;
     updateRetainedEditorModelProtection(
-      props.fileModel.identity.uri,
+      attachment?.key ?? props.fileModel.identity.uri,
       modelProtectionForProps(props),
+      attachment?.rootKey ?? modelRootKey(props),
     );
   }, [
     props.fileModel.dirty,
     props.fileModel.identity.uri,
+    props.modelRootKey,
     props.modelRetentionProtection?.agentReview,
     props.modelRetentionProtection?.hotExitRecovery,
     props.modelRetentionProtection?.pinned,
     props.saveStatus,
+    refs.modelAttachmentRef,
   ]);
 }
 
@@ -1307,10 +1338,11 @@ export function useEditorHandlers(
   }, [refs.debugBridgeRef]);
   useUnmountDisposal(refs);
   useHostEditRequest(props, refs, programmaticChangeRef);
+  useModelAttachmentSync(props, refs);
   useControlledModelValueSync(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
-  useModelProtectionSync(props);
+  useModelProtectionSync(props, refs);
   return {
     onChange,
     onMount,

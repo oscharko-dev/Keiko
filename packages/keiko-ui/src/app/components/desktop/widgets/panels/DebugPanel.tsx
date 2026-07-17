@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  Fragment,
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -20,6 +22,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { resolveDebugLaunchTarget } from "../cards/debugLaunchTarget";
+import type { DebugConsoleEntry } from "../cards/debugSessionStore";
 import { useDebugSession } from "../cards/useDebugSession";
 import {
   debugSessionStatus,
@@ -86,6 +89,21 @@ const OUTPUT_STYLE: CSSProperties = {
   padding: "8px",
   whiteSpace: "pre-wrap",
 };
+
+function DebugConsoleRowComponent(props: { readonly entry: DebugConsoleEntry }): ReactNode {
+  return <span>{`[${props.entry.category}] ${props.entry.text}`}</span>;
+}
+
+const DebugConsoleRow = memo(DebugConsoleRowComponent);
+
+function debugConsoleRows(entries: readonly DebugConsoleEntry[]): ReactNode {
+  return entries.map((entry, index) => (
+    <Fragment key={entry.id}>
+      {index === 0 ? null : "\n"}
+      <DebugConsoleRow entry={entry} />
+    </Fragment>
+  ));
+}
 
 function nextTreeId(key: string, ids: readonly string[], current: string): string {
   const index = Math.max(0, ids.indexOf(current));
@@ -840,7 +858,7 @@ export function DebugPanel({
         <h2 id="debug-console-heading">{t("consoleHeading")}</h2>
         <p>{t("consoleHelp")}</p>
         <pre aria-label={t("debugOutput")} style={OUTPUT_STYLE}>
-          {snapshot.console.entries.map((entry) => `[${entry.category}] ${entry.text}`).join("\n")}
+          {debugConsoleRows(snapshot.console.entries)}
         </pre>
         <ul aria-label={t("watchResults")}>
           {watches.map((watch) => {

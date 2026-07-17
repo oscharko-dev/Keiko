@@ -1,0 +1,6 @@
+.themeTokens {
+  --ed-inlay-fg: var(--fg-dim);
+  --ed-inlay-bg: color-mix(in oklch, var(--fg) 8%, transparent);
+  --ed-inlay-value-fg: var(--info);
+  --ed-inlay-value-bg: color-mix(in oklch, var(--info) 14%, transparent);
+}

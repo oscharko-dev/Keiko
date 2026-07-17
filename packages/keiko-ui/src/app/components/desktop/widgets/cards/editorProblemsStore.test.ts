@@ -4,9 +4,12 @@ import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 import {
   diagnosticToProblem,
   getEditorProblems,
+  getEditorProblemsSourceHealth,
+  getEditorProblemsStoreSnapshot,
   resetEditorProblemsStoreForTests,
   setPaneDiagnostics,
   setVerificationReport,
+  setVerificationSourceHealth,
   subscribeEditorProblems,
   verificationResultToProblems,
 } from "./editorProblemsStore";
@@ -206,4 +209,78 @@ describe("editorProblemsStore aggregation", () => {
     ]);
     expect(problems[0]?.id).toContain(":z-window:");
   });
+
+  it("retains verification rows while source health degrades and recovers", () => {
+    setVerificationReport("/ws", {
+      workspaceRoot: "/ws",
+      results: [result({ locations: [{ file: "src/stale.ts", line: 4, message: "stale" }] })],
+      overallStatus: "failed",
+      startedAtMs: 1,
+      durationMs: 2,
+      counts: {
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        denied: 0,
+        "timed-out": 0,
+        cancelled: 0,
+        "resource-exceeded": 0,
+      },
+    });
+
+    setVerificationSourceHealth("/ws", "reconnecting");
+    expect(getEditorProblemsSourceHealth("/ws")).toBe("reconnecting");
+    expect(getEditorProblems("/ws").map((problem) => problem.file)).toEqual(["src/stale.ts"]);
+
+    setVerificationSourceHealth("/ws", "healthy");
+    expect(getEditorProblemsSourceHealth("/ws")).toBe("healthy");
+    expect(getEditorProblems("/ws").map((problem) => problem.file)).toEqual(["src/stale.ts"]);
+  });
+
+  it("isolates source health and notifications by project root", () => {
+    const listenerA = vi.fn();
+    const listenerB = vi.fn();
+    subscribeEditorProblems("/ws-a", listenerA);
+    subscribeEditorProblems("/ws-b", listenerB);
+
+    setVerificationSourceHealth("/ws-a", "failed");
+
+    expect(getEditorProblemsSourceHealth("/ws-a")).toBe("failed");
+    expect(getEditorProblemsSourceHealth("/ws-b")).toBe("healthy");
+    expect(listenerA).toHaveBeenCalledTimes(1);
+    expect(listenerB).not.toHaveBeenCalled();
+  });
+
+  it("retains empty failed source state after the last listener leaves until recovery", () => {
+    const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+    setVerificationSourceHealth("/ws", "failed");
+    expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+
+    unsubscribe();
+
+    expect(getEditorProblemsSourceHealth("/ws")).toBe("failed");
+    expect(getEditorProblems("/ws")).toEqual([]);
+
+    setVerificationSourceHealth("/ws", "healthy");
+    expect(getEditorProblemsStoreSnapshot("/ws")).toMatchObject({
+      problems: [],
+      verificationSourceHealth: "healthy",
+    });
+  });
+
+  it.each(["reconnecting", "failed"] as const)(
+    "persists %s health before the Problems panel subscribes",
+    (health) => {
+      setVerificationSourceHealth("/ws", health);
+
+      expect(getEditorProblemsStoreSnapshot("/ws")).toEqual({
+        problems: [],
+        verificationSourceHealth: health,
+      });
+      const unsubscribe = subscribeEditorProblems("/ws", vi.fn());
+      expect(getEditorProblemsStoreSnapshot("/ws").verificationSourceHealth).toBe(health);
+      unsubscribe();
+      expect(getEditorProblemsSourceHealth("/ws")).toBe(health);
+    },
+  );
 });

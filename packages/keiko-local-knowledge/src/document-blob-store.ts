@@ -290,7 +290,7 @@ export function __resetVerifiedBlobCacheForTests(clock?: () => number): void {
 }
 
 function verifiedBlobCacheKey(capsuleId: KnowledgeCapsuleId | string, contentHash: string): string {
-  return `${String(capsuleId)} ${contentHash}`;
+  return `${String(capsuleId)}\0${contentHash}`;
 }
 
 function verifiedBlobCacheGet(key: string): Uint8Array | undefined {

@@ -99,16 +99,23 @@ describe("Sonar analysis scope", () => {
     expect(coverageDisposition("tests/gate.test.ts", nativeSources)).toBeUndefined();
   });
 
-  it("rejects replacement characters in analyzable text without reading excluded artifacts", () => {
-    const readText = vi.fn((path) => (path === "src/broken.ts" ? 'const value = "\uFFFD";' : ""));
+  it("rejects invalid source bytes without reading excluded artifacts", () => {
+    const readText = vi.fn((path) => {
+      if (path === "src/broken.ts") return 'const value = "\uFFFD";';
+      if (path === "src/nul.ts") return 'const value = "\0";';
+      return "";
+    });
     expect(
       sourceEncodingFailures({
-        files: ["src/broken.ts", "coverage/report.json"],
+        files: ["src/broken.ts", "src/nul.ts", "coverage/report.json"],
         nativeEntries,
         readText,
       }),
-    ).toEqual(["analyzable text contains a Unicode replacement character: src/broken.ts"]);
-    expect(readText).toHaveBeenCalledTimes(1);
+    ).toEqual([
+      "analyzable text contains a Unicode replacement character: src/broken.ts",
+      "analyzable text contains a NUL byte: src/nul.ts",
+    ]);
+    expect(readText).toHaveBeenCalledTimes(2);
   });
 
   it("uses absolute system Git paths on every platform", () => {

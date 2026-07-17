@@ -4,13 +4,20 @@ import {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
   MANAGED_LSP_EVIDENCE_SCHEMA_VERSION,
   MANAGED_LSP_LANGUAGES,
+  parseManagedLspControlRequest,
+  parseManagedLspRevisionEtag,
   parseManagedLspRuntimeConfiguration,
   matchesManagedLspConfigurationPrecondition,
   type ManagedLspActivationResolution,
   type ManagedLspActivationStatus,
+  type ManagedLspConfigurationSummary,
+  type ManagedLspControlDeniedResult,
+  type ManagedLspControlMutation,
+  type ManagedLspControlResult,
+  type ManagedLspControlSnapshot,
+  type ManagedLspControlSuccessResult,
   type ManagedLspEvidence,
   type ManagedLspEvidenceAction,
-  type ManagedLspEvidenceActorClass,
   type ManagedLspEvidenceOutcome,
   type ManagedLspLanguage,
   type ManagedLspRuntimeConfiguration,
@@ -34,65 +41,16 @@ const MAX_IDEMPOTENCY_KEY_CHARS = 128;
 const MAX_EVIDENCE_RECORDS = 128;
 const MAX_IDEMPOTENCY_RECORDS = 64;
 
-export type ManagedLspControlAction =
-  "activate" | "deactivate" | "configure" | "reset" | "rollback" | "restart";
+export type {
+  ManagedLspConfigurationSummary,
+  ManagedLspControlAction,
+  ManagedLspControlMutation,
+  ManagedLspControlResult,
+  ManagedLspControlSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 
-export interface ManagedLspControlMutation {
-  readonly action: ManagedLspControlAction;
-  readonly actorClass: ManagedLspEvidenceActorClass;
-  readonly expectedRevision: number;
-  readonly idempotencyKey: string;
-  readonly language: ManagedLspLanguage;
-  readonly root: string;
-  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
-}
-
-export interface ManagedLspControlSnapshot {
-  readonly storeState: ManagedLspStoreState;
-  readonly revision: number;
-  readonly etag: string;
-  readonly evidenceCount: number;
-  readonly languages: readonly ManagedLspActivationResolution[];
-  readonly settings: readonly ManagedLspConfigurationSummary[];
-  readonly configurations: readonly ManagedLspRuntimeConfiguration[];
-}
-
-export interface ManagedLspConfigurationSummary {
-  readonly language: ManagedLspLanguage;
-  readonly workspaceActivation: "enabled" | "disabled" | "unset";
-  readonly configured: boolean;
-  readonly restartRequired: boolean;
-  readonly restartFields: readonly ("runtime" | "settings")[];
-  readonly provenance: ManagedLspRuntimeConfiguration["provenance"] | null;
-}
-
-interface ManagedLspSuccessResult {
-  readonly kind: "ok";
-  readonly changed: boolean;
-  readonly revision: number;
-  readonly etag: string;
-  readonly status: ManagedLspActivationStatus;
-}
-
-interface ManagedLspDeniedResult {
-  readonly kind: "denied";
-  readonly changed: false;
-  readonly revision: number;
-  readonly etag: string;
-  readonly status: ManagedLspActivationStatus;
-}
-
-export type ManagedLspControlResult =
-  | ManagedLspSuccessResult
-  | ManagedLspDeniedResult
-  | { readonly kind: "conflict"; readonly code: "STALE_REVISION"; readonly etag: string }
-  | {
-      readonly kind: "idempotencyConflict";
-      readonly code: "IDEMPOTENCY_KEY_REUSED";
-      readonly etag: string;
-    }
-  | { readonly kind: "invalid"; readonly code: "INVALID_REQUEST" }
-  | { readonly kind: "unavailable"; readonly code: "STATE_UNAVAILABLE" };
+type ManagedLspSuccessResult = ManagedLspControlSuccessResult;
+type ManagedLspDeniedResult = ManagedLspControlDeniedResult;
 
 export interface ManagedLspControlService {
   readonly stateDir: string;
@@ -282,14 +240,20 @@ function requestHash(mutation: ManagedLspControlMutation): string {
 }
 
 function validMutation(mutation: ManagedLspControlMutation): boolean {
+  const request = parseManagedLspControlRequest({
+    root: mutation.root,
+    language: mutation.language,
+    action: mutation.action,
+    expectedRevision: mutation.expectedRevision,
+    ...(mutation.configuration === undefined ? {} : { configuration: mutation.configuration }),
+  });
   return (
-    Number.isSafeInteger(mutation.expectedRevision) &&
-    mutation.expectedRevision >= 0 &&
+    request.ok &&
     mutation.idempotencyKey.length > 0 &&
     mutation.idempotencyKey.length <= MAX_IDEMPOTENCY_KEY_CHARS &&
     !mutation.idempotencyKey.includes("\0") &&
-    MANAGED_LSP_LANGUAGES.includes(mutation.language) &&
-    (mutation.action === "configure") === (mutation.configuration !== undefined)
+    (mutation.expectedEtag === undefined ||
+      parseManagedLspRevisionEtag(mutation.expectedEtag, mutation.expectedRevision) !== undefined)
   );
 }
 
@@ -371,7 +335,7 @@ function changedLanguageEntry(
 ): ManagedLspPersistedLanguageEntry | undefined {
   const current = record.languages[mutation.language];
   if (mutation.action === "reset") return undefined;
-  if (mutation.action === "rollback") return rollbackEntry(current);
+  if (mutation.action === "rollback") return rollbackEntry(current, nextRevision, nextEtag);
   if (mutation.action === "restart") return restartedEntry(current, nextRevision, nextEtag);
   return configuredEntry(mutation, current, nextRevision, nextEtag);
 }
@@ -398,9 +362,18 @@ function restartedEntry(
 
 function rollbackEntry(
   current: ManagedLspPersistedLanguageEntry | undefined,
+  nextRevision: number,
+  nextEtag: string,
 ): ManagedLspPersistedLanguageEntry | undefined {
   if (current?.previous === undefined) return current;
-  return { ...current.previous, previous: previousState(current) };
+  const prior = current.previous;
+  if (prior.configuration === undefined) {
+    return { ...prior, previous: previousState(current) };
+  }
+  const configuration = revisionedConfiguration(prior.configuration, nextRevision, nextEtag);
+  return configuration === undefined
+    ? current
+    : { ...prior, configuration, previous: previousState(current) };
 }
 
 function configuredEntry(
@@ -665,11 +638,18 @@ function mutationPrecondition(
   record: ManagedLspWorkspaceRecord,
   mutation: ManagedLspControlMutation,
 ): ManagedLspControlResult | undefined {
+  const currentEtag = etag(mutation.root, record.revision);
+  if (
+    mutation.expectedEtag !== undefined &&
+    mutation.expectedEtag !== etag(mutation.root, mutation.expectedRevision)
+  ) {
+    return { kind: "conflict", code: "STALE_REVISION", etag: currentEtag };
+  }
   const replay = idempotencyResult(record, mutation, mutation.root);
   if (replay !== undefined) return replay;
   return record.revision === mutation.expectedRevision
     ? undefined
-    : { kind: "conflict", code: "STALE_REVISION", etag: etag(mutation.root, record.revision) };
+    : { kind: "conflict", code: "STALE_REVISION", etag: currentEtag };
 }
 
 async function commitAccepted(

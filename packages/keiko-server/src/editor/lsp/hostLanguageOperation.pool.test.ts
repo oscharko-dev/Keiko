@@ -21,6 +21,7 @@ import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import { writeExecutableFixture } from "./testing/executableFixture.js";
 import {
   disposeHostLspPoolEntry,
+  initializeHostLanguageProvider,
   runHostLanguageOperation,
   shutdownHostLspPool,
 } from "./hostLanguageOperation.js";
@@ -81,6 +82,7 @@ function countingSpawn(): {
   spawn: LspSpawnFn;
   spawnCount: () => number;
   receivedMethods: () => readonly string[];
+  controllers: () => readonly ReturnType<typeof createFakeLspProcess>[];
 } {
   let count = 0;
   const controllers: ReturnType<typeof createFakeLspProcess>[] = [];
@@ -95,6 +97,7 @@ function countingSpawn(): {
     spawnCount: (): number => count,
     receivedMethods: (): readonly string[] =>
       controllers.flatMap((controller) => controller.receivedMethods()),
+    controllers: (): readonly ReturnType<typeof createFakeLspProcess>[] => controllers,
   };
 }
 
@@ -142,6 +145,28 @@ function runAtRevision(
 }
 
 describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
+  it("initializes negotiated capabilities without opening a document or executing an operation", async () => {
+    makeExecutable("gopls");
+    const { spawn, spawnCount, receivedMethods } = countingSpawn();
+
+    const health = await initializeHostLanguageProvider("go", {
+      workspace: workspaceAt(workspaceRoot),
+      processEnv: { PATH: binDir },
+      commandRules: [{ executable: "gopls" }],
+      overlayAbsolutePath: workspaceRoot,
+      signal: new AbortController().signal,
+      spawn,
+      activationAuthorized: true,
+      protocolConfiguration: { revision: 7, settings: {} },
+    });
+
+    expect(spawnCount()).toBe(1);
+    expect(health).toMatchObject({ status: "READY", configurationRevision: 7 });
+    expect(health?.negotiatedOperations).toContain("diagnostics");
+    expect(receivedMethods()).not.toContain("textDocument/didOpen");
+    expect(receivedMethods()).not.toContain("textDocument/diagnostic");
+  });
+
   it("spawns the LSP process ONCE across two sequential ops on the same root+language", async () => {
     makeExecutable("gopls");
     const { spawn, spawnCount, receivedMethods } = countingSpawn();
@@ -182,6 +207,25 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     await runAtRevision(workspaceRoot, spawn, 2);
 
     expect(spawnCount()).toBe(2);
+  });
+
+  it("opens the document on the replacement child before an operation after a crash", async () => {
+    makeExecutable("gopls");
+    const { spawn, controllers } = countingSpawn();
+
+    await runAt(workspaceRoot, spawn);
+    controllers()[0]?.crash();
+    const result = await runAt(workspaceRoot, spawn);
+
+    expect(result).toMatchObject({ kind: "diagnostics" });
+    const replacementMethods = controllers()[1]?.receivedMethods() ?? [];
+    expect(replacementMethods.filter((method) => method === "textDocument/didOpen")).toHaveLength(
+      1,
+    );
+    expect(replacementMethods).not.toContain("textDocument/didChange");
+    expect(replacementMethods.indexOf("textDocument/didOpen")).toBeLessThan(
+      replacementMethods.indexOf("textDocument/diagnostic"),
+    );
   });
 
   it("queues a concurrent second op onto the warm process instead of rejecting it busy", async () => {

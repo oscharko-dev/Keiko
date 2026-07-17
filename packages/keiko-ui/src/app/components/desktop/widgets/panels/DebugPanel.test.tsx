@@ -598,6 +598,32 @@ describe("DebugPanel", () => {
     expect(screen.getByRole("tree", { name: "Variablen" })).toBeInTheDocument();
   });
 
+  it("retains existing console row nodes when bounded output is appended", () => {
+    const firstEntry = snapshot.console.entries[0]!;
+    const { rerender } = render(
+      <DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />,
+    );
+    const firstRow = screen.getByText("[stdout] started");
+
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: {
+        ...snapshot,
+        console: {
+          ...snapshot.console,
+          entries: [firstEntry, { id: 2, category: "stderr", text: "continued", truncated: false }],
+          retainedBytes: 16,
+        },
+      },
+      actions,
+    });
+    rerender(<DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />);
+
+    expect(screen.getByText("[stdout] started")).toBe(firstRow);
+    expect(screen.getByLabelText("Debug output").textContent).toBe(
+      "[stdout] started\n[stderr] continued",
+    );
+  });
+
   it("is axe-clean and keeps the bounded console free of arbitrary evaluation input", async () => {
     const { container } = render(
       <DebugPanel root="/repo" workspaceId="canonical-workspace-id" debugEnabled />,

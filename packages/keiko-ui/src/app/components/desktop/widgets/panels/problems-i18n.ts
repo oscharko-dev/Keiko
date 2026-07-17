@@ -21,6 +21,10 @@ const EN_PROBLEMS_MESSAGES = {
   "problems.noMatch": "No problems match the current filter.",
   "problems.truncated": "Showing {shown} of {total}.",
   "problems.openFilesOnly": "Language diagnostics cover currently open files only.",
+  "problems.sourceHealth.reconnecting":
+    "Verification updates are reconnecting. Existing verification results may be stale.",
+  "problems.sourceHealth.failed":
+    "Verification result freshness could not be restored. Existing results may be stale.",
   "problems.jumpTo": "Open {file} at line {line}",
   "problems.noLocation": "No location available",
 } as const;
@@ -45,6 +49,10 @@ const DE_PROBLEMS_MESSAGES = {
   "problems.noMatch": "Keine Probleme entsprechen dem aktuellen Filter.",
   "problems.truncated": "Zeige {shown} von {total}.",
   "problems.openFilesOnly": "Sprachdiagnosen decken nur aktuell geöffnete Dateien ab.",
+  "problems.sourceHealth.reconnecting":
+    "Die Verbindung zu Verifikationsaktualisierungen wird wiederhergestellt. Bestehende Verifikationsergebnisse können veraltet sein.",
+  "problems.sourceHealth.failed":
+    "Die Aktualität der Verifikationsergebnisse konnte nicht wiederhergestellt werden. Bestehende Ergebnisse können veraltet sein.",
   "problems.jumpTo": "{file} in Zeile {line} öffnen",
   "problems.noLocation": "Kein Ort verfügbar",
 } satisfies ProblemsMessageCatalog;

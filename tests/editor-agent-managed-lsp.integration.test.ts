@@ -48,6 +48,7 @@ import { createRunRegistry } from "../packages/keiko-server/src/runs.js";
 import { createUiServer, UI_HOST } from "../packages/keiko-server/src/server.js";
 import { _resetEditorAgentStateForTests } from "../packages/keiko-server/src/editor/agentRoutes.js";
 import { listEditorAgentActionAudit } from "../packages/keiko-server/src/editor/agentActionAudit.js";
+import { editorAgentRegistry } from "../packages/keiko-server/src/editor/agentSessionRegistry.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
@@ -84,6 +85,7 @@ interface Fixture {
 }
 
 const activeFixtures: Fixture[] = [];
+const bridgeDisconnects: (() => void)[] = [];
 
 function executable(directory: string, name: string): void {
   const path = join(directory, name);
@@ -228,9 +230,15 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
       allowDetachedHead: false,
       allowedPrefixes: ["local-"],
     },
-    requestedMode: "supervised-coding",
-    deploymentCeiling: "governed-assist",
-    effectiveMode: resolveEffectiveCodingWorkbenchMode("supervised-coding", "governed-assist"),
+    // ADR-0138's monotonic matrix gates repository-backed reads (now classed as workspace-read
+    // like queryGit) behind approval below Full access, so the provider-mechanics harness runs at
+    // the Full-access ceiling; mode-policy behaviour is covered by the governance unit suites.
+    requestedMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(
+      "autonomous-delivery",
+      "autonomous-delivery",
+    ),
     runtimeSource: "keiko-sidecar",
     actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
     connectorScopes: [],
@@ -260,7 +268,7 @@ function authority(root: string): EditorAgentGovernedAuthorityReference {
   };
   const registered = editorAgentAuthorityRegistry.register(
     envelope,
-    "governed-assist",
+    "autonomous-delivery",
     new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("expected authority registration");
@@ -344,6 +352,9 @@ async function createFixture(
   const deps = {
     config: undefined,
     configPresent: false,
+    // The provider-mechanics envelope registers at the Full-access ceiling (ADR-0138 gates
+    // repository-backed reads below it), so the route ceiling must match the envelope's.
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery" as const,
     evidenceStore: {
       put: (): string => "",
       list: (): readonly string[] => [],
@@ -471,6 +482,7 @@ async function registerSnapshot(fixture: Fixture, root: string): Promise<void> {
     }),
   });
   expect(response.status).toBe(200);
+  bridgeDisconnects.push(editorAgentRegistry.connect(SESSION_ID, () => undefined));
 }
 
 function reviewCall(
@@ -494,6 +506,7 @@ function reviewCall(
 }
 
 afterEach(async () => {
+  for (const disconnect of bridgeDisconnects.splice(0)) disconnect();
   for (const fixture of activeFixtures.splice(0)) {
     await closeServer(fixture.server);
     fixture.deps.store.close();
@@ -620,6 +633,9 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
       id: "python-lsp",
       availability: "available",
     });
+    const advertisedMethods = fixture.spawnedMethods.map((methods) => [...methods]);
+    expect(advertisedMethods).toHaveLength(1);
+    expect(advertisedMethods[0]).toContain("initialize");
     const deactivated = await fixture.deps.managedLspControl?.mutate({
       action: "deactivate",
       actorClass: "localHuman",
@@ -634,7 +650,8 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
       ok: true,
       result: { status: "failed", failure: { code: "PROVIDER_UNAVAILABLE" } },
     });
-    expect(fixture.spawnedMethods).toHaveLength(0);
+    expect(fixture.spawnedMethods.map((methods) => [...methods])).toEqual(advertisedMethods);
+    expect(fixture.spawnedMethods.flat()).not.toContain("textDocument/diagnostic");
     expect(listEditorAgentActionAudit(SESSION_ID).at(-1)).toMatchObject({
       outcome: "failed",
       failureCode: "PROVIDER_UNAVAILABLE",
@@ -693,7 +710,7 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
     expect(fixture.spawnedMethods.flat()).toContain("textDocument/diagnostic");
   });
 
-  it("rechecks managed activation after a workspace switch before provider dispatch", async () => {
+  it("fails authority after a workspace switch before provider dispatch", async () => {
     const fixture = await createFixture();
     await activate(fixture, "python", 0);
     const switchedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-agent-lsp-switched-")));
@@ -704,13 +721,14 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
     const switched = output(await call(fixture, "diagnostics", "main.py", "python", "switched"));
     expect(switched).toMatchObject({
       ok: true,
-      result: { status: "failed", failure: { code: "PROVIDER_UNAVAILABLE" } },
+      result: { status: "conflict", conflict: { code: "POLICY_DENIED" } },
     });
     expect(fixture.spawnedMethods).toHaveLength(0);
     expect(listEditorAgentActionAudit(SESSION_ID).at(-1)).toMatchObject({
-      disposition: "allowed",
-      outcome: "failed",
-      failureCode: "PROVIDER_UNAVAILABLE",
+      disposition: "denied",
+      denyReason: "authority-invalid",
+      outcome: "conflict",
+      conflictCode: "POLICY_DENIED",
     });
   });
 

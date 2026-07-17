@@ -5,15 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ManagedLspShellConfiguration } from "@oscharko-dev/keiko-contracts";
+import type {
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspShellConfiguration,
+} from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";
 import { createRunRegistry } from "../../runs.js";
 import { createUiServer, UI_HOST } from "../../server.js";
-import { createManagedLspActivationStore } from "./managedLspActivationStore.js";
+import {
+  createManagedLspActivationStore,
+  managedLspWorkspaceFingerprint,
+} from "./managedLspActivationStore.js";
 import { createManagedLspControlService } from "./managedLspControl.js";
+import { projectManagedLspLiveLanguages } from "./managedLspRoutes.js";
 
 let server: Server;
 let staticRoot: string;
@@ -163,6 +170,38 @@ function shellConfigureBody(etag: string): Record<string, unknown> {
     action: "configure",
     expectedRevision: 0,
     configuration,
+  };
+}
+
+function healthSnapshot(
+  status: ManagedLspProcessHealthSnapshot["status"],
+  failureCount: number,
+): ManagedLspProcessHealthSnapshot {
+  return {
+    schemaVersion: "1",
+    managerId: "managed-shell",
+    language: "shell",
+    status,
+    restartCount: 0,
+    configurationRevision: 0,
+    negotiatedOperations: ["diagnostics"],
+    lastTransitionTimestampMs: 1,
+    pendingRequestCount: 0,
+    requestCount: 1,
+    successCount: failureCount === 0 ? 1 : 0,
+    timeoutCount: 0,
+    cancellationCount: 0,
+    failureCount,
+    latency: {
+      count: 1,
+      totalMs: 1,
+      maximumMs: 1,
+      lessThanOrEqual10Ms: 1,
+      lessThanOrEqual50Ms: 0,
+      lessThanOrEqual250Ms: 0,
+      lessThanOrEqual1Second: 0,
+      greaterThan1Second: 0,
+    },
   };
 }
 
@@ -335,6 +374,73 @@ describe("managed LSP same-origin control routes", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["forged same-revision", false],
+    ["cross-root", true],
+  ])(
+    "rejects a %s ETag without state, evidence, or process side effects",
+    async (_label, crossRoot) => {
+      const etag = crossRoot
+        ? `"lspcfg-0-${managedLspWorkspaceFingerprint(staticRoot).slice(0, 24)}"`
+        : '"lspcfg-0-aaaaaaaaaaaaaaaa"';
+      const before = (await (await snapshot()).json()) as {
+        readonly revision: number;
+        readonly evidenceCount: number;
+      };
+
+      const response = await mutation(activateBody(), {
+        "If-Match": etag,
+        "Idempotency-Key": `reject-${_label}`,
+      });
+      const after = (await (await snapshot()).json()) as {
+        readonly revision: number;
+        readonly evidenceCount: number;
+      };
+
+      expect(response.status).toBe(412);
+      expect(await response.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
+      expect(after).toMatchObject(before);
+      expect(dispose).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["CRASHED", 1, "unhealthy", "RUNTIME_UNHEALTHY"],
+    ["READY", 1, "degraded", "RUNTIME_DEGRADED"],
+  ] as const)(
+    "preserves %s runtime health ahead of restart-required status",
+    async (runtimeStatus, failureCount, expectedState, expectedReason) => {
+      const control = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const initial = await control.read(workspaceRoot);
+      await control.mutate({
+        action: "configure",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        expectedEtag: initial.etag,
+        idempotencyKey: `configure-health-${runtimeStatus}`,
+        language: "shell",
+        root: workspaceRoot,
+        configuration: shellConfigureBody(initial.etag)
+          .configuration as ManagedLspShellConfiguration,
+      });
+      const raw = await control.read(workspaceRoot);
+      const shell = projectManagedLspLiveLanguages(raw, [
+        healthSnapshot(runtimeStatus, failureCount),
+      ]).find((entry) => entry.ok && entry.language === "shell");
+
+      expect(shell).toMatchObject({ state: expectedState, reasonCode: expectedReason });
+    },
+  );
+
   it("configures Shell through the route and surfaces the negotiated dialect and ShellCheck mode", async () => {
     const initial = await snapshot();
     const etag = initial.headers.get("etag") ?? "";
@@ -375,6 +481,21 @@ describe("managed LSP same-origin control routes", () => {
 
     expect(response.status).toBe(413);
     expect(text).not.toContain("SENTINEL_SECRET");
+    expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("rejects a drifted managed-LSP request envelope before control side effects", async () => {
+    const current = await snapshot();
+    const response = await mutation(
+      { ...activateBody(), transportHint: "browser-owned-drift" },
+      {
+        "If-Match": current.headers.get("etag") ?? "",
+        "Idempotency-Key": "drifted-envelope",
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
     expect(dispose).not.toHaveBeenCalled();
   });
 

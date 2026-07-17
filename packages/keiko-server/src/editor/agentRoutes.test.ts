@@ -46,6 +46,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
 import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
+import * as languageRoutes from "./languageRoutes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
@@ -281,6 +282,29 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
   };
 }
 
+function navigateSymbolAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
+  return action({
+    type: "navigateSymbol",
+    expectedContentHash: undefined,
+    target: { file: "src/a.ts" },
+    navigateSymbol: {
+      operation: "definition",
+      document: { path: "src/a.ts", languageId: "typescript" },
+      position: { line: 1, character: 0 },
+    },
+    ...overrides,
+  });
+}
+
+function searchWorkspaceAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
+  return action({
+    type: "searchWorkspace",
+    expectedContentHash: undefined,
+    searchWorkspace: { mode: "text", query: "workspaceNeedle", maxResults: 1 },
+    ...overrides,
+  });
+}
+
 // Connect a session-scoped SSE bridge so the session is "live" (Issue #1392). Returns the captured
 // frames plus a close() that drops the bridge. Bridge liveness gates action queueing: without a live
 // bridge a queued action is answered NO_ACTIVE_BRIDGE (AC1).
@@ -382,12 +406,19 @@ async function registerSnapshotOnly(
   bridgeDecisionCapability = bridgeDecisionCapabilities.get("session-1");
 }
 
+async function registerLiveSnapshot(
+  overrides: Partial<EditorAgentSessionSnapshot> = {},
+): Promise<void> {
+  const nextSnapshot = { ...snapshot(), ...overrides };
+  await registerSnapshotOnly(nextSnapshot);
+  connectBridge(nextSnapshot.sessionId);
+}
+
 // Register a snapshot AND connect its live bridge, so a following action can be queued. The existing
 // preflight-conflict tests reach their structural conflict before the liveness gate regardless, but
 // the tests that expect a 202 queue need a live bridge present.
 async function registerSnapshot(workspaceRoot?: string, activeFile?: string): Promise<void> {
-  await registerSnapshotOnly(snapshot(workspaceRoot, activeFile));
-  connectBridge("session-1");
+  await registerLiveSnapshot(snapshot(workspaceRoot, activeFile));
 }
 
 function writeWorkspaceFile(root: string, file: string, content: string): void {
@@ -517,13 +548,278 @@ afterEach(() => {
 });
 
 describe("server-resolved navigation and search actions (#2218)", () => {
+  it("rejects a mismatched navigation target before policy or handler invocation", async () => {
+    await registerLiveSnapshot();
+    const store = createInMemoryUiStore();
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const languageHandler = vi.spyOn(languageRoutes, "handleEditorLanguage");
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          navigateSymbolAction({
+            target: { file: "src/claimed.ts" },
+            navigateSymbol: {
+              operation: "definition",
+              document: { path: "src/a.ts", languageId: "typescript" },
+              position: { line: 0, character: 0 },
+            },
+          }),
+        ),
+        deps,
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+      expect(languageHandler).not.toHaveBeenCalled();
+      expect(auditRecords()).toHaveLength(0);
+    } finally {
+      languageHandler.mockRestore();
+      store.close();
+    }
+  });
+
+  it("denies both repository-read actions when authority is missing", async () => {
+    await registerLiveSnapshot();
+    const store = createInMemoryUiStore();
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    try {
+      for (const proposed of [
+        navigateSymbolAction({ authorityRef: undefined }),
+        searchWorkspaceAction({
+          actionId: "missing-search-authority",
+          idempotencyKey: "missing-search-authority-key",
+          authorityRef: undefined,
+        }),
+      ]) {
+        const response = await handleEditorAgentActions(context(proposed), deps);
+        expect(response.status).toBe(403);
+        expect(actionConflictCode(response.body)).toBe("POLICY_DENIED");
+      }
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(auditRecords().map((record) => record.denyReason)).toEqual([
+        "authority-missing",
+        "authority-missing",
+      ]);
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+    }
+  });
+
+  it("denies an expired repository-read authority before invoking the handler", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    await registerLiveSnapshot();
+    const expiring = authorityEnvelope("/repo", "governed-assist", "governed-assist");
+    const registered = editorAgentAuthorityRegistry.register(
+      { ...expiring, runId: "run-3001", expiresAt: "2030-01-01T00:00:01.000Z" },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected expiring authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    vi.setSystemTime(new Date("2030-01-01T00:00:02.000Z"));
+    const store = createInMemoryUiStore();
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    try {
+      const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("POLICY_DENIED");
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "searchWorkspace",
+          effectClass: "workspace-read",
+          denyReason: "authority-expired",
+        }),
+      ]);
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+    }
+  });
+
+  it("rejects a repository read from a retained snapshot without a live bridge", async () => {
+    await registerSnapshotOnly();
+    const store = createInMemoryUiStore();
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    try {
+      const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
+
+      expect(response.status).toBe(409);
+      expect(actionConflictCode(response.body)).toBe("NO_ACTIVE_SESSION");
+      expect(searchHandler).not.toHaveBeenCalled();
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+    }
+  });
+
+  it("revalidates an expired authority before returning repository-read replay data", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2098-12-31T23:59:59.000Z"));
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-expired-read-replay-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "const replayNeedle = 1;\n", "utf8");
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    const proposed = searchWorkspaceAction({
+      actionId: "expired-replay-search",
+      idempotencyKey: "expired-replay-search-key",
+    });
+    try {
+      const first = await handleEditorAgentActions(context(proposed), deps);
+      vi.setSystemTime(new Date("2099-01-01T00:00:01.000Z"));
+      const replay = await handleEditorAgentActions(context(proposed), deps);
+
+      expect(first.status).toBe(200);
+      expect(actionResultStatus(first.body)).toBe("succeeded");
+      expect(replay.status).toBe(403);
+      expect(actionConflictCode(replay.body)).toBe("POLICY_DENIED");
+      expect(searchHandler).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(replay.body)).not.toContain("replayNeedle");
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("denies an exhausted runtime budget before invoking the repository-read handler", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    await registerLiveSnapshot();
+    const limited = authorityEnvelope("/repo", "governed-assist", "governed-assist");
+    const registered = editorAgentAuthorityRegistry.register(
+      {
+        ...limited,
+        runId: "run-3003",
+        budget: { ...limited.budget, maxRuntimeMs: 1_000 },
+      },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected runtime-limited authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    vi.setSystemTime(new Date("2030-01-01T00:00:01.001Z"));
+    const store = createInMemoryUiStore();
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    try {
+      const response = await handleEditorAgentActions(context(searchWorkspaceAction()), deps);
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("POLICY_DENIED");
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "searchWorkspace",
+          effectClass: "workspace-read",
+          denyReason: "authority-budget-exceeded",
+        }),
+      ]);
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+    }
+  });
+
+  it("reserves one tool call per repository read without charging replay", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-read-authority-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "a.ts"),
+      "const workspaceNeedle = 1;\nworkspaceNeedle;\n",
+      "utf8",
+    );
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const limited = authorityEnvelope(root);
+    const registered = editorAgentAuthorityRegistry.register(
+      {
+        ...limited,
+        runId: "run-3002",
+        budget: { ...limited.budget, maxToolCalls: 2 },
+      },
+      "autonomous-delivery",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected bounded read authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    const deps = {
+      store,
+      redactor: buildRedactor({}),
+      env: {},
+      editorLanguageRouteOptions: {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: 15_000 },
+      },
+    } as unknown as UiHandlerDeps;
+    const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+    const navigation = navigateSymbolAction({
+      actionId: "reserved-navigation",
+      idempotencyKey: "reserved-navigation-key",
+    });
+    const search = searchWorkspaceAction({
+      actionId: "reserved-search",
+      idempotencyKey: "reserved-search-key",
+    });
+    const exhausted = searchWorkspaceAction({
+      actionId: "exhausted-search",
+      idempotencyKey: "exhausted-search-key",
+    });
+    try {
+      const first = await handleEditorAgentActions(context(navigation), deps);
+      const replay = await handleEditorAgentActions(context(navigation), deps);
+      const second = await handleEditorAgentActions(context(search), deps);
+      const denied = await handleEditorAgentActions(context(exhausted), deps);
+
+      expect(first.status).toBe(200);
+      expect(actionResultStatus(first.body)).toBe("succeeded");
+      expect(replay.status).toBe(200);
+      expect(replay.body).toEqual(first.body);
+      expect(second.status).toBe(200);
+      expect(actionResultStatus(second.body)).toBe("succeeded");
+      expect(denied.status).toBe(403);
+      expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
+      expect(searchHandler).toHaveBeenCalledTimes(1);
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "navigateSymbol",
+          effectClass: "workspace-read",
+          outcome: "succeeded",
+        }),
+        expect.objectContaining({
+          actionType: "searchWorkspace",
+          effectClass: "workspace-read",
+          outcome: "succeeded",
+        }),
+        expect.objectContaining({
+          actionType: "searchWorkspace",
+          effectClass: "workspace-read",
+          denyReason: "authority-budget-exceeded",
+        }),
+      ]);
+      expect(JSON.stringify(auditRecords())).not.toContain("workspaceNeedle");
+    } finally {
+      searchHandler.mockRestore();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a definition through the existing language handler", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-nav-"));
     const store = createInMemoryUiStore();
     mkdirSync(join(root, "src"), { recursive: true });
     const text = "const target = 1;\ntarget;\n";
     writeFileSync(join(root, "src", "a.ts"), text, "utf8");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     let languageClockReads = 0;
     const deps = {
       store,
@@ -588,7 +884,7 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     const store = createInMemoryUiStore();
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "a.ts"), "export function parseConfig(): void {}\n", "utf8");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     try {
       const response = await handleEditorAgentActions(
@@ -617,10 +913,49 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     }
   });
 
+  it("keeps text search inside the authority-validated scope path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-search-scope-"));
+    const store = createInMemoryUiStore();
+    mkdirSync(join(root, "inside"), { recursive: true });
+    mkdirSync(join(root, "outside"), { recursive: true });
+    writeFileSync(join(root, "inside", "match.ts"), "export const scopedNeedle = 1;\n", "utf8");
+    writeFileSync(join(root, "outside", "match.ts"), "export const scopedNeedle = 2;\n", "utf8");
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "inside/match.ts" });
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "searchWorkspace",
+            expectedContentHash: undefined,
+            searchWorkspace: {
+              mode: "text",
+              query: "scopedNeedle",
+              scopePath: "inside",
+              maxResults: 20,
+            },
+          }),
+        ),
+        deps,
+      );
+
+      expect(response.status).toBe(200);
+      const result = actionResult(response.body);
+      expect(result.status).toBe("succeeded");
+      const paths = (
+        result.data as { readonly results: readonly { readonly path: string }[] }
+      ).results.map((entry) => entry.path);
+      expect(paths).toEqual(["inside/match.ts"]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects sensitive server-resolved targets before invoking a handler", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-containment-"));
     const store = createInMemoryUiStore();
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
     try {
       const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
@@ -727,7 +1062,7 @@ describe("server-resolved git query action (#2298)", () => {
     store.createProject(root, "fixture");
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "a.ts"), "const a = 1;\n", "utf8");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -797,7 +1132,7 @@ describe("server-resolved git query action (#2298)", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-authority-"));
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -833,7 +1168,7 @@ describe("server-resolved git query action (#2298)", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-target-"));
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -886,7 +1221,7 @@ describe("server-resolved git query action (#2298)", () => {
       writeWorkspaceFile(root, "src/a.ts", `${mixed.join("\n")}\n`);
       writeWorkspaceFile(root, "src/unrelated.ts", "export const unrelated = true;\n");
       writeWorkspaceFile(root, ".env", "FIXTURE_SECRET=not-returned\n");
-      await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+      await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
       const deps = {
         store,
         redactor: buildRedactor({}),
@@ -932,7 +1267,7 @@ describe("server-resolved git query action (#2298)", () => {
     store.createProject(root, "fixture");
     writeWorkspaceFile(outside, "secret.ts", "export const secret = true;\n");
     symlinkSync(outside, join(root, "linked-outside"), "dir");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -967,7 +1302,7 @@ describe("server-resolved git query action (#2298)", () => {
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "export const inside = true;\n");
     writeWorkspaceFile(outside, "secret.ts", "export const secret = true;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = vi.fn((args: readonly string[]) => {
       if (args.includes("rev-parse")) {
         rmSync(join(root, "src", "a.ts"));
@@ -1010,7 +1345,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "export const value = true;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     let markStatusStarted: (() => void) | undefined;
     const statusStarted = new Promise<void>((resolveStarted) => {
       markStatusStarted = resolveStarted;
@@ -1073,7 +1408,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "export const value = true;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = vi.fn((args: readonly string[], _options: GitProcessOptions) =>
       Promise.resolve(gitResponseFor(root, args)),
     );
@@ -1103,7 +1438,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = vi.fn((args: readonly string[]) => {
       if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
       if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
@@ -1162,7 +1497,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = vi.fn((args: readonly string[]) => {
       if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
       if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
@@ -1205,7 +1540,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const largeLines = Array.from(
       { length: 300 },
       (_unused, index) => `+${String(index).padStart(4, "0")}${"x".repeat(1_000)}`,
@@ -1259,7 +1594,7 @@ describe("server-resolved git query action (#2298)", () => {
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
     writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const secret = "sk-git-query-redaction-1234567890abcdef";
     const runner = vi.fn((args: readonly string[]) => {
       if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
@@ -1312,7 +1647,7 @@ describe("server-resolved git query action (#2298)", () => {
     const secret = "sk-query-target-1234567890abcdef";
     const path = `src/${secret}.ts`;
     writeWorkspaceFile(root, path, "export const value = true;\n");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: path });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: path });
     const runner = dispatchingGitRunner(root);
     const deps = {
       ...gitDeps(store, runner),
@@ -1341,7 +1676,7 @@ describe("server-resolved git query action (#2298)", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-deny-"));
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -1376,7 +1711,7 @@ describe("server-resolved git query action (#2298)", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-escape-"));
     const store = createInMemoryUiStore();
     store.createProject(root, "fixture");
-    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    await registerLiveSnapshot({ workspaceRoot: root, activeFile: "src/a.ts" });
     const runner = dispatchingGitRunner(root);
     const deps = gitDeps(store, runner);
     try {
@@ -1706,12 +2041,41 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
       ),
     );
     const read = await handleEditorAgentSnapshot(
-      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+      context(
+        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, textMode: "activeFile" },
+        "/api/editor/agent/snapshot",
+      ),
     );
 
     expect(posted.status).toBe(200);
     expect(responseSnapshot(posted.body).diagnosticsDetail).toEqual(diagnosticsDetail);
     expect(responseSnapshot(read.body).diagnosticsDetail).toEqual(diagnosticsDetail);
+  });
+
+  it("removes diagnostic detail from default reads and session discovery", async () => {
+    const diagnosticsDetail = { items: [diagnostic], truncated: false } as const;
+    const posted = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), diagnosticsDetail },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const capability = responseBridgeCapability(posted.body);
+    if (capability === undefined) throw new Error("expected bridge capability");
+    const bridge = connectBridge("session-1", capability);
+    const read = await handleEditorAgentSnapshot(
+      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+    );
+
+    expect(read.body).not.toHaveProperty("snapshot.diagnosticsDetail");
+    expect(handleEditorAgentSessions().body).not.toHaveProperty("sessions.0.diagnosticsDetail");
+    expect(JSON.stringify(read.body)).not.toContain("Use readonly");
+    expect(JSON.stringify(handleEditorAgentSessions().body)).not.toContain("Use readonly");
+    bridge.close();
   });
 
   it("keeps omitted diagnostic detail absent on ingestion and read", async () => {
@@ -1743,7 +2107,10 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
     );
 
     const result = await handleEditorAgentSnapshot(
-      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+      context(
+        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, textMode: "activeFile" },
+        "/api/editor/agent/snapshot",
+      ),
     );
 
     expect(responseSnapshot(result.body).diagnosticsDetail).toEqual({
@@ -1795,7 +2162,7 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
     });
   });
 
-  it("re-caps invalid registry detail on a text-free read projection", async () => {
+  it("re-caps invalid registry detail on an explicitly detailed read projection", async () => {
     const unicodeCharacter = "\u{1f600}";
     const diagnosticsSummary = { errors: 1, warnings: 2, infos: 3 };
     const invalidSnapshot = {
@@ -1813,7 +2180,7 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
 
     const result = await handleEditorAgentSnapshot(
       context(
-        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, textMode: "none" },
+        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, textMode: "activeFile" },
         "/api/editor/agent/snapshot",
       ),
     );

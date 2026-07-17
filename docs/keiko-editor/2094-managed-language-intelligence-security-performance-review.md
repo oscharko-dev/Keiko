@@ -1,8 +1,9 @@
 # Epic 2094 managed language intelligence security and performance review
 
-Review date: 2026-07-11. Scope: managed Python, Go, Shell, Java, and Rust activation, configuration,
-process supervision, language operations, semantic tokens, Settings UI, docked-agent projection,
-evidence, rollback, and release gates.
+Review refreshed: 2026-07-16 against the Foundation-wave audit base
+`1056821a5b861f076cc88e120492aaf5cad37b9d`. Scope: managed Python, Go, Shell, Java, and Rust
+activation, configuration, process supervision, language operations, semantic tokens, Settings UI,
+docked-agent projection, evidence, rollback, and release gates.
 
 ## Security conclusion
 
@@ -11,22 +12,23 @@ security evidence is hermetic and does not trust a workspace executable, provide
 configuration body, environment variable, process descendant, or UI capability claim. Failures are
 typed and content-free outside the bounded local result surface.
 
-This conclusion is conditional on the final candidate passing the commands in this document. It is
-not an authorization to merge, deliver, close issues, or widen an Authority Envelope.
+The signed implementation candidate passed the focused security, composition, and performance
+commands in this document. This conclusion is not an authorization to bypass the delivery-wide
+aggregate, merge, close issues before verified integration, or widen an Authority Envelope.
 
 ## Trust-boundary findings
 
-| Boundary                 | Disposition                                                                                                                                                                                                                                                     |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Executable discovery     | Exact approved command names are resolved outside the workspace. Workspace-planted and symlinked binaries fail before spawn. Required companion executables are checked as one profile.                                                                         |
-| Spawn and descendants    | `shell: false`; exact argument arrays; closed environment allowlists; unique private descendant `PATH`; no ambient credential, package-manager, toolchain-home, proxy, or startup-file inheritance. Cleanup is attempted for every generation.                  |
-| Egress                   | Provider-owned launch preparation enforces native `network:none`; a platform without the enforcing backend fails closed. Container fallback is not silently enabled.                                                                                            |
-| Filesystem               | Workspace roots are canonical and selected; overlay and result paths must remain contained and root-relative. Provider state uses unique mode-0700 temporary roots outside the workspace and is removed on shutdown, crash, restart, and failed initialization. |
-| Protocol                 | JSON-RPC frames, pending requests, document bytes, item counts, edits, diagnostics, locations, semantic tokens, and display strings are bounded. Malformed, accessor-hostile, overlapping, escaping, command-bearing, and oversized input is rejected.          |
-| Activation/configuration | Default-off, local-human mutation, CSRF, ETag, revision, idempotency, typed schemas, approved runtime identities, atomic persistence, and content-free evidence are all required. Deployment policy and health can only reduce capability.                      |
-| Docked agent             | The existing action route and language route are reused. Dispatch rechecks current workspace activation and negotiation. Failures retain typed provider/capability/timeout/cancel/limit codes. Audit stores status, code, count, and relative path only.        |
-| UI                       | Settings never installs a provider or treats a static candidate as active. Status is text plus semantic styling, keyboard-operable, localized, and axe-tested. Component-scoped CSS avoids the pinned global stylesheet.                                        |
-| Evidence                 | Activation evidence uses fingerprints, revisions, reason codes, outcomes, and counts. It excludes workspace roots, configuration bodies, source, diagnostics, executable paths, environment, stderr, and secrets.                                               |
+| Boundary                 | Disposition                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executable discovery     | Exact approved command names are resolved outside the workspace. Workspace-planted and symlinked binaries fail before spawn. Required companion executables are checked as one profile.                                                                                                                                                                              |
+| Spawn and descendants    | `shell: false`; exact argument arrays; closed environment allowlists; unique private descendant `PATH`; no ambient credential, package-manager, toolchain-home, proxy, or startup-file inheritance. Cleanup is attempted for every generation.                                                                                                                       |
+| Egress                   | Provider-owned launch preparation enforces native `network:none`; a platform without the enforcing backend fails closed. Container fallback is not silently enabled.                                                                                                                                                                                                 |
+| Filesystem               | Workspace roots are canonical and selected; overlay and result paths must remain contained and root-relative. Provider state uses unique mode-0700 generations beneath Keiko's private managed-state root, disjoint from the workspace, and is removed on shutdown, crash, restart, and failed initialization.                                                       |
+| Protocol                 | JSON-RPC frames, pending requests, document bytes, item counts, edits, diagnostics, locations, semantic tokens, and display strings are bounded. Malformed, accessor-hostile, overlapping, escaping, command-bearing, and oversized input is rejected.                                                                                                               |
+| Activation/configuration | Default-off, local-human mutation, CSRF, root-bound strong ETag, monotonic revision, idempotency, contracts-owned strict schemas, approved runtime identities, atomic persistence, and content-free evidence are all required. Deployment policy and health can only reduce capability.                                                                              |
+| Docked agent             | The existing action route and language route are reused. Dispatch rechecks current workspace activation and negotiation. Failures retain typed provider/capability/timeout/cancel/limit codes. Audit stores status, code, count, and relative path only.                                                                                                             |
+| UI                       | Settings never installs a provider or treats a static candidate as active. The capability route initializes only an explicitly activated governed process and advertises the live, current-revision negotiated subset. Status is text plus semantic styling, keyboard-operable, localized, and axe-tested. Component-scoped CSS avoids the pinned global stylesheet. |
+| Evidence                 | Activation evidence uses fingerprints, revisions, reason codes, outcomes, and counts. It excludes workspace roots, configuration bodies, source, diagnostics, executable paths, environment, stderr, and secrets.                                                                                                                                                    |
 
 ## Language-specific no-execution proof
 
@@ -64,8 +66,8 @@ prove descendant, stderr, crash, frame, cleanup, and cancellation behavior. The 
 npm run test:managed-lsp-closeout
 ```
 
-Observed result: 25 files passed, five optional real-provider files skipped, 325 tests passed, five
-optional tests skipped.
+Observed result: 34 files passed, five optional real-provider files skipped, 471 tests passed, five
+optional tests skipped. The focused UI continuation passed 2 files and 102 tests.
 
 ## Performance and resource budgets
 
@@ -74,35 +76,24 @@ warm JSON-RPC request, and graceful disposal paths. It uses 20 cold/disposal sam
 samples. The fake provider isolates Keiko orchestration overhead; it is not a substitute for the
 optional real-provider compatibility lane.
 
-Committed hard dispositions:
+Linux-authoritative dispositions for signed candidate
+`5456afe9e5ef7792e478a70dbfe4745b8e22f3cb` under Node 24.18.0/npm 11.16.0:
 
-| Metric                          | Budget |
-| ------------------------------- | -----: |
-| cold initialize p95             | 250 ms |
-| warm request p95                |  25 ms |
-| disposal p95                    | 100 ms |
-| process RSS delta               | 64 MiB |
-| harness-created persistent disk |  1 MiB |
+| Metric                          |    Observed | Budget | Result   |
+| ------------------------------- | ----------: | -----: | -------- |
+| cold initialize p95             |    0.550 ms | 250 ms | **PASS** |
+| warm request p95                |    0.047 ms |  25 ms | **PASS** |
+| disposal p95                    |    0.127 ms | 100 ms | **PASS** |
+| process RSS delta               | 1,470,464 B | 64 MiB | **PASS** |
+| harness-created persistent disk |         0 B |  1 MiB | **PASS** |
 
-Linux-authoritative measurement, Docker `node:22-bookworm`, Linux arm64, Node `v22.23.1`:
-
-| Metric                      |      p50 |      p95 |             max | Result |
-| --------------------------- | -------: | -------: | --------------: | ------ |
-| cold initialize, 20 samples | 0.202 ms | 1.011 ms |        3.578 ms | Pass   |
-| warm request, 100 samples   | 0.031 ms | 0.069 ms |        0.211 ms | Pass   |
-| disposal, 20 samples        | 0.075 ms | 0.214 ms |        0.505 ms | Pass   |
-| RSS delta                   |        - |        - | 4,456,448 bytes | Pass   |
-| persistent disk             |        - |        - |         0 bytes | Pass   |
-
-Reference macOS arm64 run, Node `v22.22.3`: cold p95 `0.945 ms`, warm p95 `0.034 ms`, disposal p95
-`0.138 ms`, RSS delta `4,702,208 bytes`, disk `0 bytes`; all dispositions passed.
+The earlier Node 22 measurements remain historical only. The values above were regenerated from the
+current Node 24 candidate and do not substitute for optional real-provider compatibility evidence.
 
 The measurement is reproducible with:
 
 ```bash
 npm run check:managed-lsp-performance
-docker run --rm -v "$PWD":/workspace -w /workspace \
-  node:22-bookworm node scripts/measure-managed-lsp-closeout.mjs
 ```
 
 ## Additional budget evidence
@@ -137,8 +128,10 @@ npm run test:e2e:editor-perf
 npm run check:editor-release-evidence
 ```
 
-The authoritative editor fingerprint must be generated on Linux from the final candidate. The
-macOS fingerprint is informative only. No global CSS change is permitted for this feature.
+The authoritative editor fingerprint was generated and rechecked on Linux from the signed source
+candidate; its measurement is
+`ae8a4d826ee39c18777e8d0daf59e02afe182c2afa6c2b236842373bddfe5e8d`. The macOS fingerprint is
+informative only. No global CSS change was made for this feature.
 
 ## Rollback and residual risk
 

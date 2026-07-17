@@ -49,7 +49,7 @@ immediate bootstrap for open PRs and must not diverge from the checked-in policy
 - `npm run check:gitar-config` validates the exact Core review file set, rejects Pro-only repository
   surfaces, and requires complete-epic scope, current-head evidence, hard denials, and all former
   review lenses.
-- `npm run codex:pre-pr` and the required `Core quality` CI job execute that validator.
+- `npm run agent:pre-pr` and the required `Core quality` CI job execute that validator.
 
 ## Review lifecycle
 

@@ -241,6 +241,10 @@ describe("production debug launch context resolution", () => {
     const current = fixture();
     vi.resetModules();
     const freshModule = await import("./debugLaunchContext.js");
+    expect(Object.keys(freshModule.debugLaunchContextTestBoundary)).toStrictEqual([
+      "qualificationSystemLibraryArguments",
+    ]);
+    expect(Object.isFrozen(freshModule.debugLaunchContextTestBoundary)).toBe(true);
     const context = await freshModule.createProductionDebugLaunchContextResolver(current.deps)(
       current.input,
     );
@@ -719,6 +723,24 @@ describe("production debug launch context resolution", () => {
       ).toThrow("INVALID_DEBUG_BACKEND");
     }
   }, 30_000);
+
+  it("rejects bwrap on the wrong platform without executing it", () => {
+    const root = temporary("kdc-wrong-platform-");
+    const marker = join(root, "executed");
+    const backend = executable(
+      root,
+      "bwrap",
+      `#!/bin/sh\nprintf executed > "${marker}"\nprintf 'bubblewrap 12.34\\n'\n`,
+    );
+
+    expect(() =>
+      qualifyProductionDebugBackend({
+        backend: provisioned(backend, "/opt/keiko-backend/bwrap"),
+        platform: "darwin",
+      }),
+    ).toThrow("INVALID_DEBUG_BACKEND");
+    expect(existsSync(marker)).toBe(false);
+  });
 
   it("rejects backend execution errors, non-zero probes, and missing probe markers", () => {
     const missingInterpreter = executable(

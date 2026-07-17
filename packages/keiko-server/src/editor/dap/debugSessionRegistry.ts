@@ -66,6 +66,11 @@ export interface DebugOutputAcceptance {
   readonly accepted: Buffer;
   readonly omittedBytes: number;
   readonly limitReached: boolean;
+  readonly terminalOwner?: true;
+}
+export interface DebugTerminalTransition {
+  readonly owner: boolean;
+  readonly completion: Promise<void>;
 }
 export interface DebugProtocolPort {
   readonly dispose: () => void;
@@ -148,7 +153,7 @@ export interface DebugSessionRegistry {
     handle: QualifiedDebugCapsuleHandle,
     qualification: DebugCapsuleQualification,
   ): Promise<boolean>;
-  capsuleExited(sessionId: string, attemptId: number): Promise<void>;
+  capsuleExited(sessionId: string, attemptId: number): Promise<boolean>;
   isAttemptCurrent(sessionId: string, attemptId: number): boolean;
   attachProtocol(sessionId: string, attemptId: number, port: DebugProtocolPort): void;
   attachEndpoint(
@@ -178,6 +183,7 @@ export interface DebugSessionRegistry {
   ): Promise<DebugOutputAcceptance | undefined>;
   stop(sessionId: string): Promise<void>;
   revoke(sessionId: string): Promise<void>;
+  transitionTerminal(sessionId: string, reason: DebugLifecycleReason): DebugTerminalTransition;
   teardown(sessionId: string, reason: DebugLifecycleReason): Promise<void>;
   reconcile(): Promise<void>;
   expiredSessions(): readonly {
@@ -287,6 +293,8 @@ function createApi(
         : Promise.resolve(undefined),
     stop: (sessionId) => teardown(sessions, deps, sessionId, "stopped"),
     revoke: (sessionId) => teardown(sessions, deps, sessionId, "activationRevoked"),
+    transitionTerminal: (sessionId, reason) =>
+      transitionTerminal(sessions, deps, sessionId, reason),
     teardown: (sessionId, reason) => teardown(sessions, deps, sessionId, reason),
     reconcile: () => reconcileAll(sessions, deps),
     expiredSessions: () => expiredSessions(sessions, deps.now()),
@@ -661,11 +669,13 @@ async function capsuleExited(
   deps: DebugSessionRegistryDeps,
   sessionId: string,
   attemptId: number,
-): Promise<void> {
+): Promise<boolean> {
   const session = sessions.get(sessionId);
-  if (session === undefined) return;
-  if (session.lifecycleAttemptId !== attemptId || isTerminating(session)) return;
-  await teardown(sessions, deps, sessionId, "debuggeeExit");
+  if (session === undefined) return false;
+  if (session.lifecycleAttemptId !== attemptId || isTerminating(session)) return false;
+  const transition = transitionTerminal(sessions, deps, sessionId, "debuggeeExit");
+  await transition.completion;
+  return transition.owner;
 }
 
 function attachProtocol(session: SessionRuntime, attemptId: number, port: DebugProtocolPort): void {
@@ -793,9 +803,10 @@ async function acceptOutput(
   const session = workSession(sessions, sessionId);
   const acceptance = projectOutput(session, bytes);
   if (acceptance.limitReached) {
-    const terminal = teardown(sessions, deps, sessionId, "outputOverflow");
+    const terminal = transitionTerminal(sessions, deps, sessionId, "outputOverflow");
     emitOutputLimitOnce(deps, session);
-    await terminal;
+    await terminal.completion;
+    return terminal.owner ? { ...acceptance, terminalOwner: true } : acceptance;
   }
   return acceptance;
 }
@@ -849,9 +860,20 @@ function teardown(
   sessionId: string,
   reason: DebugLifecycleReason,
 ): Promise<void> {
+  return transitionTerminal(sessions, deps, sessionId, reason).completion;
+}
+
+function transitionTerminal(
+  sessions: Map<string, SessionRuntime>,
+  deps: DebugSessionRegistryDeps,
+  sessionId: string,
+  reason: DebugLifecycleReason,
+): DebugTerminalTransition {
   const session = sessions.get(sessionId);
-  if (session === undefined) return Promise.resolve();
-  if (session.teardownPromise !== undefined) return session.teardownPromise;
+  if (session === undefined) return { owner: false, completion: Promise.resolve() };
+  if (session.teardownPromise !== undefined) {
+    return { owner: false, completion: session.teardownPromise };
+  }
   session.state = "stopping";
   session.terminalReason = reason;
   session.projectTerminal = (now): void => {
@@ -863,7 +885,7 @@ function teardown(
     session.resolveTeardown = resolve;
   });
   void reconcileSession(sessions, deps, session);
-  return session.teardownPromise;
+  return { owner: true, completion: session.teardownPromise };
 }
 
 async function reconcileAll(

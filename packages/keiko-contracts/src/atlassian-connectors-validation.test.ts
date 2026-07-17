@@ -1178,7 +1178,7 @@ describe("validateJiraLiveSearchResult (Issue #2248 ephemeral envelope)", () => 
       "liveResult.issues[0].metadata must be a valid citation-metadata projection",
     );
     rejects(
-      liveIssue({ summary: "bad summary" }),
+      liveIssue({ summary: "bad\0summary" }),
       "liveResult.issues[0].summary must be bounded single-line text",
     );
     rejects(liveIssue({ jql: "leak" }), "liveResult.issues[0] must not include jql");

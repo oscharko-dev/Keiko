@@ -78,6 +78,8 @@ export interface ProviderContext {
   readonly realRoot: string;
   readonly signal: AbortSignal;
   readonly maxBytesPerExcerpt: number;
+  // Request metadata keeps the stable `nowMs`; lease decisions use this live clock at consumption.
+  readonly currentTimeMs: () => number;
   readonly nowMs: number;
   readonly gitContextReader?: GitContextReader | undefined;
 }
@@ -106,7 +108,18 @@ const MAX_CITATION_REF_CHARS = 160;
 const EDITOR_STATE_MAX_DIRTY_FILES = 32;
 const EDITOR_STATE_MAX_DIAGNOSTICS = 32;
 const EDITOR_STATE_EXCERPT_ID = "editor-state-current";
+// A request that observed a live bridge may finish a bounded in-flight context read if the bridge
+// disconnects while another provider awaits. The lease is server-minted, memory-only, and short;
+// caller-supplied snapshot timestamps never establish liveness.
+export const EDITOR_STATE_CONTEXT_LEASE_TTL_MS = 15_000;
+const EDITOR_STATE_CONTEXT_LEASE_BRAND: unique symbol = Symbol("editor-state-context-lease");
 const GIT_CONTEXT_SUMMARY_EXCERPT_ID = "git-context-summary";
+
+export interface EditorStateContextLease {
+  readonly sessionId: string;
+  readonly expiresAtMs: number;
+  readonly [EDITOR_STATE_CONTEXT_LEASE_BRAND]: true;
+}
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
@@ -301,11 +314,48 @@ function summarizeEditorState(snapshot: EditorAgentSessionSnapshot): {
   };
 }
 
+export function acquireEditorStateContextLease(
+  sessionId: string,
+  nowMs: number,
+): EditorStateContextLease | undefined {
+  if (!editorAgentRegistry.hasLiveBridge(sessionId) || !Number.isSafeInteger(nowMs) || nowMs < 0) {
+    return undefined;
+  }
+  const expiresAtMs = nowMs + EDITOR_STATE_CONTEXT_LEASE_TTL_MS;
+  if (!Number.isSafeInteger(expiresAtMs)) return undefined;
+  return { sessionId, expiresAtMs, [EDITOR_STATE_CONTEXT_LEASE_BRAND]: true };
+}
+
+function editorStateLeaseValid(
+  lease: EditorStateContextLease | undefined,
+  sessionId: string,
+  nowMs: number,
+): boolean {
+  return (
+    lease?.[EDITOR_STATE_CONTEXT_LEASE_BRAND] === true &&
+    lease.sessionId === sessionId &&
+    Number.isSafeInteger(nowMs) &&
+    nowMs >= 0 &&
+    nowMs < lease.expiresAtMs
+  );
+}
+
+function editorStateSessionAvailable(
+  ctx: ProviderContext,
+  input: { readonly sessionId: string; readonly lease?: EditorStateContextLease | undefined },
+): boolean {
+  const currentTimeMs = ctx.currentTimeMs();
+  return (
+    editorAgentRegistry.hasLiveBridge(input.sessionId) ||
+    editorStateLeaseValid(input.lease, input.sessionId, currentTimeMs)
+  );
+}
+
 export function runEditorStateProvider(
   ctx: ProviderContext,
-  input: { readonly sessionId: string },
+  input: { readonly sessionId: string; readonly lease?: EditorStateContextLease | undefined },
 ): ProviderOutcome {
-  if (isAborted(ctx.signal)) {
+  if (isAborted(ctx.signal) || !editorStateSessionAvailable(ctx, input)) {
     return { excerpts: [], omission: omission("editor-state", "unavailable") };
   }
   const snapshot = editorAgentRegistry.snapshotFor(input.sessionId);
@@ -510,12 +560,12 @@ function prepareGitBlame(
 
 function gitContextSnapshot(
   ctx: ProviderContext,
-  sessionId: string,
+  input: { readonly sessionId: string; readonly lease?: EditorStateContextLease | undefined },
 ): EditorAgentSessionSnapshot | ProviderOutcome {
-  if (isAborted(ctx.signal)) {
+  if (isAborted(ctx.signal) || !editorStateSessionAvailable(ctx, input)) {
     return { excerpts: [], omission: omission("git-context", "unavailable") };
   }
-  const snapshot = editorAgentRegistry.snapshotFor(sessionId);
+  const snapshot = editorAgentRegistry.snapshotFor(input.sessionId);
   if (snapshot === undefined || isAborted(ctx.signal)) {
     return { excerpts: [], omission: omission("git-context", "unavailable") };
   }
@@ -563,9 +613,9 @@ function preparedGitContextOutcome(
 
 export async function runGitContextProvider(
   ctx: ProviderContext,
-  input: { readonly sessionId: string },
+  input: { readonly sessionId: string; readonly lease?: EditorStateContextLease | undefined },
 ): Promise<ProviderOutcome> {
-  const snapshot = gitContextSnapshot(ctx, input.sessionId);
+  const snapshot = gitContextSnapshot(ctx, input);
   if ("excerpts" in snapshot) return snapshot;
   const result = await readGitContext(ctx, snapshot);
   if (result === undefined || isAborted(ctx.signal)) {

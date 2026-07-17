@@ -1,4 +1,4 @@
-import { type FSWatcher, type Stats, watch } from "node:fs";
+import { type Dirent, type FSWatcher, type Stats, watch } from "node:fs";
 import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
@@ -65,6 +65,7 @@ export type WorkspaceWatchSubscribeResult =
 
 export interface WorkspaceWatchServiceOptions {
   readonly adapter?: WorkspaceWatchAdapter | undefined;
+  readonly fileSystem?: WorkspaceWatchFileSystem | undefined;
   readonly coalesceMs?: number | undefined;
   readonly idleTearDownMs?: number | undefined;
   readonly fallbackPollMs?: number | undefined;
@@ -73,6 +74,13 @@ export interface WorkspaceWatchServiceOptions {
   readonly replayCapacity?: number | undefined;
   readonly maxSubscribersPerRoot?: number | undefined;
   readonly maxScanEntries?: number | undefined;
+}
+
+export interface WorkspaceWatchFileSystem {
+  readonly lstat: (path: string) => Promise<Stats>;
+  readonly realpath: (path: string) => Promise<string>;
+  readonly stat: (path: string) => Promise<Stats>;
+  readonly readdir: (path: string) => Promise<readonly Dirent[]>;
 }
 
 interface WatchSubscriber {
@@ -97,15 +105,19 @@ interface FileMetadata {
 type MetadataResult =
   | { readonly kind: "present"; readonly metadata: FileMetadata }
   | { readonly kind: "absent" }
+  | { readonly kind: "unavailable" }
   | { readonly kind: "unsafe" };
 
 interface ScanResult {
   readonly entries: Map<string, FileMetadata>;
-  readonly truncated: boolean;
+  readonly complete: boolean;
 }
+
+type ScanDirectoryResult = "complete" | "overflow" | "unavailable";
 
 interface WatchConfig {
   readonly adapter: WorkspaceWatchAdapter;
+  readonly fileSystem: WorkspaceWatchFileSystem;
   readonly coalesceMs: number;
   readonly idleTearDownMs: number;
   readonly fallbackPollMs: number;
@@ -116,7 +128,20 @@ interface WatchConfig {
   readonly maxScanEntries: number;
 }
 
-const DEFAULT_CONFIG: Omit<WatchConfig, "adapter"> = {
+const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
+  lstat,
+  realpath,
+  stat,
+  readdir: async (path): Promise<readonly Dirent[]> => readdir(path, { withFileTypes: true }),
+};
+
+function configuredFileSystem(
+  fileSystem: WorkspaceWatchFileSystem | undefined,
+): WorkspaceWatchFileSystem {
+  return fileSystem ?? NODE_FILE_SYSTEM;
+}
+
+const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
   coalesceMs: 50,
   idleTearDownMs: 3_000,
   fallbackPollMs: 2_000,
@@ -212,20 +237,31 @@ function entryKind(linkStats: Stats, targetStats: Stats): EditorM7WatchEntryKind
   return "unknown";
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function confirmsAbsence(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 async function metadataFor(
   root: string,
   relativePath: string,
   additional: WatchExclusions,
+  fileSystem: WorkspaceWatchFileSystem,
 ): Promise<MetadataResult> {
   if (!eventPathAllowed(relativePath, additional)) return { kind: "unsafe" };
   const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
   try {
-    const linkStats = await lstat(candidate);
-    const real = await realpath(candidate);
+    const linkStats = await fileSystem.lstat(candidate);
+    const real = await fileSystem.realpath(candidate);
     if (!containsPath(root, real)) return { kind: "unsafe" };
     const realRelativePath = relativePathFromNative(root, real);
     if (!eventPathAllowed(realRelativePath, additional)) return { kind: "unsafe" };
-    const targetStats = await stat(real);
+    const targetStats = await fileSystem.stat(real);
     const kind = entryKind(linkStats, targetStats);
     return {
       kind: "present",
@@ -237,8 +273,8 @@ async function metadataFor(
         metadataHash: metadataHash(kind, targetStats),
       },
     };
-  } catch {
-    return { kind: "absent" };
+  } catch (error) {
+    return { kind: confirmsAbsence(error) ? "absent" : "unavailable" };
   }
 }
 
@@ -291,6 +327,7 @@ function createNodeAdapter(): WorkspaceWatchAdapter {
 function configFromOptions(options: WorkspaceWatchServiceOptions): WatchConfig {
   return {
     adapter: options.adapter ?? createNodeAdapter(),
+    fileSystem: configuredFileSystem(options.fileSystem),
     coalesceMs: options.coalesceMs ?? DEFAULT_CONFIG.coalesceMs,
     idleTearDownMs: options.idleTearDownMs ?? DEFAULT_CONFIG.idleTearDownMs,
     fallbackPollMs: options.fallbackPollMs ?? DEFAULT_CONFIG.fallbackPollMs,
@@ -322,8 +359,10 @@ class WorkspaceWatchSession {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private baselineReady: Promise<void> | null = null;
   private flushing = false;
+  private scanning = false;
   private disposed = false;
   private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
+  private exclusionsInitialized = false;
 
   public constructor(
     private readonly root: string,
@@ -338,8 +377,9 @@ class WorkspaceWatchSession {
     // so accepting a different value from a later subscriber would leave the seeded `known` map
     // inconsistent with the exclusions applied to subsequent scans. All subscribers for a root
     // resolve the same watcherExclusions setting in practice, so this only matters for the first.
-    if (args.additionalExclusions !== undefined && this.subscribers.size === 0) {
-      this.additionalExclusions = exclusionsFromPatterns(args.additionalExclusions);
+    if (!this.exclusionsInitialized) {
+      this.additionalExclusions = exclusionsFromPatterns(args.additionalExclusions ?? []);
+      this.exclusionsInitialized = true;
     }
     this.ensureStarted();
     if (this.subscribers.size >= this.config.maxSubscribersPerRoot) {
@@ -495,14 +535,26 @@ class WorkspaceWatchSession {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
     }
-    const current = await metadataFor(this.root, change.relativePath, this.additionalExclusions);
+    const current = await metadataFor(
+      this.root,
+      change.relativePath,
+      this.additionalExclusions,
+      this.config.fileSystem,
+    );
     this.applyMetadataResult(change.relativePath, current);
   }
 
   private async reconcileRename(oldRelativePath: string, relativePath: string): Promise<void> {
-    const current = await metadataFor(this.root, relativePath, this.additionalExclusions);
+    const current = await metadataFor(
+      this.root,
+      relativePath,
+      this.additionalExclusions,
+      this.config.fileSystem,
+    );
     if (current.kind !== "present") {
-      this.emitRescan(current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event", "rescan");
+      const reason = current.kind === "unsafe" ? "unsafe-path" : "ambiguous-event";
+      this.emitRescan(reason, "rescan");
+      if (current.kind === "unavailable") this.startFallbackPolling();
       return;
     }
     this.known.delete(oldRelativePath);
@@ -517,6 +569,11 @@ class WorkspaceWatchSession {
     }
     if (result.kind === "absent") {
       this.applyAbsent(relativePath);
+      return;
+    }
+    if (result.kind === "unavailable") {
+      this.emitRescan("ambiguous-event", "rescan");
+      this.startFallbackPolling();
       return;
     }
     this.applyPresent(result.metadata);
@@ -548,32 +605,37 @@ class WorkspaceWatchSession {
 
   private async seedBaseline(): Promise<void> {
     const next = await this.scanTree();
-    if (next === null || this.disposed) return;
+    if (next === null || !next.complete || this.disposed) return;
     this.known.clear();
     for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {
-    const next = await this.scanTree();
-    if (next === null || this.disposed) return;
-    // A truncated scan (maxScanEntries overflow) only saw part of the tree — treating unreached
-    // known paths as deleted would fabricate deletions for files that still exist. Skip the
-    // deletion diff for a truncated pass; the already-emitted overflow/rescan signal owns recovery.
-    if (!next.truncated) {
+    if (this.scanning) return;
+    this.scanning = true;
+    try {
+      const next = await this.scanTree();
+      if (next === null || !next.complete || this.disposed) return;
       for (const [path, previous] of this.known)
         if (!next.entries.has(path))
           this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
+      for (const metadata of next.entries.values()) this.applyPresent(metadata);
+      this.recoverAfterCompleteScan();
+    } finally {
+      this.scanning = false;
     }
-    for (const metadata of next.entries.values()) this.applyPresent(metadata);
   }
 
   private async scanTree(): Promise<ScanResult | null> {
     try {
-      const rootStats = await stat(this.root);
+      const rootStats = await this.config.fileSystem.stat(this.root);
       if (!rootStats.isDirectory()) return this.rootReplaced();
       return await this.scanDirectory("");
-    } catch {
-      return this.rootReplaced();
+    } catch (error) {
+      if (confirmsAbsence(error)) return this.rootReplaced();
+      this.emitRescan("ambiguous-event", "rescan");
+      this.startFallbackPolling();
+      return null;
     }
   }
 
@@ -585,40 +647,54 @@ class WorkspaceWatchSession {
   private async scanDirectory(start: string): Promise<ScanResult> {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
-    let truncated = false;
     while (queue.length > 0) {
       const current = queue.shift() ?? "";
-      if (found.size > this.config.maxScanEntries) {
-        this.emitRescan("event-overflow", "overflow");
-        truncated = true;
-        break;
-      }
-      await this.scanOneDirectory(current, found, queue);
+      const result = await this.scanOneDirectory(current, found, queue);
+      if (result === "complete") continue;
+      this.emitRescan(
+        result === "overflow" ? "event-overflow" : "ambiguous-event",
+        result === "overflow" ? "overflow" : "rescan",
+      );
+      this.startFallbackPolling();
+      return { entries: found, complete: false };
     }
-    return { entries: found, truncated };
+    return { entries: found, complete: true };
   }
 
   private async scanOneDirectory(
     relativeDirectory: string,
     found: Map<string, FileMetadata>,
     queue: string[],
-  ): Promise<void> {
+  ): Promise<ScanDirectoryResult> {
     const directory =
       relativeDirectory.length === 0 ? this.root : join(this.root, relativeDirectory);
-    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    let entries: readonly Dirent[];
+    try {
+      entries = await this.config.fileSystem.readdir(directory);
+    } catch {
+      return "unavailable";
+    }
     for (const entry of entries) {
       const relativePath =
         relativeDirectory.length === 0 ? entry.name : `${relativeDirectory}/${entry.name}`;
       if (!eventPathAllowed(relativePath, this.additionalExclusions)) continue;
-      const result = await metadataFor(this.root, relativePath, this.additionalExclusions);
+      if (found.size >= this.config.maxScanEntries) return "overflow";
+      const result = await metadataFor(
+        this.root,
+        relativePath,
+        this.additionalExclusions,
+        this.config.fileSystem,
+      );
+      if (result.kind === "unavailable") return "unavailable";
       if (result.kind !== "present") continue;
       found.set(relativePath, result.metadata);
       if (result.metadata.entryKind === "directory") queue.push(relativePath);
     }
+    return "complete";
   }
 
   private startFallbackPolling(): void {
-    if (this.pollTimer !== null) return;
+    if (this.disposed || this.pollTimer !== null) return;
     this.pollTimer = setInterval(() => {
       void this.scanAndEmitDiff();
     }, this.config.fallbackPollMs);
@@ -631,8 +707,10 @@ class WorkspaceWatchSession {
   }
 
   private emitRescan(reason: EditorM7WatchDegradedReason, kind: "rescan" | "overflow"): void {
+    const alreadyRequired = this.health === "rescanRequired" && this.degradedReasons.has(reason);
     this.degradedReasons.add(reason);
     this.health = "rescanRequired";
+    if (alreadyRequired) return;
     this.emit({
       schemaVersion: EDITOR_M7_SCHEMA_VERSION,
       sequence: this.nextSequence(),
@@ -642,6 +720,20 @@ class WorkspaceWatchSession {
       health: this.health,
       reason,
     });
+  }
+
+  private recoverAfterCompleteScan(): void {
+    this.degradedReasons.delete("ambiguous-event");
+    this.degradedReasons.delete("event-overflow");
+    if (this.degradedReasons.has("root-replaced") || this.degradedReasons.has("sequence-gap")) {
+      this.health = "rescanRequired";
+    } else {
+      this.health = this.degradedReasons.size === 0 ? "healthy" : "degraded";
+    }
+    if (this.handle !== null && this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 
   private emit(event: EditorM7WatchEvent): void {

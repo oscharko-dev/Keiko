@@ -296,6 +296,40 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
   });
 
+  it("rejects unknown and duplicate modifiers and canonicalizes valid chords", () => {
+    for (const binding of [
+      "Hyper+O",
+      "CtrlOrMeta+CtrlOrMeta+O",
+      "shift+Shift+O",
+      "CtrlOrMeta+Meta+O",
+    ]) {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "quick-access.files",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+    }
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: " shift + CTRLORMETA + alt + o ",
+        activeBindings: {},
+      }),
+    ).toStrictEqual({ ok: true, value: "CtrlOrMeta+Alt+Shift+O" });
+  });
+
+  it("detects collisions regardless of modifier order and case", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "view.splitRight",
+        binding: "shift+ctrlormeta+o",
+        activeBindings: { "quick-access.files": "CtrlOrMeta+Shift+O" },
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
+  });
+
   it("allows explicit context-disjoint reuse and normalizes persisted override records", () => {
     expect(
       validateEditorM7Keybinding({
@@ -310,7 +344,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         binding: "Shift+Alt+X",
         activeBindings: [{ commandId: "open-editor-settings", binding: "Shift+Alt+X" }],
       }),
-    ).toStrictEqual({ ok: true, value: "Shift+Alt+X" });
+    ).toStrictEqual({ ok: true, value: "Alt+Shift+X" });
     const record = serializeEditorM7KeybindingOverride({
       schemaVersion: "1",
       commandId: "view.splitRight",

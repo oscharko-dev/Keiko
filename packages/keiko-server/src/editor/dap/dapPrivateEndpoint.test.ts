@@ -700,7 +700,7 @@ describe("private DAP endpoint", () => {
       destroy,
     } as unknown as Socket;
     const closing = closeDapPrivateEndpointSocket(socket);
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(49);
     expect(destroy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await closing;
@@ -721,7 +721,7 @@ describe("private DAP endpoint", () => {
       destroy,
     } as unknown as Socket;
     await closeDapPrivateEndpointSocket(socket);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(50);
     expect(destroy).not.toHaveBeenCalled();
     vi.useRealTimers();
   });

@@ -7,12 +7,19 @@ on:
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
       - "release/**"
+  # ADR-0139 D7: the merge queue re-triggers this workflow so the required check reports on the
+  # merge group; the diff itself was already reviewed on the pull request head, so the job is
+  # skipped there (a skipped required job satisfies branch protection).
+  merge_group:
+    branches:
+      - dev
 
 permissions: {}
 
 jobs:
   dependency-review:
     name: Review dependency diff (dev/main)
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -31,6 +31,8 @@ import {
   type LanguagePosition,
   type LanguageRange,
 } from "./language-service.js";
+import { isBoundedEditorSessionId } from "./coding-context.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 import type {
   EditorCompletionContextSelectors,
   EditorCompletionSource,
@@ -86,6 +88,7 @@ export interface EditorInlineCompletionWireResponse {
 export interface EditorInlineCompletionWireRequest {
   readonly schemaVersion: typeof EDITOR_INLINE_COMPLETION_SCHEMA_VERSION;
   readonly root: string;
+  readonly editorSessionId?: string;
   readonly document: LanguageDocumentOverlay;
   readonly position: LanguagePosition;
   readonly triggerKind: EditorInlineCompletionWireTriggerKind;
@@ -182,6 +185,14 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function collectEditorSessionIdError(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isBoundedEditorSessionId(value)) {
+    errors.push(
+      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+    );
+  }
+}
+
 // Collects the optional, content-bearing context selectors (identical invariants to the completion
 // gateway). Unknown-typed fields are rejected so a malformed selector cannot silently widen
 // retrieval; an absent `context` is valid (repository search only for the `inline` purpose).
@@ -223,6 +234,7 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
+  collectEditorSessionIdError(value.editorSessionId, errors);
   if (!isLanguageDocumentOverlay(value.document)) {
     errors.push("document must be { path, languageId, text }");
   }
@@ -263,6 +275,9 @@ export function parseEditorInlineCompletionRequest(value: unknown): EditorInline
     value: {
       schemaVersion: EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
       root: value.root as string,
+      ...(isBoundedEditorSessionId(value.editorSessionId)
+        ? { editorSessionId: value.editorSessionId }
+        : {}),
       document: value.document as LanguageDocumentOverlay,
       position: value.position as LanguagePosition,
       triggerKind: value.triggerKind as EditorInlineCompletionWireTriggerKind,

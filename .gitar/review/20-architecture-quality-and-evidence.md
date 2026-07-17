@@ -35,7 +35,7 @@ Check all applicable requirements:
 - Coverage evidence represents real changed executable source with reserve above the enforced
   threshold. A dashboard status without current-head source mapping and zero unresolved findings is
   not sufficient.
-- The first PR push is backed by `npm run codex:pre-pr` plus every affected-area gate. Later fixes
+- The first PR push is backed by `npm run agent:pre-pr` plus every affected-area gate. Later fixes
   reproduce the reported failure locally and rerun the targeted gate before the next push.
 
 Each finding must name the concrete failure mode and the smallest owning-layer repair. Avoid style

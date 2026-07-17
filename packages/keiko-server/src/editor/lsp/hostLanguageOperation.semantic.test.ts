@@ -93,6 +93,42 @@ describe("managed host semantic tokens", () => {
     expect(result?.legend.tokenTypes).toContain("struct");
   });
 
+  it("reopens semantic-token documents after a crash while retaining same-child incremental sync", async () => {
+    const processes: ReturnType<typeof createFakeLspProcess>[] = [];
+    const spawn: LspSpawnFn = () => {
+      const process = fake([0, 0, 6, 0, 1]);
+      processes.push(process);
+      return process.handle;
+    };
+
+    await runHostLanguageSemanticTokens(
+      { path: "lib.rs", languageId: "rust", text: "struct Value;\n", version: 11 },
+      options(spawn),
+    );
+    await runHostLanguageSemanticTokens(
+      { path: "lib.rs", languageId: "rust", text: "struct Other;\n", version: 12 },
+      options(spawn),
+    );
+    processes[0]?.crash();
+    const restarted = await runHostLanguageSemanticTokens(
+      { path: "lib.rs", languageId: "rust", text: "struct Final;\n", version: 13 },
+      options(spawn),
+    );
+
+    expect(restarted?.data).toMatchObject({ documentVersion: 13, returnedTokenCount: 1 });
+    const initialMethods = processes[0]?.receivedMethods() ?? [];
+    expect(initialMethods.filter((method) => method === "textDocument/didOpen")).toHaveLength(1);
+    expect(initialMethods.filter((method) => method === "textDocument/didChange")).toHaveLength(1);
+    const replacementMethods = processes[1]?.receivedMethods() ?? [];
+    expect(replacementMethods.filter((method) => method === "textDocument/didOpen")).toHaveLength(
+      1,
+    );
+    expect(replacementMethods).not.toContain("textDocument/didChange");
+    expect(replacementMethods.indexOf("textDocument/didOpen")).toBeLessThan(
+      replacementMethods.indexOf("textDocument/semanticTokens/full"),
+    );
+  });
+
   it("returns fallback for malformed token indices and cancellation", async () => {
     const malformed = fake([0, 0, 6, 8, 0]);
     const document = { path: "lib.rs", languageId: "rust", text: "struct Value;\n", version: 2 };

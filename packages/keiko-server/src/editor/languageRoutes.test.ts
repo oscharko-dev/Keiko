@@ -3,8 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  type ManagedLspProcessHealthSnapshot,
+  type ManagedLspShellConfiguration,
+} from "@oscharko-dev/keiko-contracts";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
@@ -31,6 +35,44 @@ function hasProvider(body: unknown, id: string, availability: string): boolean {
     (provider) =>
       isRecord(provider) && provider.id === id && provider.availability === availability,
   );
+}
+
+function provider(body: unknown, id: string): Record<string, unknown> | undefined {
+  if (!isRecord(body) || !Array.isArray(body.providers)) return undefined;
+  return body.providers.find((entry): entry is Record<string, unknown> => {
+    return isRecord(entry) && entry.id === id;
+  });
+}
+
+function negotiatedHealth(
+  operations: ManagedLspProcessHealthSnapshot["negotiatedOperations"],
+): ManagedLspProcessHealthSnapshot {
+  return {
+    schemaVersion: "1",
+    managerId: "managed-python",
+    language: "python",
+    status: "READY",
+    restartCount: 0,
+    configurationRevision: 1,
+    negotiatedOperations: operations,
+    lastTransitionTimestampMs: 1,
+    pendingRequestCount: 0,
+    requestCount: 0,
+    successCount: 0,
+    timeoutCount: 0,
+    cancellationCount: 0,
+    failureCount: 0,
+    latency: {
+      count: 0,
+      totalMs: 0,
+      maximumMs: 0,
+      lessThanOrEqual10Ms: 0,
+      lessThanOrEqual50Ms: 0,
+      lessThanOrEqual250Ms: 0,
+      lessThanOrEqual1Second: 0,
+      greaterThan1Second: 0,
+    },
+  };
 }
 
 function schemaVersion(body: unknown): unknown {
@@ -115,6 +157,35 @@ function tsconfig(): string {
     },
     include: ["src/**/*.ts"],
   });
+}
+
+function shellConfiguration(revision: number, etag: string): ManagedLspShellConfiguration {
+  return {
+    schemaVersion: "1",
+    language: "shell",
+    revision,
+    etag,
+    activation: "enabled",
+    runtime: { kind: "operatorApproved", runtimeId: "shell-lsp" },
+    provenance: {
+      activation: "workspace",
+      runtime: "operatorProvisioning",
+      settings: "workspace",
+    },
+    restartRequired: false,
+    restartFields: [],
+    settings: {
+      dialect: "bash",
+      sourcePolicy: "workspaceOnly",
+      shellCheck: {
+        mode: "disabled",
+        severity: "warning",
+        excludedCodes: [],
+        includePaths: [],
+        externalSources: false,
+      },
+    },
+  };
 }
 
 function positionOf(text: string, needle: string, offset = 0): { line: number; character: number } {
@@ -341,12 +412,32 @@ describe("GET /api/editor/language/capabilities", () => {
         language: "python",
         root,
       });
+      const unavailableInitialization = vi.fn(() => Promise.resolve(undefined));
+      const awaitingNegotiation = await handleEditorLanguageCapabilitiesForRoute(
+        context,
+        { ...controlledDeps, env: { PATH: bin } },
+        {
+          hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+          initializeManagedProvider: unavailableInitialization,
+        },
+      );
+      expect(hasProvider(awaitingNegotiation.body, "python-lsp", "unavailable")).toBe(true);
+      expect(unavailableInitialization).toHaveBeenCalledOnce();
+
+      const negotiatedInitialization = vi.fn(() =>
+        Promise.resolve(negotiatedHealth(["diagnostics"])),
+      );
       const activated = await handleEditorLanguageCapabilitiesForRoute(
         context,
         { ...controlledDeps, env: { PATH: bin } },
-        { hostLanguageCommandRules: [{ executable: "pyright-langserver" }] },
+        {
+          hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+          initializeManagedProvider: negotiatedInitialization,
+        },
       );
       expect(hasProvider(activated.body, "python-lsp", "available")).toBe(true);
+      expect(provider(activated.body, "python-lsp")?.operations).toEqual(["diagnostics"]);
+      expect(negotiatedInitialization).toHaveBeenCalledOnce();
     } finally {
       await rm(bin, { recursive: true, force: true });
       await rm(stateDir, { recursive: true, force: true });
@@ -796,6 +887,58 @@ describe("POST /api/editor/language", () => {
 });
 
 describe("managedActivationAuthorization", () => {
+  it("withholds desired configuration until an explicit restart succeeds", async () => {
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-restart-gate-state-")));
+    try {
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const initial = await managedLspControl.read(root);
+      const configured = await managedLspControl.mutate({
+        action: "configure",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        expectedEtag: initial.etag,
+        idempotencyKey: "configure-before-restart",
+        language: "shell",
+        root,
+        configuration: shellConfiguration(0, initial.etag),
+      });
+      if (configured.kind !== "ok") throw new Error("configuration setup failed");
+      const controlledDeps = { ...deps(), managedLspControl };
+
+      const pending = await managedActivationAuthorization(controlledDeps, root, "shell");
+
+      expect(pending).toEqual({ authorized: false });
+
+      const restarted = await managedLspControl.mutate({
+        action: "restart",
+        actorClass: "localHuman",
+        expectedRevision: 1,
+        expectedEtag: configured.etag,
+        idempotencyKey: "restart-before-serve",
+        language: "shell",
+        root,
+      });
+      expect(restarted.kind).toBe("ok");
+
+      const ready = await managedActivationAuthorization(controlledDeps, root, "shell");
+      expect(ready).toMatchObject({
+        authorized: true,
+        configuration: { revision: 2, restartRequired: false },
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("evaluates authorization against the given languageId, not a fixed language", async () => {
     const stateDir = await realpath(
       await mkdtemp(join(tmpdir(), "keiko-managed-authorization-state-")),

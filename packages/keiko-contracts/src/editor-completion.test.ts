@@ -6,6 +6,7 @@ import {
   EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
   parseEditorCompletionRequest,
 } from "./editor-completion.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 function baseRequest(): Record<string, unknown> {
   return {
@@ -66,6 +67,14 @@ describe("parseEditorCompletionRequest — happy path", () => {
     if (!parsed.ok) return;
     expect(parsed.value.triggerCharacter).toBe(".");
     expect(parsed.value.maxCostClass).toBe("medium");
+  });
+
+  it("retains a bounded editor session id when provided", () => {
+    const editorSessionId = "a".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES);
+    const parsed = parseEditorCompletionRequest({ ...baseRequest(), editorSessionId });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.editorSessionId).toBe(editorSessionId);
   });
 
   it("keeps only the supplied context selectors and drops an empty context object", () => {
@@ -132,6 +141,22 @@ describe("parseEditorCompletionRequest — rejections", () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.errors).toContain("maxCostClass must be one of: low, medium, high");
+  });
+
+  it("rejects malformed or oversized editor session ids", () => {
+    for (const editorSessionId of [
+      "",
+      "   ",
+      7,
+      "\u{1f600}".repeat(Math.floor(EDITOR_AGENT_SESSION_ID_MAX_BYTES / 4) + 1),
+    ]) {
+      const parsed = parseEditorCompletionRequest({ ...baseRequest(), editorSessionId });
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.errors).toContain(
+        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+      );
+    }
   });
 
   it("rejects a malformed context object and conflicting capsule selectors", () => {

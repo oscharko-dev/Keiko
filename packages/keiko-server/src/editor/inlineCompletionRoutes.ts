@@ -213,6 +213,7 @@ function buildContextRequest(request: EditorInlineCompletionWireRequest): Coding
   return {
     schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
     purpose: "inline",
+    editorSessionId: request.editorSessionId,
     documentPath: request.document.path,
     symbol: request.context?.symbol,
     queryText: request.context?.queryText,
