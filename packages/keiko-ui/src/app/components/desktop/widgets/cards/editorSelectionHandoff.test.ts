@@ -41,12 +41,7 @@ afterEach(() => {
 
 describe("editor selection capture", () => {
   it("preserves a CRLF selection and composes a root-relative, untrusted-input prompt", () => {
-    // Built from character codes rather than a "pha\r\nbet" literal: SonarCloud's JS analyzer
-    // highlight pass has been observed (scripts/__tests__/portable-launch-setup-smoke.test.mjs,
-    // reproduced three times) to mis-compute token ranges around adjacent \r/\n escapes and crash
-    // the CI scanner. This literal hasn't triggered it yet, but the same defensive rewrite removes
-    // the risk while keeping the runtime value byte-for-byte identical.
-    const selected = `pha${String.fromCharCode(13, 10)}bet`;
+    const selected = "pha\r\nbet";
     const captured = captureEditorSelection("src/example.ts", {
       textMode: "selection",
       range: { start: { line: 0, column: 2 }, end: { line: 1, column: 3 } },
