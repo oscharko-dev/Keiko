@@ -538,20 +538,23 @@ function requiredFirst<T>(values: readonly T[]): T {
   return first;
 }
 
-// Recursively collect every object key and every primitive value of a payload. Used to assert
-// redaction structurally (exact key/value membership) instead of scanning JSON.stringify output for
-// substrings, which false-positives whenever a random opaque token or sessionId happens to contain
-// a redacted digit sequence.
-function collectSerialized(value: unknown, keys: Set<string>, values: Set<string>): void {
+// Recursively collect every [key, primitive-value] pair of a payload. Used to assert redaction in a
+// key-scoped way (the raw DAP reference fields must be absent, and opaque *Ref tokens must not equal
+// an internal reference) instead of scanning JSON.stringify output for substrings — which
+// false-positives whenever a random opaque token or sessionId happens to contain a redacted digit
+// sequence — or banning the sentinel values globally, which would false-positive on unrelated
+// legitimate numeric fields.
+function collectEntries(value: unknown, entries: [string, string][]): void {
   if (Array.isArray(value)) {
-    for (const item of value) collectSerialized(item, keys, values);
+    for (const item of value) collectEntries(item, entries);
   } else if (value !== null && typeof value === "object") {
     for (const [key, nested] of Object.entries(value)) {
-      keys.add(key);
-      collectSerialized(nested, keys, values);
+      if (typeof nested === "string" || typeof nested === "number" || typeof nested === "boolean") {
+        entries.push([key, String(nested)]);
+      } else {
+        collectEntries(nested, entries);
+      }
     }
-  } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    values.add(String(value));
   }
 }
 
@@ -1374,18 +1377,19 @@ describe("governed DAP debug routes", () => {
     expect(evaluated.status).toBe(200);
     expect(readOnlySet.status).toBe(403);
     expect(requiredFirst(stackBody.frames).sourceFileId).toBe("src/app.ts");
-    // The client projection must expose only opaque frameRef/scopeRef/variableRef tokens, never the
-    // raw DAP "variablesReference" field name or the internal numeric references (frame id 202,
-    // scope reference 303, variable reference 404). Assert key/value membership exactly: a substring
-    // scan of the serialized body false-positives whenever a random opaque token or sessionId
-    // happens to contain one of these digit sequences (observed flakily in CI).
+    // The client projection must expose only opaque *Ref tokens: the raw DAP reference fields ("id"
+    // carrying frame 202, "variablesReference" carrying 303/404) must never appear, and an opaque
+    // reference token must never equal one of the internal numeric references. Scope the numeric
+    // checks to reference-carrying keys so unrelated legitimate numbers (line, column, counts) can
+    // never trigger a false failure, and never substring-scan random opaque tokens or the sessionId.
+    const internalReferences = new Set(["202", "303", "404"]);
     for (const body of [stackBody, scopesBody, variablesBody]) {
-      const keys = new Set<string>();
-      const values = new Set<string>();
-      collectSerialized(body, keys, values);
-      expect(keys.has("variablesReference")).toBe(false);
-      for (const reference of ["202", "303", "404"]) {
-        expect(values.has(reference)).toBe(false);
+      const entries: [string, string][] = [];
+      collectEntries(body, entries);
+      for (const [key, value] of entries) {
+        expect(key).not.toBe("id");
+        expect(key).not.toBe("variablesReference");
+        if (key.endsWith("Ref")) expect(internalReferences.has(value)).toBe(false);
       }
     }
     expect(manager.requests).toContainEqual({
