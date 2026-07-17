@@ -91,7 +91,14 @@ describe("portable launch/setup smoke", () => {
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
-    expect(containsPrimaryShellCommand("intro\r\nnode server.js")).toBe(true);
+    // Split across two literals (rather than one "intro\r\nnode server.js" literal): the
+    // SonarCloud JS analyzer's highlight pass mis-computes the token range for a string literal
+    // containing two adjacent \r\n escapes immediately followed by a chained call, throwing
+    // java.lang.IllegalArgumentException ("N is not a valid line offset") and failing CI's
+    // zero-scanner-warnings gate (check-sonar-analysis-log.mjs) — reproduced twice, deterministic
+    // on this exact literal. Splitting the escape pair across a concatenation keeps the runtime
+    // string byte-for-byte identical while avoiding the single-token shape that triggers it.
+    expect(containsPrimaryShellCommand("intro\r" + "\nnode server.js")).toBe(true);
   });
 
   // The former `(?:^|\n)\s*(?:node|npm|npx|yarn|keiko)\s+` let its `\s*` re-enter the same run of
