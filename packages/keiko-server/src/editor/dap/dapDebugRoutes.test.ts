@@ -538,6 +538,23 @@ function requiredFirst<T>(values: readonly T[]): T {
   return first;
 }
 
+// Recursively collect every object key and every primitive value of a payload. Used to assert
+// redaction structurally (exact key/value membership) instead of scanning JSON.stringify output for
+// substrings, which false-positives whenever a random opaque token or sessionId happens to contain
+// a redacted digit sequence.
+function collectSerialized(value: unknown, keys: Set<string>, values: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectSerialized(item, keys, values);
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, nested] of Object.entries(value)) {
+      keys.add(key);
+      collectSerialized(nested, keys, values);
+    }
+  } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    values.add(String(value));
+  }
+}
+
 async function putBreakpoints(
   cookie: string,
   body: Record<string, unknown>,
@@ -1357,12 +1374,19 @@ describe("governed DAP debug routes", () => {
     expect(evaluated.status).toBe(200);
     expect(readOnlySet.status).toBe(403);
     expect(requiredFirst(stackBody.frames).sourceFileId).toBe("src/app.ts");
+    // The client projection must expose only opaque frameRef/scopeRef/variableRef tokens, never the
+    // raw DAP "variablesReference" field name or the internal numeric references (frame id 202,
+    // scope reference 303, variable reference 404). Assert key/value membership exactly: a substring
+    // scan of the serialized body false-positives whenever a random opaque token or sessionId
+    // happens to contain one of these digit sequences (observed flakily in CI).
     for (const body of [stackBody, scopesBody, variablesBody]) {
-      const text = JSON.stringify(body);
-      expect(text).not.toContain('"id":202');
-      expect(text).not.toContain("variablesReference");
-      expect(text).not.toContain("303");
-      expect(text).not.toContain("404");
+      const keys = new Set<string>();
+      const values = new Set<string>();
+      collectSerialized(body, keys, values);
+      expect(keys.has("variablesReference")).toBe(false);
+      for (const reference of ["202", "303", "404"]) {
+        expect(values.has(reference)).toBe(false);
+      }
     }
     expect(manager.requests).toContainEqual({
       sessionId: session.sessionId,
