@@ -91,14 +91,17 @@ describe("portable launch/setup smoke", () => {
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
     expect(containsPrimaryShellCommand(" node server.js")).toBe(true);
-    // Split across two literals (rather than one "intro\r\nnode server.js" literal): the
-    // SonarCloud JS analyzer's highlight pass mis-computes the token range for a string literal
-    // containing two adjacent \r\n escapes immediately followed by a chained call, throwing
+    // Built from character codes rather than an "intro\r\nnode server.js" literal (or a
+    // concatenation of "\r"- and "\n"-escape literals, which still reproduced it): the SonarCloud
+    // JS analyzer's highlight pass mis-computes the token range whenever a CR-escape and an
+    // LF-escape both appear as the last statement of this block, throwing
     // java.lang.IllegalArgumentException ("N is not a valid line offset") and failing CI's
-    // zero-scanner-warnings gate (check-sonar-analysis-log.mjs) — reproduced twice, deterministic
-    // on this exact literal. Splitting the escape pair across a concatenation keeps the runtime
-    // string byte-for-byte identical while avoiding the single-token shape that triggers it.
-    expect(containsPrimaryShellCommand("intro\r" + "\nnode server.js")).toBe(true);
+    // zero-scanner-warnings gate (check-sonar-analysis-log.mjs) — reproduced three times,
+    // deterministic, and the range shifted rather than disappeared after the first attempted
+    // fix. Building the string from character codes keeps the runtime value byte-for-byte
+    // identical while removing every \r/\n escape-sequence token from this statement.
+    const crlf = String.fromCharCode(13, 10);
+    expect(containsPrimaryShellCommand(`intro${crlf}node server.js`)).toBe(true);
   });
 
   // The former `(?:^|\n)\s*(?:node|npm|npx|yarn|keiko)\s+` let its `\s*` re-enter the same run of
