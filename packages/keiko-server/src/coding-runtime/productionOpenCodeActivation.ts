@@ -30,6 +30,9 @@ type ProductionOpenCodePorts = Pick<
 
 export interface ProductionOpenCodeActivationInput {
   readonly env: NodeJS.ProcessEnv;
+  /** Host identity injection for deterministic tests; production omits both. */
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly arch?: string | undefined;
   readonly runtimeStateDir: string;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
@@ -70,7 +73,7 @@ export function resolveProductionOpenCodeActivation(
   if (codingSidecarDisabledByPolicy(input.env)) {
     return { unavailableReason: "runtime-disabled" };
   }
-  const runtime = resolveRuntime(input.env);
+  const runtime = resolveRuntime(input);
   if (runtime.unavailableReason !== undefined) {
     return { unavailableReason: runtime.unavailableReason };
   }
@@ -108,10 +111,13 @@ type ResolvedRuntime =
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
-function resolveRuntime(env: NodeJS.ProcessEnv): ResolvedRuntime {
-  const packaged = discoverQualifiedPortableOpenCode({ env });
+function resolveRuntime(
+  input: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
+): ResolvedRuntime {
+  const host = { env: input.env, platform: input.platform, arch: input.arch };
+  const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
-  return devLaneRuntime(discoverDevLaneOpenCode({ env }));
+  return devLaneRuntime(discoverDevLaneOpenCode(host));
 }
 
 function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {

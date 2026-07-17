@@ -32,6 +32,9 @@ function activationInput(
 ): Parameters<typeof resolveProductionOpenCodeActivation>[0] {
   return {
     env,
+    // Deterministic host identity: these cases exercise the macOS dev lane on every CI host.
+    platform: "darwin",
+    arch: "arm64",
     runtimeStateDir: overrides.stateDir ?? join(tmpdir(), "keiko-runtime-state"),
     runtimeEvidence: { observe: () => undefined },
     gatewayReadiness: {
