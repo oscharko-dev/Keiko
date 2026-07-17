@@ -77,6 +77,8 @@ async function buildHelper(target, helperPath, root, runBuild) {
 }
 
 export function resolveStageDeps(deps) {
+  const platform = deps.platform ?? process.platform;
+  const arch = deps.arch ?? process.arch;
   return {
     root: deps.root ?? repoRoot,
     prepareSidecars: deps.prepareSidecars ?? prepareApprovedSidecarPayloads,
@@ -84,9 +86,9 @@ export function resolveStageDeps(deps) {
     resolveGit: deps.resolveGit ?? (() => resolveHostExecutable("git")),
     exec: deps.exec ?? execFileSync,
     log: deps.log ?? console.log,
-    target:
-      deps.target ??
-      hostDevLaneTarget(deps.platform ?? process.platform, deps.arch ?? process.arch),
+    platform,
+    arch,
+    target: deps.target ?? hostDevLaneTarget(platform, arch),
   };
 }
 
@@ -112,11 +114,13 @@ function stagedManifest({ target, helperPath, root, exec, resolveGit }) {
  * host; production invocation supplies the real payload preparer, native builder, and git.
  */
 export async function stageDevCodingRuntime(argv, deps = {}) {
-  const { root, prepareSidecars, runBuild, resolveGit, exec, log, target } = resolveStageDeps(deps);
+  const { root, prepareSidecars, runBuild, resolveGit, exec, log, platform, arch, target } =
+    resolveStageDeps(deps);
   if (target === undefined) {
+    // Report the identity that actually drove the decision (injected in tests, real otherwise).
     throw new Error(
       "The coding-runtime dev lane supports macOS (arm64/x64) checkouts only; " +
-        `this host is ${process.platform}/${process.arch}.`,
+        `this host is ${platform}/${arch}.`,
     );
   }
   log(`[dev-lane] preparing approved sidecar payload for ${target} …`);

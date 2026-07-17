@@ -137,9 +137,11 @@ describe("resolveStageDeps", () => {
 describe("stageDevCodingRuntime", () => {
   it("refuses a non-macOS host before touching any I/O", async () => {
     const prepareSidecars = vi.fn();
+    // The refusal message must report the identity that drove the decision (the injected host),
+    // not the real process platform/arch (Gitar review on #2487).
     await expect(
       stageDevCodingRuntime([], { platform: "linux", arch: "x64", prepareSidecars }),
-    ).rejects.toThrow(/dev lane supports macOS/u);
+    ).rejects.toThrow("this host is linux/x64");
     expect(prepareSidecars).not.toHaveBeenCalled();
   });
 
