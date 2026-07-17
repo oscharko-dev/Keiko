@@ -1469,6 +1469,91 @@ describe("validateCodingWorkbenchRuntimeEvent", () => {
   });
 });
 
+describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
+  function auxEvent(kind: CodingWorkbenchRuntimeEvent["kind"]): Record<string, unknown> {
+    return {
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind,
+    };
+  }
+
+  it("accepts research-performed / skill-invoked / child-run-* with content-free fields", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        byteCount: 2048,
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "skl_docs-search@1",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-started"),
+        childRunId: "chr_child-1",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-completed"),
+        childRunId: "chr_child-1",
+        auxiliaryOutcome: "limit-reached",
+        childResultCount: 0,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects an invalid outcome, a forged skill id, and a non-child-run id", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "granted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("skill-invoked"),
+        skillId: "rm -rf /",
+        skillInvocation: "explicit",
+        auxiliaryOutcome: "accepted",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("child-run-started"),
+        childRunId: "run-1",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("requires the outcome and ids and rejects a foreign field for the kind", () => {
+    const missing = validateCodingWorkbenchRuntimeEvent(auxEvent("child-run-completed"));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.errors).toContain("event.childRunId is required");
+      expect(missing.errors).toContain("event.auxiliaryOutcome is required");
+      expect(missing.errors).toContain("event.childResultCount is required");
+    }
+    // A research-performed event may not carry skillId (per-kind allowlist fails closed).
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...auxEvent("research-performed"),
+        auxiliaryOutcome: "accepted",
+        skillId: "skl_x@1",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+});
+
 describe("validateCodingWorkbenchEvidenceRecord", () => {
   it("accepts a minimal content-free evidence record", () => {
     expect(validateCodingWorkbenchEvidenceRecord(baseEvidenceRecord())).toEqual({

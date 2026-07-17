@@ -25,7 +25,11 @@ import {
   isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
 } from "./code-task-governance.js";
-import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import { CODING_WORKBENCH_AUXILIARY_STATUSES } from "./coding-workbench.js";
+import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchValidationResult,
+} from "./coding-workbench.js";
 
 export const CODE_TASK_AUXILIARY_SCHEMA_VERSION = 1;
 
@@ -273,15 +277,12 @@ export function validateAuxiliaryCapabilityRequestV1(
 // A normalized, content-free outcome. `accepted` carries a progress/result ref plus, for a child
 // agent, its explicit result count (zero is valid and explicit). Every non-accepted status carries
 // a bounded reason code only. `limit-reached` and `stopped` are distinct from `denied` so a child
-// scheduler and the UI can tell an exhausted budget or a cascaded stop from a policy denial.
-export const AUXILIARY_OUTCOME_STATUSES = Object.freeze([
-  "accepted",
-  "denied",
-  "unavailable",
-  "limit-reached",
-  "stopped",
-] as const);
-export type AuxiliaryOutcomeStatus = (typeof AUXILIARY_OUTCOME_STATUSES)[number];
+// scheduler and the UI can tell an exhausted budget or a cascaded stop from a policy denial. The
+// status vocabulary is the single canonical `CodingWorkbenchAuxiliaryStatus` from the base module
+// (also carried on the runtime event's `auxiliaryOutcome` field), so the port and the timeline
+// never drift.
+export const AUXILIARY_OUTCOME_STATUSES = CODING_WORKBENCH_AUXILIARY_STATUSES;
+export type AuxiliaryOutcomeStatus = CodingWorkbenchAuxiliaryStatus;
 
 export type AuxiliaryCapabilityOutcomeV1 =
   | {
