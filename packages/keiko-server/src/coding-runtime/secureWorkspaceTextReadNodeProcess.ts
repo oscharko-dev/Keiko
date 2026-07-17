@@ -18,7 +18,10 @@ interface NodeSpawnOptions {
 }
 
 export interface SecureWorkspaceReadNodeChild {
-  readonly stdin: { end(data?: Uint8Array): unknown };
+  readonly stdin: {
+    end(data?: Uint8Array): unknown;
+    on(event: "error", listener: (error: unknown) => void): unknown;
+  };
   readonly stdout: {
     on(event: "data" | "error", listener: ((chunk: Uint8Array) => void) | (() => void)): unknown;
   };
@@ -91,6 +94,11 @@ function nodeOptions(cwd: string): NodeSpawnOptions {
 
 function adaptNodeChild(child: SecureWorkspaceReadNodeChild): SecureWorkspaceReadChild {
   const reaped = new Promise<void>((resolve) => child.once("close", resolve));
+  // A helper that dies before reading its request surfaces EPIPE on the stdin stream. Without a
+  // listener that asynchronous stream error is an uncaught exception in the server process; the
+  // close path already settles the one-shot run as a process failure, so the write error itself
+  // carries no additional signal.
+  child.stdin.on("error", () => undefined);
   return Object.freeze({
     stdin: { end: (data: Uint8Array) => child.stdin.end(data) },
     stdout: child.stdout,

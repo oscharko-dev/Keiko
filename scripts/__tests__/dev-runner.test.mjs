@@ -16,6 +16,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  bffChildEnv,
   bffProcessArgs,
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
@@ -99,6 +100,18 @@ describe("bffProcessArgs", () => {
     expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
       "/repo/scripts/dev-bff.mjs",
     ]);
+  });
+});
+
+describe("bffChildEnv", () => {
+  // #2475: the dev lane mirrors the packaged CLI's KEIKO_UI_PORT export so coding-runtime
+  // activation can compose its loopback gateway URL against the public proxy port.
+  it("exports the public UI port alongside the BFF listen port and state dir", () => {
+    expect(bffChildEnv(1984, 1983, "/state/dir")).toEqual({
+      KEIKO_DEV_BFF_PORT: "1984",
+      KEIKO_UI_PORT: "1983",
+      KEIKO_STATE_DIR: "/state/dir",
+    });
   });
 });
 

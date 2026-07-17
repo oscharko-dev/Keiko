@@ -44,6 +44,34 @@ export interface CodingWorkbenchRuntimeReadinessRequest {
   readonly requestedMode: CodingWorkbenchMode;
 }
 
+/**
+ * Closed, content-free reason vocabulary for `runtimeAvailable: false`. Codes name the first
+ * failed activation prerequisite; they never carry paths, digests, or environment values.
+ */
+export type CodingWorkbenchRuntimeUnavailableReason =
+  | "runtime-disabled"
+  | "platform-unqualified"
+  | "dev-lane-refused"
+  | "payload-missing"
+  | "payload-unapproved"
+  | "payload-tampered"
+  | "secure-read-unavailable"
+  | "loopback-unavailable"
+  | "runtime-unqualified";
+
+export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbenchRuntimeUnavailableReason[] =
+  Object.freeze([
+    "runtime-disabled",
+    "platform-unqualified",
+    "dev-lane-refused",
+    "payload-missing",
+    "payload-unapproved",
+    "payload-tampered",
+    "secure-read-unavailable",
+    "loopback-unavailable",
+    "runtime-unqualified",
+  ] as const);
+
 /** Content-free server authority and runtime-composition projection used before Start is enabled. */
 export interface CodingWorkbenchRuntimeReadiness {
   readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -51,6 +79,8 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
   readonly runtimeAvailable: boolean;
+  /** Present exactly when `runtimeAvailable` is false; names the first failed prerequisite. */
+  readonly runtimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
 }
 
 export interface CodingWorkbenchRuntimeStartRequest {
@@ -279,7 +309,14 @@ export function validateCodingWorkbenchRuntimeReadiness(
   if (!isRecord(value)) return invalid("runtime readiness must be an object");
   const errors = exactKeys(
     value,
-    ["schemaVersion", "requestedMode", "deploymentCeiling", "effectiveMode", "runtimeAvailable"],
+    [
+      "schemaVersion",
+      "requestedMode",
+      "deploymentCeiling",
+      "effectiveMode",
+      "runtimeAvailable",
+      "runtimeUnavailableReason",
+    ],
     "runtimeReadiness",
   );
   if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
@@ -288,6 +325,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
   for (const field of ["requestedMode", "deploymentCeiling", "effectiveMode"] as const) {
     if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
   }
+  validateRuntimeUnavailableReason(value, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -304,6 +342,25 @@ export function validateCodingWorkbenchRuntimeReadiness(
   }
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
+}
+
+/**
+ * The unavailable reason is bound to the availability boolean in both directions: an available
+ * runtime must not carry a reason, and an unavailable runtime must name one — a bare `false`
+ * would reintroduce the unexplained-unavailability posture this field exists to end.
+ */
+function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors: string[]): void {
+  const reason = value.runtimeUnavailableReason;
+  if (reason !== undefined && !isOneOf(reason, CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS)) {
+    errors.push("runtimeUnavailableReason is invalid");
+    return;
+  }
+  if (value.runtimeAvailable === true && reason !== undefined) {
+    errors.push("runtimeUnavailableReason must be absent when the runtime is available");
+  }
+  if (value.runtimeAvailable === false && reason === undefined) {
+    errors.push("runtimeUnavailableReason is required when the runtime is unavailable");
+  }
 }
 
 export function validateCodingWorkbenchRuntimeSseEvent(

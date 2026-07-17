@@ -178,6 +178,7 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
         deploymentCeiling: "supervised-coding",
         effectiveMode: "supervised-coding",
         runtimeAvailable: false,
+        runtimeUnavailableReason: "platform-unqualified",
       }),
     }),
   );
