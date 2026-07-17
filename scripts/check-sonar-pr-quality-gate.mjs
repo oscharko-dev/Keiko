@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
+
+import { parseChangedFiles } from "./check-mutation-scope.mjs";
+import { isCoverableProductSource, systemGitExecutable } from "./sonar-analysis-scope.mjs";
 import {
   KEIKO_GATE_ID,
   KEIKO_REPOSITORY_GATE_CONTRACT,
@@ -20,6 +24,7 @@ function finiteNumber(value) {
 
 export function evaluateSonarPullRequest({
   analysis,
+  analyzable = true,
   customGate,
   headSha,
   issuesTotal,
@@ -28,10 +33,10 @@ export function evaluateSonarPullRequest({
 }) {
   return [
     ...analysisFailures(analysis, headSha),
-    ...findingFailures(issuesTotal, measures),
-    ...coverageFailures(measures),
-    ...duplicationFailures(measures),
-    ...newHotspotFailures(measures),
+    ...findingFailures(issuesTotal, measures, analyzable),
+    ...coverageFailures(measures, analyzable),
+    ...duplicationFailures(measures, analyzable),
+    ...newHotspotFailures(measures, analyzable),
     ...overallHotspotFailures(overallMeasures),
     ...gateContractFailures(customGate),
   ];
@@ -47,11 +52,11 @@ function analysisFailures(analysis, headSha) {
   return failures;
 }
 
-function findingFailures(issuesTotal, measures) {
+function findingFailures(issuesTotal, measures, analyzable) {
   return [
     ...issueTotalFailures(issuesTotal),
     ...violationFailures(measures),
-    ...lineCountFailures(measures),
+    ...lineCountFailures(measures, analyzable),
   ];
 }
 
@@ -70,11 +75,20 @@ function violationFailures(measures) {
   return [];
 }
 
-function lineCountFailures(measures) {
+// The new-code re-checks (line count, coverage, duplication, new-code hotspots) re-verify what the
+// native Keiko Banking Grade gate already enforces. They fail closed when SonarCloud omits a metric
+// because, for a change that touches coverable product source, an absent metric means a partial or
+// untrustworthy analysis. When `analyzable` is false the pull request changed no coverable product
+// source (docs, workflow, or other non-lcov paths), so SonarCloud legitimately reports no new-code
+// metrics and there is nothing for these re-checks to evaluate. The always-on checks — native gate
+// status, gate contract, unresolved issues, new violations, and overall hotspot review — still run.
+function lineCountFailures(measures, analyzable) {
+  if (!analyzable) return [];
   return measures.new_lines === undefined ? ["New-code line count metric is missing."] : [];
 }
 
-function coverageFailures(measures) {
+function coverageFailures(measures, analyzable) {
+  if (!analyzable) return [];
   if (measures.new_lines === undefined)
     return ["Cannot evaluate new-code coverage: Sonar did not report a new-code line count."];
   return countAwareRateFailures({
@@ -85,7 +99,8 @@ function coverageFailures(measures) {
   });
 }
 
-function duplicationFailures(measures) {
+function duplicationFailures(measures, analyzable) {
+  if (!analyzable) return [];
   return countAwareRateFailures({
     count: measures.new_duplicated_lines,
     label: "New-code duplication",
@@ -94,13 +109,35 @@ function duplicationFailures(measures) {
   });
 }
 
-function newHotspotFailures(measures) {
+function newHotspotFailures(measures, analyzable) {
+  if (!analyzable) return [];
   return countAwareRateFailures({
     count: measures.new_security_hotspots,
     label: "New-code security-hotspot review",
     rate: measures.new_security_hotspots_reviewed,
     violates: (value) => value < KEIKO_REPOSITORY_GATE_CONTRACT.newCodeHotspotReviewMinimum,
   });
+}
+
+// Determines whether the pull request changed any coverable product source. A base revision is
+// required to compute the diff; without one we fail closed by treating the change as analyzable so
+// the full new-code evidence is still required. Reuses the same diff shape as the sibling LCOV
+// source-mapping gate so both gates classify changed files identically.
+export function isAnalyzableChange({
+  base,
+  execute = execFileSync,
+  head,
+  root = process.cwd(),
+} = {}) {
+  if (base === undefined || base.length === 0) return true;
+  const changed = parseChangedFiles(
+    execute(
+      systemGitExecutable(),
+      ["diff", "--name-status", "--diff-filter=ACMR", `${base}...${head}`],
+      { cwd: root, encoding: "utf8" },
+    ),
+  );
+  return changed.some(isCoverableProductSource);
 }
 
 function overallHotspotFailures(measures = {}) {
@@ -173,6 +210,7 @@ export async function runSonarPullRequestGateCli(input = {}) {
   if (pullRequest === undefined || headSha === undefined)
     throw new Error("SONAR_PULL_REQUEST and SONAR_HEAD_SHA are required.");
   await (input.run ?? runSonarPullRequestGate)({
+    base: env.SONAR_BASE_SHA,
     headSha,
     pullRequest,
     token: env.SONAR_TOKEN,
@@ -180,14 +218,18 @@ export async function runSonarPullRequestGateCli(input = {}) {
 }
 
 export async function runSonarPullRequestGate({
+  base,
+  execute,
   headSha,
   load = sonarJson,
   log = console.log,
   pullRequest,
+  root,
   token,
 }) {
   const evidence = await fetchEvidence(pullRequest, token, load);
-  const failures = evaluateSonarPullRequest({ ...evidence, headSha });
+  const analyzable = isAnalyzableChange({ base, execute, head: headSha, root });
+  const failures = evaluateSonarPullRequest({ ...evidence, analyzable, headSha });
   if (failures.length > 0) throw new Error(failures.join(" "));
   log(`sonar-pr-quality-gate: PASS - PR #${pullRequest} is clean at ${headSha}.`);
 }
