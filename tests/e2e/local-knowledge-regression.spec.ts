@@ -655,8 +655,12 @@ async function openMaintenanceSection(page: Page): Promise<void> {
 // false), and the open route first reports a user cancellation, then a validated two-file pick.
 // This proves the UI contract end-to-end: cancellation mutates nothing, a pick folds into the
 // shared root + relative files, and Connect proceeds with exactly that state.
-async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> {
-  const smallFilesRoot = join(CORPUS_DATA_ROOT, "small-files");
+// #2485: the capability answer is module-memoized in the UI for the whole session
+// (nativeFileDialogSupported caches its first result). On Linux CI the real BFF answers
+// unsupported, so the stub MUST be registered before the app's very first capability fetch
+// (the rename step already mounts the detail page) — register it at pass start, not inside
+// the picker step. On macOS the real answer is true, which previously masked the ordering bug.
+async function stubNativeFileDialog(page: Page, smallFilesRoot: string): Promise<void> {
   await page.route("**/api/native-file-dialog/capability", async (route) => {
     await route.fulfill({ json: { supported: true } });
   });
@@ -677,7 +681,10 @@ async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> 
       },
     });
   });
+}
 
+async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> {
+  const smallFilesRoot = join(CORPUS_DATA_ROOT, "small-files");
   await page.getByRole("button", { name: `Open details for Knowledge Pod ${capsuleName}` }).click();
   // #2485: ca64b217 (#2155) reformatted the limit copy from "1.0 GB" to "1 GB"; the summary sits
   // in the maintenance disclosure.
@@ -786,6 +793,7 @@ async function runRegressionPass(
   resetMutableCorpus(corpus);
   resetLocalKnowledgeDb();
   await ensureProject(request);
+  await stubNativeFileDialog(page, join(CORPUS_DATA_ROOT, "small-files"));
   await resetWorkspaceState(page);
   await openLocalKnowledge(page);
   await expect(page.locator(".lk-pipeline")).toHaveCount(0);
