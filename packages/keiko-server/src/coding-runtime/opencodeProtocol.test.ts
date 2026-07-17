@@ -273,6 +273,31 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     });
   });
 
+  // #2475 first-contact regression: OpenCode 1.17.17 reports `path: ""` for a session whose
+  // working directory is the project root (every git-worktree task workspace). The pinned
+  // projection must admit the empty string while still rejecting an absent or non-string path.
+  it("admits the real child's empty session path and stays closed for absent or invalid paths", () => {
+    const emptyPath = sessionData({ path: "" });
+    expect(parseOpenCodeHistory([syncRow(1, "session.updated.1", emptyPath)])).toMatchObject({
+      ok: true,
+      value: [{ sequence: 1, kind: "observation" }],
+    });
+    const withoutPath = sessionData();
+    delete (withoutPath.info as Record<string, unknown>).path;
+    expect(parseOpenCodeHistory([syncRow(1, "session.updated.1", withoutPath)])).toEqual({
+      ok: false,
+      reason: "event-unknown",
+    });
+    expect(
+      parseOpenCodeHistory([syncRow(1, "session.updated.1", sessionData({ path: 7 }))]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
+    expect(
+      parseOpenCodeHistory([
+        syncRow(1, "session.updated.1", sessionData({ path: "x".repeat(4097) })),
+      ]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
+  });
+
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
     const sentinel = "SENTINEL_PRIVATE_TOOL_INPUT_AND_OUTPUT";
     const parsed = parseOpenCodeHistory([

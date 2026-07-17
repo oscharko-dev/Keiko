@@ -1280,3 +1280,51 @@ describe("currentGatewayEgressConfig — fault-tolerant env egress parsing", () 
     store.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coding-runtime deployment ceiling and readiness reason threading (#2475)
+// ---------------------------------------------------------------------------
+
+describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (#2475)", () => {
+  function depsWithEnv(
+    env: NodeJS.ProcessEnv,
+    ceilingOption?: "supervised-coding",
+  ): ReturnType<typeof buildUiHandlerDeps> {
+    return buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-ceiling-"),
+      env,
+      uiDbPath: join(tmp("ceiling-state-"), "keiko-ui.db"),
+      ...(ceilingOption === undefined ? {} : { codingRuntimeDeploymentCeiling: ceilingOption }),
+    });
+  }
+
+  it("resolves the ceiling from the option, then the environment, then governed-assist", () => {
+    const fromOption = depsWithEnv(
+      { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
+      "supervised-coding",
+    );
+    expect(fromOption.codingRuntimeDeploymentCeiling).toBe("supervised-coding");
+    const fromEnv = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: "supervised-coding" });
+    expect(fromEnv.codingRuntimeDeploymentCeiling).toBe("supervised-coding");
+    const fromDefault = depsWithEnv({});
+    expect(fromDefault.codingRuntimeDeploymentCeiling).toBe("governed-assist");
+  });
+
+  it("ignores an unrecognized ceiling environment value fail-closed", () => {
+    for (const value of ["", "yolo", "AUTONOMOUS-DELIVERY", "supervised_coding"]) {
+      const deps = depsWithEnv({ KEIKO_CODING_DEPLOYMENT_CEILING: value });
+      expect(deps.codingRuntimeDeploymentCeiling).toBe("governed-assist");
+    }
+  });
+
+  it("threads the precise activation unavailable reason for the readiness projection", () => {
+    // No packaged install and no dev-lane opt-in: activation is honestly platform-unqualified.
+    const unqualified = depsWithEnv({});
+    expect(unqualified.codingRuntimeHostQualified).toBe(false);
+    expect(unqualified.codingRuntimeUnavailableReason).toBe("platform-unqualified");
+    // The kill switch dominates every other prerequisite.
+    const disabled = depsWithEnv({ KEIKO_CODING_SIDECAR_DISABLED: "1" });
+    expect(disabled.codingRuntimeUnavailableReason).toBe("runtime-disabled");
+  });
+});

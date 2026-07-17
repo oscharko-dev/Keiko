@@ -58,6 +58,8 @@ interface VerifiedPortableInput {
   readonly verification: PortableSidecarRuntimeVerification;
   readonly resourceRoot: string;
   readonly target: UpdatePortableTarget;
+  /** Admission policy that vouched for the record; absent fails closed to release-qualified. */
+  readonly admission?: "release-qualified" | "functional-dev-lane" | undefined;
 }
 
 export interface OpenCodeRuntimeCompositionInput {

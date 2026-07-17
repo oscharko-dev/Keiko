@@ -229,7 +229,10 @@ describe("coding runtime routes", () => {
     const result = handleCodingRuntimeReadiness(
       context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery"),
       runtime({
-        autonomousDeliveryDeploymentCeiling: "supervised-coding",
+        // #2475: readiness reports the coding-runtime ceiling — the same knob the mint clamp
+        // enforces — never the separate autonomous-delivery ceiling.
+        codingRuntimeDeploymentCeiling: "supervised-coding",
+        autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
         codingRuntimeHostQualified: true,
         // No live run: the effective mode is the plain ceiling clamp.
         codingRuntimeOrchestrator: undefined,
@@ -252,6 +255,38 @@ describe("coding runtime routes", () => {
     }
   });
 
+  it("names the precise unavailable reason exactly while the runtime host is unqualified", () => {
+    const unavailable = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+      runtime({
+        codingRuntimeHostQualified: false,
+        codingRuntimeUnavailableReason: "payload-tampered",
+        codingRuntimeOrchestrator: undefined,
+      }),
+    );
+    expect(unavailable).toMatchObject({
+      status: 200,
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "payload-tampered" },
+    });
+
+    const fallback = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+      runtime({ codingRuntimeHostQualified: false, codingRuntimeOrchestrator: undefined }),
+    );
+    expect(fallback).toMatchObject({
+      status: 200,
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "runtime-unqualified" },
+    });
+
+    const available = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+      runtime({ codingRuntimeHostQualified: true, codingRuntimeOrchestrator: undefined }),
+    );
+    expect(
+      (available.body as { runtimeUnavailableReason?: string }).runtimeUnavailableReason,
+    ).toBeUndefined();
+  });
+
   // #2386 regression: the server-confirmed effective mode is anchored to the LIVE run through the
   // mode-change gate. Requesting a wider mode while a supervised run is live must keep confirming
   // the run's own posture; narrowing is confirmed only from the paused (or idle) state.
@@ -265,7 +300,7 @@ describe("coding runtime routes", () => {
       const result = handleCodingRuntimeReadiness(
         context("", {}, `/api/coding-workbench/runtime/readiness?requestedMode=${requestedMode}`),
         runtime({
-          autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+          codingRuntimeDeploymentCeiling: "autonomous-delivery",
           codingRuntimeHostQualified: true,
           codingRuntimeOrchestrator: { status: () => liveStatus(state) },
         }),
