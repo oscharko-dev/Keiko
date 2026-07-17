@@ -16,7 +16,7 @@
     "/api/git/summary",
     "/api/git/history",
     "/api/git/remotes",
-    "/api/git/diff",
+    "/api/git/diff/structured",
     "/api/projects",
     "/api/git-delivery/staging/stage",
     "/api/git-delivery/staging/unstage",
