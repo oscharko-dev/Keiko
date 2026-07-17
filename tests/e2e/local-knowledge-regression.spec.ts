@@ -311,7 +311,11 @@ function resetLocalKnowledgeDb(): void {
 }
 
 function sqlScalar(sql: string): number {
-  const output = execFileSync("sqlite3", [DB_PATH, sql], { encoding: "utf8" }).trim();
+  // #2485: the CLI reads the SAME database the live BFF is writing; without a busy timeout a
+  // concurrent write lock surfaces as "database is locked (5)". Let sqlite wait it out.
+  const output = execFileSync("sqlite3", ["-cmd", ".timeout 10000", DB_PATH, sql], {
+    encoding: "utf8",
+  }).trim();
   return Number(output);
 }
 
@@ -337,6 +341,8 @@ function markFirstLargeDocumentCheckpointResumable(capsuleId: string): void {
     },
   ]);
   execFileSync("sqlite3", [
+    "-cmd",
+    ".timeout 10000",
     DB_PATH,
     `UPDATE extraction_checkpoints
        SET phase = 'cancelled',
@@ -600,8 +606,18 @@ async function assertLargeDocumentResumeControl(
 async function openLocalKnowledge(page: Page): Promise<void> {
   await page.goto("/");
   const heading = page.getByRole("heading", { name: "Knowledge Pods", level: 1 });
-  if ((await heading.count()) === 0) {
+  // #2485: the rail button TOGGLES the window, and the shell may still be hydrating when the
+  // first click lands, so a lost click must be retried — but never tightly, or the retry click
+  // closes the freshly opened window again. At most three clicks, each given a bounded window
+  // to take effect.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if ((await heading.count()) > 0) break;
     await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
+    const appeared = await heading
+      .waitFor({ state: "attached", timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (appeared) break;
   }
   await expect(heading).toBeVisible();
 }
