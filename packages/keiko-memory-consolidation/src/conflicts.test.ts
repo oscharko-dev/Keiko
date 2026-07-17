@@ -146,6 +146,20 @@ describe("findConflictPairs - value replacement conflicts", () => {
     expect(items).toEqual([]);
   });
 
+  // Regression for a Gitar review finding on this exact PR: KEY_VALUE_VALUE_RE's split into a
+  // connector regex plus an atom regex must still fall back to treating the connector word itself
+  // as the value when nothing else follows it (the original combined regex's optional connector
+  // group could backtrack out entirely in that case) rather than silently dropping the fact. "is"
+  // is both a connector token and a syntactically valid atom shape.
+  it("extracts a value fact even when the value itself is a connector word", () => {
+    const older = makeRecord({ id: "m-old", body: "database is", createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: "database is postgres", createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toHaveLength(1);
+    expect(must(items[0]).evidence?.map((item) => item.kind)).toContain("value-replacement");
+    expect(must(items[0]).evidence?.[0]?.detail).toContain("is -> postgres");
+  });
+
   // REGION_PATTERN and KEY_VALUE_PATTERN used to sandwich their optional connector token between
   // two independent `\s*`s (`\s*(?:connector)?\s*`). Once the trailing capture never matches — the
   // common case for a keyword mention with no real fact attached — the engine re-tries every split

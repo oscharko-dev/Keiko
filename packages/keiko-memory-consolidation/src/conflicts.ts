@@ -129,10 +129,21 @@ interface KeyValueValueMatch {
 function execKeyValueValue(text: string): KeyValueValueMatch | null {
   const connectorLength = KEY_VALUE_CONNECTOR_RE.exec(text)?.[0].length ?? 0;
   const atomMatch = KEY_VALUE_ATOM_RE.exec(text.slice(connectorLength));
-  if (atomMatch?.[1] === undefined) {
+  if (atomMatch?.[1] !== undefined) {
+    return { value: atomMatch[1], consumedLength: connectorLength + atomMatch[0].length };
+  }
+  if (connectorLength === 0) {
     return null;
   }
-  return { value: atomMatch[1], consumedLength: connectorLength + atomMatch[0].length };
+  // The original combined regex's optional connector group could backtrack out entirely when
+  // nothing valid followed it — e.g. body "is" alone, where "is" itself is both a connector word
+  // and a valid atom (Gitar review finding). Retrying the atom pass against the un-skipped text
+  // replicates that backtrack instead of silently dropping the fact.
+  const fallbackMatch = KEY_VALUE_ATOM_RE.exec(text);
+  if (fallbackMatch?.[1] === undefined) {
+    return null;
+  }
+  return { value: fallbackMatch[1], consumedLength: fallbackMatch[0].length };
 }
 
 const VALUE_KEY_PATTERN =

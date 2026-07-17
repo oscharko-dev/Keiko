@@ -284,6 +284,23 @@ describe("tryExtractCorrection", () => {
       expect(wrong.proposal.body).toBe("der Runner ist vitest");
     }
   });
+
+  // Regression for a Gitar review finding on this exact PR: splitting THATS_WRONG_BODY_RE's
+  // combined EN/DE verb alternation into two separately-tried regexes must still pick whichever
+  // verb appears LEFTMOST overall (matching the original single regex's lazy-subject-group
+  // behavior), not always prefer the EN pattern regardless of position. This body has an earlier
+  // German verb ("ist") and a later, unrelated English word ("is") inside the value — the correct
+  // split point is at "ist", not "is".
+  it("picks the leftmost verb across EN/DE when both appear in a wrong-shape body", () => {
+    const outcome = tryExtractCorrection(
+      "that's wrong, the region ist berlin not paris and everything is fine",
+      ctx(),
+    );
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind === "candidate") {
+      expect(outcome.proposal.body).toBe("the region ist berlin not paris and everything is fine");
+    }
+  });
 });
 
 // ─── Regex performance (SonarCloud S8786 regression) ─────────────────────────

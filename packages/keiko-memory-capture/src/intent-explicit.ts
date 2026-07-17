@@ -124,14 +124,25 @@ const THATS_WRONG_KEYWORD_PATTERNS: readonly RegExp[] = [
   /^\s*das\s+stimmt\s+nicht[,.]?\s+/iu,
   /^\s*falsch[,.]?\s+/iu,
 ];
-// Split from one 6-branch-verb regex into two 3-branch ones tried in order (typescript:S5843 —
-// the combined form was still over the complexity threshold even after the earlier keyword-prefix
-// split). EN and DE verb tokens never overlap, so trying EN then DE is behavior-identical to the
-// original single alternation for any real input.
-const THATS_WRONG_BODY_PATTERNS: readonly RegExp[] = [
-  /^(\S+(?:\s+\S+)*?)\s+(is|are|should\s+be)\s+(\S(?:.*\S)?)\s*$/iu,
-  /^(\S+(?:\s+\S+)*?)\s+(ist|sind|sollte\s+sein)\s+(\S(?:.*\S)?)\s*$/iu,
-];
+// Split from one 6-branch-verb regex into two 3-branch ones (typescript:S5843 — the combined form
+// was still over the complexity threshold even after the earlier keyword-prefix split). The
+// original's lazy subject group `(?:\s+\S+)*?` always expands to the FIRST position (leftmost)
+// where any of the 6 verb alternatives matches, regardless of language — trying one pattern before
+// the other (Gitar review finding) is NOT behavior-identical for mixed EN/DE text, since the
+// tried-first pattern can match a later verb of its own language while ignoring an earlier verb of
+// the other. execThatsWrongBody below runs both independently and keeps whichever has the shorter
+// (earlier-ending) subject capture, replicating the original's leftmost-wins selection exactly.
+const THATS_WRONG_BODY_EN_RE = /^(\S+(?:\s+\S+)*?)\s+(is|are|should\s+be)\s+(\S(?:.*\S)?)\s*$/iu;
+const THATS_WRONG_BODY_DE_RE =
+  /^(\S+(?:\s+\S+)*?)\s+(ist|sind|sollte\s+sein)\s+(\S(?:.*\S)?)\s*$/iu;
+
+function execThatsWrongBody(text: string): RegExpExecArray | null {
+  const en = THATS_WRONG_BODY_EN_RE.exec(text);
+  const de = THATS_WRONG_BODY_DE_RE.exec(text);
+  if (en === null) return de;
+  if (de === null) return en;
+  return (en[1]?.length ?? 0) <= (de[1]?.length ?? 0) ? en : de;
+}
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
@@ -336,7 +347,7 @@ function extractCorrectionBody(text: string): string | null {
   }
   const wrongPrefixMatch = execFirst(THATS_WRONG_KEYWORD_PATTERNS, text);
   if (wrongPrefixMatch !== null) {
-    const wrongMatch = execFirst(THATS_WRONG_BODY_PATTERNS, text.slice(wrongPrefixMatch[0].length));
+    const wrongMatch = execThatsWrongBody(text.slice(wrongPrefixMatch[0].length));
     if (
       wrongMatch?.[1] !== undefined &&
       wrongMatch[2] !== undefined &&
