@@ -1467,6 +1467,112 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
+  // #2475 / ADR-0140: the launch-time availability re-check asserts exactly the checks the
+  // record's admission policy performed. A dev-lane record never claims platform signature or
+  // supervisor qualification; a record without an admission marker keeps the full packaged set.
+  describe("dev-lane admission launch gate", () => {
+    function devLaneManager(
+      portable: ReturnType<typeof createPortableRuntimeFixture>,
+      harness: ReturnType<typeof createSpawnHarness>,
+      availabilityOverrides: Partial<
+        ReturnType<typeof createPortableRuntimeFixture>["verification"]["availability"]
+      > = {},
+    ): CodingRuntimeManager {
+      return createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        portableRuntimeResolver: () => ({
+          verification: {
+            ...portable.verification,
+            availability: {
+              ...portable.verification.availability,
+              signatureVerified: false,
+              qualificationVerified: false,
+              ...availabilityOverrides,
+            },
+          },
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+          admission: "functional-dev-lane",
+        }),
+      });
+    }
+
+    it("admits an honestly unqualified dev-lane record whose disk facts verify", () => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      const manager = devLaneManager(portable, harness);
+      expect(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
+      expect(harness.children).toHaveLength(1);
+    });
+
+    it("keeps the discovery-to-launch tamper window fail-closed for dev-lane records", () => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      const manager = devLaneManager(portable, harness);
+      writeFileSync(portable.executablePath, "tampered executable\n");
+      expect(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toEqual({ ok: false, failureCode: "archive-digest-mismatch", retryable: false });
+      expect(harness.children).toHaveLength(0);
+    });
+
+    it("re-asserts every stored check inside the dev-lane admission domain", () => {
+      const fixture = createManagedFixture();
+      const cases = [
+        { overrides: { redistributionApproved: false }, failureCode: "redistribution-unapproved" },
+        { overrides: { runtimeVersionVerified: false }, failureCode: "runtime-version-mismatch" },
+        { overrides: { protocolSchemaVerified: false }, failureCode: "protocol-schema-mismatch" },
+      ] as const;
+      for (const { overrides, failureCode } of cases) {
+        const portable = createPortableRuntimeFixture();
+        const harness = createSpawnHarness();
+        const manager = devLaneManager(portable, harness, overrides);
+        expect(
+          manager.start(
+            launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ).toEqual({ ok: false, failureCode, retryable: false });
+        expect(harness.children).toHaveLength(0);
+      }
+    });
+
+    it("keeps requiring the full packaged evidence set without a dev-lane admission", () => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        portableRuntimeResolver: () => ({
+          verification: {
+            ...portable.verification,
+            availability: {
+              ...portable.verification.availability,
+              signatureVerified: false,
+            },
+          },
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+        }),
+      });
+      expect(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toEqual({ ok: false, failureCode: "signature-unverified", retryable: false });
+      expect(harness.children).toHaveLength(0);
+    });
+  });
+
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
