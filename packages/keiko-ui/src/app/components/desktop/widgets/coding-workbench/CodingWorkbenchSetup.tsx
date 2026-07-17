@@ -1,16 +1,27 @@
 "use client";
 
-// Minimal Code setup for the Coding Workbench (Issue #2385). Rendered only while the coding
-// runtime reports available but no active task-workspace binding exists: it binds an EXISTING
-// local Git checkout by provisioning a managed task workspace from the entered repository root
-// (#445), setting it as the active binding (#446 active pointer), and refreshing the shared
-// active-workspace context so the regular task-start flow unlocks. It reuses the same
-// task-workspace client calls the TaskWorkspaceSwitcher state machine issues (provision →
-// set-active → re-read) and surfaces failures as a content-free alert.
+// Minimal Code setup for the Coding Workbench (Issues #2385, #2476). Rendered whenever no active
+// task-workspace binding exists — INCLUDING on an installation where the coding runtime is not yet
+// activatable, so the surface stays reachable and honestly explains why a run cannot start instead of
+// disappearing (#2476 AC4). It binds an EXISTING local Git checkout end to end in one operator action:
+// provision a managed task workspace from the entered repository root (#445), run the #447
+// reconciliation pass that stamps the verified head the runtime launch authority requires (#2476:
+// provisioning alone leaves `lastVerifiedHead` unstamped, so a hand-bound repo was previously
+// unstartable without an out-of-band API call), and only then set it as the active binding (#446) and
+// refresh the shared active-workspace context so the task-start flow unlocks. Reconciliation progress
+// and failure surface as bounded, content-free states with an in-place retry; a workspace that
+// reconciliation cannot verify is NEVER activated, so the run stays unstartable (#2476 AC3).
 
 import { useState, type ReactNode } from "react";
-import { provisionTaskWorkspace, setActiveTaskWorkspace } from "@/lib/task-workspace-api";
-import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import {
+  provisionTaskWorkspace,
+  reconcileTaskWorkspaces,
+  setActiveTaskWorkspace,
+} from "@/lib/task-workspace-api";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import { cx } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -21,12 +32,25 @@ const STUDIO_OPERATOR = "studio-operator";
 
 const DEFAULT_TARGET_BRANCH = "main";
 
-type SetupStatus = "idle" | "pending" | "error";
+type SetupPhase = "binding" | "verifying";
+type SetupErrorReason = "bind" | "verify";
+type SetupStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "pending"; readonly phase: SetupPhase }
+  | { readonly kind: "error"; readonly reason: SetupErrorReason };
+
+// The outcome of the end-to-end bind sequence. `verify-failed` is kept distinct from `bind-failed` so
+// the surface can explain that reconciliation did not confirm the checkout (vs a provisioning or
+// activation failure), while both stay content-free.
+type BindOutcome = "ok" | "bind-failed" | "verify-failed";
 
 export interface CodingWorkbenchSetupProps {
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: (root: string) => Promise<void>;
+  // True only once runtime readiness has RESOLVED as unavailable — drives the honest pre-activation
+  // note. A still-pending readiness check keeps this false so the note never flashes during load.
+  readonly runtimeUnavailable: boolean;
 }
 
 // Content-free, deterministic task id for a workbench-initiated binding. Derived from the target
@@ -39,61 +63,148 @@ export function codingWorkbenchSetupTaskId(targetBranch: string): string {
   return slug.length === 0 ? "coding-workbench" : `coding-workbench-${slug}`;
 }
 
-// Provision (create or idempotently resume) the managed workspace, set the active pointer, then
-// refresh the shared context — the same wire sequence the existing binding UI drives through
-// useActiveWorkspaceState, scoped to this one bootstrap flow.
-async function bindWorkspace(
-  root: string,
-  baseBranch: string,
-  refreshWorkspace: (root: string) => Promise<void>,
-): Promise<void> {
-  const provisioned = await provisionTaskWorkspace({
-    root,
-    taskId: codingWorkbenchSetupTaskId(baseBranch),
-    baseBranch,
-    requestedBy: STUDIO_OPERATOR,
-  });
-  await setActiveTaskWorkspace({
-    workspaceId: provisioned.instance.workspaceId,
-    requestedBy: STUDIO_OPERATOR,
-  });
-  await refreshWorkspace(root);
+// Reconcile the freshly provisioned workspace and report whether it verified healthy. A non-healthy
+// classification (dirty / foreign / drifted root) OR a failed reconciliation call both resolve false,
+// so the caller never activates an unverifiable binding and the run stays unstartable (#2476 AC3).
+async function verifyBoundWorkspace(root: string, workspaceId: string): Promise<boolean> {
+  try {
+    const report = await reconcileTaskWorkspaces({ root });
+    return report.entries.find((entry) => entry.workspaceId === workspaceId)?.status === "healthy";
+  } catch {
+    return false;
+  }
 }
 
-export function CodingWorkbenchSetup({ refreshWorkspace }: CodingWorkbenchSetupProps): ReactNode {
+// Set the verified workspace active and refresh the shared context. Failures stay content-free.
+async function activateBinding(
+  workspaceId: string,
+  root: string,
+  refreshWorkspace: (root: string) => Promise<void>,
+): Promise<boolean> {
+  try {
+    await setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
+    await refreshWorkspace(root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
+// pending phase from binding to verifying; every server error maps to a bounded, content-free outcome.
+async function executeBind(input: {
+  readonly root: string;
+  readonly baseBranch: string;
+  readonly refreshWorkspace: (root: string) => Promise<void>;
+  readonly onPhase: (phase: SetupPhase) => void;
+}): Promise<BindOutcome> {
+  const provisioned = await provisionTaskWorkspace({
+    root: input.root,
+    taskId: codingWorkbenchSetupTaskId(input.baseBranch),
+    baseBranch: input.baseBranch,
+    requestedBy: STUDIO_OPERATOR,
+  }).catch(() => null);
+  if (provisioned === null) return "bind-failed";
+  input.onPhase("verifying");
+  const verified = await verifyBoundWorkspace(input.root, provisioned.instance.workspaceId);
+  if (!verified) return "verify-failed";
+  const activated = await activateBinding(
+    provisioned.instance.workspaceId,
+    input.root,
+    input.refreshWorkspace,
+  );
+  return activated ? "ok" : "bind-failed";
+}
+
+function createBindSubmitHandler(params: {
+  readonly repositoryPath: string;
+  readonly targetBranch: string;
+  readonly submitDisabled: boolean;
+  readonly refreshWorkspace: (root: string) => Promise<void>;
+  readonly setStatus: (status: SetupStatus) => void;
+}): (event: { preventDefault: () => void }) => void {
+  return (event) => {
+    event.preventDefault();
+    if (params.submitDisabled) return;
+    params.setStatus({ kind: "pending", phase: "binding" });
+    void executeBind({
+      root: params.repositoryPath.trim(),
+      baseBranch: params.targetBranch.trim(),
+      refreshWorkspace: params.refreshWorkspace,
+      onPhase: (phase) => params.setStatus({ kind: "pending", phase }),
+    }).then((outcome) => {
+      params.setStatus(
+        outcome === "ok"
+          ? { kind: "idle" }
+          : { kind: "error", reason: outcome === "verify-failed" ? "verify" : "bind" },
+      );
+    });
+  };
+}
+
+function alertMessage(reason: SetupErrorReason, t: CodingWorkbenchTranslate): string {
+  // Verify failures point at reconciliation; bind failures reuse the existing provisioning copy.
+  return reason === "verify"
+    ? t("codingWorkbench.setup.reconcileFailed")
+    : t("codingWorkbench.alert.workspaceBindFailed");
+}
+
+function submitLabel(status: SetupStatus, t: CodingWorkbenchTranslate): string {
+  if (status.kind !== "pending") return t("codingWorkbench.setup.submit");
+  return status.phase === "verifying"
+    ? t("codingWorkbench.setup.verifying")
+    : t("codingWorkbench.setup.binding");
+}
+
+function SetupNotices({
+  runtimeUnavailable,
+  status,
+  t,
+}: {
+  readonly runtimeUnavailable: boolean;
+  readonly status: SetupStatus;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      {runtimeUnavailable ? (
+        <p className={styles.boundaryNote} data-testid="coding-workbench-setup-runtime-note">
+          {t("codingWorkbench.setup.runtimeUnavailable")}
+        </p>
+      ) : null}
+      {status.kind === "error" ? (
+        <p className={styles.alert} role="alert">
+          <span aria-hidden="true">!</span> {alertMessage(status.reason, t)}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+export function CodingWorkbenchSetup({
+  refreshWorkspace,
+  runtimeUnavailable,
+}: CodingWorkbenchSetupProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [repositoryPath, setRepositoryPath] = useState("");
   const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
-  const [status, setStatus] = useState<SetupStatus>("idle");
-  const pending = status === "pending";
+  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
+  const pending = status.kind === "pending";
   const submitDisabled = pending || repositoryPath.trim() === "" || targetBranch.trim() === "";
-
-  const onSubmit = (event: { preventDefault: () => void }): void => {
-    event.preventDefault();
-    if (submitDisabled) return;
-    setStatus("pending");
-    bindWorkspace(repositoryPath.trim(), targetBranch.trim(), refreshWorkspace).then(
-      () => {
-        setStatus("idle");
-      },
-      () => {
-        // Server errors stay content-free in the UI: the alert below carries only the fixed,
-        // localized guidance; the redacted diagnostic remains server-side.
-        setStatus("error");
-      },
-    );
-  };
+  const onSubmit = createBindSubmitHandler({
+    repositoryPath,
+    targetBranch,
+    submitDisabled,
+    refreshWorkspace,
+    setStatus,
+  });
 
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.setup.title")}>
       <PanelTitle eyebrow={t("codingWorkbench.setup.eyebrow")} id="coding-workbench-setup-title">
         {t("codingWorkbench.setup.title")}
       </PanelTitle>
-      {status === "error" ? (
-        <p className={styles.alert} role="alert">
-          <span aria-hidden="true">!</span> {t("codingWorkbench.alert.workspaceBindFailed")}
-        </p>
-      ) : null}
+      <SetupNotices runtimeUnavailable={runtimeUnavailable} status={status} t={t} />
       <form onSubmit={onSubmit}>
         <SetupFields
           repositoryPath={repositoryPath}
@@ -111,7 +222,7 @@ export function CodingWorkbenchSetup({ refreshWorkspace }: CodingWorkbenchSetupP
           disabled={submitDisabled}
           aria-describedby="coding-workbench-setup-help"
         >
-          {pending ? t("codingWorkbench.setup.binding") : t("codingWorkbench.setup.submit")}
+          {submitLabel(status, t)}
         </button>
       </form>
     </section>

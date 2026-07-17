@@ -22,6 +22,7 @@ import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const provisionMock = vi.hoisted(() => vi.fn());
+const reconcileMock = vi.hoisted(() => vi.fn());
 const setActiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
@@ -30,8 +31,18 @@ vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
 
 vi.mock("@/lib/task-workspace-api", () => ({
   provisionTaskWorkspace: provisionMock,
+  reconcileTaskWorkspaces: reconcileMock,
   setActiveTaskWorkspace: setActiveMock,
 }));
+
+// A content-free reconciliation report whose single entry classifies the just-provisioned workspace.
+// `verifyBoundWorkspace` reads only `entries[].workspaceId` and `.status`, so the minimal shape suffices.
+function reconciliationReport(
+  workspaceId: string,
+  status: "healthy" | "drifted",
+): { readonly entries: readonly { readonly workspaceId: string; readonly status: string }[] } {
+  return { entries: [{ workspaceId, status }] };
+}
 
 function binding(): WorkspaceBinding {
   return {
@@ -121,6 +132,7 @@ function setupSection(): HTMLElement | null {
 describe("CodingWorkbenchSetup", () => {
   beforeEach(() => {
     provisionMock.mockReset();
+    reconcileMock.mockReset();
     setActiveMock.mockReset();
   });
 
@@ -131,6 +143,7 @@ describe("CodingWorkbenchSetup", () => {
     expect(screen.getByLabelText("Repository path")).toBeInTheDocument();
     expect(screen.getByLabelText("Target branch")).toHaveValue("main");
     expect(screen.getByRole("button", { name: "Bind workspace" })).toBeInTheDocument();
+    expect(screen.queryByTestId("coding-workbench-setup-runtime-note")).not.toBeInTheDocument();
 
     const report = await axe(container);
     expect(
@@ -140,10 +153,11 @@ describe("CodingWorkbenchSetup", () => {
     ).toEqual([]);
   });
 
-  it("binds the entered checkout through provision, activation, and a context refresh", async () => {
+  it("binds the entered checkout through provision, reconciliation, activation, and a refresh", async () => {
     const user = userEvent.setup();
     const api = workspaceApi();
     provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
     setActiveMock.mockResolvedValue({});
     renderWorkbench(api);
 
@@ -161,10 +175,34 @@ describe("CodingWorkbenchSetup", () => {
       baseBranch: "dev",
       requestedBy: "studio-operator",
     });
+    // Reconciliation stamps the verified head before activation, so a hand-bound repo is startable
+    // without an out-of-band API call (#2476).
+    expect(reconcileMock).toHaveBeenCalledWith({ root: "/repos/keiko-checkout" });
     expect(setActiveMock).toHaveBeenCalledWith({
       workspaceId: "ws-9",
       requestedBy: "studio-operator",
     });
+  });
+
+  it("keeps the run unstartable with a content-free retry when reconciliation does not verify", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "drifted"));
+    renderWorkbench(api);
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/dirty-checkout");
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The workspace could not be verified. Reconciliation did not confirm a clean, matching checkout, so the run stays unavailable. Review the repository and try again.",
+    );
+    expect(alert).not.toHaveTextContent("drifted");
+    // A workspace reconciliation cannot verify is never activated; the setup surface stays for a retry.
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(api.refresh).not.toHaveBeenCalled();
+    expect(setupSection()).toBeInTheDocument();
   });
 
   it("surfaces a content-free alert when the bind fails and never activates", async () => {
@@ -189,10 +227,15 @@ describe("CodingWorkbenchSetup", () => {
     expect(setupSection()).not.toBeInTheDocument();
   });
 
-  it("does not render while the runtime is not confirmed available", () => {
+  it("stays reachable with an honest note when the runtime is not confirmed available", () => {
     renderWorkbench(workspaceApi(), liveState(false));
 
-    expect(setupSection()).not.toBeInTheDocument();
+    // #2476 AC4 — the setup no longer disappears behind runtime availability; it renders and honestly
+    // explains why starting a run is unavailable so a workspace can still be bound.
+    expect(setupSection()).toBeInTheDocument();
+    expect(screen.getByTestId("coding-workbench-setup-runtime-note")).toHaveTextContent(
+      "Starting a coding run is unavailable on this installation until the coding runtime is active.",
+    );
   });
 
   it("derives a content-free idempotent task id from the target branch", () => {

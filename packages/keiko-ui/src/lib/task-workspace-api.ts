@@ -13,6 +13,7 @@ import {
   type WorkspaceBinding,
   type WorkspaceFailureClass,
   type WorkspaceInstance,
+  type WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
 
 // A task-workspace BFF error that also carries the caller-facing failure class (#449, ADR-0093 D3) when
@@ -73,6 +74,21 @@ export async function provisionTaskWorkspace(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+// Run a live #447 reconciliation pass (verifies disk + git and stamps the verified head the runtime
+// launch authority requires) scoped to a repository root, then return the fresh content-free report.
+// #446 exposes it so the workbench bootstrap can make a freshly hand-bound workspace startable without
+// an out-of-band API call: provisioning leaves `lastVerifiedHead` unstamped, and only this pass stamps
+// it. The report is inspected by the caller to gate activation on a verified, healthy workspace.
+export async function reconcileTaskWorkspaces(input: {
+  readonly root: string;
+}): Promise<WorkspaceReconciliationReport> {
+  const body = await taskWorkspaceFetch<{ report: WorkspaceReconciliationReport }>(
+    "/api/task-workspaces/reconciliation",
+    { method: "POST", body: JSON.stringify({ root: input.root }) },
+  );
+  return body.report;
 }
 
 export async function listTaskWorkspaces(root: string): Promise<readonly WorkspaceInstance[]> {
