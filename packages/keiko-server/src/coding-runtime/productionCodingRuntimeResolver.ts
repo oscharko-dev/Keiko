@@ -26,6 +26,10 @@ import type {
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import {
+  createResearchGrantRegistry,
+  type ResearchGrantRegistry,
+} from "./researchGrantRegistry.js";
+import {
   type ProductionCodingRuntimeResolver,
   type QualifiedProductionCodingRuntime,
 } from "./productionCodingRuntimeHost.js";
@@ -130,6 +134,10 @@ function composeRuntime(
     input.authorityRegistry ?? editorAgentAuthorityRegistry,
   );
   const runs = new Map<string, ResolverRunRecord>();
+  // Server-level, run-bound registry of read-only research grants (#2387). Shared across the tool
+  // facade (which the egress port reads), the revoke route, and revoke-before-terminate, so a grant
+  // never outlives its run and revocation reaches the parent and every child at once.
+  const researchGrants = createResearchGrantRegistry();
   let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
   return {
@@ -137,7 +145,7 @@ function composeRuntime(
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(input, authority, runs, (event): void => {
+    mintLaunch: launchResolver(input, authority, runs, researchGrants, (event): void => {
       receiver(event);
     }),
     approvalAuthority: { issue: (request) => manager.issueApproval(request) },
@@ -155,6 +163,7 @@ function launchResolver(
   input: ProductionCodingRuntimeResolverInput,
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
+  researchGrants: ResearchGrantRegistry,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   return {
@@ -180,7 +189,15 @@ function launchResolver(
       );
       if (!minted.ok) throw new Error(minted.reason);
       try {
-        const record = createRunRecord(input, request, context, minted, authority, onRuntimeEvent);
+        const record = createRunRecord(
+          input,
+          request,
+          context,
+          minted,
+          authority,
+          researchGrants,
+          onRuntimeEvent,
+        );
         runs.set(request.runId, record);
         return launchRequest(record, context, minted);
       } catch (error) {
@@ -221,6 +238,7 @@ function createRunRecord(
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
+  researchGrants: ResearchGrantRegistry,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): ResolverRunRecord {
   const controller = new AbortController();
@@ -236,6 +254,7 @@ function createRunRecord(
     authority,
     invocationRegistry,
     leases,
+    researchGrants,
     onRuntimeEvent,
   );
   const backend = input.backend.createRun({
@@ -249,18 +268,44 @@ function createRunRecord(
     onRuntimeEvent,
   });
   validateBackendLaunch(backend.launch, context);
+  return assembleRunRecord({ input, request, context, minted, authority, backend }, controller, {
+    invocationRegistry,
+    leases,
+  });
+}
+
+interface RunRecordDisposables {
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+}
+
+interface RunRecordContext {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly backend: ReturnType<ProductionRuntimeBackendResolver["createRun"]>;
+}
+
+function assembleRunRecord(
+  parts: RunRecordContext,
+  controller: AbortController,
+  disposables: RunRecordDisposables,
+): ResolverRunRecord {
+  const { backend } = parts;
   return {
     manager: backend.manager,
     launch: backend.launch,
     turnPort: backend.turnPort,
     controller,
-    operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
-      runtimeAuthorityLive(input, context, minted, authority),
+    operationGuard: createProductionRuntimeOperationGuard(parts.request.runId, () =>
+      runtimeAuthorityLive(parts.input, parts.context, parts.minted, parts.authority),
     ),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     dispose: async (): Promise<void> => {
-      leases.dispose();
-      invocationRegistry.dispose();
+      disposables.leases.dispose();
+      disposables.invocationRegistry.dispose();
       await backend.dispose?.();
     },
   };
@@ -273,6 +318,7 @@ function createManagedToolFacade(
   authority: CodingRuntimeAuthorityService,
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  researchGrants: ResearchGrantRegistry,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): CodingToolFacade {
   return createProductionManagedWorktreeToolFacade({
@@ -280,6 +326,11 @@ function createManagedToolFacade(
     authorityRef: minted.authorityRef,
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
+    researchGrantRegistry: researchGrants,
+    // No proxy/CA is threaded from the model gateway here; research egress connects directly and
+    // its dedicated config always denies loopback regardless. A proxied deployment would supply a
+    // real accessor. Absent domains in the registry keep the egress port fail-closed.
+    gatewayEgress: (): undefined => undefined,
     authorityExpiresAt: context.expiresAt,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
