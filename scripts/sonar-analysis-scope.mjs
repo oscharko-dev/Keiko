@@ -273,7 +273,7 @@ function requiredPropertyFailures(properties) {
     "sonar.plsql.file.suffixes=-",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",
-    "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
+    "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.*.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
     "native/portable-launcher/**",
     "scripts/windows-portable-rfc3161.cs",
   ];

@@ -11,10 +11,10 @@
 // Mirrors pushRoutes.ts: the same bounded body read, allowed-key whitelist, credential-shape +
 // unsafe-format-char scans, isSafeGitRef operand guard plus configured-remote preflight,
 // content-free typed error envelope, and a `createGitDeliverySyncRouteGroup(options)` factory with
-// an injectable execution seam. CSRF + JSON
-// content type are enforced CENTRALLY by server.ts for POST, so they are NOT re-checked here.
+// an injectable execution seam. The read → validate → resolve-workspace prologue is shared through
+// prepareGitDeliveryRequest. CSRF + JSON content type are enforced CENTRALLY by server.ts for POST,
+// so they are NOT re-checked here.
 
-import type { IncomingMessage } from "node:http";
 import type {
   GitSyncExecuteResponse,
   GitSyncOperation,
@@ -23,16 +23,15 @@ import type {
 import { GIT_SYNC_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { resolveProjectWorkspace } from "./execution.js";
 import {
-  GitDeliveryBodyTooLargeError,
   hasOnlyAllowedKeys,
   isNonEmptyString,
   isPlainObject,
-  readGitDeliveryBody,
+  isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
+import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
 import {
   buildSyncPreview,
   runSyncExecute,
@@ -70,47 +69,16 @@ const errResult = (status: number, code: GitDeliverySyncErrorCode): RouteResult 
   body: { error: { code, message: SAFE_MESSAGES[code] } },
 });
 
+const SYNC_REQUEST_ERRORS: GitDeliveryRequestErrors = {
+  tooLarge: errResult(413, "GIT_DELIVERY_SYNC_PAYLOAD_TOO_LARGE"),
+  badRequest: errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST"),
+  unknownProject: errResult(404, "GIT_DELIVERY_SYNC_UNKNOWN_PROJECT"),
+};
+
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
 export interface GitDeliverySyncRouteOptions {
   readonly execution?: GitDeliverySyncSeams;
-}
-
-type BodyRead =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly result: RouteResult };
-
-async function readParsed(req: IncomingMessage): Promise<BodyRead> {
-  let raw: string;
-  try {
-    raw = await readGitDeliveryBody(req);
-  } catch (error) {
-    const result =
-      error instanceof GitDeliveryBodyTooLargeError
-        ? errResult(413, "GIT_DELIVERY_SYNC_PAYLOAD_TOO_LARGE")
-        : errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST");
-    return { ok: false, result };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, result: errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST") };
-  }
-}
-
-// A remote alias operand: non-empty, no whitespace, no leading "-" (flag-injection guard), no ":"
-// (refspec-injection guard), no NUL. Defence-in-depth so a malformed remote is a clean 400 rather than
-// an internal execution error.
-// eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
-
-function isSafeGitRef(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (/\s/.test(value)) return false;
-  if (value.startsWith("-")) return false;
-  if (REF_CONTROL_CHAR.test(value)) return false;
-  if (value.includes(":")) return false;
-  return true;
 }
 
 const ALLOWED_KEYS: ReadonlySet<string> = new Set(["schemaVersion", "projectId", "remote"]);
@@ -156,13 +124,10 @@ export const createHandleSyncPreview = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, remote } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_SYNC_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { remote } = prepared.value;
     try {
       const preview = await buildSyncPreview(operation, workspace.root, remote, seams);
       return { status: 200, body: deps.redactor(preview) };
@@ -227,13 +192,10 @@ export const createHandleSyncExecute = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, remote } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_SYNC_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { remote } = prepared.value;
     let before: GitSyncPreview;
     try {
       before = await buildSyncPreview(operation, workspace.root, remote, seams);
