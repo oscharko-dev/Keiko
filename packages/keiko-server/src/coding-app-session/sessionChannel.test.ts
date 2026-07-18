@@ -108,6 +108,21 @@ describe("createCodingAppSessionChannel", () => {
       channel.signOut(undefined);
     }).not.toThrow();
   });
+
+  // #2478: verifySession is the read-authority primitive the W1.5 route guard enforces with.
+  it("verifySession grants only a live cookie and nothing after revocation or rotation", () => {
+    const { channel, cookieToken } = pairedChannel();
+    expect(channel.verifySession(cookieToken)?.principalLabel).toBe("test-operator");
+    expect(channel.verifySession(undefined)).toBeUndefined();
+    expect(channel.verifySession("sess_000000000000000000000000.wrong")).toBeUndefined();
+    const rotated = channel.rotate(cookieToken);
+    expect(rotated.rotated).toBe(true);
+    expect(channel.verifySession(cookieToken)).toBeUndefined();
+    if (rotated.rotated) {
+      channel.signOut(rotated.cookieToken);
+      expect(channel.verifySession(rotated.cookieToken)).toBeUndefined();
+    }
+  });
 });
 
 function createStatic(content: { kind: string; body: string }): CodingAppSessionContentSource {

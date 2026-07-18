@@ -94,10 +94,13 @@ function parseEvidenceFlags(args: readonly string[]): EvidenceFlags {
   };
 }
 
-// The CLI only accepts the model-driven harness tasks. The "verify" task type is BFF-only
-// (the run engine calls `runVerification` directly without a harness session), so it is
-// excluded from this CLI-side narrowing — the upstream `TASK_TYPES` set guards entry.
-type CliTaskType = Exclude<TaskType, "verify">;
+// The CLI only accepts the model-driven harness tasks a human explicitly selects. The "verify"
+// task type is BFF-only (the run engine calls `runVerification` directly without a harness
+// session), and "editor-agent-turn" (#2489) is the Keiko-native producer's own internal task type,
+// driven only by the server's producer route against an already-registered session/authorityRef —
+// neither is CLI-selectable, so both are excluded from this CLI-side narrowing. The upstream
+// `TASK_TYPES` set guards entry.
+type CliTaskType = Exclude<TaskType, "verify" | "editor-agent-turn">;
 
 function parseTask(taskType: CliTaskType, args: readonly string[]): TaskInput | null {
   const file = flag(args, "--file");

@@ -11,6 +11,13 @@ import { join } from "node:path";
 
 export const AUTHORITY_DEFAULT_UI_PORT = 32486;
 
+// #2478: the journey acts as the trusted launcher. The server entry provisions this process-scoped
+// secret to the BFF environment, and the spec mints single-use pairing attestations with it through
+// the REAL `mintLauncherPairingAttestation` (no fake pairing port on this journey). A deterministic
+// test fixture, not a real credential.
+export const AUTHORITY_APP_SESSION_LAUNCHER_SECRET =
+  "authority-2386-app-session-launcher-secret-fixture";
+
 // Fixture file contents mirroring the functional pipeline scripted edit contract: the scripted model
 // proposes exactly ORIGINAL -> EDITED for the target file after the required question is answered.
 export const AUTHORITY_ORIGINAL_CONTENT = "export const value = 'ORIGINAL_AUTHORITY_2386';\n";

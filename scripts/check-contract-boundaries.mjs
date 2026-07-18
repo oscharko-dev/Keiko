@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { schemaVersionLockstepFailures } from "./lib/schema-version-lockstep.mjs";
 
 const root = process.cwd();
 
@@ -29,6 +30,28 @@ const checks = [
         pattern:
           /export\s+(?:interface\s+ManagedLsp(?:ConfigurationSummary|SettingsResponse|SettingsMutationInput)\b|type\s+ManagedLspSettingsAction\s*=\s*["'])/,
         message: "Managed LSP UI envelopes must alias contracts-owned route types.",
+      },
+      {
+        // Issue #2489 (Finding 7) — the 14-member EditorAgentActionType union has one owner:
+        // packages/keiko-contracts/src/editor-agent.ts. A local string-literal redeclaration here
+        // (instead of importing the type) is exactly how the Desktop chat / Managed LSP wire drift
+        // this script otherwise catches would recur for the editor-agent action wire.
+        pattern: /export\s+type\s+EditorAgentActionType\s*=\s*["']/,
+        message: "Editor-agent action types must alias EditorAgentActionType from contracts.",
+      },
+      {
+        // Issue #2489 (Finding 7) — editor-verification wire shapes (editor-agent-verification.ts)
+        // must not be re-declared locally.
+        pattern: /export\s+(?:interface|type)\s+EditorAgentVerification(?:Result|RunRequest)\b/,
+        message: "Editor-agent verification shapes must alias editor-agent-verification.ts types.",
+      },
+      {
+        // Issue #2489 (Finding 7) — editor-agent-governance.ts's effect-class/Workbench-class maps
+        // are the single source of authority-gating truth; a local copy could silently drift from
+        // the server-enforced classification (agentRoutes.ts/agentVerificationRoute.ts).
+        pattern: /export\s+const\s+EDITOR_AGENT_(?:ACTION_EFFECT_CLASS|WORKBENCH_ACTION_CLASS)\b/,
+        message:
+          "Editor-agent governance classification maps must alias editor-agent-governance.ts.",
       },
     ],
   },
@@ -125,6 +148,18 @@ for (const check of checks) {
     }
   }
 }
+
+// Issue #2489 (Finding 8) — see scripts/lib/schema-version-lockstep.mjs for the pure comparison
+// logic (kept out of this CLI-only file so it is directly unit-testable without a subprocess).
+const agentSource = readFileSync(
+  resolve(root, "packages/keiko-contracts/src/editor-agent.ts"),
+  "utf8",
+);
+const verificationSource = readFileSync(
+  resolve(root, "packages/keiko-contracts/src/editor-verification.ts"),
+  "utf8",
+);
+failures.push(...schemaVersionLockstepFailures(agentSource, verificationSource));
 
 if (failures.length > 0) {
   console.error("Contract boundary check failed:");
