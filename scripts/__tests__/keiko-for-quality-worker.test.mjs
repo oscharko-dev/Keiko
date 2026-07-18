@@ -19,9 +19,11 @@ import worker, {
   hardFailure,
   importAppKey,
   importWebhookKey,
+  isMissingColumnError,
   isValidHeadSha,
   isOwnCheckEvent,
   isOwnCommentEvent,
+  migrateTrackedPullColumns,
   parseBackstopMs,
   parseJson,
   parseStabilityMs,
@@ -2253,6 +2255,108 @@ describe("Keiko for Quality worker trust boundary", () => {
     await expect(trackedPullRequests(malformed)).rejects.toThrow(
       "D1 returned an invalid tracked pull row.",
     );
+  });
+
+  it("recognizes only a missing reconcile-metadata column error", () => {
+    expect(isMissingColumnError(new Error("no such column: settled"))).toBe(true);
+    expect(
+      isMissingColumnError(new Error("table tracked_pulls has no column named last_head_sha")),
+    ).toBe(true);
+    expect(isMissingColumnError(new Error("database is locked"))).toBe(false);
+    expect(isMissingColumnError("no such column: settled")).toBe(false);
+  });
+
+  it("adds each reconcile-metadata column and tolerates one already present", async () => {
+    const runs = [];
+    const database = {
+      prepare: (sql) => ({
+        run: async () => {
+          runs.push(sql);
+          // A concurrent evaluation already added `settled`; that must not abort the migration.
+          if (sql.includes("ADD COLUMN settled")) throw new Error("duplicate column name: settled");
+          return { meta: {} };
+        },
+      }),
+    };
+    await expect(migrateTrackedPullColumns(database)).resolves.toBeUndefined();
+    expect(runs).toEqual([
+      "ALTER TABLE tracked_pulls ADD COLUMN last_head_sha TEXT",
+      "ALTER TABLE tracked_pulls ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE tracked_pulls ADD COLUMN last_evaluated_at INTEGER NOT NULL DEFAULT 0",
+    ]);
+  });
+
+  it("surfaces a non-duplicate schema migration failure", async () => {
+    const database = {
+      prepare: () => ({
+        run: async () => {
+          throw new Error("disk I/O error");
+        },
+      }),
+    };
+    await expect(migrateTrackedPullColumns(database)).rejects.toThrow("disk I/O error");
+  });
+
+  it("self-heals a legacy tracked_pulls schema and retries the read once", async () => {
+    const altered = [];
+    let migrated = false;
+    const rows = [
+      {
+        installation_id: 42,
+        last_evaluated_at: 5,
+        last_head_sha: "a".repeat(40),
+        owner: "oscharko-dev",
+        pull_number: 2329,
+        repository: "Keiko",
+        settled: 1,
+      },
+    ];
+    const database = {
+      prepare: (query) => ({
+        bind: () => ({
+          all: async () => {
+            if (!migrated) throw new Error("no such column: settled");
+            return { results: rows };
+          },
+        }),
+        run: async () => {
+          altered.push(query);
+          if (query.includes("last_evaluated_at")) migrated = true;
+          return { meta: {} };
+        },
+      }),
+    };
+    const pulls = await trackedPullRequests(database);
+    expect(altered).toEqual([
+      "ALTER TABLE tracked_pulls ADD COLUMN last_head_sha TEXT",
+      "ALTER TABLE tracked_pulls ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE tracked_pulls ADD COLUMN last_evaluated_at INTEGER NOT NULL DEFAULT 0",
+    ]);
+    expect(pulls.size).toBe(1);
+    expect([...pulls.values()][0]).toMatchObject({
+      lastEvaluatedAt: 5,
+      lastHeadSha: "a".repeat(40),
+      settled: true,
+    });
+  });
+
+  it("does not migrate on a non-schema tracked-pull read error", async () => {
+    const altered = [];
+    const database = {
+      prepare: () => ({
+        bind: () => ({
+          all: async () => {
+            throw new Error("database is locked");
+          },
+        }),
+        run: async () => {
+          altered.push("altered");
+          return { meta: {} };
+        },
+      }),
+    };
+    await expect(trackedPullRequests(database)).rejects.toThrow("database is locked");
+    expect(altered).toEqual([]);
   });
 
   it("continues discovery when persisted D1 pull state is malformed", async () => {

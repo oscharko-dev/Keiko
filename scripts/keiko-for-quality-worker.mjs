@@ -717,6 +717,47 @@ function trackedPullKey(tracked) {
   return `${tracked.owner}/${tracked.repository}#${String(tracked.pullNumber)}`;
 }
 
+// Fixed internal DDL that adds the Issue #2507 reconcile-metadata columns to a tracked_pulls table
+// created before they existed. No caller input reaches these statements.
+const trackedPullColumnMigrations = [
+  "ALTER TABLE tracked_pulls ADD COLUMN last_head_sha TEXT",
+  "ALTER TABLE tracked_pulls ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE tracked_pulls ADD COLUMN last_evaluated_at INTEGER NOT NULL DEFAULT 0",
+];
+
+function d1ErrorMessage(error) {
+  return error instanceof Error ? error.message : "";
+}
+
+export function isMissingColumnError(error) {
+  return /no such column|has no column named/iu.test(d1ErrorMessage(error));
+}
+
+export async function migrateTrackedPullColumns(database) {
+  for (const statement of trackedPullColumnMigrations) {
+    try {
+      await database.prepare(statement).run();
+    } catch (error) {
+      // A concurrent evaluation may have already added the column; anything else is surfaced.
+      if (!/duplicate column name/iu.test(d1ErrorMessage(error))) throw error;
+    }
+  }
+}
+
+// Self-heal the reconcile-metadata schema so deploying new gate logic never has to be ordered after a
+// manual migration: run the tracked_pulls access, and only if it fails because a metadata column is
+// absent, add the missing columns once and retry. A migrated database (the steady state) succeeds on
+// the first attempt with no extra D1 calls; a genuine error is re-thrown, not masked.
+async function withTrackedPullSchema(database, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isMissingColumnError(error)) throw error;
+    await migrateTrackedPullColumns(database);
+    return await operation();
+  }
+}
+
 // Reconcile metadata is best-effort: a legacy row written before this column set (or a NULL) reads as
 // unsettled with no known head or timestamp, which the skip decision treats as "needs evaluation" —
 // the fail-closed default, never a spurious skip.
@@ -742,6 +783,10 @@ function trackedPullFromRow(row) {
 }
 
 export async function trackedPullRequests(database) {
+  return withTrackedPullSchema(database, () => readTrackedPullRequests(database));
+}
+
+async function readTrackedPullRequests(database) {
   const trackedPulls = new Map();
   for (let page = 0; page < persistedPullPageLimit; page += 1) {
     const queryLimit =
@@ -772,20 +817,22 @@ export async function trackedPullRequests(database) {
 // Every field is updated on conflict (no longer gated on an installation change) so the skip decision
 // always reads the latest evaluation.
 async function storeTrackedPull(database, tracked, metadata) {
-  await database
-    .prepare(
-      "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id, last_head_sha, settled, last_evaluated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id, last_head_sha = excluded.last_head_sha, settled = excluded.settled, last_evaluated_at = excluded.last_evaluated_at",
-    )
-    .bind(
-      tracked.owner,
-      tracked.repository,
-      tracked.pullNumber,
-      tracked.installationId,
-      metadata.headSha,
-      metadata.settled ? 1 : 0,
-      metadata.evaluatedAt,
-    )
-    .run();
+  await withTrackedPullSchema(database, () =>
+    database
+      .prepare(
+        "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id, last_head_sha, settled, last_evaluated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id, last_head_sha = excluded.last_head_sha, settled = excluded.settled, last_evaluated_at = excluded.last_evaluated_at",
+      )
+      .bind(
+        tracked.owner,
+        tracked.repository,
+        tracked.pullNumber,
+        tracked.installationId,
+        metadata.headSha,
+        metadata.settled ? 1 : 0,
+        metadata.evaluatedAt,
+      )
+      .run(),
+  );
 }
 
 async function deleteTrackedPull(database, tracked) {
