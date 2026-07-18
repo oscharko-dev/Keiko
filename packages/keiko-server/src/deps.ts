@@ -230,6 +230,14 @@ import {
 import type { CodingRuntimeStartConfirmationConsumer } from "./coding-runtime/codingRuntimeStartConfirmation.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "./coding-runtime/codingRuntimeStartConfirmationPlane.js";
 import {
+  createCodingAppSessionChannel,
+  type CodingAppSessionChannel,
+  type CodingAppSessionContentSource,
+} from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
+import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
+import {
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
@@ -393,6 +401,12 @@ export interface UiHandlerDeps {
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
+  /**
+   * Authenticated local app-session channel (ADR-0141). Read authority for content-bearing surfaces;
+   * always composed. Its pairing authority is absent unless a launcher secret or an injected port is
+   * present, in which case it fails closed to a content-free projection.
+   */
+  readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
@@ -669,6 +683,17 @@ export interface BuildHandlerDepsOptions {
   /** Central #2377 adapter. Absence is an intentional fail-closed production posture. */
   readonly codingRuntimeStartConfirmationConsumer?:
     CodingRuntimeStartConfirmationConsumer | undefined;
+  /**
+   * App-session pairing authority (ADR-0141). Injected first (the CI fake); production otherwise
+   * resolves the launcher-bound port from the environment. It mints read authority, so production
+   * composition must never construct or fall back to the fake — a missing port fails closed.
+   */
+  readonly sessionPairingPort?: SessionPairingPort | undefined;
+  /**
+   * Bounded content source the app-session channel projects to a paired session. Absent in this
+   * wave's production composition (content routing is W1.5+); tests inject a deterministic payload.
+   */
+  readonly codingAppSessionContentSource?: CodingAppSessionContentSource | undefined;
   // Explicit deployment ceiling for coding-runtime authority. Precedence: this option, then the
   // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the governed-assist default. An
   // unrecognized environment value is ignored fail-closed (the narrowest posture wins).
@@ -2810,6 +2835,15 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
         })
       : undefined;
+  // ADR-0141: the authenticated app-session channel is always composed. Its pairing authority is
+  // injected first (the CI fake), else the launcher-bound production port resolved from the
+  // environment; absent authority fails closed. Production leaves the content source absent until W1.5.
+  const codingAppSessionChannel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort:
+      args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
+    contentSource: args.options.codingAppSessionContentSource,
+  });
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2817,6 +2851,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     env: args.options.env,
     egress: args.egress,
     redactor: args.liveRedactor,
+    codingAppSessionChannel,
     registry: args.options.registry ?? createRunRegistry(),
     modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
     ...codingSidecarGatewayModelSourceFields(args),
