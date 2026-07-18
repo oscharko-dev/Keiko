@@ -253,7 +253,7 @@ function staticQualitySteps(platform, lintEnv) {
     npmStep("typecheck", ["run", "typecheck"], { cacheScope: SCOPE_TYPECHECK, platform }),
     npmStep("lint", ["run", "lint"], { cacheScope: SCOPE_LINT, env: lintEnv, platform }),
     npmStep("format", ["run", "format:check"], { platform }),
-    npmStep("gitar-config", ["run", "check:gitar-config"], { platform }),
+    npmStep("qodo-config", ["run", "check:qodo-config"], { platform }),
     npmStep("ui-i18n", ["run", "check:ui-i18n"], {
       cacheScope: ["packages/keiko-ui/", "scripts/"],
       platform,

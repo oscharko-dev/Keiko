@@ -9,7 +9,7 @@ body:
 
         Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets. Redact sensitive values before submitting.
 
-        Maintainers and agents must track this finding in the public Keiko Product Delivery project. New reports start with project `Status` = `Open Issues`, `Workflow State` = `New`, and label `status: new`. When an agent claims the finding, it must set `Status` and `Workflow State` to `In Progress`, fill `Owner / Agent`, `Branch`, `Pull Request`, and keep `Human Review Required` set to `No`. While Gitar repairs or deterministic gates settle, use `Workflow State` = `PR Open` and label `status: in progress`; mark `Done` only after verified auto-merge, closure evidence, and issue closure.
+        Maintainers and agents must track this finding in the public Keiko Product Delivery project. New reports start with project `Status` = `Open Issues`, `Workflow State` = `New`, and label `status: new`. When an agent claims the finding, it must set `Status` and `Workflow State` to `In Progress`, fill `Owner / Agent`, `Branch`, `Pull Request`, and keep `Human Review Required` set to `No`. While review findings or deterministic gates settle, use `Workflow State` = `PR Open` and label `status: in progress`; mark `Done` only after verified auto-merge, closure evidence, and issue closure.
 
   - type: input
     id: version

@@ -12,7 +12,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run typecheck",
   "npm run lint",
   "npm run format:check",
-  "npm run check:gitar-config",
+  "npm run check:qodo-config",
   "npm run check:ui-i18n",
   "npm run check:sonar-scope",
   "npm run check:shell-spawn-guardrails",
