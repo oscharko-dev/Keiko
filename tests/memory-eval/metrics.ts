@@ -20,7 +20,7 @@
 
 import type { MemoryRetrievalResult } from "@oscharko-dev/keiko-memory-retrieval";
 
-export const METRIC_PRECISION = 4 as const;
+const METRIC_PRECISION = 4 as const;
 const DEFAULT_FAMA_LAMBDA = 1;
 
 // Round to a fixed number of decimals so a ratio of small integers serialises identically every run.

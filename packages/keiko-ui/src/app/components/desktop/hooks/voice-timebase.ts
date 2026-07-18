@@ -40,25 +40,25 @@ export function createBrowserVoiceClock(): VoiceClock {
 // The replay ring is the bounded reconnect system-of-record; the partial log is a tiny ephemeral timing
 // window; backpressure goes "elevated" at 80% of replay capacity (the partial log is never counted).
 export const VOICE_TIMEBASE_REPLAY_CAPACITY = 200;
-export const VOICE_TIMEBASE_PARTIAL_CAPACITY = 32;
+const VOICE_TIMEBASE_PARTIAL_CAPACITY = 32;
 export const VOICE_TIMEBASE_BACKPRESSURE_HIGH = 160;
 
 // ─── Engine phases (state machine) ─────────────────────────────────────────────
-export type VoiceTimebasePhase =
+type VoiceTimebasePhase =
   "dormant" | "idle" | "capturing" | "transcribing" | "responding" | "interrupted" | "closed";
 
 // ─── Backpressure signal (D5) — advisory only; the engine never blocks or queues ──
-export type VoiceBackpressureLevel = "none" | "elevated" | "saturated";
+type VoiceBackpressureLevel = "none" | "elevated" | "saturated";
 
 // ─── Ingest outcome (D7) ───────────────────────────────────────────────────────
 // Buffering is decided by `isVoiceReplayEligible(kind)`, not by a distinct outcome: an "applied"
 // replay-eligible message is buffered; an "ignored-ephemeral" one is applied to the live view only.
-export type VoiceIngestOutcome =
+type VoiceIngestOutcome =
   "applied" | "duplicate" | "out-of-order" | "not-allowed-for-profile" | "ignored-ephemeral";
 
 // A control message stamped with the monotonic clock. `message` is retained for catch-up re-delivery
 // to the transport; the engine NEVER hands it to the observer or any log.
-export interface VoiceTimedRecord {
+interface VoiceTimedRecord {
   readonly seq: number;
   readonly kind: VoiceControlMessageKind;
   readonly receivedAtMs: number;
@@ -67,7 +67,7 @@ export interface VoiceTimedRecord {
 }
 
 // ─── Read-only snapshot the UI consumer renders (D3) ───────────────────────────
-export interface VoiceTimebaseSnapshot {
+interface VoiceTimebaseSnapshot {
   readonly profile: VoiceProfile;
   readonly active: boolean;
   readonly phase: VoiceTimebasePhase;
@@ -81,17 +81,17 @@ export interface VoiceTimebaseSnapshot {
   readonly backpressure: VoiceBackpressureLevel;
 }
 
-export interface VoiceIngestResult {
+interface VoiceIngestResult {
   readonly outcome: VoiceIngestOutcome;
   readonly snapshot: VoiceTimebaseSnapshot;
 }
 
 // ─── Catch-up (D6) ─────────────────────────────────────────────────────────────
-export interface VoiceCatchUpRequest {
+interface VoiceCatchUpRequest {
   readonly sinceSeq: number;
 }
 
-export interface VoiceCatchUpResult {
+interface VoiceCatchUpResult {
   /**
    * The buffered replay-eligible records with `seq > sinceSeq`, in seq order. Each
    * `VoiceTimedRecord.message` carries its ORIGINAL payload — committed / discarded transcripts are
@@ -104,7 +104,7 @@ export interface VoiceCatchUpResult {
 }
 
 // ─── Metrics observer (D9, AC6) — every field content-free ─────────────────────
-export interface VoiceTimebaseMetricEvent {
+interface VoiceTimebaseMetricEvent {
   readonly kind: VoiceControlMessageKind;
   readonly seq: number;
   readonly redaction: VoiceRedactionClass;
@@ -121,7 +121,7 @@ export interface VoiceTimebaseMetricEvent {
   readonly backpressure: VoiceBackpressureLevel;
 }
 
-export interface VoiceTimebaseOverflowEvent {
+interface VoiceTimebaseOverflowEvent {
   readonly evictedSeq: number;
   readonly overflowCount: number;
   readonly replayDepth: number;

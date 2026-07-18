@@ -4,7 +4,7 @@
 
 import type { PromptEnhancerEvalFixture } from "../types.js";
 
-export const groundingSuppliedContext: PromptEnhancerEvalFixture = {
+const groundingSuppliedContext: PromptEnhancerEvalFixture = {
   name: "grounding-supplied-context",
   category: "grounding",
   description: "Answer strictly from connected/supplied context; grounding is required.",
@@ -25,7 +25,7 @@ export const groundingSuppliedContext: PromptEnhancerEvalFixture = {
   },
 };
 
-export const groundingExternalResearch: PromptEnhancerEvalFixture = {
+const groundingExternalResearch: PromptEnhancerEvalFixture = {
   name: "grounding-external-research",
   category: "grounding",
   description: "A research request whose answer needs external evidence; grounding is required.",
@@ -40,7 +40,7 @@ export const groundingExternalResearch: PromptEnhancerEvalFixture = {
   },
 };
 
-export const groundingNotRequired: PromptEnhancerEvalFixture = {
+const groundingNotRequired: PromptEnhancerEvalFixture = {
   name: "grounding-not-required",
   category: "grounding",
   description: "A stable-knowledge question that needs no retrieval; grounding is not required.",

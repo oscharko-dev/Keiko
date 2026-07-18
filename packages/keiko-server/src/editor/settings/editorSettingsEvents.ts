@@ -22,19 +22,19 @@ export interface EditorSettingsEventBus {
   readonly subscribe: (args: EditorSettingsSubscribeArgs) => () => void;
 }
 
-export interface EditorSettingsPublishArgs {
+interface EditorSettingsPublishArgs {
   readonly snapshot: EditorM7SettingsSnapshot;
   readonly scope: EditorM7SettingScope;
   readonly settingIds: readonly EditorM7SettingId[];
 }
 
-export interface EditorSettingsSubscribeArgs {
+interface EditorSettingsSubscribeArgs {
   readonly controller: AbortController;
   readonly res: ServerResponse;
   readonly realRoot?: string | undefined;
 }
 
-export function editorSettingsEventRootKey(realRoot: string | undefined): string | undefined {
+function editorSettingsEventRootKey(realRoot: string | undefined): string | undefined {
   return realRoot === undefined ? undefined : editorSettingsWorkspaceFingerprint(realRoot);
 }
 

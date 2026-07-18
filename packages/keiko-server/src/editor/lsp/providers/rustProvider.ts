@@ -87,7 +87,7 @@ export interface RustProtocolConfiguration {
   readonly resourceBudget: RustProviderResourceBudget;
 }
 
-export interface RustProviderResourceBudget {
+interface RustProviderResourceBudget {
   readonly maxFiles: number;
   readonly maxBytes: number;
   readonly maxMemoryMb?: number | undefined;

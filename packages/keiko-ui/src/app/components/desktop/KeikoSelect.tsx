@@ -15,7 +15,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/i18n";
 
-export type KeikoSelectOption = {
+type KeikoSelectOption = {
   readonly value: string;
   readonly label: string;
   readonly description?: string;
@@ -23,7 +23,7 @@ export type KeikoSelectOption = {
   readonly badge?: string;
 };
 
-export type KeikoSelectSection = {
+type KeikoSelectSection = {
   readonly label?: string;
   readonly options: readonly KeikoSelectOption[];
 };

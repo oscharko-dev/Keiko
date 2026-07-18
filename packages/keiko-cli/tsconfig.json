@@ -18,7 +18,6 @@
     { "path": "../keiko-security" },
     { "path": "../keiko-model-gateway" },
     { "path": "../keiko-workspace" },
-    { "path": "../keiko-tools" },
     { "path": "../keiko-evaluations" },
     { "path": "../keiko-evidence" },
     { "path": "../keiko-verification" },

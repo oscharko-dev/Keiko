@@ -150,7 +150,7 @@ export function connectedRunSourcesFromWindowCfg(
   });
 }
 
-export function baseName(p: string): string {
+function baseName(p: string): string {
   const parts = p.split(/[\\/]/u).filter((s) => s.length > 0);
   return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
 }

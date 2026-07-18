@@ -65,7 +65,7 @@ import { useConversationMemorySettings } from "./memorySettings";
 // Client-side validation only. Server-side modality enforcement is deferred to
 // issue #149. Pending attachments are cleared on successful sendMessage.
 
-export type PendingAttachmentKind = "image" | "document";
+type PendingAttachmentKind = "image" | "document";
 
 // Why: attachment rejection reasons are a closed, typed union so callers can
 // show human-readable messages per reason without string matching.
@@ -141,8 +141,8 @@ function revokeAttachmentPreview(attachment: PendingAttachment): void {
   }
 }
 
-export const DEFAULT_CHAT_TITLE = "New chat";
-export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
+const DEFAULT_CHAT_TITLE = "New chat";
+const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
@@ -425,19 +425,19 @@ export type ChatSessionApi = UseChatSessionResult;
 // decouples the send from the async draft state. The field is content-only (the committed transcript,
 // already equal to what a typed message carries) — it adds NO audio and NO new wire field, preserving
 // exact context equivalence with the typed path.
-export interface SendMessageOptions {
+interface SendMessageOptions {
   // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
   // to the draft path. The draft is still cleared on a successful send so the composer returns to rest.
   readonly text?: string;
 }
 
-export interface RealtimeGroundedToolCallInput {
+interface RealtimeGroundedToolCallInput {
   readonly callId: string;
   readonly query: string;
   readonly userTranscript?: string | undefined;
 }
 
-export interface RealtimeMemoryToolCallInput {
+interface RealtimeMemoryToolCallInput {
   readonly callId: string;
   readonly query: string;
 }

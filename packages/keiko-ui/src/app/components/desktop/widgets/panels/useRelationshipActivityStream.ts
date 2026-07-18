@@ -37,10 +37,7 @@ import { secureRandomInt } from "../../../../../lib/secure-random";
 export const N_VISIBLE = 25;
 
 /** Activity window length in ms (activity-state.md §5.2). */
-export const ACTIVITY_WINDOW_MS = 60_000;
-
-/** High-throughput threshold (activity-state.md §5.4). */
-export const N_THROUGHPUT = 50;
+const ACTIVITY_WINDOW_MS = 60_000;
 
 /** Minimum ms between state changes per badge (activity-visualization.md §"No flashing"). */
 const MIN_STATE_INTERVAL_MS = 2_000;

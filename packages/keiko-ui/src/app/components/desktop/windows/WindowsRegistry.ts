@@ -159,12 +159,12 @@ export type WindowCfgByType = {
   };
 };
 
-export interface WindowSize {
+interface WindowSize {
   readonly w: number;
   readonly h: number;
 }
 
-export type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
+type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
 
 export interface ConfigField {
   readonly key: string;
@@ -242,7 +242,6 @@ export interface WindowTypeDef {
 }
 
 export const CHAT_MINI_W = 430;
-export const CHAT_MINI_H = 430;
 
 const DEFAULT_MIN: WindowSize = { w: 150, h: 110 };
 const DEFAULT_TINY: WindowSize = { w: 290, h: 190 };

@@ -25,10 +25,7 @@ export interface SegmentSpec {
 
 // Build one segment, deriving the replay / redaction classes from the contract tables so the fixtures
 // never re-encode classification (a single source of truth keeps them aligned with the lifecycle).
-export function buildSegment(
-  spec: SegmentSpec,
-  source: VoiceTranscriptSource,
-): VoiceTranscriptSegment {
+function buildSegment(spec: SegmentSpec, source: VoiceTranscriptSource): VoiceTranscriptSegment {
   return {
     id: spec.id,
     seq: spec.seq,

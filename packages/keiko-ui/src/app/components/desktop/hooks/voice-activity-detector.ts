@@ -29,7 +29,7 @@ export interface VoiceActivityThresholds {
 
 // Conservative defaults tuned for headset / laptop dictation: ~0.014 RMS gate, a short onset debounce,
 // and an ~800ms end-of-turn pause (natural between-sentence gaps stay within the turn).
-export const DEFAULT_VAD_THRESHOLDS: VoiceActivityThresholds = {
+const DEFAULT_VAD_THRESHOLDS: VoiceActivityThresholds = {
   rmsThreshold: 0.014,
   onsetMs: 150,
   trailingSilenceMs: 800,

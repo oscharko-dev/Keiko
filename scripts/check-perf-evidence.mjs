@@ -1815,18 +1815,41 @@ function evaluateD12Repetitions(comparison) {
   return failures;
 }
 
-function evaluateD12MatchingProvenance(repetitions) {
-  const reference = repetitions[0]?.baseline?.provenance;
-  if (typeof reference !== "object" || reference === null) return [];
+function d12ProvenanceWithoutLockfile(provenance) {
+  const shared = { ...d12Record(provenance) };
+  delete shared.lockfileSha256;
+  return shared;
+}
+
+function evaluateD12RevisionProvenance(repetitions, revision, reference) {
   const failures = [];
   for (const [index, repetition] of repetitions.entries()) {
-    for (const revision of ["baseline", "candidate"]) {
-      if (!isDeepStrictEqual(repetition?.[revision]?.provenance, reference)) {
-        failures.push(
-          `d12 repetition ${index + 1} ${revision}: provenance does not match baseline`,
-        );
-      }
+    if (!isDeepStrictEqual(repetition?.[revision]?.provenance, reference)) {
+      failures.push(
+        `d12 repetition ${index + 1} ${revision}: provenance does not match its first run`,
+      );
     }
+  }
+  return failures;
+}
+
+function evaluateD12MatchingProvenance(repetitions) {
+  const references = {
+    baseline: repetitions[0]?.baseline?.provenance,
+    candidate: repetitions[0]?.candidate?.provenance,
+  };
+  if (typeof references.baseline !== "object" || references.baseline === null) return [];
+  const failures = [
+    ...evaluateD12RevisionProvenance(repetitions, "baseline", references.baseline),
+    ...evaluateD12RevisionProvenance(repetitions, "candidate", references.candidate),
+  ];
+  if (
+    !isDeepStrictEqual(
+      d12ProvenanceWithoutLockfile(references.baseline),
+      d12ProvenanceWithoutLockfile(references.candidate),
+    )
+  ) {
+    failures.push("d12 baseline and candidate provenance differs outside lockfileSha256");
   }
   return failures;
 }
@@ -2172,25 +2195,53 @@ function evaluateD12CommittedRawAlignment(evidence, comparison, candidate) {
   return failures;
 }
 
-function evaluateD12DependencyProvisioning(comparison) {
-  const provisioning = comparison.dependencyProvisioning;
+function evaluateD12ProvisioningCommand(provisioning, expectedKeys, label) {
   if (typeof provisioning !== "object" || provisioning === null) {
-    return ["d12 dependency provisioning is missing"];
+    return [`${label} is missing`];
   }
-  const failures = evaluateD12ExactKeys(
-    provisioning,
-    ["args", "command", "lockfileSha256"],
-    "d12 dependency provisioning",
-  );
+  const failures = evaluateD12ExactKeys(provisioning, expectedKeys, label);
   if (provisioning.command !== "npm") {
-    failures.push("d12 dependency provisioning command must be npm");
+    failures.push(`${label} command must be npm`);
   }
   if (!isDeepStrictEqual(provisioning.args, ["ci", "--ignore-scripts"])) {
-    failures.push("d12 dependency provisioning arguments must equal npm ci --ignore-scripts");
+    failures.push(`${label} arguments must equal npm ci --ignore-scripts`);
   }
-  failures.push(
-    ...evaluateD12Digest(provisioning.lockfileSha256, "d12 dependency provisioning lockfileSha256"),
+  return failures;
+}
+
+function evaluateD12BundleDependencyProvisioning(provisioning, label) {
+  const failures = evaluateD12ProvisioningCommand(
+    provisioning,
+    ["args", "command", "lockfileSha256"],
+    label,
   );
+  failures.push(...evaluateD12Digest(provisioning?.lockfileSha256, `${label} lockfileSha256`));
+  return failures;
+}
+
+function evaluateD12DependencyProvisioning(comparison) {
+  const provisioning = comparison.dependencyProvisioning;
+  const failures = evaluateD12ProvisioningCommand(
+    provisioning,
+    ["args", "command", "lockfileSha256ByRevision"],
+    "d12 dependency provisioning",
+  );
+  const digests = provisioning?.lockfileSha256ByRevision;
+  failures.push(
+    ...evaluateD12ExactKeys(
+      digests,
+      ["baseline", "candidate"],
+      "d12 dependency provisioning lockfileSha256ByRevision",
+    ),
+  );
+  for (const revision of ["baseline", "candidate"]) {
+    failures.push(
+      ...evaluateD12Digest(
+        digests?.[revision],
+        `d12 dependency provisioning ${revision} lockfileSha256`,
+      ),
+    );
+  }
   return failures;
 }
 
@@ -2283,20 +2334,34 @@ function evaluateD12BundleDigests(record, label) {
     ...evaluateD12Digest(record.measurementSha256, `${label} measurementSha256`),
     ...evaluateD12Digest(record.sourceTreeSha256, `${label} sourceTreeSha256`),
     ...evaluateD12Digest(record.measurementHarnessSha256, `${label} measurementHarnessSha256`),
-    ...evaluateD12DependencyProvisioning({ dependencyProvisioning: record.dependencyProvisioning }),
+    ...evaluateD12BundleDependencyProvisioning(
+      record.dependencyProvisioning,
+      `${label} dependency provisioning`,
+    ),
   ];
 }
 
 function d12ExpectedBundleBinding(revision, comparison) {
-  return revision === "baseline"
-    ? {
-        commit: D12_BASELINE_COMMIT,
-        sourceTreeSha256: comparison.baselineSourceTreeSha256,
-      }
-    : {
-        commit: comparison.candidateCommit,
-        sourceTreeSha256: comparison.candidateSourceTreeSha256,
-      };
+  const identity =
+    revision === "baseline"
+      ? {
+          commit: D12_BASELINE_COMMIT,
+          sourceTreeSha256: comparison.baselineSourceTreeSha256,
+        }
+      : {
+          commit: comparison.candidateCommit,
+          sourceTreeSha256: comparison.candidateSourceTreeSha256,
+        };
+  const provisioning = d12Record(comparison.dependencyProvisioning);
+  const digests = d12Record(provisioning.lockfileSha256ByRevision);
+  return {
+    ...identity,
+    dependencyProvisioning: {
+      args: provisioning.args,
+      command: provisioning.command,
+      lockfileSha256: digests[revision],
+    },
+  };
 }
 
 function evaluateD12BundleIdentity(record, expected, comparison, label) {
@@ -2312,8 +2377,8 @@ function evaluateD12BundleIdentity(record, expected, comparison, label) {
   if (record.measurementHarnessSha256 !== comparison.measurementHarnessSha256) {
     failures.push(`${label} toolchain digest does not match comparison`);
   }
-  if (!isDeepStrictEqual(record.dependencyProvisioning, comparison.dependencyProvisioning)) {
-    failures.push(`${label} dependency provisioning does not match comparison`);
+  if (!isDeepStrictEqual(record.dependencyProvisioning, expected.dependencyProvisioning)) {
+    failures.push(`${label} dependency provisioning does not match its comparison revision`);
   }
   return failures;
 }
@@ -2385,11 +2450,11 @@ function evaluateD12Bundles(comparison) {
 }
 
 function evaluateD12DependencyBindings(comparison) {
-  const expected = comparison.dependencyProvisioning.lockfileSha256;
+  const expected = comparison.dependencyProvisioning.lockfileSha256ByRevision;
   const failures = [];
   for (const [index, repetition] of comparison.repetitions.entries()) {
     for (const revision of ["baseline", "candidate"]) {
-      if (repetition[revision].provenance.lockfileSha256 !== expected) {
+      if (repetition[revision].provenance.lockfileSha256 !== expected[revision]) {
         failures.push(
           `d12 repetition ${index + 1} ${revision}: lockfileSha256 does not match dependency provisioning`,
         );
@@ -2412,7 +2477,7 @@ export function evaluateD12Comparison(evidence) {
 
 function evaluateD12HeaderIdentity(evidence, comparison) {
   const failures = [];
-  if (comparison.schemaVersion !== "1") failures.push("d12 comparison schemaVersion must be 1");
+  if (comparison.schemaVersion !== "2") failures.push("d12 comparison schemaVersion must be 2");
   if (comparison.baselineCommit !== D12_BASELINE_COMMIT) {
     failures.push(`d12 baseline commit must be exactly ${D12_BASELINE_COMMIT}`);
   }
@@ -2645,10 +2710,11 @@ function defaultComputeLockfileSha256() {
 }
 
 function evaluateCurrentD12LockfileDigest(evidence, computeLockfileSha256) {
-  const recordedDigest = evidence.d12Comparison?.dependencyProvisioning?.lockfileSha256;
+  const recordedDigest =
+    evidence.d12Comparison?.dependencyProvisioning?.lockfileSha256ByRevision?.candidate;
   if (recordedDigest === undefined) return [];
   if (!LOWERCASE_SHA_256.test(recordedDigest)) {
-    return ["D12 comparison is missing a valid dependencyProvisioning.lockfileSha256 binding"];
+    return ["D12 comparison is missing a valid candidate dependencyProvisioning lockfile binding"];
   }
   try {
     const currentDigest = computeLockfileSha256();
@@ -2658,7 +2724,7 @@ function evaluateCurrentD12LockfileDigest(evidence, computeLockfileSha256) {
     return currentDigest === recordedDigest
       ? []
       : [
-          `dependencyProvisioning.lockfileSha256 ${recordedDigest} != current ${currentDigest} ` +
+          `dependencyProvisioning candidate lockfileSha256 ${recordedDigest} != current ${currentDigest} ` +
             "(stale D12 dependency evidence)",
         ];
   } catch (error) {

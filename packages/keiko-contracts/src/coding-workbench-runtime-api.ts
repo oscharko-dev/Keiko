@@ -222,7 +222,13 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   return result(value, errors);
 }
 
-export const parseCodingWorkbenchRuntimeRetryRequest = parseCodingWorkbenchRuntimeStartRequest;
+// A retry uses the identical request shape as the initial start; the distinct name documents the
+// retry call site's intent to readers without duplicating the validation logic.
+export function parseCodingWorkbenchRuntimeRetryRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
+  return parseCodingWorkbenchRuntimeStartRequest(value);
+}
 
 export function parseCodingWorkbenchRuntimeReadinessRequest(
   value: unknown,
@@ -301,7 +307,13 @@ export function validateCodingWorkbenchRuntimeSnapshot(
   return result(value, errors);
 }
 
-export const validateCodingWorkbenchRuntimeStatus = validateCodingWorkbenchRuntimeSnapshot;
+// A status read validates the identical snapshot shape; the distinct name documents the read call
+// site's intent to readers without duplicating the validation logic.
+export function validateCodingWorkbenchRuntimeStatus(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSnapshot> {
+  return validateCodingWorkbenchRuntimeSnapshot(value);
+}
 
 export function validateCodingWorkbenchRuntimeReadiness(
   value: unknown,

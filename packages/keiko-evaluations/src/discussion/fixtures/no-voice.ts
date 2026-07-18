@@ -4,7 +4,7 @@
 
 import type { DiscussionEvalFixture } from "../types.js";
 
-export const noVoiceChallenge: DiscussionEvalFixture = {
+const noVoiceChallenge: DiscussionEvalFixture = {
   name: "no-voice-challenge",
   category: "no-voice",
   description:
@@ -29,7 +29,7 @@ export const noVoiceChallenge: DiscussionEvalFixture = {
   },
 };
 
-export const noVoiceDecide: DiscussionEvalFixture = {
+const noVoiceDecide: DiscussionEvalFixture = {
   name: "no-voice-decide",
   category: "no-voice",
   description: "Decide mode in the text-first `none` profile; produces a decision recommendation.",
@@ -53,7 +53,7 @@ export const noVoiceDecide: DiscussionEvalFixture = {
   },
 };
 
-export const noVoiceBrainstorm: DiscussionEvalFixture = {
+const noVoiceBrainstorm: DiscussionEvalFixture = {
   name: "no-voice-brainstorm",
   category: "no-voice",
   description:

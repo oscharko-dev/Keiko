@@ -143,7 +143,7 @@ const VOICE_DE_MESSAGES: VoiceMessageCatalog = {
     "Die vollständige Antwort der Assistenz ist als Text in der Konversation verfügbar.",
 };
 
-export type VoiceMessageKey = keyof typeof VOICE_EN_MESSAGES;
+type VoiceMessageKey = keyof typeof VOICE_EN_MESSAGES;
 export type I18nTranslate = (key: VoiceMessageKey, values?: MessageValues) => string;
 type VoiceMessageCatalog = Readonly<Record<VoiceMessageKey, string>>;
 

@@ -3,7 +3,7 @@ import type { EvidenceStore, ManagedLspEvidence } from "@oscharko-dev/keiko-cont
 const LEDGER_SCHEMA_VERSION = "1" as const;
 const MAX_EVIDENCE_RECORDS = 128;
 
-export type ManagedLspEvidenceProjection = "projected" | "canonicalOnly";
+type ManagedLspEvidenceProjection = "projected" | "canonicalOnly";
 
 export type ManagedLspEvidenceProjector = (
   workspaceFingerprint: string,

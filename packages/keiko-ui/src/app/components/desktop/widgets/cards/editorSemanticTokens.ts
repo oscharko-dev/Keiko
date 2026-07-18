@@ -11,7 +11,7 @@ import type {
   KeikoCodeEditorProps,
 } from "@oscharko-dev/keiko-editor";
 
-export interface EditorSemanticTokensRequest {
+interface EditorSemanticTokensRequest {
   readonly request: EditorRequestIdentity;
   readonly document: {
     readonly uri: string;

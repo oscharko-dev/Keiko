@@ -10,40 +10,6 @@ import { buildPatchPreview, createFileModel, editorFileModelReducer } from "../i
 import type { KeikoDiffEditorProps } from "./diff-types.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 
-/**
- * Shared jsdom test harness for the KeikoCodeEditor component suites.
- *
- * The real `@monaco-editor/react` cannot run in jsdom, so suites `vi.mock` it with the
- * `<textarea>`-backed fake exported here. The fake renders a textarea (so user typing fires
- * `onChange`) and, on first render, invokes `onMount(fakeEditor, fakeMonaco)` where the fake editor
- * exposes the exact subset the mount wiring consumes.
- */
-export interface FakeEditor {
-  addAction: ReturnType<typeof vi.fn>;
-  onDidChangeCursorPosition: ReturnType<typeof vi.fn>;
-  onDidChangeCursorSelection: ReturnType<typeof vi.fn>;
-  saveViewState: ReturnType<typeof vi.fn>;
-  restoreViewState: ReturnType<typeof vi.fn>;
-  focus: ReturnType<typeof vi.fn>;
-  getContainerDomNode: () => HTMLElement;
-  emitCursor: (position: { lineNumber: number; column: number }) => void;
-  emitSelection: (selection: {
-    startLineNumber: number;
-    startColumn: number;
-    endLineNumber: number;
-    endColumn: number;
-    empty: boolean;
-  }) => void;
-  runSaveAction: () => void;
-  disposed: { action: boolean; cursor: boolean; selection: boolean };
-}
-
-export const fakeMonaco = {
-  editor: { defineTheme: vi.fn() },
-  KeyMod: { CtrlCmd: 2048, Alt: 512 },
-  KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
-};
-
 export function buildBuffer(overrides?: Partial<EditorBuffer["content"]>): EditorBuffer {
   const text = overrides?.text ?? "const a = 1;\n";
   return {
@@ -84,7 +50,7 @@ export function baseProps(overrides?: Partial<KeikoCodeEditorProps>): KeikoCodeE
 // ─── KeikoDiffEditor fixtures (#1195) ─────────────────────────────────────────────
 
 /** A mixed previewed patch: one created, one modified, one deleted file. */
-export function buildPreviewedPatch(): EditorPreviewedPatch {
+function buildPreviewedPatch(): EditorPreviewedPatch {
   return {
     patchId: "patch-1",
     status: "previewed",
@@ -118,7 +84,7 @@ export function buildPreviewedPatch(): EditorPreviewedPatch {
 }
 
 /** The rendered preview model for {@link buildPreviewedPatch}, with original sources supplied. */
-export function buildDiffModel(): PatchPreviewModel {
+function buildDiffModel(): PatchPreviewModel {
   return buildPatchPreview({
     patch: buildPreviewedPatch(),
     sources: {

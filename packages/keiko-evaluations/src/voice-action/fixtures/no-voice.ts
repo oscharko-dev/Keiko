@@ -6,7 +6,7 @@
 import type { VoiceActionEvalFixture } from "../types.js";
 import { buildSegments } from "./segment.js";
 
-export const noVoiceDormant: VoiceActionEvalFixture = {
+const noVoiceDormant: VoiceActionEvalFixture = {
   name: "no-voice-dormant",
   category: "no-voice",
   description:
@@ -25,7 +25,7 @@ export const noVoiceDormant: VoiceActionEvalFixture = {
   },
 };
 
-export const speechOutputDormant: VoiceActionEvalFixture = {
+const speechOutputDormant: VoiceActionEvalFixture = {
   name: "speech-output-dormant",
   category: "no-voice",
   description:

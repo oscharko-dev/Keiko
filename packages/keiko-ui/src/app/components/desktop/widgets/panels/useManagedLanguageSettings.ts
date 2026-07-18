@@ -15,16 +15,16 @@ import {
   type ManagedLspSettingsResponse,
 } from "@/lib/api";
 
-export interface ManagedLspPendingIntent {
+interface ManagedLspPendingIntent {
   readonly root: string;
   readonly language: ManagedLspLanguage;
   readonly action: ManagedLspSettingsAction;
   readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
 }
 
-export type ManagedLspViewIssue = "load" | "mutation" | "conflict";
+type ManagedLspViewIssue = "load" | "mutation" | "conflict";
 
-export interface ManagedLspViewState {
+interface ManagedLspViewState {
   readonly data: ManagedLspSettingsResponse | undefined;
   readonly loading: boolean;
   readonly mutating: boolean;

@@ -7,7 +7,7 @@ import { fetchCapsuleDetail } from "@/lib/local-knowledge-api";
 import type { CapsuleDetail } from "@/lib/local-knowledge-api";
 import { formatError } from "../format-error";
 
-export type DetailLoadStatus = "loading" | "ready" | "error";
+type DetailLoadStatus = "loading" | "ready" | "error";
 
 export interface CapsuleDetailState {
   readonly data: CapsuleDetail | null;

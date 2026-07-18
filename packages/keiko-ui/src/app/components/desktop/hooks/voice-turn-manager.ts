@@ -52,7 +52,7 @@ export type VoiceTurnState =
   | "recovering";
 
 // ─── Floor holder (D3) — derived from state, never stored ───────────────────────
-export type VoiceFloorHolder = "none" | "user" | "assistant";
+type VoiceFloorHolder = "none" | "user" | "assistant";
 
 // A total table keyed by `VoiceTurnState`: adding a state without classifying its floor holder is a
 // compile error (totality). The snapshot derives the floor from this at read time, which eliminates
@@ -87,7 +87,7 @@ export type VoiceTurnSignal =
   | { readonly kind: "recovered" }
   | { readonly kind: "session-closed" };
 
-export type VoiceTurnSignalKind = VoiceTurnSignal["kind"];
+type VoiceTurnSignalKind = VoiceTurnSignal["kind"];
 
 // ─── Effects (D7) — content-free directives the manager EMITS but never executes ──
 // The effect vocabulary is media-floor only. No effect grants workflow authority, triggers a model
@@ -103,7 +103,7 @@ export type VoiceTurnEffect =
 // `transitioned` — the signal changed state and/or counters; `no-op` — valid for the profile but with
 // no meaningful effect in the current state; `not-allowed-for-profile` — rejected by the capability
 // gate (and the only outcome ever produced by a dormant `none`-profile manager).
-export type VoiceTurnApplyOutcome = "transitioned" | "no-op" | "not-allowed-for-profile";
+type VoiceTurnApplyOutcome = "transitioned" | "no-op" | "not-allowed-for-profile";
 
 // ─── Read-only snapshot (D9) ────────────────────────────────────────────────────
 export interface VoiceTurnSnapshot {
@@ -120,7 +120,7 @@ export interface VoiceTurnSnapshot {
   readonly lastInterruptAtMs: number | undefined;
 }
 
-export interface VoiceTurnApplyResult {
+interface VoiceTurnApplyResult {
   readonly outcome: VoiceTurnApplyOutcome;
   readonly effects: readonly VoiceTurnEffect[];
   readonly snapshot: VoiceTurnSnapshot;
@@ -142,12 +142,12 @@ export interface VoiceTurnInterruptEvent {
   readonly interruptions: number;
 }
 
-export interface VoiceTurnBackchannelEvent {
+interface VoiceTurnBackchannelEvent {
   readonly state: VoiceTurnState;
   readonly backchannels: number;
 }
 
-export interface VoiceTurnEffectEvent {
+interface VoiceTurnEffectEvent {
   readonly effect: VoiceTurnEffect;
   readonly state: VoiceTurnState;
   readonly turnIndex: number;

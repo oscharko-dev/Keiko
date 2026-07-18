@@ -24,12 +24,12 @@ export interface PdfCitationPreviewWindowApi {
   readonly update: WorkspaceApi["update"];
 }
 
-export type CitationPreviewAffordanceState = Extract<
+type CitationPreviewAffordanceState = Extract<
   PdfCitationPreviewStatusState,
   "available" | "recoverable" | "blocked"
 >;
 
-export interface CitationPreviewAffordance {
+interface CitationPreviewAffordance {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly display?: PdfCitationPreviewDisplay;
   readonly reason?: PdfCitationPreviewCitationStatus["reason"];
@@ -97,7 +97,7 @@ function normalizePreviewMarkerIndex(marker: string | number): number | undefine
   return normalizePdfCitationPreviewMarkerIndex(marker);
 }
 
-export function knowledgeCitationsForAnswer(
+function knowledgeCitationsForAnswer(
   answer: GroundedAnswer | undefined,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (answer === undefined) return [];

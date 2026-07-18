@@ -56,7 +56,7 @@ export interface ManagedLspWorkspaceRecord {
 
 export type ManagedLspStoreState = "absent" | "ready" | "unavailable";
 
-export interface ManagedLspStoreLoadResult {
+interface ManagedLspStoreLoadResult {
   readonly state: ManagedLspStoreState;
   readonly record: ManagedLspWorkspaceRecord;
 }

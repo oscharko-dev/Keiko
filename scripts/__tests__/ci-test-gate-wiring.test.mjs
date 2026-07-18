@@ -97,6 +97,7 @@ const REQUIRED_CI_COMMANDS = [
   // the dependency verifier the general audit never completed — no @types/* in runtime deps, engines
   // floors present, build-tool script imports declared at root.
   "npm run check:dependency-hygiene",
+  "npm run check:knip",
   "npm run check:qodo-config",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the

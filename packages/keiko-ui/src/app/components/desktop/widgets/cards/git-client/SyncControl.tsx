@@ -11,7 +11,7 @@ import {
   disabledStyle,
 } from "./git-client-styles";
 
-export type GitSyncUiAction = "fetch" | "pull" | "push" | "publish-upstream" | "blocked";
+type GitSyncUiAction = "fetch" | "pull" | "push" | "publish-upstream" | "blocked";
 
 export interface GitSyncView {
   readonly action: GitSyncUiAction;

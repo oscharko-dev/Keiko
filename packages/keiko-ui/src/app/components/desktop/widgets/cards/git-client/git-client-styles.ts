@@ -72,13 +72,6 @@ export const TOOLBAR_CELL_LABEL_STYLE: CSSProperties = {
   lineHeight: 1.1,
 };
 
-export const TOOLBAR_CELL_VALUE_STYLE: CSSProperties = {
-  fontSize: 14,
-  fontWeight: 600,
-  color: "var(--fg)",
-  lineHeight: 1.1,
-};
-
 // Right action group at the end of the toolbar (Open in Editor / Open Files).
 export const TOOLBAR_ACTIONS_STYLE: CSSProperties = {
   display: "flex",
@@ -150,21 +143,6 @@ export const PRIMARY_BTN: CSSProperties = {
   color: "var(--ink-inverse)",
   font: "650 13px var(--font-ui)",
 };
-
-// Ghost icon button (zoom, split/settings in the diff header).
-export function iconButtonStyle(size = 28): CSSProperties {
-  return {
-    display: "grid",
-    placeItems: "center",
-    width: size,
-    height: size,
-    border: 0,
-    background: "transparent",
-    borderRadius: 8,
-    color: "var(--fg-faint)",
-    cursor: "pointer",
-  };
-}
 
 export function disabledStyle(disabled: boolean): CSSProperties {
   return disabled ? { opacity: "var(--opacity-disabled, 0.6)", cursor: "not-allowed" } : {};
@@ -333,7 +311,7 @@ export function statusSquareStyle(status: string): CSSProperties {
 }
 
 // M → info, A → ok, D → danger, R → warn; conflict/untracked map onto the same palette.
-export function statusColor(status: string): string {
+function statusColor(status: string): string {
   switch (status) {
     case "A":
     case "?":
@@ -382,27 +360,6 @@ export const COMMIT_PANEL_STYLE: CSSProperties = {
   gap: 10,
 };
 
-// AI-suggestion header (spark + "Keiko suggested this summary" + Regenerate). Shown only when a
-// genuine suggestion exists; never fabricated.
-export const AI_HEADER_STYLE: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 7,
-};
-
-export const GHOST_LINK_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 5,
-  border: 0,
-  background: "transparent",
-  color: "var(--fg-faint)",
-  font: "500 11.5px var(--font-ui)",
-  cursor: "pointer",
-  padding: "2px 4px",
-  borderRadius: 6,
-};
-
 // Single-line summary input. The 2px accent edge marks AI-authored content when applicable.
 export function summaryFieldStyle(aiAuthored: boolean): CSSProperties {
   return {
@@ -434,25 +391,6 @@ export const DESCRIPTION_FIELD_STYLE: CSSProperties = {
   resize: "vertical",
 };
 
-export const COAUTHOR_ROW_STYLE: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 7,
-  flexWrap: "wrap",
-};
-
-export const COAUTHOR_CHIP_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  color: "var(--accent-on-tint)",
-  background: "var(--accent-dim)",
-  padding: "2px 8px",
-  borderRadius: 999,
-  boxShadow: "inset 0 0 0 1px var(--accent-line)",
-};
-
 export const FLOW_ROW_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -482,20 +420,6 @@ export const DIFF_PATH_STYLE: CSSProperties = {
   minWidth: 0,
 };
 
-export const EXPLAIN_BTN_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  height: 28,
-  padding: "0 11px",
-  borderRadius: 8,
-  border: "1px solid var(--accent-line)",
-  background: "var(--accent-dim)",
-  color: "var(--accent-text)",
-  font: "600 12px var(--font-ui)",
-  cursor: "pointer",
-};
-
 // Diff scope segmented toggle (Worktree / Staged).
 export const SCOPE_TOGGLE_STYLE: CSSProperties = {
   display: "inline-flex",
@@ -521,55 +445,6 @@ export function scopeButtonStyle(active: boolean): CSSProperties {
     whiteSpace: "nowrap",
   };
 }
-
-// Agent "Explain diff" card. Rendered only when a genuine explanation is available.
-export const AGENT_CARD_STYLE: CSSProperties = {
-  position: "relative",
-  margin: "12px 14px 4px",
-  padding: "12px 13px",
-  borderRadius: 12,
-  background: "var(--accent-dim)",
-  boxShadow: "inset 0 0 0 1px var(--accent-line)",
-  display: "flex",
-  gap: 11,
-};
-
-export const AGENT_AVATAR_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 26,
-  height: 26,
-  flex: "none",
-  borderRadius: 8,
-  background: "var(--card)",
-  color: "var(--accent-text)",
-  boxShadow: "inset 0 0 0 1px var(--accent-line)",
-};
-
-export const CITATION_CHIP_STYLE: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 5,
-  fontFamily: "var(--font-mono)",
-  fontSize: 10.5,
-  color: "var(--accent-on-tint)",
-  background: "var(--card)",
-  padding: "2px 8px",
-  borderRadius: 6,
-  boxShadow: "inset 0 0 0 1px var(--accent-line)",
-};
-
-// Footer kept for the connected diff pane (PR/Merge live in the composer now; this stays for the
-// PR/Merge sub-panels' back action header).
-export const FOOTER_STYLE: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "10px 14px",
-  borderTop: "1px solid var(--line-soft)",
-  background: "var(--surface)",
-};
 
 // ─── History ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -804,10 +679,6 @@ export const INPUT_STYLE: CSSProperties = {
   font: "400 13px var(--font-ui)",
 };
 
-export const TEXTAREA_STYLE: CSSProperties = {
-  ...DESCRIPTION_FIELD_STYLE,
-};
-
 export const MENU_STYLE: CSSProperties = {
   position: "absolute",
   zIndex: 20,
@@ -849,14 +720,6 @@ export const REPO_OPTION_STYLE: CSSProperties = {
 export const REPO_OPTION_SELECTED_STYLE: CSSProperties = {
   background: "var(--accent-dim)",
   boxShadow: "inset 2px 0 0 var(--accent)",
-};
-
-export const SEARCH_ROW_STYLE: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 9,
-  padding: 12,
-  borderBottom: "1px solid var(--line-soft)",
 };
 
 export const STATUS_PILL_STYLE: CSSProperties = {

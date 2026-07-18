@@ -184,7 +184,7 @@ function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHan
 }
 
 /** Bounded, workspace-confined text read for the managed tool facade (functional stand-in). */
-export function functionalWorkspaceRead(
+function functionalWorkspaceRead(
   resolveRoot: () => string | undefined,
 ): SecureWorkspaceTextReadPort {
   return {
@@ -227,7 +227,7 @@ function readContainedText(
  * archived harness behaviour: exact patch/changeset correspondence, per-file source hash proof,
  * and containment-enforced application through the shared patch engine.
  */
-export function functionalEditorAgentClient(
+function functionalEditorAgentClient(
   resolveRoot: () => string | undefined,
 ): FunctionalEditorAgentClient {
   return {

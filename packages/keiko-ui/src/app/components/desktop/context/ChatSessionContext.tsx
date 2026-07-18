@@ -30,12 +30,12 @@ type ChatSessionActionKeys =
   | "forgetMemoryAction";
 
 export type ChatSessionActions = Pick<ChatSessionApi, ChatSessionActionKeys>;
-export type ChatSessionState = Omit<ChatSessionApi, ChatSessionActionKeys>;
+type ChatSessionState = Omit<ChatSessionApi, ChatSessionActionKeys>;
 // GEN-PERF-CHAT-014 — the streaming delta is the ONLY session field that changes on every
 // coalesced token flush (up to one commit per animation frame while a reply streams). It
 // lives in its own context slice so consumers that don't render the live bubble (composer,
 // headers, panels) can subscribe to the settled slice and skip those per-frame renders.
-export type ChatSessionStream = Pick<ChatSessionApi, "streamingAssistantMessage">;
+type ChatSessionStream = Pick<ChatSessionApi, "streamingAssistantMessage">;
 type ChatSessionSettledState = Omit<ChatSessionState, "streamingAssistantMessage">;
 // Everything a composer-side consumer may need: the full session API minus the per-frame
 // streaming delta. Reading THIS instead of useChatSessionContext() is what makes a
@@ -267,22 +267,6 @@ export function useChatSessionActions(): ChatSessionActions {
     throw new Error("useChatSessionActions must be used inside ChatSessionProvider");
   }
   return ctx;
-}
-
-// Issue #184 — optional read for nested widgets (e.g. FilePreview) that may render outside the
-// chat session in tests or in stand-alone storybook-style usage. Returns null when no provider
-// is mounted; callers that need the session must use useChatSessionContext().
-export function useOptionalChatSessionContext(): ChatSessionApi | null {
-  const state = useContext(ChatSessionStateContext);
-  const stream = useContext(ChatSessionStreamContext);
-  const actions = useContext(ChatSessionActionsContext);
-  return useMemo<ChatSessionApi | null>(
-    () =>
-      state === null || stream === null || actions === null
-        ? null
-        : { ...state, ...stream, ...actions },
-    [state, stream, actions],
-  );
 }
 
 export function useOptionalChatSessionCatalog(): ChatSessionCatalog | null {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export type DebugActivationEvidenceAction = "activate" | "deactivate" | "revoke";
-export type DebugActivationEvidenceOutcome = "accepted" | "noOp" | "denied";
+type DebugActivationEvidenceOutcome = "accepted" | "noOp" | "denied";
 
 /**
  * Content-free activation audit payload. It records a derived decision, never a second opt-in,

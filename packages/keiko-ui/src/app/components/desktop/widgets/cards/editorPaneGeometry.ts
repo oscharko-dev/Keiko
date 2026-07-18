@@ -25,7 +25,7 @@ import {
 
 export const EDITOR_TAB_DRAG_MIME = "application/x-keiko-editor-tab";
 export const MIN_SIDEBAR_WIDTH = 180;
-export const DEFAULT_SIDEBAR_WIDTH = 260;
+const DEFAULT_SIDEBAR_WIDTH = 260;
 export const MAX_SIDEBAR_WIDTH = 440;
 export const MAX_EDITOR_PANES = 3;
 
@@ -97,17 +97,14 @@ export function openFilesPatchValue(openFiles: readonly string[]): readonly stri
   return openFiles.length > 0 ? openFiles : undefined;
 }
 
-export function sanitizePaneFiles(root: string, pane: EditorPaneStateV2): EditorPaneStateV2 {
+function sanitizePaneFiles(root: string, pane: EditorPaneStateV2): EditorPaneStateV2 {
   const openFiles = normalizeEditorOpenFiles(root, pane.activeFile, pane.openFiles);
   const activeFile = normalizeEditorFile(root, pane.activeFile) || openFiles[0] || "";
   const tabOrder = normalizeEditorOpenFiles(root, activeFile, pane.tabOrder);
   return { ...pane, openFiles, activeFile, tabOrder: tabOrder.length > 0 ? tabOrder : openFiles };
 }
 
-export function sanitizeLayoutFiles(
-  root: string,
-  layout: EditorLayoutStateV2,
-): EditorLayoutStateV2 {
+function sanitizeLayoutFiles(root: string, layout: EditorLayoutStateV2): EditorLayoutStateV2 {
   const panes: Record<string, EditorPaneStateV2> = {};
   for (const [paneId, pane] of Object.entries(layout.panes)) {
     panes[paneId] = sanitizePaneFiles(root, pane);
@@ -153,7 +150,7 @@ export function createInitialLayout(input: {
   );
 }
 
-export function createPresetPane(
+function createPresetPane(
   root: string,
   id: string,
   activeFile: string,
@@ -187,7 +184,7 @@ export function presetTree(direction: EditorSplitDirection): EditorLayoutSplitNo
   return splitNode("split-1", direction, paneNode("pane-1"), paneNode("pane-2"));
 }
 
-export function createDistributedPresetLayout(
+function createDistributedPresetLayout(
   layout: EditorLayoutStateV2,
   root: string,
   direction: EditorSplitDirection,

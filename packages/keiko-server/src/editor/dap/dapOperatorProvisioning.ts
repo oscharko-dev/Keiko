@@ -20,7 +20,7 @@ export interface DapOperatorProvisionedArtifact {
   readonly capsulePath: string;
 }
 
-export interface DapOperatorAdapterProvisioning {
+interface DapOperatorAdapterProvisioning {
   readonly executableName: string;
   readonly executableArgs: readonly string[];
   readonly trustedRoots: readonly string[];
@@ -31,7 +31,7 @@ export interface DapOperatorAdapterProvisioning {
   readonly provisioningDigest: string;
 }
 
-export interface DapOperatorLaunchProvisioning {
+interface DapOperatorLaunchProvisioning {
   readonly adapterApprovedRoot: string;
   readonly node: DapOperatorProvisionedArtifact;
   readonly npm: DapOperatorProvisionedArtifact;

@@ -116,7 +116,7 @@ export interface RecordFigmaSnapshotResult {
 }
 
 /** Summary entry returned by {@link FigmaSnapshotStore.listByScope}. */
-export interface FigmaSnapshotScopeEntry {
+interface FigmaSnapshotScopeEntry {
   readonly runId: string;
   readonly fetchedAt: string;
   readonly integrityHash: string;

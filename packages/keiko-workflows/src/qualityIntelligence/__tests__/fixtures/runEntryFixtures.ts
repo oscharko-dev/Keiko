@@ -127,7 +127,7 @@ export function recordingSink(): RecordingSink {
 
 // Deterministic model output (two candidates) for the model-routed entry — copied shape from
 // modelRoutedTestDesign.test.ts so the two suites agree on the fixture.
-export const MODEL_OUTPUT_TWO = JSON.stringify([
+const MODEL_OUTPUT_TWO = JSON.stringify([
   {
     title: "Test atom 1 behavior",
     steps: ["Navigate to the feature", "Trigger the atom-1 action"],

@@ -46,7 +46,7 @@ export interface WorkspaceWatchService {
   readonly disposeAll: () => void;
 }
 
-export interface WorkspaceWatchSubscribeArgs {
+interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;

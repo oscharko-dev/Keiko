@@ -1507,9 +1507,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 }
 
-// Re-exports for callers that need the lower-level type
-export type { WindowType };
-
 // ─── M3 (#532) pure scope-list helpers (exported for tests) ─────────────────
 
 export const MAX_SCOPES = 16;
