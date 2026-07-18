@@ -24,18 +24,125 @@ import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./typ
 // All patterns are anchored and use a single open or bounded quantifier. The phrase trailing
 // the imperative is captured greedily ON A SINGLE LINE (no `s` flag) so embedded newlines
 // terminate the match — this prevents a multi-line paste from being absorbed into one body.
-const REMEMBER_RE =
-  /^\s*(?:remember(?:\s+that)?|(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?|speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?|notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?)\s+(.+?)\s*$/iu;
-const REMEMBER_ABOUT_RE =
-  /^\s*(?:remember\s+about|merk(?:e)?\s+dir\s+(?:zu|über|ueber)|speicher(?:e)?\s+(?:zu|über|ueber))\s+(?:this\s+(?:project|workspace)[:,\s]+)?(.+?)\s*$/iu;
-const FORGET_RE =
-  /^\s*(?:forget(?:\s+about)?|vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?|lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?)\s+(.+?)\s*$/iu;
-const UPDATE_RE =
-  /^\s*(?:update\s+(?:memory|the\s+memory)\s+about|aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber))\s+(.+?)\s+(?:to\s+be|with|auf|mit|zu|:)\s+(.+?)\s*$/iu;
-const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(.+?)\s*$/iu;
-const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(.+?)\s*$/iu;
-const THATS_WRONG_RE =
-  /^\s*(?:that(?:'s|\s+is)\s+wrong|das\s+stimmt\s+nicht|falsch)[,.]?\s+(.+?)\s+(is|are|should\s+be|ist|sind|sollte\s+sein)\s+(.+?)\s*$/iu;
+//
+// REMEMBER_PATTERNS / REMEMBER_ABOUT_PATTERNS / FORGET_PATTERNS are intentionally *prefix-only*:
+// they match the imperative keyword plus its optional inner clauses ("that", "bitte", "dass",
+// "about this project:", …) and the mandatory separator before the body, but capture nothing and
+// place no constraint after their own final quantifier. An earlier revision chained a `\S`-anchored
+// capture group directly onto these alternations (`...)\s+(\S(?:.*\S)?)\s*$`), which reintroduced
+// backtracking: because the inner keyword clauses are *optional*, the engine can retreat one out
+// of the prefix — as long as some leftover whitespace still lets the mandatory `\s+` separator
+// match — and then reinterpret the keyword's own text as the captured body, whenever the true
+// trailing content is whitespace-only. Concretely, that shape made "remember that   " capture
+// body="that" and "forget about   " capture target="about" (the keyword itself), instead of
+// correctly recognizing there is no body/target at all. A prefix pattern with nothing after its
+// final quantifier has exactly one possible parse for a given input — greedy match of the full
+// optional chain, or no match — so there is nothing left for the engine to backtrack into.
+// `bodyAfterPrefix` (below) derives the body by slicing off the matched prefix and trimming,
+// which is a plain linear-time string operation with no adjacent overlapping quantifiers, and
+// correctly returns `null` (not this intent) when nothing but whitespace remains.
+//
+// The other patterns (ACTUALLY_RE, CORRECTION_LABEL_RE) keep the single-regex
+// `(\S(?:.*\S)?)\s*$` capture style: their prefixes have no optional inner clause immediately
+// adjacent to the mandatory separator, so they aren't subject to the same ambiguity. `\S` and
+// `\s` are disjoint, so `(\S(?:.*\S)?)` has exactly one way to split the input: the body is
+// forced to end on its own last non-whitespace character, with no ambiguity to backtrack over
+// (O(n) instead of the O(n^2) that `(.+?)\s*$` had — SonarCloud S8786). The two-target patterns
+// (UPDATE_BODY_RE, THATS_WRONG_BODY_RE) apply the analogous fix to the leading group:
+// `(\S+(?:\s+\S+)*?)` tokenizes on the disjoint `\S`/`\s` boundary instead of scanning
+// character-by-character with `.+?`, which removes the same overlap against the separator's
+// `\s+`.
+//
+// Every prefix keyword used to live as one branch of a single top-level alternation (e.g.
+// `remember(?:\s+that)?|merk(e)?\s+dir...|speicher...|notier...`). SonarCloud S5843 flags that
+// shape once enough keyword/language variants pile into one regex literal: structural complexity
+// (nesting x alternation branches) crosses the rule's threshold even though each branch alone is
+// simple. The fix below splits each mega-alternation into one small regex per keyword/variant,
+// tried in order via `execFirst`. This is behaviourally identical to the original alternation:
+// the keywords are mutually exclusive prefixes (different first letters / distinct literal
+// words), so trying them one at a time in the same order the alternation would have tried its
+// branches yields the same first match. UPDATE_KEYWORD_PATTERNS/THATS_WRONG_KEYWORD_PATTERNS
+// split the same way; each keyword's own trailing `\s+` prefix-match is then handed to a
+// *separate* body regex (UPDATE_BODY_RE / THATS_WRONG_BODY_RE) applied to the remainder, which
+// keeps the O(n) backtracking-safety documented above intact — neither half changes internally,
+// only where the split between them falls.
+function execFirst(patterns: readonly RegExp[], text: string): RegExpExecArray | null {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match !== null) {
+      return match;
+    }
+  }
+  return null;
+}
+
+const REMEMBER_PATTERNS: readonly RegExp[] = [
+  /^\s*remember(?:\s+that)?\s+/iu,
+  /^\s*(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
+  /^\s*speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
+  /^\s*notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
+];
+// Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
+// than factoring it into a second matching stage) so a single execFirst pass still yields the
+// complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
+const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
+  /^\s*remember\s+about\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
+  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
+  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
+];
+const FORGET_PATTERNS: readonly RegExp[] = [
+  /^\s*forget(?:\s+about)?\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?\s+/iu,
+  /^\s*lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?\s+/iu,
+];
+// Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
+// patterns above) never matches these without the `s`/dotAll flag, so a trimmed body/target
+// containing one means the real content spans more than one line — treated as "not this intent",
+// mirroring the multi-line-paste guard those patterns get from `.` alone.
+const LINE_TERMINATOR_RE = /[\n\r\u2028\u2029]/;
+
+// Derives the body/target for the prefix-only patterns above: slice off the matched prefix, trim
+// surrounding whitespace, and reject (null) an empty or genuinely multi-line remainder. Plain
+// linear-time string ops — no regex, no backtracking.
+function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
+  const rest = text.slice(prefixMatch[0].length);
+  const trimmed = rest.trim();
+  if (trimmed === "" || LINE_TERMINATOR_RE.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+const UPDATE_KEYWORD_PATTERNS: readonly RegExp[] = [
+  /^\s*update\s+(?:memory|the\s+memory)\s+about\s+/iu,
+  /^\s*aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber)\s+/iu,
+];
+const UPDATE_BODY_RE = /^(\S+(?:\s+\S+)*?)\s+(?:to\s+be|with|auf|mit|zu|:)\s+(\S(?:.*\S)?)\s*$/iu;
+const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(\S(?:.*\S)?)\s*$/iu;
+const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(\S(?:.*\S)?)\s*$/iu;
+const THATS_WRONG_KEYWORD_PATTERNS: readonly RegExp[] = [
+  /^\s*that(?:'s|\s+is)\s+wrong[,.]?\s+/iu,
+  /^\s*das\s+stimmt\s+nicht[,.]?\s+/iu,
+  /^\s*falsch[,.]?\s+/iu,
+];
+// Split from one 6-branch-verb regex into two 3-branch ones (typescript:S5843 — the combined form
+// was still over the complexity threshold even after the earlier keyword-prefix split). The
+// original's lazy subject group `(?:\s+\S+)*?` always expands to the FIRST position (leftmost)
+// where any of the 6 verb alternatives matches, regardless of language — trying one pattern before
+// the other (Gitar review finding) is NOT behavior-identical for mixed EN/DE text, since the
+// tried-first pattern can match a later verb of its own language while ignoring an earlier verb of
+// the other. execThatsWrongBody below runs both independently and keeps whichever has the shorter
+// (earlier-ending) subject capture, replicating the original's leftmost-wins selection exactly.
+const THATS_WRONG_BODY_EN_RE = /^(\S+(?:\s+\S+)*?)\s+(is|are|should\s+be)\s+(\S(?:.*\S)?)\s*$/iu;
+const THATS_WRONG_BODY_DE_RE =
+  /^(\S+(?:\s+\S+)*?)\s+(ist|sind|sollte\s+sein)\s+(\S(?:.*\S)?)\s*$/iu;
+
+function execThatsWrongBody(text: string): RegExpExecArray | null {
+  const en = THATS_WRONG_BODY_EN_RE.exec(text);
+  const de = THATS_WRONG_BODY_DE_RE.exec(text);
+  if (en === null) return de;
+  if (de === null) return en;
+  return (en[1]?.length ?? 0) <= (de[1]?.length ?? 0) ? en : de;
+}
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
@@ -108,10 +215,18 @@ export function tryExtractRemember(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const aboutMatch = REMEMBER_ABOUT_RE.exec(text);
-  const plainMatch = aboutMatch === null ? REMEMBER_RE.exec(text) : null;
-  const body = aboutMatch?.[1] ?? plainMatch?.[1];
-  if (body === undefined) {
+  // "about" is tried first and, if its prefix matches at all (even with an unusable body), wins
+  // outright — falling back to the plain prefix on a matched-but-empty "about" body would let
+  // the plain pattern reinterpret the word "about" itself as body text (the same class of bug
+  // this file's regex catalogue comment documents).
+  const aboutPrefixMatch = execFirst(REMEMBER_ABOUT_PATTERNS, text);
+  const plainPrefixMatch = aboutPrefixMatch === null ? execFirst(REMEMBER_PATTERNS, text) : null;
+  const prefixMatch = aboutPrefixMatch ?? plainPrefixMatch;
+  if (prefixMatch === null) {
+    return null;
+  }
+  const body = bodyAfterPrefix(prefixMatch, text);
+  if (body === null) {
     return null;
   }
   const rejection = rejectIfUnsafe(body, policy);
@@ -147,12 +262,12 @@ export function tryExtractForget(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const match = FORGET_RE.exec(text);
-  if (match === null) {
+  const prefixMatch = execFirst(FORGET_PATTERNS, text);
+  if (prefixMatch === null) {
     return null;
   }
-  const target = match[1];
-  if (target === undefined) {
+  const target = bodyAfterPrefix(prefixMatch, text);
+  if (target === null) {
     return null;
   }
   const scopeResolution = scopeOrReject(context, policy);
@@ -180,7 +295,11 @@ export function tryExtractUpdate(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const match = UPDATE_RE.exec(text);
+  const prefixMatch = execFirst(UPDATE_KEYWORD_PATTERNS, text);
+  if (prefixMatch === null) {
+    return null;
+  }
+  const match = UPDATE_BODY_RE.exec(text.slice(prefixMatch[0].length));
   if (match === null) {
     return null;
   }
@@ -226,9 +345,16 @@ function extractCorrectionBody(text: string): string | null {
   if (labelMatch?.[1] !== undefined) {
     return labelMatch[1];
   }
-  const wrongMatch = THATS_WRONG_RE.exec(text);
-  if (wrongMatch?.[1] !== undefined && wrongMatch[2] !== undefined && wrongMatch[3] !== undefined) {
-    return `${wrongMatch[1]} ${wrongMatch[2]} ${wrongMatch[3]}`;
+  const wrongPrefixMatch = execFirst(THATS_WRONG_KEYWORD_PATTERNS, text);
+  if (wrongPrefixMatch !== null) {
+    const wrongMatch = execThatsWrongBody(text.slice(wrongPrefixMatch[0].length));
+    if (
+      wrongMatch?.[1] !== undefined &&
+      wrongMatch[2] !== undefined &&
+      wrongMatch[3] !== undefined
+    ) {
+      return `${wrongMatch[1]} ${wrongMatch[2]} ${wrongMatch[3]}`;
+    }
   }
   return null;
 }

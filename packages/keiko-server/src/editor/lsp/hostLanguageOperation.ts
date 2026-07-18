@@ -615,7 +615,7 @@ function textEditsFromResult(value: unknown): readonly LanguageTextEdit[] {
 }
 
 function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 function relativePathFromUri(workspaceRoot: string, uri: unknown): string | undefined {

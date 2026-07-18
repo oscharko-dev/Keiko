@@ -24,6 +24,17 @@
         width: 100%;
         border-collapse: collapse;
       }
+      .ac-table th {
+        text-align: left;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        font-weight: 500;
+        padding: 0 14px 12px;
+        border-bottom: 1px solid var(--line);
+      }
       .ac-table td {
         padding: 12px 14px;
         border-bottom: 1px solid var(--line-soft);
@@ -135,6 +146,23 @@
         line-height: 1.55;
         color: var(--fg);
       }
+      /* Row-header cells (<th scope="row">) in the term/description .tbl tables must
+         keep the plain .fgw cell look, not the mono/uppercase thead column-header style. */
+      .tbl tbody th.fgw {
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: normal;
+        text-align: left;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--fg);
+        vertical-align: middle;
+      }
+      .tbl tr:last-child th {
+        border-bottom: 0;
+      }
     </style>
   </head>
   <body class="ds">
@@ -167,6 +195,14 @@
         </div>
         <div class="card" style="padding: 8px 24px">
           <table class="ac-table">
+            <thead>
+              <tr>
+                <th scope="col">Sample</th>
+                <th scope="col">Role</th>
+                <th scope="col">Contrast ratio</th>
+                <th scope="col">Result</th>
+              </tr>
+            </thead>
             <tbody>
               <tr>
                 <td>
@@ -260,6 +296,14 @@
         </div>
         <div class="card" style="padding: 8px 24px; margin-bottom: 18px">
           <table class="ac-table">
+            <thead>
+              <tr>
+                <th scope="col">Sample</th>
+                <th scope="col">Role</th>
+                <th scope="col">Contrast ratio</th>
+                <th scope="col">Result</th>
+              </tr>
+            </thead>
             <tbody>
               <tr>
                 <td>
@@ -456,7 +500,12 @@
               <span class="ico" data-licon="search" data-size="18"></span>
             </button>
             <a class="c-chip" href="#focus" style="text-decoration: none">A link</a>
-            <input class="c-field" style="width: 200px" placeholder="A field" />
+            <input
+              class="c-field"
+              style="width: 200px"
+              placeholder="A field"
+              aria-label="A field"
+            />
           </div>
           <div
             style="
@@ -538,26 +587,26 @@
           <table class="tbl">
             <tbody>
               <tr>
-                <td class="fgw">High-DPI</td>
+                <th scope="row" class="fgw">High-DPI</th>
                 <td>
                   Icons are SVG and borders are 1px hairlines — crisp from 1× laptops to 4K/Retina.
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Browser zoom</td>
+                <th scope="row" class="fgw">Browser zoom</th>
                 <td>
                   Layouts reflow and stay usable to 200%+; nothing is pinned to a fixed pixel
                   viewport.
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Reflow</td>
+                <th scope="row" class="fgw">Reflow</th>
                 <td>
                   The sidebar collapses and grids stack on narrow widths — phone to ultrawide.
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Density</td>
+                <th scope="row" class="fgw">Density</th>
                 <td>Comfortable by default; the workspace zoom lets users scale cards to taste.</td>
               </tr>
             </tbody>

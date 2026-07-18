@@ -172,10 +172,20 @@ function toPortablePath(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
+// Strips trailing "/" one character at a time instead of via `/\/+$/u` (SonarCloud S8786): that
+// pattern is unanchored at the start, so a long run of "/" that never reaches the string's true end
+// forces the engine to retry the backtrack at every position within the run, giving O(n²) work. A
+// manual scan from the end can't backtrack and is O(n).
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 function trimTrailingSeparators(path: string): string {
   if (/^[A-Za-z]:[/\\]?$/u.test(path)) return path.replaceAll("\\", "/");
   if (/^\/\/[^/]+\/[^/]+$/u.test(toPortablePath(path))) return toPortablePath(path);
-  const trimmed = toPortablePath(path).replace(/\/+$/u, "");
+  const trimmed = stripTrailingSlashes(toPortablePath(path));
   // A lone POSIX root ("/", "//", "\") is all-separator: stripping it would collapse the root to ""
   // and the server's detectWorkspaceAt("") would then resolve to its OWN cwd, silently ingesting the
   // WRONG directory instead of the connected root. Keep the root as "/" so a folder source rooted at

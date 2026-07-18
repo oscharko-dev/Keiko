@@ -425,6 +425,27 @@ describe("runPromptEnhancement", () => {
       expect(result.renderedPrompt).not.toMatch(/^```/u);
     });
 
+    // Regression for S8786: stripOuterMarkdownFence's header separator used to be `\s*\n`, which
+    // overlaps with the trailing lazy `[\s\S]*?` body scan whenever the header is followed by many
+    // blank lines and the fence is never closed, making the parse quadratic. It is now
+    // `[^\S\n]*\n` (see promptEnhancer/index.ts), leaving only one valid split point. This asserts
+    // a model response shaped exactly like that failure case still resolves quickly.
+    it("resolves quickly for a fenced response with many blank lines and no closing fence", async () => {
+      const adversarial = `\`\`\`markdown${"\n".repeat(4000)}${"x".repeat(4000)}`;
+      const { factory } = recordingModelPort(adversarial);
+
+      const start = Date.now();
+      const result = await run(
+        { text: "Adversarial fence timing check.", modelId: "example-chat-model" },
+        configWithProvider("example-chat-model"),
+        factory,
+      );
+      const elapsedMs = Date.now() - start;
+
+      expect(elapsedMs).toBeLessThan(2000);
+      expect(result.schemaVersion).toBe("1");
+    });
+
     it("does not claim model application when the model returns no effective change", async () => {
       const text = "Plan a migration.";
       const deterministic = await run({ text });

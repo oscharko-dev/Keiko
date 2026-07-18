@@ -30,8 +30,17 @@ function workspaceInfo(root: string): WorkspaceInfo {
   };
 }
 
+// Trims trailing path separators without a regex: `/[/\\]+$/` pairs an unbounded quantifier with
+// an unanchored search, a shape SonarCloud (S8786) flags on sight even though this particular class
+// has no ambiguity of its own. A plain backward scan can't backtrack at all.
+function trimTrailingSeparators(path: string): string {
+  let end = path.length;
+  while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+  return path.slice(0, end);
+}
+
 function pathLeaf(path: string): string {
-  return basename(path.replace(/[/\\]+$/u, ""));
+  return basename(trimTrailingSeparators(path));
 }
 
 export function resolveManagedTaskWorkspaceRoot(

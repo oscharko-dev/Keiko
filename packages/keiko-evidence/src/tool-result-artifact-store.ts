@@ -34,7 +34,8 @@ function assertValidArtifactId(artifactId: string): void {
     throw new EvidenceWriteError("tool-result artifactId must be a 64-character sha256 hex id");
   }
   for (let i = 0; i < artifactId.length; i += 1) {
-    if (!isLowerHex(artifactId.charCodeAt(i))) {
+    const code = artifactId.codePointAt(i);
+    if (code === undefined || !isLowerHex(code)) {
       throw new EvidenceWriteError("tool-result artifactId contains a disallowed character");
     }
   }

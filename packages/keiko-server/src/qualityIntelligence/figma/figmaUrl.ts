@@ -13,7 +13,7 @@ export interface FigmaTarget {
 const ACCEPTED_HOSTS: readonly string[] = ["figma.com", "www.figma.com"];
 const SCOPED_PATH_KINDS: readonly string[] = ["design", "file"];
 
-const normaliseNodeId = (raw: string): string => raw.replace(/-/g, ":");
+const normaliseNodeId = (raw: string): string => raw.replaceAll("-", ":");
 
 const parseUrl = (value: string): URL | null => {
   try {

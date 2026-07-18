@@ -104,15 +104,56 @@ function isUnavailable(
 
 // --- remotes ----------------------------------------------------------------
 
+// The `(fetch)`/`(push)` marker is a fixed literal at the very end of the line, so `endsWith` finds
+// it in constant time; walking backwards over the remaining whitespace with plain character checks
+// finds the URL/separator split without ever re-scanning a run more than once. A single
+// `(\S+)\t(.+?)\s+\(...\)$` regex — or even an isolated `\s+\(...\)$` search — is unanchored at the
+// front, so a long non-matching run forces the engine to retry the same O(n) backtrack at every
+// position in that run: O(n^2) overall (S8786).
+const REMOTE_LINE_KIND_SUFFIXES: readonly { kind: "fetch" | "push"; suffix: string }[] = [
+  { kind: "fetch", suffix: "(fetch)" },
+  { kind: "push", suffix: "(push)" },
+];
+
+function isWhitespaceChar(char: string): boolean {
+  return /\s/u.test(char);
+}
+
+// The URL/separator boundary within `beforeSuffix` (everything between the tab and the fixed
+// `(fetch)`/`(push)` marker): walk back over trailing whitespace, then fall back to a 1-character
+// URL when the whole gap turned out to be whitespace (`.+?` still needs at least one character).
+function remoteUrlEnd(beforeSuffix: string): number {
+  let separatorStart = beforeSuffix.length;
+  while (separatorStart > 0 && isWhitespaceChar(beforeSuffix[separatorStart - 1] ?? "")) {
+    separatorStart -= 1;
+  }
+  return separatorStart === 0 && beforeSuffix.length >= 2 ? 1 : separatorStart;
+}
+
+function parseRemoteLine(
+  line: string,
+): { name: string; url: string; kind: "fetch" | "push" } | undefined {
+  const tabIndex = line.indexOf("\t");
+  if (tabIndex <= 0) return undefined;
+  const name = line.slice(0, tabIndex);
+  if (/\s/u.test(name)) return undefined;
+  const rest = line.slice(tabIndex + 1);
+  const suffix = REMOTE_LINE_KIND_SUFFIXES.find((candidate) => rest.endsWith(candidate.suffix));
+  if (suffix === undefined) return undefined;
+  const beforeSuffix = rest.slice(0, rest.length - suffix.suffix.length);
+  const urlEnd = remoteUrlEnd(beforeSuffix);
+  if (urlEnd === 0 || urlEnd === beforeSuffix.length) return undefined;
+  return { name, url: beforeSuffix.slice(0, urlEnd), kind: suffix.kind };
+}
+
 // `git remote -v` emits `name\turl (fetch|push)` lines; fetch/push URLs are deduplicated by name.
 export function parseRemotes(stdout: string): readonly GitRemoteSummary[] {
   const byName = new Map<string, { name: string; fetchUrl?: string; pushUrl?: string }>();
   const order: string[] = [];
   for (const line of stdout.split(/\r?\n/u)) {
-    const match = /^(\S+)\t(.+?)\s+\((fetch|push)\)$/u.exec(line.trim());
-    if (match === null) continue;
-    const [, name, url, kind] = match;
-    if (name === undefined || url === undefined) continue;
+    const parsed = parseRemoteLine(line.trim());
+    if (parsed === undefined) continue;
+    const { name, url, kind } = parsed;
     if (!byName.has(name)) {
       byName.set(name, { name });
       order.push(name);
@@ -326,8 +367,12 @@ function parseInteger(raw: string | null, fallback: number, min: number, max: nu
 }
 
 // The `--shortstat` summary line carries "N files changed"; merge/empty commits omit it (⇒ 0).
+// Digit/whitespace runs are bounded (S8786): an unbounded `\d+`/`\s+` pair is unanchored here, so a
+// non-matching remainder with a long digit or whitespace run forces the engine to retry the same
+// unbounded consume-then-backtrack at every position in that run — quadratic in the run length. A
+// real file count and the single-space separators git emits both fit comfortably inside the bounds.
 function parseChangedFileCount(remainder: string): number {
-  const match = /(\d+)\s+files?\s+changed/u.exec(remainder);
+  const match = /(\d{1,9})\s{1,8}files?\s{1,8}changed/u.exec(remainder);
   return match?.[1] === undefined ? 0 : Number.parseInt(match[1], 10);
 }
 

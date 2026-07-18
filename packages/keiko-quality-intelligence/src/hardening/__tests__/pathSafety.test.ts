@@ -17,6 +17,10 @@ describe("isSafeRelativePath — accepts safe relative paths", () => {
     "file.with.many.dots.txt",
     "unicode/тест/файл.md",
     "scoped/@org/package-name.ts",
+    // Regression (S7758): "😀" (U+1F600) is a supplementary-plane character —
+    // a 2-code-unit UTF-16 surrogate pair. Neither code unit falls in the
+    // C0/DEL/C1 control ranges, so the control-byte scan must accept it.
+    "screenshots/😀-icon.png",
   ];
 
   for (const value of cases) {

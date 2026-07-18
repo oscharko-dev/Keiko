@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -31,6 +32,7 @@ import {
   inspectWorkspaceIndexDirectories,
   isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
+  stripTrailingNonWordChars,
   type WorkspaceIndex,
   type WorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
@@ -513,6 +515,56 @@ describe("workspaceIndex", () => {
     expect("fingerprint" in record).toBe(false);
   });
 
+  it("tokenizes a supplementary-plane character in an identifier without corrupting it", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758) in isAsciiUpper /
+    // isAsciiLower / isAsciiDigit, which drive camelCase splitting. "𝐀" (U+1D400 MATHEMATICAL
+    // BOLD CAPITAL A) is a real \p{L} letter outside the BMP (2 UTF-16 code units), so it survives
+    // the lexical tokenizer's \p{L}\p{N} filter and reaches camelParts, unlike an emoji. Neither
+    // of its surrogate halves ever falls in the ASCII upper/lower/digit ranges, so it must not
+    // trigger a camelCase split and must not be dropped or corrupted in the resulting term.
+    const record = buildWorkspaceIndexLexicalRecord("get𝐀Alpha handled");
+    const expectedHashes = [
+      createHash("sha256").update("get𝐀alpha").digest("hex"),
+      createHash("sha256").update("handled").digest("hex"),
+    ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(record.truncated).toBe(false);
+    expect(record.lines).toEqual([{ startLine: 1, endLine: 1, termHashes: expectedHashes }]);
+    expect(record.termHashes).toEqual(expectedHashes);
+  });
+
+  // SonarCloud S8786: `stripTrailingNonWordChars` replaces the old `/[^\p{L}\p{N}]+$/u` regex,
+  // which is unanchored at the start -- a backtracking engine retries every start position looking
+  // for a trailing non-letter/non-number run that reaches the true end of the string, which is
+  // quadratic whenever that run isn't at the very end (blocked by a trailing letter/number, exactly
+  // the shape a real content token can take, e.g. a heavily hyphenated identifier or a line of
+  // markdown separator punctuation followed by one more word).
+  describe("stripTrailingNonWordChars", () => {
+    it.each([
+      ["abc", "abc"],
+      ["abc---", "abc"],
+      ["---", ""],
+      ["", ""],
+      ["abc.def", "abc.def"],
+      ["abc...", "abc"],
+      ["日本語", "日本語"],
+      ["日本語...", "日本語"],
+      ["get𝐀Alpha...", "get𝐀Alpha"],
+    ])("strips trailing non-letter/non-number chars from %s -> %s", (input, expected) => {
+      expect(stripTrailingNonWordChars(input)).toBe(expected);
+    });
+
+    it("completes within a tight budget for a long separator run blocked by one trailing letter", () => {
+      // A real-world analogue: a markdown-style separator line ("----...----") immediately
+      // followed by a single stray word character, tokenized as one long content token.
+      const adversarial = `${"-".repeat(20_000)}a`;
+      const start = Date.now();
+      const result = stripTrailingNonWordChars(adversarial);
+      const elapsedMs = Date.now() - start;
+      expect(elapsedMs).toBeLessThan(1000);
+      expect(result).toBe(adversarial);
+    });
+  });
+
   it("reports directory freshness and changed-directory deltas from cached snapshots", async () => {
     const tracked = createTrackedFs({
       "src/a.ts": "export const alpha = 'needle';\n",
@@ -747,9 +799,9 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readFileBytes).toBe(4);
   });
 
-  it("does not fingerprint selected directories that resolve to denied real paths", async () => {
+  it("does not fingerprint selected directories that resolve to denied real paths", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const workspaceRoot = tempRuntimeDir();
     try {
@@ -1220,9 +1272,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes owner-only file-backed runtime directories and snapshots", async () => {
+  it("writes owner-only file-backed runtime directories and snapshots", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     try {
@@ -1265,9 +1317,9 @@ describe("workspaceIndex", () => {
     ).not.toThrow();
   });
 
-  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", () => {
+  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const workspaceRoot = tempRuntimeDir();
     const outsideRoot = tempRuntimeDir();
@@ -1286,9 +1338,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not load symlinked file-backed snapshot paths", async () => {
+  it("does not load symlinked file-backed snapshot paths", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     const targetDir = tempRuntimeDir();
@@ -1312,9 +1364,9 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async () => {
+  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const runtimeDir = tempRuntimeDir();
     const workspaceRoot = tempRuntimeDir();

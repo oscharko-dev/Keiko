@@ -102,6 +102,16 @@ describe("operand validation", () => {
     expect(isSafeWorktreePathOperand("")).toBe(false);
   });
 
+  it("does not misdetect a supplementary-plane character as a control byte (S7758 regression)", () => {
+    // The emoji U+1F600 is a surrogate pair in UTF-16. Its code units (0xD83D 0xDE00) sit far above
+    // the 0x1f control-byte ceiling, so the operand guards must accept it exactly like any other
+    // non-control character rather than tripping the control/NUL rejection.
+    expect(isSafeWorktreePathOperand("/abs/path/\u{1F600}/wt")).toBe(true);
+    // A ref containing the emoji is still rejected, but by the ref charset allowlist -- not because
+    // the surrogate halves are misclassified as control bytes.
+    expect(isSafeGitRefName("keiko/task/\u{1F600}")).toBe(false);
+  });
+
   it("argv builders reject unsafe operands before constructing argv", () => {
     expect(() =>
       buildAddWorktreeArgv({ worktreePath: "/wt", taskBranch: "-evil", baseRef: "main" }),

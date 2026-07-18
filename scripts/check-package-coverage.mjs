@@ -105,23 +105,26 @@ function validateOptions(parsed) {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const parsed = defaultOptions();
 
-  for (let i = 0; i < argv.length; i += 1) {
+  let i = 0;
+  while (i < argv.length) {
     const arg = argv[i];
     const { name } = parseOptionToken(arg);
     if (name === "strict") {
       parsed.strict = true;
+      i += 1;
       continue;
     }
     if (name === "enforce-file-floors") {
       parsed.enforceFileFloors = true;
+      i += 1;
       continue;
     }
     const option = readOptionArg(argv, i);
     applyValueOption(parsed, option.name, option.value, arg);
-    i = option.nextIndex;
+    i = option.nextIndex + 1;
   }
 
   validateOptions(parsed);

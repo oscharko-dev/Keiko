@@ -24,6 +24,16 @@ describe("expandedQueryTerms", () => {
     expect(terms).toContain("validatetoken");
   });
 
+  it("keeps a supplementary-plane character from corrupting camelCase splitting", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758) in isAsciiUpper /
+    // isAsciiLower / isAsciiDigit. "𝐀" (U+1D400 MATHEMATICAL BOLD CAPITAL A) is a real \p{L}
+    // letter outside the BMP (2 UTF-16 code units), so it survives the query tokenizer and
+    // reaches camelParts. Neither of its surrogate halves ever falls in the ASCII upper/lower/
+    // digit ranges, so it must not trigger a spurious camelCase split.
+    const terms = expandedQueryTerms("Where is Get𝐀UserProfile implemented?", false);
+    expect(terms).toEqual(expect.arrayContaining(["get𝐀userprofile", "get𝐀user", "profile"]));
+  });
+
   it("adds bounded domain aliases for common monorepo terms", () => {
     const frontend = expandedQueryTerms("Which package powers the frontend?", false);
     expect(frontend).toEqual(expect.arrayContaining(["frontend", "web", "ui", "client"]));

@@ -155,9 +155,10 @@ describe("Codex profile BFF responsiveness", () => {
       expect(profileResults.every((result) => result.status === 200)).toBe(true);
       expect(latency.p50).toBeLessThanOrEqual(latency.p95);
       expect(latency.p95).toBeLessThanOrEqual(latency.max);
-      // Health stays responsive rather than serialized behind the deferred profile work; a 500ms
-      // p95 ceiling (matching the elapsed-time bound below) proves responsiveness while absorbing
-      // shared-CI-runner wall-clock jitter that made a tighter 200ms budget flaky.
+      // Widened from 200ms: this measures real HTTP round-trip latency against a live server
+      // under concurrent load, which is sensitive to CI/host scheduling noise, not just CPU work
+      // — it flaked once at 200.38ms. 500ms keeps large headroom while still catching genuine
+      // unresponsiveness (matches this file's own 500ms budget for the hanging-probe case below).
       expect(latency.p95).toBeLessThan(500);
     } finally {
       await server.close();
@@ -189,7 +190,10 @@ describe("Codex profile BFF responsiveness", () => {
       expect(aborts).toBe(1);
       expect(profileResults.every((result) => result.status === 200)).toBe(true);
       expect(performance.now() - started).toBeLessThan(500);
-      // Same CI-jitter-tolerant responsiveness ceiling as the coalescing case above.
+      // Widened from 200ms: this measures real HTTP round-trip latency against a live server
+      // under concurrent load, which is sensitive to CI/host scheduling noise, not just CPU work
+      // — it flaked once at 200.38ms. 500ms keeps large headroom while still catching genuine
+      // unresponsiveness (matches this file's own 500ms budget for the hanging-probe case below).
       expect(latency.p95).toBeLessThan(500);
     } finally {
       await server.close();

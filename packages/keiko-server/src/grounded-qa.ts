@@ -443,7 +443,7 @@ function redactedString(redactor: Redactor, value: string): string {
 }
 
 export function promptSafeExcerptText(value: string): string {
-  return value.split("```").join("` ` `");
+  return value.replaceAll("```", "` ` `");
 }
 
 export function promptByteLength(messages: readonly GatewayChatMessage[]): number {

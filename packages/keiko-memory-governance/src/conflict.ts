@@ -50,7 +50,7 @@ import type {
 
 // ─── Body-normalisation helpers (no regex, no external deps) ──────────────────
 function mapCharToSafe(ch: string): string {
-  const code = ch.charCodeAt(0);
+  const code = ch.codePointAt(0) ?? 0;
   const isLetter = code >= 97 && code <= 122;
   const isDigit = code >= 48 && code <= 57;
   if (isLetter || isDigit) return ch;

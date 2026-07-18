@@ -8,8 +8,10 @@
 import type { GitCommitChangeSummary } from "@oscharko-dev/keiko-contracts";
 
 // A staged path is a "test" path when it is under a __tests__ directory or carries a .test/.spec
-// suffix on a js/ts source extension. Linear regex (no catastrophic backtracking).
-const TEST_PATH = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
+// suffix on a js/ts source extension. Linear regex (no catastrophic backtracking). The top-level
+// alternation is wrapped in an explicit non-capturing group for precedence clarity (S5850) — no
+// behavior change, since `|` already has the lowest precedence of any operator here.
+const TEST_PATH = /(?:(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$)/;
 
 // Cap the number of distinct area tokens carried into the content-free summary; the analyzer needs
 // the COUNT for mixed-scope detection and the dominant area for the scope suggestion, not an unbounded

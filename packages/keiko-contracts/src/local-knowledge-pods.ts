@@ -541,7 +541,7 @@ function queryKeyContainsTokenName(key: string): boolean {
 
 function safeDecodeUriComponent(value: string): string {
   try {
-    return decodeURIComponent(value.replace(/\+/gu, " "));
+    return decodeURIComponent(value.replaceAll("+", " "));
   } catch {
     return value;
   }
@@ -712,12 +712,12 @@ function everyChar(value: string, predicate: (char: string) => boolean): boolean
 }
 
 function isAsciiLetter(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
 function isAsciiDigit(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 48 && code <= 57;
 }
 

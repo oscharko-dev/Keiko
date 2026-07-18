@@ -1335,7 +1335,7 @@ const AGENT_CHANGESET_ACTION_MEMORY_LIMIT = 128;
 
 function normalizeAgentChangesetPath(path: string): string {
   return path
-    .replace(/\\/gu, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join("/");

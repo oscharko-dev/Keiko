@@ -33,6 +33,7 @@ const DEL = "\u007f";
 const C1_CONTROL = "\u0085"; // NEL (Next Line)
 const NON_NFKC_LIGATURE = "ﬁeld"; // U+FB01 "fi" ligature; NFKC -> "field"
 const COMPOSED_E_ACUTE = "qi-éclair"; // already NFKC-normalised composed form
+const SUPPLEMENTARY_PLANE_CHAR = "\u{1F600}"; // 😀 U+1F600, a 2-UTF-16-code-unit character
 
 describe("QI id constructors — rejection", () => {
   for (const [name, ctor] of constructors) {
@@ -84,6 +85,22 @@ describe("QI id constructors — acceptance", () => {
       expect(ctor(COMPOSED_E_ACUTE)).toBe(COMPOSED_E_ACUTE);
     });
   }
+});
+
+describe("QI id constructors — supplementary-plane character handling", () => {
+  // A lone surrogate's code unit (and a real supplementary-plane code point) always falls well
+  // outside the C0/DEL/C1 control ranges `hasControlCharacter` checks, so an id carrying an emoji
+  // must be accepted, not mistaken for a control character.
+  it("accepts an id containing a supplementary-plane character", () => {
+    const value = `qi-run-${SUPPLEMENTARY_PLANE_CHAR}-01`;
+    expect(asQualityIntelligenceRunId(value)).toBe(value);
+  });
+
+  it("still rejects a real control character sitting right next to a supplementary-plane character", () => {
+    expect(() => asQualityIntelligenceRunId(`${SUPPLEMENTARY_PLANE_CHAR}${NUL}`)).toThrow(
+      TypeError,
+    );
+  });
 });
 
 describe("validateQualityIntelligenceIdString", () => {

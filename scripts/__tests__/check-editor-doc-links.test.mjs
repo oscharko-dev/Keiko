@@ -96,3 +96,57 @@ describe("isWithinPath", () => {
     expect(isWithinPath("/tmp/repo", "/tmp/repo-outside/a.md")).toBe(false);
   });
 });
+
+// Regression coverage for the S8786 backtracking fixes: both regexes used to combine an
+// unanchored/lazy unbounded quantifier with an overlapping-class successor, so a long
+// non-matching run forced an O(n^2) (or worse) retry-at-every-position scan.
+describe("check-editor-doc-links — bounded regex safety (S8786)", () => {
+  it("still resolves an anchor built from a heading with trailing '##' closing markers", () => {
+    const { repoRoot } = makeSandbox();
+    write(
+      repoRoot,
+      "packages/keiko-editor/README.md",
+      "# Package\n\n[Runbook](../../docs/keiko-editor/runbook.md#operations)\n",
+    );
+    write(repoRoot, "docs/keiko-editor/runbook.md", "# Runbook\n\n## Operations ##\n");
+
+    expect(check({ repoRoot, files: ["packages/keiko-editor/README.md"] })).toMatchObject({
+      ok: true,
+      failures: [],
+    });
+  });
+
+  it("resolves an anchor slugged from a pathologically long heading line without catastrophic backtracking", () => {
+    const { repoRoot } = makeSandbox();
+    write(
+      repoRoot,
+      "packages/keiko-editor/README.md",
+      "# Package\n\n[Runbook](../../docs/keiko-editor/big.md#a-b)\n",
+    );
+    // Shape that made the previous `(.*?)\s*#*\s*$` superlinear: a long whitespace run followed by
+    // more non-whitespace content, so `\s*#*\s*$` cannot succeed until `.*?` has grown past it all.
+    write(repoRoot, "docs/keiko-editor/big.md", `## a${" ".repeat(20000)}b\n`);
+
+    const start = Date.now();
+    const result = check({ repoRoot, files: ["packages/keiko-editor/README.md"] });
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(result).toMatchObject({ ok: true, failures: [] });
+  });
+
+  it("scans a doc file with a pathologically link-shaped body without catastrophic backtracking", () => {
+    const { repoRoot } = makeSandbox();
+    // Shape that made the previous `[^\]]*`/`[^)\s]+` superlinear: many repeated `[` characters,
+    // none of which ever closes, forcing a full O(n) consume-then-backtrack at every position.
+    write(
+      repoRoot,
+      "packages/keiko-editor/README.md",
+      `${"[".repeat(20000)}\n\n[real](../../docs/keiko-editor/runbook.md)\n`,
+    );
+    write(repoRoot, "docs/keiko-editor/runbook.md", "# Runbook\n");
+
+    const start = Date.now();
+    const result = check({ repoRoot, files: ["packages/keiko-editor/README.md"] });
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(result).toMatchObject({ ok: true, failures: [] });
+  });
+});

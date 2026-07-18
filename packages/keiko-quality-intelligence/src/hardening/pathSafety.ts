@@ -17,7 +17,9 @@ const FORBIDDEN_DOTDOT_SEGMENT = /(^|[\\/])\.\.([\\/]|$)/u;
 
 const containsControlOrNullByte = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    // `index` is always a valid position (bounded by the loop condition), so
+    // `codePointAt` always resolves to a code point here.
+    const code = value.codePointAt(index) ?? -1;
     // C0 control range (includes NUL 0x00), DEL, and C1 control range.
     if (code <= 0x1f) return true;
     if (code === 0x7f) return true;

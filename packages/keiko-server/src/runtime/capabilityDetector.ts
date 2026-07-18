@@ -472,7 +472,7 @@ function packageManifestCapability(record: Record<string, unknown> | undefined):
 }
 
 function relativeWorkspacePath(root: string, absolutePath: string): string {
-  return relative(root, absolutePath).split("\\").join("/");
+  return relative(root, absolutePath).replaceAll("\\", "/");
 }
 
 function addManifestCapability(

@@ -10,7 +10,7 @@ import { detectFrontendStack, selectTestStrategy, type TestStrategy } from "./fr
 import type { TestConventions, UnitTestTarget } from "./types.js";
 
 function toPosix(path: string): string {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 // The single source path the strategy is anchored on: the file under test, the first changed file, or

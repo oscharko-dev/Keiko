@@ -60,6 +60,10 @@ describe("writeSideFile name and runId guards", () => {
     "back\\slash",
     "name with space",
     "evil\0",
+    // "😀" (U+1F600) is a 2-code-unit UTF-16 surrogate pair. Regression guard for the charCodeAt ->
+    // codePointAt rename in isAllowedNameChar: a supplementary-plane character is still outside the
+    // allowed ASCII digit/letter/./_/- set and must still be rejected.
+    "emoji😀name.png",
   ])("rejects invalid name %s", (badName) => {
     expect(() => writeSideFile(baseDir, "run123", badName, Buffer.from("x"))).toThrow(
       EvidenceWriteError,
@@ -185,9 +189,9 @@ describe("writeSideFile evidenceSchemaVersion contract", () => {
 });
 
 describe("writeSideFile POSIX permission hardening (AC1)", () => {
-  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", () => {
+  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", (ctx) => {
     // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") ctx.skip();
     const result = writeSideFile(baseDir, "run-perms", "browser-1.png", Buffer.from("acl-check"));
     const runDir = join(baseDir, "run-perms");
     expect(statSync(runDir).mode & 0o777).toBe(0o700);

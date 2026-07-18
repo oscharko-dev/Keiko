@@ -201,6 +201,20 @@ describe("editor selection handoff registry", () => {
     expect(registry.size()).toBe(0);
   });
 
+  it.each([
+    ["NUL", "\u0000"],
+    ["CR", "\r"],
+    ["LF", "\n"],
+    ["SOH, outside the original NUL/CR/LF set", "\u0001"],
+    ["DEL, outside the original NUL/CR/LF set", "\u007f"],
+  ])("rejects a workspace root containing a %s control character", (_label, control) => {
+    const registry = createEditorSelectionHandoffRegistry({ createId: () => "opaque-1" });
+    const value = handoff("selected");
+
+    expect(registry.register(`/workspace/${control}root`, value)).toBeNull();
+    expect(registry.size()).toBe(0);
+  });
+
   it("fails closed for throwing, unavailable, invalid, and colliding id allocators", () => {
     const value = handoff("selected");
     const throwing = createEditorSelectionHandoffRegistry({

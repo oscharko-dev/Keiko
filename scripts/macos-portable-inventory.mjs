@@ -33,7 +33,7 @@ export function boundedMacSigningFail(message) {
 
 export function hasUnsafeText(value) {
   return Array.from(value).some((character) => {
-    const code = character.charCodeAt(0);
+    const code = character.codePointAt(0);
     return character === "\\" || code < 32 || code === 127;
   });
 }

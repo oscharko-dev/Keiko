@@ -56,10 +56,12 @@ function decodeQuotedPath(raw: string): string | undefined {
   const bytes: number[] = [];
   const encoder = new TextEncoder();
   const content = raw.slice(1, -1);
-  for (let index = 0; index < content.length; index += 1) {
+  let index = 0;
+  while (index < content.length) {
     const value = content[index] ?? "";
     if (value !== "\\") {
       bytes.push(...encoder.encode(value));
+      index += 1;
       continue;
     }
     const escape = content[index + 1];
@@ -67,7 +69,7 @@ function decodeQuotedPath(raw: string): string | undefined {
     const octal = content.slice(index + 1, index + 4);
     if (OCTAL_ESCAPE.test(octal)) {
       bytes.push(Number.parseInt(octal, 8));
-      index += 3;
+      index += 4;
       continue;
     }
     const escaped = new Map([
@@ -83,7 +85,7 @@ function decodeQuotedPath(raw: string): string | undefined {
     ]).get(escape);
     if (escaped === undefined) return undefined;
     bytes.push(escaped);
-    index += 1;
+    index += 2;
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
@@ -276,11 +278,15 @@ function parseHunks(lines: readonly string[]): ParsedHunks {
   const hunks: GitEditorDiffHunk[] = [];
   let malformed = false;
   let fatal = false;
-  for (let index = 1; index < lines.length; index += 1) {
+  let index = 1;
+  while (index < lines.length) {
     const line = lines[index] ?? "";
-    if (!line.startsWith("@@")) continue;
+    if (!line.startsWith("@@")) {
+      index += 1;
+      continue;
+    }
     const parsed = parseOneHunk(lines, index);
-    index = parsed.next - 1;
+    index = parsed.next;
     if (parsed.malformed) malformed = true;
     if (parsed.fatal) fatal = true;
     else if (parsed.hunk !== undefined && hunks.length < GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE) {

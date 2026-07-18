@@ -89,4 +89,19 @@ describe("lexical analyzer", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.terms.length).toBeLessThan(200);
   });
+
+  // Regression for typescript/javascript:S8786. The exact-term edge trimmer used to run
+  // `/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu`: `[^\p{L}\p{N}]+$` is not left-anchored, so a global
+  // search re-tried its greedy-run-then-backtrack at every offset inside a long punctuation run
+  // that never reaches the true string end, which is quadratic in run length. A hostile single
+  // "word" (no whitespace, so it survives as one token) with a long symbol run in the middle would
+  // have taken seconds; the fixed code-point scan is linear and does not backtrack.
+  it("trims exact-term edges for an adversarial punctuation run in linear time", () => {
+    const adversarialToken = `a${"!".repeat(20_000)}a`;
+    const start = Date.now();
+    const terms = lexicalExactTerms(adversarialToken);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1500);
+    expect(terms).toEqual([]);
+  });
 });

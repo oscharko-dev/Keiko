@@ -4,4 +4,4 @@
 // adds no ReDoS surface and stays safe on attacker-influenceable failure output.
 
 // Normalizes Windows-style backslash separators to POSIX forward slashes. `a\b\c` -> `a/b/c`.
-export const toPosix = (value: string): string => value.split("\\").join("/");
+export const toPosix = (value: string): string => value.replaceAll("\\", "/");

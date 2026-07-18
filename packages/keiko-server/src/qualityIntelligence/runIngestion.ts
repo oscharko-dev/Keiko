@@ -179,11 +179,89 @@ function stripUnsafeLabelChars(value: string): string {
   return out;
 }
 
+// Single-character class tests (no quantifier — each is called once per scanned character in
+// `redactUrlAuthorities` below, so none of them carries the multi-character backtracking risk a
+// quantified `[a-z0-9+.-]*`/`{0,N}` run would).
+const isSchemeChar = (ch: string | undefined): boolean =>
+  ch !== undefined && /[a-z0-9+.-]/iu.test(ch);
+const isAsciiLetter = (ch: string | undefined): boolean => ch !== undefined && /[a-z]/iu.test(ch);
+const isWhitespaceChar = (ch: string | undefined): boolean => ch !== undefined && /\s/u.test(ch);
+
+// Finds the leftmost scheme-letter start within the run of scheme characters immediately preceding
+// `sepIndex` (mirrors `[a-z][a-z0-9+.-]*`'s leftmost-match semantics), bounded below by `cursor`
+// (the text already emitted). Returns undefined when the run contains no letter at all — mirrors
+// the original pattern's mandatory leading `[a-z]`.
+function schemeMatchStart(value: string, cursor: number, sepIndex: number): number | undefined {
+  let runStart = sepIndex;
+  while (runStart > cursor && isSchemeChar(value[runStart - 1])) {
+    runStart -= 1;
+  }
+  for (let position = runStart; position < sepIndex; position += 1) {
+    if (isAsciiLetter(value[position])) return position;
+  }
+  return undefined;
+}
+
+// Finds the end of the mandatory `\S+` authority run right after "://" at `sepIndex + 3`. Returns
+// undefined when there is no such character (end of string or immediate whitespace) — mirrors the
+// original grammar's "+" (at least one non-whitespace character) requirement.
+function authorityRunEnd(value: string, sepIndex: number, length: number): number | undefined {
+  let end = sepIndex + 3;
+  while (end < length && !isWhitespaceChar(value[end])) {
+    end += 1;
+  }
+  return end === sepIndex + 3 ? undefined : end;
+}
+
+// Redacts every "scheme://authority" URL run in `value`, replacing each with a single space,
+// WITHOUT a backtracking regex over untrusted content (SonarCloud S8786). A first fix bounded the
+// scheme-name quantifier to `{0,63}` to cap the backtracking — but this function feeds a
+// `.replace()` over a browser-supplied, redaction-security-relevant label (#277/#278), not a
+// boolean `.test()`: bounding the quantifier changes WHERE the leftmost match starts once a
+// fake-or-real "scheme" run exceeds the bound, leaving everything before `runLength - 64`
+// UNREDACTED. Confirmed exploitable through the production pipeline: label =
+// "q".repeat(100) + "://secretpayload" left a 36-char unredacted prefix in the envelope
+// `displayLabel` streamed to the browser with the `{0,63}`-bounded regex, where the original
+// unbounded regex fully redacted it to a single space. A bound cannot be safely raised here either
+// — any input long enough to matter is exactly the adversarial shape the bound exists to reject,
+// so "redact everything after position N and leave the rest unredacted before it" is never
+// acceptable on this path. This manual, single-pass, linear scan removes the ambiguity instead of
+// bounding it: `indexOf` finds each literal "://" (no backtracking possible), then
+// `schemeMatchStart`/`authorityRunEnd` each do a single bounded scan. Every input position is
+// visited O(1) times overall, so the worst case is linear regardless of input shape — there is no
+// quantifier left to bound, so there is nothing for a bound to outgrow.
+function redactUrlAuthorities(value: string): string {
+  let result = "";
+  let cursor = 0;
+  const length = value.length;
+  while (cursor < length) {
+    const sepIndex = value.indexOf("://", cursor);
+    if (sepIndex === -1) {
+      result += value.slice(cursor);
+      break;
+    }
+    const matchStart = schemeMatchStart(value, cursor, sepIndex);
+    const end = matchStart === undefined ? undefined : authorityRunEnd(value, sepIndex, length);
+    if (matchStart === undefined || end === undefined) {
+      // No scheme-letter start before "://", or no mandatory `\S+` character after it: this
+      // separator can never be part of a match. Copy it through unchanged and keep scanning after
+      // it (mirrors the original pattern finding its next candidate match further along).
+      result += value.slice(cursor, sepIndex + 3);
+      cursor = sepIndex + 3;
+      continue;
+    }
+    result += value.slice(cursor, matchStart);
+    result += " ";
+    cursor = end;
+  }
+  return result;
+}
+
 const sanitiseLabel = (label: string): string => {
   // Strip any URL authority — ANY scheme (http, file, s3, ftp, …), not just http(s) — plus the
   // well-known credential token shapes, so a browser-supplied label never carries a URL or secret
   // into the envelope display surface that is streamed back to the client (#277/#278).
-  let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
+  let cleaned = redactUrlAuthorities(label);
   for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
   // Map control characters (newline, CR, tab, NUL, DEL, …) to spaces and DROP bidi-override,
   // zero-width, BOM, and C1 spoofing code points so a multi-line, control-laden, or
@@ -252,7 +330,7 @@ function assertRealPathNotDenied(absPath: string, label: string, noun: string): 
 // security audit. A value with no "\" or "|" encodes to itself, so clean labels/paths keep their
 // existing envelope id (and the atom ids derived from it), preserving re-check stability.
 const escapeEnvelopeField = (value: string): string =>
-  value.split("\\").join("\\\\").split("|").join("\\|");
+  value.replaceAll("\\", String.raw`\\`).replaceAll("|", String.raw`\|`);
 
 export const envelopeIdFor = (
   index: number,

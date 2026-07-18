@@ -8,7 +8,7 @@ export function hashEndpointContractId(prefix: string, shape: readonly unknown[]
 export function lineNumberOf(text: string, charIndex: number): number {
   let line = 1;
   for (let index = 0; index < charIndex && index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) line += 1;
+    if (text.codePointAt(index) === 10) line += 1;
   }
   return line;
 }
@@ -21,7 +21,7 @@ function replaceTemplateExpressions(rawPath: string): string {
   let normalized = "";
   let cursor = 0;
   while (cursor < rawPath.length) {
-    if (rawPath.charCodeAt(cursor) === 36 && rawPath.charCodeAt(cursor + 1) === 123) {
+    if (rawPath.codePointAt(cursor) === 36 && rawPath.codePointAt(cursor + 1) === 123) {
       const end = rawPath.indexOf("}", cursor + 2);
       if (end !== -1) {
         normalized += "{param}";
@@ -57,14 +57,14 @@ function isBraceParamSegment(segment: string): boolean {
 }
 
 function isColonParamSegment(segment: string): boolean {
-  if (segment.length < 2 || segment.charCodeAt(0) !== 58) {
+  if (segment.length < 2 || segment.codePointAt(0) !== 58) {
     return false;
   }
-  if (!isParamIdentifierStart(segment.charCodeAt(1))) {
+  if (!isParamIdentifierStart(segment.codePointAt(1) ?? 0)) {
     return false;
   }
   for (let index = 2; index < segment.length; index += 1) {
-    if (!isParamIdentifierPart(segment.charCodeAt(index))) {
+    if (!isParamIdentifierPart(segment.codePointAt(index) ?? 0)) {
       return false;
     }
   }

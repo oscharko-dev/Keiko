@@ -981,6 +981,33 @@ function reportStatus(
   return probes.every((probe) => probe.status === "passed") ? "ready" : "partial";
 }
 
+// Digit/float quantifiers are bounded (S8786): both evidence strings are built from
+// `.toString()`/`.toFixed(4)` on numeric probe results (see the `approximate tokens` and
+// `dimensions with L2 norm` template literals above). Without a bound, an unanchored
+// `\d+`/`[0-9.]+` that never reaches the expected trailing literal forces an O(n) backtrack retry
+// at every one of the O(n) start positions in a long adversarial evidence string — quadratic in
+// the input length.
+//
+// The norm capture's bound must cover more than "realistic" values, because `norm` is computed
+// from an untrusted/hostile embedding provider's response (a `Float32Array` whose component
+// magnitudes an adversarial or broken provider fully controls, up to ~3.4e38 each) — this is
+// exactly the kind of external input this repo's trust model treats as hostile. `Number.toFixed`
+// only switches to exponential notation at 1e21; below that threshold, the longest possible
+// decimal string it can produce is 21 integer digits + "." + 4 fraction digits = 26 characters
+// (e.g. "999999999999999999999.9999"). A bound of 20 truncates — rather than fails to match —
+// any value in the 1e17..1e21 range, silently reporting a wrong (too-small) norm instead of a
+// clean parse failure. 32 gives comfortable headroom over that 26-character mathematical ceiling
+// while staying a small, finite bound for Sonar's static analysis. (Norms at/above 1e21 render in
+// exponential notation, e.g. "1.2345e+21" — the `[0-9.]` class already stops at the non-digit "e"
+// character before any bound is reached, matching the pre-existing, unbounded-original behavior
+// for that extreme range unchanged; that is not a regression introduced by this bound.)
+//
+// Exported so the timing/equivalence regression can exercise the exact patterns used below rather
+// than a hand-copied duplicate.
+export const TESTED_CONTEXT_TOKENS_PATTERN = /(\d{1,15}) approximate tokens/u;
+export const EMBEDDING_EVIDENCE_PATTERN =
+  /returned (\d{1,15}) dimensions with L2 norm ([0-9.]{1,32})/u;
+
 // eslint-disable-next-line complexity
 function verifiedCapabilities(
   probes: readonly GatewayReadinessProbeResult[],
@@ -993,15 +1020,13 @@ function verifiedCapabilities(
   const longContext = probes.find(
     (probe) => probe.name === "long_context" && probe.status === "passed",
   );
-  const tokenMatch = longContext?.evidence.match(/(\d+) approximate tokens/u);
+  const tokenMatch = longContext?.evidence.match(TESTED_CONTEXT_TOKENS_PATTERN);
   const testedContextTokens =
     tokenMatch === undefined || tokenMatch === null
       ? undefined
       : Number.parseInt(tokenMatch[1] ?? "0", 10);
   const embedding = probes.find((probe) => probe.name === "embedding" && probe.status === "passed");
-  const embeddingMatch = embedding?.evidence.match(
-    /returned (\d+) dimensions with L2 norm ([0-9.]+)/u,
-  );
+  const embeddingMatch = embedding?.evidence.match(EMBEDDING_EVIDENCE_PATTERN);
   const embeddingDimensions =
     embeddingMatch === undefined || embeddingMatch === null
       ? undefined

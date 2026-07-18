@@ -80,10 +80,28 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 const CANDIDATE_ARRAY_KEYS = ["testCases", "test_cases", "tests", "cases"] as const;
 
+// Matches only the opening fence + optional language tag + leading whitespace. Anchored at `^`
+// with a single trailing quantifier, so there is exactly one start position and no competing
+// quantifier — this half stays linear on any input.
+const OPEN_CODE_FENCE_RE = /^```(?:json)?\s*/u;
+
 // Strip a single ```json … ``` or ``` … ``` fence if the whole payload is fenced.
+//
+// Previously a single combined pattern: `^```(?:json)?\s*([\s\S]*?)\s*```$`. Its lazy capture
+// group sat between two greedy `\s*` boundaries that can match the very same whitespace
+// characters, so on large un-fenced/malformed input (no closing "```") the engine explored
+// O(n^2)-plus splits between the three before giving up (SonarCloud S8786, confirmed empirically:
+// the old pattern took seconds on a ~30-40KB adversarial input). Rewritten as two independent,
+// unambiguous steps: an anchored open-fence match, then a plain string check + slice for the
+// close side (the close fence, if present at all, can only be the literal last 3 characters of
+// the trimmed input, since raw.trim() already removed any real trailing whitespace).
 const stripCodeFence = (raw: string): string => {
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/u.exec(raw.trim());
-  return fence?.[1] ?? raw;
+  const trimmed = raw.trim();
+  const openMatch = OPEN_CODE_FENCE_RE.exec(trimmed);
+  if (!openMatch) return raw;
+  const rest = trimmed.slice(openMatch[0].length);
+  if (!rest.endsWith("```")) return raw;
+  return rest.slice(0, -3).trimEnd();
 };
 
 interface StringScan {

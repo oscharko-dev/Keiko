@@ -56,6 +56,43 @@ describe("classifyRetrievalIntent", () => {
     },
   );
 
+  // ─── ReDoS regression guard (SonarCloud S8786) ───────────────────────────────────
+  // TARGETED_CODE_PATTERNS' old "path" pattern (`(?:[\w.-]+/)+[\w.-]+`) and "identifier" pattern
+  // (`[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*`) each combined an unbounded quantifier with an
+  // unanchored scan over a required-but-possibly-absent character, which made a single long run of
+  // ordinary word characters (no "/" for the path pattern, no uppercase letter for the identifier
+  // pattern) quadratic to reject. A single query built from one long run of "a" characters hits
+  // both: it never matches DIAGNOSTIC/PROJECT_METADATA/REPOSITORY_OVERVIEW patterns, so
+  // classification falls through to TARGETED_CODE_PATTERNS and both rewritten patterns run against
+  // it (twice: once against the raw text, once against the normalized text).
+  it("classifies a long ambiguous run of word characters without superlinear slowdown", () => {
+    const adversarial = "a".repeat(20_000);
+    const start = Date.now();
+    const result = classifyRetrievalIntent(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(result.intent).toBe("targeted-code-search");
+  });
+
+  // A homogeneous run of a single word character (the case above) only ever has ONE `\b`-satisfying
+  // start position, so it is actually linear for the "identifier" pattern even when that pattern's
+  // quantifiers are unbounded -- it does not exercise the real remaining vulnerability. `$` is part
+  // of the "identifier" pattern's character classes but is NOT a `\w` character for `\b` purposes, so
+  // alternating word/`$` characters (e.g. "a$a$a$...") produces O(n) independent `\b`-satisfying
+  // start positions instead of one. With unbounded leading-run quantifiers, each of those O(n) start
+  // positions costs O(remaining length) to disprove (no uppercase letter ever appears), giving true
+  // O(n^2) blowup. "zzz " is prepended so the `searchableTokens` gate is satisfied without the
+  // payload itself matching any DIAGNOSTIC/PROJECT_METADATA pattern, forcing classification through
+  // to TARGETED_CODE_PATTERNS exactly as it would for a real, attacker-controlled query.
+  it("classifies an alternating word/dollar run without superlinear slowdown", () => {
+    const adversarial = "zzz " + "a$".repeat(40_000);
+    const start = Date.now();
+    const result = classifyRetrievalIntent(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(result.intent).toBe("targeted-code-search");
+  });
+
   // ─── Polyglot ecosystem project-metadata routing (registry-driven) ──────────────
   // Regression target: "Which Java version does this project use?" previously fell through to a
   // generic code search because PROJECT_METADATA_PATTERNS only knew the JS/TS ecosystem.

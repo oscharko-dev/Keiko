@@ -175,7 +175,7 @@ export function parseConflictMarkers(text: string): ConflictMarkerModel {
     const newline = text.indexOf("\n", offset);
     const end = newline < 0 ? text.length : newline + 1;
     const contentEnd =
-      newline < 0 ? end : text.charCodeAt(newline - 1) === 13 ? newline - 1 : newline;
+      newline < 0 ? end : text.codePointAt(newline - 1) === 13 ? newline - 1 : newline;
     const line = text.slice(offset, contentEnd);
     const kind = marker(line);
     if (kind !== null) consumeMarker(state, kind, line, offset, end, lineNumber);

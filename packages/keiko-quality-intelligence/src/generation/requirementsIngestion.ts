@@ -196,12 +196,50 @@ interface MarkdownHeadingContext {
   readonly text: string;
 }
 
+const isWhitespaceChar = (char: string): boolean => char !== "" && /\s/u.test(char);
+
+// Walks backward from `end` while `matches` holds for the preceding char, returning the new
+// (smaller) end index. Shared by `stripAtxClosingHashes` so each of its three backward scans stays
+// a single bounded pass instead of an unanchored regex quantifier.
+const skipTrailingWhile = (
+  value: string,
+  end: number,
+  matches: (char: string) => boolean,
+): number => {
+  let cursor = end;
+  while (cursor > 0 && matches(value[cursor - 1] ?? "")) cursor -= 1;
+  return cursor;
+};
+
+const isHashChar = (char: string): boolean => char === "#";
+
+// Strips a trailing ATX closing marker (e.g. "## Heading ##" -> "## Heading") with plain scans
+// instead of the former `/\s+#+\s*$/u`. That regex is unanchored at the start, so on a line with
+// no closing `#` run at all (the common case) every position inside a long run of trailing
+// whitespace forces the engine to re-try `\s+` at ever-shorter lengths before giving up — quadratic
+// in the whitespace run length (S8786). Three bounded backward scans (trailing whitespace, then a
+// '#' run, then the whitespace before it) reproduce the exact same "only strip if a `#` run is
+// directly preceded by whitespace" rule in linear time.
+const stripAtxClosingHashes = (value: string): string => {
+  const afterHashes = skipTrailingWhile(value, value.length, isWhitespaceChar);
+  const hashesStart = skipTrailingWhile(value, afterHashes, isHashChar);
+  if (hashesStart === afterHashes) return value;
+  const end = skipTrailingWhile(value, hashesStart, isWhitespaceChar);
+  if (end === hashesStart) return value;
+  return value.slice(0, end);
+};
+
+// Only the marker's hash count is actually consumed below (`heading` is computed separately,
+// from `line.trim()`, not from a capture) — so the marker-only regex below needs nothing past the
+// bounded `#{1,6}` MARKDOWN_HEADING already validated. The former `(.*\S)\s*$` tail captured text
+// nothing read, purely to double as a shape check, and paid for it: a lazy dot-star immediately
+// followed by a trailing `\s*` lets the engine split an arbitrarily long run of trailing
+// whitespace between the two in exponentially many ways once the overall match fails (S8786).
 const parseMarkdownHeading = (line: string): MarkdownHeadingContext | undefined => {
   if (!MARKDOWN_HEADING.test(line)) return undefined;
-  const match = /^\s{0,3}(#{1,6})\s+(.+?)\s*$/u.exec(line);
-  const marker = match?.[1];
+  const marker = /^\s{0,3}(#{1,6})/u.exec(line)?.[1];
   if (marker === undefined) return undefined;
-  const heading = normaliseStatement(line.trim().replace(/\s+#+\s*$/u, ""));
+  const heading = normaliseStatement(stripAtxClosingHashes(line.trim()));
   return { level: marker.length, text: heading };
 };
 

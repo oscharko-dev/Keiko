@@ -137,6 +137,45 @@ describe("GET /api/git/status", () => {
     });
   });
 
+  it("strips an ahead/behind tracking-info suffix from the branch name", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("## main...origin/main [ahead 2, behind 1]\0"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ branch: "main", detached: false });
+  });
+
+  // Regression for S8786: the branch header is parsed with `/\s+\[.*$/` replaced by a linear
+  // scan (see gitRoutes.ts's stripTrackingSuffix). The old pattern's `\s+` was unanchored and
+  // had to retry its whitespace-run scan at every offset whenever no `[` followed, making a long
+  // bracket-free run of whitespace quadratic. This asserts the parse still completes quickly for
+  // a header shaped exactly like that failure case.
+  it("parses a branch header with a long whitespace run and no tracking bracket in bounded time", async () => {
+    const adversarialBranch = `x${" ".repeat(20_000)}`;
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(`## ${adversarialBranch}\0`));
+
+    const start = Date.now();
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(2000);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ branch: "x", detached: false });
+  });
+
   it("parses staged, unstaged, untracked, branch, and detached porcelain states", async () => {
     const runner = vi
       .fn<GitProcessRunner>()

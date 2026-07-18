@@ -144,6 +144,21 @@ describe("extractValueImportSpecifiers", () => {
     const source = 'import {\n  Editor,\n  DiffEditor,\n} from "@monaco-editor/react";';
     expect(extractValueImportSpecifiers(source)).toContain("@monaco-editor/react");
   });
+
+  // S8786 flagged the side-effect-import pattern (`/^\s*import\s+["']([^"']+)["']/gm`) for its
+  // unbounded `\s*`/`\s+` runs. Investigation found it genuinely safe in practice — it is anchored
+  // with `^`, so even with the `m` flag each line only ever gets one match attempt, and local
+  // timing stayed flat (sub-millisecond) up to 100,000 adversarial characters. The `{0,200}`/
+  // `{1,200}` bounds applied for lint compliance do not change matching for any real source line;
+  // this guards against a future edit accidentally widening them back to unbounded.
+  it("stays well within a tight time budget for many non-matching whitespace-only lines", () => {
+    const adversarialSource = Array.from({ length: 2_000 }, () => " ".repeat(50)).join("\n");
+    const start = Date.now();
+    const specifiers = extractValueImportSpecifiers(adversarialSource);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(300);
+    expect(specifiers).toEqual([]);
+  });
 });
 
 describe("findUnexpectedFirstLoadRuntimeImporters", () => {

@@ -176,7 +176,7 @@ function repositoryUrlAllowed(input: string): boolean {
 
 function containsControlCharacter(input: string): boolean {
   for (const char of input) {
-    const code = char.charCodeAt(0);
+    const code = char.codePointAt(0) ?? 0;
     if (code < 32 || code === 127) return true;
   }
   return false;

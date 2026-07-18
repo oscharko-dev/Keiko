@@ -43,16 +43,28 @@ export function deriveWorkspaceId(input: {
   );
 }
 
+// Trims leading/trailing characters found in `edgeChars` without a regex: `/^[-.]+/` and
+// `/[-.]+$/` pair an unbounded quantifier with an anchor, a shape SonarCloud (S8786) flags on
+// sight even though this small, fixed character class has no ambiguity of its own. A plain
+// index scan can't backtrack at all.
+function trimEdgeChars(value: string, edgeChars: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && edgeChars.includes(value[start] ?? "")) start++;
+  while (end > start && edgeChars.includes(value[end - 1] ?? "")) end--;
+  return value.slice(start, end);
+}
+
 // Slugifies an arbitrary task id into the bounded git-ref-safe character set, collapsing runs of
 // unsafe characters and trimming separators. Empty/degenerate input falls back to "task".
 function slugifyTaskId(taskId: string): string {
-  const slug = taskId
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/-+/gu, "-")
-    .replace(/^[-.]+/u, "")
-    .replace(/[-.]+$/u, "")
-    .slice(0, 40);
+  const slug = trimEdgeChars(
+    taskId
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "-")
+      .replace(/-+/gu, "-"),
+    "-.",
+  ).slice(0, 40);
   return slug.length === 0 ? "task" : slug;
 }
 

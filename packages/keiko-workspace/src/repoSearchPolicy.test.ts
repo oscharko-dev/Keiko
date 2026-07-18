@@ -34,10 +34,13 @@ describe("resolveSearchPolicy", () => {
 
   it("normalizes hint paths without accepting traversal or denied paths", () => {
     const policy = resolveSearchPolicy(false, {
-      lowValuePathAllowlist: ["./vendor/generated///", "../outside", ".env"],
+      lowValuePathAllowlist: ["./vendor/generated///", "../outside", ".env", "assets/😀///"],
       recentPaths: ["src\\payments\\PaymentService.ts///"],
     });
-    expect(policy.lowValuePathAllowlist).toEqual(["vendor/generated"]);
+    // "assets/😀///" regression-checks the charCodeAt -> codePointAt rename (typescript:S7758):
+    // "😀" is 2 UTF-16 code units and neither unit's code point ever equals the ASCII "/" (47),
+    // so trailing-slash stripping stops exactly after the emoji instead of corrupting it.
+    expect(policy.lowValuePathAllowlist).toEqual(["assets/😀", "vendor/generated"]);
     expect(policy.recentPaths).toEqual(["src/payments/PaymentService.ts"]);
   });
 });

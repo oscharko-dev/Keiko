@@ -224,6 +224,32 @@ describe("queueChatEditorApply", () => {
     expect(applyUnifiedPatch(source, action?.patch ?? "")).toBe("const result = 1;\n");
   });
 
+  it("resolves selection offsets correctly when an earlier line holds a supplementary-plane character", async () => {
+    // "😀" (U+1F600) is 2 UTF-16 code units. It sits on line 0 so that locating the start of
+    // line 1 (a codePointAt-based newline scan) and the line/character offset math for the
+    // selection on line 1 must both still land on UTF-16-unit boundaries, not code-point ones.
+    const source = "const 😀 = 1;\nconst answer = 1;\n";
+    const environment = fakeEnvironment({
+      sessions: [
+        session(source, {
+          selection: { start: { line: 1, character: 6 }, end: { line: 1, character: 12 } },
+        }),
+      ],
+      files: new Map([["src/a.ts", fileResponse("src/a.ts", source)]]),
+    });
+
+    const outcome = await queueChatEditorApply(
+      input("result", "typescript"),
+      environment.dependencies,
+    );
+
+    expect(outcome.kind).toBe("queued");
+    const action = environment.actions[0];
+    expect(applyUnifiedPatch(source, action?.patch ?? "")).toBe(
+      "const 😀 = 1;\nconst result = 1;\n",
+    );
+  });
+
   it("queues an unlabeled multi-file patch as one applyChangeset", async () => {
     const patch = multiModifyPatch([
       { path: "src/a.ts", before: "A0", after: "A1" },
@@ -374,6 +400,33 @@ describe("queueChatEditorApply", () => {
     });
     expect(overflowContext.fileCalls()).toBe(0);
     expect(overflowContext.queueCalls()).toBe(0);
+  });
+
+  it.each([
+    ["NUL", "\u0000"],
+    ["TAB", "\t"],
+    ["CR", "\r"],
+    ["LF", "\n"],
+    ["SOH, outside the original NUL/TAB/CR/LF set", "\u0001"],
+    ["DEL, outside the original NUL/TAB/CR/LF set", "\u007f"],
+  ])("rejects an active-file path containing a %s control character", async (_label, control) => {
+    const environment = fakeEnvironment();
+
+    await expect(
+      queueChatEditorApply(
+        input("replacement", undefined, {
+          workspaceRoot: ROOT,
+          activeFile: `src/${control}a.ts`,
+        }),
+        environment.dependencies,
+      ),
+    ).resolves.toEqual({
+      kind: "rejected",
+      code: "AMBIGUOUS_TARGET",
+      message: "Active-file context is invalid.",
+    });
+    expect(environment.fileCalls()).toBe(0);
+    expect(environment.queueCalls()).toBe(0);
   });
 
   it.each([
