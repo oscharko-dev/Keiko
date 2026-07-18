@@ -101,7 +101,7 @@ export async function github(path, token, init = {}) {
   return response.status === 204 ? undefined : response.json();
 }
 
-async function installationToken(installationId, env) {
+export async function installationToken(installationId, env) {
   const jwt = await appJwt(env);
   const result = await github(`/app/installations/${String(installationId)}/access_tokens`, jwt, {
     method: "POST",
@@ -230,15 +230,23 @@ export function hardFailure(failures) {
   );
 }
 
-export async function publishCheck(owner, repository, headSha, result, token, env) {
+export async function publishCheck(
+  owner,
+  repository,
+  headSha,
+  result,
+  token,
+  env,
+  name = checkName,
+) {
   const checkRuns = await allCheckRuns(
     `/repos/${owner}/${repository}/commits/${headSha}/check-runs`,
     token,
   );
   const existing = checkRuns.find(
-    (check) => check.name === checkName && appId(check.app) === Number(env.GITHUB_APP_ID),
+    (check) => check.name === name && appId(check.app) === Number(env.GITHUB_APP_ID),
   );
-  const body = checkBody(result);
+  const body = checkBody(result, name);
   const path =
     existing === undefined
       ? `/repos/${owner}/${repository}/check-runs`
@@ -249,21 +257,21 @@ export async function publishCheck(owner, repository, headSha, result, token, en
   });
 }
 
-export function checkBody(result) {
+export function checkBody(result, name = checkName) {
   if (result.passed) {
     return {
       conclusion: "success",
-      name: checkName,
+      name,
       output: {
         summary: "All current-head Keiko for Quality evidence is valid.",
-        title: checkName,
+        title: name,
       },
       status: "completed",
     };
   }
   const body = {
-    name: checkName,
-    output: { summary: result.failures.join("\n"), title: checkName },
+    name,
+    output: { summary: result.failures.join("\n"), title: name },
     status: "in_progress",
   };
   return hardFailure(result.failures)
@@ -306,6 +314,8 @@ export function dashboardComment({
   checks,
   expectedChecks = requiredChecks,
   headSha,
+  marker = dashboardMarker,
+  name = checkName,
   pull,
   result,
 }) {
@@ -319,8 +329,8 @@ export function dashboardComment({
     ? "Validated evidence"
     : `${incompleteEvidenceLabel} evidence (${String(result.failures.length)})`;
   return [
-    dashboardMarker,
-    "## Keiko for Quality",
+    marker,
+    `## ${name}`,
     "",
     `${state.icon} **${state.label}**`,
     "",
@@ -355,6 +365,8 @@ export async function publishDashboardComment({
   repository,
   pullNumber,
   currentEvidence,
+  marker = dashboardMarker,
+  name = checkName,
   pull,
   result,
   token,
@@ -364,6 +376,8 @@ export async function publishDashboardComment({
     ...currentEvidence,
     expectedChecks,
     headSha: pull.head.sha,
+    marker,
+    name,
     pull,
     result,
   });
@@ -371,7 +385,7 @@ export async function publishDashboardComment({
     (comment) =>
       comment.appId === Number(env.GITHUB_APP_ID) &&
       Number.isInteger(comment.id) &&
-      comment.body.includes(dashboardMarker),
+      comment.body.includes(marker),
   );
   if (existing?.body === body) return;
   const path =
@@ -394,7 +408,7 @@ function postMergeReconciliation(pull, evaluatedAt) {
   );
 }
 
-function pullNeedsEvaluation(pull, baseBranch, evaluatedAt) {
+export function pullNeedsEvaluation(pull, baseBranch, evaluatedAt) {
   return (
     pull.base?.ref === baseBranch &&
     (pull.state === "open" || postMergeReconciliation(pull, evaluatedAt))
@@ -429,7 +443,7 @@ async function mergeCommitContext(owner, repository, headSha, token) {
 // Resolve the merge context lazily: only fetch the head commit when no Qodo review binds the exact
 // head (a merge-commit head whose review is pinned to a parent). A normal head whose Qodo review
 // references it directly — the common steady-state case re-checked every cron tick — skips the fetch.
-async function mergeContextForHead(currentEvidence, owner, repository, headSha, token) {
+export async function mergeContextForHead(currentEvidence, owner, repository, headSha, token) {
   return latestQodoReview(currentEvidence.comments, headSha) === undefined
     ? await mergeCommitContext(owner, repository, headSha, token)
     : { commitTime: undefined, parents: [] };
@@ -636,7 +650,7 @@ export function targetForRepository(repository, env) {
   return target;
 }
 
-async function repositoryInstallation(owner, repository, env) {
+export async function repositoryInstallation(owner, repository, env) {
   const jwt = await appJwt(env);
   const installation = await github(`/repos/${owner}/${repository}/installation`, jwt);
   if (!Number.isInteger(installation?.id)) throw new Error("GitHub omitted installation ID.");
