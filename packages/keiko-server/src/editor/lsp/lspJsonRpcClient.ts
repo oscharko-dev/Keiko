@@ -45,10 +45,10 @@ export class LspServerRequestError extends Error {
   }
 }
 
-export type LspNotificationHandler = (method: string, params: unknown) => void;
-export type LspServerRequestHandler = (method: string, params: unknown) => unknown;
+type LspNotificationHandler = (method: string, params: unknown) => void;
+type LspServerRequestHandler = (method: string, params: unknown) => unknown;
 
-export interface LspRequestOptions {
+interface LspRequestOptions {
   readonly signal?: AbortSignal | undefined;
   readonly deadlineMs: number;
   readonly now?: (() => number) | undefined;

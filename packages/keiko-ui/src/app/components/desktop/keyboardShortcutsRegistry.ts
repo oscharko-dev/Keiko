@@ -20,7 +20,7 @@ import {
   type KeyboardShortcutPlatformLabel,
 } from "./keyboardShortcutLabels";
 
-export type KeyboardShortcutSource = "default" | "user";
+type KeyboardShortcutSource = "default" | "user";
 export type KeyboardShortcutPlatform = KeyboardShortcutPlatformLabel;
 
 export interface EffectiveKeyboardShortcut {
@@ -32,7 +32,7 @@ export interface EffectiveKeyboardShortcut {
   readonly conflictCommandIds: readonly string[];
 }
 
-export interface KeyboardShortcutRegistryStatus {
+interface KeyboardShortcutRegistryStatus {
   readonly kind: "ready" | "fallback";
   readonly reasonCode?: EditorM7ReasonCode | undefined;
 }

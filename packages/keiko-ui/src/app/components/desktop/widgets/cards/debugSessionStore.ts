@@ -52,7 +52,7 @@ export interface DebugConsoleEntry {
   readonly truncated: boolean;
 }
 
-export interface DebugConsoleSnapshot {
+interface DebugConsoleSnapshot {
   readonly entries: readonly DebugConsoleEntry[];
   readonly retainedBytes: number;
   readonly evictedEntries: number;

@@ -618,7 +618,7 @@ function evaluatePressureCompactionContent(outcome, plain, fixtures) {
   if (!hasExactLatestUserInstruction(plain, fixtures.currentInstruction)) {
     return false;
   }
-  if (!hasNoLiteral(messages, fixtures.earlySecret)) {
+  if (!hasNoLiteral(messages, fixtures.earlyRedactionSentinel)) {
     return false;
   }
   return (
@@ -680,10 +680,10 @@ export function evaluateChatCompaction(fixtures) {
   const profile = { contextProfile: DEFAULT_CONTEXT_PROFILE };
   const pressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
     ...profile,
-    redactionSecrets: [fixtures.earlySecret],
+    redactionSecrets: [fixtures.earlyRedactionSentinel],
   });
   const noProfilePressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
-    redactionSecrets: [fixtures.earlySecret],
+    redactionSecrets: [fixtures.earlyRedactionSentinel],
   });
   const pressurePlain = conversationForGateway(fixtures.pressure);
   const longOutcome = conversationForGatewayWithCompaction(fixtures.long, profile);

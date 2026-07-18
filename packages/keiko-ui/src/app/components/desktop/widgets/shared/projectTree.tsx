@@ -48,7 +48,7 @@ const FILE_ICON_RULES: FileIconRule[] = [
   },
 ];
 
-export function fileIconKey(name: string): string | null {
+function fileIconKey(name: string): string | null {
   const n = name.toLowerCase();
   const rule = FILE_ICON_RULES.find(({ test }) => test(n));
   return rule ? rule.key : null;

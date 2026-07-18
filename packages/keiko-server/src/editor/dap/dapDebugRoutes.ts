@@ -510,10 +510,7 @@ interface InstrumentationSnapshotLike {
   readonly exceptionFilters: readonly ExceptionBreakpointFilter[];
 }
 
-export async function handleDebugBootstrap(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleDebugBootstrap(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseDebugBootstrapRequest);
@@ -611,10 +608,7 @@ export async function handleStartDebugSession(
   return { status: 201, body: sessionProjection(projection, authorized.workspace.workspaceId) };
 }
 
-export async function handleGetDebugSession(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleGetDebugSession(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const authorized = await authorizeSession(ctx, deps, service, ctx.params.sessionId ?? "");
@@ -625,7 +619,7 @@ export async function handleGetDebugSession(
   };
 }
 
-export async function handleDeleteDebugSession(
+async function handleDeleteDebugSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -960,7 +954,7 @@ async function updateActiveExceptionBreakpoints(
   }
 }
 
-export async function handleGetDebugInstrumentation(
+async function handleGetDebugInstrumentation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -1013,7 +1007,7 @@ export async function handleSetDebugBreakpoints(
     : mutationResponse(reconciled.result);
 }
 
-export async function handleSetDebugExceptionBreakpoints(
+async function handleSetDebugExceptionBreakpoints(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -1047,10 +1041,7 @@ function requestedWatches(
   return watches.map(({ expression, enabled }) => ({ expression, enabled }));
 }
 
-export async function handleSetDebugWatches(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleSetDebugWatches(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseSetWatchesRequest);
@@ -1100,7 +1091,7 @@ async function reconfigureClearedInstrumentation(
   return unavailable ? "unavailable" : "armed";
 }
 
-export async function handleClearDebugInstrumentation(
+async function handleClearDebugInstrumentation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -1233,7 +1224,7 @@ function controlAllowed(projection: DebugSessionProjection, action: string): boo
   return action === "pause" ? projection.state === "running" : projection.state === "paused";
 }
 
-export async function handleControlDebugSession(
+async function handleControlDebugSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -1421,10 +1412,7 @@ function stackStartFrame(
       };
 }
 
-export async function handleDebugStackTrace(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleDebugStackTrace(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseStackTraceRequest);
@@ -1573,10 +1561,7 @@ function scopesResult(
   };
 }
 
-export async function handleDebugScopes(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleDebugScopes(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseScopesRequest);
@@ -1817,10 +1802,7 @@ async function expandVariables(
   );
 }
 
-export async function handleDebugVariables(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+async function handleDebugVariables(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const service = unavailable(deps);
   if (isRouteResult(service)) return service;
   const parsed = await parseBody(ctx, parseVariablesRequest);
@@ -1914,7 +1896,7 @@ function setVariableResult(
   };
 }
 
-export async function handleDebugSetVariable(
+async function handleDebugSetVariable(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
@@ -2034,7 +2016,7 @@ function watchEvaluationResult(
   };
 }
 
-export async function handleEvaluateDebugWatch(
+async function handleEvaluateDebugWatch(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {

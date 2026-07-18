@@ -26,6 +26,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run arch:check:negative",
   "npm run check:adr-index",
   "npm run check:dependency-hygiene",
+  "npm run check:knip",
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
@@ -86,6 +87,14 @@ describe("agent pre-PR gate", () => {
     );
 
     expect(commands).toEqual(REQUIRED_LINUX_COMMANDS);
+  });
+
+  it("invalidates the whole-repository knip verdict for any changed path", () => {
+    const knip = createPrePrSteps({ env: {}, platform: "linux" }).find(
+      (step) => step.id === "knip",
+    );
+
+    expect(knip?.cacheScope).toEqual(["."]);
   });
 
   it("keeps Linux-authoritative editor release evidence explicit on non-Linux hosts", () => {
@@ -156,7 +165,7 @@ describe("agent pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ cached: 0, failed: 0, passed: 27, planned: 0, skipped: 3 });
+      expect(report.summary).toEqual({ cached: 0, failed: 0, passed: 28, planned: 0, skipped: 3 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);
@@ -408,7 +417,7 @@ describe("agent pre-PR gate CLI entrypoint", () => {
 
     try {
       await installFakeNpm(binDir);
-      const result = await runCli(["--report", reportPath], {
+      const result = await runCli(["--no-cache", "--report", reportPath], {
         cwd: tempDir,
         env: {
           KEIKO_FAKE_NPM_FAIL_COMMAND: "run typecheck",

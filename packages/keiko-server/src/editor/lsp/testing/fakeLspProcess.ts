@@ -23,7 +23,7 @@ export type FakeLspBehavior =
 
 // The spawn-handle surface a manager adapter consumes: the structural stdio handle plus lifecycle
 // hooks. Mirrors the node adapter's `LspSpawnFn` return so the fake is a drop-in for the manager.
-export interface FakeLspSpawnHandle extends LspSpawnHandle {
+interface FakeLspSpawnHandle extends LspSpawnHandle {
   kill(signal: NodeJS.Signals): void;
   onExit(callback: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   onError(callback: (error: Error) => void): void;

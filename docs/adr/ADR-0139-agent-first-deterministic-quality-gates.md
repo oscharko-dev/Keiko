@@ -128,6 +128,17 @@ merge ref. It carries no rule, coverage, or rating signal, and the SonarCloud qu
 enforcing all of those independently. The exemption matches only that exact wording, so every other
 warning — including any real SCM failure such as a missing revision — still fails the gate.
 
+### D9 — D12 binds dependency state per revision
+
+The pinned baseline and candidate are each provisioned from the exact `package-lock.json` at their
+respective commit. The execution manifest and immutable comparison bind both digests by revision;
+every raw measurement and bundle input must match the digest for the revision it measured. Runtime,
+browser, hardware, warm-up, and measurement-toolchain provenance must still match across revisions.
+This makes dependency changes part of the measured candidate while preserving the exact pinned
+baseline. Requiring both commits to have an identical lockfile would deadlock the first dependency
+change after a baseline was pinned; substituting either lockfile into the other checkout would no
+longer measure an exact commit. Both failure modes are therefore rejected.
+
 ## Invariants that do not change
 
 Performance budgets, coverage ratchet floors and per-file floors, architecture and trust-boundary

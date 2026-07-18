@@ -612,7 +612,7 @@ function toDenialDetails(
 
 // ─── Density mode ─────────────────────────────────────────────────────────────
 
-export type DensityMode = "minimal" | "standard" | "dense";
+type DensityMode = "minimal" | "standard" | "dense";
 
 // ─── Action buttons (inspector-spec.md §"Action buttons") ─────────────────────
 

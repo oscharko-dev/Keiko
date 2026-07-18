@@ -35,16 +35,14 @@ mint the required aggregate check.
 7. Enable Workers Observability with redacted application logs. Verify a fresh webhook delivery,
    one scheduled reconciliation, and one app-authored check before making the check required.
 
-`TARGET_REPOSITORIES_JSON`, `STABILITY_WINDOW_MS`, `RECONCILE_BACKSTOP_MS`,
-`SOCKET_RISK_ALLOWLIST_JSON`, and `SOCKET_RISK_ACTORS_JSON` are non-secret Worker variables.
-`RECONCILE_BACKSTOP_MS` (default 15 minutes) bounds how often the scheduled sweep re-evaluates a
-settled pull request whose exact head is unchanged; it must stay well inside the one-hour post-merge
-reconciliation window. Socket entries are exact
-`npm/package@version` identifiers, and only explicitly listed maintainers may issue an acceptance
-command. They are valid only while
-the matching version and integrity digest in
-[`../../docs/qa/supply-chain-risk-acceptances.json`](../../docs/qa/supply-chain-risk-acceptances.json)
-still match `package-lock.json`; the required repository test enforces that binding.
+`TARGET_REPOSITORIES_JSON`, `STABILITY_WINDOW_MS`, and `RECONCILE_BACKSTOP_MS` are non-secret
+Worker variables. `RECONCILE_BACKSTOP_MS` (default 15 minutes) bounds how often the scheduled sweep
+re-evaluates a settled pull request whose exact head is unchanged; it must stay well inside the
+one-hour post-merge reconciliation window. Since Issue #2508
+([ADR-0143](../../docs/adr/ADR-0143-keiko-for-quality-narrowed-to-the-qodo-bridge.md)) the aggregate
+evaluates only the Qodo review bridge; the direct required checks — including both Socket contexts —
+are branch-protection authority on the exact head, so the former `SOCKET_RISK_ALLOWLIST_JSON` and
+`SOCKET_RISK_ACTORS_JSON` variables no longer exist.
 
 `TARGET_REPOSITORIES_JSON` declares a unique repository, protected base branch, and quality profile
 for every target. The two-minute schedule is a liveness backstop, not merely a stability timer. It

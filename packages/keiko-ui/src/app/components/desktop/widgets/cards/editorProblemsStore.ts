@@ -29,7 +29,7 @@ const FAILED_STATUSES: ReadonlySet<VerificationResult["status"]> = new Set([
 // The contract's maximum is expressed in JavaScript string characters (UTF-16 code units). Slice at
 // that boundary, then step back over a high surrogate so hostile/oversized producer text can never
 // leave an invalid half-code-point in the UI. Every producer routes through this one normalizer.
-export function truncateProblemMessage(message: string): string {
+function truncateProblemMessage(message: string): string {
   if (message.length <= EDITOR_PROBLEM_MESSAGE_MAX_CHARS) return message;
   let end = EDITOR_PROBLEM_MESSAGE_MAX_CHARS;
   const lastCodeUnit = message.slice(end - 1, end).codePointAt(0) ?? 0;

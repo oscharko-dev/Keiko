@@ -21,7 +21,7 @@ import {
   type ReactNode,
 } from "react";
 
-export interface AnnounceOptions {
+interface AnnounceOptions {
   // Route to the assertive (role="alert") region for time-critical outcomes (errors, failures).
   // Defaults to the polite (role="status") region.
   readonly assertive?: boolean;

@@ -10,7 +10,7 @@ import {
   type DevLaneOpenCodeTarget,
 } from "../devLanePortableCodingRuntime.js";
 
-export const FIXTURE_TARGET: DevLaneOpenCodeTarget = "macos-arm64";
+const FIXTURE_TARGET: DevLaneOpenCodeTarget = "macos-arm64";
 const FIXTURE_EXECUTABLE = "#!/bin/sh\nexit 0\n";
 const FIXTURE_LICENSE = "fixture license evidence\n";
 const FIXTURE_SBOM = '{"bomFormat":"CycloneDX"}\n';
@@ -18,7 +18,7 @@ const FIXTURE_HELPER = "#!/bin/sh\nexit 0\n";
 const FIXTURE_HELPER_SOURCE = "/* fixture secure_workspace_read source */\n";
 const FIXTURE_COMMIT = "a".repeat(40);
 
-export interface DevLaneFixturePaths {
+interface DevLaneFixturePaths {
   readonly catalog: string;
   readonly stagedTargetRoot: string;
   readonly executable: string;
@@ -81,7 +81,7 @@ export function stageDevLaneFixture(root: string): DevLaneFixture {
   };
 }
 
-export function fixtureCatalog(): Record<string, unknown> {
+function fixtureCatalog(): Record<string, unknown> {
   return {
     schemaVersion: 2,
     sidecarRuntimes: [
@@ -125,7 +125,7 @@ function fixtureHelperManifest(): Record<string, unknown> {
   };
 }
 
-export function sha256Text(value: string): string {
+function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 

@@ -22,7 +22,7 @@ interface GlobalCommandDefinition {
   readonly defaultBinding: string;
 }
 
-export interface GlobalKeyboardShortcut {
+interface GlobalKeyboardShortcut {
   readonly command: GlobalCommandDefinition;
   readonly binding: string;
 }
@@ -94,7 +94,7 @@ export function activeGlobalWorkspaceBindings(
   });
 }
 
-export function bindingToWorkspaceChord(binding: string): WorkspaceKeyChord | null {
+function bindingToWorkspaceChord(binding: string): WorkspaceKeyChord | null {
   const parts = binding.split("+");
   const key = parts.at(-1);
   if (key === undefined || key.length === 0 || MODIFIER_SET.has(key)) return null;

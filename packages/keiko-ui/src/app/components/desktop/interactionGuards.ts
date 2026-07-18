@@ -1,13 +1,9 @@
-export function isPrimaryPointerButton(button: number): boolean {
+function isPrimaryPointerButton(button: number): boolean {
   return button === 0;
 }
 
-export function isMiddlePointerButton(button: number): boolean {
+function isMiddlePointerButton(button: number): boolean {
   return button === 1;
-}
-
-export function isSecondaryPointerButton(button: number): boolean {
-  return button === 2;
 }
 
 function isMacPlatform(): boolean {

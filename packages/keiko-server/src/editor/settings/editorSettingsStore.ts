@@ -56,7 +56,7 @@ export interface EditorSettingsWorkspaceRecord extends EditorSettingsRecordBase 
   readonly workspaceFingerprint: string;
 }
 
-export interface EditorSettingsLoadResult<T extends EditorSettingsRecordBase> {
+interface EditorSettingsLoadResult<T extends EditorSettingsRecordBase> {
   readonly state: EditorSettingsStoreState;
   readonly record: T;
 }

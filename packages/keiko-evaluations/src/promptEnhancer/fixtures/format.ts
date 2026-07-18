@@ -4,7 +4,7 @@
 
 import type { PromptEnhancerEvalFixture } from "../types.js";
 
-export const formatTable: PromptEnhancerEvalFixture = {
+const formatTable: PromptEnhancerEvalFixture = {
   name: "format-table",
   category: "format",
   description: "A request that mandates a structured table output.",
@@ -17,7 +17,7 @@ export const formatTable: PromptEnhancerEvalFixture = {
   },
 };
 
-export const formatYaml: PromptEnhancerEvalFixture = {
+const formatYaml: PromptEnhancerEvalFixture = {
   name: "format-yaml",
   category: "format",
   description: "A request that mandates a structured YAML output.",
@@ -30,7 +30,7 @@ export const formatYaml: PromptEnhancerEvalFixture = {
   },
 };
 
-export const formatProse: PromptEnhancerEvalFixture = {
+const formatProse: PromptEnhancerEvalFixture = {
   name: "format-prose",
   category: "format",
   description: "A request with no structured-format signal; output stays unstructured.",

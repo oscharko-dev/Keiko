@@ -18,7 +18,7 @@ export class DapAdapterPreflightError extends Error {
   }
 }
 
-export type DapEphemeralDirectory = EphemeralHome;
+type DapEphemeralDirectory = EphemeralHome;
 export interface DapAdapterPreflightDeps {
   readonly workspaceRoot: string;
   readonly processEnv: NodeJS.ProcessEnv;

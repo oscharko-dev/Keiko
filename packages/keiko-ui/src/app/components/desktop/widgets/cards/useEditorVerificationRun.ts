@@ -42,7 +42,7 @@ const MUTATION_HEADERS = {
   "X-Keiko-CSRF": "1",
 } as const;
 
-export interface EditorVerificationStatusRun {
+interface EditorVerificationStatusRun {
   readonly label: string;
   readonly busy: boolean;
 }

@@ -8,7 +8,7 @@
 // inside each object is fixed via explicit construction (NOT spread of unknown shape) so
 // JSON.stringify produces a byte-equal output across runs.
 
-export const EVAL_SCORECARD_SCHEMA_VERSION = "1" as const;
+const EVAL_SCORECARD_SCHEMA_VERSION = "1" as const;
 
 // A graded quality number a scenario chose to report alongside its pass/fail (recall@k, FAMA, …).
 // Values are deterministic (the metric layer rounds them) so the serialised scorecard stays
@@ -18,7 +18,7 @@ export interface ScenarioMetric {
   readonly value: number;
 }
 
-export interface ScenarioResult {
+interface ScenarioResult {
   readonly name: string;
   readonly passed: boolean;
   readonly evidence: string;
@@ -28,7 +28,7 @@ export interface ScenarioResult {
   readonly metrics?: readonly ScenarioMetric[];
 }
 
-export interface ScorecardTotals {
+interface ScorecardTotals {
   readonly scenarios: number;
   readonly passed: number;
   readonly failed: number;
@@ -76,10 +76,7 @@ export function createScorecard(): Scorecard {
   };
 }
 
-export function buildScorecard(
-  results: readonly ScenarioResult[],
-  generatedAt: number,
-): EvalScorecard {
+function buildScorecard(results: readonly ScenarioResult[], generatedAt: number): EvalScorecard {
   let passed = 0;
   let failed = 0;
   for (const r of results) {

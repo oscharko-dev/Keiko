@@ -95,6 +95,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
+      - run: npm run check:knip
       - run: npm run check:qodo-config
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals

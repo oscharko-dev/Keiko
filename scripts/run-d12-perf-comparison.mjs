@@ -277,7 +277,9 @@ function provisionDependencies(state, provision) {
       revision,
       root: state.roots[revision],
     });
-    if (lockfileSha256(state.roots[revision]) !== state.dependencyLockfileSha256) {
+    if (
+      lockfileSha256(state.roots[revision]) !== state.dependencyLockfileSha256ByRevision[revision]
+    ) {
       fail(`${revision} package-lock.json changed during dependency provisioning`);
     }
   }
@@ -708,15 +710,12 @@ function resolveState(options, dependencies) {
   const artifactsRoot = resolve(
     options["artifacts-root"] ?? join(dirname(resolve(options.output)), "d12-perf-runs"),
   );
-  const lockfileDigests = Object.fromEntries(
+  const dependencyLockfileSha256ByRevision = Object.fromEntries(
     REVISIONS.map((revision) => [revision, lockfileSha256(roots[revision])]),
   );
-  if (lockfileDigests.baseline !== lockfileDigests.candidate) {
-    fail("baseline and candidate package-lock.json digests differ");
-  }
   return {
     artifactsRoot,
-    dependencyLockfileSha256: lockfileDigests.candidate,
+    dependencyLockfileSha256ByRevision,
     heads,
     measurementHarnessSha256,
     roots,
@@ -750,11 +749,11 @@ export async function runD12Comparison(argv, injected = {}) {
   state.candidateRoot = state.roots.candidate;
   executeWarmUps(state, dependencies);
   const manifest = {
-    schemaVersion: "3",
+    schemaVersion: "4",
     dependencyProvisioning: {
       ...DEPENDENCY_PROVISIONING,
       args: [...DEPENDENCY_PROVISIONING.args],
-      lockfileSha256: state.dependencyLockfileSha256,
+      lockfileSha256ByRevision: state.dependencyLockfileSha256ByRevision,
     },
     warmUp: {
       runs: 1,

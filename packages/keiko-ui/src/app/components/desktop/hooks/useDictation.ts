@@ -52,7 +52,7 @@ const HEARD_SPEECH_LEVEL = 0.12;
 // The lifecycle phase the composer renders from.
 export type DictationPhase =
   "idle" | "requesting" | "recording" | "finalizing" | "transcribing" | "preview" | "error";
-export type DictationMode = "batch" | "realtime";
+type DictationMode = "batch" | "realtime";
 
 // Why dictation could not complete. Recorder failures plus the two transcription outcomes.
 export type DictationErrorReason =

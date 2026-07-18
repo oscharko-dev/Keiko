@@ -59,7 +59,7 @@ export const EDITOR_AGENT_ACTIVITY_RECENCY_MS = 60_000;
 export const MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS = 64;
 
 /** A content-free agent selection-reveal request the host merges into the editor surface. */
-export interface EditorAgentSelectionRequest {
+interface EditorAgentSelectionRequest {
   readonly actionId: string;
   readonly selection: {
     readonly start: { readonly line: number; readonly character: number };
@@ -434,7 +434,7 @@ export interface UseEditorAgentBridgeResult {
 }
 
 /** Bounded, content-free state derived only from action/result frames already observed by the hook. */
-export interface EditorAgentBridgeState {
+interface EditorAgentBridgeState {
   /** Epoch milliseconds for the most recently observed valid action or result frame. */
   readonly lastActivityAt: number | null;
   /** True only during the finite recency window following the latest observed frame. */

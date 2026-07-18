@@ -2,7 +2,7 @@
 
 import type { IconName } from "./Icons";
 import type { MessageKey } from "@/lib/i18n-messages.en";
-import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
+import type { WindowType } from "./windows/WindowsRegistry";
 import {
   availablePaletteCommands,
   type EditorPaletteCommand,
@@ -122,8 +122,4 @@ export function appCommandWindowTypes(): {
   readonly tools: readonly WindowType[];
 } {
   return { cards: QUICK_ACCESS_CARD_TYPES, tools: QUICK_ACCESS_TOOL_TYPES };
-}
-
-export function titleForWindowType(type: WindowType): string {
-  return WIN_TYPES[type].title;
 }

@@ -23,7 +23,7 @@ export interface Bridges {
   readonly docs: boolean;
 }
 
-export const DEFAULT_POLICY: readonly PolicyRow[] = [
+const DEFAULT_POLICY: readonly PolicyRow[] = [
   { id: "read", action: "Read files", scope: "workspace", decision: "allow" },
   { id: "write", action: "Write files", scope: "src/** · docs/**", decision: "allow" },
   { id: "write-prod", action: "Write files", scope: "prod/** · infra/**", decision: "deny" },
@@ -34,7 +34,7 @@ export const DEFAULT_POLICY: readonly PolicyRow[] = [
   { id: "mail", action: "Mail / calendar", scope: "any", decision: "ask" },
 ];
 
-export const DEFAULT_BRIDGES: Bridges = {
+const DEFAULT_BRIDGES: Bridges = {
   calendar: true,
   mail: false,
   jira: true,
@@ -61,7 +61,7 @@ export interface TwinContextValue {
   readonly decide: (kind: GateKind, risk: Risk) => Decision;
 }
 
-export function twinDecide(policy: readonly PolicyRow[], kind: GateKind, risk: Risk): Decision {
+function twinDecide(policy: readonly PolicyRow[], kind: GateKind, risk: Risk): Decision {
   const d = (id: string): Decision | null => policy.find((p) => p.id === id)?.decision ?? null;
   if (kind === "write") {
     return risk === "high" ? (d("write-prod") ?? "deny") : (d("write") ?? "allow");

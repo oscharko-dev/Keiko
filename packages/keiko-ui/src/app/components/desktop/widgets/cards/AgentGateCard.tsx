@@ -4,10 +4,10 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { useEffect, useId, useRef } from "react";
 import { Icons } from "../../Icons";
 
-export type GateKind = "write" | "command" | "git" | "mail" | "network";
-export type Risk = "low" | "high";
+type GateKind = "write" | "command" | "git" | "mail" | "network";
+type Risk = "low" | "high";
 
-export interface GateInfo {
+interface GateInfo {
   readonly title: string;
   readonly detail: string;
   readonly kind: GateKind;

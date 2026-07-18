@@ -684,14 +684,15 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
     const f = buildChatHistoryFixtures();
     const dropped = f.pressure.slice(0, 1);
     expect(dropped.length).toBe(1);
-    expect(dropped[0].content).toContain(f.earlySecret);
-    expect(dropped[0].content).toContain("customer-secret-ABC-1234567890");
+    expect(dropped[0].content).toContain(f.earlyRedactionSentinel);
+    expect(f.earlyRedactionSentinel).toBe("[fixture-redaction-sentinel-7f3a]");
+    expect(f.earlyRedactionSentinel).not.toMatch(/secret|credential|api[-_]?key|token/iu);
     // The distinctive durable marker also lives in that dropped turn, but the compacted summary
     // must digest it rather than carry the raw string verbatim.
     expect(dropped[0].content).toContain(f.droppedDurableMarker);
     // None of the KEPT turns in the budget-safe long fixture carry the secret.
     const kept = f.long.slice(f.long.length - 24);
-    expect(kept.some((m) => m.content.includes(f.earlySecret))).toBe(false);
+    expect(kept.some((m) => m.content.includes(f.earlyRedactionSentinel))).toBe(false);
   });
 
   it("every fixture turn has the store ChatMessage shape (role + content)", () => {
@@ -728,7 +729,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.pressure, {
       ...PROFILE,
-      redactionSecrets: [f.earlySecret],
+      redactionSecrets: [f.earlyRedactionSentinel],
     });
     const plain = conversationForGateway(f.pressure);
     expect(evaluateLongSessionCompaction(outcome, plain, f)).toBe(true);
@@ -738,7 +739,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.pressure, {
       ...PROFILE,
-      redactionSecrets: [f.earlySecret],
+      redactionSecrets: [f.earlyRedactionSentinel],
     });
     const plain = conversationForGateway(f.pressure);
     // Strip the latest user instruction from every spliced message.
@@ -756,7 +757,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.pressure, {
       ...PROFILE,
-      redactionSecrets: [f.earlySecret],
+      redactionSecrets: [f.earlyRedactionSentinel],
     });
     const plain = conversationForGateway(f.pressure);
     const leaked = {
@@ -764,7 +765,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
       messages: [
         {
           ...outcome.messages[0],
-          content: `${outcome.messages[0].content} leaked ${f.earlySecret}`,
+          content: `${outcome.messages[0].content} leaked ${f.earlyRedactionSentinel}`,
         },
         ...outcome.messages.slice(1),
       ],
@@ -784,7 +785,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.pressure, {
       ...PROFILE,
-      redactionSecrets: [f.earlySecret],
+      redactionSecrets: [f.earlyRedactionSentinel],
     });
     const plain = conversationForGateway(f.pressure);
     const reordered = {
@@ -846,7 +847,7 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   it("evaluateNoProfileOverflowCompaction is true on the real no-profile pressure splice", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.pressure, {
-      redactionSecrets: [f.earlySecret],
+      redactionSecrets: [f.earlyRedactionSentinel],
     });
     const plain = conversationForGateway(f.pressure);
     expect(evaluateNoProfileOverflowCompaction(outcome, plain, f)).toBe(true);

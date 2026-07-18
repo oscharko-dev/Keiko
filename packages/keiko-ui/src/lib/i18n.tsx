@@ -14,7 +14,7 @@ import { EN_MESSAGES, type MessageCatalog, type MessageKey } from "./i18n-messag
 
 export const I18N_STORAGE_KEY = "keiko.locale";
 
-export const SUPPORTED_LOCALES = ["en", "de"] as const;
+const SUPPORTED_LOCALES = ["en", "de"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = "en";

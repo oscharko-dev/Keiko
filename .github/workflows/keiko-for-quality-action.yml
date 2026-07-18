@@ -81,8 +81,6 @@ jobs:
             [{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},
             {"repository":"oscharko-dev/Keiko-Native","baseBranch":"dev","profile":"keiko-native"}]
           STABILITY_WINDOW_MS: "60000"
-          SOCKET_RISK_ALLOWLIST_JSON: "[]"
-          SOCKET_RISK_ACTORS_JSON: "[]"
           KFQ_ACTION_LABEL: kfq-action-poc
         run: node scripts/keiko-for-quality-action.mjs
 
@@ -118,6 +116,4 @@ jobs:
             [{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},
             {"repository":"oscharko-dev/Keiko-Native","baseBranch":"dev","profile":"keiko-native"}]
           STABILITY_WINDOW_MS: "60000"
-          SOCKET_RISK_ALLOWLIST_JSON: "[]"
-          SOCKET_RISK_ACTORS_JSON: "[]"
         run: node scripts/keiko-for-quality-action.mjs

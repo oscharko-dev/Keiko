@@ -46,9 +46,8 @@ import {
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 
-export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
-export type { SnapZone } from "../windows/connectionUtils";
-export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
+export type { AppWindow, View };
+export type { UseWorkspaceResult, ViewportWorld };
 
 type CurrentRef<T> = { current: T };
 

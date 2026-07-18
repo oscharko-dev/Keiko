@@ -44,7 +44,7 @@ import {
 } from "./providers/dapAdapterProviders.js";
 import { createNodeDebugAdapterSpec } from "./providers/nodeDebugAdapter.js";
 
-export interface NodeDebugAdapterProvisioning {
+interface NodeDebugAdapterProvisioning {
   readonly executableName: string;
   readonly executableArgs: readonly string[];
   readonly trustedRoots: readonly string[];
