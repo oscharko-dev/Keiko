@@ -237,20 +237,36 @@ describe("Keiko for Quality core", () => {
     expect(latestQodoReview([wrongApp], headSha)).toBeUndefined();
   });
 
-  it("binds Qodo currency to a merge-commit head via its parent SHAs", () => {
+  it("binds Qodo currency to a merge-commit head via a fresh parent-pinned review", () => {
     const parent = "f".repeat(40);
-    // Qodo pinned its review to the feature parent, not the merge-commit head SHA.
+    // The merge commit was created just before Qodo re-posted its parent-pinned review (10:00).
+    const mergeAt = Date.parse("2026-07-11T09:59:00.000Z");
     const review = qodoComment({ body: qodoBody({ bugs: 2, sha: parent }) });
     // Normal commit (no merge parents): a parent-pinned review is NOT current for the head.
     expect(latestQodoReview([review], headSha)).toBeUndefined();
     expect(latestQodoReview([review], headSha, [])).toBeUndefined();
-    // Merge-commit head: supplying the parent SHA binds the review.
-    expect(latestQodoReview([review], headSha, [parent])).toBe(review);
-    expect(latestQodoReview([review], headSha, ["c".repeat(40), parent])).toBe(review);
+    // A merge parent without the merge time is not enough — parent binding needs the freshness gate.
+    expect(latestQodoReview([review], headSha, [parent])).toBeUndefined();
+    // Merge-commit head with the merge time: the fresh parent-pinned review binds.
+    expect(latestQodoReview([review], headSha, [parent], mergeAt)).toBe(review);
+    expect(latestQodoReview([review], headSha, ["c".repeat(40), parent], mergeAt)).toBe(review);
   });
 
-  it("reads Qodo findings on a merge-commit head through mergeParents", () => {
+  it("rejects a pre-merge parent review and ignores malformed merge parents", () => {
     const parent = "f".repeat(40);
+    const review = qodoComment({ body: qodoBody({ bugs: 2, sha: parent }) }); // updatedAt 10:00
+    // A parent-pinned review created AFTER the merge commit's time is stale — never current (#1).
+    const afterReview = Date.parse("2026-07-11T10:01:00.000Z");
+    expect(latestQodoReview([review], headSha, [parent], afterReview)).toBeUndefined();
+    // An empty/short merge parent must not match every comment body via includes() (#4).
+    const mergeAt = Date.parse("2026-07-11T09:59:00.000Z");
+    expect(latestQodoReview([review], headSha, [""], mergeAt)).toBeUndefined();
+    expect(latestQodoReview([review], headSha, ["fff"], mergeAt)).toBeUndefined();
+  });
+
+  it("reads Qodo findings on a merge-commit head through fresh merge parents", () => {
+    const parent = "f".repeat(40);
+    const mergeAt = Date.parse("2026-07-11T09:59:00.000Z");
     const comments = passingInput().comments.map((comment) =>
       comment.authorId === qodoAuthorId
         ? { ...comment, body: qodoBody({ bugs: 2, sha: parent }) }
@@ -260,10 +276,14 @@ describe("Keiko for Quality core", () => {
     expect(evaluate({ comments }).failures).toContain(
       "Current Qodo finding evidence is missing or unparseable.",
     );
-    // With the merge parent, KFQ correctly reports the 2 unresolved findings.
+    // A merge parent alone (no merge time) is still treated as missing — no stale acceptance.
     expect(evaluate({ comments, mergeParents: [parent] }).failures).toContain(
-      "Qodo has 2 unresolved finding(s).",
+      "Current Qodo finding evidence is missing or unparseable.",
     );
+    // With the merge parent AND the merge commit time, KFQ reports the 2 unresolved findings.
+    expect(
+      evaluate({ comments, mergeParents: [parent], mergeCommitTime: mergeAt }).failures,
+    ).toContain("Qodo has 2 unresolved finding(s).");
   });
 
   it("extracts and deduplicates exact Socket package versions", () => {

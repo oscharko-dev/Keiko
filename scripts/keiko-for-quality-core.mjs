@@ -7,6 +7,12 @@ function checks(entries) {
   return entries.map(([name, appId]) => ({ appId, name }));
 }
 
+// A currency SHA must be a full 40-hex commit id. Validating at this trust boundary stops a short or
+// empty caller-supplied merge-parent value from matching every comment body through includes().
+export function isValidHeadSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
 export const requiredChecks = checks([
   ["ci", actionsAppId],
   ["actionlint", actionsAppId],
@@ -103,21 +109,33 @@ export function parseQodoFindings(body) {
   return counts.reduce((total, count) => total + (count ?? 0), 0);
 }
 
-// Select the newest current-head Qodo summary. Currency is the reviewed commit SHA embedded in the
-// comment body (present even for a clean review via Qodo's footer commit marker, not only via finding
-// permalinks). For a merge-commit head (e.g. "Merge dev into <branch>") Qodo pins its review to the
-// feature parent, not the merge SHA, so the head's parent SHAs are accepted too — the worker only
-// supplies them for an actual merge commit, so a non-merge head still binds to its exact SHA.
-// Requiring a parseable summary prevents a newer non-summary Qodo comment from shadowing the real one.
-export function latestQodoReview(comments, headSha, mergeParents = []) {
-  const currentShas = [headSha, ...mergeParents];
+// A Qodo review is current when its body embeds the exact head SHA (present even for a clean review
+// via Qodo's footer commit marker, not only via finding permalinks). For a merge-commit head (e.g.
+// "Merge dev into <branch>") Qodo pins its review to the feature parent, not the merge SHA, so a
+// parent-bound review also counts — but only when it was (re)posted at/after the merge commit was
+// created. That freshness gate stops a pre-merge feature-branch review from being reused for the
+// merged result, preserving the strict head currency established in PR #2497.
+function qodoReviewIsCurrent(comment, headSha, validParents, mergeCommitTime) {
+  if (comment.body.includes(headSha)) return true;
+  if (typeof mergeCommitTime !== "number") return false;
+  const bindsParent = validParents.some((sha) => comment.body.includes(sha));
+  return bindsParent && Date.parse(comment.updatedAt) >= mergeCommitTime;
+}
+
+// Select the newest current Qodo summary. Requiring a parseable summary prevents a newer non-summary
+// Qodo comment from shadowing the real one. Merge parents are validated (full 40-hex) before use so a
+// malformed entry can't broaden currency matching.
+export function latestQodoReview(
+  comments,
+  headSha,
+  mergeParents = [],
+  mergeCommitTime = undefined,
+) {
+  const validParents = mergeParents.filter((sha) => isValidHeadSha(sha));
   return comments
     .filter((comment) => isBotEvidence(comment, qodoIdentity, true))
-    .filter(
-      (comment) =>
-        currentShas.some((sha) => comment.body.includes(sha)) &&
-        parseQodoFindings(comment.body) !== undefined,
-    )
+    .filter((comment) => parseQodoFindings(comment.body) !== undefined)
+    .filter((comment) => qodoReviewIsCurrent(comment, headSha, validParents, mergeCommitTime))
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
@@ -180,9 +198,10 @@ function reviewFailures(
   socketRiskAllowlist,
   socketRiskActors,
   mergeParents,
+  mergeCommitTime,
 ) {
   const failures = [];
-  const qodo = latestQodoReview(comments, headSha, mergeParents);
+  const qodo = latestQodoReview(comments, headSha, mergeParents, mergeCommitTime);
   const findings = qodo === undefined ? undefined : parseQodoFindings(qodo.body);
   if (findings === undefined)
     failures.push("Current Qodo finding evidence is missing or unparseable.");
@@ -210,7 +229,15 @@ function reviewFailures(
   return failures;
 }
 
-export function stabilityFailures(checks, comments, now, stabilityMs, headSha, mergeParents = []) {
+export function stabilityFailures(
+  checks,
+  comments,
+  now,
+  stabilityMs,
+  headSha,
+  mergeParents = [],
+  mergeCommitTime = undefined,
+) {
   const socketStart = currentCheckStart(checks, headSha, [
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
@@ -221,7 +248,7 @@ export function stabilityFailures(checks, comments, now, stabilityMs, headSha, m
     currentSocket === undefined && hasCurrentSocketNoAlertEvidence(checks, headSha);
   const evidenceTimes = [
     ...checks.filter((check) => check.name.startsWith("Socket Security:")).map(completedAt),
-    latestQodoReview(comments, headSha, mergeParents)?.updatedAt,
+    latestQodoReview(comments, headSha, mergeParents, mergeCommitTime)?.updatedAt,
     currentSocket?.updatedAt,
   ]
     .map((value) => (typeof value === "number" ? value : Date.parse(value)))
@@ -248,6 +275,8 @@ export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
   const mergeParents = Array.isArray(input.mergeParents) ? input.mergeParents : [];
+  const mergeCommitTime =
+    typeof input.mergeCommitTime === "number" ? input.mergeCommitTime : undefined;
   const failures = [
     ...checkFailures(input.checks, input.headSha, input.requiredChecks),
     ...reviewFailures(
@@ -257,6 +286,7 @@ export function evaluateKeikoForQuality(input) {
       riskAllowlist,
       riskActors,
       mergeParents,
+      mergeCommitTime,
     ),
     ...stabilityFailures(
       input.checks,
@@ -265,6 +295,7 @@ export function evaluateKeikoForQuality(input) {
       input.stabilityMs ?? 60_000,
       input.headSha,
       mergeParents,
+      mergeCommitTime,
     ),
   ];
   return { failures, passed: failures.length === 0 };

@@ -1,13 +1,19 @@
 import {
   evaluateKeikoForQuality,
+  isValidHeadSha,
   latestQodoReview,
   requiredChecks,
   requiredChecksForProfile,
 } from "./keiko-for-quality-core.mjs";
 
+// Re-exported from core (the pure leaf that owns SHA validation) so existing importers of this
+// worker module keep resolving it here.
+export { isValidHeadSha };
+
 const checkName = "Keiko for Quality";
 const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
 const githubApi = "https://api.github.com";
+const githubTimeoutMs = 15_000;
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
 const deliveryRetentionMs = 86_400_000;
@@ -80,6 +86,7 @@ export function importAppKey(pem) {
 
 export async function github(path, token, init = {}) {
   const response = await fetch(`${githubApi}${path}`, {
+    signal: AbortSignal.timeout(githubTimeoutMs),
     ...init,
     headers: {
       Accept: "application/vnd.github+json",
@@ -400,14 +407,32 @@ async function persistEvaluatedPull(database, tracked, pull, result) {
 }
 
 // A merge-commit head (2+ parents) has its Qodo review pinned to a parent (the feature commit), not
-// the merge SHA, so surface those parent SHAs to let KFQ's head-SHA currency accept the review. A
-// normal single-parent commit returns [] so it still binds to its exact SHA.
-async function mergeParentShas(owner, repository, headSha, token) {
-  const commit = await github(`/repos/${owner}/${repository}/commits/${headSha}`, token);
-  const parents = Array.isArray(commit?.parents) ? commit.parents : [];
-  return parents.length >= 2
-    ? parents.map((parent) => parent?.sha).filter((sha) => isValidHeadSha(sha))
-    : [];
+// the merge SHA. Surface those parent SHAs plus the merge commit's own timestamp so KFQ can accept a
+// parent-bound review that post-dates the merge, while a normal single-parent commit yields no
+// parents and still binds to its exact SHA. A transient commit-fetch failure degrades to "no merge
+// context" (Qodo then reads as missing → the gate fails closed) instead of rejecting the whole
+// evaluation, so one bad GitHub response can't suppress the verdict for that run.
+async function mergeCommitContext(owner, repository, headSha, token) {
+  try {
+    const commit = await github(`/repos/${owner}/${repository}/commits/${headSha}`, token);
+    const parents = Array.isArray(commit?.parents) ? commit.parents : [];
+    if (parents.length < 2) return { commitTime: undefined, parents: [] };
+    const shas = parents.map((parent) => parent?.sha).filter((sha) => isValidHeadSha(sha));
+    const committed = Date.parse(commit?.commit?.committer?.date ?? "");
+    return { commitTime: Number.isFinite(committed) ? committed : undefined, parents: shas };
+  } catch (error) {
+    console.error(`merge parent read failed errorKind=${reconciliationErrorKind(error)}`);
+    return { commitTime: undefined, parents: [] };
+  }
+}
+
+// Resolve the merge context lazily: only fetch the head commit when no Qodo review binds the exact
+// head (a merge-commit head whose review is pinned to a parent). A normal head whose Qodo review
+// references it directly — the common steady-state case re-checked every cron tick — skips the fetch.
+async function mergeContextForHead(currentEvidence, owner, repository, headSha, token) {
+  return latestQodoReview(currentEvidence.comments, headSha) === undefined
+    ? await mergeCommitContext(owner, repository, headSha, token)
+    : { commitTime: undefined, parents: [] };
 }
 
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
@@ -424,20 +449,14 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     throw new Error("Pull request head SHA is invalid.");
   }
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
-  // Only fetch the head commit's merge parents when no Qodo review already binds the exact head
-  // (e.g. a merge-commit head whose review is pinned to a parent). A normal head whose Qodo review
-  // references it directly — the common steady-state case re-checked every cron tick — needs no
-  // extra commit fetch.
-  const mergeParents =
-    latestQodoReview(currentEvidence.comments, headSha) === undefined
-      ? await mergeParentShas(owner, repository, headSha, token)
-      : [];
+  const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
   const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
     requiredChecks: expectedChecks,
     headSha,
-    mergeParents,
+    mergeParents: merge.parents,
+    mergeCommitTime: merge.commitTime,
     now: evaluatedAt,
     socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
     socketRiskActors: JSON.parse(env.SOCKET_RISK_ACTORS_JSON ?? "[]"),
@@ -574,10 +593,6 @@ export function parseStabilityMs(value) {
   if (value === undefined || value.trim() === "") return 60_000;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
-}
-
-export function isValidHeadSha(value) {
-  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 
 function validatedRepository(value, legacy) {
