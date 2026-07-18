@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   evaluateKeikoForQuality,
   isValidHeadSha,
-  nativeRequiredChecks,
-  requiredChecks,
-  requiredChecksForProfile,
+  latestQodoReview,
 } from "./keiko-for-quality-core.mjs";
 import {
   evidence,
@@ -14,7 +13,6 @@ import {
   installationToken,
   isOwnCommentEvent,
   mergeContextForHead,
-  parseJson,
   parseStabilityMs,
   publishCheck,
   publishDashboardComment,
@@ -38,13 +36,30 @@ const defaultCheckName = "Keiko for Quality (Action)";
 const defaultMarker = "<!-- keiko-for-quality-action-dashboard:v1 -->";
 const defaultLabel = "kfq-action-poc";
 
-// React only to completions of checks the aggregate actually reads. This both scopes work to
-// relevant evidence and structurally prevents a self-trigger loop: neither this workflow's job
-// status check nor the aggregate check it posts is an aggregated name, so their completions are
-// ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth would not).
-const aggregatedCheckNames = new Set(
-  [...requiredChecks, ...nativeRequiredChecks].map((check) => check.name),
-);
+// React only to completions of the direct required-check contexts (the union across quality
+// targets). Since Issue #2508 the aggregate no longer reads check-run evidence — branch protection
+// owns those contexts directly — but their completions remain the natural "time passed on this
+// pull" signals that let a stability-window verdict settle without a cron. The fixed allowlist is a
+// trigger filter, not merge authority, and it structurally prevents a self-trigger loop: neither
+// this workflow's job status check nor the aggregate check it posts is a listed name, so their
+// completions are ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth would
+// not).
+const reevaluationCheckNames = new Set([
+  "ci",
+  "actionlint",
+  "Verify pinned action SHAs",
+  "zizmor",
+  "Analyze (actions)",
+  "Analyze (javascript-typescript)",
+  "Build, scan, SBOM, smoke",
+  "Review dependency diff (dev/main)",
+  "ui",
+  "native",
+  "Scan dependency lockfiles",
+  "SonarCloud Code Analysis",
+  "Socket Security: Project Report",
+  "Socket Security: Pull Request Alerts",
+]);
 
 function hasValue(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -94,8 +109,6 @@ export function parseEvent(env) {
 
 function parseConfig(env) {
   return {
-    socketRiskActors: parseJson(env.SOCKET_RISK_ACTORS_JSON ?? "[]") ?? [],
-    socketRiskAllowlist: parseJson(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]") ?? [],
     stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
     targetEnv: {
       TARGET_REPOSITORIES_JSON: env.TARGET_REPOSITORIES_JSON,
@@ -104,12 +117,12 @@ function parseConfig(env) {
   };
 }
 
-// The pull requests this event should (re)evaluate. A completed run of a non-aggregated check (our
-// own job status, our posted aggregate check) yields none; an edit to our own dashboard comment
-// yields none; everything else maps through the shared worker extractor.
+// The pull requests this event should (re)evaluate. A completed run of an unlisted check (our own
+// job status, our posted aggregate check) yields none; an edit to our own dashboard comment yields
+// none; everything else maps through the shared worker extractor.
 export function affectedPullNumbers(eventName, payload, producerAppId) {
   if (eventName === "check_run") {
-    return aggregatedCheckNames.has(payload?.check_run?.name)
+    return reevaluationCheckNames.has(payload?.check_run?.name)
       ? pullRequestNumbers(eventName, payload)
       : [];
   }
@@ -187,7 +200,6 @@ async function publishResult(context) {
   await publishDashboardComment({
     currentEvidence: context.currentEvidence,
     env,
-    expectedChecks: context.expectedChecks,
     marker: context.identity.marker,
     name: context.identity.name,
     owner: context.owner,
@@ -199,8 +211,62 @@ async function publishResult(context) {
   });
 }
 
+async function evaluateHeadOnce(context, headSha, evaluationTime) {
+  const { config, owner, pullNumber, repository, token } = context;
+  const currentEvidence = await evidence(owner, repository, pullNumber, token);
+  const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
+  const decisionResult = evaluateKeikoForQuality({
+    comments: currentEvidence.comments,
+    headSha,
+    mergeCommitTime: merge.commitTime,
+    mergeParents: merge.parents,
+    now: evaluationTime,
+    stabilityMs: config.stabilityMs,
+  });
+  return { currentEvidence, decisionResult, merge };
+}
+
+// The in-window stability wait is the one pending state with a known, bounded settlement time —
+// and, because the Action is purely event-driven, the triggering event can be the Qodo comment
+// itself with no later allowlisted completion to re-run the evaluator (Qodo review of PR #2519).
+// Return the remaining wait when the verdict is pending on the stability window alone; anything
+// longer than this bound stays pending and settles through a later event or manual dispatch.
+const stabilityWindowFailure = "Review-product evidence is inside the stability window.";
+const maxSettleWaitMs = 300_000;
+
+function settleDelayMs({ currentEvidence, decisionResult, merge }, headSha, config, now) {
+  const stabilityOnly =
+    decisionResult.failures.length === 1 && decisionResult.failures[0] === stabilityWindowFailure;
+  if (!stabilityOnly) return undefined;
+  const review = latestQodoReview(
+    currentEvidence.comments,
+    headSha,
+    merge.parents,
+    merge.commitTime,
+  );
+  if (review === undefined) return undefined;
+  const waitMs = Date.parse(review.updatedAt) + config.stabilityMs - now;
+  return waitMs > 0 && waitMs <= maxSettleWaitMs ? waitMs : undefined;
+}
+
+// Evaluate once; when the only failure is the still-open stability window, hold this run for the
+// bounded remaining time and re-evaluate on refreshed evidence so the same run settles the verdict
+// instead of stranding an in_progress check. A review that moved during the wait re-enters the
+// window and is carried by its own issue_comment event, so one settle pass is enough.
+async function settledEvaluation(context, headSha) {
+  const first = await evaluateHeadOnce(context, headSha, context.now);
+  const waitMs = context.dryRun
+    ? undefined
+    : settleDelayMs(first, headSha, context.config, context.now);
+  if (waitMs === undefined) return { ...first, evaluatedAt: context.now };
+  console.log(`keiko-for-quality-action: settle-wait ms=${String(waitMs)}`);
+  await context.delay(waitMs);
+  const evaluatedAt = context.now + waitMs;
+  return { ...(await evaluateHeadOnce(context, headSha, evaluatedAt)), evaluatedAt };
+}
+
 async function evaluatePull(context) {
-  const { config, dryRun, eventName, identity, now, owner, pullNumber, repository, target, token } =
+  const { dryRun, eventName, identity, now, owner, pullNumber, repository, target, token } =
     context;
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
   if (!pullNeedsEvaluation(pull, target.baseBranch, now)) {
@@ -213,27 +279,16 @@ async function evaluatePull(context) {
   }
   const headSha = pull.head?.sha;
   if (!isValidHeadSha(headSha)) throw new Error("Pull request head SHA is invalid.");
-  const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
-  const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
-  const expectedChecks = requiredChecksForProfile(target.profile);
-  const decisionResult = evaluateKeikoForQuality({
-    ...currentEvidence,
+  const { currentEvidence, decisionResult, evaluatedAt } = await settledEvaluation(
+    context,
     headSha,
-    mergeCommitTime: merge.commitTime,
-    mergeParents: merge.parents,
-    now,
-    requiredChecks: expectedChecks,
-    socketRiskActors: config.socketRiskActors,
-    socketRiskAllowlist: config.socketRiskAllowlist,
-    stabilityMs: config.stabilityMs,
-  });
-  const result = { ...decisionResult, evaluatedAt: now };
+  );
+  const result = { ...decisionResult, evaluatedAt };
   logVerdict(pullNumber, headSha, result, dryRun);
   if (dryRun) return;
   await publishResult({
     ...context,
     currentEvidence,
-    expectedChecks,
     headSha,
     producerAppId: context.producerAppId,
     pull,
@@ -263,9 +318,12 @@ export async function run(env, options = {}) {
   }
   const token = await resolveToken(auth, owner, repository, installationId);
   const dryRun = isDryRun(env);
+  // Injectable for deterministic tests; the runner path waits in real time.
+  const delay = options.delay ?? ((ms) => sleep(ms));
   for (const pullNumber of prNumbers) {
     await evaluatePull({
       config,
+      delay,
       dryRun,
       eventName,
       identity,

@@ -2,8 +2,6 @@ import {
   evaluateKeikoForQuality,
   isValidHeadSha,
   latestQodoReview,
-  requiredChecks,
-  requiredChecksForProfile,
 } from "./keiko-for-quality-core.mjs";
 
 // Re-exported from core (the pure leaf that owns SHA validation) so existing importers of this
@@ -31,6 +29,11 @@ const persistedPullPageLimit = 10;
 // (waiting) pull requests and any head move are still re-evaluated every eligible tick. Fifteen
 // minutes keeps the backstop well inside the one-hour post-merge reconciliation window.
 const defaultReconcileBackstopMs = 900_000;
+// The profile names a configured quality target may declare. Since the aggregate was narrowed to the
+// Qodo bridge (Issue #2508, ADR-0143) the profile no longer selects a required-check set; it is kept
+// as a validated enum so existing deployed target configuration stays valid and a typo still fails
+// closed at startup.
+const qualityProfiles = new Set(["keiko", "keiko-native"]);
 
 export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
@@ -188,38 +191,15 @@ export function appId(app) {
   return app?.id;
 }
 
-export function socketNoAlertEvidence(check) {
-  if (
-    appId(check.app) !== 156372 ||
-    check.conclusion !== "success" ||
-    check.name !== "Socket Security: Pull Request Alerts" ||
-    check.output?.annotations_count !== 0
-  )
-    return false;
-  const output = [check.output.title, check.output.summary, check.output.text]
-    .filter((value) => typeof value === "string")
-    .join("\n");
-  return /\b(?:contains no net changes to dependencies|no dependency changes detected|no new alerts?)\b/iu.test(
-    output,
+// The narrowed aggregate reads only the pull request's comment stream (Issue #2508, ADR-0143):
+// direct-check and Socket check-run results are branch-protection authority on the exact head
+// already, so the per-evaluation check-runs listing is no longer fetched.
+export async function evidence(owner, repository, pullNumber, token) {
+  const comments = await allPages(
+    `/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`,
+    token,
   );
-}
-
-export async function evidence(owner, repository, pullNumber, headSha, token) {
-  const [checkRuns, comments] = await Promise.all([
-    allCheckRuns(`/repos/${owner}/${repository}/commits/${headSha}/check-runs`, token),
-    allPages(`/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`, token),
-  ]);
   return {
-    checks: checkRuns.map((check) => ({
-      appId: check.app?.id,
-      completedAt: check.completed_at,
-      conclusion: check.conclusion,
-      headSha: check.head_sha,
-      name: check.name,
-      socketNoAlerts: socketNoAlertEvidence(check),
-      startedAt: check.started_at,
-      status: check.status,
-    })),
     comments: comments.map((comment) => ({
       appId: comment.performed_via_github_app?.id,
       author: String(comment.user?.login ?? ""),
@@ -234,14 +214,7 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
 }
 
 export function hardFailure(failures) {
-  return failures.some(
-    (failure) =>
-      failure.startsWith("Wrong producer") ||
-      failure.includes("unresolved finding") ||
-      failure.includes("Socket warning") ||
-      failure.includes("Socket reports") ||
-      failure.startsWith("Check is not successful"),
-  );
+  return failures.some((failure) => failure.includes("unresolved finding"));
 }
 
 export async function publishCheck(
@@ -293,19 +266,6 @@ export function checkBody(result, name = checkName) {
     : body;
 }
 
-function currentCheckCount(checks, headSha, expectedChecks) {
-  return expectedChecks.filter(({ appId: expectedAppId, name }) =>
-    checks.some(
-      (check) =>
-        check.appId === expectedAppId &&
-        check.conclusion === "success" &&
-        check.headSha === headSha &&
-        check.name === name &&
-        check.status === "completed",
-    ),
-  ).length;
-}
-
 function decision(result) {
   if (result.passed) return { icon: "✅", label: "Ready for auto-merge" };
   return hardFailure(result.failures)
@@ -325,8 +285,6 @@ function evidenceState(failures, pattern, cleanLabel) {
 }
 
 export function dashboardComment({
-  checks,
-  expectedChecks = requiredChecks,
   headSha,
   marker = dashboardMarker,
   name = checkName,
@@ -334,7 +292,6 @@ export function dashboardComment({
   result,
 }) {
   const state = decision(result);
-  const successfulChecks = currentCheckCount(checks, headSha, expectedChecks);
   const autoMerge =
     pull.auto_merge === null || pull.auto_merge === undefined ? "not armed" : "armed";
   const blocked = hardFailure(result.failures);
@@ -352,10 +309,7 @@ export function dashboardComment({
     "",
     "| Gate group | Evidence |",
     "| --- | --- |",
-    `| Required checks | ${String(successfulChecks)}/${String(expectedChecks.length)} successful |`,
-    `| SonarQube Cloud | ${evidenceState(result.failures, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
     `| Qodo review | ${evidenceState(result.failures, /Qodo/iu, "zero unresolved findings")} |`,
-    `| Socket Security | ${evidenceState(result.failures, /Socket/iu, "zero unresolved alerts")} |`,
     `| Stability window | ${evidenceState(result.failures, /stability/iu, "settled")} |`,
     "",
     "| Automation | State |",
@@ -374,7 +328,6 @@ export function dashboardComment({
 }
 
 export async function publishDashboardComment({
-  expectedChecks,
   owner,
   repository,
   pullNumber,
@@ -387,8 +340,6 @@ export async function publishDashboardComment({
   env,
 }) {
   const body = dashboardComment({
-    ...currentEvidence,
-    expectedChecks,
     headSha: pull.head.sha,
     marker,
     name,
@@ -483,24 +434,19 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
   if (!isValidHeadSha(headSha)) {
     throw new Error("Pull request head SHA is invalid.");
   }
-  const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
+  const currentEvidence = await evidence(owner, repository, pullNumber, token);
   const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
-  const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
-    ...currentEvidence,
-    requiredChecks: expectedChecks,
+    comments: currentEvidence.comments,
     headSha,
-    mergeParents: merge.parents,
     mergeCommitTime: merge.commitTime,
+    mergeParents: merge.parents,
     now: evaluatedAt,
-    socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
-    socketRiskActors: JSON.parse(env.SOCKET_RISK_ACTORS_JSON ?? "[]"),
     stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
   });
   const result = { ...decisionResult, evaluatedAt };
   await publishCheck(owner, repository, headSha, result, token, env);
   await publishDashboardComment({
-    expectedChecks,
     owner,
     repository,
     pullNumber,
@@ -655,7 +601,7 @@ function validatedTarget(value, legacy = false) {
   const repository = validatedRepository(legacy ? value : value?.repository, legacy);
   const baseBranch = validatedBaseBranch(legacy ? "dev" : value?.baseBranch);
   const profile = legacy ? "keiko" : value?.profile;
-  requiredChecksForProfile(profile);
+  if (!qualityProfiles.has(profile)) throw new Error("Unsupported quality-gate profile.");
   return { baseBranch, profile, repository };
 }
 

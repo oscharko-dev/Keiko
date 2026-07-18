@@ -17,5 +17,3 @@ database_id = "replace-with-production-d1-id"
 TARGET_REPOSITORIES_JSON = '[{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},{"repository":"oscharko-dev/Keiko-Native","baseBranch":"main","profile":"keiko-native"}]'
 STABILITY_WINDOW_MS = "60000"
 RECONCILE_BACKSTOP_MS = "900000"
-SOCKET_RISK_ALLOWLIST_JSON = '[]'
-SOCKET_RISK_ACTORS_JSON = '[]'
