@@ -2,13 +2,14 @@
 import "../../vitest.setup";
 
 import { render } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
 
 import { EditorStatusBar } from "./EditorStatusBar.js";
 import { deriveEditorStatusBar } from "./status-bar.js";
 
 describe("merge-conflict accessibility", () => {
-  it("exposes the conflict count through the polite status region without conflating save state", () => {
+  it("exposes the conflict count through the polite status region without conflating save state", async () => {
     const view = deriveEditorStatusBar({
       languageId: "typescript",
       cursor: null,
@@ -34,5 +35,6 @@ describe("merge-conflict accessibility", () => {
     expect(alert).toHaveAttribute("role", "alert");
     expect(alert).toHaveAttribute("aria-live", "assertive");
     expect(alert).toBeEmptyDOMElement();
+    expect((await axe(rendered.container)).violations).toEqual([]);
   });
 });

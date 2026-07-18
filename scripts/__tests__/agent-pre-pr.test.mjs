@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { commandText, createPrePrSteps, runPrePrGate } from "../agent-pre-pr.mjs";
+import {
+  commandText,
+  computeStepInputDigest,
+  createPrePrSteps,
+  runPrePrGate,
+} from "../agent-pre-pr.mjs";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "agent-pre-pr.mjs");
 
@@ -89,12 +94,56 @@ describe("agent pre-PR gate", () => {
     expect(commands).toEqual(REQUIRED_LINUX_COMMANDS);
   });
 
-  it("invalidates the whole-repository knip verdict for any changed path", () => {
+  it("limits the knip cache digest to analysis inputs instead of hashing the whole repository", () => {
     const knip = createPrePrSteps({ env: {}, platform: "linux" }).find(
       (step) => step.id === "knip",
     );
 
-    expect(knip?.cacheScope).toEqual(["."]);
+    expect(knip?.cacheScope).toEqual([
+      "packages/",
+      "src/",
+      "tests/",
+      "scripts/",
+      "native/",
+      "knip.json",
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json",
+      "tsconfig.base.json",
+      "tsconfig.build.json",
+      "tsconfig.packages.json",
+      "vitest.config.ts",
+      "vitest.coverage.packages.config.ts",
+      "vitest.coverage.scripts.config.ts",
+    ]);
+  });
+
+  it("invalidates knip for source changes but not unrelated documentation", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-knip-cache-"));
+    const knip = createPrePrSteps({ env: {}, platform: "linux" }).find(
+      (step) => step.id === "knip",
+    );
+
+    try {
+      await mkdir(join(repo, "docs"), { recursive: true });
+      await mkdir(join(repo, "packages", "fixture"), { recursive: true });
+      await writeFile(join(repo, "docs", "note.md"), "initial\n", "utf8");
+      await writeFile(join(repo, "packages", "fixture", "index.ts"), "export {};\n", "utf8");
+      spawnSync("git", ["init", "--quiet"], { cwd: repo, stdio: "ignore" });
+
+      const initial = computeStepInputDigest(knip, { cwd: repo });
+      await writeFile(join(repo, "docs", "note.md"), "changed\n", "utf8");
+      expect(computeStepInputDigest(knip, { cwd: repo })).toBe(initial);
+
+      await writeFile(
+        join(repo, "packages", "fixture", "index.ts"),
+        "export const changed = true;\n",
+        "utf8",
+      );
+      expect(computeStepInputDigest(knip, { cwd: repo })).not.toBe(initial);
+    } finally {
+      await rm(repo, { force: true, recursive: true });
+    }
   });
 
   it("keeps Linux-authoritative editor release evidence explicit on non-Linux hosts", () => {
