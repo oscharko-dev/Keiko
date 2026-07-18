@@ -182,13 +182,24 @@ function normalizedCanonicalWorkspaceRoot(
   return style === "windows" ? value.toLowerCase() : value;
 }
 
+function canonicalWorkspaceRootBodyIsValid(
+  value: string,
+  style: CanonicalWorkspaceRootStyle,
+): boolean {
+  const separator = canonicalWorkspaceRootSeparator(style);
+  const bodySegments = value.split(separator).slice(1);
+  if (bodySegments.length === 1 && bodySegments[0] === "") return true;
+  return bodySegments.every(
+    (segment): boolean => segment !== "" && segment !== "." && segment !== "..",
+  );
+}
+
 export function isCanonicalWorkspaceRoot(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 4096) return false;
   if (value.includes("\0")) return false;
   const style = canonicalWorkspaceRootStyle(value);
   if (style === undefined) return false;
-  const separator = canonicalWorkspaceRootSeparator(style);
-  return !value.split(separator).some((segment): boolean => segment === "." || segment === "..");
+  return canonicalWorkspaceRootBodyIsValid(value, style);
 }
 
 export function isPortableWorkspaceRelativePath(value: unknown): value is string {
