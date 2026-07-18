@@ -42,7 +42,7 @@ export const SESSION_PAIRING_DENIED: SessionPairingDecision = { outcome: "denied
 const ALLOWED_KEYS: readonly string[] = ["requestId", "issuedAtMs", "claim"];
 
 function hasOnlyAllowedKeys(candidate: Record<string, unknown>): boolean {
-  return Object.keys(candidate).every((key) => ALLOWED_KEYS.includes(key));
+  return Object.keys(candidate).every((key): boolean => ALLOWED_KEYS.includes(key));
 }
 
 function isValidRequestId(value: unknown): boolean {

@@ -34,7 +34,7 @@ const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 
 /** Read and JSON-parse a bounded request body, resolving `undefined` on any failure (fail closed). */
 export function readPairingBody(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve) => {
+  return new Promise((resolve): void => {
     const chunks: Buffer[] = [];
     let total = 0;
     let settled = false;
@@ -44,7 +44,7 @@ export function readPairingBody(req: IncomingMessage): Promise<unknown> {
         resolve(value);
       }
     };
-    req.on("data", (chunk: Buffer) => {
+    req.on("data", (chunk: Buffer): void => {
       total += chunk.length;
       if (total > MAX_PAIRING_BODY_BYTES) {
         finish(undefined);
@@ -53,7 +53,7 @@ export function readPairingBody(req: IncomingMessage): Promise<unknown> {
       }
       chunks.push(chunk);
     });
-    req.on("end", () => {
+    req.on("end", (): void => {
       const raw = Buffer.concat(chunks).toString("utf8");
       if (raw.length === 0) {
         finish(undefined);
@@ -65,7 +65,7 @@ export function readPairingBody(req: IncomingMessage): Promise<unknown> {
         finish(undefined);
       }
     });
-    req.on("error", () => {
+    req.on("error", (): void => {
       finish(undefined);
     });
   });

@@ -70,8 +70,8 @@ function unexpectedKeys(
   path: string,
 ): string[] {
   return Object.keys(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
+    .filter((key): boolean => !allowed.includes(key))
+    .map((key): string => `${path}.${key} is not allowed`);
 }
 
 function checkBoundedText(value: unknown, path: string, max: number, errors: string[]): void {
