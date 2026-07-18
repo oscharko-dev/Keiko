@@ -10,6 +10,7 @@ import {
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
   provisionTaskWorkspace,
+  reconcileTaskWorkspaces,
   resumeTaskWorkspace,
   setActiveTaskWorkspace,
 } from "./task-workspace-api";
@@ -100,6 +101,24 @@ describe("header injection", () => {
       baseBranch: "dev",
       requestedBy: "op",
     });
+  });
+
+  it("reconcile posts the root to the reconciliation route and unwraps the report", async () => {
+    const report = {
+      schemaVersion: "1",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      entries: [{ workspaceId: "ws-1", status: "healthy" }],
+      activeRestoration: { kind: "none" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ report }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await reconcileTaskWorkspaces({ root: "/repo/x" });
+    const init = lastInit(fetchMock);
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
+    expect(lastUrl(fetchMock)).toBe("/api/task-workspaces/reconciliation");
+    expect(JSON.parse(init.body as string)).toEqual({ root: "/repo/x" });
+    expect(result).toEqual(report);
   });
 });
 

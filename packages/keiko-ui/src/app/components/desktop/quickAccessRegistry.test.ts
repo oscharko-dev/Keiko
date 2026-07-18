@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  appCommandWindowTypes,
   buildUnifiedQuickAccessCommands,
   commandIdsForEvidence,
   paletteWindowOrder,
@@ -108,5 +109,13 @@ describe("quick access registry", () => {
       "agents",
       "docbrowser",
     ]);
+  });
+
+  it("exposes the Coding Workbench through the palette tool list, not the card grid (#2476)", () => {
+    // The Coding Workbench is a singleton tool, so it reaches the palette via the idempotent tool seam
+    // and must stay out of the card grid that mints a new-window flow.
+    const { cards, tools } = appCommandWindowTypes();
+    expect(tools).toContain("coding");
+    expect(cards).not.toContain("coding");
   });
 });

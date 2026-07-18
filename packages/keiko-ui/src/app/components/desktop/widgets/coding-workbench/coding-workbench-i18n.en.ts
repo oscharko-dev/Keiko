@@ -65,6 +65,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.targetBranchPlaceholder": "main",
   "codingWorkbench.setup.submit": "Bind workspace",
   "codingWorkbench.setup.binding": "Binding…",
+  "codingWorkbench.setup.verifying": "Verifying…",
+  "codingWorkbench.setup.reconcileFailed":
+    "The workspace could not be verified. Reconciliation did not confirm a clean, matching checkout, so the run stays unavailable. Review the repository and try again.",
+  "codingWorkbench.setup.runtimeUnavailable":
+    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed.",
   "codingWorkbench.readiness.eyebrow": "Readiness",
   "codingWorkbench.readiness.title": "Independent live resources",
   "codingWorkbench.readiness.modelSource.label": "Model source",

@@ -146,15 +146,22 @@ function WorkbenchColumns({
   locked,
   onDecision,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
-  // The bootstrap Code setup (#2385) renders only while the runtime is confirmed available but no
-  // active task-workspace binding exists; once a binding lands it yields to the task-start flow.
-  const showSetup =
-    state.runtime.value?.runtimeAvailable === true && activeWorkspace.activeBinding === null;
+  // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
+  // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
+  // hides behind runtime availability: on an unactivated install it stays reachable and honestly
+  // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
+  // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
+  const showSetup = activeWorkspace.activeBinding === null;
+  const runtimeUnavailable =
+    state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
   return (
     <div className={styles.grid}>
       <div className={styles.stack}>
         {showSetup ? (
-          <CodingWorkbenchSetup refreshWorkspace={(root) => activeWorkspace.refresh(root)} />
+          <CodingWorkbenchSetup
+            refreshWorkspace={(root) => activeWorkspace.refresh(root)}
+            runtimeUnavailable={runtimeUnavailable}
+          />
         ) : null}
         <TaskStartSection
           taskIntent={taskIntent}

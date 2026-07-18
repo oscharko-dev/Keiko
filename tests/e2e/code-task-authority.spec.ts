@@ -45,24 +45,18 @@ async function openWorkbench(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
 }
 
-// Drives the "Code setup" section: bind the fixture checkout as a managed task workspace.
+// Drives the "Code setup" section end to end through UI interactions only: binding the fixture
+// checkout now provisions, runs the #447 reconciliation pass that stamps the verified head the runtime
+// launch authority requires, and only then activates — no out-of-band `page.request` reconciliation
+// call (#2476 AC1). The section yields once the verified binding lands.
 async function bindFixtureWorkspace(page: Page): Promise<void> {
   const setup = page.getByRole("region", { name: "Code setup" });
   await expect(setup).toBeVisible();
   await setup.getByLabel("Repository path").fill(repositoryRoot);
   await setup.getByLabel("Target branch").fill("main");
   await setup.getByRole("button", { name: "Bind workspace" }).click();
-  await expect(setup).toHaveCount(0);
-}
-
-// A fresh binding has no verified head yet — run the REAL #447 reconciliation route so the runtime
-// authority can prove the managed worktree head before the run starts.
-async function reconcileBoundWorkspace(page: Page): Promise<void> {
-  const response = await page.request.post("/api/task-workspaces/reconciliation", {
-    headers: { "X-Keiko-CSRF": "1" },
-    data: { root: repositoryRoot },
-  });
-  expect(response.ok()).toBe(true);
+  // The bind performs real filesystem + git reconciliation before it yields, so allow for that IO.
+  await expect(setup).toHaveCount(0, { timeout: 30_000 });
 }
 
 // Locates the file the scripted runtime edited inside the Keiko-managed worktree root. The worktree
@@ -110,7 +104,6 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
 }) => {
   await openWorkbench(page);
   await bindFixtureWorkspace(page);
-  await reconcileBoundWorkspace(page);
 
   // #2386 changed the workbench default from full access to the supervised middle mode.
   await expect(page.getByRole("radio", { name: /Supervised workspace/u })).toBeChecked();
@@ -185,6 +178,10 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
   await openWorkbench(page);
 
   await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
+  // #2476 AC4 — the setup surface stays reachable and honestly explains why start is unavailable
+  // instead of disappearing behind the unconfirmed runtime.
+  await expect(page.getByRole("region", { name: "Code setup" })).toBeVisible();
+  await expect(page.getByTestId("coding-workbench-setup-runtime-note")).toBeVisible();
   await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
   await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
 });

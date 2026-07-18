@@ -40,6 +40,11 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "resources",
   "localKnowledge",
   "governedGit",
+  // Issue #2476 — Code task reachability. The Coding Workbench is a `singleton: true, tool: true`
+  // window, so it belongs on the palette's tool list (the idempotent `toggleTool` seam the Left Rail
+  // already uses), NOT the card list (which mints a new-window config flow) and NOT `TYPE_ORDER`
+  // (the launcher-grid order the palette does not source its commands from — the known wrong-list trap).
+  "coding",
   "editor",
   "figma",
   "quality",
