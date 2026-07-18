@@ -22,7 +22,14 @@ interface BlameHeader {
 
 const BLAME_HEADER = /^(\S+) \d+ (\d+)(?: \d+)?$/u;
 const GIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
-const EMAIL_SHAPE = /[^\s<>@]+@[^\s<>@]+/u;
+// Bounded ({1,320} instead of unbounded `+`) so a long run of the author string with no "@" at
+// all cannot force the unanchored search to retry an O(remaining-length) backtrack at every
+// character position (empirically verified quadratic before this fix: ~4x time per 2x input).
+// 320 is the conventional max total email-address length (RFC 5321: 64-char local part + "@" +
+// 255-char domain), so this can never change whether `.test()` finds a match - it only caps the
+// per-position backtrack cost, since a match only ever needs a minimum of 1 qualifying character
+// on each side of the "@" regardless of how long the surrounding run actually is.
+const EMAIL_SHAPE = /[^\s<>@]{1,320}@[^\s<>@]{1,320}/u;
 const PRIVATE_AUTHOR = "Private author";
 
 function parseHeader(line: string): BlameHeader | undefined {

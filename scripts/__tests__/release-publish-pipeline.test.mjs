@@ -1415,3 +1415,28 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     });
   },
 );
+
+// parseArgs' argv loop mixes three token widths in one pass: a bare boolean flag
+// (--dry-run, 1 token), an inline `--flag=value` assignment (1 token), and a
+// space-separated value flag (--tag <value>, 2 tokens). Runs standalone (not inside the
+// stubbed-orchestrator describe above) so it exercises real argv parsing regardless of
+// whether the root version is a prerelease, and fails fast in validateDistTag before any
+// npm/gh/git process is spawned.
+describe("release-publish argv parsing", () => {
+  it("advances the index correctly across a boolean flag, an inline-assignment flag, and a value flag", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/release-publish.mjs",
+        "--dry-run",
+        "--registry=https://registry.example.invalid/",
+        "--tag",
+        "not-a-real-tag",
+      ],
+      { cwd: REPO_ROOT, encoding: "utf8", env: process.env },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("unsupported npm dist-tag not-a-real-tag");
+  });
+});

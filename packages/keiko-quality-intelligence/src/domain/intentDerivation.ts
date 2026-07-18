@@ -52,7 +52,12 @@ const REQUIREMENT_VERB_PATTERNS: readonly RegExp[] = [
 ];
 
 const THEME_SEPARATOR = /[\s–—:;|/,.()[\]{}]+/u;
-const TRACEABILITY_ID_PATTERN = /^[A-Za-z]{2,}-\d+[A-Za-z0-9-]*$/u;
+// `\d[A-Za-z0-9-]*` (one mandatory digit, then any trailing alnum/hyphen run) recognises the
+// exact same language as `\d+[A-Za-z0-9-]*` — the trailing class already accepts every character
+// `\d+`'s extra repetitions could consume — but without two adjacent quantified atoms whose
+// classes overlap on digits, which made the previous shape quadratic on a long digit run that
+// fails to reach the anchored `$` (typescript/javascript:S8786).
+const TRACEABILITY_ID_PATTERN = /^[A-Za-z]{2,}-\d[A-Za-z0-9-]*$/u;
 const UPPERCASE_SIGNAL_PATTERN = /^[A-ZÄÖÜ0-9]{2,}$/u;
 
 const DOMAIN_THEME_TOKENS: ReadonlyMap<string, string> = new Map([

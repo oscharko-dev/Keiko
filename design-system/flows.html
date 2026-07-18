@@ -175,11 +175,12 @@
                 <div class="sub">Sign in to your Keiko workspace.</div>
               </div>
               <div class="c-form-row">
-                <label class="c-label">Email</label><input class="c-field" value="maya@studio.co" />
+                <label class="c-label" for="login-email">Email</label
+                ><input class="c-field" id="login-email" value="maya@studio.co" />
               </div>
               <div class="c-form-row">
-                <label class="c-label">Password</label
-                ><input class="c-field" type="password" value="········" />
+                <label class="c-label" for="login-password">Password</label
+                ><input class="c-field" id="login-password" type="password" value="········" />
               </div>
               <button class="c-btn c-btn--primary" style="justify-content: center">Sign in</button>
               <button class="c-btn" style="justify-content: center">
@@ -320,21 +321,21 @@
                   <div class="tt">Run failures</div>
                   <div class="ts">Alert when an agent run errors.</div>
                 </div>
-                <button class="c-toggle" aria-checked="true"><span></span></button>
+                <button class="c-toggle" role="switch" aria-checked="true"><span></span></button>
               </div>
               <div class="set-row">
                 <div class="tx">
                   <div class="tt">Weekly digest</div>
                   <div class="ts">A Monday summary of activity.</div>
                 </div>
-                <button class="c-toggle" aria-checked="true"><span></span></button>
+                <button class="c-toggle" role="switch" aria-checked="true"><span></span></button>
               </div>
               <div class="set-row">
                 <div class="tx">
                   <div class="tt">Mentions</div>
                   <div class="ts">When a teammate @-mentions you.</div>
                 </div>
-                <button class="c-toggle" aria-checked="false"><span></span></button>
+                <button class="c-toggle" role="switch" aria-checked="false"><span></span></button>
               </div>
             </div>
           </div>
@@ -346,12 +347,13 @@
             <div class="screen-body">
               <div class="c-form-grid">
                 <div class="c-form-row">
-                  <label class="c-label">Name</label><input class="c-field" value="Release Notes" />
+                  <label class="c-label" for="agent-name">Name</label
+                  ><input class="c-field" id="agent-name" value="Release Notes" />
                 </div>
                 <div class="c-form-row">
-                  <label class="c-label">Trigger</label>
+                  <label class="c-label" for="agent-trigger">Trigger</label>
                   <div class="c-select" style="width: 100%">
-                    <select style="width: 100%">
+                    <select id="agent-trigger" style="width: 100%">
                       <option>On tag push</option>
                       <option>On schedule</option>
                       <option>Manual</option></select
@@ -371,8 +373,12 @@
                   </div>
                 </div>
                 <div class="c-form-row">
-                  <label class="c-label">Webhook URL</label
-                  ><input class="c-field c-field--invalid" value="nothttps://" />
+                  <label class="c-label" for="agent-webhook-url">Webhook URL</label
+                  ><input
+                    class="c-field c-field--invalid"
+                    id="agent-webhook-url"
+                    value="nothttps://"
+                  />
                   <div class="c-field-error">
                     <span class="ico"
                       ><svg

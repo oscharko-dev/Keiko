@@ -98,6 +98,15 @@ describe("validateKnowledgePodSummary", () => {
     }
   });
 
+  it("treats a supplementary-plane character as a non-ASCII scheme/host boundary, not a letter or digit", () => {
+    // A lone surrogate's code unit (and a real supplementary-plane code point) never falls in the
+    // ASCII letter/digit ranges `isAsciiLetter`/`isAsciiDigit` check, so an emoji immediately before
+    // a scheme must still let the scheme scan find its true start, and must not itself be over- or
+    // under-redacted.
+    expect(isKnowledgePodEvidenceSafeText("😀https://example.test/path")).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText("Pod 😀 Notes")).toBe(true);
+  });
+
   it("keeps benign display names with a single slash evidence-safe", () => {
     for (const safeText of [
       "UI/UX Guidelines",

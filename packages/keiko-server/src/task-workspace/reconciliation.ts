@@ -86,7 +86,10 @@ function safeGitdirIdentity(worktreePath: string): string | undefined {
   } catch {
     return undefined;
   }
-  const match = /^gitdir:\s*(.+)\s*$/mu.exec(raw);
+  // See provisioning.ts's gitdirIdentity: the removed leading/trailing `\s*` overlapped with
+  // `(.+)` and, under the multiline flag, made this quadratic on adversarial pointer content
+  // (S8786). `.trim()` below already strips the same whitespace, so behavior is unchanged.
+  const match = /^gitdir:(.+)$/mu.exec(raw);
   if (match?.[1] === undefined || match[1].length === 0) return undefined;
   return createHash("sha256").update(match[1].trim(), "utf8").digest("hex").slice(0, 32);
 }

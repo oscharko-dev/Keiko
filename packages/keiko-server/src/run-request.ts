@@ -245,13 +245,18 @@ function validateOptionalStringField(
   return null;
 }
 
+const DEFAULT_VALIDATE_STRING_ARRAY_OPTIONS = Object.freeze({
+  required: false,
+  allowEmpty: true,
+});
+
 function validateStringArray(
   value: unknown,
   label: string,
-  options: { readonly required: boolean; readonly allowEmpty: boolean } = {
-    required: false,
-    allowEmpty: true,
-  },
+  options: {
+    readonly required: boolean;
+    readonly allowEmpty: boolean;
+  } = DEFAULT_VALIDATE_STRING_ARRAY_OPTIONS,
 ): RunRequestError | null {
   if (value === undefined) {
     return options.required

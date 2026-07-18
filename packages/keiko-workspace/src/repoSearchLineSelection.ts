@@ -31,7 +31,10 @@ function lineIndent(line: string): number {
   return match?.[0].length ?? 0;
 }
 
-function looksLikeBlockHeader(line: string): boolean {
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly instead of routing an adversarial line through the
+// full `collectBestLines` pipeline.
+export function looksLikeBlockHeader(line: string): boolean {
   const trimmed = line.trim();
   if (looksLikeControlFlowHeader(trimmed)) {
     return false;
@@ -43,23 +46,89 @@ function looksLikeBlockHeader(line: string): boolean {
   ) {
     return true;
   }
-  return /\b[A-Za-z_$][\w$<>,.[\]?]*\s+[A-Za-z_$][\w$]*\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{/u.test(
-    trimmed,
+  return looksLikeFunctionSignatureTail(trimmed);
+}
+
+// All three variable-length character classes below are bounded (2000 characters is far beyond
+// any realistic single-line type prefix, parameter list, or throws-clause — even a verbose real
+// signature stays well under it; the trailing `throws` class was originally left unbounded and
+// SonarCloud correctly flagged it — S8786 — for exactly the same reason the other two are capped:
+// an adversarial line with many "ident ident() throws ident " units and no closing `{` anywhere
+// makes every successfully-parsed candidate rescan the rest of the line for a `{` that never
+// appears, which is quadratic without the cap). Bounding alone doesn't change the pattern's
+// *shape*: leading `\b` makes
+// `.test()` retry the whole pattern from every word-boundary start position in the line, which is
+// the unanchored-adjacent-quantifier shape S8786 flags regardless of the per-position bound. This
+// reproduces the identical `\b<pattern>` search explicitly: a manual scan over candidate
+// word-boundary starts, each checked with a *sticky* (`y`-flagged) copy of the pattern pinned to
+// that exact index via `lastIndex` — a single bounded pass per candidate with no
+// retry-at-every-position ambiguity, and (unlike anchoring `^` and re-slicing the line per
+// candidate) no per-candidate string copy either.
+const FUNCTION_SIGNATURE_TAIL =
+  /[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+[A-Za-z_$][\w$]*\s*\([^;{}]{0,2000}\)\s*(?:throws\s+[^{]{0,500})?\{/uy;
+
+// Real `\b` (which the original pattern's leading `\b` relied on) fires at a position exactly
+// when the character before it and the character at it disagree on being a `\w` = `[A-Za-z0-9_]`
+// character — the string's start/end count as a non-word "before"/"after". `\w` does NOT include
+// `$`, even though `$` is itself a valid identifier character in JS/TS, so a `$` sitting right
+// after a digit or letter (e.g. "9$Type", "x$1") IS a real boundary (digit/letter is `\w`, `$`
+// isn't) while a `$` at the very start of the line is NOT (both "sides" are non-word).
+//
+// Plain char-range comparisons instead of `/\w/u`/`/[A-Za-z_$]/u` regex calls, and reusing the
+// previous iteration's word-ness instead of recomputing it for both sides of every candidate:
+// this scan already runs once per character of a potentially huge adversarial line (S8786), so
+// per-character constant-factor cost matters here in a way it doesn't elsewhere in this file.
+function isWordChar(char: string): boolean {
+  return (
+    (char >= "a" && char <= "z") ||
+    (char >= "A" && char <= "Z") ||
+    (char >= "0" && char <= "9") ||
+    char === "_"
   );
+}
+
+function isIdentStartChar(char: string): boolean {
+  return (
+    (char >= "a" && char <= "z") || (char >= "A" && char <= "Z") || char === "_" || char === "$"
+  );
+}
+
+function looksLikeFunctionSignatureTail(trimmed: string): boolean {
+  let previousWasWord = false;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const atChar = trimmed.charAt(index);
+    const atIsWord = isWordChar(atChar);
+    const isBoundary = previousWasWord !== atIsWord;
+    previousWasWord = atIsWord;
+    if (!isBoundary || !isIdentStartChar(atChar)) continue;
+    FUNCTION_SIGNATURE_TAIL.lastIndex = index;
+    if (FUNCTION_SIGNATURE_TAIL.test(trimmed)) return true;
+  }
+  return false;
 }
 
 function looksLikeControlFlowHeader(trimmedLine: string): boolean {
   return /^(?:if|for|while|switch|catch|else|do|try|finally|using|lock|when)\b/u.test(trimmedLine);
 }
 
-function looksLikeSignatureStart(line: string): boolean {
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly instead of routing an adversarial line through the
+// full `collectBestLines` pipeline.
+export function looksLikeSignatureStart(line: string): boolean {
   const trimmed = line.trim();
   if (trimmed.length === 0 || looksLikeControlFlowHeader(trimmed)) {
     return false;
   }
+  // Same S8786 shape as `looksLikeBlockHeader` (this pattern is reached from the same
+  // `collectBestLines` line-scan on arbitrary source lines): the repeated group's inner class
+  // `[\w$<>,.[\]?]*` includes `,`/`.`, so on a dead-end line (never followed by `(`) it overlaps
+  // comma/dot-separated content and re-walks an O(remaining length) search from every one of the
+  // many word-boundary start positions that creates — quadratic in line length. Bounded to 2000
+  // characters per the same "far beyond any realistic single-line type prefix" reasoning as
+  // `looksLikeBlockHeader`.
   return (
     looksLikeBlockHeader(trimmed) ||
-    /\b(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
+    /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
   );
 }
 

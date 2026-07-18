@@ -634,7 +634,12 @@ function collectGoModules(
     } catch {
       continue;
     }
-    const modulePath = /^\s*module\s+(\S+)/mu.exec(text)?.[1];
+    // Leading whitespace is bounded so a run of blank lines cannot force the multiline
+    // anchor to re-scan the remaining text from every line start (superlinear backtracking).
+    // 500 is far beyond any realistic same-line indentation before a `module` directive
+    // (real go.mod files use none) while still being small enough to keep the bounded
+    // per-line scan fast even across a file that is nothing but blank lines.
+    const modulePath = /^\s{0,500}module\s+(\S+)/mu.exec(text)?.[1];
     if (modulePath === undefined || modulePath.length === 0) {
       continue;
     }
@@ -742,7 +747,7 @@ function wildcardSubstitution(pattern: string, value: string): string | undefine
 }
 
 function applyWildcard(target: string, substitution: string): string {
-  return target.includes("*") ? target.replace(/\*/gu, substitution) : target;
+  return target.includes("*") ? target.replaceAll("*", substitution) : target;
 }
 
 function aliasBase(alias: TsPathAlias, target: string): string {
@@ -885,7 +890,7 @@ function resolvePythonRelativeImport(
   }
   return resolveCandidate(
     pathSet,
-    posix.join(baseDir, moduleName.replace(/\./gu, "/")),
+    posix.join(baseDir, moduleName.replaceAll(".", "/")),
     PY_EXTENSIONS,
   );
 }
@@ -1077,7 +1082,7 @@ function collectImportEdges(
       (inGoImportBlock ? /^\s*(?:\w+\s+)?["']([^"']+)["']/u.exec(line) : null);
     if (goImport?.[1] !== undefined) emit("import", goImport[1]);
     const rustUse = /^\s*(?:pub\s+)?(?:use|mod)\s+([A-Za-z_][\w:]*)/u.exec(line);
-    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replace(/::/gu, "/"));
+    if (rustUse?.[1] !== undefined) emit("import", rustUse[1].replaceAll("::", "/"));
     const csharpUsing = /^\s*using\s+([A-Za-z_][\w.]*)\s*;/u.exec(line);
     if (csharpUsing?.[1] !== undefined) emit("import", csharpUsing[1]);
   });
@@ -1234,6 +1239,70 @@ function collectTypescriptImportBindings(
   return bindings;
 }
 
+/**
+ * Strips a trailing `# comment` (and any whitespace immediately before the `#`) from a single
+ * source line. Implemented with plain string operations rather than `/\s*#.*$/` because that
+ * pattern is unanchored at the start: when no `#` is present, the regex engine retries the
+ * leading `\s*` backtrack at every character position, giving O(n^2) behavior on long
+ * whitespace-heavy input.
+ */
+function skipLeadingDots(line: string, start: number, max: number): number {
+  let index = start;
+  while (index < line.length && index - start < max && line.charAt(index) === ".") {
+    index += 1;
+  }
+  return index;
+}
+
+function stripPythonLineComment(text: string): string {
+  const hashIndex = text.indexOf("#");
+  if (hashIndex < 0) {
+    return text;
+  }
+  let end = hashIndex;
+  while (end > 0 && /\s/u.test(text[end - 1] ?? "")) {
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
+
+function buildPythonTargetBySpecifier(
+  scopePath: string,
+  imports: readonly CodeImportEdge[],
+): ReadonlyMap<string, string> {
+  const targetBySpecifier = new Map<string, string>();
+  for (const edge of imports) {
+    if (edge.importerPath === scopePath && edge.targetPath !== undefined) {
+      targetBySpecifier.set(edge.specifier, edge.targetPath);
+    }
+  }
+  return targetBySpecifier;
+}
+
+// Parses the comma-separated `import` clause of a single resolved `from ... import ...` line
+// (already stripped of its trailing comment and any parens) into individual bindings, handling
+// the optional `as alias` form per part.
+function collectPythonImportListBindings(
+  scopePath: string,
+  targetPath: string,
+  importList: string,
+): readonly CodeImportBinding[] {
+  const bindings: CodeImportBinding[] = [];
+  for (const part of importList.split(",")) {
+    const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
+    if (importMatch?.[1] === undefined) {
+      continue;
+    }
+    bindings.push({
+      importerPath: scopePath,
+      localName: importMatch[2] ?? importMatch[1],
+      importedName: importMatch[1],
+      targetPath,
+    });
+  }
+  return bindings;
+}
+
 function collectPolyglotImportBindings(
   file: SourceFile,
   imports: readonly CodeImportEdge[],
@@ -1241,36 +1310,43 @@ function collectPolyglotImportBindings(
   if (file.language !== "python") {
     return [];
   }
-  const targetBySpecifier = new Map<string, string>();
-  for (const edge of imports) {
-    if (edge.importerPath === file.scopePath && edge.targetPath !== undefined) {
-      targetBySpecifier.set(edge.specifier, edge.targetPath);
-    }
-  }
+  const targetBySpecifier = buildPythonTargetBySpecifier(file.scopePath, imports);
   const bindings: CodeImportBinding[] = [];
   const lines = file.text.split(/\r?\n/u);
   for (const line of lines) {
-    const match = /^\s*from\s+(\.*[A-Za-z_][\w.]*)\s+import\s+(.+)$/u.exec(line);
-    if (match?.[1] === undefined || match[2] === undefined) {
+    // The former single regex let `\.{0,100}` (leading relative-import dots) and the trailing
+    // `[\w.]{0,2000}` (rest of the dotted name) both claim the same `.` characters — bounding
+    // each side caps the *worst-case* cost but doesn't remove that overlap, which is the shape
+    // S8786 flags regardless of the bound. Consuming the leading dots with a manual, deterministic
+    // scan first (still capped at 100, matching the original's realistic-depth ceiling) leaves the
+    // regex below with disjoint atoms: `[\w.]{0,2000}` no longer shares any character with what
+    // precedes it, so there is nothing left to backtrack between.
+    const fromMatch = /^\s*from\s+/u.exec(line);
+    if (fromMatch === null) {
       continue;
     }
-    const targetPath = targetBySpecifier.get(match[1]);
+    const afterFrom = fromMatch[0].length;
+    const dotsEnd = skipLeadingDots(line, afterFrom, 100);
+    // The trailing `(.+)$` capture is just "everything left on the line" — expressible as a plain
+    // slice with no regex needed, which also removes the SonarCloud S8786 shape flag on a bounded
+    // class immediately preceding an unbounded one (even though the required literal "import"
+    // between them already made the original safe in practice; the empirical benchmark for this
+    // exact regex showed clean linear scaling before this change too).
+    const nameMatch = /^([A-Za-z_][\w.]{0,2000})\s+import\s+/u.exec(line.slice(dotsEnd));
+    if (nameMatch?.[1] === undefined) {
+      continue;
+    }
+    const importListRestOfLine = line.slice(dotsEnd + nameMatch[0].length);
+    if (importListRestOfLine.length === 0) {
+      continue;
+    }
+    const specifier = line.slice(afterFrom, dotsEnd) + nameMatch[1];
+    const targetPath = targetBySpecifier.get(specifier);
     if (targetPath === undefined) {
       continue;
     }
-    const importList = match[2].replace(/\s*#.*$/u, "").replace(/[()]/gu, "");
-    for (const part of importList.split(",")) {
-      const importMatch = /^\s*([A-Za-z_][\w]*)(?:\s+as\s+([A-Za-z_][\w]*))?\s*$/u.exec(part);
-      if (importMatch?.[1] === undefined) {
-        continue;
-      }
-      bindings.push({
-        importerPath: file.scopePath,
-        localName: importMatch[2] ?? importMatch[1],
-        importedName: importMatch[1],
-        targetPath,
-      });
-    }
+    const importList = stripPythonLineComment(importListRestOfLine).replace(/[()]/gu, "");
+    bindings.push(...collectPythonImportListBindings(file.scopePath, targetPath, importList));
   }
   return bindings;
 }
@@ -1518,15 +1594,31 @@ function fieldNameFromSerializationAnnotation(text: string): string | undefined 
   return match;
 }
 
+/**
+ * Strips a trailing `= <default value>` assignment (with no top-level comma in the value) from
+ * a field/parameter component, mirroring `/=[^,]+$/`. Implemented with plain string operations
+ * because that pattern is unanchored at the start: a string with many `=` characters ahead of a
+ * comma near the end forces the engine to retry the full trailing scan at every `=` position,
+ * giving O(n^2) behavior. The last comma in the text is the only place an unbroken,
+ * comma-free `=...` suffix can begin, so the leftmost qualifying `=` is found in one pass.
+ */
+function stripTrailingCommaFreeAssignment(text: string): string {
+  const lastCommaIndex = text.lastIndexOf(",");
+  const equalsIndex = text.indexOf("=", lastCommaIndex + 1);
+  if (equalsIndex < 0 || equalsIndex === text.length - 1) {
+    return text;
+  }
+  return `${text.slice(0, equalsIndex)} `;
+}
+
 function fieldNameFromComponent(component: string): string | undefined {
   const serializedFieldName = fieldNameFromSerializationAnnotation(component);
   if (serializedFieldName !== undefined) {
     return serializedFieldName;
   }
-  const cleaned = component
-    .replace(/@\w+(?:\([^)]*\))?/gu, " ")
-    .replace(/=[^,]+$/u, " ")
-    .trim();
+  const cleaned = stripTrailingCommaFreeAssignment(
+    component.replace(/@\w+(?:\([^)]*\))?/gu, " "),
+  ).trim();
   const kotlinConstructorProperty =
     /^(?:(?:public|private|protected|internal|override)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*:/u.exec(
       cleaned,
@@ -1903,6 +1995,75 @@ function javaLikeFieldName(line: string): string | undefined {
   return candidate !== undefined && /^[A-Za-z_$][\w$]*$/u.test(candidate) ? candidate : undefined;
 }
 
+// Modifier keywords a C#-like property declaration may repeat any number of times before its
+// type (e.g. "public required string Name {"). Used by csharpPropertyFieldName below instead of
+// folding the list into the property regex's own `(?:(?:mod1|mod2|...)\s+)*` prefix: a repeated
+// alternation of this many branches is exactly the shape SonarCloud S5843 flags as too complex —
+// nesting a 12-branch disjunction inside an unbounded repetition. A Set lookup carries the same
+// keyword list with none of that regex-structural cost.
+const CSHARP_PROPERTY_MODIFIERS = new Set([
+  "public",
+  "private",
+  "protected",
+  "internal",
+  "required",
+  "static",
+  "readonly",
+  "virtual",
+  "override",
+  "sealed",
+  "abstract",
+  "new",
+]);
+
+// Matches a single leading `identifier` + mandatory trailing whitespace — used to peel one token
+// at a time off the front of a declaration line so each can be checked against
+// CSHARP_PROPERTY_MODIFIERS in plain code rather than via a repeated regex alternation.
+const LEADING_IDENTIFIER_RE = /^([A-Za-z_$][\w$]*)\s+/u;
+
+// The type-expression run is bounded: its character class includes a literal space (to allow
+// multi-token generics like "Dictionary<string, string>"), which otherwise overlaps with the
+// mandatory `\s+` before the property name and lets the engine re-split a long run of trailing
+// spaces in O(n) different ways, giving O(n^2) backtracking. 1000 characters is far past even
+// deeply-nested real-world generic type expressions, so no legitimate declaration can be affected
+// by the cutoff. This is unchanged from before the S5843 fix — only the modifier-prefix matching
+// (now in csharpPropertyFieldName) moved out of this regex.
+const CSHARP_PROPERTY_RE = /^[A-Za-z_$][\w$<>, ?.[\]]{1,1000}\s+([A-Za-z_$][\w$]*)\s*\{/u;
+
+// Extracts a C#-like property name ("public required string Name {" -> "Name"). Splits what used
+// to be one regex (repeated modifier alternation + type + name + brace) into: (1) a plain-code
+// scan that peels off as many leading CSHARP_PROPERTY_MODIFIERS tokens as it can find, and (2) the
+// fixed CSHARP_PROPERTY_RE applied to what's left. Because the original regex's modifier-prefix
+// repetition could backtrack — giving back a token it first matched as a modifier and letting
+// CSHARP_PROPERTY_RE reinterpret it as the type when nothing else parses (e.g. a stray "static Foo
+// {" with no explicit type) — the loop below tries stripping every prefix length from "all
+// detected modifier tokens" down to "none", in that order, and returns on the first length whose
+// remainder matches. That reproduces the regex engine's own backtracking order exactly, so the
+// result is identical to the original single-regex match for every input.
+function csharpPropertyFieldName(line: string): string | undefined {
+  const leadingWhitespace = /^\s*/u.exec(line)?.[0].length ?? 0;
+  const body = line.slice(leadingWhitespace);
+  const modifierChunks: string[] = [];
+  let rest = body;
+  for (;;) {
+    const tokenMatch = LEADING_IDENTIFIER_RE.exec(rest);
+    const token = tokenMatch?.[1];
+    if (tokenMatch === null || token === undefined || !CSHARP_PROPERTY_MODIFIERS.has(token)) {
+      break;
+    }
+    modifierChunks.push(tokenMatch[0]);
+    rest = rest.slice(tokenMatch[0].length);
+  }
+  for (let keep = modifierChunks.length; keep >= 0; keep -= 1) {
+    const consumedLength = modifierChunks.slice(0, keep).join("").length;
+    const match = CSHARP_PROPERTY_RE.exec(body.slice(consumedLength));
+    if (match?.[1] !== undefined) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
 function declarationFieldNames(
   line: string,
   language: CodeLanguage,
@@ -1916,9 +2077,7 @@ function declarationFieldNames(
     /^\s*(?:(?:public|private|protected|internal|override|lateinit)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\??\s*[:=]/u.exec(
       declarationLine,
     )?.[1],
-    /^\s*(?:(?:public|private|protected|internal|required|static|readonly|virtual|override|sealed|abstract|new)\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+([A-Za-z_$][\w$]*)\s*\{/u.exec(
-      declarationLine,
-    )?.[1],
+    csharpPropertyFieldName(declarationLine),
   ].filter((name): name is string => name !== undefined);
   if (language !== "go" || !insideBlock) return names;
   const goStructField = /^\s*([A-Za-z_][\w]*)\s+[^\s`{]+(?:\s+`([^`]*)`)?/u.exec(line);
@@ -2815,20 +2974,47 @@ function pathOnlyRouteInput(path: string): string {
   return path.split(/[?#]/u)[0] ?? path;
 }
 
+// Replaces every non-empty `<...>` (or `{...}`) span with ":param" using a single forward scan
+// instead of a `/<[^>]+>/g`-style regex. An unclosed opening bracket makes the negated character
+// class scan all the way to the end of the string before failing, and an unanchored global regex
+// then retries that same failing scan from every subsequent position - O(n^2) on a string with
+// many unclosed brackets. A finite bound on the bracket contents avoids the blowup but silently
+// leaves long-but-legitimate segments un-normalized (raw "<...>"/"{...}" text in the route path),
+// which is a correctness regression for a code-intelligence index. Scanning forward once, and
+// giving up on further close-bracket lookups for the rest of the string the first time one is not
+// found, keeps this exactly linear for any input while normalizing brackets of any length.
+function collapseBracketedRouteSegments(text: string, open: string, close: string): string {
+  let result = "";
+  let index = 0;
+  let noCloseRemaining = false;
+  while (index < text.length) {
+    const character = text[index] ?? "";
+    if (!noCloseRemaining && character === open) {
+      const closeIndex = text.indexOf(close, index + 1);
+      if (closeIndex < 0) {
+        noCloseRemaining = true;
+      } else if (closeIndex > index + 1) {
+        result += ":param";
+        index = closeIndex + 1;
+        continue;
+      }
+    }
+    result += character;
+    index += 1;
+  }
+  return result;
+}
+
 function normalizeRoutePath(path: string): string {
   const pathOnly = pathOnlyRouteInput(path);
   const collapsed = `/${pathOnly}`.replace(/\/+/gu, "/");
-  return (
-    collapsed
-      .replace(/^\/\^/u, "/")
-      .replace(/\$$/u, "")
-      .replace(/<[^>]+>/gu, ":param")
-      .replace(/\(\?P<[^>]+>[^)]+\)/gu, ":param")
-      .replace(/\$\{[^}]+\}/gu, ":param")
-      .replace(/\{[^}]+\}/gu, ":param")
-      .replace(/:[A-Za-z_][\w-]*/gu, ":param")
-      .replace(/\/$/u, "") || "/"
-  );
+  const anchored = collapsed.replace(/^\/\^/u, "/").replace(/\$$/u, "");
+  const withoutAngleBrackets = collapseBracketedRouteSegments(anchored, "<", ">");
+  const withoutNamedCaptures = withoutAngleBrackets
+    .replace(/\(\?P<[^>]+>[^)]+\)/gu, ":param")
+    .replace(/\$\{[^}]+\}/gu, ":param");
+  const withoutBraces = collapseBracketedRouteSegments(withoutNamedCaptures, "{", "}");
+  return withoutBraces.replace(/:[A-Za-z_][\w-]*/gu, ":param").replace(/\/$/u, "") || "/";
 }
 
 function combineRoutePath(prefix: string | undefined, path: string): string {
@@ -3145,7 +3331,10 @@ function graphqlEndpoint(
 
 function collectGraphqlFields(segment: string): readonly string[] {
   const fields: string[] = [];
-  for (const match of segment.matchAll(/\b([A-Za-z_][\w]*)\s*(?:\([^)]*\))?\s*:/gu)) {
+  // The leading `\s*` is nested inside the optional arg-list group rather than sitting next to
+  // a second, independent `\s*` — two adjacent `\s*` runs around the same optional group let the
+  // engine re-split a long whitespace-only run in O(n) ways for every position, giving O(n^2).
+  for (const match of segment.matchAll(/\b([A-Za-z_]\w*)(?:\s*\([^)]*\))?\s*:/gu)) {
     const name = match[1];
     if (name !== undefined && !["schema", "type", "extend"].includes(name.toLowerCase())) {
       fields.push(name);
@@ -3207,29 +3396,94 @@ function firstGraphqlSelectionField(operationText: string): string | undefined {
   return /\b([A-Za-z_][\w]*)\s*(?:\([^)]*\))?/u.exec(selection)?.[1];
 }
 
+// A GraphQL operation keyword starts a *new* operation only when there is a line break between
+// it and whatever precedes it, with nothing but non-newline whitespace in between - i.e. it
+// begins its own line, however far that line is indented. Mirrors the original
+// `\n\s*(?:query|mutation)` lookahead: scanning backward through same-line whitespace and
+// stopping as soon as a newline is found (rather than continuing through it into the previous
+// operation's content) means a keyword used mid-operation on the *same* line as other content
+// (e.g. an argument name like `query: "..."`) is correctly rejected as a boundary, while any
+// amount of whitespace - of any length, on any number of lines - after the last newline still
+// counts. The scan is bounded by the nearest newline or non-whitespace character, so consecutive
+// boundary checks never re-walk the same span of text.
+function isGraphqlOperationBoundary(text: string, index: number): boolean {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const character = text[i];
+    if (character === "\n") {
+      return true;
+    }
+    if (character !== " " && character !== "\t" && character !== "\r") {
+      return false;
+    }
+  }
+  return true;
+}
+
+interface GraphqlOperationStart {
+  readonly index: number;
+  readonly kind: string;
+}
+
+function graphqlOperationStarts(text: string): readonly GraphqlOperationStart[] {
+  const starts: GraphqlOperationStart[] = [];
+  for (const match of text.matchAll(/\b(query|mutation)\b/giu)) {
+    const kind = match[1];
+    if (kind !== undefined) {
+      starts.push({ index: match.index, kind });
+    }
+  }
+  return starts;
+}
+
+function pushGraphqlOperationEndpoint(
+  endpoints: ApiEndpoint[],
+  file: SourceFile,
+  text: string,
+  baseOffset: number,
+  segment: GraphqlOperationStart,
+  end: number,
+): void {
+  const operationText = text.slice(segment.index, end);
+  const fieldName = firstGraphqlSelectionField(operationText);
+  if (fieldName === undefined) {
+    return;
+  }
+  endpoints.push(
+    graphqlEndpoint(
+      file,
+      "client",
+      segment.kind,
+      fieldName,
+      lineNumberAtOffset(file.text, baseOffset + segment.index),
+    ),
+  );
+}
+
 function collectGraphqlOperationEndpoints(
   file: SourceFile,
   text: string,
   baseOffset: number,
 ): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
-  const operationPattern = /\b(query|mutation)\b[\s\S]*?(?=\n\s*(?:query|mutation)\b|$)/giu;
-  for (const operation of text.matchAll(operationPattern)) {
-    const operationText = operation[0];
-    const kind = operation[1];
-    const fieldName = firstGraphqlSelectionField(operationText);
-    if (kind === undefined || fieldName === undefined) {
-      continue;
+  // Operation boundaries are found with a forward keyword scan plus a backward whitespace walk
+  // instead of a `\n\s*(query|mutation)` lookahead: an unbounded `\s*` there backtracks
+  // catastrophically, while bounding it silently merges - and loses - a later operation whenever
+  // the separating whitespace run exceeds the bound (e.g. operations separated by many spaces on
+  // one line rather than a newline). This scan is linear and lossless for a separator of any
+  // length or shape.
+  const starts = graphqlOperationStarts(text);
+  let segment: GraphqlOperationStart | undefined;
+  starts.forEach((candidate, i) => {
+    if (i > 0 && !isGraphqlOperationBoundary(text, candidate.index)) {
+      return;
     }
-    endpoints.push(
-      graphqlEndpoint(
-        file,
-        "client",
-        kind,
-        fieldName,
-        lineNumberAtOffset(file.text, baseOffset + operation.index),
-      ),
-    );
+    if (segment !== undefined) {
+      pushGraphqlOperationEndpoint(endpoints, file, text, baseOffset, segment, candidate.index);
+    }
+    segment = candidate;
+  });
+  if (segment !== undefined) {
+    pushGraphqlOperationEndpoint(endpoints, file, text, baseOffset, segment, text.length);
   }
   return endpoints;
 }

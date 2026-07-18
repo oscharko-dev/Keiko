@@ -62,12 +62,14 @@ function resolveCommitSha(env) {
   return sha;
 }
 
+const DEFAULT_WORKFLOW_RUN = Object.freeze({ runAttempt: 0, runId: 0 });
+
 export function stageArgumentsForTarget(
   options,
   approvals,
   commitSha,
   packageVersion,
-  workflow = { runAttempt: 0, runId: 0 },
+  workflow = DEFAULT_WORKFLOW_RUN,
 ) {
   const node = approvedNodeStageArguments(approvals, options.target);
   const args = [

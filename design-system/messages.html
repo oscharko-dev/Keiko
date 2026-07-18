@@ -550,7 +550,7 @@
           <table class="tbl">
             <tbody>
               <tr>
-                <td class="fgw">Live regions</td>
+                <th scope="row" class="fgw">Live regions</th>
                 <td>
                   Blocking errors use <span class="cls">role="alert"</span> (assertive); info &amp;
                   success use <span class="cls">role="status"</span> /
@@ -559,14 +559,14 @@
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Shape + text</td>
+                <th scope="row" class="fgw">Shape + text</th>
                 <td>
                   Severity is icon + word + tone — never colour alone (1.4.1). Each level owns a
                   distinct glyph.
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Field errors</td>
+                <th scope="row" class="fgw">Field errors</th>
                 <td>
                   <span class="cls">aria-invalid="true"</span> on the input, error text linked via
                   <span class="cls">aria-describedby</span>; focus moves to the first invalid field
@@ -574,7 +574,7 @@
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Contrast</td>
+                <th scope="row" class="fgw">Contrast</th>
                 <td>
                   Icon &amp; border tones clear 3:1 in both themes; success uses
                   <span class="cls">--accent-text</span> so green holds up on white. Body text is
@@ -582,14 +582,14 @@
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Dismiss</td>
+                <th scope="row" class="fgw">Dismiss</th>
                 <td>
                   Every close control has an <span class="cls">aria-label</span> and a ≥ 24px
                   target; dismissing is never the only way to act on a blocking error.
                 </td>
               </tr>
               <tr>
-                <td class="fgw">Persistence</td>
+                <th scope="row" class="fgw">Persistence</th>
                 <td>Errors that need action don't auto-dismiss. Only confirmations time out.</td>
               </tr>
             </tbody>

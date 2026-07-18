@@ -12,7 +12,7 @@ const TEST_SEGMENTS: readonly string[] = ["test", "spec"];
 
 // Normalises a path to forward slashes so dir/segment checks are platform-independent.
 function toPosix(path: string): string {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 // True when the basename (without its final extension) contains "test" or "spec" as a

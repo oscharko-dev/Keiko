@@ -1054,10 +1054,7 @@ function validationContextForProposal(
 
 function proposalFromStoredRelationship(
   relationship: StoredRelationship,
-  target: ProposalInput["target"] = {
-    kind: relationship.target.kind,
-    id: relationship.target.id,
-  },
+  target?: ProposalInput["target"],
 ): ProposalInput {
   return {
     type: relationship.type,
@@ -1065,7 +1062,7 @@ function proposalFromStoredRelationship(
       kind: relationship.source.kind,
       id: relationship.source.id,
     },
-    target,
+    target: target ?? { kind: relationship.target.kind, id: relationship.target.id },
     scope: relationship.scope,
   };
 }
@@ -2020,7 +2017,7 @@ export interface CreateRelationshipStorePortOptions {
 
 function defaultEtag(updatedAt: number): string {
   const hex = updatedAt.toString(16).padStart(16, "0");
-  const tail = randomUUID().replace(/-/g, "").slice(0, 6);
+  const tail = randomUUID().replaceAll("-", "").slice(0, 6);
   return `${hex}-${tail}`;
 }
 

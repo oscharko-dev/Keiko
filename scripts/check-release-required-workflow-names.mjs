@@ -13,12 +13,30 @@ function fail(message) {
   process.exit(1);
 }
 
+// Plain string scan instead of a single `^\s*KEY:\s*'([^']+)'`m regex: chaining two unbounded
+// `\s*` quantifiers around a literal key in one pattern is the S8786 shape Sonar flags for
+// super-linear backtracking risk, even though this specific case is bounded by the width of
+// leading indentation. Splitting into a per-line scan removes the ambiguity structurally.
+function quotedEnvValue(source, key) {
+  const prefix = `${key}:`;
+  for (const line of source.split(/\r?\n/u)) {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith(prefix)) continue;
+    const afterKey = trimmed.slice(prefix.length).trimStart();
+    if (!afterKey.startsWith("'")) continue;
+    const closeIndex = afterKey.indexOf("'", 1);
+    if (closeIndex <= 1) continue; // require at least one char between quotes, like `[^']+`
+    return afterKey.slice(1, closeIndex);
+  }
+  return undefined;
+}
+
 export function releaseRequiredChecks(source = readFileSync(releaseWorkflowPath, "utf8")) {
-  const match = /^\s*RELEASE_REQUIRED_CHECKS:\s*'([^']+)'/m.exec(source);
-  if (match === null) {
+  const captured = quotedEnvValue(source, "RELEASE_REQUIRED_CHECKS");
+  if (captured === undefined) {
     fail("release.yml does not declare env.RELEASE_REQUIRED_CHECKS as a single-quoted JSON list.");
   }
-  const parsed = JSON.parse(match[1]);
+  const parsed = JSON.parse(captured);
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     fail("RELEASE_REQUIRED_CHECKS must parse to an array of strings.");
   }
@@ -54,6 +72,8 @@ function expandMatrixName(name, source) {
   return values.map((value) => name.replace(matrixExpression, value));
 }
 
+const JOB_NAME_LINE_PREFIX = "    name:";
+
 export function workflowJobNames(source) {
   const names = [];
   const lines = source.split(/\r?\n/u);
@@ -80,9 +100,12 @@ export function workflowJobNames(source) {
       currentJobName = null;
       continue;
     }
-    const nameMatch = line.match(/^ {4}name:\s*(.+)$/u);
-    if (nameMatch !== null && currentJobId !== null) {
-      currentJobName = unquoteYamlScalar(nameMatch[1]);
+    // Plain prefix/slice check instead of `/^ {4}name:\s*(.+)$/u`: `unquoteYamlScalar` already
+    // trims its input, so matching-then-trimming collapses to "has any content after the
+    // literal prefix" - removing the regex avoids the S8786 chained-quantifier shape entirely.
+    if (currentJobId !== null && line.startsWith(JOB_NAME_LINE_PREFIX)) {
+      const rest = line.slice(JOB_NAME_LINE_PREFIX.length);
+      if (rest.length > 0) currentJobName = unquoteYamlScalar(rest);
     }
   }
   flush();

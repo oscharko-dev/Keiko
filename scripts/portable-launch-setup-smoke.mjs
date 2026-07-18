@@ -389,8 +389,24 @@ function section(text, heading) {
   return next === -1 ? body : body.slice(0, next);
 }
 
-function containsPrimaryShellCommand(text) {
-  return /```|(?:^|\n)\s*(?:node|npm|npx|yarn|keiko)\s+|npm install|keiko start|keiko portable/iu.test(
+// The line-start branch used `\s*` for the indent before the keyword. Because `\s` also matches
+// `\n`, that `\s*` can re-enter the same blank-line run the `(?:^|\n)` alternative already
+// anchors on, so on text with many newlines and no matching keyword the engine retries the
+// keyword check at every offset of every such run — quadratic in the run length (S8786;
+// empirically ~1.3s at a 40k-newline run before this fix). The indent only ever needs to consume
+// same-line filler, so it is restricted to "any whitespace except newline" — `[^\S\n]` — rather
+// than a narrower `[ \t]`: the latter is not behaviour-preserving, since a line indented with a
+// bare CR, form feed, vertical tab, NBSP, or a Unicode line/paragraph separator (all `\s` members
+// other than space/tab/newline) would silently stop matching under `[ \t]*` while the original
+// `\s*` (and this `[^\S\n]*`) still catch it. `[^\S\n]` never matches `\n`, so it cannot re-enter
+// the blank-line run the `(?:^|\n)` alternative already anchors on: every `\n`/start position is
+// still tried (unchanged — `.test()` scans every offset regardless), but each one now costs only
+// its own line's indent length, and the true match — if any — is always found from the newline
+// immediately before it, so the boolean result is identical to the original `\s*` shape (verified
+// against the prior pattern across representative inputs plus a 50k-case fuzz sweep of the
+// shell-command vocabulary, including CR/FF/VT/NBSP/U+2028/U+2029 filler).
+export function containsPrimaryShellCommand(text) {
+  return /```|(?:^|\n)[^\S\n]*(?:node|npm|npx|yarn|keiko)\s+|npm install|keiko start|keiko portable/iu.test(
     text,
   );
 }

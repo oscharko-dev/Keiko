@@ -356,7 +356,7 @@ const MODEL_SYSTEM_PROMPT = [
 ].join("\n");
 
 function fencedText(label: string, value: string): string {
-  return [`${label}:`, "```text", value.replace(/```/gu, "`\u200b``"), "```"].join("\n");
+  return [`${label}:`, "```text", value.replaceAll("```", "`\u200b``"), "```"].join("\n");
 }
 
 function modelUserPayload(options: {
@@ -421,8 +421,15 @@ function modelRequest(
   };
 }
 
+// The header's whitespace before the mandatory newline is deliberately restricted to non-newline
+// whitespace ([^\S\n], i.e. spaces/tabs). `\s*\n` (whitespace, which includes \n, immediately
+// followed by a literal \n) lets the engine split a run of blank lines between the two in many
+// ways; combined with the trailing lazy `[\s\S]*?` scan, a fence header followed by many blank
+// lines and an unclosed body made this quadratic (S8786). Excluding \n from the leading class
+// leaves exactly one valid split point, and the final `.trim()` below already strips any leftover
+// leading blank lines from the capture, so the recognized input space is unchanged.
 function stripOuterMarkdownFence(text: string): string {
-  const match = /^```(?:markdown|md|text)?\s*\n([\s\S]*?)\n```$/iu.exec(text.trim());
+  const match = /^```(?:markdown|md|text)?[^\S\n]*\n([\s\S]*?)\n```$/iu.exec(text.trim());
   return match?.[1]?.trim() ?? text.trim();
 }
 

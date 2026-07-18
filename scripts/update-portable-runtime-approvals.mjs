@@ -23,6 +23,7 @@ const RELEASE_HOSTS = Object.freeze([
   "objects.githubusercontent.com",
 ]);
 const RAW_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
+const DEFAULT_UPDATE_DEPS = Object.freeze({ fetchFn: globalThis.fetch });
 const OPENCODE_RELEASE_BASE = "https://github.com/anomalyco/opencode/releases/download";
 const OPENCODE_LICENSE_BASE = "https://raw.githubusercontent.com/anomalyco/opencode";
 const OPENCODE_ARCHIVE_BY_TARGET = Object.freeze({
@@ -153,7 +154,7 @@ function updatedOpencodeRuntime(existing, version, archives, license) {
 
 export async function updatePortableRuntimeApprovals(
   argv,
-  deps = { fetchFn: globalThis.fetch },
+  deps = DEFAULT_UPDATE_DEPS,
   root = repoRoot,
 ) {
   const options = parseArgs(argv);

@@ -19,10 +19,6 @@ import { fileURLToPath } from "node:url";
 
 const ADR_FILE = /^ADR-(\d{4})-.*\.md$/;
 
-/** ADR files that are deliberately not part of the reviewer decision index. Keep empty
- *  unless a specific ADR is intentionally excluded — an entry here is an explicit waiver. */
-const INDEX_EXCLUSIONS = new Set();
-
 function adrNumber(name) {
   const match = ADR_FILE.exec(name);
   if (match?.[1] === undefined) {
@@ -77,7 +73,7 @@ export function checkAdrRegistry(adrDir) {
     ...duplicateNumberProblems(files),
     // 2. index completeness — every on-disk ADR file must be linked.
     ...files
-      .filter((name) => !INDEX_EXCLUSIONS.has(name) && !linkedFiles.has(name))
+      .filter((name) => !linkedFiles.has(name))
       .map((name) => `ADR file not indexed in docs/adr/README.md: ${name}`),
     // 3. no orphan links — every README ADR link must resolve to an existing file.
     ...[...linkedFiles]

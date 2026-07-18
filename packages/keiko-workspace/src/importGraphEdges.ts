@@ -84,7 +84,98 @@ const RESOLVE_EXTENSIONS = [
   ".vue",
   ".json",
 ];
-const ESM_IMPORT = /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+)*[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
+// The former `(?:[ \t]+\S+(?:[ \t]+\S+){0,50000}[ \t]+from)?` clause tried to enumerate every
+// whitespace-separated token of the import clause before "from" -- a nested repetition group
+// that keeps the ambiguous-shape S8786 flags no matter how the outer bound is tuned (a bound
+// only caps the worst case, it doesn't make the two `\S+` atoms disjoint from each other).
+//
+// An earlier fix for that shape ("first quote after `import` is always the specifier") was too
+// permissive in two ways, confirmed by direct review: it dropped side-effect/from-clause imports
+// whose specifier's opening quote sits on a later line (the search never looked past the current
+// line), and it fabricated `static-import` edges for ANY `import`-prefixed line that happens to
+// contain a later quote at all -- including `import someIdentifier.foo("bar")` (not an import
+// statement) and bare `import("./x")` (a dynamic-import EXPRESSION, already covered by
+// DYNAMIC_IMPORT below, and now double-counted). `scanImportClauseFrom` restores the original
+// regex's actual guarantee -- the text between `import` and the specifier's quote is provably
+// nothing but clause syntax (identifiers, `{`/`}`/`,`/`*`, and whitespace including newlines) --
+// by validating that shape character-by-character instead of assuming it. Any other character
+// aborts the match for this `import` occurrence, exactly as the original regex would simply fail
+// to match and move on to the next line.
+const ESM_IMPORT_KEYWORD = /^[ \t]*import\b/gmu;
+const IMPORT_CLAUSE_STRUCTURAL_CHARS = new Set(["{", "}", ",", "*"]);
+
+function isIdentifierChar(char: string): boolean {
+  return /[A-Za-z0-9_$]/u.test(char);
+}
+
+function skipWhitespaceRun(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && /\s/u.test(text.charAt(index))) index += 1;
+  return index;
+}
+
+function scanIdentifierRun(text: string, from: number): number {
+  let end = from;
+  while (end < text.length && isIdentifierChar(text.charAt(end))) end += 1;
+  return end;
+}
+
+// Scans a from-clause-or-none import header starting right after the required whitespace that
+// follows `import`, returning the index right after a validated `from` keyword, or `undefined` if
+// the header is not built entirely from clause syntax before either running out of text or
+// reaching a character that could never appear in one (e.g. the `.`/`(` in
+// `someIdentifier.foo(`, or the `(` that opens a dynamic-import expression).
+function scanImportClauseFrom(text: string, start: number): number | undefined {
+  let index = start;
+  for (;;) {
+    if (index >= text.length) return undefined;
+    const char = text.charAt(index);
+    if (/\s/u.test(char)) {
+      index = skipWhitespaceRun(text, index);
+      continue;
+    }
+    if (IMPORT_CLAUSE_STRUCTURAL_CHARS.has(char)) {
+      index += 1;
+      continue;
+    }
+    if (isIdentifierChar(char)) {
+      const end = scanIdentifierRun(text, index);
+      if (text.slice(index, end) === "from") return end;
+      index = end;
+      continue;
+    }
+    return undefined;
+  }
+}
+
+function readQuotedSpecifier(text: string, at: number): { readonly value: string } | undefined {
+  const quote = text.charAt(at);
+  if (quote !== '"' && quote !== "'") return undefined;
+  const closeIndex = text.indexOf(quote, at + 1);
+  if (closeIndex === -1) return undefined;
+  const value = text.slice(at + 1, closeIndex);
+  return value.length > 0 && !value.includes("\n") ? { value } : undefined;
+}
+
+function matchEsmStaticImportSpecifier(
+  text: string,
+  afterKeyword: number,
+): { readonly value: string } | undefined {
+  // "import" must be followed by at least one whitespace char, exactly like the original regex's
+  // mandatory `\s+` -- a bare "(" here is a dynamic-import EXPRESSION (DYNAMIC_IMPORT handles
+  // it), and nothing else can legally abut "import" either way.
+  if (afterKeyword >= text.length || !/\s/u.test(text.charAt(afterKeyword))) return undefined;
+  const afterRequiredWhitespace = skipWhitespaceRun(text, afterKeyword);
+  const nextChar = text.charAt(afterRequiredWhitespace);
+  if (nextChar === '"' || nextChar === "'") {
+    return readQuotedSpecifier(text, afterRequiredWhitespace);
+  }
+  const afterFrom = scanImportClauseFrom(text, afterRequiredWhitespace);
+  if (afterFrom === undefined) return undefined;
+  const afterFromWhitespace = skipWhitespaceRun(text, afterFrom);
+  if (afterFromWhitespace === afterFrom) return undefined;
+  return readQuotedSpecifier(text, afterFromWhitespace);
+}
 const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
 const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
@@ -96,9 +187,28 @@ function normalizeScopePath(scopePath: string): string {
 function lineNumberOf(text: string, charIndex: number): number {
   let line = 1;
   for (let i = 0; i < charIndex && i < text.length; i += 1) {
-    if (text.charCodeAt(i) === 10) line += 1;
+    if (text.codePointAt(i) === 10) line += 1;
   }
   return line;
+}
+
+function collectEsmStaticImports(text: string, hits: ImportSpecifierHit[]): void {
+  ESM_IMPORT_KEYWORD.lastIndex = 0;
+  let match: RegExpExecArray | null = ESM_IMPORT_KEYWORD.exec(text);
+  while (match !== null) {
+    const afterKeyword = match.index + match[0].length;
+    const specifier = matchEsmStaticImportSpecifier(text, afterKeyword);
+    if (specifier !== undefined) {
+      hits.push({
+        specifier: specifier.value,
+        kind: "static-import",
+        line: lineNumberOf(text, match.index),
+        ordinal: hits.length,
+      });
+    }
+    ESM_IMPORT_KEYWORD.lastIndex = afterKeyword;
+    match = ESM_IMPORT_KEYWORD.exec(text);
+  }
 }
 
 function collectWithRegex(
@@ -125,7 +235,7 @@ function collectWithRegex(
 
 export function collectImportSpecifiers(text: string): readonly ImportSpecifierHit[] {
   const hits: ImportSpecifierHit[] = [];
-  collectWithRegex(text, ESM_IMPORT, "static-import", hits);
+  collectEsmStaticImports(text, hits);
   collectWithRegex(text, ESM_REEXPORT, "re-export", hits);
   collectWithRegex(text, CJS_REQUIRE, "commonjs-require", hits);
   collectWithRegex(text, DYNAMIC_IMPORT, "dynamic-import", hits);

@@ -101,6 +101,18 @@ describe("textParser", () => {
     expect(asSection(result.units[0]).sectionPath).toEqual(["Hello"]);
   });
 
+  // S7758 regression: countHashes/skipHSpace/trimAtxTrailing decide ATX heading boundaries via
+  // `charCodeAt` → `codePointAt` equality checks against fixed ASCII codes (space, tab, `#`).
+  // A supplementary-plane character in the heading text must not be mistaken for trailing
+  // whitespace/hash markers, and must not be corrupted by the trim.
+  it("recognizes an emoji-titled ATX heading and trims trailing markers/whitespace around it", () => {
+    const result = textParser.parse(
+      selectionFromText("## 😀 Status ##  \n\nBody.\n", { extension: "md" }),
+      frozenAt(0),
+    );
+    expect(asSection(result.units[0]).sectionPath).toEqual(["😀 Status"]);
+  });
+
   it("recognizes Setext headings", () => {
     const doc = "Title\n=====\n\nBody\n\nSub\n---\nMore\n";
     const result = textParser.parse(

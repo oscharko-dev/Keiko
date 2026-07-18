@@ -28,7 +28,7 @@ export interface ContainedHostOptions {
 }
 
 function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 // True when `fileName` is the TypeScript compiler's own default-library directory or a file inside

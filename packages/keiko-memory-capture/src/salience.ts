@@ -117,7 +117,7 @@ async function callSalienceModel(input: SalienceInput, deps: SalienceDeps): Prom
 
 // ─── Defensive JSON parsing (never throws) ───────────────────────────────────
 function stripCodeFences(raw: string): string {
-  return raw.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
+  return raw.replaceAll(/```[a-zA-Z]*\n?/g, "").replaceAll("```", "");
 }
 
 // Scan state for firstBalancedArray: bracket nesting depth plus the string/escape tracking that
@@ -260,13 +260,29 @@ function clampConfidence(value: number): number {
   return Math.min(CONFIDENCE_MAX, Math.max(CONFIDENCE_MIN, value));
 }
 
+// Trims leading/trailing "-" runs. Equivalent to `/^-+|-+$/gu` but without its unbounded
+// backtracking: given input with no long dash run anywhere (guaranteed by the `[^\p{L}\p{N}]+` ->
+// "-" collapse above, which never produces adjacent dashes), the regex is fine — but the pattern
+// itself is a generic S8786 shape (two independent unanchored `-+` scans that can jointly re-split
+// a single long dash run across the whole string in O(run^2)) once applied to unconstrained input.
+// Two bounded index walks reproduce the same "strip leading dashes, strip trailing dashes" result
+// in guaranteed O(n).
+export function trimDashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "-") start += 1;
+  while (end > start && value[end - 1] === "-") end -= 1;
+  return value.slice(start, end);
+}
+
 function normalizeTag(tag: string): string | null {
-  const normalized = tag
-    .normalize("NFKC")
-    .toLocaleLowerCase("und")
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/gu, "");
-  const bounded = normalized.slice(0, MAX_TAG_CHARS).replace(/^-+|-+$/gu, "");
+  const normalized = trimDashes(
+    tag
+      .normalize("NFKC")
+      .toLocaleLowerCase("und")
+      .replace(/[^\p{L}\p{N}]+/gu, "-"),
+  );
+  const bounded = trimDashes(normalized.slice(0, MAX_TAG_CHARS));
   return bounded.length === 0 ? null : bounded;
 }
 

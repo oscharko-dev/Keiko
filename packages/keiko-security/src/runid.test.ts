@@ -21,6 +21,7 @@ describe("assertValidRunId", () => {
     ["traversal segment", "../escape"],
     ["space", "a b"],
     ["colon", "a:b"],
+    ["supplementary-plane emoji", "a😀b"],
   ])("rejects %s", (_label, id) => {
     expect(() => {
       assertValidRunId(id);

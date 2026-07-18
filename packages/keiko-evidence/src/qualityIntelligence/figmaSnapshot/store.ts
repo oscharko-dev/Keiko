@@ -557,8 +557,8 @@ function normalizeDisplayName(value: string | null | undefined): string | undefi
 
 function hasControlCharacter(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code <= 0x1f || code === 0x7f) return true;
+    const code = value.codePointAt(i);
+    if (code === undefined || code <= 0x1f || code === 0x7f) return true;
   }
   return false;
 }

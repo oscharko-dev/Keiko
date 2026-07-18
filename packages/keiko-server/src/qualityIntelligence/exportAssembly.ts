@@ -195,7 +195,7 @@ function pdfStr(s: string): Uint8Array {
 }
 
 function escapePdf(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  return s.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
 }
 
 // WinAnsi (CP1252) bytes for the code points that differ from Latin-1 in the 0x80–0x9F window.

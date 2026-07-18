@@ -72,6 +72,29 @@ describe("git repository routes", () => {
     );
   });
 
+  it("clones a repository URL containing a supplementary-plane character (not a control character)", async () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The control-character scan iterates
+    // by Unicode code point and must not misclassify it as a control character (codes < 32 or 127).
+    const destination = join(tmp, "app");
+    const cloneRunner = vi.fn((_repositoryUrl: string, destinationPath: string) => {
+      mkdirSync(destinationPath);
+      return Promise.resolve(null);
+    });
+    const handler = createCloneRepositoryHandler(cloneRunner);
+
+    const result = await handler(
+      ctx({
+        repositoryUrl: "https://github.com/acme/app-😀.git",
+        destinationPath: destination,
+        name: "Emoji App",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(201);
+    expect(cloneRunner).toHaveBeenCalledWith("https://github.com/acme/app-😀.git", destination);
+  });
+
   it("uses the shared hardened network git env for the clone spawn boundary", async () => {
     const destination = join(tmp, "app");
     const capturePath = join(tmp, "clone-env.json");

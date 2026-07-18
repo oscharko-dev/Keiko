@@ -91,7 +91,7 @@ function hasControlOrNul(value: string): boolean {
   // a path operand we are willing to pass to git. Iterating code points avoids a control-character
   // regex literal.
   for (let index = 0; index < value.length; index += 1) {
-    if (value.charCodeAt(index) <= 0x1f) return true;
+    if ((value.codePointAt(index) ?? 0) <= 0x1f) return true;
   }
   return false;
 }

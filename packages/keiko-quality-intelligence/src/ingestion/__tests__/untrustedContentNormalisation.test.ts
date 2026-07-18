@@ -59,6 +59,16 @@ describe("normaliseUntrustedContent", () => {
     expect(result.normalisedFromControlChars).toBe(true);
   });
 
+  it("preserves a supplementary-plane character (emoji) while stripping surrounding control chars", () => {
+    // Regression (S7758): the control-char scan reads code points via
+    // `codePointAt`, not UTF-16 code units via `charCodeAt`. "😀" (U+1F600) is
+    // a 2-code-unit surrogate pair; neither code unit falls in a control range,
+    // so both units must survive and reassemble into the same emoji.
+    const result = normaliseUntrustedContent("a\x00😀\x7Fb");
+    expect(result.value).toBe("a😀b");
+    expect(result.normalisedFromControlChars).toBe(true);
+  });
+
   it("escapes Markdown heading lines on every line", () => {
     const result = normaliseUntrustedContent("# heading\n## sub");
     // The LF is preserved (text whitespace) and the heading regex is multiline,
@@ -80,6 +90,21 @@ describe("normaliseUntrustedContent", () => {
     expect(result.value).toContain("\\!");
     expect(result.value).toContain("\\[text\\]");
     expect(result.markdownInjectionEscapes).toBeGreaterThanOrEqual(2);
+  });
+
+  // SonarCloud S8786: the link-open escape used to be the regex `/(?<!!)\[([^\]]*)\]\(/gu`. Its
+  // negated class `[^\]]*` has only one valid match length per "[", but the unanchored global
+  // search retried the full failed match at EVERY unmatched "[" — quadratic in input length on
+  // content with many "[" and no closing "]" (confirmed empirically: ~860ms at 32k characters
+  // before the fix). Must stay fast well past that size, and leave content with no closing
+  // bracket untouched.
+  it("stays fast on many unmatched '[' characters (regression for SonarCloud S8786)", () => {
+    const adversarial = "[".repeat(40_000);
+    const start = Date.now();
+    const result = normaliseUntrustedContent(adversarial);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(result.value).toBe(adversarial);
+    expect(result.markdownInjectionEscapes).toBe(0);
   });
 
   it("clamps to maxBytes and signals the clamp", () => {

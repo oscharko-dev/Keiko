@@ -16,7 +16,7 @@ import {
 import type { UnitTestTarget } from "./types.js";
 
 function toPosix(path: string): string {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 export function targetInputPaths(target: UnitTestTarget): readonly string[] {

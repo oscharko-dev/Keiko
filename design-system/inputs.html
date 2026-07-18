@@ -386,7 +386,10 @@
         b.addEventListener("click", function () {
           var v = Math.max(
             1,
-            Math.min(32, (parseInt(stepEl.value, 10) || 0) + parseInt(b.dataset.step, 10)),
+            Math.min(
+              32,
+              (Number.parseInt(stepEl.value, 10) || 0) + Number.parseInt(b.dataset.step, 10),
+            ),
           );
           stepEl.value = v;
         });

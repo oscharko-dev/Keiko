@@ -126,9 +126,27 @@ const DIAGNOSTIC_PATTERNS: readonly IntentPattern[] = [
 ];
 
 const TARGETED_CODE_PATTERNS: readonly IntentPattern[] = [
-  { term: "path", pattern: /(?:[\w.-]+\/)+[\w.-]+/u },
+  // A repository path always has at least one "segment/segment" boundary; any successful match of
+  // the old `(?:[\w.-]+/)+[\w.-]+` shape necessarily contains such a boundary (the last group
+  // iteration's mandatory "/" is always flanked by a path-char before and after it), and any such
+  // boundary trivially satisfies that old pattern too. The 3-char window is the exact same test
+  // without the unbounded-quantifier-plus-unanchored-scan shape that made the old form quadratic
+  // on inputs with no "/" at all (each of the O(n) scan start positions cost O(n) to disprove).
+  { term: "path", pattern: /[\w.-]\/[\w.-]/u },
   { term: "quoted", pattern: /"[^"\n]+"|'[^'\n]+'|`[^`\n]+`/u },
-  { term: "identifier", pattern: /\b[A-Za-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*\b/u },
+  // Excluding uppercase letters from the leading run (disjoint from the required `[A-Z]`) removes
+  // the ambiguous overlap between the two classes, but that alone is NOT enough: `$` is included in
+  // both runs' character classes while NOT being a `\w` character for `\b` purposes. A string built
+  // from alternating word/`$` characters (e.g. `"a$".repeat(n)`) therefore has a `\b` boundary before
+  // every "a", giving O(n) independent match-start positions; with unbounded `*` quantifiers, each
+  // failing start position costs O(remaining length) to disprove (the leading run greedily consumes
+  // the rest of the string, including further "$"s, before backtracking char-by-char looking for an
+  // `[A-Z]` that never appears), so the whole scan is O(n^2). Bounding each run's length caps the
+  // backtracking cost per start position to a constant, making the total scan O(n) regardless of how
+  // many `\b`-satisfying start positions the input contains. 300 characters per run (600+ for the
+  // whole identifier) is far beyond any realistic source-code identifier, so no legitimate match is
+  // lost; it only removes the unbounded blow-up on adversarial input.
+  { term: "identifier", pattern: /\b[A-Za-z_$][a-z0-9_$]{0,300}[A-Z][A-Za-z0-9_$]{0,300}\b/u },
   { term: "symbol", pattern: /\b(function|class|interface|type|const|let|var)\s+[A-Za-z_]/iu },
 ];
 

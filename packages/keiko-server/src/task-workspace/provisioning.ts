@@ -121,7 +121,12 @@ function gitdirIdentity(worktreePath: string): string {
   } catch {
     throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree git pointer is missing");
   }
-  const match = /^gitdir:\s*(.+)\s*$/mu.exec(raw);
+  // The leading/trailing `\s*` around the capture is intentionally NOT part of the pattern: it
+  // overlapped with `(.+)` (both can match plain spaces), and combined with the multiline flag
+  // that let the engine retry the split at every line, made this quadratic on adversarial pointer
+  // content (S8786). The capture now takes the whole line as-is; `.trim()` below strips the same
+  // leading/trailing whitespace the removed `\s*` used to, so the recognized value is unchanged.
+  const match = /^gitdir:(.+)$/mu.exec(raw);
   if (match?.[1] === undefined || match[1].length === 0) {
     throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree git pointer is malformed");
   }

@@ -75,7 +75,7 @@ interface ParsedCsvRow {
 function readField(state: ParseState): { readonly endOfRow: boolean } {
   const { text } = state;
   if (state.cursor >= text.length) return { endOfRow: true };
-  const code = text.charCodeAt(state.cursor);
+  const code = text.codePointAt(state.cursor);
   if (code === 0x22 /* " */) return readQuotedField(state);
   return readBareField(state);
 }
@@ -83,7 +83,7 @@ function readField(state: ParseState): { readonly endOfRow: boolean } {
 function readBareField(state: ParseState): { readonly endOfRow: boolean } {
   const { text, delimiter } = state;
   while (state.cursor < text.length) {
-    const code = text.charCodeAt(state.cursor);
+    const code = text.codePointAt(state.cursor);
     if (code === delimiter) {
       state.cursor += 1;
       return { endOfRow: false };
@@ -105,10 +105,10 @@ function readQuotedField(state: ParseState): { readonly endOfRow: boolean } {
   // Skip the opening quote.
   state.cursor += 1;
   while (state.cursor < text.length) {
-    const code = text.charCodeAt(state.cursor);
+    const code = text.codePointAt(state.cursor);
     if (code === 0x22 /* " */) {
       // Escaped quote? Peek ahead.
-      if (state.cursor + 1 < text.length && text.charCodeAt(state.cursor + 1) === 0x22) {
+      if (state.cursor + 1 < text.length && text.codePointAt(state.cursor + 1) === 0x22) {
         state.cursor += 2;
         continue;
       }
@@ -124,7 +124,7 @@ function readQuotedField(state: ParseState): { readonly endOfRow: boolean } {
 
 function consumeAfterQuote(state: ParseState): { readonly endOfRow: boolean } {
   if (state.cursor >= state.text.length) return { endOfRow: true };
-  const code = state.text.charCodeAt(state.cursor);
+  const code = state.text.codePointAt(state.cursor);
   if (code === state.delimiter) {
     state.cursor += 1;
     return { endOfRow: false };
@@ -133,7 +133,7 @@ function consumeAfterQuote(state: ParseState): { readonly endOfRow: boolean } {
   // Malformed: bytes after the closing quote that are neither delimiter nor newline. We
   // tolerate by consuming until the next delimiter / newline rather than crashing.
   while (state.cursor < state.text.length) {
-    const inner = state.text.charCodeAt(state.cursor);
+    const inner = state.text.codePointAt(state.cursor);
     if (inner === state.delimiter) {
       state.cursor += 1;
       return { endOfRow: false };
@@ -146,10 +146,10 @@ function consumeAfterQuote(state: ParseState): { readonly endOfRow: boolean } {
 
 function consumeRowTerminator(state: ParseState): void {
   if (state.cursor >= state.text.length) return;
-  const code = state.text.charCodeAt(state.cursor);
+  const code = state.text.codePointAt(state.cursor);
   if (code === 0x0d) {
     state.cursor += 1;
-    if (state.cursor < state.text.length && state.text.charCodeAt(state.cursor) === 0x0a) {
+    if (state.cursor < state.text.length && state.text.codePointAt(state.cursor) === 0x0a) {
       state.cursor += 1;
     }
     return;
@@ -254,7 +254,12 @@ function parseRowValues(rowText: string, delimiter: string): readonly string[] {
 }
 
 function readParsedRows(text: string, delimiter: string): readonly ParsedCsvRow[] {
-  const state: ParseState = { text, delimiter: delimiter.charCodeAt(0), cursor: 0, rowStart: 0 };
+  const state: ParseState = {
+    text,
+    delimiter: delimiter.codePointAt(0) ?? 0,
+    cursor: 0,
+    rowStart: 0,
+  };
   const rows: ParsedCsvRow[] = [];
   for (;;) {
     const row = readRow(state);

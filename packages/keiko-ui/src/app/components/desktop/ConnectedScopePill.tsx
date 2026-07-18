@@ -93,8 +93,20 @@ export function buildLastGroundedBudgetStatus(
   };
 }
 
+// Strip trailing "/" characters with a bounded scan instead of the unanchored `/\/+$/`: without a
+// `^` anchor, that pattern retries the match at every position inside a long slash run whenever
+// the string doesn't end in "/", which is quadratic in input length (SonarCloud S8786).
+// Exported for the co-located regression test only.
+export function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.codePointAt(end - 1) === 0x2f /* "/" */) {
+    end -= 1;
+  }
+  return path.slice(0, end);
+}
+
 function lastSegment(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
+  const trimmed = stripTrailingSlashes(path);
   const slash = trimmed.lastIndexOf("/");
   return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }

@@ -115,7 +115,7 @@ export function RepositoryToolbar({
           <button type="button" style={{ ...SECONDARY_BTN, ...disabledStyle(true) }} disabled>
             <span style={{ color: "var(--fg-dim)" }}>
               <Icons.code size={15} />
-            </span>
+            </span>{" "}
             Open in Editor
           </button>
         ) : null}
@@ -194,7 +194,7 @@ export function RepositoryToolbar({
             >
               <span style={{ color: "var(--fg-dim)" }}>
                 <Icons.code size={15} />
-              </span>
+              </span>{" "}
               Open in Editor
             </button>
           ) : null}
@@ -208,7 +208,7 @@ export function RepositoryToolbar({
             >
               <span style={{ color: "var(--fg-dim)" }}>
                 <Icons.files size={15} />
-              </span>
+              </span>{" "}
               Open Files
             </button>
           ) : null}

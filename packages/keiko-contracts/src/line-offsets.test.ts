@@ -84,6 +84,46 @@ describe("offsetToPosition", () => {
   });
 });
 
+describe("supplementary-plane characters (surrogate pairs)", () => {
+  // A realistic multi-line buffer where a supplementary-plane character (😀, U+1F600 — two UTF-16
+  // code units) sits mid-line, followed by more content and another line. LSP/editor positions are
+  // always UTF-16-code-unit offsets, never codepoint indices, so every mapping here must treat the
+  // emoji as occupying two `character` slots, exactly as `charCodeAt`-based scanning always did.
+  const text = 'const a = 1;\nconst emoji = "😀";\nconst b = 2;\n';
+  const starts = computeLineStarts(text);
+  // Line 1 (`const emoji = "😀";`) starts at absolute offset 13. The opening quote is at character
+  // 14, the emoji's two code units occupy characters 15-16, and the closing quote is at character 17.
+  const emojiOffset = text.indexOf("😀");
+
+  it("finds the correct line starts across a line that contains a surrogate pair", () => {
+    expect(starts).toEqual([0, 13, 33, 46]);
+    expect(emojiOffset).toBe(28);
+  });
+
+  it("maps a position landing right before the surrogate pair to its absolute offset", () => {
+    expect(positionToOffset(text, starts, { line: 1, character: 15 })).toBe(emojiOffset);
+  });
+
+  it("maps a position landing right after the surrogate pair to its absolute offset", () => {
+    // The closing quote follows the two-code-unit emoji, so it sits two characters past character 15.
+    expect(positionToOffset(text, starts, { line: 1, character: 17 })).toBe(emojiOffset + 2);
+    expect(text[emojiOffset + 2]).toBe('"');
+  });
+
+  it("round-trips offsets that land before, inside, and after the surrogate pair", () => {
+    expect(offsetToPosition(text, starts, emojiOffset)).toEqual({ line: 1, character: 15 });
+    // Landing between the two surrogate code units is still a valid UTF-16 offset; the mapping must
+    // not skip it or collapse the pair into a single character slot.
+    expect(offsetToPosition(text, starts, emojiOffset + 1)).toEqual({ line: 1, character: 16 });
+    expect(offsetToPosition(text, starts, emojiOffset + 2)).toEqual({ line: 1, character: 17 });
+  });
+
+  it("excludes only the line terminator from content end on a line carrying a surrogate pair", () => {
+    // Line 1 is `const emoji = "😀";` (19 UTF-16 code units, offsets 13-31), followed by "\n" at 32.
+    expect(lineContentEnd(text, starts, 1)).toBe(32);
+  });
+});
+
 describe("spanToRange", () => {
   const text = "ab\ncde\n";
   const starts = computeLineStarts(text);

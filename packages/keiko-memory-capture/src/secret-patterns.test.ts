@@ -114,6 +114,19 @@ describe("scanForSecrets — provider base URLs", () => {
   it("does not reject an ordinary documentation URL", () => {
     expect(scanForSecrets("remember that docs live at https://docs.example.com/setup")).toBeNull();
   });
+
+  // SonarCloud S8786: the pathname trailing-slash strip used to be the unanchored `/\/+$/u`.
+  // Without a `^` anchor, the engine retries the match at every position inside a long slash run
+  // whenever the string doesn't end in "/" — quadratic in input length (confirmed empirically:
+  // ~1.6s at 64k characters before the fix). `value` here is attacker-influenced free text, so
+  // this must stay linear even on an adversarially long URL path.
+  it("stays fast on a URL whose path is a long non-terminating slash run (regression for SonarCloud S8786)", () => {
+    const raw = `https://docs.example.com${"/".repeat(20_000)}end`;
+    const start = Date.now();
+    const result = scanForSecrets(raw);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(result).toBeNull();
+  });
 });
 
 describe("scanForSecrets — raw log content", () => {

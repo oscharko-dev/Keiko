@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -218,6 +218,29 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
     expect(reportEntry?.status).toBe("stale-pointer");
     expect(reportEntry?.driftMarkers).toContain("gitdir-mismatch");
+  });
+
+  // Regression for S8786: safeGitdirIdentity's `.git` pointer parse mirrors provisioning.ts's
+  // gitdirIdentity (`/^gitdir:\s*(.+)\s*$/mu` → `/^gitdir:(.+)$/mu`), removing the leading/trailing
+  // `\s*` that overlapped with `(.+)` and, under the multiline flag, made the parse quadratic on
+  // adversarial pointer content. This pads the real `.git` pointer with a huge whitespace run
+  // around the actual target and asserts reconciliation still classifies it healthy, quickly.
+  it("still classifies healthy when the .git pointer is padded with adversarial whitespace", async () => {
+    const instance = await provisionTask("t1");
+    const gitPointerPath = join(instance.managedWorktreePath, ".git");
+    const rawTarget = readFileSync(gitPointerPath, "utf8")
+      .replace(/^gitdir:/u, "")
+      .trim();
+    writeFileSync(gitPointerPath, `gitdir:${" ".repeat(20_000)}${rawTarget}${" ".repeat(5_000)}\n`);
+
+    const start = Date.now();
+    const report = await reconciliation().reconcile();
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(2000);
+    const reportEntry = report.entries.find((e) => e.workspaceId === instance.workspaceId);
+    expect(reportEntry?.status).toBe("healthy");
+    expect(reportEntry?.driftMarkers).toEqual([]);
   });
 });
 
