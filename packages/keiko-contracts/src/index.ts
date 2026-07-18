@@ -45,6 +45,7 @@ export type {
   InvestigateBugInput,
   ExplainPlanInput,
   VerifyInput,
+  EditorAgentTurnInput,
   TaskInput,
   RunCounters,
   RunOutcome,

@@ -209,8 +209,11 @@ const SEARCH_WORKSPACE_PARAMETERS = objectSchema(
     sessionId: { type: "string", minLength: 1 },
     idempotencyKey: IDEMPOTENCY_KEY_SCHEMA,
     query: { type: "string", minLength: 1, maxLength: 200 },
-    mode: { type: "string", enum: ["text", "symbol"] },
+    // Issue #2489 (Finding 3) — "regex" is additive (schema stays "1"), closing the #2217 human/
+    // agent search parity gap. "symbol" is a language-service lookup and ignores wholeWord.
+    mode: { type: "string", enum: ["text", "symbol", "regex"] },
     caseSensitive: { type: "boolean", default: false },
+    wholeWord: { type: "boolean", default: false },
     includeGlobs: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 32 },
     excludeGlobs: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 32 },
     maxResults: { type: "integer", minimum: 1, maximum: 200, default: 50 },

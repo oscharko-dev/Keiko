@@ -5,6 +5,7 @@
 
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { TaskInput } from "../types.js";
+import { buildEditorAgentTurn } from "./editor-agent-turn.js";
 import { buildExplainPlan } from "./explain-plan.js";
 import { buildGenerateUnitTests } from "./generate-unit-tests.js";
 import { buildInvestigateBug } from "./investigate-bug.js";
@@ -35,5 +36,7 @@ export function resolveTaskPlan(task: TaskInput): TaskPlan {
       return buildExplainPlan(task.input);
     case "verify":
       return buildVerify(task.input);
+    case "editor-agent-turn":
+      return buildEditorAgentTurn(task.input);
   }
 }

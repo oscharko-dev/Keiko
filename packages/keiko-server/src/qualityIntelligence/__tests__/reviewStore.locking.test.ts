@@ -20,7 +20,11 @@ import {
 } from "../reviewStore.js";
 
 const RUN_ID = "run-lock-persistence-007";
-const DEAD_LOCK_RECLAIM_BUDGET_MS = 250;
+// Widened from 250ms: the reclaim path itself has no hard ceiling (file-stat/read scheduling under
+// CI load), and 250ms was observed to flake at ~278ms under load while still nowhere near the
+// deterministic ~200ms-plus-per-attempt-I/O floor of the busy-wait path this test distinguishes
+// from (40 attempts x 5ms sleep alone is 200ms, before any retry I/O overhead).
+const DEAD_LOCK_RECLAIM_BUDGET_MS = 500;
 const LIVE_LOCK_EXPECTED_POLLS = 40;
 const LIVE_LOCK_EXPECTED_SLEEPS = 39;
 const dirs: string[] = [];
