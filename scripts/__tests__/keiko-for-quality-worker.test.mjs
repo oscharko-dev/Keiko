@@ -1133,6 +1133,37 @@ describe("Keiko for Quality worker trust boundary", () => {
     const body = JSON.parse(publish[1].body);
     expect(body.conclusion).toBe("failure");
     expect(body.output.summary).toContain("Qodo has 2 unresolved finding(s).");
+    // The head commit was fetched precisely because no Qodo review bound the exact head.
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        /\/commits\/[0-9a-f]{40}$/u.test(new URL(String(url)).pathname),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the head-commit fetch when a Qodo review binds the exact head", async () => {
+    const headSha = "a".repeat(40);
+    const fetchMock = githubMock(headSha); // default Qodo review references the head directly
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "no-parent-fetch",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const commitFetches = fetchMock.mock.calls.filter(([url]) =>
+      /\/commits\/[0-9a-f]{40}$/u.test(new URL(String(url)).pathname),
+    );
+    expect(commitFetches).toHaveLength(0);
   });
 
   it("keeps missing evidence pending and ignores its own check event", async () => {

@@ -1,5 +1,6 @@
 import {
   evaluateKeikoForQuality,
+  latestQodoReview,
   requiredChecks,
   requiredChecksForProfile,
 } from "./keiko-for-quality-core.mjs";
@@ -422,8 +423,15 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
   if (!isValidHeadSha(headSha)) {
     throw new Error("Pull request head SHA is invalid.");
   }
-  const mergeParents = await mergeParentShas(owner, repository, headSha, token);
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
+  // Only fetch the head commit's merge parents when no Qodo review already binds the exact head
+  // (e.g. a merge-commit head whose review is pinned to a parent). A normal head whose Qodo review
+  // references it directly — the common steady-state case re-checked every cron tick — needs no
+  // extra commit fetch.
+  const mergeParents =
+    latestQodoReview(currentEvidence.comments, headSha) === undefined
+      ? await mergeParentShas(owner, repository, headSha, token)
+      : [];
   const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
