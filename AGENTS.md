@@ -54,8 +54,8 @@ This shapes the product _and_ how you work on it:
 - For an accepted Keiko task or epic, agents may commit, push the assigned non-`dev` branch, open or
   update its PR, repair deterministic findings, arm native auto-merge, and close the issue after
   verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
-  required check, use `gitar unblock`, dismiss a finding to obtain green status, or merge outside
-  the ADR-0135 direct-check path.
+  required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
+  direct-check path.
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
@@ -341,7 +341,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
   `Socket Security: Pull Request Alerts`
 
-  No human approving review is required for `dev`. Gitar and `Keiko for Quality` are advisory and
+  No human approving review is required for `dev`. Qodo and `Keiko for Quality` are advisory and
   must not be added to branch protection until their availability, bounded settlement, and
   non-self-deadlocking repair path pass the live probes in
   [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation and hosted-runner

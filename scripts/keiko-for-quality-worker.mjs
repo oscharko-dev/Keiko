@@ -183,9 +183,8 @@ export function socketNoAlertEvidence(check) {
 }
 
 export async function evidence(owner, repository, pullNumber, headSha, token) {
-  const [checkRuns, reviews, comments] = await Promise.all([
+  const [checkRuns, comments] = await Promise.all([
     allCheckRuns(`/repos/${owner}/${repository}/commits/${headSha}/check-runs`, token),
-    allPages(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}/reviews`, token),
     allPages(`/repos/${owner}/${repository}/issues/${String(pullNumber)}/comments`, token),
   ]);
   return {
@@ -209,12 +208,6 @@ export async function evidence(owner, repository, pullNumber, headSha, token) {
       id: comment.id,
       updatedAt: comment.updated_at,
     })),
-    reviews: reviews.map((review) => ({
-      authorId: review.user?.id,
-      authorType: review.user?.type,
-      commitSha: review.commit_id,
-      state: review.state,
-    })),
   };
 }
 
@@ -222,7 +215,6 @@ export function hardFailure(failures) {
   return failures.some(
     (failure) =>
       failure.startsWith("Wrong producer") ||
-      failure.includes("CHANGES_REQUESTED") ||
       failure.includes("unresolved finding") ||
       failure.includes("Socket warning") ||
       failure.includes("Socket reports") ||
@@ -284,20 +276,6 @@ function currentCheckCount(checks, headSha, expectedChecks) {
   ).length;
 }
 
-function latestGitarComment(comments) {
-  return comments
-    .filter((comment) => comment.appId === 827041)
-    .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-}
-
-export function autoApplyState(comments) {
-  const body = latestGitarComment(comments)?.body;
-  if (body === undefined) return "not confirmed";
-  if (body.match(/✅\s*Auto-apply/iu) !== null) return "enabled";
-  if (/Auto-apply/iu.test(body)) return "disabled";
-  return "not confirmed";
-}
-
 function decision(result) {
   if (result.passed) return { icon: "✅", label: "Ready for auto-merge" };
   return hardFailure(result.failures)
@@ -318,7 +296,6 @@ function evidenceState(failures, pattern, cleanLabel) {
 
 export function dashboardComment({
   checks,
-  comments,
   expectedChecks = requiredChecks,
   headSha,
   pull,
@@ -345,13 +322,12 @@ export function dashboardComment({
     "| --- | --- |",
     `| Required checks | ${String(successfulChecks)}/${String(expectedChecks.length)} successful |`,
     `| SonarQube Cloud | ${evidenceState(result.failures, /SonarCloud Code Analysis/iu, "native quality gate passed")} |`,
-    `| Gitar review | ${evidenceState(result.failures, /Gitar/iu, "zero unresolved findings")} |`,
+    `| Qodo review | ${evidenceState(result.failures, /Qodo/iu, "zero unresolved findings")} |`,
     `| Socket Security | ${evidenceState(result.failures, /Socket/iu, "zero unresolved alerts")} |`,
     `| Stability window | ${evidenceState(result.failures, /stability/iu, "settled")} |`,
     "",
     "| Automation | State |",
     "| --- | --- |",
-    `| Gitar Auto-Apply | ${autoApplyState(comments)} |`,
     `| GitHub Auto-Merge | ${autoMerge} |`,
     "",
     `<details${blocked ? " open" : ""}>`,

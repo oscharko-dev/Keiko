@@ -35,13 +35,13 @@ can merge into `dev`:
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the direct required checks succeed on the exact current head and every review conversation
-is resolved. Gitar and `Keiko for Quality` remain advisory until they independently satisfy the
+is resolved. Qodo and `Keiko for Quality` remain advisory until they independently satisfy the
 availability and liveness requirements in
 [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation testing runs daily and
 on explicit dispatch; shared-runner performance evidence runs after merge and for releases. Neither
-unbounded workload is part of the pull-request critical path. Gitar configuration, large-PR
-acceptance, safe commands, and plan boundaries are governed by
-[`docs/qa/gitar-review-policy.md`](docs/qa/gitar-review-policy.md).
+unbounded workload is part of the pull-request critical path. Qodo configuration, large-PR
+acceptance, safe commands, and boundaries are governed by
+[`docs/qa/qodo-review-policy.md`](docs/qa/qodo-review-policy.md).
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),

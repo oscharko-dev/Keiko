@@ -55,7 +55,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
 - [ ] When implementation starts, fill the `Branch` field with the active branch name.
 - [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `No`.
-- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while Gitar repairs or deterministic gates settle.
+- [ ] Keep `Workflow State` at `PR Open` and the issue label at `status: in progress` while review findings or deterministic gates settle.
 - [ ] Do not mark `Done` until the PR is merged, closure evidence exists, the issue is closed, and project `Status` is set to `Done`.
 
 ## Expected Verification

@@ -54,5 +54,5 @@ concurrent large pull requests.
 
 Do not add `Keiko for Quality` to `dev` branch protection until the installed app has emitted that
 name from its own App ID and every negative probe in the QA policy has blocked native auto-merge,
-including for administrators. Do not enable Gitar Auto-Approve/Auto-Merge before the positive probe
-also succeeds.
+including for administrators. Do not enable Qodo auto-approval or add Qodo to branch protection
+before the positive probe also succeeds.
