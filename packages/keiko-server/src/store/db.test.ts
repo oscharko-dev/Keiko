@@ -66,8 +66,8 @@ describe("createNodeUiStore — on-disk file", () => {
     store.close();
   });
 
-  it("creates parent directory with mode 0o700 (Unix)", () => {
-    if (process.platform === "win32") return;
+  it("creates parent directory with mode 0o700 (Unix)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dbPath = join(tmpDir, "nested", "keiko-ui.db");
     const store = createNodeUiStore(dbPath);
     const dirMode = statSync(dirname(dbPath)).mode & 0o777;
@@ -75,8 +75,8 @@ describe("createNodeUiStore — on-disk file", () => {
     store.close();
   });
 
-  it("chmods the DB file to 0o600 (Unix)", () => {
-    if (process.platform === "win32") return;
+  it("chmods the DB file to 0o600 (Unix)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dbPath = join(tmpDir, "keiko-ui.db");
     const store = createNodeUiStore(dbPath);
     const fileMode = statSync(dbPath).mode & 0o777;

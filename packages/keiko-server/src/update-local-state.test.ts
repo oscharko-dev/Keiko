@@ -101,8 +101,8 @@ describe("update local state compatibility scan", () => {
     expect(JSON.stringify(scan)).not.toContain("sk-do-not-read");
   });
 
-  it("retains unreadable owned subtrees instead of throwing", () => {
-    if (process.platform === "win32") return;
+  it("retains unreadable owned subtrees instead of throwing", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = makeStateDir();
     const memoryDir = join(stateDir, "memory");
     mkdirSync(memoryDir, { recursive: true });
@@ -178,8 +178,8 @@ describe("update recovery snapshots", () => {
     expect(localState.validateRecoverySnapshot("snap-new")).toBe(true);
   });
 
-  it("fails closed on a symlinked state root", () => {
-    if (process.platform === "win32") return;
+  it("fails closed on a symlinked state root", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = mkdtempSync(join(tmpdir(), "keiko-update-symlink-"));
     tempRoots.push(root);
     const target = join(root, "outside-state");

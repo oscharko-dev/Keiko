@@ -189,8 +189,8 @@ describe("resolveFigmaVaultKey precedence", () => {
     expect(resolved.key.equals(envKey)).toBe(true);
   });
 
-  it("rejects a keyfile path through a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("rejects a keyfile path through a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-key-dir");
     mkdirSync(realSub);
     const linkSub = join(dir, "link-key-dir");
@@ -201,8 +201,8 @@ describe("resolveFigmaVaultKey precedence", () => {
     });
   });
 
-  it("rejects a final keyfile path that is itself a symlink", () => {
-    if (process.platform === "win32") return;
+  it("rejects a final keyfile path that is itself a symlink", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     writeFileSync(join(dir, "real-figma-vault.key"), Buffer.alloc(32, 4).toString("base64"));
     symlinkSync(join(dir, "real-figma-vault.key"), join(dir, "figma-vault.key"));
 
@@ -213,8 +213,8 @@ describe("resolveFigmaVaultKey precedence", () => {
 });
 
 describe("symlink guard", () => {
-  it("rejects store/read/revoke through a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("rejects store/read/revoke through a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-store-dir");
     mkdirSync(realSub);
     const linkSub = join(dir, "link-store-dir");
@@ -233,8 +233,8 @@ describe("symlink guard", () => {
     });
   });
 
-  it("rejects a final store path that is itself a symlink", () => {
-    if (process.platform === "win32") return;
+  it("rejects a final store path that is itself a symlink", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realStorePath = join(dir, "real-figma-token.enc");
     createFigmaTokenStore({ key: KEY, storePath: realStorePath }).store(TOKEN);
     const linkStorePath = join(dir, "link-figma-token.enc");
