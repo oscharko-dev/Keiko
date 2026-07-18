@@ -15,17 +15,17 @@ import { get as httpGet } from "node:http";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-// From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
-import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts";
-// From the contracts leaf, NOT keiko-server: pulling the server module graph in
-// eagerly here cost every `keiko` invocation ~410ms of ESM loading
-// (GEN-PERF-CLI-001); lifecycle only needs the loopback endpoint constants.
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
-// The launcher half of the ADR-0141 app-session pairing hand-off (#2478) — also from the
-// contracts leaf; the claim-minting keiko-server import stays dynamic inside the `--open` path.
+// From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
+// module graph in eagerly here cost every `keiko` invocation ~410ms of ESM loading
+// (GEN-PERF-CLI-001). Lifecycle needs the loopback endpoint constants plus the launcher half of
+// the ADR-0141 app-session pairing hand-off (#2478); the claim-minting keiko-server import stays
+// dynamic inside the `--open` path.
 import {
   CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+  DEFAULT_UI_PORT,
+  KEIKO_PRODUCT_VERSION as SDK_VERSION,
+  UI_HOST,
   encodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts";
 import { resolvePreferredInstallLayout } from "./install-layout.js";

@@ -11,24 +11,17 @@
 // port even evaluates it.
 
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
-import {
-  CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS,
-  CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
-  CODING_APP_SESSION_PAIRING_REQUEST_ID_MAX_CHARS,
-  isWellFormedCodingAppSessionPairingAttestation,
+
+// The attestation WIRE shape, its bounds, and its structural gate were promoted to
+// `keiko-contracts` in W1.5 (#2478) so the browser client and the launcher share one definition;
+// this module re-exports them under the established server-local names, and the authority seam
+// below (port, decision, denial) stays server-private.
+export {
+  CODING_APP_SESSION_PAIRING_REQUEST_ID_MAX_CHARS as SESSION_PAIRING_REQUEST_ID_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS as SESSION_PAIRING_CLAIM_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS as SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
+  isWellFormedCodingAppSessionPairingAttestation as isWellFormedSessionPairingAttestation,
 } from "@oscharko-dev/keiko-contracts";
-
-// The attestation WIRE shape and its structural gate were promoted to `keiko-contracts` in W1.5
-// (#2478) so the browser client and the launcher share one definition; the authority seam below
-// (port, decision, denial) stays server-private.
-
-/** Maximum characters for the single-use pairing request identifier. */
-export const SESSION_PAIRING_REQUEST_ID_MAX_CHARS = CODING_APP_SESSION_PAIRING_REQUEST_ID_MAX_CHARS;
-/** Maximum characters for the attestation claim (an HMAC-SHA256 hex digest is 64 chars). */
-export const SESSION_PAIRING_CLAIM_MAX_CHARS = CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS;
-/** Maximum characters for a principal label an approved decision may carry. */
-export const SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS =
-  CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS;
 
 /** A launcher-minted, single-use, process-bound pairing attestation presented at the pair endpoint. */
 export type SessionPairingAttestation = CodingAppSessionPairingAttestation;
@@ -45,9 +38,3 @@ export interface SessionPairingPort {
 
 /** A single denied decision reused everywhere so no call site invents a divergent shape. */
 export const SESSION_PAIRING_DENIED: SessionPairingDecision = { outcome: "denied" };
-
-/**
- * Structural gate every attestation must pass before any authority check. Rejects malformed request
- * ids, non-integer timestamps, and oversized claims. It is not authority — it only bounds the input.
- */
-export const isWellFormedSessionPairingAttestation = isWellFormedCodingAppSessionPairingAttestation;
