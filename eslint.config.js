@@ -211,6 +211,16 @@ export default defineConfig(
     },
   },
   {
+    files: ["scripts/__tests__/keiko-for-quality-action.test.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        Response: "readonly",
+        URL: "readonly",
+      },
+    },
+  },
+  {
     files: [
       "scripts/check-lcov-source-mapping.mjs",
       "scripts/check-mutation-quality.mjs",

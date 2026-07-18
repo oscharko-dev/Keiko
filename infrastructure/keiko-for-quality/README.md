@@ -2,7 +2,16 @@
 
 This directory contains the deployment template for the independent GitHub App described in
 [`../../docs/qa/keiko-for-quality.md`](../../docs/qa/keiko-for-quality.md). The runtime is
-deliberately outside GitHub Actions so pull-request code cannot mint the required aggregate check.
+deliberately outside a `pull_request`-triggered GitHub Actions workflow so pull-request code cannot
+mint the required aggregate check.
+
+> **Note (Issue #2506):** "outside GitHub Actions" is a property of the `pull_request` trigger, not
+> of GitHub Actions as such. A workflow triggered on `check_run` / `issue_comment` runs its
+> definition from the default branch (`dev`), which pull-request code cannot alter, and therefore
+> preserves this tamper-resistance. Epic #2504 evaluates replacing this Worker with such an Action;
+> see [`../../docs/qa/keiko-for-quality-action-evaluation.md`](../../docs/qa/keiko-for-quality-action-evaluation.md)
+> and [ADR-0142](../../docs/adr/ADR-0142-keiko-for-quality-github-action-execution-shell.md). Until
+> that cutover completes, this Worker remains the canonical producer.
 
 ## One-time setup
 
