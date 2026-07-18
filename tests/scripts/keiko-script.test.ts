@@ -175,11 +175,11 @@ describe("scripts/keiko.sh", () => {
   });
 
   describe("build-asset guard", () => {
-    it("start fails with guidance when dist assets are missing", () => {
+    it("start fails with guidance when dist assets are missing", (ctx) => {
       // Point ROOT-derived asset paths at a tree with no dist by running with a state dir only;
       // when dist IS present locally this asserts nothing useful, so guard on the negative case.
       if (DIST_READY) {
-        return; // covered by the lifecycle test instead
+        ctx.skip(); // covered by the lifecycle test instead
       }
       const r = run(["start"], {
         KEIKO_STATE_DIR: stateDir,

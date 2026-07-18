@@ -125,8 +125,8 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
     await expect(stat(runSideDir)).rejects.toThrow();
   });
 
-  it("continues purging independent runs when one side-file dir is unsafe", async () => {
-    if (process.platform === "win32") return;
+  it("continues purging independent runs when one side-file dir is unsafe", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     seedRun("run-blocked");
     seedRun("run-ok");
     const sideFileRoot = join(evidenceDir, QI_SUBDIR, "side-files");
@@ -155,8 +155,8 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
     }
   });
 
-  it("refuses a symlinked side-file root before deleting the run manifest", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked side-file root before deleting the run manifest", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     seedRun("run-root-symlink");
     const qiDir = join(evidenceDir, QI_SUBDIR);
     const sideFileRoot = join(qiDir, "side-root");
@@ -179,8 +179,8 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
     }
   });
 
-  it("refuses a symlinked evidence root even when the side-file root resolves inside it", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked evidence root even when the side-file root resolves inside it", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realEvidenceDir = await mkdtemp(join(tmpdir(), "keiko-qi-ret-real-"));
     const linkParent = await mkdtemp(join(tmpdir(), "keiko-qi-ret-link-parent-"));
     const linkedEvidenceDir = join(linkParent, "evidence-link");

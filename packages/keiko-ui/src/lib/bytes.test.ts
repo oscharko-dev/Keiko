@@ -31,8 +31,8 @@ describe("toExactArrayBuffer", () => {
     expect(empty.byteLength).toBe(0);
   });
 
-  it("copies SharedArrayBuffer-backed views into an ArrayBuffer when supported", () => {
-    if (typeof SharedArrayBuffer === "undefined") return;
+  it("copies SharedArrayBuffer-backed views into an ArrayBuffer when supported", (ctx) => {
+    if (typeof SharedArrayBuffer === "undefined") ctx.skip();
     const shared = new SharedArrayBuffer(3);
     const source = new Uint8Array(shared);
     source.set([7, 8, 9]);

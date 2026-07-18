@@ -1557,8 +1557,8 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
 // yield 500 QI_EXPORT_FAILED (verifier Gap 1).
 
 describe("handleQiExport — AC4 audit write is fail-open", () => {
-  it("returns 200 with the export body when the audit-evidence append fails", async () => {
-    if (platform() === "win32") return; // POSIX permission bits only
+  it("returns 200 with the export body when the audit-evidence append fails", async (testCtx) => {
+    if (platform() === "win32") testCtx.skip(); // POSIX permission bits only
     const qiDir = join(evidenceDir, "qi");
     chmodSync(qiDir, 0o555); // read + traverse, but no new files → atomic manifest write fails
     try {

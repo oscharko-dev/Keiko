@@ -158,8 +158,8 @@ describe("corrupt-DB quarantine rotates sidecars", () => {
 });
 
 describe("sidecar permissions", () => {
-  it("hardens WAL sidecars created by later writes on POSIX", () => {
-    if (process.platform === "win32") return;
+  it("hardens WAL sidecars created by later writes on POSIX", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dir = freshDir();
     const vault = openVault(dir);
     const dbPath = join(dir, "keiko-memory.db");
