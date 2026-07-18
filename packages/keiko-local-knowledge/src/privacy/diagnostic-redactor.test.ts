@@ -61,6 +61,16 @@ describe("redactDiagnosticMessage", () => {
     ).toBe("failed to parse <path>/secret.pdf at offset 42");
   });
 
+  // S7758 regression: stripTrailingSlash (used by basenameOf) decides where a trailing "/"
+  // ends via a `charCodeAt` → `codePointAt` equality check against the fixed ASCII code 47.
+  // A supplementary-plane character directly adjacent to the trailing slash must not be
+  // treated as more slash to strip, and must survive into the redacted basename intact.
+  it("keeps a supplementary-plane directory name intact when trimming a trailing slash", () => {
+    expect(redactDiagnosticMessage("listing /var/data/😀/ failed", "/Users/victim")).toBe(
+      "listing <path>/😀 failed",
+    );
+  });
+
   it("redacts Windows and UNC paths embedded in prose", () => {
     expect(
       redactDiagnosticMessage(

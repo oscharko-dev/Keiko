@@ -33,7 +33,7 @@ const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
 
 function isAllowedExternalGitdir(candidate: string): boolean {
-  return candidate.replace(/\\/g, "/").includes("/.git/worktrees/");
+  return candidate.replaceAll("\\", "/").includes("/.git/worktrees/");
 }
 
 function containsParentTraversal(candidate: string): boolean {

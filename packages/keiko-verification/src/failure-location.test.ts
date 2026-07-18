@@ -285,3 +285,126 @@ describe("extractFailureLocations — workspace containment", () => {
     }
   });
 });
+
+// Regression guards for SonarCloud S8786 (superlinear regex backtracking). ESLINT_ROW,
+// VITEST_FRAME, and VITEST_TITLE were rewritten to use bounded repetition (VITEST_FRAME's file
+// token additionally bounded to 512 chars) instead of unbounded quantifiers directly adjacent to
+// an optional/lazy group.
+//
+// All three pre-fix patterns have a genuine, empirically confirmed polynomial (~quadratic) blowup
+// — this is not merely a lint-compliance concern. VITEST_FRAME's previous unbounded `[^\s()]+` is
+// the unanchored case: scanning a non-matching line tries every start position, and each attempt
+// was itself O(line-length), giving O(n^2) (a non-matching line took ~2.3s at 64,000 chars, up
+// from ~3ms at 2,000 — a clean quadratic curve). ESLINT_ROW and VITEST_TITLE are fully anchored
+// (`^...$`), so they don't have that per-position-scan mechanism — but an *earlier* pass's
+// "no measurable superlinear growth" finding for those two used adversarial shapes (repeated
+// short tokens, or a run directly abutting the mandatory `\s+`/`\s*` that precedes the capture)
+// that happen to let the mandatory whitespace swallow the whole ambiguous run, neutralizing the
+// backtracking before it can compound. With an anchor character that stops the mandatory
+// whitespace early, followed by a large interior run of the character class the lazy capture and
+// the following `\s{2,}`/`\s*` both match, followed by a terminator neither the optional group nor
+// the trailing `\s*$` can consume, both pre-fix patterns show the same clean quadratic growth as
+// VITEST_FRAME: ESLINT_ROW took ~3.1s at ~51,000 chars (up from ~45ms at 6,000), and VITEST_TITLE
+// took ~150ms at 16,000 chars with ~4x time per doubling. See the "empirical evidence" tests below,
+// which reproduce this directly against isolated copies of the pre-fix patterns.
+//
+// None of this is reachable through `extractFailureLocations` today: every line is filtered to
+// MAX_LINE_LENGTH (4,096 chars) before any of these regexes run (see the `.filter` call in
+// `extractFailureLocations`), and at that capped size the pre-fix and bounded patterns perform
+// comparably (~10-30ms) for all three — so there is no observable hang or regression at this
+// module's actual public boundary, before or after this change. The bound is still the right fix:
+// it closes a real superlinear-time class for any future direct caller of these patterns (if ever
+// exported, reused elsewhere, or if MAX_LINE_LENGTH is ever raised), not just a static-analysis
+// preference. The wall-clock budgets below carry large headroom over that ~10-30ms measured cost
+// specifically so they assert "not superlinear", not a tight performance SLA — decoupling the
+// regression guard from CI-load-driven timing noise (code review finding, PR #2471).
+describe("extractFailureLocations — regex safety (S8786 regression guards)", () => {
+  it("resolves many maximal-length non-matching vitest frame lines quickly", () => {
+    const noise = "a".repeat(4096);
+    const lines = Array.from({ length: 30 }, () => noise).join("\n");
+    const start = Date.now();
+    const out = extract("test", cmd(lines));
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(out).toEqual([]);
+  });
+
+  it("resolves a maximal-length ambiguous ESLint row quickly", () => {
+    const prefix = "  1:1  error  ";
+    // The leading "x" is an anchor that stops the mandatory `\s+` before the message from
+    // absorbing the entire space run below — without it, that `\s+` silently swallows all the
+    // ambiguity and the input no longer exercises the shape this test is named for.
+    const msg = `x${" ".repeat(4096 - prefix.length - 2)}!`;
+    const line = ["/repo/src/a.ts", `${prefix}${msg}`].join("\n");
+    const start = Date.now();
+    const out = extract("lint", cmd(line));
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.ruleId).toBeUndefined();
+  });
+
+  it("resolves a maximal-length ambiguous vitest title line quickly", () => {
+    // Same anchor-then-ambiguous-run-then-terminator shape as the ESLint row test above, applied
+    // to the title capture's own `\s*` neighbours.
+    const title = `a${" ".repeat(4096 - "FAIL ".length - 2)}b`;
+    const start = Date.now();
+    const out = extract("test", cmd(`FAIL ${title}`));
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(out).toEqual([]);
+  });
+
+  it("still captures multi-dot vitest file names unchanged (e.g. foo.perf.test.ts)", () => {
+    const out = extract("targeted-test", cmd(" ❯ src/workspaceIndex.perf.test.ts:7:3"));
+    expect(out).toHaveLength(1);
+    expect(out[0]?.file).toBe("src/workspaceIndex.perf.test.ts");
+  });
+
+  // Empirical evidence for the block comment above: isolated copies of the pre-fix ("OLD") and
+  // bounded-but-still-ambiguous ("NEW") patterns, exercised directly (bypassing
+  // extractFailureLocations' MAX_LINE_LENGTH filter, which is what makes this class unreachable
+  // in production) against the anchor + large-ambiguous-run + non-absorbable-terminator shape.
+  // This proves the closed class is real, not just SonarCloud preference, and would fail if the
+  // bound were ever removed. NEW_ESLINT_ROW mirrors the shipped ESLINT_ROW exactly; NEW_VITEST_TITLE
+  // mirrors what VITEST_TITLE looked like before its trailing `\s*$` was dropped entirely (a
+  // second SonarCloud pass kept flagging the bounded-but-still-adjacent shape) — kept here as a
+  // second, independent data point for the same underlying pattern family.
+  it("demonstrates the closed polynomial blowup for ESLINT_ROW's pre-fix shape", () => {
+    const OLD_ESLINT_ROW =
+      /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.+?)(?:\s{2,}(?<rule>[\w@/.-]+))?\s*$/u;
+    const NEW_ESLINT_ROW =
+      /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.{1,4096}?)(?:\s{2,4096}(?<rule>[\w@/.-]{1,4096}))?\s*$/u;
+    const n = 30_000;
+    const line = `  1:1  error  x${" ".repeat(n)}!`;
+
+    const oldStart = Date.now();
+    OLD_ESLINT_ROW.exec(line);
+    const oldMs = Date.now() - oldStart;
+
+    const newStart = Date.now();
+    NEW_ESLINT_ROW.exec(line);
+    const newMs = Date.now() - newStart;
+
+    // The bounded pattern's cost saturates once input exceeds its 4096 bound; the pre-fix
+    // pattern keeps growing quadratically. Assert both an absolute plateau and a relative gap so
+    // this isn't tied to one CI machine's absolute speed.
+    expect(newMs).toBeLessThan(2000);
+    expect(oldMs).toBeGreaterThan(newMs * 1.5);
+  });
+
+  it("demonstrates the closed polynomial blowup for VITEST_TITLE's pre-fix shape", () => {
+    const OLD_VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.+?)\s*$/u;
+    const NEW_VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.{1,4096}?)\s*$/u;
+    const n = 30_000;
+    const line = `FAIL a${" ".repeat(n)}b`;
+
+    const oldStart = Date.now();
+    OLD_VITEST_TITLE.exec(line);
+    const oldMs = Date.now() - oldStart;
+
+    const newStart = Date.now();
+    NEW_VITEST_TITLE.exec(line);
+    const newMs = Date.now() - newStart;
+
+    expect(newMs).toBeLessThan(2000);
+    expect(oldMs).toBeGreaterThan(newMs * 1.5);
+  });
+});

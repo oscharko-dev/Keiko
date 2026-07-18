@@ -91,7 +91,54 @@ const SECRET_PATTERN =
   /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{82}|npm_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
 const CREDENTIAL_VALUE_PATTERN =
   /(?:(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization)\s*:\s*|(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*)(?:bearer|basic)\s+\S+/iu;
-const CREDENTIAL_URL_PATTERN = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
+// Structural (non-regex) equivalent of /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u.
+// The original was an unanchored regex whose scheme-continuation class ([A-Za-z0-9+.-]*)
+// overlaps with the mandatory leading letter, letting the engine retry the scheme match at
+// every letter position of a long run before falling through to an unbounded userinfo scan —
+// O(n^2) worst case. Scanning for each "://" occurrence directly and validating its scheme and
+// userinfo segments with single-character class checks (no backtracking, no ambiguous split)
+// preserves identical match semantics in O(n).
+const CREDENTIAL_URL_SCHEME_HEAD_CHAR = /[A-Za-z]/u;
+const CREDENTIAL_URL_SCHEME_TAIL_CHAR = /[A-Za-z0-9+.-]/u;
+const CREDENTIAL_URL_USER_CHAR = /[^/\s:@]/u;
+const CREDENTIAL_URL_PASSWORD_CHAR = /[^/\s@]/u;
+
+function hasCredentialUrlScheme(value, separatorIndex) {
+  let schemeStart = separatorIndex - 1;
+  let sawSchemeLetter = false;
+  while (schemeStart >= 0 && CREDENTIAL_URL_SCHEME_TAIL_CHAR.test(value[schemeStart])) {
+    if (CREDENTIAL_URL_SCHEME_HEAD_CHAR.test(value[schemeStart])) sawSchemeLetter = true;
+    schemeStart -= 1;
+  }
+  return sawSchemeLetter;
+}
+
+// Consumes one-or-more `charPattern` characters starting at `start` and returns the index right
+// after the run, or -1 if no character matched (mirrors a `+` quantifier's all-or-nothing need).
+function consumeCredentialUrlRun(value, start, charPattern) {
+  let cursor = start;
+  while (cursor < value.length && charPattern.test(value[cursor])) cursor += 1;
+  return cursor === start ? -1 : cursor;
+}
+
+function credentialUrlAtSeparator(value, separatorIndex) {
+  if (!hasCredentialUrlScheme(value, separatorIndex)) return false;
+
+  const afterUser = consumeCredentialUrlRun(value, separatorIndex + 3, CREDENTIAL_URL_USER_CHAR);
+  if (afterUser === -1 || value[afterUser] !== ":") return false;
+
+  const afterPassword = consumeCredentialUrlRun(value, afterUser + 1, CREDENTIAL_URL_PASSWORD_CHAR);
+  return afterPassword !== -1 && value[afterPassword] === "@";
+}
+
+function containsCredentialUrl(value) {
+  let separatorIndex = value.indexOf("://");
+  while (separatorIndex !== -1) {
+    if (credentialUrlAtSeparator(value, separatorIndex)) return true;
+    separatorIndex = value.indexOf("://", separatorIndex + 1);
+  }
+  return false;
+}
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -833,7 +880,7 @@ function relativePathAt(record, key, path, failures) {
 
 export function isSafePortableRelativePath(value) {
   if (value.length === 0) return false;
-  if (CREDENTIAL_URL_PATTERN.test(value) || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)) return false;
+  if (containsCredentialUrl(value) || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)) return false;
   if (value.startsWith("/") || value.startsWith("\\\\") || value.startsWith("//")) return false;
   if (/^[A-Za-z]:/u.test(value)) return false;
   const parts = value.replaceAll("\\", "/").split("/");
@@ -1465,10 +1512,15 @@ function normalizeCredentialMetadataKey(key) {
   return key.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
 }
 
+// The acronym/word boundary insertion used a capturing ([A-Z]+)([A-Z][a-z]) pair whose two
+// quantified groups both match uppercase letters, so an unanchored, non-matching uppercase run
+// gets retried at every position within it — O(n^2) worst case. A zero-width lookbehind/lookahead
+// pinpoints the same boundary (an uppercase letter preceded by another uppercase letter and
+// followed by a lowercase letter) without any quantified, overlapping groups to backtrack over.
 function credentialMetadataWords(key) {
   return key
     .replaceAll(/([a-z0-9])([A-Z])/gu, "$1 $2")
-    .replaceAll(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+    .replaceAll(/(?<=[A-Z])(?=[A-Z][a-z])/gu, " ")
     .toLowerCase()
     .split(/[^a-z0-9]+/u)
     .filter((word) => word.length > 0);
@@ -1502,7 +1554,7 @@ function scanForbiddenString(value, path, failures) {
     SECRET_PATTERN.test(value) ||
     CREDENTIAL_VALUE_PATTERN.test(value) ||
     PRIVATE_PATH_PATTERN.test(value) ||
-    CREDENTIAL_URL_PATTERN.test(value)
+    containsCredentialUrl(value)
   ) {
     push(failures, path, "contains secret-like or private-path text");
   }

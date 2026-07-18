@@ -21,6 +21,7 @@ import {
   hashDirectoryTree,
   PORTABLE_TARGETS,
   findPortableMetadataRedactionFailures,
+  isSafePortableRelativePath,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,
@@ -165,6 +166,29 @@ describe("findPortableMetadataRedactionFailures", () => {
     ]) {
       expect(findPortableMetadataRedactionFailures(value)).toEqual([]);
     }
+  });
+
+  // SonarCloud S8786 regression: the credential-URL detector used to be an unanchored regex
+  // whose scheme-continuation class re-tried at every letter of a long run before falling
+  // through to an unbounded userinfo scan, and the credential-key word splitter used to pair
+  // two overlapping uppercase-quantifier groups. Both were O(n^2) worst case; a 20,000-character
+  // adversarial input took hundreds of milliseconds under the old patterns (measured before this
+  // fix landed) and must now stay well under budget.
+  it("stays fast scanning an adversarial credential-URL-shaped string", () => {
+    const adversarial = `${"a".repeat(10_000)}://${"b".repeat(10_000)}`;
+    const start = Date.now();
+    const failures = findPortableMetadataRedactionFailures(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(failures).toEqual([]);
+    expect(isSafePortableRelativePath(adversarial)).toBe(false);
+  });
+
+  it("stays fast scanning an adversarial acronym-shaped credential key", () => {
+    const adversarialKey = `${"A".repeat(10_000)}Key`;
+    const start = Date.now();
+    const failures = findPortableMetadataRedactionFailures({ [adversarialKey]: "opaque" });
+    expect(Date.now() - start).toBeLessThan(300);
+    expect(Array.isArray(failures)).toBe(true);
   });
 });
 

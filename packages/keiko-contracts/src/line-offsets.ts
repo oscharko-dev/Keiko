@@ -27,10 +27,10 @@ const CR = 0x0d;
 export function computeLineStarts(text: string): readonly number[] {
   const starts: number[] = [0];
   for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
+    const code = text.codePointAt(index) ?? 0;
     if (code === LF) {
       starts.push(index + 1);
-    } else if (code === CR && text.charCodeAt(index + 1) !== LF) {
+    } else if (code === CR && (text.codePointAt(index + 1) ?? 0) !== LF) {
       starts.push(index + 1);
     }
   }
@@ -53,12 +53,12 @@ export function lineContentEnd(text: string, lineStarts: readonly number[], line
   const nextLineStart =
     line + 1 < lineStarts.length ? (lineStarts[line + 1] ?? text.length) : text.length;
   let end = nextLineStart;
-  if (end > lineStart && text.charCodeAt(end - 1) === LF) {
+  if (end > lineStart && text.codePointAt(end - 1) === LF) {
     end -= 1;
-    if (end > lineStart && text.charCodeAt(end - 1) === CR) {
+    if (end > lineStart && text.codePointAt(end - 1) === CR) {
       end -= 1;
     }
-  } else if (end > lineStart && text.charCodeAt(end - 1) === CR) {
+  } else if (end > lineStart && text.codePointAt(end - 1) === CR) {
     // Old-Mac, lone-CR line terminator: strip it so a character offset never lands on the CR.
     end -= 1;
   }

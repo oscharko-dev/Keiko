@@ -878,6 +878,49 @@ describe("scope normalization helpers", () => {
   });
 });
 
+// SonarCloud S8786 — the trailing-slash trimmer previously used `/\/+$/u`. That single quantified
+// atom is anchored only at `$`, so on a string that never ends in "/" the engine retries the
+// greedy run from every start position before giving up: O(n^2) backtracking, not the O(n) a
+// bounded pattern like this looks like it should be. Same for the (now-removed) `/^\/+/u` +
+// trailing chain in normaliseRelativePath. root/openRoot/path here are workspace-selected or
+// chat/model-supplied identifiers, so an attacker-shaped value (many separators, no matching
+// trailing char) must stay cheap rather than degrade into a multi-second stall.
+describe("trailing-slash normalization — regex-safety regression (S8786)", () => {
+  it("normalizes adversarial-shaped roots and relative paths in linear time and with unchanged results", () => {
+    const n = 50_000;
+    // Non-slash prefix/suffix so a naive backtracking trailing-slash regex cannot short-circuit
+    // via the leading-slash strip and cannot match at the end either — forcing a full rescan.
+    const adversarialRoot = `/repo${"/".repeat(n)}z`;
+    const adversarialRelativePath = `y${"/".repeat(n)}z`;
+
+    const start = Date.now();
+    const scope = filesVisibleScope(
+      win("files", { resolvedRoot: adversarialRoot, activeFilePath: adversarialRelativePath }),
+      42,
+    );
+    const zc: MutableRefObject<number> = { current: 1 };
+    const { openEditorFile } = makeMutations({
+      setWins: () => undefined,
+      zc,
+      worldVP: () => layoutViewport,
+    });
+    const openResult = openEditorFile({
+      root: adversarialRoot,
+      path: "src/a.ts",
+    });
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(1500);
+    expect(scope).toEqual({
+      kind: "files",
+      relativePaths: ["y" + "/".repeat(n) + "z"],
+      root: "/repo" + "/".repeat(n) + "z",
+      connectedAtMs: 42,
+    });
+    expect(openResult.ok).toBe(true);
+  });
+});
+
 describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
   it("returns empty when the quality window has no connections", () => {
     const { linkedConnectorCapsuleIds } = makeConnectHarness([win("quality", {}, "quality")], []);

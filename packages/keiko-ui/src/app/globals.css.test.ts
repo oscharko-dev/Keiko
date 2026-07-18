@@ -555,7 +555,14 @@ describe("Chat grounded audit footer density", () => {
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   // Isolate the [data-theme="light"] block content
   const lightBlockStart = css.indexOf('[data-theme="light"]');
-  expect(lightBlockStart).toBeGreaterThan(-1);
+  // Setup-validity guard (not a test assertion): abort immediately with a clear message
+  // if the fixture assumption breaks, rather than asserting during describe-collection
+  // (S8784 — expect() must run inside a test/hook, not the describe body).
+  if (lightBlockStart === -1) {
+    throw new Error(
+      '[data-theme="light"] block not found in globals.css — check test fixture setup',
+    );
+  }
   // Find the matching closing brace
   let depth = 0;
   let lightBlockEnd = lightBlockStart;

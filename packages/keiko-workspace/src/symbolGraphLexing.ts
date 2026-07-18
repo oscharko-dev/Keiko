@@ -103,7 +103,7 @@ const KEYWORDS = new Set([
 function lineNumberOf(text: string, charIndex: number): number {
   let line = 1;
   for (let index = 0; index < charIndex && index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10) line += 1;
+    if (text.codePointAt(index) === 10) line += 1;
   }
   return line;
 }

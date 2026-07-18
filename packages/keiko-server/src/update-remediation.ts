@@ -97,7 +97,7 @@ function materializeAction(
   };
 }
 
-function overallStatus(
+export function overallStatus(
   actions: readonly UpdateRemediationAction[],
 ): UpdateRemediationOverallStatus {
   if (actions.length === 0 || actions.every((item) => item.status === "not-needed")) {
@@ -110,7 +110,10 @@ function overallStatus(
     if (action.status === "pending") return "pending";
     return "completed";
   });
-  return mapped.reduce((worst, item) => (statusRank(item) > statusRank(worst) ? item : worst));
+  return mapped.reduce(
+    (worst, item) => (statusRank(item) > statusRank(worst) ? item : worst),
+    "completed",
+  );
 }
 
 function completeOrDeferred(action: UpdateRemediationAction): boolean {

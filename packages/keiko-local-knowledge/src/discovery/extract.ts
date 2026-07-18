@@ -126,7 +126,7 @@ export interface ExtractDocumentDeps {
 // (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
 // containment checks work cross-platform.
 function normaliseSep(p: string): string {
-  return p.replace(/\\/g, "/");
+  return p.replaceAll("\\", "/");
 }
 
 function isContained(absoluteRoot: string, absolutePath: string): boolean {
@@ -277,12 +277,14 @@ function shouldPersistFailureRow(
   return existing === undefined || existing.status === "failed";
 }
 
+const DEFAULT_BUILD_FAILURE_RESULT_OPTIONS = Object.freeze({ persist: true });
+
 function buildFailureResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   documentId: DocumentId,
   error: DiscoveryError,
-  options: { readonly persist: boolean } = { persist: true },
+  options: { readonly persist: boolean } = DEFAULT_BUILD_FAILURE_RESULT_OPTIONS,
 ): ExtractionResult {
   const now = deps.store._internal.now;
   const redactedMessage = redactMessage(error.message, params.source);

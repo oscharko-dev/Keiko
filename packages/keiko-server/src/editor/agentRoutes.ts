@@ -820,7 +820,7 @@ function deriveSingleFilePostImage(inspection: PatchInspectionFile): AgentTextEd
 // matching same-file patch is not rejected on a cosmetic difference.
 function normalizeWorkspaceRelativePath(path: string): string {
   return path
-    .replace(/\\/gu, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join("/");

@@ -83,7 +83,7 @@ const ON_ATTR_PREFIXES = [" ", "\n", "\t", "'", '"'] as const;
 function isAssignmentAfterIdentifier(lower: string, start: number): boolean {
   let j = start;
   while (j < lower.length) {
-    const code = lower.charCodeAt(j);
+    const code = lower.codePointAt(j) ?? 0;
     if (code < 97 || code > 122) break;
     j++;
   }
@@ -207,7 +207,7 @@ function tryBold(
 
 function isWordChar(value: string | undefined): boolean {
   if (value === undefined || value.length === 0) return false;
-  const code = value.charCodeAt(0);
+  const code = value.codePointAt(0) ?? 0;
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 

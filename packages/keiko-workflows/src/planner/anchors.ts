@@ -160,7 +160,16 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
 const BACKTICK_RE = /`([^`\n]+)`/g;
-const PATH_RE = /(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}/g;
+// Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
+// realistic repository path, but it caps the worst-case backtracking work a single scan position
+// can spend to a fixed constant instead of one growing with input length. The previous unbounded
+// `(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}` let the trailing `[\w.-]+` and the group's inner
+// `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
+// points, which is quadratic on adversarial input (measured empirically before this change).
+// Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
+// exercise the pattern directly, past extractAnchors's MAX_INPUT_LENGTH guard, for the S8786
+// regression test.
+export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
 const API_ROUTE_RE = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.:{}-]+){2,})/g;
 // Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor

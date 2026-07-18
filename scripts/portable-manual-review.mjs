@@ -189,7 +189,7 @@ function ensureDir(path) {
 }
 
 function shellQuote(value) {
-  return `'${value.replace(/'/gu, `'\\''`)}'`;
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function targetByName(name) {

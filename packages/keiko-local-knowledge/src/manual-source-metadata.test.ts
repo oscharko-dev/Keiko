@@ -13,6 +13,8 @@
 // scope. This lets each test pick the exact `document_path` / origin / pathPrefix combination
 // under test without depending on crawl/parse/chunk machinery.
 
+import { pathToFileURL } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
@@ -32,7 +34,7 @@ import {
   updateHtmlManualRefreshState,
   type ResolveHtmlManualCitationTargetInput,
 } from "./manual-source-metadata.js";
-import { addSourceToCapsule } from "./source-lifecycle.js";
+import { addSourceToCapsule, updateSourceScopeInCapsule } from "./source-lifecycle.js";
 import { freshStore, sampleCapsuleInput, DEFAULT_EMBEDDING } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -306,6 +308,7 @@ describe("manual-source-metadata", () => {
         { label: "empty string", pathPrefix: "" },
         { label: "root slash", pathPrefix: "/" },
         { label: "trailing slash", pathPrefix: "/docs/" },
+        { label: "multiple trailing slashes", pathPrefix: "/docs///" },
         { label: "no trailing slash", pathPrefix: "/docs" },
       ])("accepts an in-scope path under pathPrefix ($label)", ({ pathPrefix }) => {
         const relativeSuffix =
@@ -468,6 +471,120 @@ describe("manual-source-metadata", () => {
         pageTitle: "page.html",
         safePageId: String(documentId),
         relativePath: "https://docs.internal/guide.html",
+      });
+    });
+  });
+
+  // ── Regression coverage for Sonar S8786 (super-linear regex backtracking) ─────────────
+  //
+  // `relativePathForSource`, `isWithinApprovedHttpPath`, and `localTarget` used to strip a
+  // trailing run of "/" with `value.replace(/\/+$/u, "")`. That pattern is unanchored at the
+  // start, so on a string that does NOT end in "/" the engine retries the match at every
+  // position inside any long interior run of "/" before giving up — O(n^2) on the run length.
+  // All three now use a linear backward scan (`stripTrailingSlashes`) instead. Each test below
+  // feeds a value shaped like the pathological case (a long run of "/" that is NOT at the very
+  // end of the string) through the real public entry point and asserts both a tight wall-clock
+  // budget and the exact same result the old regex would have produced (unchanged, since it
+  // does not end in "/").
+  //
+  // ADVERSARIAL_SLASH_RUN / BUDGET_MS are picked to actually discriminate fixed-vs-vulnerable
+  // code, not merely to "look adversarial": measured directly against the pre-fix
+  // `value.replace(/\/+$/u, "")` on this exact end-to-end path (readHtmlManualSourceMetadata +
+  // SQLite round trip), a 60,000-character run takes ~1.4s (fails a 500ms budget with a ~2.8x
+  // margin) while the O(n) `stripTrailingSlashes` fix takes ~15-20ms (passes with a >25x margin)
+  // — both comfortably clear of Vitest's 5s default per-test timeout. A smaller run (e.g. the
+  // previous 20,000 / 300ms) sits on the wrong side of the old regex's O(n^2) curve for this
+  // code path (~175ms, under budget) and silently passes on the vulnerable code, defeating the
+  // point of a regression test. Do not shrink these below a size that has been re-verified to
+  // fail against a reverted `.replace(/\/+$/u, "")` implementation.
+  describe("regex-safety (S8786): unbounded trailing-slash stripping", () => {
+    const ADVERSARIAL_SLASH_RUN = "/".repeat(60_000);
+    const BUDGET_MS = 500;
+
+    it("computes a folder-scope relativePath quickly when the source rootPath has a long non-trailing slash run", () => {
+      const rootPath = `/srv/manuals-adversarial${ADVERSARIAL_SLASH_RUN}root`;
+      updateSourceScopeInCapsule(fixture.store, CAPSULE_ID, SOURCE_ID, {
+        kind: "folder",
+        rootPath,
+        recursive: true,
+      });
+      persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, httpManualSource());
+      const documentId = "doc-folder-adversarial-root" as DocumentId;
+      insertDocumentRow(fixture.store._internal.db, {
+        id: documentId,
+        capsuleId: CAPSULE_ID,
+        sourceId: SOURCE_ID,
+        documentPath: `${rootPath}/guide.html`,
+        sizeBytes: 128,
+        mediaType: "text/html",
+        contentHash: "hash-folder-adversarial-root",
+        parserId: "html",
+        parserVersion: "1.0.0",
+        lastExtractedAt: 1000,
+        status: "extracted",
+        safeDisplayName: "guide.html",
+      });
+
+      const startedAt = Date.now();
+      const result = resolveHtmlManualCitationTarget(fixture.store, resolveInput(documentId));
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+      expect(result).toStrictEqual({
+        ok: true,
+        target: "https://docs.internal/guide.html",
+        sourceKind: "html-manual-http",
+        pageTitle: "guide.html",
+        safePageId: String(documentId),
+        relativePath: "guide.html",
+      });
+    });
+
+    it("resolves an http target quickly when pathPrefix has a long non-trailing slash run", () => {
+      const pathPrefix = `/docs${ADVERSARIAL_SLASH_RUN}tail`;
+      persistHtmlManualSourceMetadata(
+        fixture.store,
+        CAPSULE_ID,
+        SOURCE_ID,
+        httpManualSource({
+          scope: { kind: "html-manual-http", origin: "https://docs.internal", pathPrefix },
+        }),
+      );
+      const documentId = seedDocument(fixture.store, "doc-http-adversarial-prefix", "guide.html");
+
+      const startedAt = Date.now();
+      const result = resolveHtmlManualCitationTarget(fixture.store, resolveInput(documentId));
+      const elapsedMs = Date.now() - startedAt;
+
+      // The huge pathPrefix can never be a real prefix of the short resolved pathname, so this
+      // must fail closed — the point of the assertion is that it fails closed FAST, not that it
+      // hangs (or, under the old regex, times out the test runner).
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+      expect(result).toStrictEqual({ ok: false, reason: "target-outside-approved-scope" });
+    });
+
+    it("resolves a local file:// target quickly when rootPath has a long non-trailing slash run", () => {
+      const rootPath = `/srv/manuals-root${ADVERSARIAL_SLASH_RUN}tail`;
+      persistHtmlManualSourceMetadata(
+        fixture.store,
+        CAPSULE_ID,
+        SOURCE_ID,
+        localManualSource({ scope: { kind: "html-manual-local", rootPath } }),
+      );
+      const documentId = seedDocument(fixture.store, "doc-local-adversarial-root", "guide.html");
+
+      const startedAt = Date.now();
+      const result = resolveHtmlManualCitationTarget(fixture.store, resolveInput(documentId));
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+      expect(result).toStrictEqual({
+        ok: true,
+        target: pathToFileURL(`${rootPath}/guide.html`).href,
+        sourceKind: "html-manual-local",
+        pageTitle: "page.html",
+        safePageId: String(documentId),
+        relativePath: "guide.html",
       });
     });
   });

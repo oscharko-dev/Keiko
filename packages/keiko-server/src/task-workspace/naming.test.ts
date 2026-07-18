@@ -68,6 +68,25 @@ describe("deriveTaskBranchName", () => {
       deriveTaskBranchName({ taskId: "issue-445" }),
     );
   });
+
+  // Regression for S8786: slugifyTaskId's leading/trailing "-."-trim used to be
+  // `/^[-.]+/` + `/[-.]+$/`, a regex shape SonarCloud flags on sight. It is now a plain index
+  // scan (naming.ts's trimEdgeChars). Note this is an end-to-end check on slugifyTaskId, not a
+  // direct stress test of trimEdgeChars itself: the preceding `.replace(/[^a-z0-9]+/gu, "-")`
+  // step already collapses the entire 40,001-char all-separator input down to a single "-"
+  // before trimEdgeChars ever runs, so trimEdgeChars itself never sees more than one leading or
+  // trailing character through this call site. What this asserts is that slugifyTaskId as a
+  // whole stays fast and falls back to "task" for a large all-separator task id.
+  it("slugifies a huge run of trim-edge characters in bounded time", () => {
+    const taskId = `${"-".repeat(20_000)}.${".".repeat(20_000)}`;
+    const start = Date.now();
+    const branch = deriveTaskBranchName({ taskId });
+    const elapsedMs = Date.now() - start;
+
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(branch.startsWith("keiko/task/task-")).toBe(true);
+    expect(isSafeGitRefName(branch)).toBe(true);
+  });
 });
 
 describe("deriveManagedWorktreePath / marker", () => {

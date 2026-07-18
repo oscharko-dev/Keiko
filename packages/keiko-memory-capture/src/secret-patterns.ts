@@ -71,6 +71,19 @@ const GERMAN_IBAN_RE = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/i;
 const GERMAN_TAX_ID_CANDIDATE_RE = /\b\d(?:[ -]?\d){10}\b/;
 const GERMAN_PHONE_RE = /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){5,12}\b/;
 
+// Strip trailing "/" characters with a bounded scan instead of the unanchored `/\/+$/u`: without
+// a `^` anchor, that pattern retries the match at every position inside a long slash run whenever
+// the string doesn't end in "/", which is quadratic in input length (SonarCloud S8786). `value`
+// here is a parsed URL's pathname, extracted from attacker-influenced free text, so this must stay
+// linear even on an adversarially long path.
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.codePointAt(end - 1) === 0x2f /* "/" */) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
   for (const pattern of patterns) {
     if (pattern.test(value)) {
@@ -93,7 +106,7 @@ function looksLikeProviderBaseUrl(value: string): boolean {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       continue;
     }
-    const normalizedPath = parsed.pathname.replace(/\/+$/u, "");
+    const normalizedPath = stripTrailingSlashes(parsed.pathname);
     const hasOpenAiBasePath =
       normalizedPath === "/v1" ||
       normalizedPath === "/openai/v1" ||

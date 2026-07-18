@@ -20,17 +20,16 @@ export interface RerankerSeam {
   ): Promise<readonly CandidateFile[]>;
 }
 
-// No `await` in the body — use the resolve/reject pattern from prior PRs to avoid the
-// `@typescript-eslint/require-await` lint while preserving the async surface.
+// No `await` in the body: a plain function returning `Promise.resolve(...)` of a
+// synchronous, non-throwing value preserves the async surface without triggering
+// `@typescript-eslint/require-await`. No try/catch: `Promise.resolve` of a plain object
+// literal / readonly reference cannot throw synchronously, so a catch here would be dead
+// defensive code (SonarCloud typescript:S4822).
 function unavailable(): Promise<RerankerAvailability> {
-  try {
-    return Promise.resolve({
-      available: false as const,
-      reason: "reranker-not-configured",
-    });
-  } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+  return Promise.resolve({
+    available: false as const,
+    reason: "reranker-not-configured",
+  });
 }
 
 function identity(
@@ -38,11 +37,7 @@ function identity(
   _atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>,
   _topK: number,
 ): Promise<readonly CandidateFile[]> {
-  try {
-    return Promise.resolve(candidates);
-  } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+  return Promise.resolve(candidates);
 }
 
 export const disabledReranker: RerankerSeam = {

@@ -47,7 +47,7 @@ function foldForSearch(text: string): string {
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/gu, "")
-    .replace(/ß/gu, "ss");
+    .replaceAll("ß", "ss");
 }
 
 const STOP_WORDS: ReadonlySet<string> = new Set([

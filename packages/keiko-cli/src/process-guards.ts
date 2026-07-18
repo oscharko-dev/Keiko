@@ -22,16 +22,16 @@ export function fatalProcessLine(kind: string, reason: unknown): string {
   return `keiko: fatal ${kind} (${named}). The process will exit.\n`;
 }
 
-export function installProcessGuards(
-  sink: ProcessGuardSink = {
-    err: (text: string): void => {
-      process.stderr.write(text);
-    },
-    exit: (code: number): void => {
-      process.exit(code);
-    },
+const DEFAULT_PROCESS_GUARD_SINK: ProcessGuardSink = {
+  err: (text: string): void => {
+    process.stderr.write(text);
   },
-): void {
+  exit: (code: number): void => {
+    process.exit(code);
+  },
+};
+
+export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GUARD_SINK): void {
   process.on("uncaughtException", (error: Error) => {
     sink.err(fatalProcessLine("uncaught exception", error));
     sink.exit(1);

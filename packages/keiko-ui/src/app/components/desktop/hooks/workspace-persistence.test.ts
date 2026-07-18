@@ -301,6 +301,27 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain("must");
   });
 
+  it("rejects opaque-reference and figma-screen-id values containing a supplementary-plane character", () => {
+    // "😀" (U+1F600) is 2 UTF-16 code units. isAllowedReferenceChar()/the figma
+    // screen-id char check iterate with `for (const char of value)` (one Unicode code
+    // point per step) and read it via codePointAt(0); the emoji must still fall
+    // outside every allowed ASCII range and be rejected, exactly as the pre-rename
+    // charCodeAt(0) comparison did.
+    const persisted = sanitizePersistedWindows([
+      win({ id: "review-1", type: "review", cfg: { runId: "run-😀-123" } }),
+      win({
+        id: "figma-json-1",
+        type: "figmaJson",
+        cfg: { snapshotRunId: "fs-abc-123", screenId: "screen-😀-1" },
+      }),
+    ]);
+
+    expect(persisted.find((entry) => entry.id === "review-1")?.cfg).toEqual({});
+    expect(persisted.find((entry) => entry.id === "figma-json-1")?.cfg).toEqual({
+      snapshotRunId: "fs-abc-123",
+    });
+  });
+
   it("preserves standalone Figma image references without persisting raw image data or external URLs", () => {
     const persisted = sanitizePersistedWindows([
       win({

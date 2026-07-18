@@ -51,10 +51,10 @@ function parseHunkHeader(
   const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
   if (m === null || m[1] === undefined || m[3] === undefined) return null;
   return {
-    oldStart: parseInt(m[1], 10),
-    oldCount: m[2] === undefined ? 1 : parseInt(m[2], 10),
-    newStart: parseInt(m[3] ?? "1", 10),
-    newCount: m[4] === undefined ? 1 : parseInt(m[4], 10),
+    oldStart: Number.parseInt(m[1], 10),
+    oldCount: m[2] === undefined ? 1 : Number.parseInt(m[2], 10),
+    newStart: Number.parseInt(m[3] ?? "1", 10),
+    newCount: m[4] === undefined ? 1 : Number.parseInt(m[4], 10),
   };
 }
 

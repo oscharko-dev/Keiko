@@ -236,7 +236,7 @@ export function detectFrontendStack(
 // ─── Target classification (pure) ──────────────────────────────────────────────────────────────────
 
 function toPosix(path: string): string {
-  return path.split("\\").join("/");
+  return path.replaceAll("\\", "/");
 }
 
 function lastSegment(path: string): string {

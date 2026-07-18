@@ -26,7 +26,7 @@ export function assertValidRunId(runId: string): void {
     throw new InvalidRunIdError("runId must not start with a dot");
   }
   for (let i = 0; i < runId.length; i += 1) {
-    if (!isAllowedChar(runId.charCodeAt(i))) {
+    if (!isAllowedChar(runId.codePointAt(i) ?? 0)) {
       throw new InvalidRunIdError("runId contains a disallowed character");
     }
   }

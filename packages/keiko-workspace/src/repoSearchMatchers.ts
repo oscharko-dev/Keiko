@@ -237,11 +237,30 @@ interface NaturalLanguageIntent {
   readonly httpMethods: readonly string[];
 }
 
+const LEADING_NON_ALNUM_RE = /^[^\p{L}\p{N}]+/u;
+
+// Reverse a string by Unicode code point (not UTF-16 code unit), so surrogate pairs and
+// combining marks stay intact — `Array.from` iterates by code point, matching how `\p{L}`/`\p{N}`
+// classify characters under the regex `u` flag.
+function reverseByCodePoint(value: string): string {
+  return Array.from(value).reverse().join("");
+}
+
 // Strip leading/trailing non-alphanumeric characters (Unicode-aware) while preserving internal
-// punctuation such as the hyphen in "ADR-0022" or the dot in "file.ts". Anchored, single
-// character-class quantifiers only - linear in input length (ReDoS-safe).
-function normalizeNaturalLanguageToken(raw: string): string {
-  return raw.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+// punctuation such as the hyphen in "ADR-0022" or the dot in "file.ts".
+//
+// The trailing strip used to be a second pattern, `[^\p{L}\p{N}]+$` — despite the comment this
+// replaced, that one is NOT fully anchored (no `^`), so the engine retries the match at every
+// position inside a long non-alphanumeric run before concluding there is no match at the string's
+// end: quadratic in input length (SonarCloud S8786, confirmed empirically). The leading pattern
+// above IS safe (the `^` pins the single start position), so the trailing strip now reuses it by
+// reversing the string, stripping the (now-leading) run, and reversing back.
+// Exported for the co-located regression test only — not part of the package's public surface
+// (index.ts does not re-export anything from this module).
+export function normalizeNaturalLanguageToken(raw: string): string {
+  const leadingStripped = raw.replace(LEADING_NON_ALNUM_RE, "");
+  const reversed = reverseByCodePoint(leadingStripped).replace(LEADING_NON_ALNUM_RE, "");
+  return reverseByCodePoint(reversed);
 }
 
 function naturalLanguageNormalizedTokens(rawTokens: readonly string[]): readonly string[] {

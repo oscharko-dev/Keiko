@@ -25,6 +25,7 @@ import { createInMemoryUiStore } from "../../store/index.js";
 import {
   makeFigmaSnapshotLoader,
   makeFigmaVisionHintProvider,
+  stripJsonCodeFence,
   type FigmaVisionScreenRequest,
 } from "../figmaSnapshotAdapter.js";
 
@@ -515,5 +516,44 @@ describe("makeFigmaVisionHintProvider", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("stripJsonCodeFence (S8786 regression)", () => {
+  it("strips a ```json fence, case-insensitively", () => {
+    expect(stripJsonCodeFence('```json\n["a", "b"]\n```')).toBe('["a", "b"]');
+    expect(stripJsonCodeFence('```JSON\n["a", "b"]\n```')).toBe('["a", "b"]');
+  });
+
+  it("strips a bare ``` fence with no language tag", () => {
+    expect(stripJsonCodeFence('```\n["a", "b"]\n```')).toBe('["a", "b"]');
+  });
+
+  it("returns the input unchanged when it is not fenced", () => {
+    expect(stripJsonCodeFence('["a", "b"]')).toBe('["a", "b"]');
+  });
+
+  it("returns the input unchanged when only one side is fenced", () => {
+    expect(stripJsonCodeFence('```json\n["a", "b"]')).toBe('```json\n["a", "b"]');
+  });
+
+  it("returns the input unchanged when it is too short to hold both fences", () => {
+    expect(stripJsonCodeFence("``````".slice(0, 5))).toBe("`````");
+  });
+
+  // Regression for S8786: the old `/^```(?:json)?\s*([\s\S]*?)\s*```$/iu` pattern's lazy
+  // `([\s\S]*?)` sits between two greedy `\s*` runs whose class is a strict subset of `[\s\S]` —
+  // an adjacent-overlapping-quantifier shape. A fenced-looking string with no real closing fence
+  // measured well over a second at ~2,000 characters locally (and climbed sharply from there).
+  // The rewritten plain-JS version is a fixed number of string operations regardless of content;
+  // this must stay comfortably under budget even at 20,000 characters.
+  it("stays well within a tight time budget for a long unterminated fenced-looking string", () => {
+    const adversarial = "```json" + " ".repeat(6_000) + "x".repeat(8_000) + " ".repeat(6_000);
+    const start = Date.now();
+    const result = stripJsonCodeFence(adversarial);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1500);
+    // No real closing fence anywhere in the string, so it is returned unchanged.
+    expect(result).toBe(adversarial);
   });
 });

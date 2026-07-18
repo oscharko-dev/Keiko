@@ -163,6 +163,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// `codePointAt` returns `number | undefined` (unlike `charCodeAt`, which returns `NaN` in range) so
+// every scanner below stays a plain `number`. The callers only ever pass an in-bounds index; the
+// fallback is unreachable in practice and `0` never collides with any ASCII constant compared below.
+function codePointOrZero(value: string, index: number): number {
+  return value.codePointAt(index) ?? 0;
+}
+
 function isAsciiLetterCode(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
@@ -196,7 +203,7 @@ function isEmailDomainCode(code: number): boolean {
 function isDigitsOnlyRun(value: string, start: number, end: number): boolean {
   if (end <= start) return false;
   for (let i = start; i < end; i += 1) {
-    if (!isAsciiDigitCode(value.charCodeAt(i))) return false;
+    if (!isAsciiDigitCode(codePointOrZero(value, i))) return false;
   }
   return true;
 }
@@ -208,7 +215,7 @@ function isIpLikeDomain(value: string, start: number, end: number): boolean {
   let labelStart = start;
   let labelCount = 0;
   for (let i = start; i <= end; i += 1) {
-    if (i !== end && value.charCodeAt(i) !== 46) continue;
+    if (i !== end && value.codePointAt(i) !== 46) continue;
     if (!isDigitsOnlyRun(value, labelStart, i)) return false;
     labelCount += 1;
     labelStart = i + 1;
@@ -220,23 +227,25 @@ function hasEmailDomainSuffix(value: string, start: number, end: number): boolea
   if (isIpLikeDomain(value, start, end)) return true;
   let finalDot = -1;
   for (let i = start; i < end; i += 1) {
-    if (value.charCodeAt(i) === 46) finalDot = i;
+    if (value.codePointAt(i) === 46) finalDot = i;
   }
   if (finalDot <= start || end - finalDot - 1 < 2) return false;
   for (let i = finalDot + 1; i < end; i += 1) {
-    if (!isAsciiLetterCode(value.charCodeAt(i))) return false;
+    if (!isAsciiLetterCode(codePointOrZero(value, i))) return false;
   }
   return true;
 }
 
 function containsEmailLikeText(value: string): boolean {
   for (let at = 1; at < value.length - 3; at += 1) {
-    if (value.charCodeAt(at) !== 64) continue;
+    if (value.codePointAt(at) !== 64) continue;
     let localStart = at;
-    while (localStart > 0 && isEmailLocalCode(value.charCodeAt(localStart - 1))) localStart -= 1;
+    while (localStart > 0 && isEmailLocalCode(codePointOrZero(value, localStart - 1))) {
+      localStart -= 1;
+    }
     if (localStart === at) continue;
     let domainEnd = at + 1;
-    while (domainEnd < value.length && isEmailDomainCode(value.charCodeAt(domainEnd))) {
+    while (domainEnd < value.length && isEmailDomainCode(codePointOrZero(value, domainEnd))) {
       domainEnd += 1;
     }
     if (hasEmailDomainSuffix(value, at + 1, domainEnd)) return true;
@@ -245,20 +254,20 @@ function containsEmailLikeText(value: string): boolean {
 }
 
 function skipOptionalSsnSeparator(value: string, index: number): number {
-  const code = value.charCodeAt(index);
+  const code = value.codePointAt(index);
   return code === 32 || code === 45 ? index + 1 : index;
 }
 
 function hasDigitsAt(value: string, start: number, count: number): boolean {
   if (start + count > value.length) return false;
   for (let i = start; i < start + count; i += 1) {
-    if (!isAsciiDigitCode(value.charCodeAt(i))) return false;
+    if (!isAsciiDigitCode(codePointOrZero(value, i))) return false;
   }
   return true;
 }
 
 function isDigitBoundary(value: string, index: number): boolean {
-  return index < 0 || index >= value.length || !isAsciiDigitCode(value.charCodeAt(index));
+  return index < 0 || index >= value.length || !isAsciiDigitCode(codePointOrZero(value, index));
 }
 
 function containsSsnLikeText(value: string): boolean {
@@ -288,17 +297,17 @@ function scanPhoneLikeText(value: string, start: number): boolean {
   // separator or word must not defeat detection, so the verdict depends only on how many digits
   // the bounded run carries — the leading digit boundary is already enforced by the caller.
   let digits = 0;
-  const first = value.charCodeAt(start);
+  const first = value.codePointAt(start);
   let index = first === 43 ? start + 1 : start;
-  for (; index < value.length && isPhoneBodyCode(value.charCodeAt(index)); index += 1) {
-    if (isAsciiDigitCode(value.charCodeAt(index))) digits += 1;
+  for (; index < value.length && isPhoneBodyCode(codePointOrZero(value, index)); index += 1) {
+    if (isAsciiDigitCode(codePointOrZero(value, index))) digits += 1;
   }
   return digits >= 8;
 }
 
 function containsPhoneLikeText(value: string): boolean {
   for (let start = 0; start < value.length; start += 1) {
-    const code = value.charCodeAt(start);
+    const code = codePointOrZero(value, start);
     if ((code === 43 || isAsciiDigitCode(code)) && isDigitBoundary(value, start - 1)) {
       if (scanPhoneLikeText(value, start)) return true;
     }

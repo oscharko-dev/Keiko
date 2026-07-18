@@ -184,4 +184,23 @@ describe("csvParser", () => {
       { tableName: "csv", rowIndex: 0, span: "Name=A | Preis=42\n" },
     ]);
   });
+
+  // S7758 regression: the field/row scanner decides quote/delimiter/newline boundaries via
+  // `charCodeAt` → `codePointAt` equality checks against fixed ASCII codes (0x22 quote, 0x2c/
+  // 0x09 delimiter, 0x0a/0x0d newline). A supplementary-plane character's code units (or
+  // combined code point) never fall in those ranges, so it must be treated as ordinary bare
+  // field data both inside and outside a quoted field, and the row span must still reproduce
+  // it exactly.
+  it("treats a supplementary-plane character in a field as ordinary data, not a delimiter/quote/newline", () => {
+    const text = 'a,b\n1,"note: 😀 field"\n2,plain 😀 field\n';
+    const result = csvParser.parse(
+      selectionFromText(text, { extension: "csv" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const parsed = rows(normalizedText(result), result.units);
+    expect(parsed).toEqual([
+      { tableName: "csv", rowIndex: 0, span: "a=1 | b=note: 😀 field\n" },
+      { tableName: "csv", rowIndex: 1, span: "a=2 | b=plain 😀 field\n" },
+    ]);
+  });
 });

@@ -4,7 +4,11 @@ import { useState, type ReactNode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { buildLastGroundedBudgetStatus, ConnectedScopePill } from "./ConnectedScopePill";
+import {
+  buildLastGroundedBudgetStatus,
+  ConnectedScopePill,
+  stripTrailingSlashes,
+} from "./ConnectedScopePill";
 import type {
   Chat,
   ChatConnectedScope,
@@ -78,6 +82,28 @@ function contextPack(
     ...overrides,
   };
 }
+
+describe("stripTrailingSlashes", () => {
+  it("strips one or more trailing slashes, matching the prior regex behaviour", () => {
+    expect(stripTrailingSlashes("/data/alpha/")).toBe("/data/alpha");
+    expect(stripTrailingSlashes("/data/alpha////")).toBe("/data/alpha");
+    expect(stripTrailingSlashes("/data/alpha")).toBe("/data/alpha");
+    expect(stripTrailingSlashes("")).toBe("");
+    expect(stripTrailingSlashes("///")).toBe("");
+  });
+
+  // SonarCloud S8786: the previous `/\/+$/` pattern has no leading `^` anchor, so the engine
+  // retries the match at every position inside a long slash run before concluding there is no
+  // match — O(n^2) when the string never ends in "/". Must stay fast well past a size the old
+  // pattern would already be very slow at.
+  it("stays linear for a long non-terminating slash run (regression for SonarCloud S8786)", () => {
+    const adversarial = `${"/".repeat(320_000)}x`;
+    const start = Date.now();
+    const result = stripTrailingSlashes(adversarial);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(result).toBe(adversarial);
+  });
+});
 
 describe("ConnectedScopePill", () => {
   it("renders nothing when the chat has no connected scope", () => {

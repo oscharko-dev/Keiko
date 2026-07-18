@@ -36,7 +36,8 @@ function assertValidName(name: string): void {
     throw new EvidenceWriteError("side-file name must not start with a dot");
   }
   for (let i = 0; i < name.length; i += 1) {
-    if (!isAllowedNameChar(name.charCodeAt(i))) {
+    const code = name.codePointAt(i);
+    if (code === undefined || !isAllowedNameChar(code)) {
       throw new EvidenceWriteError("side-file name contains a disallowed character");
     }
   }

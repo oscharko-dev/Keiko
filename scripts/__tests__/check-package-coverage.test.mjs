@@ -11,6 +11,7 @@ import {
   evaluateFileFloors,
   evaluatePackageCoverage,
   listPackages,
+  parseArgs,
 } from "../check-package-coverage.mjs";
 
 function makeRoot() {
@@ -374,5 +375,49 @@ describe("per-file coverage floors", () => {
       fileFloors: { "packages/keiko-a/src/hot.ts": 39.5 },
     });
     expect(baseline.fileFloors).toEqual({ "packages/keiko-a/src/hot.ts": 39.5 });
+  });
+
+  it("parses a boolean flag, an inline `--flag=value` assignment, and space-separated value flags in one pass", () => {
+    // Exercises all three token widths the argv loop advances by: a bare boolean flag
+    // (--strict, 1 token), an inline assignment (--target=90, 1 token), and
+    // space-separated value flags (--metric branches / --package keiko-a, 2 tokens each).
+    // A off-by-one in the index advancement would either re-read a flag as its own value
+    // or skip the following flag entirely.
+    const parsed = parseArgs([
+      "--strict",
+      "--target=90",
+      "--metric",
+      "branches",
+      "--package",
+      "keiko-a",
+    ]);
+
+    expect(parsed).toMatchObject({
+      strict: true,
+      target: 90,
+      metric: "branches",
+      package: ["keiko-a"],
+    });
+  });
+
+  it("parses consecutive list-value flags without dropping or duplicating tokens", () => {
+    const parsed = parseArgs([
+      "--package",
+      "keiko-a",
+      "--exclude-package",
+      "keiko-b",
+      "--enforce-file-floors",
+      "--coverage",
+      "coverage-a.json",
+      "--coverage",
+      "coverage-b.json",
+    ]);
+
+    expect(parsed).toMatchObject({
+      package: ["keiko-a"],
+      excludePackage: ["keiko-b"],
+      enforceFileFloors: true,
+      coverage: ["coverage-a.json", "coverage-b.json"],
+    });
   });
 });

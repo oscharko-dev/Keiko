@@ -969,7 +969,7 @@ function insertHistoryRow(
 // owning row; the random suffix avoids same-millisecond collisions that a deterministic clock
 // (test fixtures, fast production clock ticks) would otherwise produce.
 function nextHistoryRowId(relationshipId: string): string {
-  return `${relationshipId}-h-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  return `${relationshipId}-h-${randomUUID().replaceAll("-", "").slice(0, 8)}`;
 }
 
 function validateWalkBounds(o: {

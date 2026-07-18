@@ -14,7 +14,12 @@ import {
   type KnowledgeCapsuleId,
   type KnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { ChatWindow, clearKnowledgeCatalogCacheForTests, copyableMessageText } from "./ChatWindow";
+import {
+  ChatWindow,
+  clearKnowledgeCatalogCacheForTests,
+  copyableMessageText,
+  rootDisplayName,
+} from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
@@ -2753,6 +2758,52 @@ describe("ChatWindow message copy", () => {
 
   it("removes standalone source labels without corrupting answer spacing", () => {
     expect(copyableMessageText("Alpha [source: api] beta.")).toBe("Alpha beta.");
+  });
+
+  // SonarCloud S8786 regression — the citation-marker pattern used to lead with an unbounded
+  // `\s*` directly followed by a mandatory, rarely-occurring bracket atom: for a long run of
+  // whitespace that never resolves into a marker, a backtracking engine retries the whole run
+  // from every offset inside it (O(n^2)). Newlines (not spaces/tabs) keep the run intact through
+  // sanitizeRepositoryEvidenceText's own space/tab collapsing pass, so this exercises the citation
+  // stripper directly. Empirically, the old shape took ~300ms at this input size on ordinary
+  // hardware; the fixed implementation (matchAll + a bounded backward whitespace scan) is O(n)
+  // and completes in low single-digit milliseconds.
+  it("strips citation markers from a huge non-matching whitespace run in O(n), not O(n^2)", () => {
+    const adversarial = `${"\n".repeat(25_000)}no marker here`;
+    const start = performance.now();
+    const result = copyableMessageText(adversarial);
+    const elapsed = performance.now() - start;
+
+    expect(result).toBe(adversarial);
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  describe("rootDisplayName", () => {
+    it("normalizes backslashes and trims one or many trailing slashes to the final segment", () => {
+      expect(rootDisplayName("/Users/foo/bar")).toBe("bar");
+      expect(rootDisplayName("/Users/foo/bar/")).toBe("bar");
+      expect(rootDisplayName("/Users/foo/bar///")).toBe("bar");
+      expect(rootDisplayName("C:\\Users\\foo\\bar\\")).toBe("bar");
+      expect(rootDisplayName("C:\\Users\\foo\\bar")).toBe("bar");
+      expect(rootDisplayName("single")).toBe("single");
+      // Degenerate all-slash input falls back to the original root (no segment left to name).
+      expect(rootDisplayName("///")).toBe("///");
+    });
+
+    // SonarCloud S8786 regression — `/\/+$/u` is unanchored at the start, so a backtracking
+    // engine retries a long slash run that never reaches the true end from every offset inside
+    // it (O(n^2)). Empirically, the old shape took ~225ms at this input size on ordinary
+    // hardware; the fixed implementation (a manual backward scan) is O(n) and completes in
+    // low single-digit milliseconds.
+    it("trims a huge non-terminal slash run in O(n), not O(n^2)", () => {
+      const adversarial = `${"/".repeat(25_000)}x`;
+      const start = performance.now();
+      const result = rootDisplayName(adversarial);
+      const elapsed = performance.now() - start;
+
+      expect(result).toBe("x");
+      expect(elapsed).toBeLessThan(200);
+    });
   });
 
   it("surfaces assistant answer clipboard failures", async () => {

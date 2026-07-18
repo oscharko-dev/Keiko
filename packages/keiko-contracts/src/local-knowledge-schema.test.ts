@@ -1106,6 +1106,15 @@ describe("redactPathInDiagnostic", () => {
     );
   });
 
+  it("preserves a supplementary-plane character intact while trimming a trailing separator", () => {
+    // The HOME-prefix trailing-slash trim scans backward one UTF-16 code unit at a time; a
+    // supplementary-plane character (😀, two code units) immediately before the trimmed slash must
+    // survive whole, not be split or miscounted.
+    expect(redactPathInDiagnostic("/Users/😀foo/secret.txt", { homePrefix: "/Users/😀foo/" })).toBe(
+      "~/secret.txt",
+    );
+  });
+
   it("does not collapse `/Users/foobar` into `/Users/foo` (prefix-with-separator gate)", () => {
     expect(redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" })).toBe(
       "/Users/foobar/x",

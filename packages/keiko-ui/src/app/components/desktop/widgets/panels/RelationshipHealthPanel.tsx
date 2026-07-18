@@ -189,6 +189,9 @@ function OrphanedEndpointList({ findings }: { findings: HealthFindings }): React
       style={{ marginBottom: 14 }}
     >
       <div className="rb-section-label" role="heading" aria-level={3}>
+        {/* No text-node space before the count pill by design — matches the same
+            label+rb-count pattern in RelationshipFindingList and RelationshipImpactCard,
+            where the pill's own padding/background provides the visual separation. */}
         Orphaned endpoints
         <span className="rb-count" aria-hidden="true">
           {findings.orphanedEndpoints.length}

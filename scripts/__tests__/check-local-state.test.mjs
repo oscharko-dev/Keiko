@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runRepairCli } from "@oscharko-dev/keiko-cli";
 import { sealString } from "@oscharko-dev/keiko-security";
 
-import { auditLocalState } from "../lib/local-state-audit.mjs";
+import { _testables, auditLocalState } from "../lib/local-state-audit.mjs";
 import { createDriftedFixture, createHealthyFixture } from "../lib/local-state-fixture.mjs";
 
 // Builds a minimal SQLite file at `path` from raw DDL/DML. Used to craft store-shaped databases that
@@ -224,8 +224,8 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "credentials").findings.join(" ")).toContain("not valid JSON");
   });
 
-  it("fails when a sensitive artifact is group/world-readable", () => {
-    if (process.platform === "win32") return;
+  it("fails when a sensitive artifact is group/world-readable", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(root, "loose", ".keiko");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const configPath = join(stateDir, "keiko.config.json");
@@ -422,8 +422,8 @@ describe("auditLocalState — per-class failure detection", () => {
     );
   });
 
-  it("credentials: refuses symlinked credential directories without reporting targets", () => {
-    if (process.platform === "win32") return;
+  it("credentials: refuses symlinked credential directories without reporting targets", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("credentials-symlink");
     const outsideDir = join(root, "outside-credentials");
     mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
@@ -463,8 +463,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(ref);
   });
 
-  it("file-modes: detects a group/world-readable state directory", () => {
-    if (process.platform === "win32") return;
+  it("file-modes: detects a group/world-readable state directory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("loose-dir");
     chmodSync(stateDir, 0o755);
     expect(auditLocalState(stateDir).classes.find((c) => c.id === "file-modes").status).toBe(
@@ -472,8 +472,8 @@ describe("auditLocalState — per-class failure detection", () => {
     );
   });
 
-  it("file-modes: detects a group/world-readable subdirectory", () => {
-    if (process.platform === "win32") return;
+  it("file-modes: detects a group/world-readable subdirectory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("loose-subdir");
     const sub = join(stateDir, "credentials");
     mkdirSync(sub, { recursive: true, mode: 0o700 });
@@ -675,8 +675,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(integrity.findings.join(" ")).toContain("SQLite quarantine diagnostic record");
   });
 
-  it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("tool-result-symlink");
     const evidenceDir = join(stateDir, "evidence");
     const outsideDir = join(root, "outside-tool-results");
@@ -761,8 +761,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).toContain("sha256 does not match");
   });
 
-  it("evidence-qi: refuses symlinked artifacts without reporting their targets", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses symlinked artifacts without reporting their targets", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("evidence-symlink");
     const evidenceDir = join(stateDir, "evidence");
     const outsideDir = join(root, "outside-evidence");
@@ -777,8 +777,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(outsideTarget);
   });
 
-  it("evidence-qi: refuses a symlinked evidence root without reporting its target", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses a symlinked evidence root without reporting its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("evidence-root-symlink");
     const outsideDir = join(root, "outside-evidence-root");
     mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
@@ -792,8 +792,8 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).not.toContain(outsideDir);
   });
 
-  it("evidence-qi: refuses Figma image side-files through symlinked parent directories", () => {
-    if (process.platform === "win32") return;
+  it("evidence-qi: refuses Figma image side-files through symlinked parent directories", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("figma-sidefile-parent-symlink");
     const qiDir = join(stateDir, "evidence", "qi");
     const snapshotRoot = join(qiDir, "figma-snapshots");
@@ -891,5 +891,39 @@ describe("auditLocalState — secret-shape detection", () => {
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("secret key assignment");
+  });
+});
+
+// Regression coverage for the S8786 rewrite of `isPlaceholderSafe`'s trailing-punctuation trim: a
+// manual character scan replaced `/[.,;)}]+$/g`, which backtracked O(n²) on a long run of matching
+// punctuation that never reaches the string's true end.
+describe("isPlaceholderSafe — trailing punctuation trim (S8786 rewrite)", () => {
+  it("still accepts the redacted placeholder with common trailing punctuation", () => {
+    expect(_testables.isPlaceholderSafe("[REDACTED]")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED].")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED]),")).toBe(true);
+    expect(_testables.isPlaceholderSafe("[REDACTED]}")).toBe(true);
+    expect(_testables.isPlaceholderSafe("  [REDACTED];  ")).toBe(true);
+  });
+
+  it("still accepts booleans/null/numeric placeholders with trailing punctuation", () => {
+    expect(_testables.isPlaceholderSafe("true,")).toBe(true);
+    expect(_testables.isPlaceholderSafe("FALSE.")).toBe(true);
+    expect(_testables.isPlaceholderSafe("null)")).toBe(true);
+    expect(_testables.isPlaceholderSafe("12345;")).toBe(true);
+  });
+
+  it("still rejects a real-looking secret value, punctuation notwithstanding", () => {
+    expect(_testables.isPlaceholderSafe("sk-live-abcdef123456.")).toBe(false);
+    expect(_testables.isPlaceholderSafe("[REDACTED]tail")).toBe(false);
+  });
+
+  it("completes in linear time against an adversarial run of trailing punctuation", () => {
+    // Old `/[.,;)}]+$/g`: a long run of matching characters that never reaches the string end forces
+    // an O(n²) backtrack (empirically ~450ms at n=32,000 on this machine); the manual scan is O(n).
+    const adversarial = ".,;)}".repeat(4000) + "X"; // 20,000 matching chars, then a non-match
+    const start = Date.now();
+    _testables.isPlaceholderSafe(adversarial);
+    expect(Date.now() - start).toBeLessThan(300);
   });
 });

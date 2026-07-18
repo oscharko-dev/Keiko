@@ -49,6 +49,79 @@ describe("collectImportSpecifiers", () => {
       ["dynamic-import", "./d", 4],
     ]);
   });
+
+  it("counts lines correctly when a supplementary-plane character precedes an import", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758). "😀" is 2 UTF-16
+    // code units; neither unit's code point ever equals the ASCII line-feed (10), so the line
+    // count for the import below is unaffected by the emoji on the preceding line.
+    const hits = collectImportSpecifiers(["// 😀 note", 'import { a } from "./a";'].join("\n"));
+    expect(hits.map((hit) => [hit.kind, hit.specifier, hit.line])).toEqual([
+      ["static-import", "./a", 2],
+    ]);
+  });
+
+  it("still matches a very large single-line named-import list", () => {
+    // Behavior-equivalence check for the S8786 fix: ESM_IMPORT's inner token-repetition group
+    // was bounded from an unbounded `*` to a finite cap to remove the `(X+Y+)*` shape Sonar
+    // flags. 300 named imports stays well inside that bound, so the match must be unaffected.
+    const names = Array.from({ length: 300 }, (_, i) => `name${String(i)}`).join(", ");
+    const hits = collectImportSpecifiers(`import { ${names} } from "./big";`);
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "./big"]]);
+  });
+
+  it("matches a single-line named-import list past the old, too-low 2000-token bound", () => {
+    // Regression for a real bug in an earlier version of the S8786 fix: bounding ESM_IMPORT's
+    // inner repetition group to {0,2000} (instead of the {0,50000} it uses now) silently
+    // dropped the import edge for any single-line clause at/above ~2000 whitespace-separated
+    // tokens -- a generated/minified barrel file can plausibly have that many named specifiers
+    // on one line. 2000 named imports (2002 whitespace-separated tokens once the braces are
+    // counted) is exactly the shape a {0,2000} bound fails to match, while the old unbounded
+    // `*` and the current {0,50000} bound both match it correctly. This test must fail against
+    // a {0,2000}-bounded pattern and pass against the current, more generous bound.
+    const names = Array.from({ length: 2000 }, (_, i) => `name${String(i)}`).join(", ");
+    const hits = collectImportSpecifiers(`import { ${names} } from "./big";`);
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "./big"]]);
+  });
+
+  // Regression: an intermediate fix for the S8786 shape ("first quote after `import` is always
+  // the specifier") was too permissive in both directions -- confirmed by independent review.
+  it("still finds a static import whose specifier's quote is on a line after 'from'", () => {
+    const hits = collectImportSpecifiers('import Foo from\n  "module-a";');
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "module-a"]]);
+  });
+
+  it("still finds a bare side-effect import whose quote is on a later line", () => {
+    const hits = collectImportSpecifiers('import\n  "module-b";');
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([["static-import", "module-b"]]);
+  });
+
+  it("does not fabricate a static-import edge from a non-import statement", () => {
+    const hits = collectImportSpecifiers('import someIdentifier.foo("bar");');
+    expect(hits).toEqual([]);
+  });
+
+  it("does not double-count a bare dynamic-import expression as a static import too", () => {
+    const withoutSpace = collectImportSpecifiers('import("./dynamic-no-space").then(cb);');
+    expect(withoutSpace.map((hit) => hit.kind)).toEqual(["dynamic-import"]);
+
+    const withSpace = collectImportSpecifiers('import ("./dynamic-with-space").then(cb);');
+    expect(withSpace.map((hit) => hit.kind)).toEqual(["dynamic-import"]);
+  });
+
+  it("completes within budget for a long token run with no closing 'from' (S8786 regression)", () => {
+    // ESM_IMPORT's inner `(?:[ \t]+\S+)*` had the unbounded-nested-quantifier shape S8786
+    // flags (it measured linear in practice here because `[ \t]` and `\S` are disjoint, but the
+    // shape itself is what Sonar targets). It is now bounded ({0,50000}); this guards against a
+    // regression to an unbounded quantifier by asserting a huge non-matching token run - well
+    // past the bound, so neither the old unbounded pattern nor the current bounded one can find
+    // a trailing "from" - still completes fast rather than degrading if the bound is ever
+    // widened or removed.
+    const adversarial = `import${" x".repeat(60000)} end`;
+    const start = Date.now();
+    const hits = collectImportSpecifiers(adversarial);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(hits).toEqual([]);
+  });
 });
 
 describe("buildImportGraph", () => {

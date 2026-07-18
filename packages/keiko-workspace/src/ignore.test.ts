@@ -244,4 +244,12 @@ describe("normalize trailing-slash handling (ReDoS regression)", () => {
     isDenied(pathological);
     expect(Date.now() - start).toBeLessThan(1_000);
   });
+
+  it("treats a path ending in a supplementary-plane character the same with or without trailing slashes", () => {
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758). "😀" is 2 UTF-16
+    // code units; neither unit's code point ever equals the ASCII "/" (47), so trailing-slash
+    // stripping stops exactly after the emoji instead of corrupting it.
+    const m = compileIgnore(["src/😀"]);
+    expect(isIgnored(m, "src/😀", false)).toBe(isIgnored(m, "src/😀/////", false));
+  });
 });

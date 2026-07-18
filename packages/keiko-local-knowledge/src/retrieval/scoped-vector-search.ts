@@ -1342,7 +1342,7 @@ function lexicalFtsSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): 
 }
 
 function escapeFtsPhrase(value: string): string {
-  return `"${value.replace(/"/gu, '""')}"`;
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function ftsGroupQuery(group: LexicalQueryTermGroup): string {

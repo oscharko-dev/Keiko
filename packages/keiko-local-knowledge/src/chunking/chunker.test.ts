@@ -228,6 +228,43 @@ describe("chunkParsedUnit — pure", () => {
     }
   });
 
+  it("still splits on a literal HTML heading tag boundary", () => {
+    const paragraph =
+      "Die Ueberweisung wird im Fachprozess geprueft und dokumentiert Schritt fuer Schritt genau.";
+    const text = [paragraph, paragraph, "<h2>Naechster Abschnitt</h2>", paragraph, paragraph].join(
+      " ",
+    );
+    const unit = pageUnit(0, text.length);
+    const chunks = chunkParsedUnit(unit, text, { maxTokens: 24, minTokens: 0, overlapTokens: 0 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(
+      chunks.some((chunk) =>
+        text.slice(chunk.characterStart, chunk.characterEnd).trimStart().startsWith("<h2>"),
+      ),
+    ).toBe(true);
+  });
+
+  // Regression for typescript/javascript:S8786. HTML_HEADING_PATTERN used to be
+  // `/\n?[ \t]*<\/?h[1-6](?:\s|>|$)/gi`: nothing gates entry into the `[ \t]*` run before the
+  // required `<` literal, so an unanchored global search (`collectBoundaryMatches` runs this via
+  // `RegExp#exec` in a loop) over a long stretch of plain spaces/tabs with no heading tag re-tries
+  // the same greedy-then-backtrack walk at every offset inside the run — quadratic in run length.
+  // A large padded document (long non-heading whitespace runs between real paragraphs) would have
+  // taken far longer; the bounded pattern keeps chunking linear.
+  it("chunks a large document with long non-heading whitespace runs in linear time", () => {
+    const text = [
+      "Intro paragraph with real words that needs chunking on its own.",
+      " ".repeat(300_000),
+      "Trailing paragraph content after the long run of plain whitespace padding.",
+    ].join(" ");
+    const unit = pageUnit(0, text.length);
+    const start = Date.now();
+    const chunks = chunkParsedUnit(unit, text, { maxTokens: 2048, minTokens: 1, overlapTokens: 0 });
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
   it("safeExcerptHash is deterministic across runs", () => {
     const text = "The quick brown fox jumps over the lazy dog.";
     const unit = pageUnit(0, text.length);

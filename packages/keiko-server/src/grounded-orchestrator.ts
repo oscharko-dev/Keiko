@@ -1178,12 +1178,22 @@ function readWorkspacePatterns(
   return [];
 }
 
+// Strips trailing "/" one character at a time instead of via `/\/+$/u` (SonarCloud S8786): that
+// pattern is unanchored at the start, so a long run of "/" that never reaches the string's true end
+// forces the engine to retry the backtrack at every position within the run, giving O(n²) work. A
+// manual scan from the end can't backtrack and is O(n).
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 function normalizeWorkspacePattern(pattern: string): string | undefined {
-  let normalized = pattern.trim().replace(/\\/gu, "/");
+  let normalized = pattern.trim().replaceAll("\\", "/");
   while (normalized.startsWith("./")) {
     normalized = normalized.slice(2);
   }
-  normalized = normalized.replace(/\/+$/u, "");
+  normalized = stripTrailingSlashes(normalized);
   if (normalized.length === 0 || normalized.startsWith("../") || normalized.includes("/../")) {
     return undefined;
   }
@@ -1827,7 +1837,7 @@ function selectedFileScopeAtoms(
     if (!isValidScopePath(entry, { mustBeRelative: true })) {
       continue;
     }
-    const scopePath = entry.replace(/\\/gu, "/");
+    const scopePath = entry.replaceAll("\\", "/");
     if (seen.has(scopePath)) {
       continue;
     }

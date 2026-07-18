@@ -418,5 +418,7 @@ export function WorkspaceShader(): ReactNode {
     };
   }, [enabled]);
 
-  return enabled ? <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" /> : null;
+  return enabled ? (
+    <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" tabIndex={-1} />
+  ) : null;
 }
