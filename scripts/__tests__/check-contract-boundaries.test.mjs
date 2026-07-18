@@ -106,7 +106,9 @@ describe("editor-agent contract boundary (#2489 Finding 7)", () => {
 });
 
 // Issue #2489 (Finding 8) — EDITOR_AGENT_SCHEMA_VERSION and EDITOR_VERIFICATION_SCHEMA_VERSION
-// must not silently drift apart while both independent ladders are pinned at "1".
+// must not silently drift apart while both independent ladders are pinned at "1". The pure
+// comparison logic itself is unit-tested directly in schema-version-lockstep.test.mjs (no
+// subprocess); these two tests are the end-to-end CLI-behavior proof.
 describe("editor-agent schema-version lockstep (#2489 Finding 8)", () => {
   it("passes when both schema-version constants match", () => {
     const root = createFixtureRoot(CLEAN_FIXTURE_PATH);

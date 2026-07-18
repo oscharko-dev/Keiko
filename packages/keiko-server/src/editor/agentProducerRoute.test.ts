@@ -278,7 +278,8 @@ async function createFixture(): Promise<Fixture> {
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     store,
-    modelPortFactory: (): ModelPort => model,
+    modelPortFactory: (modelId: string): ModelPort | undefined =>
+      modelId === "producer-test-model" ? model : undefined,
     editorLanguageRouteOptions: {
       now: (): number => Date.now(),
       limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: 15_000 },
@@ -460,6 +461,46 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
   });
 });
 
+// Coverage: the four validation/error branches handleEditorAgentProducerTurn fails closed on
+// before ever building a tool host or starting a harness turn. None of the reachability tests
+// above exercise these -- they all POST a well-formed body against a registered session, a
+// configured model, and a valid authority reference.
+describe("editor-agent producer turn error paths (#2489 coverage)", () => {
+  it("400s on a malformed request body before any dispatch (INVALID_REQUEST)", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const response = await postProducerTurn(current.port, { goal: "" });
+    expect(response.status).toBe(400);
+    expect(response.body.error?.code).toBe("INVALID_REQUEST");
+  });
+
+  it("404s for a sessionId with no registered snapshot (SESSION_NOT_FOUND)", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const response = await postProducerTurn(current.port, { sessionId: "unknown-session" });
+    expect(response.status).toBe(404);
+    expect(response.body.error?.code).toBe("SESSION_NOT_FOUND");
+  });
+
+  it("503s when no model is configured for the requested modelId (MODEL_UNAVAILABLE)", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const response = await postProducerTurn(current.port, { modelId: "unconfigured-model" });
+    expect(response.status).toBe(503);
+    expect(response.body.error?.code).toBe("MODEL_UNAVAILABLE");
+  });
+
+  it("400s on an authorityRef that fails downstream validation (AUTHORITY_INVALID)", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const response = await postProducerTurn(current.port, {
+      authorityRef: { runId: "", envelopeDigest: "" },
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error?.code).toBe("AUTHORITY_INVALID");
+  });
+});
+
 // Security hardening (found by /security-review on this PR): the model's tool_call.name is
 // untrusted (ADR-0004 — model output is never executed as an instruction) and is NOT constrained
 // to what listTools() advertised. Before this fix, scopedProducerToolPort.execute() forwarded ANY
@@ -569,6 +610,39 @@ describe("editor_search_workspace wholeWord/regex parity (#2489 Finding 3)", () 
       expect(data?.results?.length ?? 0).toBeGreaterThan(0);
     } else {
       throw new Error(`expected a succeeded regex search, got ${JSON.stringify(output)}`);
+    }
+  });
+
+  // "symbol" mode routes through a wholly different handler (symbolSearchContext ->
+  // handleEditorWorkspaceSymbols) than "text"/"regex" (textSearchContext ->
+  // handleEditorWorkspaceSearch); neither path is exercised by the other two tests above.
+  it("accepts symbol mode and dispatches to the workspace-symbols handler", async () => {
+    const current = fixture;
+    if (current === undefined) throw new Error("fixture missing");
+    const host = new EditorAgentToolHost({
+      client: new EditorAgentHttpClient({
+        baseUrl: `http://${UI_HOST}:${String(current.port)}`,
+        transport: createFetchEditorAgentHttpTransport(),
+      }),
+      authorityRef: current.authorityRef,
+      nextActionId: (): string => "action-parity-3",
+    });
+    const result = await host.execute({
+      toolCallId: "call-parity-3",
+      toolName: "editor_search_workspace",
+      arguments: {
+        sessionId: SESSION_ID,
+        idempotencyKey: "idem-parity-symbol",
+        query: "target",
+        mode: "symbol",
+        maxResults: 5,
+      },
+      signal: new AbortController().signal,
+    });
+    const output = toolOutput(result);
+    expect(output.ok).toBe(true);
+    if (output.ok && output.kind === "action-result") {
+      expect(output.result.status).toBe("succeeded");
     }
   });
 });

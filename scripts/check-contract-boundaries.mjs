@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { schemaVersionLockstepFailures } from "./lib/schema-version-lockstep.mjs";
 
 const root = process.cwd();
 
@@ -148,38 +149,17 @@ for (const check of checks) {
   }
 }
 
-// Issue #2489 (Finding 8) — EDITOR_AGENT_SCHEMA_VERSION and EDITOR_VERIFICATION_SCHEMA_VERSION are
-// deliberately two independent "ladders" (docs/keiko-editor/2088-foundation-wave-audit.md,
-// Deliberate exclusions), but they must not silently drift apart while both are pinned at "1".
-function schemaVersionLiteral(file, constantName) {
-  const source = readFileSync(resolve(root, file), "utf8");
-  const match = new RegExp(`export const ${constantName} = "([^"]+)" as const;`).exec(source);
-  if (match === null) {
-    failures.push(`${file}: could not find ${constantName} to check schema-version lockstep.`);
-    return null;
-  }
-  return match[1];
-}
-
-const editorAgentSchemaVersion = schemaVersionLiteral(
-  "packages/keiko-contracts/src/editor-agent.ts",
-  "EDITOR_AGENT_SCHEMA_VERSION",
+// Issue #2489 (Finding 8) — see scripts/lib/schema-version-lockstep.mjs for the pure comparison
+// logic (kept out of this CLI-only file so it is directly unit-testable without a subprocess).
+const agentSource = readFileSync(
+  resolve(root, "packages/keiko-contracts/src/editor-agent.ts"),
+  "utf8",
 );
-const editorVerificationSchemaVersion = schemaVersionLiteral(
-  "packages/keiko-contracts/src/editor-verification.ts",
-  "EDITOR_VERIFICATION_SCHEMA_VERSION",
+const verificationSource = readFileSync(
+  resolve(root, "packages/keiko-contracts/src/editor-verification.ts"),
+  "utf8",
 );
-if (
-  editorAgentSchemaVersion !== null &&
-  editorVerificationSchemaVersion !== null &&
-  editorAgentSchemaVersion !== editorVerificationSchemaVersion
-) {
-  failures.push(
-    `EDITOR_AGENT_SCHEMA_VERSION ("${editorAgentSchemaVersion}") and ` +
-      `EDITOR_VERIFICATION_SCHEMA_VERSION ("${editorVerificationSchemaVersion}") have drifted out ` +
-      "of lockstep.",
-  );
-}
+failures.push(...schemaVersionLockstepFailures(agentSource, verificationSource));
 
 if (failures.length > 0) {
   console.error("Contract boundary check failed:");
