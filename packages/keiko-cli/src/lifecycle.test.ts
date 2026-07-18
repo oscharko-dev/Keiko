@@ -13,8 +13,14 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
+  CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+  decodeCodingAppSessionPairingFragment,
+} from "@oscharko-dev/keiko-contracts";
+import { computeLauncherPairingClaim } from "@oscharko-dev/keiko-server";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { runLifecycleCli, safeKillProcess } from "./lifecycle.js";
+import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
 import type { CliIo } from "./runner.js";
 
 interface Captured {
@@ -415,10 +421,106 @@ describe("runLifecycleCli", () => {
     });
   });
 
-  it("accepts --open and opens the UI URL after a healthy start", async () => {
+  // #2478 (ADR-0141 W1.5): `keiko start --open` is the launcher-automatic pairing flow — the
+  // spawned BFF inherits a process-scoped pairing secret, and the opened URL carries one
+  // single-use attestation in the fragment whose HMAC claim verifies against that same secret.
+  function expectPairedOpen(spawnedEnv: NodeJS.ProcessEnv | undefined, opened: string): void {
+    const provisionedSecret = spawnedEnv?.[CODING_APP_SESSION_LAUNCHER_SECRET_ENV] ?? "";
+    expect(provisionedSecret.length).toBeGreaterThanOrEqual(
+      CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+    );
+    expect(opened.startsWith("http://127.0.0.1:1983/#keiko-app-session=")).toBe(true);
+    const attestation = decodeCodingAppSessionPairingFragment(
+      opened.slice("http://127.0.0.1:1983/".length),
+    );
+    if (attestation === undefined) throw new Error("opened URL carried no valid attestation");
+    expect(attestation.claim).toBe(
+      computeLauncherPairingClaim(provisionedSecret, attestation.requestId, attestation.issuedAtMs),
+    );
+  }
+
+  it("accepts --open, provisions the pairing secret, and opens a paired boot URL", async () => {
     const root = makeRoot();
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const openExternal = vi.fn();
+    const spawnedEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--open"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: (_command, _args, opts) => {
+          spawnedEnvs.push(opts.env);
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).toBe("");
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expectPairedOpen(spawnedEnvs[0], String(openExternal.mock.calls[0]?.[0]));
+  });
+
+  // #2478 (Qodo #2514 finding 1): a percent-encoded pairing fragment must never pass through
+  // cmd.exe, whose %...% expansion corrupts the URL and leaves the opened window unpaired.
+  it("opens Windows URLs through an encoded PowerShell command, never cmd start", () => {
+    const url = "http://127.0.0.1:1983/#keiko-app-session=%7B%22requestId%22%3A%22r%22%7D";
+    const win = resolveExternalOpener(url, "win32");
+    expect(win.command).toBe("powershell.exe");
+    expect(win.args).not.toContain(url);
+    const encoded = win.args.at(-1) ?? "";
+    expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
+    expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
+    expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
+  });
+
+  it("honors an operator-provisioned launcher secret for the spawned BFF", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const provided = "operator".padEnd(CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS, "x");
+    const spawnedEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: provided },
+      {
+        cwd: root,
+        spawnFn: (_command, _args, opts) => {
+          spawnedEnvs.push(opts.env);
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawnedEnvs[0]?.[CODING_APP_SESSION_LAUNCHER_SECRET_ENV]).toBe(provided);
+  });
+
+  it("opens an unpaired URL for an already-running UI and says how to re-pair", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
     const openExternal = vi.fn();
 
     const code = await runLifecycleCli(
@@ -428,7 +530,7 @@ describe("runLifecycleCli", () => {
       {},
       {
         cwd: root,
-        spawnFn: () => child,
+        spawnFn: vi.fn(),
         fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
@@ -440,7 +542,7 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
-    expect(c.err()).toBe("");
+    expect(c.out()).toContain("keiko restart --open");
   });
 
   it("keeps an already-running UI when the health version matches the installed package", async () => {

@@ -40,7 +40,10 @@ The following analysis remains valuable but is not merge-critical:
   the same protection path needed to repair its own evaluator.
 - Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
   remains required engineering evidence for tractable trust-boundary changes.
-- The per-pull aggregate mirrors the protected direct checks plus the Qodo review comment. It does
+- The per-pull aggregate is the Qodo bridge only (Issue #2508,
+  [ADR-0143](../adr/ADR-0143-keiko-for-quality-narrowed-to-the-qodo-bridge.md)): it binds the
+  comment-only Qodo review to the exact current head and applies the stability window. It does not
+  re-check the direct required contexts — branch protection is their single authority — and it does
   not wait for the scheduled/manual full mutation lane, which does not emit a pull-request check.
 - Hosted-runner performance evidence uses ten samples after merge or on a release lane. Functional
   UI build, lint, typecheck, coverage, accessibility, smoke, editor E2E, and package checks remain in
@@ -65,6 +68,15 @@ The repository retains the open implementation under
 redacted evaluator tests. The GitHub App receives no Contents, Actions, Administration, or
 repository-secret access. Its check and dashboard comment are not merge authority.
 
+Since Issue #2508 ([ADR-0143](../adr/ADR-0143-keiko-for-quality-narrowed-to-the-qodo-bridge.md))
+the evaluator is narrowed to the Qodo bridge: it requires a current-head (or fresh
+merge-parent-bound), app-id-verified, parseable Qodo summary with zero blocking findings, and
+applies the stability window to that evidence. Unresolved findings publish a `failure` conclusion;
+missing, stale, unparseable, or still-settling evidence keeps the check `in_progress`. The 13
+direct required checks and Socket's comment alerts are no longer re-checked — branch protection and
+the organisation-level Socket policy own those decisions directly — which removes the
+per-evaluation check-runs listing and the `SOCKET_RISK_*` configuration surface.
+
 The scheduled reconciliation sweep retains a merged pull request for up to one hour. This bounded
 post-merge lane lets the 60-second review-product stability window finish and updates the exact-head
 advisory check before deleting persisted tracking. Closed, unmerged, wrong-base, expired, and
@@ -85,8 +97,9 @@ The aggregate may be reconsidered only after live probes prove all of the follow
 3. reconciliation settles within a documented SLO without repeated unchanged writes;
 4. service quotas and vendor plan limits cannot omit required evidence;
 5. the gate's own deployment and repair path does not depend on that gate succeeding; and
-6. negative probes for stale head, wrong producer, failed direct checks, Socket warning, and Sonar
-   failure all block, followed by a complete positive probe.
+6. negative probes for a stale-head review, a wrong producer, an unresolved Qodo finding, and an
+   unparseable summary all block the aggregate — while a failed direct required check still blocks
+   the merge through branch protection natively — followed by a complete positive probe.
 
 Until every condition is met and branch protection is changed through a reviewed maintainer
 decision, `Keiko for Quality` remains advisory and non-required.

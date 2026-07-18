@@ -7,6 +7,13 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import { API_ROUTES, STREAMING, matchRoute, type RouteContext } from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
@@ -44,9 +51,10 @@ function context(
   body = "{}",
   params: Record<string, string> = {},
   path = "/api/coding-workbench/runtime/runs",
+  cookie?: string,
 ): RouteContext {
   const req = new PassThrough() as unknown as RouteContext["req"];
-  req.headers = {};
+  req.headers = cookie === undefined ? {} : { cookie };
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
   return {
     req,
@@ -54,6 +62,18 @@ function context(
     params,
     url: new URL(`http://localhost${path}`),
   };
+}
+
+// #2478: the question routes enforce the app-session read authority, so the fixtures pair a real
+// channel + registry once and present its cookie; unpaired contexts simply omit the cookie.
+function pairedAppSession(): { channel: UiHandlerDeps["codingAppSessionChannel"]; cookie: string } {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("test pairing failed");
+  return { channel, cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
 }
 
 class FakeResponse extends EventEmitter {
@@ -179,6 +199,8 @@ describe("coding runtime routes", () => {
   });
 
   it("routes pause, resume, follow-up, and question mutations to the live run only", async () => {
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
     const handlers = [
       handleCodingRuntimePause,
       handleCodingRuntimeResume,
@@ -188,26 +210,35 @@ describe("coding runtime routes", () => {
       handleCodingRuntimeQuestionList,
     ];
     for (const handler of handlers) {
-      await expect(handler(context("{}", { runId: "run-1" }), runtime())).resolves.toMatchObject({
-        status: 200,
-      });
-      await expect(handler(context("{}", { runId: "run-9" }), runtime())).resolves.toMatchObject({
-        status: 404,
-      });
-      await expect(handler(context("{}"), runtime())).resolves.toMatchObject({ status: 404 });
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      await expect(
+        handler(context("{}", { runId: "run-1" }, runPath, session.cookie), deps),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        handler(context("{}", { runId: "run-9" }, runPath, session.cookie), deps),
+      ).resolves.toMatchObject({ status: 404 });
+      await expect(
+        handler(context("{}", {}, runPath, session.cookie), deps),
+      ).resolves.toMatchObject({ status: 404 });
     }
   });
 
   it("caps a question answer body at 64KB and never echoes its untrusted text", async () => {
-    const oversized = "x".repeat(64 * 1024 + 1);
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
     const tooLarge = await handleCodingRuntimeQuestionAnswer(
-      context(JSON.stringify({ padding: oversized }), { runId: "run-1" }),
-      runtime(),
+      context(
+        JSON.stringify({ padding: "x".repeat(64 * 1024 + 1) }),
+        { runId: "run-1" },
+        runPath,
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
     );
     expect(tooLarge).toMatchObject({ status: 413 });
     expect(JSON.stringify(tooLarge.body)).not.toContain("xxxx");
 
-    const deps = runtime();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
     const answered = await handleCodingRuntimeQuestionAnswer(
       context(
         JSON.stringify({
@@ -217,12 +248,72 @@ describe("coding runtime routes", () => {
           answers: [["untrusted-answer-text"]],
         }),
         { runId: "run-1" },
+        runPath,
+        session.cookie,
       ),
       deps,
     );
     expect(answered).toMatchObject({ status: 200, body: snapshot });
     // The route response projects only the content-free snapshot, never the answer text.
     expect(JSON.stringify(answered.body)).not.toContain("untrusted-answer-text");
+  });
+
+  it("#2478: serves the paired question list as the channel payload with the active session facet", async () => {
+    const session = pairedAppSession();
+    const listed = await handleCodingRuntimeQuestionList(
+      context("{}", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+    expect(listed).toEqual({ status: 200, body: { session: "active", questions: [] } });
+  });
+
+  it("#2478: an unpaired question list yields the one constant content-free projection before any run resolution", async () => {
+    const session = pairedAppSession();
+    const unpairedProjection = { status: 200, body: { session: "unpaired", questions: [] } };
+    // Same constant shape for a live run, an unknown run, a missing runId, and even a server
+    // composed without the runtime — the response never becomes an existence oracle (ADR-0141 D6).
+    const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+      [{ runId: "run-1" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{ runId: "run-9" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{}, runtime({ codingAppSessionChannel: session.channel })],
+      [
+        { runId: "run-1" },
+        runtime({ codingAppSessionChannel: session.channel, codingRuntimeOrchestrator: undefined }),
+      ],
+      [{ runId: "run-1" }, runtime()],
+    ];
+    for (const [params, deps] of cases) {
+      await expect(handleCodingRuntimeQuestionList(context("{}", params), deps)).resolves.toEqual(
+        unpairedProjection,
+      );
+    }
+  });
+
+  it("#2478: unpaired question mutations receive the existence-concealing not-found result", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    for (const handler of [handleCodingRuntimeQuestionAnswer, handleCodingRuntimeQuestionReject]) {
+      const denied = await handler(context("{}", { runId: "run-1" }), deps);
+      const unknownRun = await handler(
+        context("{}", { runId: "run-9" }, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      );
+      // Byte-identical to the unknown-run response: a probe cannot tell "not paired" apart.
+      expect(denied).toEqual(unknownRun);
+      expect(denied.status).toBe(404);
+    }
+  });
+
+  it("#2478: a rotated-away or revoked cookie loses the question read authority", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    session.channel?.signOut(session.cookie.split("=")[1]);
+    await expect(
+      handleCodingRuntimeQuestionList(
+        context("{}", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      ),
+    ).resolves.toEqual({ status: 200, body: { session: "unpaired", questions: [] } });
   });
 
   it("projects only server-owned readiness facts and computes the effective mode fail-closed", () => {

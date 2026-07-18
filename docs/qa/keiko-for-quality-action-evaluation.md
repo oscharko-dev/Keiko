@@ -53,9 +53,11 @@ never reach the privileged publisher (Qodo review of PR #2513):
 The `evaluate` job's per-pull `concurrency` group resolves to the pull number (via
 `check_run.pull_requests[0].number`, not the per-check id) so concurrent check completions for one
 pull cannot race to PATCH the aggregate into a stale state. It also reacts to a `check_run`
-completion only when the completed check is one the aggregate reads, which both scopes work and
-structurally prevents a self-trigger loop (its own job status check and posted aggregate check are
-not aggregated names).
+completion only when the completed check is on the fixed direct-check name allowlist — since Issue
+#2508 ([ADR-0143](../adr/ADR-0143-keiko-for-quality-narrowed-to-the-qodo-bridge.md)) those names
+are re-evaluation triggers only, not evaluated evidence — which both scopes work and structurally
+prevents a self-trigger loop (its own job status check and posted aggregate check are not listed
+names).
 
 ## Producer identity
 
@@ -78,6 +80,9 @@ Both preserved, because the pure core and the exact-head evidence fetch are iden
 - Evidence is filtered to the pull's freshly fetched `head.sha`; stale-head results are never reused.
 - A hard failure publishes a `failure` conclusion; missing or in-progress evidence publishes an
   `in_progress` check with no conclusion, keeping the required check pending and the merge blocked.
+- A verdict pending on the stability window alone is settled within the same run: the shell waits
+  out the bounded remainder (at most five minutes) and re-evaluates on refreshed evidence, because
+  the triggering event can be the Qodo comment itself with no later event to re-run the evaluator.
 - A merge-commit head whose Qodo review is pinned to a feature parent is resolved through the shared
   `mergeContextForHead` helper, exactly as in the Worker, and only accepts a parent-bound review that
   post-dates the merge commit.
@@ -99,7 +104,6 @@ Reproduce locally (read-only, no side effects):
 export GITHUB_TOKEN="$(gh auth token)"
 export GITHUB_REPOSITORY="oscharko-dev/Keiko"
 export KFQ_DRY_RUN=1 STABILITY_WINDOW_MS=60000
-export SOCKET_RISK_ALLOWLIST_JSON='[]' SOCKET_RISK_ACTORS_JSON='[]'
 export TARGET_REPOSITORIES_JSON='[{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"}]'
 KFQ_PR=<pull-number> node scripts/keiko-for-quality-action.mjs
 ```
@@ -120,8 +124,9 @@ gated on the live-probe conditions below; the Worker stays canonical until they 
 3. **Run the live-probe gate** from [`keiko-for-quality.md`](keiko-for-quality.md): exactly one
    app-bound check per head; missing/running inputs stay pending while terminal failures stay red;
    bounded settlement without repeated unchanged writes; quota independence; a repair path that does
-   not depend on the gate; and the full negative-plus-positive probe set (stale head, wrong producer,
-   failed direct check, Socket warning, Sonar failure all block, then a clean pass).
+   not depend on the gate; and the full negative-plus-positive probe set (stale-head review, wrong
+   producer, unresolved Qodo finding, unparseable summary all block the aggregate — failed direct
+   checks block through branch protection natively — then a clean pass).
 4. **Cut over.** Point the Action at the canonical name and marker (`KFQ_CHECK_NAME` /
    `KFQ_DASHBOARD_MARKER`) and remove the label gate. Confirm the Action's check is the one branch
    protection observes.

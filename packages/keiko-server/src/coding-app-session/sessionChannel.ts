@@ -37,6 +37,13 @@ export interface CodingAppSessionChannel {
   readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
   readonly signOut: (cookieToken: string | undefined) => void;
   readonly sessionCount: () => number;
+  /**
+   * Verify a presented cookie token into its live session, or `undefined` for every invalid,
+   * revoked, or expired presentation. This is the read-authority primitive the W1.5 route guard
+   * (and the later W1.6–W1.9 content surfaces) enforce content-bearing reads with (#2478); a
+   * successful verification refreshes the session's inactivity window.
+   */
+  readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
 }
 
 export interface CodingAppSessionChannelDeps {
@@ -97,5 +104,7 @@ export function createCodingAppSessionChannel(
       if (session !== undefined) registry.revoke(session.sessionId);
     },
     sessionCount: (): number => registry.sessionCount(),
+    verifySession: (cookieToken: string | undefined): AppSession | undefined =>
+      registry.verify(cookieToken),
   };
 }
