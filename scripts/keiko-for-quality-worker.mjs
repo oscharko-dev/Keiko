@@ -398,6 +398,17 @@ async function persistEvaluatedPull(database, tracked, pull, result) {
   else await deleteTrackedPull(database, tracked);
 }
 
+// A merge-commit head (2+ parents) has its Qodo review pinned to a parent (the feature commit), not
+// the merge SHA, so surface those parent SHAs to let KFQ's head-SHA currency accept the review. A
+// normal single-parent commit returns [] so it still binds to its exact SHA.
+async function mergeParentShas(owner, repository, headSha, token) {
+  const commit = await github(`/repos/${owner}/${repository}/commits/${headSha}`, token);
+  const parents = Array.isArray(commit?.parents) ? commit.parents : [];
+  return parents.length >= 2
+    ? parents.map((parent) => parent?.sha).filter((sha) => isValidHeadSha(sha))
+    : [];
+}
+
 async function evaluatePullRequest(owner, repository, pullNumber, installationId, env) {
   const target = targetForRepository(`${owner}/${repository}`, env);
   const token = await installationToken(installationId, env);
@@ -411,12 +422,14 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
   if (!isValidHeadSha(headSha)) {
     throw new Error("Pull request head SHA is invalid.");
   }
+  const mergeParents = await mergeParentShas(owner, repository, headSha, token);
   const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
   const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
     ...currentEvidence,
     requiredChecks: expectedChecks,
     headSha,
+    mergeParents,
     now: evaluatedAt,
     socketRiskAllowlist: JSON.parse(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]"),
     socketRiskActors: JSON.parse(env.SOCKET_RISK_ACTORS_JSON ?? "[]"),

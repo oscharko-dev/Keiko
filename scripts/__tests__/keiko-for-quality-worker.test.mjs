@@ -128,7 +128,7 @@ function commentsResponse(url, headSha, options = {}) {
     );
   }
   const comments = [
-    qodoReviewComment(headSha),
+    qodoReviewComment(options.qodoSha ?? headSha, { bugs: options.qodoBugs ?? 0 }),
     {
       author_association: "NONE",
       body: "[!WARNING] https://socket.dev/npm/package/execa/overview/9.6.1",
@@ -169,6 +169,12 @@ function pullResponse(headSha, options) {
   );
 }
 
+function commitResponse(headSha, options) {
+  // Default: a normal single-parent commit (no merge parents surfaced). options.parents models a
+  // merge-commit head (2+ parents).
+  return response({ sha: headSha, parents: options.parents ?? [{ sha: "d".repeat(40) }] });
+}
+
 function checkWriteResponse(path, method) {
   if (path.endsWith("/check-runs") && method === "POST") return response({ id: 99 });
   if (/\/check-runs\/\d+$/u.test(path) && method === "PATCH") return response({ id: 99 });
@@ -196,6 +202,7 @@ function githubReadResponse(url, path, method, headSha, options) {
     return commentsResponse(url, headSha, options);
   }
   if (path.includes(`/commits/${headSha}/check-runs`)) return checksResponse(headSha, options);
+  if (path.endsWith(`/commits/${headSha}`)) return commitResponse(headSha, options);
   return undefined;
 }
 
@@ -1093,6 +1100,39 @@ describe("Keiko for Quality worker trust boundary", () => {
       conclusion: "failure",
       status: "completed",
     });
+  });
+
+  it("reads Qodo evidence on a merge-commit head via its parent SHA", async () => {
+    const headSha = "a".repeat(40);
+    const parent = "f".repeat(40);
+    // Merge-commit head (2 parents); Qodo pinned its review to the feature parent with 2 findings.
+    const fetchMock = githubMock(headSha, {
+      parents: [{ sha: parent }, { sha: "e".repeat(40) }],
+      qodoSha: parent,
+      qodoBugs: 2,
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merge-head",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    const body = JSON.parse(publish[1].body);
+    expect(body.conclusion).toBe("failure");
+    expect(body.output.summary).toContain("Qodo has 2 unresolved finding(s).");
   });
 
   it("keeps missing evidence pending and ignores its own check event", async () => {

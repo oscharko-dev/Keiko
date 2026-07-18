@@ -237,6 +237,35 @@ describe("Keiko for Quality core", () => {
     expect(latestQodoReview([wrongApp], headSha)).toBeUndefined();
   });
 
+  it("binds Qodo currency to a merge-commit head via its parent SHAs", () => {
+    const parent = "f".repeat(40);
+    // Qodo pinned its review to the feature parent, not the merge-commit head SHA.
+    const review = qodoComment({ body: qodoBody({ bugs: 2, sha: parent }) });
+    // Normal commit (no merge parents): a parent-pinned review is NOT current for the head.
+    expect(latestQodoReview([review], headSha)).toBeUndefined();
+    expect(latestQodoReview([review], headSha, [])).toBeUndefined();
+    // Merge-commit head: supplying the parent SHA binds the review.
+    expect(latestQodoReview([review], headSha, [parent])).toBe(review);
+    expect(latestQodoReview([review], headSha, ["c".repeat(40), parent])).toBe(review);
+  });
+
+  it("reads Qodo findings on a merge-commit head through mergeParents", () => {
+    const parent = "f".repeat(40);
+    const comments = passingInput().comments.map((comment) =>
+      comment.authorId === qodoAuthorId
+        ? { ...comment, body: qodoBody({ bugs: 2, sha: parent }) }
+        : comment,
+    );
+    // Without the merge parent, the parent-pinned review looks missing (fail closed, still blocks).
+    expect(evaluate({ comments }).failures).toContain(
+      "Current Qodo finding evidence is missing or unparseable.",
+    );
+    // With the merge parent, KFQ correctly reports the 2 unresolved findings.
+    expect(evaluate({ comments, mergeParents: [parent] }).failures).toContain(
+      "Qodo has 2 unresolved finding(s).",
+    );
+  });
+
   it("extracts and deduplicates exact Socket package versions", () => {
     expect(packageAlerts("No warnings: npm/execa@9.6.1")).toEqual([]);
     expect(
