@@ -168,6 +168,27 @@ async function proveUnpairedClientReadsNoQuestionText(
   expect(answered.status()).toBe(404);
 }
 
+// #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the
+// honest re-pair state on the questions surface at the next resync (the pause transition), never
+// a silent empty list — while the content-free run controls keep working without a session.
+async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
+  const signedOut = await page.request.post("/api/coding-workbench/app-session/sign-out", {
+    headers: { "x-keiko-csrf": "1" },
+    data: {},
+  });
+  expect(signedOut.ok()).toBe(true);
+  await page.getByRole("button", { name: "Pause run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+  await expect(runtimeQuestions(page)).toHaveAttribute("data-question-state", "unpaired", {
+    timeout: 15_000,
+  });
+  await expect(
+    runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Resume run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+}
+
 // Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while
 // no workspace binding is active — the authority journey below binds and activates the fixture
 // workspace on the shared webServer, after which "Code setup" is legitimately replaced by the
@@ -256,24 +277,8 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
 
-  // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the
-  // honest re-pair state on the questions surface at the next resync — never a silent empty list —
-  // while the content-free run controls keep working without a session.
-  const signedOut = await page.request.post("/api/coding-workbench/app-session/sign-out", {
-    headers: { "x-keiko-csrf": "1" },
-    data: {},
-  });
-  expect(signedOut.ok()).toBe(true);
-  await page.getByRole("button", { name: "Pause run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-  await expect(runtimeQuestions(page)).toHaveAttribute("data-question-state", "unpaired", {
-    timeout: 15_000,
-  });
-  await expect(
-    runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Resume run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+  // #2478: revocation flips the questions surface to the honest re-pair state.
+  await proveRevocationSurfacesRepairState(page);
 
   // Settle through Stop: the orchestrator releases the active slot and the durable per-run
   // snapshot records the terminal cancelled state.

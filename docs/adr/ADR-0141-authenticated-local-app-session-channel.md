@@ -190,10 +190,17 @@ precisely: during the browser hand-off the fragment URL is transiently visible i
 arguments (`open`/`xdg-open`), so a same-user process racing the browser could redeem the
 attestation first. The exposure is bounded by single-use redemption, the ±30 s freshness window,
 and — decisively — the honest re-pair state: a stolen redemption leaves the legitimate window
-visibly unpaired instead of silently compromised. The Keiko Native shell replaces this hop with
-direct cookie injection and retires the residual risk; an already-running BFF cannot re-attest
-(its secret is private to its own launch), so `--open` against it opens an honestly unpaired
-window and says how to re-pair.
+visibly unpaired instead of silently compromised. Relatedly, and made explicit here: the
+launcher secret itself lives in the BFF process environment for the process lifetime, and
+process environments are same-user-readable on common platforms (`/proc/<pid>/environ`,
+`ps -E`). This is inside the threat model's standing assumption — "cannot read another process's
+private OS-owned launcher state" — which this ADR treats as trusted OS same-user isolation, on
+par with the browser's cookie store; the asymmetry (a read secret mints unlimited silent
+sessions, whereas a stolen attestation is one visible, time-bounded redemption) is why the
+assumption is load-bearing and why the native shell's direct injection remains the target
+posture. The Keiko Native shell replaces this hop with direct cookie injection and retires the
+residual risk; an already-running BFF cannot re-attest (its secret is private to its own
+launch), so `--open` against it opens an honestly unpaired window and says how to re-pair.
 
 ### F4 — Contract promotion (the scheduled D12 batching)
 
