@@ -717,8 +717,8 @@ export function buildRepoFs(overrides = {}) {
 // from the turn index. The gate asserts the milestone headline AC — "long sessions compact without
 // losing current user instructions" — so these fixtures embed DISTINCTIVE, searchable markers:
 //   • CHAT_CURRENT_INSTRUCTION   — the LATEST user turn; must survive VERBATIM into the spliced output.
-//   • CHAT_EARLY_SECRET          — a non-pattern literal secret in an EARLY (dropped) turn; must be
-//                                  REDACTED out of the summary segment (never verbatim).
+//   • CHAT_EARLY_REDACTION_SENTINEL — an obvious non-credential placeholder in an EARLY (dropped)
+//                                     turn; must be REDACTED out of the summary segment.
 //   • CHAT_DROPPED_DURABLE_INSTR — a distinctive durable instruction in that same dropped turn; its
 //                                  raw text must NOT appear verbatim (only a redacted digest snippet).
 // The shim drops the first (filtered.length - MAX_CONTEXT_MESSAGES) turns, so a 30-turn history drops
@@ -726,7 +726,7 @@ export function buildRepoFs(overrides = {}) {
 
 const CHAT_CURRENT_INSTRUCTION =
   "USER INSTRUCTION (current): rename issue_refund to settle_refund and keep the public API stable — KEIKO-CURRENT-MARKER-7f3a.";
-const CHAT_EARLY_SECRET = "customer-secret-ABC-1234567890";
+const CHAT_EARLY_REDACTION_SENTINEL = "[fixture-redaction-sentinel-7f3a]";
 // The distinctive durable-instruction marker is placed DEEP in the dropped turn (after >200 bytes of
 // leading body) so the shim's per-turn snippet budget (SNIPPET_BYTE_BUDGET=200) truncates BEFORE it.
 // That makes the raw durable text non-verbatim in the summary (only a leading redacted digest), which
@@ -764,7 +764,7 @@ function buildHistory(count) {
         mkChatMessage(
           i,
           "user",
-          `Credential ${CHAT_EARLY_SECRET} authorizes the refund sandbox. ${CHAT_DROPPED_PREAMBLE}${CHAT_DROPPED_DURABLE_INSTR}`,
+          `Fixture value ${CHAT_EARLY_REDACTION_SENTINEL} authorizes the refund sandbox. ${CHAT_DROPPED_PREAMBLE}${CHAT_DROPPED_DURABLE_INSTR}`,
         ),
       );
       continue;
@@ -785,7 +785,7 @@ function buildPressureHistory() {
     mkChatMessage(
       0,
       "user",
-      `Credential ${CHAT_EARLY_SECRET} authorizes the refund sandbox. ${CHAT_DROPPED_PREAMBLE}${CHAT_DROPPED_DURABLE_INSTR}${oversized}`,
+      `Fixture value ${CHAT_EARLY_REDACTION_SENTINEL} authorizes the refund sandbox. ${CHAT_DROPPED_PREAMBLE}${CHAT_DROPPED_DURABLE_INSTR}${oversized}`,
     ),
     mkChatMessage(1, "assistant", `Turn 1: oversized refund progress note. ${oversized}`),
     mkChatMessage(2, "user", CHAT_CURRENT_INSTRUCTION),
@@ -807,7 +807,7 @@ export function buildChatHistoryFixtures() {
     short: buildHistory(24),
     tiny: buildHistory(8),
     currentInstruction: CHAT_CURRENT_INSTRUCTION,
-    earlySecret: CHAT_EARLY_SECRET,
+    earlyRedactionSentinel: CHAT_EARLY_REDACTION_SENTINEL,
     droppedDurableInstruction: CHAT_DROPPED_DURABLE_INSTR,
     droppedDurableMarker: CHAT_DROPPED_DURABLE_MARKER,
   });

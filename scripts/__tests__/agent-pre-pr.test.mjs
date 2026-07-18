@@ -89,6 +89,14 @@ describe("agent pre-PR gate", () => {
     expect(commands).toEqual(REQUIRED_LINUX_COMMANDS);
   });
 
+  it("invalidates the whole-repository knip verdict for any changed path", () => {
+    const knip = createPrePrSteps({ env: {}, platform: "linux" }).find(
+      (step) => step.id === "knip",
+    );
+
+    expect(knip?.cacheScope).toEqual(["."]);
+  });
+
   it("keeps Linux-authoritative editor release evidence explicit on non-Linux hosts", () => {
     const evidence = createPrePrSteps({ env: {}, platform: "darwin" }).find(
       (step) => step.id === "editor-release-evidence",

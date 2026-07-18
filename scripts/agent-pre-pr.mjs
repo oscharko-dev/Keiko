@@ -300,7 +300,7 @@ function testAndArchitectureSteps(platform) {
       platform,
     }),
     npmStep("knip", ["run", "check:knip"], {
-      cacheScope: [...SCOPE_SOURCES, "knip.json", "package.json"],
+      cacheScope: ["."],
       platform,
     }),
   ];
