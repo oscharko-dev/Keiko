@@ -42,13 +42,13 @@ import {
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
 import {
-  GitDeliveryBodyTooLargeError,
   hasOnlyAllowedKeys,
   isNonEmptyString,
   isPlainObject,
-  readGitDeliveryBody,
+  readParsedGitDeliveryBody,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
+  type GitDeliveryParsedBody,
 } from "./requestGuards.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
@@ -85,27 +85,12 @@ export interface GitDeliveryCommitRouteOptions {
   readonly messagePolicy?: GitCommitMessagePolicy;
 }
 
-type BodyRead =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly result: RouteResult };
-
-async function readParsed(req: IncomingMessage): Promise<BodyRead> {
-  let raw: string;
-  try {
-    raw = await readGitDeliveryBody(req);
-  } catch (error) {
-    const result =
-      error instanceof GitDeliveryBodyTooLargeError
-        ? errResult(413, "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE")
-        : errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
-    return { ok: false, result };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, result: errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST") };
-  }
-}
+const readParsed = (req: IncomingMessage): Promise<GitDeliveryParsedBody<RouteResult>> =>
+  readParsedGitDeliveryBody(
+    req,
+    () => errResult(413, "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE"),
+    () => errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST"),
+  );
 
 // Envelope pre-checks shared by both handlers. Returns the validated object or an error RouteResult.
 function preValidate(

@@ -44,6 +44,35 @@ export const readGitDeliveryBody = (req: IncomingMessage): Promise<string> =>
     req.on("error", reject);
   });
 
+// Reads the bounded body and JSON-parses it, mapping the two failure modes — body cap exceeded
+// (onTooLarge) and unreadable / non-JSON body (onBadRequest) — to the caller's typed error result.
+// The #476–#479 execution routes each inlined this identical read-then-parse discipline; this is the
+// single shared implementation. Generic over the error result so this module stays free of any
+// route-envelope coupling.
+export type GitDeliveryParsedBody<R> =
+  { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly result: R };
+
+export const readParsedGitDeliveryBody = async <R>(
+  req: IncomingMessage,
+  onTooLarge: () => R,
+  onBadRequest: () => R,
+): Promise<GitDeliveryParsedBody<R>> => {
+  let raw: string;
+  try {
+    raw = await readGitDeliveryBody(req);
+  } catch (error) {
+    return {
+      ok: false,
+      result: error instanceof GitDeliveryBodyTooLargeError ? onTooLarge() : onBadRequest(),
+    };
+  }
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false, result: onBadRequest() };
+  }
+};
+
 export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -89,7 +118,8 @@ export const isNonEmptyString = (value: unknown): value is string =>
 
 // C0 control characters (incl. TAB/LF/CR/NUL) and DEL. A pathspec in these content-free requests never
 // legitimately contains them; rejecting fail-closed keeps the pathspec guard symmetric with the
-// network-ref REF_CONTROL_CHAR guard (syncRoutes.ts). Pathspecs are already literalized as
+// network-ref control-char guard (GIT_DELIVERY_REF_CONTROL_CHAR / isSafeGitRef below). Pathspecs are
+// already literalized as
 // :(literal)<value> after a "--" sentinel at the adapter, so this is defence-in-depth, not a live fix.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 export const GIT_DELIVERY_PATHSPEC_CONTROL_CHAR = new RegExp("[\\u0000-\\u001f\\u007f]");
@@ -104,4 +134,21 @@ export const isContainedPathspec = (value: unknown): value is string => {
   if (/^[A-Za-z]:/u.test(value)) return false; // Windows drive-qualified
   const segments = value.split(/[\\/]+/);
   return !segments.includes("..");
+};
+
+// C0 control characters (incl. TAB/LF/CR/NUL) and DEL — same class as the pathspec guard above.
+// eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
+const GIT_DELIVERY_REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/u;
+
+// A git ref / remote alias operand: non-empty, no whitespace, no leading "-" (flag-injection guard),
+// no ":" (refspec-injection guard), and no NUL / C0 control / DEL char. Defence-in-depth above the
+// gateway's own argv assertions so a malformed ref is a clean 400 rather than an internal execution
+// error. Shared by the publish / pull-request / merge / sync routes (#476–#479).
+export const isSafeGitRef = (value: unknown): value is string => {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (/\s/.test(value)) return false;
+  if (value.startsWith("-")) return false;
+  if (GIT_DELIVERY_REF_CONTROL_CHAR.test(value)) return false;
+  if (value.includes(":")) return false;
+  return true;
 };
