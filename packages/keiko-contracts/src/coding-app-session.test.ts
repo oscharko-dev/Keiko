@@ -53,6 +53,10 @@ describe("coding app-session channel contract", () => {
     expect(
       validateCodingAppSessionChannelSnapshot({ schemaVersion: "1", content: null, extra: 1 }).ok,
     ).toBe(false);
+    expect(
+      validateCodingAppSessionChannelSnapshot({ schemaVersion: "1", content: "not-an-object" }).ok,
+    ).toBe(false);
+    expect(validateCodingAppSessionChannelSnapshot("not-a-record").ok).toBe(false);
     const oversized = {
       schemaVersion: "1",
       content: {

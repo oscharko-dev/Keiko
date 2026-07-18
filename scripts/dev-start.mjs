@@ -54,15 +54,15 @@ function publicBrowserUrl(port) {
 const APP_SESSION_SECRET_ENV = "KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET";
 const openBrowserRequested = process.argv.includes("--open");
 
-function resolveDevPairingSecret() {
-  const provisioned = process.env[APP_SESSION_SECRET_ENV];
+export function resolveDevPairingSecret(env = process.env) {
+  const provisioned = env[APP_SESSION_SECRET_ENV];
   if (typeof provisioned === "string" && provisioned.length >= 32) return provisioned;
   return randomBytes(32).toString("hex");
 }
 
 // The claim construction and fragment codec stay single-source in the built workspace packages;
 // `dev:start` runs `npm run build` before this executes, so dist/ is present by construction.
-async function pairedDevBrowserUrl(pairingSecret) {
+export async function pairedDevBrowserUrl(pairingSecret, baseUrl = publicBrowserUrl(publicPort)) {
   const serverModule = await import(
     pathToFileURL(join(repoRoot, "packages", "keiko-server", "dist", "index.js")).href
   );
@@ -75,7 +75,7 @@ async function pairedDevBrowserUrl(pairingSecret) {
     issuedAtMs: Date.now(),
   });
   const fragment = contractsModule.encodeCodingAppSessionPairingFragment(attestation);
-  return `${publicBrowserUrl(publicPort)}/${fragment}`;
+  return `${baseUrl}/${fragment}`;
 }
 
 // `cmd /c start` percent-expands its argument, which corrupts a percent-encoded pairing fragment
@@ -103,10 +103,13 @@ function openExternal(url) {
   child.unref();
 }
 
-async function maybeOpenPairedBrowser(pairingSecret) {
-  if (!openBrowserRequested) return;
+export async function maybeOpenPairedBrowser(pairingSecret, seams = {}) {
+  const requested = seams.requested ?? openBrowserRequested;
+  const buildUrl = seams.buildUrl ?? pairedDevBrowserUrl;
+  const open = seams.open ?? openExternal;
+  if (!requested) return;
   try {
-    openExternal(await pairedDevBrowserUrl(pairingSecret));
+    open(await buildUrl(pairingSecret));
     console.log("[dev:start] opened a paired browser window (single-use app-session pairing).");
   } catch (error) {
     console.error(

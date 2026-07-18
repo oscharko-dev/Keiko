@@ -75,6 +75,27 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
   it("is a no-op outside a browser context", async () => {
     await expect(redeemCodingAppSessionPairingFragment(undefined)).resolves.toBe(false);
   });
+
+  it("wires the default browser seams: reads the hash, posts the pairing, strips the fragment", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    try {
+      window.location.hash = encodeCodingAppSessionPairingFragment(attestation);
+      await expect(redeemCodingAppSessionPairingFragment()).resolves.toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(path).toBe("/api/coding-workbench/app-session/pair");
+      expect(JSON.parse(String(init.body))).toEqual(attestation);
+      expect(replaceState).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      replaceState.mockRestore();
+      window.location.hash = "";
+    }
+  });
 });
 
 describe("boot pairing ordering (#2478, Qodo #2514 finding 3)", () => {

@@ -485,6 +485,37 @@ describe("runLifecycleCli", () => {
     expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
   });
 
+  it("honors an operator-provisioned launcher secret for the spawned BFF", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const provided = "operator".padEnd(CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS, "x");
+    const spawnedEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: provided },
+      {
+        cwd: root,
+        spawnFn: (_command, _args, opts) => {
+          spawnedEnvs.push(opts.env);
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        openExternal: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawnedEnvs[0]?.[CODING_APP_SESSION_LAUNCHER_SECRET_ENV]).toBe(provided);
+  });
+
   it("opens an unpaired URL for an already-running UI and says how to re-pair", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
