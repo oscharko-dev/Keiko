@@ -1,0 +1,123 @@
+# Keiko for Quality — GitHub Action execution shell (proof of concept, issue #2506).
+#
+# Prototype that reuses the pure evaluator (scripts/keiko-for-quality-core.mjs) and the shared
+# GitHub helpers from the Cloudflare Worker shell to reproduce the KFQ verdict without any external
+# infrastructure. It coexists with the live Worker under a distinct check name and dashboard marker
+# and only publishes for pulls that carry the opt-in label (see the env below), so the real gate is
+# untouched while the two run side by side.
+#
+# Trust split (issue #2506, Qodo review): the `check_run` and `issue_comment` triggers run the
+# workflow definition from the repository default branch (`dev`), not from pull-request code, so a
+# pull cannot alter the evaluator that judges it. That authoritative path (the `evaluate` job) holds
+# write permissions and the App private key. The `pull_request` trigger runs the pull's own copy and
+# is therefore untrusted: the `preview` job is read-only, dry-run, and holds no secrets, so
+# pull-request-controlled code can neither exfiltrate credentials nor publish under a privileged
+# identity. See docs/qa/keiko-for-quality-action-evaluation.md.
+name: Keiko for Quality (Action)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    branches:
+      - dev
+  check_run:
+    types: [completed]
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number to evaluate"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  # Authoritative path: default-branch-defined triggers only. Pull-request code cannot alter this
+  # definition, so it is safe to hold write permissions and App auth here.
+  evaluate:
+    name: Evaluate quality aggregate
+    # Never runs for pull_request. Skip comment events on plain issues (only pull-request comments
+    # carry review evidence).
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+      issues: write
+      pull-requests: write
+    # One in-flight authoritative evaluation per pull request. For check_run events the group must
+    # resolve to the pull number (not the per-check id) or concurrent completions for the same pull
+    # would race to PATCH the aggregate. Runs are not cancelled mid-flight so a publish always
+    # completes; GitHub keeps only the newest queued run, which re-evaluates the exact current head.
+    concurrency:
+      group: >-
+        kfq-action-eval-${{ github.event.issue.number ||
+        github.event.check_run.pull_requests[0].number || github.event.inputs.pr || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Evaluate Keiko for Quality
+        env:
+          # App auth (preferred) keeps the check bound to the Keiko for Quality App id, preserving the
+          # exact branch-protection pin. Absent the App secrets the shell falls back to GITHUB_TOKEN
+          # and the check is produced under the GitHub Actions App id (documented in the evaluation).
+          # These secrets are only ever exposed on this default-branch-defined path.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KFQ_APP_ID: ${{ secrets.KFQ_APP_ID }}
+          KFQ_PRIVATE_KEY_PKCS8: ${{ secrets.KFQ_PRIVATE_KEY_PKCS8 }}
+          KFQ_PR: ${{ github.event.inputs.pr }}
+          # Non-secret configuration, mirroring the live Worker variables.
+          TARGET_REPOSITORIES_JSON: >-
+            [{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},
+            {"repository":"oscharko-dev/Keiko-Native","baseBranch":"dev","profile":"keiko-native"}]
+          STABILITY_WINDOW_MS: "60000"
+          SOCKET_RISK_ALLOWLIST_JSON: "[]"
+          SOCKET_RISK_ACTORS_JSON: "[]"
+          KFQ_ACTION_LABEL: kfq-action-poc
+        run: node scripts/keiko-for-quality-action.mjs
+
+  # Untrusted path: pull_request runs the pull's own workflow/script copy. Read-only, no secrets, and
+  # dry-run (KFQ_DRY_RUN logs the verdict to the run log and performs no writes), so pull-controlled
+  # code cannot exfiltrate credentials or publish under any identity. Fast feedback only; the
+  # authoritative verdict comes from the default-branch triggers above.
+  preview:
+    name: Preview quality aggregate (dry-run)
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
+    concurrency:
+      group: kfq-action-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Preview Keiko for Quality (dry-run, no writes)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KFQ_DRY_RUN: "1"
+          TARGET_REPOSITORIES_JSON: >-
+            [{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},
+            {"repository":"oscharko-dev/Keiko-Native","baseBranch":"dev","profile":"keiko-native"}]
+          STABILITY_WINDOW_MS: "60000"
+          SOCKET_RISK_ALLOWLIST_JSON: "[]"
+          SOCKET_RISK_ACTORS_JSON: "[]"
+        run: node scripts/keiko-for-quality-action.mjs
