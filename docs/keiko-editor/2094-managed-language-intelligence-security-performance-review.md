@@ -13,9 +13,9 @@ cannot create the first typed runtime configuration after activation (#2534), an
 projection hides the restart action after a configuration mutation (#2535). Issue #2282 is
 verification-only, so neither product-source fix is folded into this closeout.
 
-The real-browser axe/visual lane, controlled Linux orchestration run, and Linux-authoritative editor
-evidence are green. This conclusion remains provisional until the exact-head local aggregate and
-protected checks are green.
+The real-browser axe/visual lane, controlled Linux orchestration run, Linux-authoritative editor
+evidence, and complete local aggregate are green. This conclusion remains provisional until the
+exact-head protected checks are green.
 
 ## Trust-boundary review
 
@@ -31,7 +31,7 @@ protected checks are green.
 | Docked agent           | Existing governed action/language routes are reused; review-only results grant no write/delivery authority.                                  | Real-loopback integration covers Python/Go operations, cancellation, workspace switch, stale activation, redacted audit, and byte-identical files for review-only edits. **PASS**.            |
 | UI                     | Settings reflects server state, remains keyboard/focus safe, and does not install providers or expose secrets/paths.                         | Component axe/i18n/state coverage and the composed real-browser axe/visual lane pass. The two product gaps are tracked in #2534 and #2535. **PASS WITH FOLLOW-UPS**.                          |
 | Evidence               | Diagnostics/manifests contain statuses, counts, hashes, reason codes, and relative paths only.                                               | Redaction tests exclude roots, source/diagnostic bodies, executable paths, environment, stderr, configuration bodies, endpoints, and credentials. **PASS**.                                   |
-| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | Local-first aggregate and exact-head protected checks are still required; no merge/closure authority is inferred from this review. **PENDING**.                                               |
+| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | The no-cache local aggregate passes; exact-head protected checks are still required before merge and closure. **LOCAL PASS; REMOTE PENDING**.                                                 |
 
 ## Provider-operation-state closure
 
@@ -171,7 +171,7 @@ stale process, mutates source, or grants delivery authority.
 
 Residual limitations:
 
-- exact-head aggregate and protected-check receipts remain required;
+- exact-head protected-check receipts remain required;
 - provider-native indexing/RSS varies by approved binary and workspace and is not represented by the
   fake orchestration result;
 - Settings cannot create the first runtime configuration; #2534 owns that product correction;
@@ -196,5 +196,5 @@ npm run agent:pre-pr -- --no-cache
 ```
 
 Only the controlled runner should set the wall-clock switch. The exact command results, optional
-skips, `.agent/pre-pr-report.json`, Linux visual/axe attachment, editor-evidence disposition, and all
+skips, `.agent/pre-pr-report.json`, real-browser visual/axe attachment, editor-evidence disposition, and all
 required checks must be recorded before #2282 or Epic #2094 is closed.

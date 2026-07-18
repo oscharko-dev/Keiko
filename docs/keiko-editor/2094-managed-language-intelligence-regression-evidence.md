@@ -2,8 +2,8 @@
 
 Evidence refreshed: 2026-07-18. The local Issue #2282 implementation is based on
 `dev@1325bf1321f15956afd08d7988bae3e24e6c8387` with Node 24.18.0 and npm 11.16.0.
-The real-browser, controlled Linux orchestration, and Linux-authoritative editor-evidence lanes are
-green. Exact-head signed-commit, aggregate, and required-check receipts remain mandatory before
+The real-browser, controlled Linux orchestration, Linux-authoritative editor-evidence, and complete
+local aggregate lanes are green. Exact-head protected-check receipts remain mandatory before
 closure.
 
 ## Current closeout status
@@ -18,10 +18,9 @@ closure.
 | Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 32.4 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
 | Linux editor release evidence    | **PASS** — fresh production export: 307 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
 | D12 paired editor evidence       | **PASS** — independent validation reports fresh Linux-authoritative evidence at `1e7d0742a095dd37fde6ab77885e6f58ee79fed3`, with all budgets inside their limits.      |
-| Aggregate gate                   | **PENDING** — a clean `npm run agent:pre-pr -- --no-cache` remains required after the authoritative evidence files are settled.                                        |
+| Aggregate gate                   | **PASS** — `npm run agent:pre-pr -- --no-cache` completed with 27 passed steps, zero failures, and 3 documented non-Linux platform skips.                              |
 
-Existing `dev` checks do not validate the uncommitted Issue #2282 diff and are not reused as
-exact-head evidence.
+The local receipt does not replace the required protected checks on the pushed exact head.
 
 ## Failure-first receipt
 
@@ -160,7 +159,7 @@ Styling remains component-scoped. The SHA-pinned global stylesheet is unchanged.
 
 ## Coverage and release gates
 
-Before delivery, run the clean aggregate and report `.agent/pre-pr-report.json`:
+The clean aggregate receipt in `.agent/pre-pr-report.json` was produced with:
 
 ```bash
 npm run agent:pre-pr -- --no-cache
@@ -175,7 +174,7 @@ gate, or evidence fingerprint may be lowered to obtain a pass.
 
 ## Known limitations and follow-ups
 
-- Exact-head aggregate and protected-check receipts remain required.
+- Exact-head protected-check receipts remain required.
 - Optional real-provider compatibility requires exact operator-provisioned offline profiles; no
   download was attempted.
 - Provider-native indexing latency/RSS varies by real workspace and is not claimed by the fake
