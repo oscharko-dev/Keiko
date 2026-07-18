@@ -28,7 +28,7 @@ Refs #<issue_number>
 - [ ] Project `Workflow State` is `PR Open` while deterministic gates or repairs are active.
 - [ ] `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required` are filled.
 - [ ] Issue label remains `status: in progress` until verified auto-merge, then becomes `status: done`.
-- [ ] Autonomous repair stayed on the PR branch; no direct `dev` push, force-push, `gitar unblock`, finding dismissal, or required-gate bypass occurred.
+- [ ] Autonomous repair stayed on the PR branch; no direct `dev` push, force-push, finding dismissal, or required-gate bypass occurred.
 - [ ] Native auto-merge was armed only after the ADR-0135 direct required checks settled.
 
 ## Product Impact
