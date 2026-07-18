@@ -12,6 +12,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
@@ -25,6 +26,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
       - epic/coding-workbench-opencode-codex
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
@@ -45,7 +47,7 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
-            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:epic/coding-workbench-opencode-codex | *:release/*)
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:epic/coding-workbench-opencode-codex | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
