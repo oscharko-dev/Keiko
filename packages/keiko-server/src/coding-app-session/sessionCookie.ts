@@ -1,0 +1,59 @@
+// Session cookie serialization and reading for the authenticated app-session channel (ADR-0141 D4).
+//
+// The cookie is the only bearer. It is `HttpOnly` (unreadable by page script, so not extractable
+// browser storage), `SameSite=Strict` (never sent cross-site), and scoped to the channel path. It is
+// marked `Secure` only when the request arrived over TLS, because loopback HTTP — a browser-designated
+// secure context — cannot carry a `Secure` cookie. The value never appears in a URL or any log.
+
+import type { IncomingMessage } from "node:http";
+
+/** Cookie name for the app session. Kept stable so it can be cleared reliably. */
+export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
+/** Path scope: the channel route group only. The cookie is not sent to any other route. */
+export const APP_SESSION_COOKIE_PATH = "/api/coding-workbench/app-session";
+
+export interface SessionCookieOptions {
+  readonly secure: boolean;
+  readonly maxAgeSeconds: number;
+}
+
+function baseAttributes(secure: boolean): string {
+  const attributes = [`Path=${APP_SESSION_COOKIE_PATH}`, "HttpOnly", "SameSite=Strict"];
+  if (secure) attributes.push("Secure");
+  return attributes.join("; ");
+}
+
+/** Serialize the `Set-Cookie` value that issues a session. */
+export function serializeSessionCookie(cookieToken: string, options: SessionCookieOptions): string {
+  const maxAge = Math.max(0, Math.floor(options.maxAgeSeconds));
+  return `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure)}; Max-Age=${String(maxAge)}`;
+}
+
+/** Serialize the `Set-Cookie` value that clears a session on sign-out. */
+export function clearSessionCookie(secure: boolean): string {
+  return `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure)}; Max-Age=0`;
+}
+
+/** Read the app-session cookie value from a request, or `undefined` when it is absent. */
+export function readSessionCookie(req: IncomingMessage): string | undefined {
+  const header = req.headers.cookie;
+  if (typeof header !== "string") return undefined;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) continue;
+    if (trimmed.slice(0, separator) === APP_SESSION_COOKIE_NAME) {
+      const value = trimmed.slice(separator + 1);
+      return value.length > 0 ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Whether the request arrived over TLS, gating the `Secure` cookie attribute. */
+export function requestIsSecure(req: IncomingMessage): boolean {
+  // A plain (non-TLS) socket has no `encrypted` field; Node types a `TLSSocket`'s as the literal
+  // `true`, so read through a widened shape to keep the comparison meaningful for both.
+  const socket = req.socket as { readonly encrypted?: boolean };
+  return socket.encrypted === true;
+}

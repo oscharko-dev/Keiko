@@ -128,7 +128,7 @@ function commentsResponse(url, headSha, options = {}) {
     );
   }
   const comments = [
-    qodoReviewComment(headSha),
+    qodoReviewComment(options.qodoSha ?? headSha, { bugs: options.qodoBugs ?? 0 }),
     {
       author_association: "NONE",
       body: "[!WARNING] https://socket.dev/npm/package/execa/overview/9.6.1",
@@ -169,6 +169,19 @@ function pullResponse(headSha, options) {
   );
 }
 
+function commitResponse(headSha, options) {
+  // A transient commit read must not abort the whole evaluation (fail-closed, verdict still posted).
+  if (options.commitFails) return response({ message: "server error" }, 500);
+  // Default: a normal single-parent commit (no merge parents surfaced). options.parents models a
+  // merge-commit head (2+ parents); committer.date defaults just before the Qodo review (09:00) so a
+  // parent-pinned review reads as fresh unless the test overrides commitDate to a later time.
+  return response({
+    commit: { committer: { date: options.commitDate ?? "2026-07-11T08:59:00.000Z" } },
+    parents: options.parents ?? [{ sha: "d".repeat(40) }],
+    sha: headSha,
+  });
+}
+
 function checkWriteResponse(path, method) {
   if (path.endsWith("/check-runs") && method === "POST") return response({ id: 99 });
   if (/\/check-runs\/\d+$/u.test(path) && method === "PATCH") return response({ id: 99 });
@@ -196,6 +209,7 @@ function githubReadResponse(url, path, method, headSha, options) {
     return commentsResponse(url, headSha, options);
   }
   if (path.includes(`/commits/${headSha}/check-runs`)) return checksResponse(headSha, options);
+  if (path.endsWith(`/commits/${headSha}`)) return commitResponse(headSha, options);
   return undefined;
 }
 
@@ -1093,6 +1107,141 @@ describe("Keiko for Quality worker trust boundary", () => {
       conclusion: "failure",
       status: "completed",
     });
+  });
+
+  it("reads Qodo evidence on a merge-commit head via its parent SHA", async () => {
+    const headSha = "a".repeat(40);
+    const parent = "f".repeat(40);
+    // Merge-commit head (2 parents); Qodo pinned its review to the feature parent with 2 findings.
+    const fetchMock = githubMock(headSha, {
+      parents: [{ sha: parent }, { sha: "e".repeat(40) }],
+      qodoSha: parent,
+      qodoBugs: 2,
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merge-head",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    const body = JSON.parse(publish[1].body);
+    expect(body.conclusion).toBe("failure");
+    expect(body.output.summary).toContain("Qodo has 2 unresolved finding(s).");
+    // The head commit was fetched precisely because no Qodo review bound the exact head.
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        /\/commits\/[0-9a-f]{40}$/u.test(new URL(String(url)).pathname),
+      ),
+    ).toBe(true);
+  });
+
+  it("degrades to missing Qodo evidence when the merge-parent commit read fails", async () => {
+    const headSha = "a".repeat(40);
+    // Head not directly bound (Qodo pinned to a parent), so the worker attempts the head-commit read
+    // — which fails here. The evaluation must still publish a fail-closed verdict, not abort.
+    const fetchMock = githubMock(headSha, {
+      commitFails: true,
+      qodoBugs: 2,
+      qodoSha: "f".repeat(40),
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merge-head-fetch-fails",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    expect(publish).toBeDefined();
+    const body = JSON.parse(publish[1].body);
+    // Missing Qodo evidence blocks as a pending check (in_progress, no conclusion) — never success.
+    expect(body.conclusion).not.toBe("success");
+    expect(body.output.summary).toContain("Qodo finding evidence is missing");
+  });
+
+  it("blocks a merge-commit head whose only Qodo review predates the merge", async () => {
+    const headSha = "a".repeat(40);
+    const parent = "f".repeat(40);
+    // The merge commit (09:30) was created AFTER Qodo's parent-pinned review (09:00), so that review
+    // is stale for the merged result and must not satisfy currency.
+    const fetchMock = githubMock(headSha, {
+      commitDate: "2026-07-11T09:30:00.000Z",
+      parents: [{ sha: parent }, { sha: "e".repeat(40) }],
+      qodoBugs: 2,
+      qodoSha: parent,
+    });
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "merge-head-stale",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const publish = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    );
+    const body = JSON.parse(publish[1].body);
+    // A pre-merge review is not accepted, so currency reads as missing → blocks (never success).
+    expect(body.conclusion).not.toBe("success");
+    expect(body.output.summary).toContain("Qodo finding evidence is missing");
+  });
+
+  it("skips the head-commit fetch when a Qodo review binds the exact head", async () => {
+    const headSha = "a".repeat(40);
+    const fetchMock = githubMock(headSha); // default Qodo review references the head directly
+    const waits = [];
+    await worker.fetch(
+      await signedRequest(
+        {
+          installation: { id: 42 },
+          number: 2329,
+          pull_request: { number: 2329 },
+          repository: { full_name: "oscharko-dev/Keiko" },
+        },
+        "test-secret",
+        "no-parent-fetch",
+      ),
+      environment(stateBinding()),
+      { waitUntil: (promise) => waits.push(promise) },
+    );
+    await Promise.all(waits);
+    const commitFetches = fetchMock.mock.calls.filter(([url]) =>
+      /\/commits\/[0-9a-f]{40}$/u.test(new URL(String(url)).pathname),
+    );
+    expect(commitFetches).toHaveLength(0);
   });
 
   it("keeps missing evidence pending and ignores its own check event", async () => {
