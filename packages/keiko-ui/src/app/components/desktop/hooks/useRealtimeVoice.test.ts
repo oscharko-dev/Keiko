@@ -1872,9 +1872,20 @@ describe("useRealtimeVoice — unmount safety", () => {
 });
 
 function memoryItemText(item: Record<string, unknown> | undefined): string | undefined {
-  const content = (item?.item as { readonly content?: readonly { readonly text?: string }[] })
-    ?.content;
-  return content?.[0]?.text;
+  const inner = item?.item;
+  if (typeof inner !== "object" || inner === null) {
+    return undefined;
+  }
+  const content = "content" in inner ? inner.content : undefined;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const first: unknown = content[0];
+  if (typeof first !== "object" || first === null || !("text" in first)) {
+    return undefined;
+  }
+  const { text } = first;
+  return typeof text === "string" ? text : undefined;
 }
 
 describe("buildRealtimeMemoryContextItem", () => {

@@ -34,16 +34,19 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
     pattern: /disregard (?:all |the )?(?:previous|above) instructions?/iu,
   },
   { name: "override-system-prompt", pattern: /(?:override|bypass) (?:the )?system prompt/iu },
-  // Role-marker patterns below bound the gap between the line-start anchor and the
-  // keyword to 20 characters (Sonar S8786): with an unbounded `\s*`, every `\n`/`\r`
-  // inside a long run is a candidate line-start, and each candidate previously
-  // required an O(run-length) whitespace backtrack to fail, giving O(n^2) on inputs
-  // built from many newlines. The bound caps each candidate's cost to O(1); it only
-  // changes behaviour for >20 whitespace/blank-line characters between the anchor
-  // and the keyword, far beyond any realistic role-injection payload.
-  { name: "system-role-injection", pattern: /(^|[\n\r])\s{0,20}system\s*:/iu },
-  { name: "assistant-role-injection", pattern: /(^|[\n\r])\s{0,20}assistant\s*:/iu },
-  { name: "developer-role-injection", pattern: /(^|[\n\r])\s{0,20}developer\s*:/iu },
+  // Role-marker patterns below restrict the gap between the line-start anchor and
+  // the keyword to horizontal whitespace only (Sonar S8786): with an unbounded
+  // `\s*`, every `\n`/`\r` inside a long run is itself both a candidate line-start
+  // AND part of the following quantifier's skippable range, so the engine explores
+  // every way to split a run of N newlines between the two, giving O(n^2). Because
+  // `[ \t]*` excludes `\n`/`\r`, a horizontal-whitespace run between two anchors
+  // belongs to exactly one candidate — each run is scanned once, giving O(n) total
+  // — without capping how far a role marker may be indented (an earlier fix bounded
+  // the gap to 20 characters, which let an attacker evade detection entirely by
+  // padding past the cap; see PR #2471 review).
+  { name: "system-role-injection", pattern: /(^|[\n\r])[ \t]*system\s*:/iu },
+  { name: "assistant-role-injection", pattern: /(^|[\n\r])[ \t]*assistant\s*:/iu },
+  { name: "developer-role-injection", pattern: /(^|[\n\r])[ \t]*developer\s*:/iu },
   { name: "im-start-token", pattern: /<\|im_start\|>/iu },
   { name: "im-end-token", pattern: /<\|im_end\|>/iu },
   { name: "endoftext-token", pattern: /<\|endoftext\|>/iu },
@@ -103,11 +106,11 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
   },
   {
     name: "de-system-role-injection",
-    pattern: /(^|[\n\r])\s{0,20}systemnachricht\s*:/iu,
+    pattern: /(^|[\n\r])[ \t]*systemnachricht\s*:/iu,
   },
   {
     name: "de-developer-role-injection",
-    pattern: /(^|[\n\r])\s{0,20}entwicklernachricht\s*:/iu,
+    pattern: /(^|[\n\r])[ \t]*entwicklernachricht\s*:/iu,
   },
 ];
 

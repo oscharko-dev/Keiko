@@ -47,7 +47,10 @@ import {
   reconcileTaskWorkspacesAtStartup,
 } from "./deps.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
-import type { WorkspaceReconciliationReport } from "@oscharko-dev/keiko-contracts";
+import {
+  TASK_WORKSPACE_SCHEMA_VERSION,
+  type WorkspaceReconciliationReport,
+} from "@oscharko-dev/keiko-contracts";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
@@ -1341,12 +1344,12 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
 
   it("does not throw when reconcile() resolves normally", async () => {
     let called = false;
-    const report = {
-      schemaVersion: 1,
+    const report: WorkspaceReconciliationReport = {
+      schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       generatedAt: new Date(0).toISOString(),
       entries: [],
       activeRestoration: { kind: "none" },
-    } as unknown as WorkspaceReconciliationReport;
+    };
     const service = fakeReconciliationService(() => {
       called = true;
       return Promise.resolve(report);

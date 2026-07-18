@@ -198,6 +198,35 @@ describe("scanForPromptInjections — ReDoS regression (Sonar S8786)", () => {
     expect(result.safe).toBe(true);
     expect(result.injections).toEqual([]);
   });
+
+  // Regression for a PR #2471 review finding: an earlier fix for this same class of
+  // ReDoS bounded the role-marker gap to a fixed 20 characters, which let an
+  // attacker evade detection entirely by padding past the cap. The gap is now
+  // restricted to horizontal whitespace only (no `\n`/`\r`), which is what makes
+  // the pattern linear (see the comment above the pattern definitions) — not an
+  // arbitrary length cap — so a marker indented far past the old 20-char bound must
+  // still be flagged.
+  it("flags a role marker indented far beyond the old 20-character bound", () => {
+    const input = "context\n" + " ".repeat(500) + "system: leaked instructions";
+    const result = scanForPromptInjections(input);
+    expect(result.safe).toBe(false);
+    expect(result.injections).toContain("system-role-injection");
+  });
+
+  // Adversarial input shaped to stress the new horizontal-whitespace-only bound
+  // specifically: many newline-anchored candidates, each followed by a moderate
+  // space run that never reaches a role marker. Each run belongs to exactly one
+  // anchor (a `\n` cannot appear inside `[ \t]*`'s match), so this must stay linear
+  // even though the gap itself is now unbounded.
+  it("resolves many newline-anchored whitespace runs without quadratic backtracking", () => {
+    const input = "\n ".repeat(10_000).concat(" ".repeat(40), "no role marker in this tail");
+    const start = Date.now();
+    const result = scanForPromptInjections(input);
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(1500);
+    expect(result.safe).toBe(true);
+    expect(result.injections).toEqual([]);
+  });
 });
 
 describe("scanForPromptInjections — corpus integrity", () => {
