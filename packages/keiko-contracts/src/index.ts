@@ -3770,6 +3770,121 @@ export {
   validateVoiceSessionRecapAuditRecord,
 } from "./voice-session-recap.js";
 
+// ─── Editor M11 multi-root/trust/profile/history foundation (Issue #2520) ───────
+export type {
+  WorkspaceBranded,
+  WorkspaceRootRef,
+  WorkspaceManifestRef,
+  WorkspaceProfileRef,
+  WorkspaceHistoryEntryRef,
+  WorkspaceVaultEntryRef,
+  WorkspaceRootIdentityDigest,
+  WorkspaceManifestDigest,
+  WorkspaceTrustBasisDigest,
+  WorkspaceContentDigest,
+  WorkspacePathDigest,
+  WorkspaceIsoInstant,
+  WorkspaceFact,
+  WorkspaceContractValidationOk,
+  WorkspaceContractValidationFail,
+  WorkspaceContractValidation,
+} from "./workspace-contract-primitives.js";
+export {
+  WORKSPACE_CONTRACT_SCHEMA_VERSION,
+  WORKSPACE_OPAQUE_REF_MAX_CHARS,
+  WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+  isWorkspaceRootRef,
+  isWorkspaceManifestRef,
+  isWorkspaceProfileRef,
+  isWorkspaceHistoryEntryRef,
+  isWorkspaceVaultEntryRef,
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceManifestDigest,
+  isWorkspaceTrustBasisDigest,
+  isWorkspaceContentDigest,
+  isWorkspacePathDigest,
+  isWorkspaceIsoInstant,
+  isWorkspaceFact,
+  isCanonicalWorkspaceRoot,
+  isPortableWorkspaceRelativePath,
+} from "./workspace-contract-primitives.js";
+export type {
+  WorkspaceRootDescriptor,
+  WorkspaceManifest,
+  WorkspaceRootDispatchOperationClass,
+  WorkspaceRootDispatch,
+} from "./workspace-manifest.js";
+export {
+  WORKSPACE_MANIFEST_SCHEMA_VERSION,
+  WORKSPACE_MANIFEST_MAX_ROOTS,
+  WORKSPACE_ROOT_DISPLAY_NAME_MAX_CHARS,
+  validateWorkspaceManifest,
+  validateWorkspaceRootDispatch,
+} from "./workspace-manifest.js";
+export type {
+  WorkspaceTrustLevel,
+  WorkspaceTrustReason,
+  WorkspaceTrustBinding,
+  WorkspaceTrustRecord,
+  WorkspaceTrustAssessment,
+  WorkspaceTrustOperationClass,
+} from "./workspace-trust.js";
+export {
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+  WORKSPACE_TRUST_LEVELS,
+  WORKSPACE_TRUST_REASONS,
+  validateWorkspaceTrustBinding,
+  validateWorkspaceTrustRecord,
+  isWorkspaceRestrictedModeActive,
+  projectCommandTaskTrustState,
+  workspaceTrustPolicyEffect,
+  strictestWorkspaceTrustPolicyEffect,
+} from "./workspace-trust.js";
+export type {
+  EditorM11ProfileSettingsLayer,
+  EditorM11RootSettingsLayer,
+  EditorM11SettingSource,
+  EditorM11ResolvedSetting,
+  EditorM11SettingsResolutionInput,
+} from "./editor-m11-settings.js";
+export {
+  EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+  isEditorM11ProfileSettingsLayer,
+  isEditorM11RootSettingsLayer,
+  validateEditorM11ProfileSettingsLayer,
+  validateEditorM11RootSettingsLayer,
+  resolveEditorM11Settings,
+} from "./editor-m11-settings.js";
+export type { WorkspaceProfileManifest } from "./workspace-profile.js";
+export {
+  WORKSPACE_PROFILE_SCHEMA_VERSION,
+  WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
+  validateWorkspaceProfileManifest,
+  redactWorkspaceProfileForExport,
+} from "./workspace-profile.js";
+export type {
+  EditorLocalHistoryOrigin,
+  EditorLocalHistoryEncryptedContentRef,
+  EditorLocalHistoryEntry,
+  EditorLocalHistoryIndex,
+  EditorLocalHistoryRetentionRequirement,
+  EditorLocalHistoryRetentionPlan,
+} from "./editor-local-history.js";
+export {
+  EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
+  EDITOR_LOCAL_HISTORY_ENCRYPTION,
+  EDITOR_LOCAL_HISTORY_MAX_ENTRIES,
+  EDITOR_LOCAL_HISTORY_MAX_ENTRY_BYTES,
+  EDITOR_LOCAL_HISTORY_MAX_TOTAL_BYTES,
+  EDITOR_LOCAL_HISTORY_MAX_PINNED_BYTES,
+  EDITOR_LOCAL_HISTORY_MAX_VERSIONS_PER_FILE,
+  EDITOR_LOCAL_HISTORY_TTL_DAYS,
+  EDITOR_LOCAL_HISTORY_ORIGINS,
+  validateEditorLocalHistoryEntry,
+  validateEditorLocalHistoryIndex,
+  planEditorLocalHistoryRetention,
+} from "./editor-local-history.js";
+
 // ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
 // The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,
 // its lifecycle state machine (legal/illegal transitions + SC4 preconditions), drift/recovery
@@ -3799,6 +3914,10 @@ export type {
   WorkspaceEvent,
   WorkspaceInstance,
   WorkspaceBinding,
+  WorkspaceBindingV1,
+  WorkspaceBoundRootV2,
+  WorkspaceBindingV2,
+  VersionedWorkspaceBinding,
   WorkspaceActivation,
   WorkspaceOperationAuthority,
   WorkspaceOperationName,
@@ -3837,6 +3956,9 @@ export {
   WORKSPACE_EVENT_ALLOWED_KEYS,
   WORKSPACE_INSTANCE_ALLOWED_KEYS,
   WORKSPACE_BINDING_ALLOWED_KEYS,
+  WORKSPACE_BINDING_V2_SCHEMA_VERSION,
+  WORKSPACE_BOUND_ROOT_V2_ALLOWED_KEYS,
+  WORKSPACE_BINDING_V2_ALLOWED_KEYS,
   WORKSPACE_ACTIVATION_ALLOWED_KEYS,
   TASK_WORKSPACE_OPERATIONS,
   TASK_WORKSPACE_DELEGATED_SUBSYSTEMS,
@@ -3856,6 +3978,8 @@ export {
   validateWorkspaceEvent,
   validateWorkspaceInstance,
   validateWorkspaceBinding,
+  validateWorkspaceBoundRootV2,
+  validateWorkspaceBindingV2,
   validateWorkspaceActivation,
   taskWorkspaceOperation,
   isReadOnlyTaskWorkspaceOperation,
