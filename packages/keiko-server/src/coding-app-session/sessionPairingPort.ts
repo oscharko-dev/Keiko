@@ -10,21 +10,21 @@
 // the fake. The bounds here are the outer envelope the launcher attestation must satisfy before the
 // port even evaluates it.
 
-/** Maximum characters for the single-use pairing request identifier. */
-export const SESSION_PAIRING_REQUEST_ID_MAX_CHARS = 128;
-/** Maximum characters for the attestation claim (an HMAC-SHA256 hex digest is 64 chars). */
-export const SESSION_PAIRING_CLAIM_MAX_CHARS = 256;
-/** Maximum characters for a principal label an approved decision may carry. */
-export const SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS = 64;
+import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 
-const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+// The attestation WIRE shape, its bounds, and its structural gate were promoted to
+// `keiko-contracts` in W1.5 (#2478) so the browser client and the launcher share one definition;
+// this module re-exports them under the established server-local names, and the authority seam
+// below (port, decision, denial) stays server-private.
+export {
+  CODING_APP_SESSION_PAIRING_REQUEST_ID_MAX_CHARS as SESSION_PAIRING_REQUEST_ID_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS as SESSION_PAIRING_CLAIM_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS as SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
+  isWellFormedCodingAppSessionPairingAttestation as isWellFormedSessionPairingAttestation,
+} from "@oscharko-dev/keiko-contracts";
 
 /** A launcher-minted, single-use, process-bound pairing attestation presented at the pair endpoint. */
-export interface SessionPairingAttestation {
-  readonly requestId: string;
-  readonly issuedAtMs: number;
-  readonly claim: string;
-}
+export type SessionPairingAttestation = CodingAppSessionPairingAttestation;
 
 /** The port's decision. `denied` never distinguishes why, so a probe learns nothing from it. */
 export type SessionPairingDecision =
@@ -38,46 +38,3 @@ export interface SessionPairingPort {
 
 /** A single denied decision reused everywhere so no call site invents a divergent shape. */
 export const SESSION_PAIRING_DENIED: SessionPairingDecision = { outcome: "denied" };
-
-const ALLOWED_KEYS = new Set<string>(["requestId", "issuedAtMs", "claim"]);
-
-function hasOnlyAllowedKeys(candidate: Record<string, unknown>): boolean {
-  return Object.keys(candidate).every((key): boolean => ALLOWED_KEYS.has(key));
-}
-
-function isValidRequestId(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    value.length <= SESSION_PAIRING_REQUEST_ID_MAX_CHARS &&
-    SAFE_REQUEST_ID.test(value)
-  );
-}
-
-function isValidIssuedAt(value: unknown): boolean {
-  return Number.isSafeInteger(value) && Number(value) >= 0;
-}
-
-function isValidClaim(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= SESSION_PAIRING_CLAIM_MAX_CHARS
-  );
-}
-
-/**
- * Structural gate every attestation must pass before any authority check. Rejects malformed request
- * ids, non-integer timestamps, and oversized claims. It is not authority — it only bounds the input.
- */
-export function isWellFormedSessionPairingAttestation(
-  value: unknown,
-): value is SessionPairingAttestation {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    hasOnlyAllowedKeys(candidate) &&
-    isValidRequestId(candidate.requestId) &&
-    isValidIssuedAt(candidate.issuedAtMs) &&
-    isValidClaim(candidate.claim)
-  );
-}

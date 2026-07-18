@@ -6,10 +6,13 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
+  unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   errorBody,
@@ -310,10 +313,20 @@ export function handleCodingRuntimeFollowUp(
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
 // snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
 // server-owned revision through the same serialized coordinator as every other mutation.
+//
+// All three question routes are content-bearing and therefore enforce the app-session read
+// authority (ADR-0141 D2, #2478) BEFORE any runId or runtime resolution: an unpaired list read
+// receives the one constant content-free projection, and an unpaired answer/reject receives the
+// same existence-concealing not-found result an unknown run yields — never a distinct auth error,
+// so no probe can tell "not paired" from "does not exist" (ADR-0141 D6). Loopback, Origin, CSRF,
+// and runId knowledge remain routing facts and never grant these routes (ADR-0141 D1).
 export function handleCodingRuntimeQuestionAnswer(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return Promise.resolve(notFound());
+  }
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound())
@@ -324,6 +337,9 @@ export function handleCodingRuntimeQuestionReject(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return Promise.resolve(notFound());
+  }
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound())
@@ -334,6 +350,12 @@ export function handleCodingRuntimeQuestionList(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return Promise.resolve({
+      status: 200,
+      body: unpairedCodingWorkbenchRuntimeQuestionsChannelPayload(),
+    });
+  }
   const runId = ctx.params.runId;
   if (runId === undefined) return Promise.resolve(notFound());
   const required = requireRuntime(deps);
@@ -343,7 +365,12 @@ export function handleCodingRuntimeQuestionList(
     const body = await readBody(ctx.req);
     if (body === undefined) return failureResult("invalid-intent");
     const result = await required.orchestrator.listQuestions(runId, body);
-    return result.ok ? { status: 200, body: result.questions } : failureResult(result.failureCode);
+    if (!result.ok) return failureResult(result.failureCode);
+    const payload: CodingWorkbenchRuntimeQuestionsChannelPayload = {
+      session: "active",
+      questions: result.questions.questions,
+    };
+    return { status: 200, body: payload };
   });
 }
 

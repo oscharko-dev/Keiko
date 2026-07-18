@@ -243,6 +243,7 @@ import {
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
 } from "./editor/agentRoutes.js";
+import { handleEditorAgentProducerTurn } from "./editor/agentProducerRoute.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -841,6 +842,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/agent/actions",
     handler: handleEditorAgentActions,
+  },
+  // Issue #2489 (Findings 1/2) -- the Keiko-native producer: a governed model turn whose tool
+  // calls dispatch through the SAME EditorAgentToolHost -> agentRoutes/agentVerificationRoute path
+  // above, scoped to the four retrofit tools (navigateSymbol/searchWorkspace/queryGit/
+  // requestVerification). EditorAgentToolHost's first production consumer.
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/producer/turn",
+    handler: handleEditorAgentProducerTurn,
   },
   {
     method: "GET",

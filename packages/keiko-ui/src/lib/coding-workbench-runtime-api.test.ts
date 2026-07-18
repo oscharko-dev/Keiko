@@ -10,6 +10,7 @@ import {
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeSnapshot,
   getCodingWorkbenchRuntimeStatus,
+  listCodingWorkbenchRuntimeQuestions,
   newCodingWorkbenchRuntimeRequestId,
   parseCodingWorkbenchRuntimeEvent,
   retryCodingWorkbenchRuntime,
@@ -182,6 +183,24 @@ describe("Coding Workbench runtime API endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
+
+  // #2478: the question list rides the authenticated channel payload; the client validator
+  // accepts both session facets and rejects anything that is not the channel shape.
+  it("lists questions as the channel payload and contract-validates it", async () => {
+    const fetchMock = stubFetch({ session: "unpaired", questions: [] });
+    await expect(
+      listCodingWorkbenchRuntimeQuestions("run-1", { requestId: "req-1", expectedRevision: 3 }),
+    ).resolves.toEqual({ session: "unpaired", questions: [] });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs/run-1/questions",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    stubFetch({ questions: [] });
+    await expect(
+      listCodingWorkbenchRuntimeQuestions("run-1", { requestId: "req-2", expectedRevision: 3 }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
 
   it("reads the global status and a run-scoped snapshot from their routes", async () => {
     const fetchMock = stubFetch(snapshot());

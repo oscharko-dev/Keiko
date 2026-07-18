@@ -9,8 +9,15 @@ import type { IncomingMessage } from "node:http";
 
 /** Cookie name for the app session. Kept stable so it can be cleared reliably. */
 export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
-/** Path scope: the channel route group only. The cookie is not sent to any other route. */
-export const APP_SESSION_COOKIE_PATH = "/api/coding-workbench/app-session";
+/**
+ * Path scope: the coding-workbench surface. W1.4 scoped the cookie to the app-session route group;
+ * W1.5 (#2478) widens it exactly to the surface that carries the enforced content-bearing routes
+ * (`…/runtime/runs/:runId/questions*`), because the browser must present the session there for the
+ * guard to grant read authority. The cookie `Path` attribute is browser hygiene, not a security
+ * boundary (RFC 6265 §8.6); `HttpOnly`, `SameSite=Strict`, and the loopback host scope carry the
+ * bearer-protection properties, and the BFF is the only receiver on every covered path.
+ */
+export const APP_SESSION_COOKIE_PATH = "/api/coding-workbench";
 
 export interface SessionCookieOptions {
   readonly secure: boolean;

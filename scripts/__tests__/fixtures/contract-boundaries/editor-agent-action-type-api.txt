@@ -1,0 +1,1 @@
+export type EditorAgentActionType = "openFile" | "focusTab";
