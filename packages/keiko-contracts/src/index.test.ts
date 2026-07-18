@@ -1253,4 +1253,35 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodRefreshRequest>();
     pin<import("./index.js").HtmlManualPodCreateRequest>();
   });
+
+  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async () => {
+    const m = await import("./index.js");
+    expect(m.WORKSPACE_CONTRACT_SCHEMA_VERSION).toBe(1);
+    expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
+    expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
+    expect(m.EDITOR_LOCAL_HISTORY_MAX_ENTRIES).toBe(512);
+    expect(typeof m.validateWorkspaceManifest).toBe("function");
+    expect(typeof m.validateWorkspaceRootDispatch).toBe("function");
+    expect(typeof m.validateWorkspaceTrustRecord).toBe("function");
+    expect(typeof m.resolveEditorM11Settings).toBe("function");
+    expect(typeof m.validateWorkspaceProfileManifest).toBe("function");
+    expect(typeof m.planEditorLocalHistoryRetention).toBe("function");
+    expect(typeof m.validateWorkspaceBindingV2).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").WorkspaceRootRef>();
+    pin<import("./index.js").WorkspaceManifest>();
+    pin<import("./index.js").WorkspaceRootDispatch>();
+    pin<import("./index.js").WorkspaceTrustRecord>();
+    pin<import("./index.js").WorkspaceTrustAssessment>();
+    pin<import("./index.js").EditorM11ProfileSettingsLayer>();
+    pin<import("./index.js").EditorM11RootSettingsLayer>();
+    pin<import("./index.js").EditorM11ResolvedSetting>();
+    pin<import("./index.js").WorkspaceProfileManifest>();
+    pin<import("./index.js").EditorLocalHistoryEntry>();
+    pin<import("./index.js").EditorLocalHistoryIndex>();
+    pin<import("./index.js").WorkspaceBindingV1>();
+    pin<import("./index.js").WorkspaceBindingV2>();
+    pin<import("./index.js").VersionedWorkspaceBinding>();
+  });
 });
