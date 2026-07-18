@@ -11,6 +11,7 @@ import {
   TASK_WORKSPACE_SURFACES,
   WORKSPACE_EVENT_TYPES,
   WORKSPACE_EVENT_ALLOWED_KEYS,
+  WORKSPACE_BINDING_V2_SCHEMA_VERSION,
   TASK_WORKSPACE_OPERATIONS,
   TASK_WORKSPACE_DELEGATED_SUBSYSTEMS,
   isTaskWorkspaceLifecycleState,
@@ -28,6 +29,8 @@ import {
   validateWorkspaceEvent,
   validateWorkspaceInstance,
   validateWorkspaceBinding,
+  validateWorkspaceBoundRootV2,
+  validateWorkspaceBindingV2,
   validateWorkspaceActivation,
   taskWorkspaceOperation,
   isReadOnlyTaskWorkspaceOperation,
@@ -40,8 +43,15 @@ import type {
   WorkspaceEvent,
   WorkspaceInstance,
   WorkspaceBinding,
+  WorkspaceBindingV2,
   WorkspaceActivation,
 } from "./task-workspace.js";
+import {
+  isWorkspaceManifestDigest,
+  isWorkspaceManifestRef,
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceRootRef,
+} from "./workspace-contract-primitives.js";
 
 const ALL_PRECONDITIONS_MET: TaskWorkspaceTransitionContext = {
   lockHeldByActor: true,
@@ -102,6 +112,48 @@ function validBinding(): WorkspaceBinding {
     boundSurfaces: ["chat", "editor", "git-delivery"],
     gitDeliveryRoot: "/repos/keiko/.worktrees/task-1",
     editorProjectRoot: "/repos/keiko/.worktrees/task-1",
+  };
+}
+
+function checked<Value>(value: string, guard: (input: unknown) => input is Value): Value {
+  if (!guard(value)) throw new Error(`invalid fixture: ${value}`);
+  return value;
+}
+
+const V2_ROOT = checked("root-primary", isWorkspaceRootRef);
+const V2_SECOND_ROOT = checked("root-secondary", isWorkspaceRootRef);
+const V2_MANIFEST = checked("manifest-primary", isWorkspaceManifestRef);
+const V2_ROOT_DIGEST = checked("a".repeat(64), isWorkspaceRootIdentityDigest);
+const V2_SECOND_ROOT_DIGEST = checked("b".repeat(64), isWorkspaceRootIdentityDigest);
+const V2_MANIFEST_DIGEST = checked("c".repeat(64), isWorkspaceManifestDigest);
+
+function validBindingV2(): WorkspaceBindingV2 {
+  return {
+    schemaVersion: WORKSPACE_BINDING_V2_SCHEMA_VERSION,
+    workspaceId: "ws-1",
+    taskId: "task-1",
+    manifestRef: V2_MANIFEST,
+    manifestRevision: 2,
+    manifestDigest: V2_MANIFEST_DIGEST,
+    roots: [
+      {
+        rootRef: V2_ROOT,
+        rootIdentityDigest: V2_ROOT_DIGEST,
+        rootPath: "/repos/keiko",
+        boundSurfaces: ["chat", "editor", "git-delivery"],
+        gitDeliveryRoot: "/repos/keiko",
+        editorProjectRoot: "/repos/keiko",
+      },
+      {
+        rootRef: V2_SECOND_ROOT,
+        rootIdentityDigest: V2_SECOND_ROOT_DIGEST,
+        rootPath: "/repos/secondary",
+        boundSurfaces: ["files", "editor"],
+        gitDeliveryRoot: "/repos/secondary",
+        editorProjectRoot: "/repos/secondary",
+      },
+    ],
+    focusedRootRef: V2_ROOT,
   };
 }
 
@@ -683,6 +735,71 @@ describe("validateWorkspaceBinding", () => {
     const result = validateWorkspaceBinding({ ...validBinding(), schemaVersion: "9" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain("schemaVersion invalid");
+  });
+
+  it("keeps the legacy single-root serialization byte-identical", () => {
+    expect(JSON.stringify(validBinding())).toBe(
+      '{"schemaVersion":"1","workspaceId":"ws-1","taskId":"task-1","activeRoot":"/repos/keiko/.worktrees/task-1","boundSurfaces":["chat","editor","git-delivery"],"gitDeliveryRoot":"/repos/keiko/.worktrees/task-1","editorProjectRoot":"/repos/keiko/.worktrees/task-1"}',
+    );
+    expect(validateWorkspaceBinding(validBinding())).toEqual({ ok: true });
+  });
+});
+
+describe("WorkspaceBinding V2", () => {
+  it("accepts the explicit versioned multi-root shape through both validators", () => {
+    expect(validateWorkspaceBoundRootV2(validBindingV2().roots[0])).toEqual({ ok: true });
+    expect(validateWorkspaceBindingV2(validBindingV2())).toEqual({ ok: true });
+    expect(validateWorkspaceBinding(validBindingV2())).toEqual({ ok: true });
+  });
+
+  it("rejects legacy-field smuggling and a foreign focused root", () => {
+    expect(validateWorkspaceBindingV2({ ...validBindingV2(), activeRoot: "/fallback" }).ok).toBe(
+      false,
+    );
+    expect(
+      validateWorkspaceBindingV2({ ...validBindingV2(), focusedRootRef: "root-foreign" }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects duplicate roots and per-root surface divergence", () => {
+    const first = validBindingV2().roots[0];
+    expect(validateWorkspaceBindingV2({ ...validBindingV2(), roots: [first, first] }).ok).toBe(
+      false,
+    );
+    expect(
+      validateWorkspaceBindingV2({
+        ...validBindingV2(),
+        roots: [{ ...first, editorProjectRoot: "/other" }],
+        focusedRootRef: V2_ROOT,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects overlapping roots, duplicate surfaces, and mixed-version shapes", () => {
+    const first = validBindingV2().roots[0];
+    const second = validBindingV2().roots[1];
+    const nestedPath = "/repos/keiko/packages/nested";
+    expect(
+      validateWorkspaceBindingV2({
+        ...validBindingV2(),
+        roots: [
+          first,
+          {
+            ...second,
+            rootPath: nestedPath,
+            gitDeliveryRoot: nestedPath,
+            editorProjectRoot: nestedPath,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateWorkspaceBoundRootV2({
+        ...first,
+        boundSurfaces: ["editor", "editor"],
+      }).ok,
+    ).toBe(false);
+    expect(validateWorkspaceBinding({ ...validBindingV2(), schemaVersion: "3" }).ok).toBe(false);
   });
 });
 
