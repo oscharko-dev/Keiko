@@ -11,11 +11,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..");
 const knipEntry = join(repoRoot, "node_modules", "knip", "bin", "knip.js");
 
-function run() {
-  const result = spawnSync(process.execPath, [knipEntry, "--no-progress"], {
+function spawnKnip() {
+  return spawnSync(process.execPath, [knipEntry, "--no-progress"], {
     cwd: repoRoot,
     stdio: "inherit",
   });
+}
+
+export function run(spawn = spawnKnip) {
+  const result = spawn();
   if (result.error !== undefined) {
     console.error(`check:knip FAILED — could not launch knip: ${result.error.message}`);
     return 1;
