@@ -1,8 +1,9 @@
 # Epic 2088 Foundation-wave production audit
 
-Audit date: 2026-07-16. Audited baseline: `origin/dev` at
-`1056821a5b861f076cc88e120492aaf5cad37b9d`. Scope: Epic #2088 Foundation wave and child epics
-#2089 through #2096 (M1 through M8).
+Audit date: 2026-07-16, extended 2026-07-18 (#2489). Audited baseline: `origin/dev` at
+`922b22ba887fff18ea5a61112b018a4f12d80dac` (rebound from the original `1056821a` at #2489's
+PR-open time; #2489's own fix commits land on top of this baseline). Scope: Epic #2088 Foundation
+wave and child epics #2089 through #2096 (M1 through M8).
 
 This record distinguishes implementation defects from later-wave work and from behavior that the
 governing ADRs intentionally exclude. It is a source-level and composed-product audit, not a claim
@@ -37,13 +38,78 @@ through M16.
 | M7 #2095  | Snippet interpolation could emit unsafe shell/HTML forms; save/watch event order could hide an external write; directory watching was flat/capped and could misreport I/O failure as deletion; keybinding and model-root ownership were incomplete; verification activation was absent from the canonical status projection.  | Contracts reject unsafe snippet forms and malformed key chords, recursive watches fail closed without fabricated deletes, save reconciliation compares the exact saved document version, Monaco cleanup is root-scoped and protection-aware, and all four closed AI-assist features have independent policy/capability status. Tests cover hostile forms, event-order reversal, deep paths, permission failure, sibling roots, and verification degradation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | M8 #2096  | Debug provisioning cache identity could miss same-size tampering with restored mtime; capped stack/inline/output composition lacked exact browser proof; D12 raw inputs, bundle measurements, cap artifacts, dependency state, and measurement tooling were not durably bound into one independently reproducible comparison. | Provisioning cache signatures include immutable object identity and ctime-sensitive metadata. Stack pagination, 200-value inline projection, and the exactly-once output-limit terminal event compose through the real UI/BFF/DAP path. Canonical reduced raw artifacts are committed behind recursively closed schemas and domain-separated hashes; the checker re-derives every normalized metric and bundle byte from those artifacts. The final document is itself exact-key closed, canonical-byte checked, and uploaded only after validation. The official producer provisions the exact lockfile with `npm ci --ignore-scripts`; a deterministic environment allowlist and verified clean checkouts exclude ambient or stale build state. Target/producer commits, source trees, toolchain, lockfile, Linux/Node/npm/OS/zlib runtime, and measurements are jointly fingerprinted and cross-checked against browser provenance. The pinned baseline digest is independently recomputed, and stale, malformed, dirty, aliased, under-sampled, coherently tampered, unbound, or drifted evidence is rejected. Signed source candidate `57524a9c0ea92b5ad19830d7199af32ffbc0822c` passed all six alternating Common runs and all three D12 cap runs on Linux; independent host and Linux checkers accepted the fresh source-tree binding. |
 
+## Invariants reconciliation (#2489)
+
+A 2026-07-17 cross-audit surfaced two 2026-07-11 cross-audit invariants (Epic #2088 Architecture
+Invariants) that this record did not yet confirm, deliberately exclude, or track open. #2489
+dispositions both.
+
+**Agent-reachability is delivered with each capability, not retrofitted.** Status per milestone
+that ships a human-facing capability requiring an agent tool + producer:
+
+| Milestone                | Tool-side                                                            | Producer-side                                                     |
+| ------------------------ | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| M1 `navigateSymbol`      | Shipped #2218 (2026-07-10)                                           | Closed by #2489 — first `EditorAgentToolHost` production consumer |
+| M2 `searchWorkspace`     | Shipped #2218; `wholeWord`/`regex` parity added by #2489 (Finding 3) | Closed by #2489                                                   |
+| M4 `requestVerification` | Shipped #2214 (2026-07-12)                                           | Closed by #2489                                                   |
+| M5 `queryGit`            | Shipped #2298 (2026-07-11)                                           | Closed by #2489                                                   |
+
+M3 is the docking mechanism itself (`EditorAgentToolHost`, session registry, SSE bridge, review
+flow) that the above tools consume; it does not carry its own separate agent-tool obligation under
+this invariant. The five review-gated mutation actions (`openFile`/`focusTab`/`moveTab`/
+`splitPane`/`setSelection`/`save`/`applyTextEdits`/`applyPatch`/`applyChangeset`) still have no
+producer: an unattended model turn cannot supply the live human reviewer their dispatch requires,
+so a producer for them is future work, not a #2489 gap — tracked against this invariant, not
+deferred silently. M9 (tasks/terminal/tests), M10 (debugging), M12 (remote targets), and M14
+(notebooks) have not started implementation; each still owes its own agent tool + producer at
+close under this same invariant.
+
+**One governed long-lived-process supervisor, many transports.** Status: **admitted-open**.
+`lspProcessManager.ts` (ADR-0069) and `dapProcessManager.ts` remain two parallel supervisors that
+share only `escalateKill`/`KillableChild` (`processHardening.js`), not the full governed substrate
+(spawn preflight, executable resolution, ephemeral HOME, restart throttle, lifecycle events).
+Extracting a shared `GovernedLongLivedProcessSupervisor` needs an ADR and is a materially larger
+change than an audit-and-fix PR can safely absorb; #2489 defers it to companion issue
+[#2500](https://github.com/oscharko-dev/Keiko/issues/2500), which must land before M9 (PTY/tasks)
+spawns its first long-lived child process (M14/Jupyter has the same dependency).
+
 ## Deliberate exclusions reconciled against the live issues
 
 - Issue #2116 explicitly excludes production activation of `DryRunToolPort` / `run-engine` from the
-  M3 slice. No parallel production editor-agent tool host was added.
+  M3 slice. No parallel production editor-agent tool host was added. #2489's producer is additive
+  and distinct: it composes the existing harness `createSession`/`executor.ts` loop with the
+  existing `EditorAgentToolHost` under a new task type (`editor-agent-turn`), and does not activate
+  `run-engine.ts`'s `DryRunToolPort` path or the `POST /api/runs` request shape — it is a separate,
+  Keiko-native entry point (`POST /api/editor/agent/producer/turn`), not a reversal of this
+  exclusion.
 - ADR-0136 deliberately excludes an agent debug-control/read surface from M8. Debugging remains a
   local-human-controlled, server-owned DAP surface; the older parent-epic wording is reconciled to
   the ADR rather than implemented as an authority expansion.
+- PR #2463's body documents the managed-pool warm-up on the authorized-language capabilities read
+  as intentional, but this audit record's M6 row did not carry that disposition. Recorded here as a
+  **deliberate exclusion, not a defect**: M6 production-activation close-out (including any warm-up
+  behavior change) is owned end-to-end by #2282, tracked separately from this Foundation-wave
+  audit.
+- `NAVIGATE_SYMBOL_PARAMETERS`' operation enum omits `hover`, `symbols`, `formatting`, `completion`,
+  and `renameApply` (only `renamePrepare` is exposed). Each omission is intentional, not a gap:
+  `formatting` is its own top-level `format` `EditorAgentActionType`, not a `navigateSymbol`
+  operation. `symbols` (workspace-wide symbol search) is already exposed via `editor_search_workspace`
+  (`mode: "symbol"`) — a different tool scoped to workspace search rather than per-document
+  navigation. `hover` is a transient, human-UI tooltip affordance whose information is redundant
+  with the already-exposed `definition`/`typeDefinition`/`references`/`signatureHelp` operations —
+  no independent agent-actionable capability gap. `completion` is served by the separately
+  flag-gated model-assisted completion/inline-completion routes (`/api/editor/completion`,
+  `/api/editor/inline-completion`), which have their own governance; duplicating that through
+  `navigateSymbol` would fork the surface rather than reuse it. `renameApply` is a multi-file
+  mutation and, like every other buffer/workspace mutation, must flow through the reviewed
+  `editor_propose_changeset`/`applyChangeset` path — `renamePrepare` (read-only: computes the edit
+  without applying it) is the navigateSymbol-side half of that flow.
+- `EDITOR_AGENT_SCHEMA_VERSION` and `EDITOR_VERIFICATION_SCHEMA_VERSION` are deliberately two
+  independent constants (a "two-ladder" versioning scheme), not one shared version: the agent
+  action wire (`editor-agent.ts`) and the verification-run wire (`agentVerificationRoute.ts`) are
+  separate contracts that can each grow independently. #2489 (Finding 8) asserts they stay in
+  lockstep at `"1"` today via a dedicated test, so drift between the two ladders is caught rather
+  than silently diverging; the two-constant design itself is intentional and unchanged.
 - The parent Epic #2088 remains open after Foundation closure because M9 through M16 are outside
   this delivery slice.
 

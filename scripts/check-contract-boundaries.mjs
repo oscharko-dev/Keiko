@@ -30,6 +30,28 @@ const checks = [
           /export\s+(?:interface\s+ManagedLsp(?:ConfigurationSummary|SettingsResponse|SettingsMutationInput)\b|type\s+ManagedLspSettingsAction\s*=\s*["'])/,
         message: "Managed LSP UI envelopes must alias contracts-owned route types.",
       },
+      {
+        // Issue #2489 (Finding 7) — the 14-member EditorAgentActionType union has one owner:
+        // packages/keiko-contracts/src/editor-agent.ts. A local string-literal redeclaration here
+        // (instead of importing the type) is exactly how the Desktop chat / Managed LSP wire drift
+        // this script otherwise catches would recur for the editor-agent action wire.
+        pattern: /export\s+type\s+EditorAgentActionType\s*=\s*["']/,
+        message: "Editor-agent action types must alias EditorAgentActionType from contracts.",
+      },
+      {
+        // Issue #2489 (Finding 7) — editor-verification wire shapes (editor-agent-verification.ts)
+        // must not be re-declared locally.
+        pattern: /export\s+(?:interface|type)\s+EditorAgentVerification(?:Result|RunRequest)\b/,
+        message: "Editor-agent verification shapes must alias editor-agent-verification.ts types.",
+      },
+      {
+        // Issue #2489 (Finding 7) — editor-agent-governance.ts's effect-class/Workbench-class maps
+        // are the single source of authority-gating truth; a local copy could silently drift from
+        // the server-enforced classification (agentRoutes.ts/agentVerificationRoute.ts).
+        pattern: /export\s+const\s+EDITOR_AGENT_(?:ACTION_EFFECT_CLASS|WORKBENCH_ACTION_CLASS)\b/,
+        message:
+          "Editor-agent governance classification maps must alias editor-agent-governance.ts.",
+      },
     ],
   },
   {
@@ -124,6 +146,39 @@ for (const check of checks) {
       failures.push(`${check.file}: ${rule.message}`);
     }
   }
+}
+
+// Issue #2489 (Finding 8) — EDITOR_AGENT_SCHEMA_VERSION and EDITOR_VERIFICATION_SCHEMA_VERSION are
+// deliberately two independent "ladders" (docs/keiko-editor/2088-foundation-wave-audit.md,
+// Deliberate exclusions), but they must not silently drift apart while both are pinned at "1".
+function schemaVersionLiteral(file, constantName) {
+  const source = readFileSync(resolve(root, file), "utf8");
+  const match = new RegExp(`export const ${constantName} = "([^"]+)" as const;`).exec(source);
+  if (match === null) {
+    failures.push(`${file}: could not find ${constantName} to check schema-version lockstep.`);
+    return null;
+  }
+  return match[1];
+}
+
+const editorAgentSchemaVersion = schemaVersionLiteral(
+  "packages/keiko-contracts/src/editor-agent.ts",
+  "EDITOR_AGENT_SCHEMA_VERSION",
+);
+const editorVerificationSchemaVersion = schemaVersionLiteral(
+  "packages/keiko-contracts/src/editor-verification.ts",
+  "EDITOR_VERIFICATION_SCHEMA_VERSION",
+);
+if (
+  editorAgentSchemaVersion !== null &&
+  editorVerificationSchemaVersion !== null &&
+  editorAgentSchemaVersion !== editorVerificationSchemaVersion
+) {
+  failures.push(
+    `EDITOR_AGENT_SCHEMA_VERSION ("${editorAgentSchemaVersion}") and ` +
+      `EDITOR_VERIFICATION_SCHEMA_VERSION ("${editorVerificationSchemaVersion}") have drifted out ` +
+      "of lockstep.",
+  );
 }
 
 if (failures.length > 0) {
