@@ -39,10 +39,10 @@ export interface SessionPairingPort {
 /** A single denied decision reused everywhere so no call site invents a divergent shape. */
 export const SESSION_PAIRING_DENIED: SessionPairingDecision = { outcome: "denied" };
 
-const ALLOWED_KEYS: readonly string[] = ["requestId", "issuedAtMs", "claim"];
+const ALLOWED_KEYS = new Set<string>(["requestId", "issuedAtMs", "claim"]);
 
 function hasOnlyAllowedKeys(candidate: Record<string, unknown>): boolean {
-  return Object.keys(candidate).every((key): boolean => ALLOWED_KEYS.includes(key));
+  return Object.keys(candidate).every((key): boolean => ALLOWED_KEYS.has(key));
 }
 
 function isValidRequestId(value: unknown): boolean {

@@ -69,8 +69,9 @@ function unexpectedKeys(
   allowed: readonly string[],
   path: string,
 ): string[] {
+  const allowedKeys = new Set(allowed);
   return Object.keys(value)
-    .filter((key): boolean => !allowed.includes(key))
+    .filter((key): boolean => !allowedKeys.has(key))
     .map((key): string => `${path}.${key} is not allowed`);
 }
 
