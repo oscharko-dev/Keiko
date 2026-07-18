@@ -33,7 +33,8 @@ Today the evaluator runs inside a Cloudflare Worker
 need:
 
 - a manual `wrangler deploy` on every change (a forgotten redeploy silently runs stale gate logic);
-- a per-minute `scheduled` cron as a liveness backstop;
+- a periodic `scheduled` cron as a liveness backstop (Issue #2507 lowered its cadence and made it
+  re-evaluate only pull requests that can still move);
 - a D1 database for webhook-delivery replay suppression and tracked-pull persistence;
 - a webhook HMAC secret, a GitHub App private key, and a separate hosting account and dashboard.
 
@@ -116,7 +117,7 @@ Worker remains deployed and canonical throughout the evaluation, so no rollback 
 
 ## Consequences
 
-- **Removed on cutover:** the D1 database, the per-minute cron cost, the webhook HMAC secret, the
+- **Removed on cutover:** the D1 database, the scheduled cron cost, the webhook HMAC secret, the
   manual `wrangler deploy` step, and the separate hosting account — "merge = deployed," with the
   gate logic versioned in-repo and reviewed like any other change.
 - **Improved repair path:** a broken evaluator is fixed by a normal pull request instead of an

@@ -26,6 +26,11 @@ const deliveryRetentionMs = 86_400_000;
 const postMergeReconciliationMs = 3_600_000;
 const persistedPullPageSize = 100;
 const persistedPullPageLimit = 10;
+// A settled pull request (passed or hard-blocked, exact head unchanged) is re-evaluated by the cron
+// only this often, as a liveness backstop for a lost webhook that changed same-head evidence. Pending
+// (waiting) pull requests and any head move are still re-evaluated every eligible tick. Fifteen
+// minutes keeps the backstop well inside the one-hour post-merge reconciliation window.
+const defaultReconcileBackstopMs = 900_000;
 
 export function base64Url(value) {
   const bytes = typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
@@ -424,9 +429,16 @@ export function pullNeedsEvaluation(pull, baseBranch, evaluatedAt) {
   );
 }
 
-async function persistEvaluatedPull(database, tracked, pull, result) {
-  if (pull.state === "open" || !result.passed) await storeTrackedPull(database, tracked);
-  else await deleteTrackedPull(database, tracked);
+async function persistEvaluatedPull(database, tracked, pull, result, headSha) {
+  if (pull.state !== "open" && result.passed) {
+    await deleteTrackedPull(database, tracked);
+    return;
+  }
+  await storeTrackedPull(database, tracked, {
+    evaluatedAt: result.evaluatedAt,
+    headSha,
+    settled: result.passed || hardFailure(result.failures),
+  });
 }
 
 // A merge-commit head (2+ parents) has its Qodo review pinned to a parent (the feature commit), not
@@ -504,7 +516,7 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     pullNumber,
     repository,
   };
-  await persistEvaluatedPull(env.KEIKO_FOR_QUALITY_DB, tracked, pull, result);
+  await persistEvaluatedPull(env.KEIKO_FOR_QUALITY_DB, tracked, pull, result, headSha);
 }
 
 async function authenticateWebhook(request, env, body) {
@@ -618,6 +630,12 @@ export function parseStabilityMs(value) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
 }
 
+export function parseBackstopMs(value) {
+  if (value === undefined || value.trim() === "") return defaultReconcileBackstopMs;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultReconcileBackstopMs;
+}
+
 function validatedRepository(value, legacy) {
   if (typeof value !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(value)) {
     throw new Error(
@@ -679,7 +697,15 @@ export async function discoverOpenPullRequests(env) {
     discovered.push(
       ...pulls.flatMap((pull) =>
         Number.isInteger(pull.number)
-          ? [{ installationId, owner, pullNumber: pull.number, repository }]
+          ? [
+              {
+                headSha: isValidHeadSha(pull.head?.sha) ? pull.head.sha : undefined,
+                installationId,
+                owner,
+                pullNumber: pull.number,
+                repository,
+              },
+            ]
           : [],
       ),
     );
@@ -691,14 +717,28 @@ function trackedPullKey(tracked) {
   return `${tracked.owner}/${tracked.repository}#${String(tracked.pullNumber)}`;
 }
 
-function trackedPullFromRow(row) {
-  const tracked = {
-    installationId: row?.installation_id,
-    owner: row?.owner,
-    pullNumber: row?.pull_number,
-    repository: row?.repository,
+// Reconcile metadata is best-effort: a legacy row written before this column set (or a NULL) reads as
+// unsettled with no known head or timestamp, which the skip decision treats as "needs evaluation" —
+// the fail-closed default, never a spurious skip.
+function trackedPullMetadata(row) {
+  return {
+    lastEvaluatedAt: Number.isInteger(row.last_evaluated_at) ? row.last_evaluated_at : undefined,
+    lastHeadSha: isValidHeadSha(row.last_head_sha) ? row.last_head_sha : undefined,
+    settled: row.settled === 1,
   };
-  return parseTrackedPull(JSON.stringify(tracked));
+}
+
+function trackedPullFromRow(row) {
+  const parsed = parseTrackedPull(
+    JSON.stringify({
+      installationId: row?.installation_id,
+      owner: row?.owner,
+      pullNumber: row?.pull_number,
+      repository: row?.repository,
+    }),
+  );
+  if (parsed.kind !== "valid") return parsed;
+  return { kind: "valid", tracked: { ...parsed.tracked, ...trackedPullMetadata(row) } };
 }
 
 export async function trackedPullRequests(database) {
@@ -708,7 +748,7 @@ export async function trackedPullRequests(database) {
       page === persistedPullPageLimit - 1 ? persistedPullPageSize + 1 : persistedPullPageSize;
     const result = await database
       .prepare(
-        "SELECT installation_id, owner, repository, pull_number FROM tracked_pulls ORDER BY owner, repository, pull_number LIMIT ?1 OFFSET ?2",
+        "SELECT installation_id, owner, repository, pull_number, last_head_sha, settled, last_evaluated_at FROM tracked_pulls ORDER BY owner, repository, pull_number LIMIT ?1 OFFSET ?2",
       )
       .bind(queryLimit, page * persistedPullPageSize)
       .all();
@@ -726,12 +766,25 @@ export async function trackedPullRequests(database) {
   return trackedPulls;
 }
 
-async function storeTrackedPull(database, tracked) {
+// Persist the reconcile metadata alongside the tracked identity so a later cron tick can decide
+// whether the pull request still needs evaluation without re-fetching its evidence: the exact head it
+// was last evaluated against, whether that verdict was settled (passed or hard-blocked), and when.
+// Every field is updated on conflict (no longer gated on an installation change) so the skip decision
+// always reads the latest evaluation.
+async function storeTrackedPull(database, tracked, metadata) {
   await database
     .prepare(
-      "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id WHERE installation_id != excluded.installation_id",
+      "INSERT INTO tracked_pulls (owner, repository, pull_number, installation_id, last_head_sha, settled, last_evaluated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (owner, repository, pull_number) DO UPDATE SET installation_id = excluded.installation_id, last_head_sha = excluded.last_head_sha, settled = excluded.settled, last_evaluated_at = excluded.last_evaluated_at",
     )
-    .bind(tracked.owner, tracked.repository, tracked.pullNumber, tracked.installationId)
+    .bind(
+      tracked.owner,
+      tracked.repository,
+      tracked.pullNumber,
+      tracked.installationId,
+      metadata.headSha,
+      metadata.settled ? 1 : 0,
+      metadata.evaluatedAt,
+    )
     .run();
 }
 
@@ -750,21 +803,67 @@ export function reconciliationErrorKind(error) {
   return error instanceof Error ? error.name : "UnknownError";
 }
 
+// A reconcile candidate carries the tracked identity plus the two signals the skip decision needs:
+// the pull request's current head (from open-PR discovery, or undefined when only D1 tracking knows
+// it) and the persisted metadata of its last evaluation.
+function trackedCandidate(tracked) {
+  return {
+    currentHeadSha: undefined,
+    installationId: tracked.installationId,
+    owner: tracked.owner,
+    persisted: {
+      lastEvaluatedAt: tracked.lastEvaluatedAt,
+      lastHeadSha: tracked.lastHeadSha,
+      settled: tracked.settled,
+    },
+    pullNumber: tracked.pullNumber,
+    repository: tracked.repository,
+  };
+}
+
+function discoveredCandidate(discovered, existing) {
+  return {
+    currentHeadSha: discovered.headSha,
+    installationId: discovered.installationId,
+    owner: discovered.owner,
+    persisted: existing?.persisted,
+    pullNumber: discovered.pullNumber,
+    repository: discovered.repository,
+  };
+}
+
 async function reconciledPullRequests(env) {
-  const pulls = new Map();
+  const candidates = new Map();
   try {
     for (const tracked of (await trackedPullRequests(env.KEIKO_FOR_QUALITY_DB)).values())
-      pulls.set(trackedPullKey(tracked), tracked);
+      candidates.set(trackedPullKey(tracked), trackedCandidate(tracked));
   } catch (error) {
     console.error(`tracked pull read failed errorKind=${reconciliationErrorKind(error)}`);
   }
   try {
-    for (const discovered of await discoverOpenPullRequests(env))
-      pulls.set(trackedPullKey(discovered), discovered);
+    for (const discovered of await discoverOpenPullRequests(env)) {
+      const key = trackedPullKey(discovered);
+      candidates.set(key, discoveredCandidate(discovered, candidates.get(key)));
+    }
   } catch (error) {
     console.error(`pull reconciliation failed errorKind=${reconciliationErrorKind(error)}`);
   }
-  return pulls.values();
+  return candidates.values();
+}
+
+// The cron re-evaluates a pull request only when doing so can change its verdict: it was never
+// evaluated, its last verdict was still waiting on evidence (a timer such as the stability window,
+// not a webhook, will flip it), its head moved, or the settled verdict is older than the liveness
+// backstop. A settled pull request whose exact head is unchanged and was evaluated within the backstop
+// is skipped — a webhook, not the cron, carries any fresh same-head evidence for it. This preserves
+// fail-closed currency (nothing merges without a current app-bound check) while cutting steady-state
+// re-evaluation to the pull requests that can actually move.
+export function pullNeedsReevaluation({ backstopMs, currentHeadSha, now, persisted }) {
+  if (persisted === undefined) return true;
+  if (persisted.settled !== true) return true;
+  if (currentHeadSha !== undefined && currentHeadSha !== persisted.lastHeadSha) return true;
+  if (!Number.isFinite(persisted.lastEvaluatedAt)) return true;
+  return now - persisted.lastEvaluatedAt >= backstopMs;
 }
 
 async function handleSchedule(controller, env, context) {
@@ -775,16 +874,29 @@ async function handleSchedule(controller, env, context) {
     new Date(controller.scheduledTime).getUTCMinutes() === 0
   )
     context.waitUntil(cleanupExpiredDeliveries(env.KEIKO_FOR_QUALITY_DB, Date.now()));
-  for (const tracked of await reconciledPullRequests(env))
+  const now = Date.now();
+  const backstopMs = parseBackstopMs(env.RECONCILE_BACKSTOP_MS);
+  let evaluated = 0;
+  let skipped = 0;
+  for (const candidate of await reconciledPullRequests(env)) {
+    const { currentHeadSha, persisted } = candidate;
+    if (!pullNeedsReevaluation({ backstopMs, currentHeadSha, now, persisted })) {
+      skipped += 1;
+      continue;
+    }
+    evaluated += 1;
     context.waitUntil(
       evaluatePullRequest(
-        tracked.owner,
-        tracked.repository,
-        tracked.pullNumber,
-        tracked.installationId,
+        candidate.owner,
+        candidate.repository,
+        candidate.pullNumber,
+        candidate.installationId,
         env,
       ),
     );
+  }
+  if (skipped > 0)
+    console.log(`reconcile settled-skip evaluated=${String(evaluated)} skipped=${String(skipped)}`);
 }
 
 export default {
