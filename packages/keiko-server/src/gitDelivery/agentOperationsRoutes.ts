@@ -26,12 +26,12 @@ import { createGitDeliveryPrRouteGroup } from "./prRoutes.js";
 import { createGitDeliveryPushRouteGroup } from "./pushRoutes.js";
 import { createGitDeliverySyncRouteGroup } from "./syncRoutes.js";
 import {
-  GitDeliveryBodyTooLargeError,
   hasOnlyAllowedKeys,
   isPlainObject,
-  readGitDeliveryBody,
+  readParsedGitDeliveryBody,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
+  type GitDeliveryParsedBody,
 } from "./requestGuards.js";
 
 type DelegatedResult = RouteResult;
@@ -178,27 +178,12 @@ function denied(
   };
 }
 
-async function readParsed(
-  req: IncomingMessage,
-): Promise<
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly result: RouteResult }
-> {
-  let raw: string;
-  try {
-    raw = await readGitDeliveryBody(req);
-  } catch (error) {
-    if (error instanceof GitDeliveryBodyTooLargeError) {
-      return { ok: false, result: errResult(413, "GIT_AGENT_OPERATION_PAYLOAD_TOO_LARGE") };
-    }
-    return { ok: false, result: errResult(400, "GIT_AGENT_OPERATION_BAD_REQUEST") };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, result: errResult(400, "GIT_AGENT_OPERATION_BAD_REQUEST") };
-  }
-}
+const readParsed = (req: IncomingMessage): Promise<GitDeliveryParsedBody<RouteResult>> =>
+  readParsedGitDeliveryBody(
+    req,
+    () => errResult(413, "GIT_AGENT_OPERATION_PAYLOAD_TOO_LARGE"),
+    () => errResult(400, "GIT_AGENT_OPERATION_BAD_REQUEST"),
+  );
 
 function makeRequest(body: unknown, base: IncomingMessage): IncomingMessage {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
