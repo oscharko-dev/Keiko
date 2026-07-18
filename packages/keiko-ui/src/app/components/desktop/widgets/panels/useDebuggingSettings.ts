@@ -6,7 +6,7 @@ import type { DebugActivationSummary } from "@oscharko-dev/keiko-contracts";
 import { ApiError, mutateDebugActivation } from "../../../../../lib/api";
 import { settingById, useEditorSettings } from "../cards/useEditorSettings";
 
-export type DebuggingSettingsIssue = "load" | "mutation" | "conflict";
+type DebuggingSettingsIssue = "load" | "mutation" | "conflict";
 
 export interface DebuggingSettingsView {
   readonly summary: DebugActivationSummary | undefined;

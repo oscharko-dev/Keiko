@@ -4,7 +4,7 @@ import {
   type DebugEvent,
 } from "@oscharko-dev/keiko-contracts";
 
-export const DEBUG_EVENT_REPLAY_ENTRY_CAP = 2_000;
+const DEBUG_EVENT_REPLAY_ENTRY_CAP = 2_000;
 export const DEBUG_EVENT_REPLAY_BYTE_CAP = 512 * 1_024;
 export const DEBUG_EVENT_SUBSCRIBER_CAP = 8;
 export const DEBUG_EVENT_CHANNEL_CAP = 64;
@@ -28,7 +28,7 @@ export interface DebugEventReplaySnapshot {
   readonly evictedBytes: number;
 }
 
-export type DebugEventSubscriptionResult =
+type DebugEventSubscriptionResult =
   | {
       readonly kind: "ok";
       readonly replay: readonly DebugEventEnvelope[];

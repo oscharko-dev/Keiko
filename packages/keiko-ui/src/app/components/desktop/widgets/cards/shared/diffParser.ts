@@ -11,15 +11,11 @@ import {
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
   type GitEditorDiffFile,
-  type GitEditorDiffHunk,
   type GitEditorDiffLine,
-  type GitEditorDiffLineKind,
 } from "@oscharko-dev/keiko-contracts";
 
-export type DiffLineKind = GitEditorDiffLineKind;
-export type DiffLine = GitEditorDiffLine;
-export type DiffHunk = GitEditorDiffHunk;
-export type DiffFile = GitEditorDiffFile;
+type DiffLine = GitEditorDiffLine;
+type DiffFile = GitEditorDiffFile;
 
 export interface DiffParseResult {
   readonly files: readonly DiffFile[];

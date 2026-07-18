@@ -12,20 +12,10 @@ import type {
   deleteCapsuleSet,
   CapsuleListEntry,
   CapsuleSetListEntry,
-  CapsulesResponse,
-  CapsuleSetsResponse,
   CapsuleActionResponse,
-  CapsuleSetActionResponse,
 } from "@/lib/local-knowledge-api";
 
-export type {
-  CapsuleListEntry,
-  CapsuleSetListEntry,
-  CapsulesResponse,
-  CapsuleSetsResponse,
-  CapsuleActionResponse,
-  CapsuleSetActionResponse,
-};
+export type { CapsuleListEntry, CapsuleSetListEntry, CapsuleActionResponse };
 
 export type LoadStatus = "loading" | "ready" | "error";
 
@@ -77,5 +67,3 @@ export const STATUS_LABELS: Record<CapsuleLifecycleState, string> = {
   deleting: "Deleting",
   error: "Failed",
 };
-
-export type ActionVariant = "primary" | "ghost" | "danger";

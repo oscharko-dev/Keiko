@@ -36,11 +36,11 @@ export type DebugReferenceTarget =
     }
   | { readonly kind: "cursor"; readonly startFrame: number };
 
-export type DebugReferenceMintResult =
+type DebugReferenceMintResult =
   | { readonly ok: true; readonly reference: string }
   | { readonly ok: false; readonly reason: "inactive" | "capacity" };
 
-export type DebugReferenceResolveResult<T extends DebugReferenceTarget["kind"]> =
+type DebugReferenceResolveResult<T extends DebugReferenceTarget["kind"]> =
   | {
       readonly ok: true;
       readonly target: Extract<DebugReferenceTarget, { readonly kind: T }>;

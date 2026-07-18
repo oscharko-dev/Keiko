@@ -65,7 +65,7 @@ function pathBasename(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-export function isWorkspaceDirty(instance: WorkspaceInstance): boolean {
+function isWorkspaceDirty(instance: WorkspaceInstance): boolean {
   return instance.driftMarkers.includes("uncommitted-changes");
 }
 

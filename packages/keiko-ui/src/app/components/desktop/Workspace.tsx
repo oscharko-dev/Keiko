@@ -74,10 +74,10 @@ interface WorkspaceProps {
   readonly children?: ReactNode;
 }
 
-export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
-export const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
-export const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
-export const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;
+const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
+const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
+const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
+const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;
 
 export function workspaceDropPointToWindowOrigin({
   clientX,

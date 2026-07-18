@@ -10,7 +10,7 @@ import {
 import { fetchWorkspaceSnippets, mutateWorkspaceSnippets } from "../../../../../lib/api";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 
-export type WorkspaceSnippetsIssue = "load" | "mutation" | "conflict" | "invalid" | "unavailable";
+type WorkspaceSnippetsIssue = "load" | "mutation" | "conflict" | "invalid" | "unavailable";
 
 export interface WorkspaceSnippetsView {
   readonly snapshot: EditorM7WorkspaceSnippetSnapshot | undefined;

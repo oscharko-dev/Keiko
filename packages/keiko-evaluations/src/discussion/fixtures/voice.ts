@@ -5,7 +5,7 @@
 
 import type { DiscussionEvalFixture } from "../types.js";
 
-export const voiceSttReview: DiscussionEvalFixture = {
+const voiceSttReview: DiscussionEvalFixture = {
   name: "voice-stt-review",
   category: "voice",
   description:
@@ -30,7 +30,7 @@ export const voiceSttReview: DiscussionEvalFixture = {
   },
 };
 
-export const voiceRealtimeBargeInRecovery: DiscussionEvalFixture = {
+const voiceRealtimeBargeInRecovery: DiscussionEvalFixture = {
   name: "voice-realtime-barge-in-recovery",
   category: "voice",
   description:

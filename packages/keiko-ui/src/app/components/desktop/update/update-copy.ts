@@ -159,7 +159,7 @@ export function updateTone(
   return "neutral";
 }
 
-export function dominantRemediation(
+function dominantRemediation(
   remediations: readonly ReleaseImpactRemediation[] | undefined,
 ): ReleaseImpactRemediation | undefined {
   const actionable = remediations?.find((entry) => entry !== "no-action-required");

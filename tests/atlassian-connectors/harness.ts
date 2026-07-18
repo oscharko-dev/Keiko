@@ -51,7 +51,7 @@ import { atlassianActionApprovalRegistry } from "../../packages/keiko-server/src
 import type { AtlassianConnectorCredentialDeps } from "../../packages/keiko-server/src/atlassian/credentialRoutes.js";
 
 export const CONNECTOR_BASE_URL = "https://tenant.example";
-export const CONNECTOR_WORKSPACE_ROOT = "/repo";
+const CONNECTOR_WORKSPACE_ROOT = "/repo";
 
 // ─── Runtime-built redaction marker (Issue #2246 Scope 1) ─────────────────────
 // Entropy-shaped and assembled at runtime from `randomBytes`, so there is no committed literal for
@@ -87,7 +87,7 @@ export const DEGRADATION_CONDITIONS: readonly DegradationCondition[] = [
   "network",
 ];
 
-export function conditionResult(condition: DegradationCondition): AtlassianHttpBodyResult {
+function conditionResult(condition: DegradationCondition): AtlassianHttpBodyResult {
   if (condition === "timeout") return { kind: "timeout" };
   if (condition === "network") return { kind: "network-error" };
   const status = condition === "5xx" ? 503 : Number(condition);
@@ -304,7 +304,7 @@ const ENVELOPE_STATIC: Omit<
   approvalProofDigest: "a".repeat(64),
 };
 
-export function connectorEnvelope(
+function connectorEnvelope(
   mode: CodingWorkbenchMode,
   connectorScopes: readonly CodingWorkbenchConnectorScope[],
   over: Partial<CodingWorkbenchAuthorityEnvelope> = {},
@@ -342,7 +342,7 @@ export function registerConnectorEnvelope(
 }
 
 // ─── Route request plumbing ───────────────────────────────────────────────────
-export function jsonRequest(body: Record<string, unknown>): IncomingMessage {
+function jsonRequest(body: Record<string, unknown>): IncomingMessage {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };

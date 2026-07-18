@@ -21,9 +21,9 @@ import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 const MAX_RECORD_BYTES = 512 * 1024;
 const MAX_IDEMPOTENCY_RECORDS = 64;
 
-export type WorkspaceSnippetsStoreState = "absent" | "ready" | "unavailable";
+type WorkspaceSnippetsStoreState = "absent" | "ready" | "unavailable";
 
-export interface WorkspaceSnippetCompletionRequest {
+interface WorkspaceSnippetCompletionRequest {
   readonly realRoot: string;
   readonly languageId: string;
   readonly relativePath: string;
@@ -32,7 +32,7 @@ export interface WorkspaceSnippetCompletionRequest {
   readonly signal?: AbortSignal | undefined;
 }
 
-export interface WorkspaceSnippetMutation {
+interface WorkspaceSnippetMutation {
   readonly realRoot: string;
   readonly expectedRevision: number;
   readonly idempotencyKey: string;
@@ -69,7 +69,7 @@ export interface WorkspaceSnippetsChangeEvent {
   readonly snippetCount: number;
 }
 
-export type WorkspaceSnippetsEventListener = (event: WorkspaceSnippetsChangeEvent) => void;
+type WorkspaceSnippetsEventListener = (event: WorkspaceSnippetsChangeEvent) => void;
 
 interface IdempotencyRecord {
   readonly keyHash: string;

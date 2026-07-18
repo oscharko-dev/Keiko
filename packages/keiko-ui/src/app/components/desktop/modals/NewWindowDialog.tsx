@@ -143,7 +143,7 @@ function toPosix(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
-export function normalizeAgentPathForWorkspace(workspaceRoot: string, value: string): string {
+function normalizeAgentPathForWorkspace(workspaceRoot: string, value: string): string {
   const candidate = toPosix(value.trim());
   if (candidate.length === 0) return "";
   const workspace = toPosix(workspaceRoot.trim()).replace(/\/+$/u, "");

@@ -4,7 +4,7 @@
 
 import type { DiscussionEvalFixture } from "../types.js";
 
-export const evidenceCheckCorrection: DiscussionEvalFixture = {
+const evidenceCheckCorrection: DiscussionEvalFixture = {
   name: "evidence-check-correction",
   category: "correction",
   description:
@@ -29,7 +29,7 @@ export const evidenceCheckCorrection: DiscussionEvalFixture = {
   },
 };
 
-export const voiceEvidenceCheckCorrection: DiscussionEvalFixture = {
+const voiceEvidenceCheckCorrection: DiscussionEvalFixture = {
   name: "voice-evidence-check-correction",
   category: "correction",
   description:

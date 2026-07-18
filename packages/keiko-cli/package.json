@@ -29,7 +29,6 @@
     "@oscharko-dev/keiko-security": "0.2.15",
     "@oscharko-dev/keiko-model-gateway": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
-    "@oscharko-dev/keiko-tools": "0.2.15",
     "@oscharko-dev/keiko-evaluations": "0.2.15",
     "@oscharko-dev/keiko-evidence": "0.2.15",
     "@oscharko-dev/keiko-verification": "0.2.15",

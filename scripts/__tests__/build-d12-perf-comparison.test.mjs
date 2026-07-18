@@ -25,6 +25,11 @@ const SOURCE_TREE_SHA_256 = "b".repeat(64);
 const MEASUREMENT_HARNESS_SHA_256 = "e".repeat(64);
 const LOCKFILE_CONTENT = "{}\n";
 const LOCKFILE_SHA_256 = createHash("sha256").update(LOCKFILE_CONTENT).digest("hex");
+const BASELINE_LOCKFILE_SHA_256 = "c".repeat(64);
+const LOCKFILE_SHA_256_BY_REVISION = {
+  baseline: BASELINE_LOCKFILE_SHA_256,
+  candidate: LOCKFILE_SHA_256,
+};
 const RUN_BASE_MS = Date.parse("2026-07-15T12:00:00.000Z");
 const roots = [];
 
@@ -51,7 +56,7 @@ function rawEvidence(revision, index, sequence) {
     measuredAtIso: runTimestamp(sequence, 1),
     sourceTreeSha256: candidate ? SOURCE_TREE_SHA_256 : BASELINE_SOURCE_TREE_SHA_256,
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
-    provenance: provenance(),
+    provenance: provenance(revision),
     b4ColdStartMs: {
       budgetP50: 1500,
       budgetP95: 2500,
@@ -133,7 +138,7 @@ function bundleEvidence(revision) {
     dependencyProvisioning: {
       args: ["ci", "--ignore-scripts"],
       command: "npm",
-      lockfileSha256: LOCKFILE_SHA_256,
+      lockfileSha256: LOCKFILE_SHA_256_BY_REVISION[revision],
     },
     b1: { monacoMarkersInFirstLoad: 0, ok: true },
     b2: { shipsTotalBytes: candidate ? 1_010_000 : 1_000_000, ok: true },
@@ -160,7 +165,7 @@ function capEvidence(index, sequence) {
     measuredAtIso: runTimestamp(sequence, 4),
     sourceTreeSha256: SOURCE_TREE_SHA_256,
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
-    provenance: provenance(),
+    provenance: provenance("candidate"),
     stoppedProjection: {
       frames: 128,
       scopes: 32,
@@ -185,14 +190,14 @@ function capEvidence(index, sequence) {
   };
 }
 
-function provenance() {
+function provenance(revision) {
   return {
     platform: "linux",
     architecture: "x64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",
-    lockfileSha256: LOCKFILE_SHA_256,
+    lockfileSha256: LOCKFILE_SHA_256_BY_REVISION[revision],
     playwrightVersion: "1.61.1",
     zlibVersion: "1.3.1",
     chromiumVersion: "140.0.7339.16",
@@ -217,7 +222,7 @@ function executionRecord(root, artifact, revision, sequence) {
     commonCompletedAtIso,
     completedAtIso: revision === "candidate" ? runTimestamp(sequence, 5) : commonCompletedAtIso,
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
-    provenance: provenance(),
+    provenance: provenance(revision),
     sequence,
     sourceTreeSha256: revision === "baseline" ? BASELINE_SOURCE_TREE_SHA_256 : SOURCE_TREE_SHA_256,
     startedAtIso: runTimestamp(sequence, 0),
@@ -251,11 +256,11 @@ function createFixture() {
   }
   sequence = 0;
   const manifest = {
-    schemaVersion: "3",
+    schemaVersion: "4",
     dependencyProvisioning: {
       command: "npm",
       args: ["ci", "--ignore-scripts"],
-      lockfileSha256: LOCKFILE_SHA_256,
+      lockfileSha256ByRevision: LOCKFILE_SHA_256_BY_REVISION,
     },
     warmUp: {
       runs: 1,
@@ -275,7 +280,7 @@ function createFixture() {
             checkoutHead: CANDIDATE_COMMIT,
             completedAtIso: runTimestamp(sequence, 5),
             measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
-            provenance: provenance(),
+            provenance: provenance("candidate"),
             sequence,
             sourceTreeSha256: SOURCE_TREE_SHA_256,
             startedAtIso: runTimestamp(sequence, 3),
@@ -313,6 +318,7 @@ function invocation(root, selfCheck = false) {
 function run(root, overrides = {}) {
   let digestCalls = 0;
   let headCalls = 0;
+  let lockfileCalls = 0;
   return runD12Builder(invocation(root, overrides.selfCheck), {
     computeDigest:
       overrides.computeDigest ??
@@ -323,6 +329,9 @@ function run(root, overrides = {}) {
     computeMeasurementHarnessSha256:
       overrides.computeMeasurementHarnessSha256 ?? (() => MEASUREMENT_HARNESS_SHA_256),
     computeBaselineDigest: overrides.computeBaselineDigest ?? (() => BASELINE_SOURCE_TREE_SHA_256),
+    computeLockfileSha256:
+      overrides.computeLockfileSha256 ??
+      (() => (lockfileCalls++ === 0 ? BASELINE_LOCKFILE_SHA_256 : LOCKFILE_SHA_256)),
     evaluateEditorEvidence: overrides.evaluateEditorEvidence,
     evaluateFreshness: overrides.evaluateFreshness,
   });
@@ -455,7 +464,7 @@ describe("D12 performance comparison builder", () => {
     expect(output.d12Comparison.dependencyProvisioning).toEqual({
       command: "npm",
       args: ["ci", "--ignore-scripts"],
-      lockfileSha256: LOCKFILE_SHA_256,
+      lockfileSha256ByRevision: LOCKFILE_SHA_256_BY_REVISION,
     });
     expect(output.d12Comparison.repetitions.map((item) => item.order)).toEqual([
       ["baseline", "candidate"],
@@ -711,7 +720,7 @@ describe("D12 performance comparison builder", () => {
     ],
     [
       "lockfile digest",
-      (value) => (value.dependencyProvisioning.lockfileSha256 = "invalid"),
+      (value) => (value.dependencyProvisioning.lockfileSha256ByRevision.candidate = "invalid"),
       /lockfileSha256/u,
     ],
   ])("rejects invalid dependency provisioning %s", (_name, mutate, expected) => {
@@ -729,6 +738,28 @@ describe("D12 performance comparison builder", () => {
     expect(() => run(root)).toThrow(/lockfile digest differs from measured provenance/u);
   });
 
+  it("rejects a bundle bound to the other revision's lockfile", () => {
+    const { root } = createFixture();
+    mutateJson(root, "baseline-bundle.json", (value) => {
+      value.dependencyProvisioning.lockfileSha256 = LOCKFILE_SHA_256;
+      value.measurementSha256 = computeD12BundleMeasurementSha256(value);
+    });
+
+    expect(() => run(root)).toThrow(/baseline bundle dependency lockfile differs/u);
+  });
+
+  it("rejects swapped revision lockfile bindings in the execution manifest", () => {
+    const { root } = createFixture();
+    mutateJson(root, "order.json", (value) => {
+      value.dependencyProvisioning.lockfileSha256ByRevision = {
+        baseline: LOCKFILE_SHA_256,
+        candidate: BASELINE_LOCKFILE_SHA_256,
+      };
+    });
+
+    expect(() => run(root)).toThrow(/lockfile digests differ from current package-lock/u);
+  });
+
   it("rejects internally consistent evidence provisioned from a stale current package-lock", () => {
     const { root } = createFixture();
     const staleDigest = "f".repeat(64);
@@ -736,7 +767,10 @@ describe("D12 performance comparison builder", () => {
       value.lockfileSha256 = staleDigest;
     });
     mutateJson(root, "order.json", (value) => {
-      value.dependencyProvisioning.lockfileSha256 = staleDigest;
+      value.dependencyProvisioning.lockfileSha256ByRevision = {
+        baseline: staleDigest,
+        candidate: staleDigest,
+      };
     });
 
     expect(() => run(root)).toThrow(/current package-lock\.json/u);

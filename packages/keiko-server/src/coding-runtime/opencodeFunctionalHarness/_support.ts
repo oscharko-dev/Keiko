@@ -41,7 +41,7 @@ const MAX_FAKE_AGENT_STEPS = 8;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
 /** OpenAPI projection served by the scripted child; it projects to the pinned handshake digest. */
-export const FUNCTIONAL_OPENCODE_OPENAPI = {
+const FUNCTIONAL_OPENCODE_OPENAPI = {
   openapi: "3.1.0",
   paths: {
     "/global/health": {
@@ -217,7 +217,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
 } as const;
 
 /** The exact model-visible tool projection an OpenCode child presents to the gateway. */
-export function functionalGatewayTools(): readonly Record<string, unknown>[] {
+function functionalGatewayTools(): readonly Record<string, unknown>[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     type: "function",
     function: {
@@ -530,7 +530,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
  * per-run Basic-auth secret, bridges gateway tool calls to the governed tool facade, and surfaces
  * `question` tool calls through the /question endpoints — exactly the loop the real binary runs.
  */
-export class FakeOpenCodeChild {
+class FakeOpenCodeChild {
   private readonly password: string;
   private readonly gatewayUrl: string;
   private readonly gatewayCapability: string;

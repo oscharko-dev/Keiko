@@ -117,14 +117,19 @@ function idleDebugEvidence(overrides = {}) {
   };
 }
 
-function d12Provenance() {
+const D12_LOCKFILE_SHA_256_BY_REVISION = {
+  baseline: "9".repeat(64),
+  candidate: "a".repeat(64),
+};
+
+function d12Provenance(revision = "candidate") {
   return {
     platform: "linux",
     architecture: "x64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",
-    lockfileSha256: "a".repeat(64),
+    lockfileSha256: D12_LOCKFILE_SHA_256_BY_REVISION[revision],
     playwrightVersion: "1.55.0",
     zlibVersion: "1.3.1",
     chromiumVersion: "140.0.7339.16",
@@ -343,7 +348,7 @@ function d12Measurement(revision, sequence) {
     measuredAtIso: d12Timestamp(sequence, 1),
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
     perfRuns: 10,
-    provenance: d12Provenance(),
+    provenance: d12Provenance(revision),
     sequence,
     sourceTreeSha256: candidate ? SOURCE_TREE_SHA_256 : BASELINE_SOURCE_TREE_SHA_256,
     startedAtIso: d12Timestamp(sequence, 0),
@@ -470,7 +475,7 @@ function d12BundleBinding(revision) {
     dependencyProvisioning: {
       args: ["ci", "--ignore-scripts"],
       command: "npm",
-      lockfileSha256: "a".repeat(64),
+      lockfileSha256: D12_LOCKFILE_SHA_256_BY_REVISION[revision],
     },
     measurementHarnessSha256: MEASUREMENT_HARNESS_SHA_256,
     producerCommit: CANDIDATE_COMMIT,
@@ -495,7 +500,7 @@ function d12Comparison() {
   const baseline = d12Aggregate("baseline");
   const candidate = d12Aggregate("candidate");
   return {
-    schemaVersion: "1",
+    schemaVersion: "2",
     baselineCommit: BASELINE_COMMIT,
     baselineSourceTreeSha256: BASELINE_SOURCE_TREE_SHA_256,
     bundles: {
@@ -508,7 +513,7 @@ function d12Comparison() {
     dependencyProvisioning: {
       command: "npm",
       args: ["ci", "--ignore-scripts"],
-      lockfileSha256: "a".repeat(64),
+      lockfileSha256ByRevision: { ...D12_LOCKFILE_SHA_256_BY_REVISION },
     },
     aggregateRule: "median-run-level-percentile",
     warmUp: { runs: 1, procedure: "discard one complete suite run" },
@@ -1186,12 +1191,23 @@ describe("evaluateD12Comparison", () => {
     );
   });
 
-  it("requires identical Linux, toolchain, hardware, and warm-up provenance", () => {
+  it("requires matching Linux, toolchain, hardware, and warm-up provenance", () => {
     const evidence = editorEvidence();
     evidence.d12Comparison.repetitions[1].candidate.provenance.hardware.cpuModel = "other CPU";
 
     expect(evaluateD12Comparison(evidence)).toContain(
-      "d12 repetition 2 candidate: provenance does not match baseline",
+      "d12 repetition 2 candidate: provenance does not match its first run",
+    );
+  });
+
+  it("rejects cross-revision provenance drift outside the bound lockfile digest", () => {
+    const evidence = editorEvidence();
+    for (const repetition of evidence.d12Comparison.repetitions) {
+      repetition.candidate.provenance.hardware.cpuModel = "other CPU";
+    }
+
+    expect(evaluateD12Comparison(evidence)).toContain(
+      "d12 baseline and candidate provenance differs outside lockfileSha256",
     );
   });
 
@@ -1385,7 +1401,8 @@ describe("evaluateD12Comparison", () => {
     ],
     [
       "malformed lock digest",
-      (comparison) => (comparison.dependencyProvisioning.lockfileSha256 = "invalid"),
+      (comparison) =>
+        (comparison.dependencyProvisioning.lockfileSha256ByRevision.candidate = "invalid"),
       /lockfileSha256 is not a lowercase SHA-256 digest/u,
     ],
   ])("rejects %s D12 dependency provisioning", (_name, mutate, expected) => {
@@ -1400,6 +1417,18 @@ describe("evaluateD12Comparison", () => {
 
     expect(evaluateD12Comparison(evidence)).toContain(
       "d12 repetition 2 candidate: lockfileSha256 does not match dependency provisioning",
+    );
+  });
+
+  it("rejects a bundle bound to the other revision's lockfile", () => {
+    const evidence = editorEvidence();
+    const baselineBundle = evidence.d12Comparison.bundles.baseline;
+    baselineBundle.dependencyProvisioning.lockfileSha256 =
+      D12_LOCKFILE_SHA_256_BY_REVISION.candidate;
+    baselineBundle.measurementSha256 = computeD12BundleMeasurementSha256(baselineBundle);
+
+    expect(evaluateD12Comparison(evidence)).toContain(
+      "d12 baseline bundle dependency provisioning does not match its comparison revision",
     );
   });
 
@@ -1892,7 +1921,7 @@ describe("evaluateFreshness", () => {
     });
 
     expect(result.failures).toContain(
-      `dependencyProvisioning.lockfileSha256 ${"a".repeat(64)} != current ${currentDigest} ` +
+      `dependencyProvisioning candidate lockfileSha256 ${"a".repeat(64)} != current ${currentDigest} ` +
         "(stale D12 dependency evidence)",
     );
   });

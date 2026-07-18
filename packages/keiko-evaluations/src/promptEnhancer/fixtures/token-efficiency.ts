@@ -13,7 +13,7 @@
 
 import type { PromptEnhancerEvalFixture } from "../types.js";
 
-export const tokenEfficiencyLean: PromptEnhancerEvalFixture = {
+const tokenEfficiencyLean: PromptEnhancerEvalFixture = {
   name: "token-efficiency-lean",
   category: "token-efficiency",
   description: "A lean editing draft routed to the fast profile; instructions stay compact.",
@@ -28,7 +28,7 @@ export const tokenEfficiencyLean: PromptEnhancerEvalFixture = {
   },
 };
 
-export const tokenEfficiencyThorough: PromptEnhancerEvalFixture = {
+const tokenEfficiencyThorough: PromptEnhancerEvalFixture = {
   name: "token-efficiency-thorough",
   category: "token-efficiency",
   description: "A thorough research draft routed to the research profile; stays within its budget.",

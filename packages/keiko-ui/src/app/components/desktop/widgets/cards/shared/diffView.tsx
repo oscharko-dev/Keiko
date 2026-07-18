@@ -18,7 +18,7 @@ import type {
   GitEditorDiffLine as DiffLine,
 } from "@oscharko-dev/keiko-contracts";
 
-export function lineKindLabel(kind: DiffLine["kind"]): string {
+function lineKindLabel(kind: DiffLine["kind"]): string {
   if (kind === "add") return "Added line";
   if (kind === "del") return "Deleted line";
   return kind === "ctx" ? "Context line" : "Diff metadata";
@@ -46,7 +46,7 @@ interface DiffLineViewProps {
   readonly kindLabel?: string | undefined;
 }
 
-export function DiffLineView({ line, lang, kindLabel }: DiffLineViewProps): ReactNode {
+function DiffLineView({ line, lang, kindLabel }: DiffLineViewProps): ReactNode {
   // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
   const sign =
     line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
@@ -74,7 +74,7 @@ export function DiffLineView({ line, lang, kindLabel }: DiffLineViewProps): Reac
   );
 }
 
-export interface DiffHunkViewLabels {
+interface DiffHunkViewLabels {
   readonly header: string;
   readonly add: string;
   readonly del: string;

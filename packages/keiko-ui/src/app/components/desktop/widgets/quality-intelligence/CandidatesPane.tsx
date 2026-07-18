@@ -52,7 +52,7 @@ type CandidateWithQualityVerdict = QualityIntelligenceUiCandidate & {
 
 export type QiReviewAction = QualityIntelligenceReviewAction;
 
-export type QiCandidateEdit = (
+type QiCandidateEdit = (
   candidateId: string,
   edited: QualityIntelligenceCandidateEditableFields,
 ) => Promise<void> | void;

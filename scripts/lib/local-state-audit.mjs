@@ -1220,15 +1220,6 @@ export function auditLocalState(stateDir) {
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }
 
-export const AUDIT_MARKERS = Object.freeze({
-  SEALED_STRING_PREFIX,
-  SEALED_BINARY_VERSION,
-  LK_ENC_MARKER_KEY,
-  LK_ENC_MARKER_VALUE,
-  LK_ENC_SCOPE_KEY,
-  LK_ENC_SCOPE_VALUE,
-});
-
 // Exported solely for a direct, fast regression test of the ReDoS-safe rewrite of the trailing
 // placeholder-punctuation trim (SonarCloud S8786) — not part of the module's operational surface.
 export const _testables = Object.freeze({ isPlaceholderSafe });

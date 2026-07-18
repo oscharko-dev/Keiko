@@ -2,7 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
+const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 
 interface ConversationMemorySettingsSnapshot {
   readonly enabled: boolean;

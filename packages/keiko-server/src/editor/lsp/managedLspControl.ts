@@ -41,13 +41,7 @@ const MAX_IDEMPOTENCY_KEY_CHARS = 128;
 const MAX_EVIDENCE_RECORDS = 128;
 const MAX_IDEMPOTENCY_RECORDS = 64;
 
-export type {
-  ManagedLspConfigurationSummary,
-  ManagedLspControlAction,
-  ManagedLspControlMutation,
-  ManagedLspControlResult,
-  ManagedLspControlSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+export type { ManagedLspControlSnapshot } from "@oscharko-dev/keiko-contracts";
 
 type ManagedLspSuccessResult = ManagedLspControlSuccessResult;
 type ManagedLspDeniedResult = ManagedLspControlDeniedResult;

@@ -63,6 +63,7 @@ export const LIFECYCLE_HISTORY_RETAIN = 32;
 // Alias used by #542 health surface — counts in every finding category are hard-capped at
 // this number. It is the same hard cap as MAX_IMPACT_RELATIONSHIPS; the alias is exported
 // so callers can name the contract intent.
+/** @alias */
 export const MAX_RELATIONSHIPS_PER_QUERY = MAX_IMPACT_RELATIONSHIPS;
 
 // ─── Wire types ───────────────────────────────────────────────────────────────

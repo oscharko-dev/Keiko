@@ -14,6 +14,7 @@ import {
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSseEvent,
+  validateCodingWorkbenchRuntimeStatus,
 } from "./index.js";
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -242,6 +243,7 @@ describe("Coding Workbench runtime API contracts", () => {
       modelSource: "keiko-model-gateway",
     };
     expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
+    expect(validateCodingWorkbenchRuntimeStatus(snapshot)).toEqual({ ok: true, value: snapshot });
     for (const field of [
       "taskIntent",
       "prompt",

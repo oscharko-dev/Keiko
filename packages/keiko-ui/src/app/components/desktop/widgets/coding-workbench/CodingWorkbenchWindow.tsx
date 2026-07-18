@@ -202,8 +202,6 @@ function WorkbenchColumns({
   );
 }
 
-export default CodingWorkbenchWindow;
-
 interface LiveSectionProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: CodingWorkbenchRuntimeActions;

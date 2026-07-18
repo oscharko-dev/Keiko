@@ -22,7 +22,7 @@ const WATCHDOG_INTERVAL_MS = 1_000;
 // out (issue #2347 audit finding: unbounded per-process watch list).
 const DEFAULT_TRACKED_IDLE_TTL_MS = 30 * 60_000;
 
-export interface DebugActivationContext {
+interface DebugActivationContext {
   readonly realRoot?: string | undefined;
   readonly revision: number;
   readonly workspaceActivation: DebugWorkspaceActivation;
@@ -41,7 +41,7 @@ export interface DebugActivationControlService {
   readonly dispose: () => void;
 }
 
-export interface DebugActivationSweepFailure {
+interface DebugActivationSweepFailure {
   readonly schemaVersion: "1";
   readonly code: "ACTIVATION_SWEEP_FAILED";
   readonly source: "watchdog" | "subscription";

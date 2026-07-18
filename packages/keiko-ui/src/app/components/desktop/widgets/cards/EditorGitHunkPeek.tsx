@@ -6,7 +6,7 @@ import type { EditorGitGutterPeek } from "@oscharko-dev/keiko-editor";
 import { DiffHunkView } from "./shared/diffView";
 import styles from "./EditorGitHunkPeek.module.css";
 
-export interface EditorGitHunkPeekLabels {
+interface EditorGitHunkPeekLabels {
   readonly close: string;
   readonly staged: string;
   readonly unstaged: string;

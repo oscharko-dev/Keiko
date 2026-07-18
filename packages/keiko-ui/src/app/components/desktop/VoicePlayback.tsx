@@ -23,7 +23,7 @@ import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i
 import type { VoicePlaybackSnapshot } from "./hooks/voice-playback-state";
 
 // Stable id for the local-only disclosure on the mute button.
-export const PLAYBACK_PRIVACY_HINT_ID = "cmp-voice-playback-privacy-hint";
+const PLAYBACK_PRIVACY_HINT_ID = "cmp-voice-playback-privacy-hint";
 
 // Decorative speaker glyph; `aria-hidden` so the accessible name comes from the button label. A muted
 // glyph adds a slash. Kept inline so the component depends on no audio-specific icon asset.

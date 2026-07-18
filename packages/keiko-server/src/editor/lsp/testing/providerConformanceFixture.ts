@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 
 import type { LanguageRange, LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
 
-export const PROVIDER_CONFORMANCE_RANGE: LanguageRange = Object.freeze({
+const PROVIDER_CONFORMANCE_RANGE: LanguageRange = Object.freeze({
   start: { line: 0, character: 0 },
   end: { line: 0, character: 5 },
 });

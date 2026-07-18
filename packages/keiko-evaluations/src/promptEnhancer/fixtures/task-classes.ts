@@ -16,7 +16,7 @@ const CORE = new Set([
   "token-efficiency",
 ] as const);
 
-export const factualQa: PromptEnhancerEvalFixture = {
+const factualQa: PromptEnhancerEvalFixture = {
   name: "task-factual-qa",
   category: "task-class",
   description: "A plain factual question with no retrieval need (the conservative default class).",
@@ -29,7 +29,7 @@ export const factualQa: PromptEnhancerEvalFixture = {
   },
 };
 
-export const research: PromptEnhancerEvalFixture = {
+const research: PromptEnhancerEvalFixture = {
   name: "task-research",
   category: "task-class",
   description: "A comprehensive research request that mandates grounding.",
@@ -44,7 +44,7 @@ export const research: PromptEnhancerEvalFixture = {
   },
 };
 
-export const ragQuestionAnswering: PromptEnhancerEvalFixture = {
+const ragQuestionAnswering: PromptEnhancerEvalFixture = {
   name: "task-rag-qa",
   category: "task-class",
   description: "A question answered strictly from supplied/connected context.",
@@ -61,7 +61,7 @@ export const ragQuestionAnswering: PromptEnhancerEvalFixture = {
   },
 };
 
-export const summarization: PromptEnhancerEvalFixture = {
+const summarization: PromptEnhancerEvalFixture = {
   name: "task-summarization",
   category: "task-class",
   description: "A summarization request over supplied material.",
@@ -72,7 +72,7 @@ export const summarization: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["summarization"] },
 };
 
-export const structuredExtraction: PromptEnhancerEvalFixture = {
+const structuredExtraction: PromptEnhancerEvalFixture = {
   name: "task-structured-extraction",
   category: "task-class",
   description: "An extraction request into a structured (JSON) form.",
@@ -87,7 +87,7 @@ export const structuredExtraction: PromptEnhancerEvalFixture = {
   },
 };
 
-export const dataAnalysis: PromptEnhancerEvalFixture = {
+const dataAnalysis: PromptEnhancerEvalFixture = {
   name: "task-data-analysis",
   category: "task-class",
   description: "A statistical analysis request over a dataset.",
@@ -98,7 +98,7 @@ export const dataAnalysis: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["data-analysis"], expectedProfiles: ["technical"] },
 };
 
-export const codeGeneration: PromptEnhancerEvalFixture = {
+const codeGeneration: PromptEnhancerEvalFixture = {
   name: "task-code-generation",
   category: "task-class",
   description: "A code-writing request.",
@@ -107,7 +107,7 @@ export const codeGeneration: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["code-generation"], expectedProfiles: ["technical"] },
 };
 
-export const codeDebugging: PromptEnhancerEvalFixture = {
+const codeDebugging: PromptEnhancerEvalFixture = {
   name: "task-code-debugging",
   category: "task-class",
   description: "A debugging request driven by a failing stack trace.",
@@ -118,7 +118,7 @@ export const codeDebugging: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["code-debugging"], expectedProfiles: ["technical"] },
 };
 
-export const codeArchitecture: PromptEnhancerEvalFixture = {
+const codeArchitecture: PromptEnhancerEvalFixture = {
   name: "task-code-architecture",
   category: "task-class",
   description: "A system-design request.",
@@ -129,7 +129,7 @@ export const codeArchitecture: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["code-architecture"], expectedProfiles: ["technical"] },
 };
 
-export const writingEditing: PromptEnhancerEvalFixture = {
+const writingEditing: PromptEnhancerEvalFixture = {
   name: "task-writing-editing",
   category: "task-class",
   description: "A drafting/editing request that favours a lean profile.",
@@ -138,7 +138,7 @@ export const writingEditing: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["writing-editing"], expectedProfiles: ["fast"] },
 };
 
-export const creativeWriting: PromptEnhancerEvalFixture = {
+const creativeWriting: PromptEnhancerEvalFixture = {
   name: "task-creative-writing",
   category: "task-class",
   description: "A creative-writing request.",
@@ -149,7 +149,7 @@ export const creativeWriting: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["creative-writing"], expectedProfiles: ["creative"] },
 };
 
-export const decisionSupport: PromptEnhancerEvalFixture = {
+const decisionSupport: PromptEnhancerEvalFixture = {
   name: "task-decision-support",
   category: "task-class",
   description: "A non-safety-critical decision-support request.",
@@ -160,7 +160,7 @@ export const decisionSupport: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["decision-support"], expectedProfiles: ["precise"] },
 };
 
-export const agenticToolUse: PromptEnhancerEvalFixture = {
+const agenticToolUse: PromptEnhancerEvalFixture = {
   name: "task-agentic-tool-use",
   category: "task-class",
   description: "An agentic task that requires human-approval gating on side effects.",
@@ -176,7 +176,7 @@ export const agenticToolUse: PromptEnhancerEvalFixture = {
   },
 };
 
-export const promptOptimization: PromptEnhancerEvalFixture = {
+const promptOptimization: PromptEnhancerEvalFixture = {
   name: "task-prompt-optimization",
   category: "task-class",
   description: "A meta-prompting request to improve an existing prompt.",
@@ -185,7 +185,7 @@ export const promptOptimization: PromptEnhancerEvalFixture = {
   oracle: { expectedTaskClasses: ["prompt-optimization"], expectedProfiles: ["technical"] },
 };
 
-export const safetyCritical: PromptEnhancerEvalFixture = {
+const safetyCritical: PromptEnhancerEvalFixture = {
   name: "task-safety-critical",
   category: "task-class",
   description: "Consequential advice in a safety-critical (medical) domain.",

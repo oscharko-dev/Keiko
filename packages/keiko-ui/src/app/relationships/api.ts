@@ -10,7 +10,6 @@
 // No third-party dependency is introduced. Uses the browser Fetch API only.
 
 import type {
-  Relationship,
   RelationshipLifecycleState,
   RelationshipObjectKind,
   RelationshipType,
@@ -39,16 +38,6 @@ export interface ApiRelationship {
   readonly etag: number;
   readonly confidence?: number | undefined;
   readonly summary?: string | undefined;
-}
-
-export interface ApiError {
-  readonly code: string;
-  readonly message: string;
-}
-
-export interface ApiDenial {
-  readonly error: ApiError;
-  readonly reasons: readonly RelationshipValidationError[];
 }
 
 export interface ListRelationshipsResult {
@@ -129,12 +118,6 @@ export interface HealthResult {
   readonly truncated: boolean;
   readonly findings: HealthFindings;
 }
-
-// ─── Bounded impact / dependency walk (api-contract.md §4.4) ───────────────────
-// The impact endpoint walks from an OBJECT endpoint; dependencies walk from a RELATIONSHIP. Both
-// return the same bounded report shape (endpoints + relationships + truncation), differing only in
-// the origin field (`origin` vs `rootRelationshipId`), which the UI does not need to distinguish.
-export type ImpactReport = DependencyReport;
 
 // ─── Proposal types ────────────────────────────────────────────────────────────
 
@@ -380,5 +363,5 @@ export async function getHealth(): Promise<HealthResult> {
   return parseApiResponse<HealthResult>(res);
 }
 
-// Re-export Relationship type for consumers of this module
-export type { Relationship, RelationshipLifecycleState, RelationshipType, RelationshipObjectKind };
+// Re-export relationship types for consumers of this module
+export type { RelationshipLifecycleState, RelationshipObjectKind };

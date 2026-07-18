@@ -45,7 +45,7 @@ import {
   type EditorAgentTranslate,
 } from "./widgets/cards/editor-agent-i18n";
 
-export interface AssistantCodeBlockApplyRequest {
+interface AssistantCodeBlockApplyRequest {
   readonly codeBlockText: string;
   readonly language?: string | undefined;
 }

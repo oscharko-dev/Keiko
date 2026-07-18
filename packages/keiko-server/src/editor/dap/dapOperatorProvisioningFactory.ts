@@ -14,7 +14,7 @@ import type {
   DapOperatorProvisioningDocument,
 } from "./dapOperatorProvisioning.js";
 
-export interface DapOperatorWorkspace {
+interface DapOperatorWorkspace {
   readonly root: string;
   readonly projectId: string;
   readonly trusted: boolean;

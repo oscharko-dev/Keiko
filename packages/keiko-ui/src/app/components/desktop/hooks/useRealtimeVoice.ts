@@ -92,9 +92,7 @@ function collapseWhitespaceBeforeNewline(text: string): string {
 // less likely to truncate an unfinished utterance ("ähm…") — the exact "the end wasn't understood"
 // complaint — at the cost of requiring provider support. `balanced` reproduces the prior behavior
 // byte-for-byte, so it stays the safe default and no session changes endpointing without an explicit opt-in.
-export type RealtimeTurnDetectionProfile = "balanced" | "headset" | "laptop" | "noisy" | "semantic";
-
-export const DEFAULT_REALTIME_TURN_DETECTION_PROFILE: RealtimeTurnDetectionProfile = "balanced";
+type RealtimeTurnDetectionProfile = "balanced" | "headset" | "laptop" | "noisy" | "semantic";
 
 // A total table: adding a profile without a builder is a compile error. Each builder returns a FRESH
 // object so the caller can safely layer interrupt_response / create_response onto it.
@@ -326,7 +324,7 @@ export interface UseRealtimeVoiceOptions {
     | undefined;
 }
 
-export interface RealtimeGroundedVoiceToolCall {
+interface RealtimeGroundedVoiceToolCall {
   readonly callId: string;
   readonly query: string;
   readonly userTranscript?: string | undefined;
@@ -334,16 +332,16 @@ export interface RealtimeGroundedVoiceToolCall {
   readonly itemId?: string | undefined;
 }
 
-export type RealtimeGroundedVoiceToolOutput = unknown;
+type RealtimeGroundedVoiceToolOutput = unknown;
 
-export interface RealtimeMemoryVoiceToolCall {
+interface RealtimeMemoryVoiceToolCall {
   readonly callId: string;
   readonly query: string;
 }
 
-export type RealtimeMemoryVoiceToolOutput = unknown;
+type RealtimeMemoryVoiceToolOutput = unknown;
 
-export interface RealtimeVoiceTurnMessage {
+interface RealtimeVoiceTurnMessage {
   readonly role: "user" | "assistant";
   readonly content: string;
 }

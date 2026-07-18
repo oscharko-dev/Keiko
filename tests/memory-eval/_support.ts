@@ -46,11 +46,11 @@ import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 // One cast per brand so a `grep -n " as UserId"` finds every site. Matches the convention
 // used in packages/keiko-memory-retrieval/src/_support.ts.
 export const userId = (s: string): UserId => s as UserId;
-export const workspaceId = (s: string): WorkspaceId => s as WorkspaceId;
-export const projectId = (s: string): ProjectId => s as ProjectId;
-export const workflowDefinitionId = (s: string): WorkflowDefinitionId => s as WorkflowDefinitionId;
+const workspaceId = (s: string): WorkspaceId => s as WorkspaceId;
+const projectId = (s: string): ProjectId => s as ProjectId;
+const workflowDefinitionId = (s: string): WorkflowDefinitionId => s as WorkflowDefinitionId;
 export const memoryId = (s: string): MemoryId => s as MemoryId;
-export const edgeId = (s: string): MemoryEdgeId => s as MemoryEdgeId;
+const edgeId = (s: string): MemoryEdgeId => s as MemoryEdgeId;
 export const reviewerId = (s: string): MemoryReviewerId => s as MemoryReviewerId;
 
 export const userScope = (id = "user-alice"): MemoryScope => ({
@@ -74,7 +74,7 @@ export const workflowScopeOf = (id = "wf-investigate"): MemoryScope => ({
 // Mirrors `MemoryRecord` minus brand types so JSON parses cleanly. Anything optional in
 // the fixture is filled by `makeRecord` from a deterministic default.
 
-export type FixtureScope =
+type FixtureScope =
   | { readonly kind: "user"; readonly userId: string }
   | { readonly kind: "workspace"; readonly workspaceId: string }
   | { readonly kind: "project"; readonly projectId: string }
@@ -116,7 +116,7 @@ export interface MemoryEvalFixture {
 }
 
 // ─── Branding helpers for fixture scopes ─────────────────────────────────────
-export function brandScope(scope: FixtureScope): MemoryScope {
+function brandScope(scope: FixtureScope): MemoryScope {
   switch (scope.kind) {
     case "user":
       return { kind: "user", userId: userId(scope.userId) };
@@ -340,7 +340,6 @@ export function loadFixture(filename: string): readonly MemoryEvalFixture[] {
 
 // ─── Fixed clock + counter ID source ─────────────────────────────────────────
 export const FIXED_NOW_MS = DEFAULT_TIMESTAMP;
-export const fixedClock = (): number => FIXED_NOW_MS;
 export const TEST_VAULT_KEY: Buffer = Buffer.alloc(32, 7);
 
 export function counterIdSource(prefix: string): () => string {

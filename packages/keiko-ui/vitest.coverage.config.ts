@@ -16,7 +16,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: ["./packages/keiko-ui/vitest.setup.ts"],
+    setupFiles: [fileURLToPath(new URL("./vitest.setup.ts", import.meta.url))],
     // GEN-TEST-FLAKE-001: align the CI-gated UI coverage run's per-test timeout with the root suite
     // (vitest.config.ts, 15s). jsdom + v8 instrumentation over 235 UI files makes the default 5s a
     // false-RED risk for the required coverage gate. Parity enforced by

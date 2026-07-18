@@ -529,4 +529,3 @@ export function RelationshipEdgeBadge({
 
 // Export visual binding table for #541 consumer
 export { ACTIVITY_VISUALS };
-export type { ActivityVisual };

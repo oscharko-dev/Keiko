@@ -303,5 +303,3 @@ export async function deleteEditorHotExitSnapshot(
     if (remoteDeleteError !== undefined) throw remoteDeleteError;
   });
 }
-
-export { EDITOR_HOT_EXIT_TTL_MS };
