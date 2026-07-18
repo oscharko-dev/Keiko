@@ -84,6 +84,36 @@ async function currentRunId(page: Page): Promise<string> {
   return body.runId ?? "";
 }
 
+// Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while
+// no workspace binding is active — the tracer journey below binds and activates the fixture
+// workspace on the shared webServer, after which "Code setup" is legitimately replaced by the
+// binding summary (the exact ordering break behind nightly run 29635737112).
+test("#2385 tracer: the workbench readiness surface is live, not static", async ({ page }) => {
+  await page.route("**/api/coding-workbench/runtime/readiness*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "platform-unqualified",
+      }),
+    }),
+  );
+  await openWorkbench(page);
+
+  await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
+  // #2476 AC4 — the setup surface stays reachable and honestly explains why start is unavailable
+  // instead of disappearing behind the unconfirmed runtime.
+  await expect(page.getByRole("region", { name: "Code setup" })).toBeVisible();
+  await expect(page.getByTestId("coding-workbench-setup-runtime-note")).toBeVisible();
+  await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
+  await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
+});
+
 test("#2385 tracer: bind, run, observe live SSE activity, and settle against the real runtime", async ({
   page,
 }) => {
@@ -118,30 +148,4 @@ test("#2385 tracer: bind, run, observe live SSE activity, and settle against the
   const settled = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
   expect(settled.ok()).toBe(true);
   expect(((await settled.json()) as { readonly state?: string }).state).toBe("cancelled");
-});
-
-test("#2385 tracer: the workbench readiness surface is live, not static", async ({ page }) => {
-  await page.route("**/api/coding-workbench/runtime/readiness*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        schemaVersion: "1",
-        requestedMode: "governed-assist",
-        deploymentCeiling: "governed-assist",
-        effectiveMode: "governed-assist",
-        runtimeAvailable: false,
-        runtimeUnavailableReason: "platform-unqualified",
-      }),
-    }),
-  );
-  await openWorkbench(page);
-
-  await expect(page.getByText("Runtime not confirmed", { exact: true })).toBeVisible();
-  // #2476 AC4 — the setup surface stays reachable and honestly explains why start is unavailable
-  // instead of disappearing behind the unconfirmed runtime.
-  await expect(page.getByRole("region", { name: "Code setup" })).toBeVisible();
-  await expect(page.getByTestId("coding-workbench-setup-runtime-note")).toBeVisible();
-  await page.getByLabel("Task instructions").fill("Must stay blocked without a confirmed runtime");
-  await expect(page.getByRole("button", { name: "Start coding run" })).toBeDisabled();
 });

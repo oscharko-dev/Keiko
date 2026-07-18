@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+  unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
+  validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 
@@ -170,5 +172,55 @@ describe("coding workbench runtime questions failure branches", () => {
         answers: Array.from({ length: 33 }, () => ["ok"]),
       }),
     ).toMatchObject({ ok: false, errors: ["answers must be a bounded non-empty array"] });
+  });
+});
+
+describe("coding workbench runtime questions channel payload (#2478)", () => {
+  it("provides the constant content-free unpaired projection", () => {
+    const unpaired = unpairedCodingWorkbenchRuntimeQuestionsChannelPayload();
+    expect(unpaired).toEqual({ session: "unpaired", questions: [] });
+    expect(validateCodingWorkbenchRuntimeQuestionsChannelPayload(unpaired).ok).toBe(true);
+  });
+
+  it("accepts an active payload carrying the unchanged question bounds", () => {
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({
+        session: "active",
+        questions: response.questions,
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({ session: "active", questions: [] })
+        .ok,
+    ).toBe(true);
+  });
+
+  it("rejects question text riding on an unpaired payload", () => {
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({
+        session: "unpaired",
+        questions: response.questions,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["questionsChannelPayload.questions must be empty when the session is unpaired"],
+    });
+  });
+
+  it("rejects unknown session facets, extra keys, and unbounded questions", () => {
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({ session: "guest", questions: [] }).ok,
+    ).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({
+        session: "active",
+        questions: [],
+        extra: 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsChannelPayload({ session: "active", questions: "x" })
+        .ok,
+    ).toBe(false);
   });
 });

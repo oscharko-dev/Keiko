@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  validateCodingWorkbenchRuntimeQuestionsResponse,
+  validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
-  type CodingWorkbenchRuntimeQuestionsResponse,
+  type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   type CodingWorkbenchRuntimeRetryRequest,
@@ -83,8 +83,11 @@ function readinessValidator(path: string, value: unknown): CodingWorkbenchRuntim
   return validated(path, value, validateCodingWorkbenchRuntimeReadiness);
 }
 
-function questionsValidator(path: string, value: unknown): CodingWorkbenchRuntimeQuestionsResponse {
-  return validated(path, value, validateCodingWorkbenchRuntimeQuestionsResponse);
+function questionsValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeQuestionsChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeQuestionsChannelPayload);
 }
 
 function runPath(runId: string, suffix = ""): string {
@@ -224,14 +227,16 @@ export function submitCodingWorkbenchRuntimeFollowUp(
 }
 
 /**
- * List the run's required questions. The server advances its own revision on each list, so callers
- * must re-anchor to a fresh snapshot before the next revision-bound operation.
+ * List the run's required questions over the authenticated app-session channel (#2478). The server
+ * advances its own revision on each list, so callers must re-anchor to a fresh snapshot before the
+ * next revision-bound operation. An unpaired window receives the constant content-free
+ * `{ session: "unpaired", questions: [] }` projection instead of an error.
  */
 export function listCodingWorkbenchRuntimeQuestions(
   runId: string,
   input: CodingWorkbenchRuntimeOperationRequest,
   signal?: AbortSignal,
-): Promise<CodingWorkbenchRuntimeQuestionsResponse> {
+): Promise<CodingWorkbenchRuntimeQuestionsChannelPayload> {
   return bffFetchJson(
     runPath(runId, "/questions"),
     {

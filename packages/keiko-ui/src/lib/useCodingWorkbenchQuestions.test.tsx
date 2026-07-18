@@ -16,7 +16,10 @@ vi.mock("./coding-workbench-runtime-api", () => ({
   newCodingWorkbenchRuntimeRequestId: (): string => "ui-req",
 }));
 
+// #2478: the list route serves the channel-carried payload with the session facet of the caller's
+// own cookie; the question shapes and bounds inside are unchanged.
 const pending = {
+  session: "active",
   questions: [
     {
       id: "que_1",
@@ -30,6 +33,8 @@ const pending = {
     },
   ],
 } as const;
+
+const emptyActive = { session: "active", questions: [] } as const;
 
 const snapshot = { schemaVersion: "1", state: "paused", revision: 3, updatedAt: "x" } as const;
 
@@ -73,7 +78,7 @@ describe("useCodingWorkbenchQuestions", () => {
     vi.useFakeTimers();
     try {
       vi.mocked(listCodingWorkbenchRuntimeQuestions)
-        .mockResolvedValueOnce({ questions: [] })
+        .mockResolvedValueOnce(emptyActive)
         .mockResolvedValueOnce(pending);
       const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
         initialProps: activeInput(),
@@ -100,7 +105,7 @@ describe("useCodingWorkbenchQuestions", () => {
     vi.useFakeTimers();
     try {
       vi.mocked(listCodingWorkbenchRuntimeQuestions)
-        .mockResolvedValueOnce({ questions: [] })
+        .mockResolvedValueOnce(emptyActive)
         .mockResolvedValueOnce(pending);
       const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
         initialProps: activeInput(),
@@ -152,7 +157,7 @@ describe("useCodingWorkbenchQuestions", () => {
   });
 
   it("answers once, drops the accepted question, and re-anchors", async () => {
-    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue({ questions: [] });
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(emptyActive);
     vi.mocked(answerCodingWorkbenchRuntimeQuestion).mockResolvedValue(snapshot);
     const refreshSnapshot = vi.fn(() => Promise.resolve());
     const view = renderHook(() => useCodingWorkbenchQuestions(activeInput(refreshSnapshot)));
@@ -171,7 +176,7 @@ describe("useCodingWorkbenchQuestions", () => {
   });
 
   it("rejects a question through the reject route", async () => {
-    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue({ questions: [] });
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(emptyActive);
     vi.mocked(rejectCodingWorkbenchRuntimeQuestion).mockResolvedValue(snapshot);
     const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
     await flush();
@@ -208,5 +213,25 @@ describe("useCodingWorkbenchQuestions", () => {
       errorCode: "CODING_RUNTIME_QUESTION_STALE",
     });
     stale.unmount();
+  });
+
+  // #2478: revocation/expiry surfaces as the honest re-pair state — never a silent empty list —
+  // and the unpaired projection skips the snapshot re-anchor (the server never touched the run).
+  it("surfaces an unpaired session distinctly from an empty question list", async () => {
+    const refreshSnapshot = vi.fn(() => Promise.resolve());
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue({
+      session: "unpaired",
+      questions: [],
+    });
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput(refreshSnapshot)));
+    await flush();
+
+    expect(view.result.current).toMatchObject({
+      status: "unpaired",
+      questions: [],
+      errorCode: null,
+    });
+    expect(refreshSnapshot).not.toHaveBeenCalled();
+    view.unmount();
   });
 });

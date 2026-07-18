@@ -48,6 +48,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.stale": "Question state changed. Check again to continue.",
   "codingWorkbench.questions.submitting": "Submitting your response…",
   "codingWorkbench.questions.terminal": "The coding run has ended.",
+  "codingWorkbench.questions.unpaired":
+    "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
   "codingWorkbench.questions.retry": "Check again",
   "codingWorkbench.questions.requestTitle": "Runtime needs your input",
   "codingWorkbench.questions.required": "Answer every question before sending.",

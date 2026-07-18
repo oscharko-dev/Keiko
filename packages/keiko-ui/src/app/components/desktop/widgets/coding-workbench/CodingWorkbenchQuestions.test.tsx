@@ -97,7 +97,7 @@ describe("CodingWorkbenchQuestions", () => {
     ]);
   });
 
-  it("exposes loading, empty, offline, error, stale, submitting, and terminal states", async () => {
+  it("exposes loading, empty, offline, error, stale, submitting, terminal, and unpaired states", async () => {
     const user = userEvent.setup();
     const cases = [
       ["loading", "Checking for runtime questions…"],
@@ -106,6 +106,12 @@ describe("CodingWorkbenchQuestions", () => {
       ["error", "Questions could not be refreshed."],
       ["stale", "Question state changed. Check again to continue."],
       ["terminal", "The coding run has ended."],
+      // #2478: the honest re-pair state — distinct from "empty", and not retryable in place
+      // because only a fresh launcher pairing can restore the session.
+      [
+        "unpaired",
+        "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
+      ],
     ] as const;
 
     for (const [status, label] of cases) {
@@ -115,6 +121,8 @@ describe("CodingWorkbenchQuestions", () => {
       if (status === "offline" || status === "error" || status === "stale") {
         await user.click(screen.getByRole("button", { name: "Check again" }));
         expect(retry).toHaveBeenCalledOnce();
+      } else {
+        expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
       }
       cleanup();
     }
