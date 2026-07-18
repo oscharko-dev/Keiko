@@ -1,5 +1,11 @@
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
-import { exactKeys, invalid, isRecord, result } from "./coding-workbench-runtime-api-validation.js";
+import {
+  exactKeys,
+  invalid,
+  isOneOf,
+  isRecord,
+  result,
+} from "./coding-workbench-runtime-api-validation.js";
 
 export const CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT = 256;
 export const CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT = 32;
@@ -39,6 +45,33 @@ export interface CodingWorkbenchRuntimeQuestionAnswerRequest {
   readonly answers: readonly (readonly string[])[];
 }
 
+/** Session facet of a channel-carried question payload: the status of the presented cookie only. */
+export const CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeQuestionsSession =
+  (typeof CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES)[number];
+
+/**
+ * The question payload as carried over the authenticated app-session channel (#2478, ADR-0141).
+ * `session` reflects only whether the caller's own presented cookie is a valid app session — never
+ * the existence of runs, questions, or anyone else's session — so the browser can render an honest
+ * re-pair state instead of a silent empty list. The question bounds are unchanged from
+ * `CodingWorkbenchRuntimeQuestionsResponse`; an `unpaired` payload is content-free by construction.
+ */
+export interface CodingWorkbenchRuntimeQuestionsChannelPayload {
+  readonly session: CodingWorkbenchRuntimeQuestionsSession;
+  readonly questions: readonly CodingWorkbenchRuntimeQuestionRequest[];
+}
+
+/**
+ * The single source of the constant content-free projection every unauthenticated caller of the
+ * question routes receives (ADR-0141 D6): independent of run existence, runtime configuration, and
+ * pending-question state, so it is not an existence oracle.
+ */
+export function unpairedCodingWorkbenchRuntimeQuestionsChannelPayload(): CodingWorkbenchRuntimeQuestionsChannelPayload {
+  return { session: "unpaired", questions: [] };
+}
+
 export function parseCodingWorkbenchRuntimeQuestionAnswerRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest> {
@@ -53,21 +86,52 @@ export function validateCodingWorkbenchRuntimeQuestionsResponse(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsResponse> {
   if (!isRecord(value)) return invalid("questions response must be an object");
   const errors = exactKeys(value, ["questions"], "questionsResponse");
+  checkBoundedQuestionRequests(value.questions, value, errors);
+  return result(value, errors);
+}
+
+/**
+ * Validate a channel-carried question payload (#2478): exact keys, a valid session facet, the
+ * unchanged question bounds, and the invariant that an `unpaired` payload carries no questions.
+ */
+export function validateCodingWorkbenchRuntimeQuestionsChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionsChannelPayload> {
+  if (!isRecord(value)) return invalid("questions channel payload must be an object");
+  const errors = exactKeys(value, ["session", "questions"], "questionsChannelPayload");
+  if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES)) {
+    errors.push("questionsChannelPayload.session is invalid");
+  }
   if (
-    !Array.isArray(value.questions) ||
-    value.questions.length > CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT
+    value.session === "unpaired" &&
+    (!Array.isArray(value.questions) || value.questions.length > 0)
+  ) {
+    errors.push("questionsChannelPayload.questions must be empty when the session is unpaired");
+  }
+  checkBoundedQuestionRequests(value.questions, value, errors);
+  return result(value, errors);
+}
+
+/** Shared question-request bounds: array cap, per-request structure, and the aggregate byte budget. */
+function checkBoundedQuestionRequests(
+  questions: unknown,
+  container: object,
+  errors: string[],
+): void {
+  if (
+    !Array.isArray(questions) ||
+    questions.length > CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT
   ) {
     errors.push("questions must be a bounded array");
-  } else {
-    validateQuestionRequests(value.questions, errors);
-    if (
-      errors.length === 0 &&
-      serializedBytes(value) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
-    ) {
-      errors.push("questions response exceeds the aggregate UTF-8 byte budget");
-    }
+    return;
   }
-  return result(value, errors);
+  validateQuestionRequests(questions, errors);
+  if (
+    errors.length === 0 &&
+    serializedBytes(container) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
+  ) {
+    errors.push("questions response exceeds the aggregate UTF-8 byte budget");
+  }
 }
 
 function validateQuestionRequests(values: readonly unknown[], errors: string[]): void {

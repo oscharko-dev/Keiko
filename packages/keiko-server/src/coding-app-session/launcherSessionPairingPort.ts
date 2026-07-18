@@ -11,6 +11,10 @@
 // the server-side authority verified here is complete and unit-tested directly.
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import {
+  CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
+  CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+} from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   SESSION_PAIRING_DENIED,
@@ -21,9 +25,9 @@ import {
 } from "./sessionPairingPort.js";
 
 /** Environment variable through which the trusted launcher provisions the process-scoped secret. */
-export const SESSION_PAIRING_LAUNCHER_SECRET_ENV = "KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET";
+export const SESSION_PAIRING_LAUNCHER_SECRET_ENV = CODING_APP_SESSION_LAUNCHER_SECRET_ENV;
 
-const MIN_LAUNCHER_SECRET_CHARS = 32;
+const MIN_LAUNCHER_SECRET_CHARS = CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS;
 const DEFAULT_CLAIM_FRESHNESS_MS = 30_000;
 const MAX_TRACKED_REQUEST_IDS = 4_096;
 const APPROVED_PRINCIPAL_LABEL = "local-app-session";

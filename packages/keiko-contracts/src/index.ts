@@ -1191,7 +1191,9 @@ export type {
   CodingWorkbenchRuntimeQuestion,
   CodingWorkbenchRuntimeQuestionOption,
   CodingWorkbenchRuntimeQuestionRequest,
+  CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeQuestionsResponse,
+  CodingWorkbenchRuntimeQuestionsSession,
 } from "./coding-workbench-runtime-questions.js";
 export {
   CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT,
@@ -1203,9 +1205,37 @@ export {
   CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
   CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT,
+  CODING_WORKBENCH_RUNTIME_QUESTIONS_SESSION_STATES,
   parseCodingWorkbenchRuntimeQuestionAnswerRequest,
+  unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
+  validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
+export type {
+  CodingAppSessionAcknowledgement,
+  CodingAppSessionChannelContent,
+  CodingAppSessionChannelSnapshot,
+  CodingAppSessionPairingAttestation,
+} from "./coding-app-session.js";
+export {
+  CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
+  CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION,
+  CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS,
+  CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
+  CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
+  CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+  CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
+  CODING_APP_SESSION_PAIRING_PRINCIPAL_LABEL_MAX_CHARS,
+  CODING_APP_SESSION_PAIRING_REQUEST_ID_MAX_CHARS,
+  codingAppSessionAcknowledgement,
+  contentFreeCodingAppSessionChannelSnapshot,
+  decodeCodingAppSessionPairingFragment,
+  encodeCodingAppSessionPairingFragment,
+  isWellFormedCodingAppSessionPairingAttestation,
+  validateCodingAppSessionChannelContent,
+  validateCodingAppSessionChannelSnapshot,
+} from "./coding-app-session.js";
 export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,

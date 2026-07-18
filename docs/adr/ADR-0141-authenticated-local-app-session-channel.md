@@ -5,7 +5,8 @@
 Accepted (Issue #2477, Epic #2473 Wave 1, 2026-07-18). This decision governs a trust boundary; the
 mandatory human security review required before implementation — the repository rule for trust
 boundaries and the epic board exception `Human Review Required: Yes` — was performed and is recorded
-on the implementing pull request.
+on the implementing pull request. The W1.5 finalization section below records the decisions this
+ADR explicitly deferred to route enforcement (Issue #2478).
 
 ## Context
 
@@ -145,6 +146,61 @@ and never falls back to it, identical to the runtime start-confirmation and prod
 pattern. A negative test asserts on production composition that, without an injected port and
 without launcher authority, no session is issuable and the channel stays content-free — the fake is
 unreachable, not merely unused.
+
+## W1.5 finalization (Issue #2478)
+
+W1.5 enforced this authority on the content-bearing routes and finalized the two decisions D2 and
+D4 deliberately left open. These are refinements inside this ADR's design space, not reversals.
+
+### F1 — Route enforcement and the session-annotated content-free projection
+
+All three runtime-question routes (`…/runs/:runId/questions`, `…/questions/answer`,
+`…/questions/reject`) resolve the app-session read authority BEFORE any runId or runtime
+resolution. An unauthenticated list read receives the one constant projection
+`{ session: "unpaired", questions: [] }` (HTTP 200) regardless of run existence, runtime
+configuration, or pending-question state; unauthenticated question mutations receive the same
+not-found result an unknown run yields. This preserves D6's intent — no `401`/`403`, no response
+that distinguishes "not paired" from "does not exist" — while refining its byte-identity wording
+for the question surface: the `session` facet reflects exclusively the validity of the caller's
+own presented cookie, never the existence of protected content or of anyone else's session. The
+refinement exists because the product requirement "revocation surfaces as an honest re-pair state,
+never a silent empty list" is unsatisfiable with a projection that is byte-identical between a
+paired-empty and an unpaired read; the W1.4 generic channel snapshot keeps its strict
+byte-identity. A route-table sweep test (`contentRouteEnforcement.test.ts`) holds the invariant
+that no route in the runtime or app-session groups releases question text to a cookie-less,
+forged, or revoked caller.
+
+### F2 — Cookie path widened exactly to the enforced surface (D4 refinement)
+
+The session cookie's `Path` widened from `/api/coding-workbench/app-session` to
+`/api/coding-workbench`, because the browser must present the cookie to the enforced
+content-bearing runtime routes. The `Path` attribute is browser hygiene, not a security boundary
+(RFC 6265 §8.6); `HttpOnly`, `SameSite=Strict`, and the loopback host scope continue to carry the
+bearer-protection properties, and the BFF is the only receiver on every covered path.
+
+### F3 — Launcher-to-browser attestation delivery (D2 finalization)
+
+The trusted launcher (`keiko start --open`, and `npm run dev:start -- --open` for the dev lane)
+generates the process-scoped secret, provisions it to the BFF exclusively through the child's
+inherited environment, and hands the browser exactly one single-use, freshness-bounded attestation
+in the boot URL **fragment** (`#keiko-app-session=…`). The fragment never travels over HTTP; the
+desktop shell redeems it against the pair endpoint on boot and immediately strips it from the
+address bar and history entry, whether or not it was well-formed. Accepted residual risk, named
+precisely: during the browser hand-off the fragment URL is transiently visible in local process
+arguments (`open`/`xdg-open`), so a same-user process racing the browser could redeem the
+attestation first. The exposure is bounded by single-use redemption, the ±30 s freshness window,
+and — decisively — the honest re-pair state: a stolen redemption leaves the legitimate window
+visibly unpaired instead of silently compromised. The Keiko Native shell replaces this hop with
+direct cookie injection and retires the residual risk; an already-running BFF cannot re-attest
+(its secret is private to its own launch), so `--open` against it opens an honestly unpaired
+window and says how to re-pair.
+
+### F4 — Contract promotion (the scheduled D12 batching)
+
+The channel wire shapes, the pairing-attestation wire shape, the launcher-secret environment
+contract, and the fragment codec moved to `keiko-contracts` alongside the browser client and the
+channel-carried question payload (`{ session, questions }`, unchanged question bounds), exactly as
+the consequence below scheduled for W1.5.
 
 ## Consequences
 

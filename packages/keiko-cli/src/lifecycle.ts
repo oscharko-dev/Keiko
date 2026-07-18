@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import { get as httpGet } from "node:http";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -19,6 +20,13 @@ import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contra
 // eagerly here cost every `keiko` invocation ~410ms of ESM loading
 // (GEN-PERF-CLI-001); lifecycle only needs the loopback endpoint constants.
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
+// The launcher half of the ADR-0141 app-session pairing hand-off (#2478) — also from the
+// contracts leaf; the claim-minting keiko-server import stays dynamic inside the `--open` path.
+import {
+  CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
+  CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
+  encodeCodingAppSessionPairingFragment,
+} from "@oscharko-dev/keiko-contracts";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
@@ -361,6 +369,34 @@ function runningPid(
   return pid;
 }
 
+// #2478 (ADR-0141 W1.5): `keiko start` is the trusted launcher of the UI process. It provisions a
+// process-scoped pairing secret to the spawned BFF as an inherited environment value only — never
+// a disk file, never a URL — and, with `--open`, hands the browser one single-use, freshness-bounded
+// pairing attestation in the boot URL fragment. An operator-provisioned secret in the caller's
+// environment is respected so external supervision setups keep working.
+function resolveLauncherPairingSecret(env: EnvSource): string {
+  const provisioned = env[CODING_APP_SESSION_LAUNCHER_SECRET_ENV];
+  if (
+    typeof provisioned === "string" &&
+    provisioned.length >= CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS
+  ) {
+    return provisioned;
+  }
+  return randomBytes(32).toString("hex");
+}
+
+// Dynamic import: the claim construction stays single-source in keiko-server without re-introducing
+// the eager server module graph into every `keiko` invocation (GEN-PERF-CLI-001).
+async function pairedOpenUrl(baseUrl: string, pairingSecret: string): Promise<string> {
+  const { mintLauncherPairingAttestation } = await import("@oscharko-dev/keiko-server");
+  const attestation = mintLauncherPairingAttestation({
+    secret: pairingSecret,
+    requestId: `req_launcher-${randomUUID()}`,
+    issuedAtMs: Date.now(),
+  });
+  return `${baseUrl}/${encodeCodingAppSessionPairingFragment(attestation)}`;
+}
+
 function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -403,30 +439,34 @@ function defaultOpenExternal(url: string): void {
   child.unref();
 }
 
-function maybeOpenBrowser(
+async function maybeOpenBrowser(
   options: LifecycleOptions,
   io: CliIo,
   openExternal: (url: string) => void,
-): void {
+  pairingSecret?: string,
+): Promise<void> {
   if (!options.openBrowser) return;
   const baseUrl = lifecycleBaseUrl(options);
   try {
-    openExternal(baseUrl);
+    const target =
+      pairingSecret === undefined ? baseUrl : await pairedOpenUrl(baseUrl, pairingSecret);
+    openExternal(target);
   } catch {
     io.err(`keiko start: failed to open ${baseUrl} in the default browser.\n`);
   }
 }
 
-function reportHealthyStart(
+async function reportHealthyStart(
   options: LifecycleOptions,
   io: CliIo,
   pid: number,
   logPath: string,
   openExternal: (url: string) => void,
-): number {
+  pairingSecret: string,
+): Promise<number> {
   io.out(`Keiko UI running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
   io.out(`Logs: ${logPath}\n`);
-  maybeOpenBrowser(options, io, openExternal);
+  await maybeOpenBrowser(options, io, openExternal, pairingSecret);
   return 0;
 }
 
@@ -455,12 +495,16 @@ function spawnUiProcess(
   env: EnvSource,
   deps: Pick<LifecycleRuntimeDeps, "spawnFn">,
   cwd: string,
+  pairingSecret: string,
 ): { readonly child: ChildProcess; readonly logPath: string } {
   const logStdio = openUiLogStdio(options);
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
+    // ADR-0141 D2 / #2478: the launcher-provisioned pairing secret travels only through the
+    // inherited environment of the spawned BFF.
+    [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: pairingSecret,
     ...(preferredLayout === undefined
       ? {}
       : {
@@ -517,6 +561,23 @@ async function ensureStartPortAvailable(
   return false;
 }
 
+async function keepAlreadyRunningUi(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: LifecycleRuntimeDeps,
+  pid: number,
+): Promise<void> {
+  io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
+  // The pairing secret of an already-running BFF is process-private to that launch, so this
+  // window opens unpaired (fail closed) — question content needs a fresh paired launch.
+  await maybeOpenBrowser(options, io, deps.openExternal);
+  if (options.openBrowser) {
+    io.out(
+      "Note: this window is not paired for coding question content; run `keiko restart --open` to pair a fresh app session.\n",
+    );
+  }
+}
+
 async function cmdStart(
   options: LifecycleOptions,
   io: CliIo,
@@ -528,10 +589,7 @@ async function cmdStart(
   if (running !== undefined) {
     const health = await deps.healthProbe(healthUrl(options));
     if (health.version === SDK_VERSION) {
-      io.out(
-        `Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`,
-      );
-      maybeOpenBrowser(options, io, deps.openExternal);
+      await keepAlreadyRunningUi(options, io, deps, running);
       return 0;
     }
     io.out(
@@ -543,9 +601,10 @@ async function cmdStart(
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
 
+  const pairingSecret = resolveLauncherPairingSecret(env);
   let spawned: { readonly child: ChildProcess; readonly logPath: string };
   try {
-    spawned = spawnUiProcess(options, env, deps, cwd);
+    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret);
   } catch {
     io.err("keiko start: failed to spawn the UI process.\n");
     return 1;
@@ -569,7 +628,9 @@ async function cmdStart(
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);
-  if (healthy) return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal);
+  if (healthy) {
+    return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal, pairingSecret);
+  }
 
   deps.killProcess(child.pid, "SIGTERM");
   rmSync(pidFile(options), { force: true });

@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import {
   closeSync,
@@ -14,7 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
@@ -42,6 +43,63 @@ export function shouldShellNpmCommand(command, platform = process.platform) {
 
 function publicBrowserUrl(port) {
   return `http://${publicBrowserHost}:${String(port)}`;
+}
+
+// #2478 (ADR-0141 W1.5): `dev:start` is the trusted launcher of the dev BFF. It provisions a
+// process-scoped app-session pairing secret through the runner's inherited environment (never a
+// disk file, never a URL), and `npm run dev:start -- --open` opens the browser with one
+// single-use pairing attestation in the boot URL fragment so runtime question content is
+// readable in the dev lane. An operator-provisioned secret in the environment is respected.
+const APP_SESSION_SECRET_ENV = "KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET";
+const openBrowserRequested = process.argv.includes("--open");
+
+function resolveDevPairingSecret() {
+  const provisioned = process.env[APP_SESSION_SECRET_ENV];
+  if (typeof provisioned === "string" && provisioned.length >= 32) return provisioned;
+  return randomBytes(32).toString("hex");
+}
+
+// The claim construction and fragment codec stay single-source in the built workspace packages;
+// `dev:start` runs `npm run build` before this executes, so dist/ is present by construction.
+async function pairedDevBrowserUrl(pairingSecret) {
+  const serverModule = await import(
+    pathToFileURL(join(repoRoot, "packages", "keiko-server", "dist", "index.js")).href
+  );
+  const contractsModule = await import(
+    pathToFileURL(join(repoRoot, "packages", "keiko-contracts", "dist", "index.js")).href
+  );
+  const attestation = serverModule.mintLauncherPairingAttestation({
+    secret: pairingSecret,
+    requestId: `req_dev-${randomUUID()}`,
+    issuedAtMs: Date.now(),
+  });
+  const fragment = contractsModule.encodeCodingAppSessionPairingFragment(attestation);
+  return `${publicBrowserUrl(publicPort)}/${fragment}`;
+}
+
+function openExternal(url) {
+  const opener =
+    process.platform === "darwin"
+      ? { command: "open", args: [url] }
+      : process.platform === "win32"
+        ? { command: "cmd", args: ["/c", "start", "", url] }
+        : { command: "xdg-open", args: [url] };
+  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+async function maybeOpenPairedBrowser(pairingSecret) {
+  if (!openBrowserRequested) return;
+  try {
+    openExternal(await pairedDevBrowserUrl(pairingSecret));
+    console.log("[dev:start] opened a paired browser window (single-use app-session pairing).");
+  } catch (error) {
+    console.error(
+      `[dev:start] could not open a paired browser window: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 export function run(command, args, cwd, options = {}) {
@@ -226,6 +284,13 @@ async function restartExistingRunnerIfNeeded() {
         state.runnerPid,
       )}).`,
     );
+    if (openBrowserRequested) {
+      // The running BFF's pairing secret is private to its own launch, so no fresh attestation
+      // can be minted here (fail closed): re-pairing needs a restart through this launcher.
+      console.log(
+        "Pairing: the running dev UI keeps its existing app session; run `npm run dev:stop && npm run dev:start -- --open` to pair a fresh browser window.",
+      );
+    }
     process.exit(0);
   }
 
@@ -257,7 +322,7 @@ async function resolveDevPorts() {
   return { bffPort, nextPort };
 }
 
-function spawnDevelopmentRunner(bffPort, nextPort) {
+function spawnDevelopmentRunner(bffPort, nextPort, pairingSecret) {
   mkdirSync(stateDir, { recursive: true });
   // Bounded log growth: append mode grew dev-ui.log without limit across daily
   // dev sessions (webpack/next/tsc-watch output is verbose). Keep exactly one
@@ -279,6 +344,7 @@ function spawnDevelopmentRunner(bffPort, nextPort) {
       KEIKO_DEV_NEXT_PORT: String(nextPort),
       KEIKO_DEV_PID_FILE: pidFile,
       KEIKO_STATE_DIR: stateDir,
+      [APP_SESSION_SECRET_ENV]: pairingSecret,
     },
   });
   closeSync(logFd);
@@ -301,7 +367,8 @@ async function launchDevelopmentRunner() {
   ensureDevGatewayConfig();
   run(npmCommand(), ["run", "build"], repoRoot);
   const { bffPort, nextPort } = await resolveDevPorts();
-  const child = spawnDevelopmentRunner(bffPort, nextPort);
+  const pairingSecret = resolveDevPairingSecret();
+  const child = spawnDevelopmentRunner(bffPort, nextPort, pairingSecret);
 
   try {
     await waitForHealth(publicPort, child);
@@ -316,6 +383,12 @@ async function launchDevelopmentRunner() {
   console.log(`State: ${stateDir}`);
   console.log(`Logs: ${logFile}`);
   console.log(`Stop: npm run dev:stop`);
+  if (!openBrowserRequested) {
+    console.log(
+      "Pairing: run `npm run dev:start -- --open` to open a browser window paired for coding question content.",
+    );
+  }
+  await maybeOpenPairedBrowser(pairingSecret);
 }
 
 export async function main() {

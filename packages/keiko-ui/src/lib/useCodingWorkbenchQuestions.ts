@@ -30,7 +30,16 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
 ]);
 
 export type CodingWorkbenchQuestionsStatus =
-  "loading" | "empty" | "ready" | "error" | "offline" | "submitting" | "stale" | "terminal";
+  | "loading"
+  | "empty"
+  | "ready"
+  | "error"
+  | "offline"
+  | "submitting"
+  | "stale"
+  | "terminal"
+  /** The presented app-session cookie is not valid (#2478): honest re-pair state, never a silent empty list. */
+  | "unpaired";
 
 export interface CodingWorkbenchQuestionsState {
   readonly status: CodingWorkbenchQuestionsStatus;
@@ -217,6 +226,12 @@ function useQuestionListing(input: ListingInput): void {
           },
           controller.signal,
         );
+        if (response.session === "unpaired") {
+          // #2478: the server answered before touching the run, so the revision did not advance —
+          // no snapshot re-anchor is needed; surface the honest re-pair state instead.
+          if (!disposed) setState({ status: "unpaired", questions: [], errorCode: null });
+          return;
+        }
         if (!disposed) setState(listedState(response.questions, consumedRef));
         await refreshSnapshot();
       } catch (error) {
