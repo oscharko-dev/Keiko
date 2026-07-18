@@ -67,7 +67,8 @@ export const HARNESS_VERSION = "0.1.7";
 
 // ─── Task types ───────────────────────────────────────────────────────────────
 
-export type TaskType = "generate-unit-tests" | "investigate-bug" | "explain-plan" | "verify";
+export type TaskType =
+  "generate-unit-tests" | "investigate-bug" | "explain-plan" | "verify" | "editor-agent-turn";
 
 export interface GenerateUnitTestsInput {
   readonly filePath: string;
@@ -104,11 +105,22 @@ export interface VerifyInput {
   readonly targetFiles?: readonly string[] | undefined;
 }
 
+// Issue #2489 (Findings 1/2) — the Keiko-native producer task. A governed model turn whose tool
+// calls dispatch through the EditorAgentToolHost seam, scoped by the producer to the four
+// server-resolved/synchronously-governed retrofit tools (navigateSymbol, searchWorkspace,
+// queryGit, requestVerification). sessionId/workspaceRoot are resolved server-side from the live
+// editor session registry; only the free-form goal is caller-supplied.
+export interface EditorAgentTurnInput {
+  readonly goal: string;
+  readonly sessionId: string;
+}
+
 export type TaskInput =
   | { readonly taskType: "generate-unit-tests"; readonly input: GenerateUnitTestsInput }
   | { readonly taskType: "investigate-bug"; readonly input: InvestigateBugInput }
   | { readonly taskType: "explain-plan"; readonly input: ExplainPlanInput }
-  | { readonly taskType: "verify"; readonly input: VerifyInput };
+  | { readonly taskType: "verify"; readonly input: VerifyInput }
+  | { readonly taskType: "editor-agent-turn"; readonly input: EditorAgentTurnInput };
 
 // ─── Runtime counters (harness-internal mutable state) ────────────────────────
 

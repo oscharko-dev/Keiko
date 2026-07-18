@@ -180,12 +180,19 @@ export interface EditorAgentNavigateSymbolRequest {
   readonly diagnostics?: readonly LanguageDiagnostic[] | undefined;
 }
 
-export type EditorAgentSearchWorkspaceMode = "text" | "symbol";
+// Issue #2489 (Finding 3) — "regex" is additive (schema stays "1"): #2217 shipped wholeWord/regex
+// text search human-only on 2026-07-10 (WorkspaceSearchMode = "literal" | "regex", workspace-search.ts);
+// this closes the agent/human parity gap for search (replace itself stays out of this read-only tool
+// and routes through the reviewed `editor_propose_edit`/`editor_propose_changeset` mutation path).
+export type EditorAgentSearchWorkspaceMode = "text" | "symbol" | "regex";
 
 export interface EditorAgentSearchWorkspaceRequest {
   readonly mode: EditorAgentSearchWorkspaceMode;
   readonly query: string;
   readonly caseSensitive?: boolean | undefined;
+  // Issue #2489 (Finding 3) — additive parity field. Applies to "text"/"regex" modes only, mirroring
+  // WorkspaceSearchRequest.wholeWord; ignored for "symbol" (a language-service lookup, not a text scan).
+  readonly wholeWord?: boolean | undefined;
   readonly includeGlobs?: readonly string[] | undefined;
   readonly excludeGlobs?: readonly string[] | undefined;
   readonly maxResults?: number | undefined;
@@ -1080,12 +1087,17 @@ function isNavigateSymbolRequest(value: unknown): value is EditorAgentNavigateSy
   return isNavigateSymbolExtrasValid(value.operation, value.range, value.diagnostics);
 }
 
+function isSearchWorkspaceMode(value: unknown): value is EditorAgentSearchWorkspaceMode {
+  return value === "text" || value === "symbol" || value === "regex";
+}
+
 function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWorkspaceRequest {
   return (
     isRecord(value) &&
-    (value.mode === "text" || value.mode === "symbol") &&
+    isSearchWorkspaceMode(value.mode) &&
     isBoundedNonEmptyString(value.query, EDITOR_AGENT_SEARCH_MAX_QUERY_CHARS) &&
     isUndefinedOr(value.caseSensitive, (candidate) => typeof candidate === "boolean") &&
+    isUndefinedOr(value.wholeWord, (candidate) => typeof candidate === "boolean") &&
     isUndefinedOr(value.includeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
     isUndefinedOr(value.excludeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
     isUndefinedOr(
@@ -1861,6 +1873,7 @@ function canonicalSearchWorkspaceRequest(
     mode: request.mode,
     query: request.query,
     ...(request.caseSensitive === undefined ? {} : { caseSensitive: request.caseSensitive }),
+    ...(request.wholeWord === undefined ? {} : { wholeWord: request.wholeWord }),
     ...(request.includeGlobs === undefined ? {} : { includeGlobs: [...request.includeGlobs] }),
     ...(request.excludeGlobs === undefined ? {} : { excludeGlobs: [...request.excludeGlobs] }),
     ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),

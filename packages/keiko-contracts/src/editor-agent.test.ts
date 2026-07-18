@@ -280,6 +280,27 @@ describe("editor agent contracts", () => {
     expect(JSON.stringify(parsedResult.value)).not.toContain(canary);
   });
 
+  // Issue #2489 (Finding 3) — wholeWord is additive on EditorAgentSearchWorkspaceRequest; prove it
+  // survives canonicalization (canonicalSearchWorkspaceRequest) like its caseSensitive sibling,
+  // rather than being silently dropped when a searchWorkspace action crosses the bridge boundary.
+  it("preserves wholeWord through searchWorkspace action canonicalization", () => {
+    const action = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-wholeword-1",
+      idempotencyKey: "idempotency-wholeword-1",
+      sessionId: "session-1",
+      type: "searchWorkspace" as const,
+      searchWorkspace: { mode: "text" as const, query: "needle", wholeWord: true, maxResults: 10 },
+    };
+    const parsed = parseEditorAgentActionsPostBody(action);
+    expect(parsed).toMatchObject({ ok: true });
+    if (!parsed.ok) throw new Error("Expected the valid searchWorkspace action to parse.");
+    if (!("type" in parsed.value) || parsed.value.type !== "searchWorkspace") {
+      throw new Error("Expected a canonicalized searchWorkspace action.");
+    }
+    expect(parsed.value.searchWorkspace?.wholeWord).toBe(true);
+  });
+
   it("byte-bounds identifiers and target metadata at the wire boundary", () => {
     const oversizedActionId = "x".repeat(EDITOR_AGENT_ACTION_ID_MAX_BYTES + 1);
     const oversizedSessionId = "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1);

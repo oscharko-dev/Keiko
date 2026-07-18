@@ -70,6 +70,14 @@ post-merge lane lets the 60-second review-product stability window finish and up
 advisory check before deleting persisted tracking. Closed, unmerged, wrong-base, expired, and
 successfully reconciled pull requests are removed from tracking.
 
+The sweep runs every two minutes and re-evaluates only pull requests whose verdict can still move —
+never evaluated, still waiting on evidence, a changed head, or a settled verdict older than the
+liveness backstop (`RECONCILE_BACKSTOP_MS`, default 15 minutes). A settled pull request whose exact
+head is unchanged is skipped; a webhook, not the cron, carries its next same-head evidence. This
+directly serves probe 3 (reconciliation without repeated unchanged writes) and lowers Cloudflare and
+D1 usage while preserving fail-closed currency: every head move is re-evaluated, and the backstop
+still re-checks each settled pull request periodically (Issue #2507).
+
 The aggregate may be reconsidered only after live probes prove all of the following:
 
 1. every pull-request head receives exactly one app-bound check without manual prompting;
@@ -87,7 +95,7 @@ decision, `Keiko for Quality` remains advisory and non-required.
 
 The evaluator is a pure function and does not depend on the Cloudflare Worker. Issue #2506 (Epic
 #2504) evaluates and prototypes running the same evaluator as a GitHub Action instead, removing the
-D1 database, the per-minute cron, the manual `wrangler deploy`, and the webhook secret while
+D1 database, the scheduled cron, the manual `wrangler deploy`, and the webhook secret while
 preserving fail-closed evaluation and exact-head currency. The base-branch `check_run` and
 `issue_comment` triggers run the workflow definition from `dev`, which pull-request code cannot
 alter, so the Action preserves the Worker's tamper-resistance; App auth keeps the produced check

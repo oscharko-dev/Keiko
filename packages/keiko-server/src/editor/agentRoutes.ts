@@ -2178,6 +2178,43 @@ async function runNavigateSymbolAction(
   );
 }
 
+function symbolSearchContext(
+  root: string,
+  request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+): RouteContext {
+  return serverActionContext(
+    {
+      root,
+      query: request.query,
+      maxResults: request.maxResults ?? 50,
+      ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
+    },
+    "/api/editor/workspace-symbols",
+  );
+}
+
+// Issue #2489 (Finding 3) — additive parity with #2217's human search: "regex" maps onto the same
+// WorkspaceSearchMode the human route already accepts; any other agent mode is literal.
+function textSearchContext(
+  root: string,
+  request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+): RouteContext {
+  return serverActionContext(
+    {
+      root,
+      query: request.query,
+      mode: request.mode === "regex" ? "regex" : "literal",
+      caseSensitive: request.caseSensitive ?? false,
+      wholeWord: request.wholeWord ?? false,
+      includeGlobs: request.includeGlobs ?? [],
+      excludeGlobs: request.excludeGlobs ?? [],
+      maxResults: request.maxResults ?? 50,
+      ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
+    },
+    "/api/editor/workspace-search",
+  );
+}
+
 async function runSearchWorkspaceAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
@@ -2186,35 +2223,9 @@ async function runSearchWorkspaceAction(
   const request = action.searchWorkspace;
   if (request === undefined) throw new Error("searchWorkspace payload is missing");
   if (request.mode === "symbol") {
-    return handleEditorWorkspaceSymbols(
-      serverActionContext(
-        {
-          root: snapshot.workspaceRoot,
-          query: request.query,
-          maxResults: request.maxResults ?? 50,
-          ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
-        },
-        "/api/editor/workspace-symbols",
-      ),
-      deps,
-    );
+    return handleEditorWorkspaceSymbols(symbolSearchContext(snapshot.workspaceRoot, request), deps);
   }
-  return handleEditorWorkspaceSearch(
-    serverActionContext(
-      {
-        root: snapshot.workspaceRoot,
-        query: request.query,
-        mode: "literal",
-        caseSensitive: request.caseSensitive ?? false,
-        includeGlobs: request.includeGlobs ?? [],
-        excludeGlobs: request.excludeGlobs ?? [],
-        maxResults: request.maxResults ?? 50,
-        ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
-      },
-      "/api/editor/workspace-search",
-    ),
-    deps,
-  );
+  return handleEditorWorkspaceSearch(textSearchContext(snapshot.workspaceRoot, request), deps);
 }
 
 // Issue #2298: a GET-style synthesized route context so the read-only git handlers (which read
