@@ -52,15 +52,32 @@ export function loadQodoSources(root = repoRoot) {
   };
 }
 
+// Parse `key = true|false` TOML assignments with a linear scan (no backtracking regex).
+function booleanSettings(config) {
+  const values = new Map();
+  for (const rawLine of config.split("\n")) {
+    const line = rawLine.trim();
+    const equals = line.indexOf("=");
+    if (equals === -1) continue;
+    const key = line.slice(0, equals).trim();
+    const token = line
+      .slice(equals + 1)
+      .trim()
+      .split(/[\s#]/u)[0];
+    if (token === "true" || token === "false") values.set(key, token);
+  }
+  return values;
+}
+
 function autoApprovalFailures(config) {
+  const settings = booleanSettings(config);
   const failures = [];
-  const normalized = config.replace(/\s*=\s*/gu, "=");
   for (const key of autoApprovalKeys) {
-    if (normalized.includes(`${key}=true`)) {
+    if (settings.get(key) === "true") {
       failures.push(`Qodo config must not enable ${key}; Qodo has no merge authority`);
     }
   }
-  if (!normalized.includes("approve_pr_on_self_review=false")) {
+  if (settings.get("approve_pr_on_self_review") !== "false") {
     failures.push("Qodo config must explicitly set approve_pr_on_self_review = false");
   }
   return failures;
