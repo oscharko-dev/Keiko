@@ -27,16 +27,26 @@ const qodoAuthorId = 151058649;
 const qodoAppId = 484649;
 
 // Faithful reproduction of Qodo's summary comment: an <h3> header, the exact
-// emoji/HTML counts line (Bugs/Rule violations/Requirement gaps/Skill insights),
-// and a full 40-hex blob permalink that anchors the review to its reviewed head.
-function qodoBody({ bugs = 0, rules = 0, gaps = 0, skills = 0, sha = headSha } = {}) {
+// emoji/HTML counts line (Qodo omits a category when it does not apply — `omit` models that), and
+// the footer commit marker Qodo emits for every review, which anchors even a clean review (no
+// finding permalinks) to its reviewed head.
+function qodoBody({ bugs = 0, rules = 0, gaps = 0, skills = 0, sha = headSha, omit = [] } = {}) {
+  const categories = [
+    ["bugs", `🐞 Bugs (${String(bugs)})`],
+    ["rules", `📘 Rule violations (${String(rules)})`],
+    ["gaps", `📎 Requirement gaps (${String(gaps)})`],
+    ["skills", `📜 Skill insights (${String(skills)})`],
+  ];
+  const countsLine = categories
+    .filter(([key]) => !omit.includes(key))
+    .map(([, label]) => `<code>${label}</code>`)
+    .join("  ");
   return [
     "<h3>Code Review by Qodo</h3>",
     "",
-    `<code>🐞 Bugs (${String(bugs)})</code>  <code>📘 Rule violations (${String(rules)})</code>  ` +
-      `<code>📎 Requirement gaps (${String(gaps)})</code>  <code>📜 Skill insights (${String(skills)})</code>`,
+    countsLine,
     "",
-    `<code>[scripts/x.mjs](https://github.com/oscharko-dev/Keiko/blob/${sha}/scripts/x.mjs#L1-L2)</code>`,
+    `<!-- https://github.com/oscharko-dev/Keiko/commit/${sha} -->`,
   ].join("\n");
 }
 
@@ -182,37 +192,49 @@ describe("Keiko for Quality core", () => {
     expect(isBotEvidence({ ...exact, appId: 8 }, identity, false)).toBe(true);
   });
 
-  it("sums Qodo findings from the exact counts line and excludes skill insights", () => {
-    // The exact emoji/HTML counts line Qodo posts (captured from a real /review).
-    const realCountsLine =
+  it("sums Qodo findings across present categories and excludes skill insights", () => {
+    // Real 4-category counts line (captured from a /review).
+    const fourCategories =
       "<h3>Code Review by Qodo</h3>\n\n" +
       "<code>🐞 Bugs (2)</code>  <code>📘 Rule violations (1)</code>  " +
       "<code>📎 Requirement gaps (3)</code>  <code>📜 Skill insights (4)</code>";
-    expect(parseQodoFindings(realCountsLine)).toBe(6);
+    expect(parseQodoFindings(fourCategories)).toBe(6);
+    // Real variable line: Qodo omits Requirement gaps when it does not apply (captured from PR #2497).
+    const noGaps =
+      "<h3>Code Review by Qodo</h3>\n\n" +
+      "<code>🐞 Bugs (3)</code>  <code>📘 Rule violations (0)</code>  <code>📜 Skill insights (0)</code>";
+    expect(parseQodoFindings(noGaps)).toBe(3);
     expect(parseQodoFindings(qodoBody({ bugs: 1, rules: 2, gaps: 3, skills: 9 }))).toBe(6);
+    expect(parseQodoFindings(qodoBody({ bugs: 3, omit: ["gaps"] }))).toBe(3);
     expect(parseQodoFindings(qodoBody())).toBe(0);
     expect(parseQodoFindings(qodoBody({ skills: 7 }))).toBe(0);
   });
 
-  it("rejects Qodo bodies missing the header or any finding category", () => {
+  it("rejects Qodo bodies without the header or any recognizable blocking count", () => {
     const header = "<h3>Code Review by Qodo</h3>\n";
-    expect(parseQodoFindings("Bugs (1) Rule violations (0) Requirement gaps (0)")).toBeUndefined();
-    expect(parseQodoFindings(`${header}Rule violations (0) Requirement gaps (0)`)).toBeUndefined();
-    expect(parseQodoFindings(`${header}Bugs (1) Requirement gaps (0)`)).toBeUndefined();
-    expect(parseQodoFindings(`${header}Bugs (1) Rule violations (0)`)).toBeUndefined();
+    expect(parseQodoFindings("Bugs (1) Rule violations (0)")).toBeUndefined();
+    expect(parseQodoFindings(`${header}Reviewing your changes...`)).toBeUndefined();
+    expect(parseQodoFindings(`${header}Skill insights (4)`)).toBeUndefined();
+    expect(parseQodoFindings(`${header}Bugs (2)`)).toBe(2);
+    expect(parseQodoFindings(`${header}Requirement gaps (1)`)).toBe(1);
   });
 
-  it("selects the newest current-head Qodo review and rejects wrong head or producer", () => {
+  it("selects the newest parseable current-head Qodo summary over shadows", () => {
     const base = { appId: qodoAppId, authorAssociation: "NONE", authorId: qodoAuthorId };
     const older = qodoComment({ ...base, body: qodoBody({ bugs: 5 }), updatedAt: completedAt });
-    const newer = qodoComment({ body: qodoBody(), updatedAt: "2026-07-11T10:01:00.000Z" });
+    // A clean review anchored to the head only by the footer commit marker (no finding permalinks).
+    const clean = qodoComment({ body: qodoBody(), updatedAt: "2026-07-11T10:01:00.000Z" });
+    // A newer Qodo comment that is not a parseable summary must not shadow the real summary.
+    const shadow = qodoComment({
+      body: `<h3>Code Review by Qodo</h3>\n\nRe-running the review... ${headSha}`,
+      updatedAt: "2026-07-11T10:02:00.000Z",
+    });
     const wrongHead = qodoComment({ body: qodoBody({ sha: "b".repeat(40) }) });
     const wrongApp = qodoComment({ appId: 1 });
-    const noHeader = qodoComment({ body: `no header ${headSha}` });
-    expect(latestQodoReview([older, newer, wrongHead, wrongApp, noHeader], headSha)).toBe(newer);
+    expect(latestQodoReview([older, clean, shadow, wrongHead, wrongApp], headSha)).toBe(clean);
+    expect(latestQodoReview([shadow], headSha)).toBeUndefined();
     expect(latestQodoReview([wrongHead], headSha)).toBeUndefined();
     expect(latestQodoReview([wrongApp], headSha)).toBeUndefined();
-    expect(latestQodoReview([noHeader], headSha)).toBeUndefined();
   });
 
   it("extracts and deduplicates exact Socket package versions", () => {
@@ -491,18 +513,18 @@ describe("Keiko for Quality core", () => {
     ).toContain("Current Qodo finding evidence is missing or unparseable.");
   });
 
-  it("passes on skill-only Qodo output and fails closed on malformed counts", () => {
-    const skillOnly = passingInput().comments.map((comment) =>
+  it("passes on all-clear Qodo output and fails closed on an unparseable summary", () => {
+    const clean = passingInput().comments.map((comment) =>
       comment.authorId === qodoAuthorId ? { ...comment, body: qodoBody({ skills: 7 }) } : comment,
     );
-    expect(evaluate({ comments: skillOnly }).passed).toBe(true);
+    expect(evaluate({ comments: clean }).passed).toBe(true);
 
-    const malformed = passingInput().comments.map((comment) =>
+    const unparseable = passingInput().comments.map((comment) =>
       comment.authorId === qodoAuthorId
-        ? { ...comment, body: `<h3>Code Review by Qodo</h3>\nBugs (0) ${headSha}` }
+        ? { ...comment, body: `<h3>Code Review by Qodo</h3>\nReviewing your changes... ${headSha}` }
         : comment,
     );
-    expect(evaluate({ comments: malformed }).failures).toContain(
+    expect(evaluate({ comments: unparseable }).failures).toContain(
       "Current Qodo finding evidence is missing or unparseable.",
     );
   });

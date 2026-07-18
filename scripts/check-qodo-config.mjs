@@ -52,19 +52,32 @@ export function loadQodoSources(root = repoRoot) {
   };
 }
 
-// Parse `key = true|false` TOML assignments with a linear scan (no backtracking regex).
+function booleanAssignment(line) {
+  const equals = line.indexOf("=");
+  if (equals === -1) return undefined;
+  const token = line
+    .slice(equals + 1)
+    .trim()
+    .split(/[\s#]/u)[0];
+  if (token !== "true" && token !== "false") return undefined;
+  return { key: line.slice(0, equals).trim(), value: token };
+}
+
+// Parse real top-level `key = true|false` TOML assignments with a linear scan (no backtracking
+// regex). Assignments inside a triple-quoted multiline string (e.g. the extra_instructions block)
+// are ignored, so prose or a comment cannot spoof a safety-critical setting.
 function booleanSettings(config) {
   const values = new Map();
+  let inString = false;
   for (const rawLine of config.split("\n")) {
     const line = rawLine.trim();
-    const equals = line.indexOf("=");
-    if (equals === -1) continue;
-    const key = line.slice(0, equals).trim();
-    const token = line
-      .slice(equals + 1)
-      .trim()
-      .split(/[\s#]/u)[0];
-    if (token === "true" || token === "false") values.set(key, token);
+    const oddDelimiters = (line.match(/"""/gu) ?? []).length % 2 === 1;
+    if (inString || oddDelimiters) {
+      inString = inString !== oddDelimiters;
+      continue;
+    }
+    const assignment = booleanAssignment(line);
+    if (assignment !== undefined) values.set(assignment.key, assignment.value);
   }
   return values;
 }
@@ -98,12 +111,18 @@ function contentFailures(combined) {
   return failures;
 }
 
+// A trailing newline must not count as an extra content line: exactly 800 content lines followed by
+// a final newline is 800 lines, not 801.
+function contentLineCount(text) {
+  return text.replace(/\n$/u, "").split("\n").length;
+}
+
 export function validateQodoSources(sources) {
   const failures = [];
   if (sources.config === undefined) failures.push(`${configFile} is missing`);
   else failures.push(...autoApprovalFailures(sources.config));
   if (sources.bestPractices === undefined) failures.push(`${bestPracticesFile} is missing`);
-  else if (sources.bestPractices.split("\n").length > bestPracticesMaxLines) {
+  else if (contentLineCount(sources.bestPractices) > bestPracticesMaxLines) {
     failures.push(`${bestPracticesFile} exceeds ${String(bestPracticesMaxLines)} lines`);
   }
   const combined = [sources.config, sources.bestPractices].filter(Boolean).join("\n");

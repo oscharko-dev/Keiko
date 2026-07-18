@@ -72,9 +72,40 @@ describe("Qodo configuration gate", () => {
     );
   });
 
-  it("rejects a best_practices file over the length ceiling", () => {
-    const sources = validSources();
-    sources.bestPractices = Array.from({ length: 801 }, () => "line").join("\n");
-    expect(validateQodoSources(sources)).toContain("best_practices.md exceeds 800 lines");
+  it("counts the best_practices ceiling by content lines, ignoring a trailing newline", () => {
+    const atCeiling = {
+      ...validSources(),
+      bestPractices: `${Array.from({ length: 800 }, () => "line").join("\n")}\n`,
+    };
+    expect(validateQodoSources(atCeiling)).not.toContain("best_practices.md exceeds 800 lines");
+
+    const overCeiling = {
+      ...validSources(),
+      bestPractices: Array.from({ length: 801 }, () => "line").join("\n"),
+    };
+    expect(validateQodoSources(overCeiling)).toContain("best_practices.md exceeds 800 lines");
+  });
+
+  it("ignores auto-approval assignments hidden in a comment or multiline string", () => {
+    const commented = {
+      bestPractices: validSources().bestPractices,
+      config:
+        "# approve_pr_on_self_review = false\n" +
+        validSources().config.replace(
+          "approve_pr_on_self_review = false",
+          "approve_pr_on_self_review = true",
+        ),
+    };
+    expect(validateQodoSources(commented)).toContain(
+      "Qodo config must not enable approve_pr_on_self_review; Qodo has no merge authority",
+    );
+
+    const stringOnly = {
+      bestPractices: validSources().bestPractices,
+      config: '[pr_reviewer]\nextra_instructions = """\napprove_pr_on_self_review = false\n"""\n',
+    };
+    expect(validateQodoSources(stringOnly)).toContain(
+      "Qodo config must explicitly set approve_pr_on_self_review = false",
+    );
   });
 });

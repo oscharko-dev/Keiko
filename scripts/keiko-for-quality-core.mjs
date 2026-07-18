@@ -85,20 +85,33 @@ function latestComment(comments, identity) {
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 
+// Qodo's summary counts line omits a category when it is not applicable (a real review may show
+// Bugs + Rule violations + Skill insights with no Requirement gaps). Require the header and at least
+// one recognized blocking category, then sum the present blocking categories (Skill insights are
+// advisory and excluded). A header-only comment with no counts is unparseable and fails closed.
 export function parseQodoFindings(body) {
   if (!/Code Review by Qodo/iu.test(body)) return undefined;
-  const bugs = /Bugs\s*\((\d+)\)/iu.exec(body);
-  const rules = /Rule violations\s*\((\d+)\)/iu.exec(body);
-  const gaps = /Requirement gaps\s*\((\d+)\)/iu.exec(body);
-  if (bugs === null || rules === null || gaps === null) return undefined;
-  return Number(bugs[1]) + Number(rules[1]) + Number(gaps[1]);
+  const counts = [
+    /Bugs\s*\((\d+)\)/iu,
+    /Rule violations\s*\((\d+)\)/iu,
+    /Requirement gaps\s*\((\d+)\)/iu,
+  ].map((pattern) => {
+    const match = pattern.exec(body);
+    return match === null ? undefined : Number(match[1]);
+  });
+  if (counts.every((count) => count === undefined)) return undefined;
+  return counts.reduce((total, count) => total + (count ?? 0), 0);
 }
 
+// Select the newest current-head Qodo summary. Currency is the head SHA embedded in the comment
+// body — present even for a clean review via Qodo's footer commit marker, not only via finding
+// permalinks. Requiring a parseable summary prevents a newer non-summary Qodo comment from shadowing
+// the real summary and forcing a false "missing or unparseable" result.
 export function latestQodoReview(comments, headSha) {
   return comments
     .filter((comment) => isBotEvidence(comment, qodoIdentity, true))
     .filter(
-      (comment) => /Code Review by Qodo/iu.test(comment.body) && comment.body.includes(headSha),
+      (comment) => comment.body.includes(headSha) && parseQodoFindings(comment.body) !== undefined,
     )
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
