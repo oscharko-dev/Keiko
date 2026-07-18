@@ -138,7 +138,7 @@ export const isContainedPathspec = (value: unknown): value is string => {
 
 // C0 control characters (incl. TAB/LF/CR/NUL) and DEL — same class as the pathspec guard above.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const GIT_DELIVERY_REF_CONTROL_CHAR = new RegExp("[\\u0000-\\u001f\\u007f]");
+const GIT_DELIVERY_REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/u;
 
 // A git ref / remote alias operand: non-empty, no whitespace, no leading "-" (flag-injection guard),
 // no ":" (refspec-injection guard), and no NUL / C0 control / DEL char. Defence-in-depth above the
