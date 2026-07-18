@@ -86,25 +86,25 @@ function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-async function bindServer(deps: UiHandlerDeps, staticRoot: string): Promise<Server> {
-  const csp = buildCspHeader([]);
-  const probe = createUiServer({ staticRoot, csp, port: 0, handlerDeps: deps });
-  await new Promise<void>((resolve) => probe.listen(0, UI_HOST, resolve));
-  const port = (probe.address() as AddressInfo).port;
+async function bindServer(handlerDeps: UiHandlerDeps, staticRoot: string): Promise<Server> {
+  // Bind once on an ephemeral port, then patch the server-deps port. `isAllowedHost` reads `port`
+  // from this object per request, so the loopback-authority check matches the actual bound port
+  // without a close-then-rebind step (which races another process for the discovered port).
+  const serverDeps = { staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps };
+  const server = createUiServer(serverDeps);
   await new Promise<void>((resolve) => {
-    probe.close(() => {
+    server.listen(0, UI_HOST, (): void => {
       resolve();
     });
   });
-  const server = createUiServer({ staticRoot, csp, port, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  serverDeps.port = (server.address() as AddressInfo).port;
   return server;
 }
 
 /**
  * Compose the real BFF (production `buildUiHandlerDeps`) with the injected pairing/content seams and
- * bind it on a loopback port. The two-step bind resolves an ephemeral port, then rebinds with that
- * exact port so the server's own loopback-authority host check (`isAllowedHost`) matches.
+ * bind it on an ephemeral loopback port; the server-deps port is patched to the bound port so the
+ * loopback-authority host check (`isAllowedHost`) matches without a racy close-then-rebind.
  */
 export async function startAppSessionTestServer(
   options: AppSessionTestServerOptions = {},

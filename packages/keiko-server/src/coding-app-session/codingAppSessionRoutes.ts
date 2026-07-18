@@ -120,25 +120,21 @@ export function handleCodingAppSessionChannelStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): HandlerOutcome {
-  openCodingAppSessionStream(ctx.res, ctx.req, currentSnapshot(deps, ctx.req));
+  openCodingAppSessionStream(ctx.res, currentSnapshot(deps, ctx.req));
   return STREAMING;
 }
 
 export function openCodingAppSessionStream(
   res: ServerResponse,
-  req: IncomingMessage,
   snapshot: CodingAppSessionChannelSnapshot,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
-  let closed = false;
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    if (!res.writableEnded && !res.destroyed) res.end();
-  };
-  res.once("close", close);
-  req.once("aborted", close);
+  // W1.4 has no live content feed, so the stream emits the current snapshot and ends rather than
+  // holding the socket open under keep-alive with no further server output. W1.6 replaces this with a
+  // persistent subscription to the live projection (heartbeat- and lifecycle-managed, like the
+  // runtime event stream).
+  res.end();
 }
 
 /** POST /rotate — rotate the presented session's secret; the prior cookie stops working. */

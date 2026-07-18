@@ -6,7 +6,7 @@
 // revocation, inactivity, and an absolute lifetime bound. The bearer (the cookie value) is
 // `<sessionId>.<secret>`; only the browser holds it, and it never appears in any diagnostic here.
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1_000;
 const DEFAULT_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1_000;
@@ -61,12 +61,15 @@ interface RegistryState {
   readonly idleTtlMs: number;
   readonly absoluteTtlMs: number;
   readonly maxSessions: number;
+  /** Per-registry random salt (HMAC key) so stored digests are salted, never bare `sha256`. */
+  readonly salt: string;
   readonly mintSessionId: () => string;
   readonly mintSecret: () => string;
 }
 
-function sha256(input: string): Buffer {
-  return createHash("sha256").update(input, "utf8").digest();
+/** Salted hash of a session secret: HMAC-SHA256 keyed by the per-registry salt (ADR-0141 D4). */
+function saltedHash(salt: string, secret: string): Buffer {
+  return createHmac("sha256", salt).update(secret, "utf8").digest();
 }
 
 function defaultSessionId(): string {
@@ -123,7 +126,7 @@ function storeSession(
   const nowMs = state.now();
   const stored: StoredSession = {
     sessionId,
-    secretHash: sha256(secret),
+    secretHash: saltedHash(state.salt, secret),
     principalLabel,
     issuedAtMs: nowMs,
     lastSeenAtMs: nowMs,
@@ -152,7 +155,7 @@ function verifySession(
     state.sessions.delete(stored.sessionId);
     return undefined;
   }
-  if (!timingSafeEqual(sha256(parsed.secret), stored.secretHash)) return undefined;
+  if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) return undefined;
   stored.lastSeenAtMs = nowMs;
   return describe(stored);
 }
@@ -171,6 +174,7 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
     idleTtlMs: deps.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
     absoluteTtlMs: deps.absoluteTtlMs ?? DEFAULT_ABSOLUTE_TTL_MS,
     maxSessions: deps.maxSessions ?? DEFAULT_MAX_SESSIONS,
+    salt: randomBytes(32).toString("hex"),
     mintSessionId: deps.mintSessionId ?? defaultSessionId,
     mintSecret: deps.mintSecret ?? defaultSecret,
   };
