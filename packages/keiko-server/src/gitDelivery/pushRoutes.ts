@@ -13,7 +13,6 @@
 // Content-free throughout: counts, flags, typed codes, branch/remote NAMES only — never command output,
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { IncomingMessage } from "node:http";
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -22,7 +21,7 @@ import {
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
-import { readWorktreeSnapshotFor, resolveProjectWorkspace } from "./execution.js";
+import { readWorktreeSnapshotFor } from "./execution.js";
 import {
   buildGitDeliveryPushPreview,
   executeGovernedPublish,
@@ -31,14 +30,14 @@ import {
   type GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 import {
-  GitDeliveryBodyTooLargeError,
   hasOnlyAllowedKeys,
   isNonEmptyString,
   isPlainObject,
-  readGitDeliveryBody,
+  isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
+import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -64,47 +63,16 @@ const errResult = (status: number, code: GitDeliveryPushErrorCode): RouteResult 
   body: { error: { code, message: SAFE_MESSAGES[code] } },
 });
 
+const PUSH_REQUEST_ERRORS: GitDeliveryRequestErrors = {
+  tooLarge: errResult(413, "GIT_DELIVERY_PUSH_PAYLOAD_TOO_LARGE"),
+  badRequest: errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST"),
+  unknownProject: errResult(404, "GIT_DELIVERY_PUSH_UNKNOWN_PROJECT"),
+};
+
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
 export interface GitDeliveryPushRouteOptions {
   readonly execution?: GitDeliveryPublishSeams;
-}
-
-type BodyRead =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly result: RouteResult };
-
-async function readParsed(req: IncomingMessage): Promise<BodyRead> {
-  let raw: string;
-  try {
-    raw = await readGitDeliveryBody(req);
-  } catch (error) {
-    const result =
-      error instanceof GitDeliveryBodyTooLargeError
-        ? errResult(413, "GIT_DELIVERY_PUSH_PAYLOAD_TOO_LARGE")
-        : errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
-    return { ok: false, result };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, result: errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST") };
-  }
-}
-
-// A git ref / remote alias operand: non-empty, no whitespace, no leading "-" (flag-injection guard), no
-// ":" (refspec-injection guard), no NUL. Defence-in-depth above the gateway's own argv assertions, so a
-// malformed ref is a clean 400 rather than an internal execution error.
-// eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
-
-function isSafeGitRef(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (/\s/.test(value)) return false;
-  if (value.startsWith("-")) return false;
-  if (REF_CONTROL_CHAR.test(value)) return false;
-  if (value.includes(":")) return false;
-  return true;
 }
 
 const ALLOWED_KEYS: ReadonlySet<string> = new Set([
@@ -188,13 +156,10 @@ export const createHandlePushPreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, command } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_PUSH_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { command } = prepared.value;
     const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK };
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
@@ -215,13 +180,10 @@ export const createHandlePushExecute = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, command, approval } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_PUSH_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command, approval } = prepared.value;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
       binding: { projectId, operation: "push", command },
