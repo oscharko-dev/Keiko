@@ -1436,8 +1436,8 @@ describe("runPortableCli", () => {
     expect(existsSync(join(repoRoot, "Keiko"))).toBe(false);
   });
 
-  it("refuses a symlinked Start Menu ancestor during setup without creating outside artifacts", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked Start Menu ancestor during setup without creating outside artifacts", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");

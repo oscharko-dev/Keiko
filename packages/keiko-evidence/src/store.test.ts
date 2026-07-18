@@ -125,8 +125,8 @@ describe("createNodeEvidenceStore", () => {
     expect(existsSync(sideDir)).toBe(false);
   });
 
-  it("refuses a symlinked side-file directory before deleting the manifest", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked side-file directory before deleting the manifest", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dir = freshDir();
     const outside = freshDir();
     const store = createNodeEvidenceStore(dir);
@@ -241,8 +241,8 @@ describe("createNodeEvidenceStore", () => {
     expect(() => store.list()).toThrow(EvidenceReadError);
   });
 
-  it("wraps directory listing failures as EvidenceReadError", () => {
-    if (process.platform === "win32") return;
+  it("wraps directory listing failures as EvidenceReadError", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dir = freshDir();
     const store = createNodeEvidenceStore(dir);
     chmodSync(dir, 0);
@@ -305,9 +305,9 @@ describe("createNodeEvidenceStore", () => {
     expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
   });
 
-  it("creates the evidence base dir with mode 0o700 and written manifests with mode 0o600 (AC1)", () => {
+  it("creates the evidence base dir with mode 0o700 and written manifests with mode 0o600 (AC1)", (ctx) => {
     // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") ctx.skip();
     // Point at a not-yet-existing subdir so prepareBaseDir's mkdirSync is what CREATES the
     // directory: freshDir() (mkdtemp) is always 0o700 and would mask a regression where the
     // `mode: 0o700` is dropped from the recursive mkdir.

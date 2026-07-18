@@ -41,8 +41,8 @@ describe("mode constants", () => {
 });
 
 describe("ensureDirHardened", () => {
-  it("creates a missing directory at 0o700 (POSIX)", () => {
-    if (process.platform === "win32") return;
+  it("creates a missing directory at 0o700 (POSIX)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const target = join(base, "nested", "vault");
     expect(existsSync(target)).toBe(false);
@@ -51,8 +51,8 @@ describe("ensureDirHardened", () => {
     expect(statSync(target).mode & 0o777).toBe(0o700);
   });
 
-  it("tightens a loose existing directory to 0o700 (POSIX)", () => {
-    if (process.platform === "win32") return;
+  it("tightens a loose existing directory to 0o700 (POSIX)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const target = join(base, "loose");
     mkdirSync(target, { mode: 0o755 });
@@ -62,8 +62,8 @@ describe("ensureDirHardened", () => {
     expect(statSync(target).mode & 0o777).toBe(0o700);
   });
 
-  it("does not throw when the directory already exists and is already tight (POSIX)", () => {
-    if (process.platform === "win32") return;
+  it("does not throw when the directory already exists and is already tight (POSIX)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const target = join(base, "already-700");
     mkdirSync(target, { mode: 0o700 });
@@ -88,8 +88,8 @@ describe("ensureDirHardened", () => {
 });
 
 describe("chmodIfPresent", () => {
-  it("applies the requested mode to an existing file (POSIX)", () => {
-    if (process.platform === "win32") return;
+  it("applies the requested mode to an existing file (POSIX)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const file = join(base, "keyfile");
     writeFileSync(file, "x", { mode: 0o644 });
@@ -99,8 +99,8 @@ describe("chmodIfPresent", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it("swallows ENOENT when the path is absent (best-effort sidecar hardening)", () => {
-    if (process.platform === "win32") return;
+  it("swallows ENOENT when the path is absent (best-effort sidecar hardening)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const missing = join(base, "does-not-exist-wal");
     expect(existsSync(missing)).toBe(false);

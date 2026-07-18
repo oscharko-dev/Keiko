@@ -54,9 +54,9 @@ describe("workspace index provider", () => {
     }
   });
 
-  it("falls back when runtime state resolves into the workspace through a symlink", () => {
+  it("falls back when runtime state resolves into the workspace through a symlink", (ctx) => {
     if (process.platform === "win32") {
-      return;
+      ctx.skip();
     }
     const workspaceRoot = tempDir("keiko-index-workspace-");
     const outsideRoot = tempDir("keiko-index-state-");

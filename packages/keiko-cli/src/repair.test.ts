@@ -385,8 +385,8 @@ describe("runRepairCli — stale pid", () => {
 });
 
 describe("runRepairCli — state directory permissions", () => {
-  it("tightens loose permissions to 0o700", () => {
-    if (process.platform === "win32") return;
+  it("tightens loose permissions to 0o700", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
@@ -398,8 +398,8 @@ describe("runRepairCli — state directory permissions", () => {
     expect(statSync(stateDir).mode & 0o777).toBe(0o700);
   });
 
-  it("reports loose permissions in --dry-run without changing them and exits 1", () => {
-    if (process.platform === "win32") return;
+  it("reports loose permissions in --dry-run without changing them and exits 1", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");
@@ -992,8 +992,8 @@ function modeOf(path: string): number {
 }
 
 describe("runRepairCli — runtime state artifacts", () => {
-  it("tightens loose permissions on Keiko-owned DB, evidence, and QI artifacts", () => {
-    if (process.platform === "win32") return;
+  it("tightens loose permissions on Keiko-owned DB, evidence, and QI artifacts", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1017,8 +1017,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(join(stateDir, "evidence"))).toBe(0o700);
   });
 
-  it("tightens the sealed credential and Figma vaults", () => {
-    if (process.platform === "win32") return;
+  it("tightens the sealed credential and Figma vaults", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1038,8 +1038,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     for (const p of vaultFiles) expect(modeOf(p)).toBe(0o600);
   });
 
-  it("tightens exact producer temp files while leaving customer temp lookalikes untouched", () => {
-    if (process.platform === "win32") return;
+  it("tightens exact producer temp files while leaving customer temp lookalikes untouched", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1070,8 +1070,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     for (const p of customerTemp) expect(modeOf(p)).toBe(0o644);
   });
 
-  it("reports loose artifacts in --dry-run without changing them and exits 1", () => {
-    if (process.platform === "win32") return;
+  it("reports loose artifacts in --dry-run without changing them and exits 1", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1085,8 +1085,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(evidence)).toBe(0o644);
   });
 
-  it("does not modify a customer file that merely lives under .keiko", () => {
-    if (process.platform === "win32") return;
+  it("does not modify a customer file that merely lives under .keiko", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1103,8 +1103,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(userFile)).toBe(0o644); // untouched
   });
 
-  it("refuses a symlinked state root without chmodding the target tree", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked state root without chmodding the target tree", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const target = join(root, "outside-state");
@@ -1135,8 +1135,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(c.out()).toContain("refusing to inspect non-directory state path");
   });
 
-  it("does not chmod customer lookalikes in known state subdirectories", () => {
-    if (process.platform === "win32") return;
+  it("does not chmod customer lookalikes in known state subdirectories", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1162,8 +1162,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(customerNamespace)).toBe(0o755);
   });
 
-  it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", () => {
-    if (process.platform === "win32") return;
+  it("flags a symlink occupying a Keiko-owned path as an action item and exits 1", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1176,8 +1176,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(c.out()).toContain("symlink occupies a Keiko-owned path");
   });
 
-  it("flags a hardlink occupying a Keiko-owned path without chmodding the outside file", () => {
-    if (process.platform === "win32") return;
+  it("flags a hardlink occupying a Keiko-owned path without chmodding the outside file", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
@@ -1193,8 +1193,8 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(outsideDb)).toBe(0o644);
   });
 
-  it("reports owner-only artifacts as healthy", () => {
-    if (process.platform === "win32") return;
+  it("reports owner-only artifacts as healthy", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = join(root, ".keiko");

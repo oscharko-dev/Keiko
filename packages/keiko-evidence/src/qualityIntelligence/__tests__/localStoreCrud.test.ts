@@ -166,8 +166,8 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     }
   });
 
-  it("refuses a symlinked QI sub-store directory before writing", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked QI sub-store directory before writing", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const outside = await mkdtemp(join(tmpdir(), "keiko-qi-substore-victim-"));
     try {
       await symlink(outside, join(evidenceDir, QI_SUBDIR), "dir");
@@ -219,8 +219,8 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     ]);
   });
 
-  it("wraps QI directory listing failures as EvidenceReadError", async () => {
-    if (process.platform === "win32") return;
+  it("wraps QI directory listing failures as EvidenceReadError", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     await mkdir(join(evidenceDir, QI_SUBDIR), { recursive: true });
     await chmod(join(evidenceDir, QI_SUBDIR), 0);
     try {

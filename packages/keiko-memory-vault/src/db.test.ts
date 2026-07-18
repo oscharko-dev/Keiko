@@ -49,8 +49,8 @@ describe("openMemoryDatabase", () => {
     db.close();
   });
 
-  it("hardens the dir to 0o700 and the DB file to 0o600 on POSIX", () => {
-    if (process.platform === "win32") return;
+  it("hardens the dir to 0o700 and the DB file to 0o600 on POSIX", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     const db = openMemoryDatabase(dbPath, TEST_CIPHER);
@@ -171,8 +171,8 @@ describe("chmodIfPresent", () => {
     }).not.toThrow();
   });
 
-  it("applies the mode when the file exists (POSIX)", () => {
-    if (process.platform === "win32") return;
+  it("applies the mode when the file exists (POSIX)", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dir = freshDir();
     const path = join(dir, "marker");
     writeFileSync(path, "x");

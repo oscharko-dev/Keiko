@@ -242,8 +242,8 @@ describe("runLauncherCli install — happy paths", () => {
     expect(state.entries).toHaveLength(1);
   });
 
-  it("install writes a macOS .command with 0o755 mode and exec line", () => {
-    if (osPlatform() === "win32") return;
+  it("install writes a macOS .command with 0o755 mode and exec line", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness("darwin");
     const c = makeIo();
     expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(0);
@@ -254,12 +254,12 @@ describe("runLauncherCli install — happy paths", () => {
     expect(mode).toBe(0o755);
   });
 
-  it("install writes a windows .bat with CRLF and @start", () => {
+  it("install writes a windows .bat with CRLF and @start", (ctx) => {
     // Only run when actually on Windows: simulating win32 on a Posix host would have the
     // launcher attempt to mkdir a path with backslash separators, which the host POSIX
     // mkdir cannot create. The content shape is already golden-tested in
     // launcher-platforms.test.ts; this test verifies end-to-end FS write on Windows.
-    if (osPlatform() !== "win32") return;
+    if (osPlatform() !== "win32") ctx.skip();
     const h = makeHarness("win32", "C:\\Tools\\keiko.exe");
     const c = makeIo();
     expect(runLauncherCli(["install"], c.io, {}, h.deps)).toBe(0);
@@ -330,8 +330,8 @@ describe("runLauncherCli install — refusals (security)", () => {
     expect(readFileSync(h.targetPath, "utf8")).toBe("DEFINITELY NOT KEIKO\n");
   });
 
-  it("refuses to write through a symlink at the target path", () => {
-    if (osPlatform() === "win32") return;
+  it("refuses to write through a symlink at the target path", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
     mkdirSync(h.approvedDir, { recursive: true });
     const realFile = join(makeRoot(), "evil");
@@ -347,8 +347,8 @@ describe("runLauncherCli install — refusals (security)", () => {
     expect(readFileSync(realFile, "utf8")).toBe("evil");
   });
 
-  it("refuses when the approved dir itself is a symlink", () => {
-    if (osPlatform() === "win32") return;
+  it("refuses when the approved dir itself is a symlink", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
     // Make ~/.local/share/applications a symlink to a non-approved directory.
     mkdirSync(join(h.home, ".local/share"), { recursive: true });
@@ -449,8 +449,8 @@ function plantTamperedStateFile(
 }
 
 describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
-  it("F1 — remove REFUSES to unlink an out-of-bounds path planted in the state file", () => {
-    if (osPlatform() === "win32") return;
+  it("F1 — remove REFUSES to unlink an out-of-bounds path planted in the state file", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
     // Sensitive target lives OUTSIDE the approved installDir; create it via mkdtempSync
     // so the test never touches a real ~/.ssh path.
@@ -471,8 +471,8 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
     expect(code).toBe(0);
   });
 
-  it("F2 — status REFUSES to existsSync/readFileSync an out-of-bounds planted entry", () => {
-    if (osPlatform() === "win32") return;
+  it("F2 — status REFUSES to existsSync/readFileSync an out-of-bounds planted entry", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
     const sensitiveRoot = makeRoot();
     const sensitive = join(sensitiveRoot, "private.txt");
@@ -489,8 +489,8 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
     expect(readFileSync(sensitive, "utf8")).toBe("secret\n");
   });
 
-  it("F2 — status reports 'unreadable' instead of leaking a read error stack", () => {
-    if (osPlatform() === "win32") return;
+  it("F2 — status reports 'unreadable' instead of leaking a read error stack", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const h = makeHarness();
     // Install a real shortcut first, then replace the file with a directory (EISDIR on
     // readFileSync) — forces cmdStatus to take the new catch path.
@@ -505,8 +505,8 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
 });
 
 describe("runLauncherCli — KEIKO_STATE_DIR containment (F4)", () => {
-  it("refuses with STATE_DIR_ESCAPE when KEIKO_STATE_DIR resolves outside homedir", () => {
-    if (osPlatform() === "win32") return;
+  it("refuses with STATE_DIR_ESCAPE when KEIKO_STATE_DIR resolves outside homedir", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     const home = join(root, "home");
     mkdirSync(home, { recursive: true });
@@ -529,8 +529,8 @@ describe("runLauncherCli — KEIKO_STATE_DIR containment (F4)", () => {
     expect(c.err()).toContain("outside the user's home directory");
   });
 
-  it("accepts KEIKO_STATE_DIR when contained under homedir", () => {
-    if (osPlatform() === "win32") return;
+  it("accepts KEIKO_STATE_DIR when contained under homedir", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     const home = join(root, "home");
     const stateDir = join(home, "custom-state");

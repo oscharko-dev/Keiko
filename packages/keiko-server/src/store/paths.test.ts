@@ -78,8 +78,8 @@ describe("resolveUiDbPath", () => {
     );
   });
 
-  it("rejects a symlinked data directory", () => {
-    if (process.platform === "win32") return;
+  it("rejects a symlinked data directory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const target = makeTempDir();
     const link = join(makeTempDir(), "data-link");
     symlinkSync(target, link, "dir");

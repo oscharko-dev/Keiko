@@ -419,9 +419,9 @@ describe("runUninstallCli — scripts edge cases", () => {
     expect(c.out()).toContain("no keiko:start / keiko:stop scripts");
   });
 
-  it("exits 1 gracefully when package.json cannot be written", () => {
+  it("exits 1 gracefully when package.json cannot be written", (ctx) => {
     // Skip where the read-only bit does not block the owner (Windows, or running as root).
-    if (process.platform === "win32") return;
+    if (process.platform === "win32") ctx.skip();
     if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const root = makeRoot();
     const pkg = seedPackageJson(root);
@@ -639,8 +639,8 @@ describe("runUninstallCli — portable managed install", () => {
     expect(c.err()).toContain("portable registration refused unknown artifact");
   });
 
-  it("refuses a symlink inside the managed install and keeps the portable state", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlink inside the managed install and keeps the portable state", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const { home, managedRoot, shortcut, env } = await installPortableWindows(root);
     writeFileSync(join(root, "outside.txt"), "keep", "utf8");
@@ -710,8 +710,8 @@ describe("runUninstallCli — portable managed install", () => {
     expect(c.err()).toContain("could not be attested");
   });
 
-  it("refuses a symlinked Start Menu ancestor without deleting outside artifacts", async () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked Start Menu ancestor without deleting outside artifacts", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const { home, managedRoot, shortcut, env } = await installPortableWindows(root);
     const programsDir = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs");
@@ -835,8 +835,8 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(c.out()).toContain("non-Keiko entr");
   });
 
-  it("refuses to follow a symlink and keeps the state dir", () => {
-    if (process.platform === "win32") return;
+  it("refuses to follow a symlink and keeps the state dir", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const outsideTarget = join(root, "outside-secret.txt");
@@ -850,8 +850,8 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(c.out()).toContain("symlink — not followed");
   });
 
-  it("refuses a symlinked state root without deleting the target tree", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked state root without deleting the target tree", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const target = join(root, "outside-state");
     mkdirSync(target, { recursive: true });
@@ -904,8 +904,8 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(c.out()).toContain("not a recognized Keiko artifact");
   });
 
-  it("keeps an owned-looking hardlink and reports why the state dir remains", () => {
-    if (process.platform === "win32") return;
+  it("keeps an owned-looking hardlink and reports why the state dir remains", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = seedFullState(root);
     const outsideDb = join(root, "outside-db");

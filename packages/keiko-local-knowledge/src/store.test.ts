@@ -93,8 +93,8 @@ describe("openKnowledgeStore — fresh install", () => {
     }
   });
 
-  it("restricts the store directory and SQLite files on POSIX", () => {
-    if (process.platform === "win32") return;
+  it("restricts the store directory and SQLite files on POSIX", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const dbPath = join(tmp, "capsules.db");
     const store = openKnowledgeStore({ dbPath });
     try {
