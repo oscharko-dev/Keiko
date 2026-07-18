@@ -1,5 +1,15 @@
+import type { IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { GIT_DELIVERY_PATHSPEC_CONTROL_CHAR, isContainedPathspec } from "./requestGuards.js";
+import {
+  GIT_DELIVERY_PATHSPEC_CONTROL_CHAR,
+  isContainedPathspec,
+  isSafeGitRef,
+  readParsedGitDeliveryBody,
+} from "./requestGuards.js";
+
+const bodyStream = (body: string): IncomingMessage =>
+  Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
 
 describe("isContainedPathspec", () => {
   it("accepts contained relative pathspecs", () => {
@@ -40,5 +50,67 @@ describe("isContainedPathspec", () => {
     expect(GIT_DELIVERY_PATHSPEC_CONTROL_CHAR.test("\x00")).toBe(true);
     expect(GIT_DELIVERY_PATHSPEC_CONTROL_CHAR.test("\x7f")).toBe(true);
     expect(GIT_DELIVERY_PATHSPEC_CONTROL_CHAR.test("ok")).toBe(false);
+  });
+});
+
+describe("isSafeGitRef", () => {
+  it("accepts plain refs and remote aliases", () => {
+    expect(isSafeGitRef("main")).toBe(true);
+    expect(isSafeGitRef("origin")).toBe(true);
+    expect(isSafeGitRef("feature/foo-bar")).toBe(true);
+    expect(isSafeGitRef("release-1.2.3")).toBe(true);
+  });
+
+  it("rejects empty, non-string, and whitespace-bearing values", () => {
+    expect(isSafeGitRef("")).toBe(false);
+    expect(isSafeGitRef(42)).toBe(false);
+    expect(isSafeGitRef(undefined)).toBe(false);
+    expect(isSafeGitRef("has space")).toBe(false);
+    expect(isSafeGitRef("tab\there")).toBe(false);
+  });
+
+  it("rejects flag-injection, refspec-injection, and control chars", () => {
+    expect(isSafeGitRef("-force")).toBe(false);
+    expect(isSafeGitRef("a:b")).toBe(false);
+    expect(isSafeGitRef("ref\0nul")).toBe(false);
+    expect(isSafeGitRef("ref\x7fdel")).toBe(false);
+  });
+});
+
+describe("readParsedGitDeliveryBody", () => {
+  const tooLarge = (): string => "TOO_LARGE";
+  const badRequest = (): string => "BAD_REQUEST";
+
+  it("parses a well-formed JSON body", async () => {
+    const read = await readParsedGitDeliveryBody(
+      bodyStream('{"schemaVersion":"1"}'),
+      tooLarge,
+      badRequest,
+    );
+    expect(read).toEqual({ ok: true, value: { schemaVersion: "1" } });
+  });
+
+  it("maps an unparseable body to the bad-request result", async () => {
+    const read = await readParsedGitDeliveryBody(bodyStream("}{ not json"), tooLarge, badRequest);
+    expect(read).toEqual({ ok: false, result: "BAD_REQUEST" });
+  });
+
+  it("maps an over-cap body to the too-large result", async () => {
+    const read = await readParsedGitDeliveryBody(
+      bodyStream("x".repeat(200 * 1024)),
+      tooLarge,
+      badRequest,
+    );
+    expect(read).toEqual({ ok: false, result: "TOO_LARGE" });
+  });
+
+  it("maps a non-too-large stream read error to the bad-request result", async () => {
+    const erroring = new Readable({
+      read(): void {
+        this.destroy(new Error("stream boom"));
+      },
+    }) as unknown as IncomingMessage;
+    const read = await readParsedGitDeliveryBody(erroring, tooLarge, badRequest);
+    expect(read).toEqual({ ok: false, result: "BAD_REQUEST" });
   });
 });
