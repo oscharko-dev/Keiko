@@ -24,7 +24,7 @@ export const DEBUG_MAX_SESSION_OUTPUT_BYTES = 1_024 * 1_024;
 export const DEBUG_MAX_REPLAY_ENTRIES = 256;
 const OUTPUT_TRUNCATION_MARKER = Buffer.from("[truncated]");
 
-export type DebugRegistryHealth = "ready" | "terminationPending" | "evidencePending";
+type DebugRegistryHealth = "ready" | "terminationPending" | "evidencePending";
 export interface DebugReservationInput {
   readonly sessionId: string;
   readonly workspaceId: string;
@@ -58,17 +58,17 @@ export interface DebugReservationPromotion {
   readonly backend: "oci" | "linuxNamespace" | "windowsContainer";
   readonly runtimeIdentityDigest: string;
 }
-export interface DebugStartupAttempt {
+interface DebugStartupAttempt {
   readonly attemptId: number;
   readonly signal: AbortSignal;
 }
-export interface DebugOutputAcceptance {
+interface DebugOutputAcceptance {
   readonly accepted: Buffer;
   readonly omittedBytes: number;
   readonly limitReached: boolean;
   readonly terminalOwner?: true;
 }
-export interface DebugTerminalTransition {
+interface DebugTerminalTransition {
   readonly owner: boolean;
   readonly completion: Promise<void>;
 }
@@ -82,11 +82,11 @@ export interface DebugProtocolPort {
     signal?: AbortSignal,
   ) => Promise<T>;
 }
-export interface DebugEndpointResource {
+interface DebugEndpointResource {
   close(): Promise<void>;
   destroy(): void;
 }
-export interface DebugDisposableResource {
+interface DebugDisposableResource {
   cleanup(): void;
 }
 export interface DebugOutputLimitEvent {
@@ -120,7 +120,7 @@ export interface DebugPauseContext {
   readonly threadId: number | undefined;
   readonly allThreadsStopped: boolean;
 }
-export interface DebugRegistryError extends Error {
+interface DebugRegistryError extends Error {
   readonly code: Extract<
     DebugProcessErrorCode,
     | "CAPACITY"

@@ -40,7 +40,7 @@ export interface PdfCitationPreviewContextCitation {
   readonly display: PdfCitationPreviewDisplay;
 }
 
-export interface PdfCitationPreviewOriginContext {
+interface PdfCitationPreviewOriginContext {
   readonly assistantMessageId: string;
   readonly chatId: string;
   readonly chatWindowId?: string;

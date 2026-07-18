@@ -9,7 +9,7 @@ import { supportsRealtimeVoice } from "./useVoiceCapability";
 // The capture strategy the offered session uses. `"none"` is the fail-closed default for every
 // not-offered case; `"webrtc"` is the only Voice Dialogue path. STT dictation stays a separate
 // composer feature and must never be treated as spoken dialogue.
-export type VoiceDialogueCapture = "none" | "webrtc";
+type VoiceDialogueCapture = "none" | "webrtc";
 
 // The total description the matrix returns for a resolution. `offered` gates the dialogue switch; the
 // remaining fields describe what an offered session can do. Every field is deterministically derived,

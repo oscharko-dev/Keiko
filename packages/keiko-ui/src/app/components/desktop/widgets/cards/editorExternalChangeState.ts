@@ -1,6 +1,6 @@
 import type { EditorM7WatchEvent } from "@oscharko-dev/keiko-contracts";
 
-export type EditorExternalChangeStatus =
+type EditorExternalChangeStatus =
   "idle" | "cleanChanged" | "dirtyChanged" | "deleted" | "renamed" | "rescanRequired" | "degraded";
 
 export interface EditorExternalChangeState {

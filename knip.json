@@ -1,0 +1,50 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": [
+    "@oscharko-dev/keiko-dev-sandbox",
+    "@stryker-mutator/vitest-runner",
+    "axe-core",
+    "@oscharko-dev/keiko-git",
+    "@oscharko-dev/keiko-memory-consolidation",
+    "@oscharko-dev/keiko-quality-intelligence",
+    "@oscharko-dev/keiko-sandbox",
+    "ws"
+  ],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3"],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/**/*.ts!",
+        "scripts/*.mjs!",
+        "dist/cli/index.js!",
+        "tests/e2e/**/*.spec.ts!",
+        "tests/e2e/**/*.mts!",
+        "tests/e2e/config/**/*.ts!",
+        "tests/e2e/support/**/*.{ts,mjs}!",
+        "tests/e2e/servers/**/*.mts!"
+      ],
+      "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
+      "ignore": [
+        "tests/architecture/fixtures/**",
+        "tests/fixtures/**",
+        "tests/e2e/fixtures/**",
+        "packages/keiko-ui/public/**",
+        "docs/design-system/evidence/**",
+        "design-system/**",
+        "sandbox/**",
+        "native/runtime-supervisor/**"
+      ]
+    },
+    "packages/*": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-server": {
+      "entry": [
+        "src/*.ts!",
+        "src/*/*.ts!",
+        "src/**/index.ts!",
+        "src/**/testing/fake-lsp-server.mjs!"
+      ]
+    }
+  }
+}

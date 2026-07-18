@@ -6,7 +6,7 @@ export const FRAME_BORDER_STRENGTH_KEY = "keiko.frame.border.strength";
 export const FRAME_INNER_GLOW_STRENGTH_KEY = "keiko.frame.inner.glow.strength";
 export const WORKSPACE_CAMERA_SMOOTHNESS_KEY = "keiko.workspace.camera.smoothness";
 
-export const DEFAULT_WALLPAPER_ENABLED = false;
+const DEFAULT_WALLPAPER_ENABLED = false;
 
 export const WALLPAPER_ENABLED_EVENT = "keiko:wallpaper-enabled";
 export const WALLPAPER_OPACITY_EVENT = "keiko:wallpaper-opacity";
@@ -16,7 +16,7 @@ export const FRAME_BORDER_STRENGTH_EVENT = "keiko:frame-border-strength";
 export const FRAME_INNER_GLOW_STRENGTH_EVENT = "keiko:frame-inner-glow-strength";
 export const WORKSPACE_CAMERA_SMOOTHNESS_EVENT = "keiko:workspace-camera-smoothness";
 
-export const DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS = 0;
+const DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS = 0;
 
 export function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;

@@ -24,7 +24,7 @@ import type {
 import type { ConversationMemoryActionWire } from "@/lib/types";
 
 // Stable id for the local-only privacy disclosure on the realtime button.
-export const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
+const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
 
 function realtimeLabel(phase: RealtimeVoicePhase, t: I18nTranslate): string {
   switch (phase) {

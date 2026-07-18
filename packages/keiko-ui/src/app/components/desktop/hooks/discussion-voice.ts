@@ -83,18 +83,18 @@ export function isVoiceDiscussionIntent(value: unknown): value is VoiceDiscussio
 // ─── Content-free observer (mirrors the #499 / #500 observers) ───────────────────
 // Every field is an enum or an integer; no mode-selection ever leaks text, topic content, or transcript.
 // `committedChars` is a character COUNT of the committed projection, never the text itself.
-export interface DiscussionVoiceModeEvent {
+interface DiscussionVoiceModeEvent {
   readonly mode: DiscussionMode;
   readonly mandatedFacetCount: number;
 }
 
-export interface DiscussionVoiceTurnEvent {
+interface DiscussionVoiceTurnEvent {
   readonly from: DiscussionTurnStatus;
   readonly to: DiscussionTurnStatus;
   readonly turnIndex: number;
 }
 
-export interface DiscussionVoiceInputEvent {
+interface DiscussionVoiceInputEvent {
   readonly committedChars: number;
   readonly committedSegments: number;
 }
@@ -114,7 +114,7 @@ export interface DiscussionVoiceBindingOptions {
 // Read-only view for the consuming hook. `active` mirrors `voiceCanDriveDiscussion`; `turn` is the
 // active discussion turn context (undefined when none has begun); `selectedMode` is the last mode a
 // spoken intent selected.
-export interface DiscussionVoiceSnapshot {
+interface DiscussionVoiceSnapshot {
   readonly profile: VoiceProfile;
   readonly active: boolean;
   readonly selectedMode: DiscussionMode | undefined;

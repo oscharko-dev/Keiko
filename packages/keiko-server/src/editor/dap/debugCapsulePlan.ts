@@ -4,7 +4,7 @@ import type { StrictDebugCapsulePlan } from "@oscharko-dev/keiko-sandbox";
 declare const layer2PlanBrand: unique symbol;
 
 export type DebugCapsuleBackend = "oci" | "linuxNamespace" | "windowsContainer";
-export type DebugTargetKind = "catalog" | "file";
+type DebugTargetKind = "catalog" | "file";
 
 export interface PosixDebugEndpointPlan {
   readonly kind: "posixSocket";
@@ -15,7 +15,7 @@ export interface PosixDebugEndpointPlan {
   readonly runtimeIdentity: string;
 }
 
-export interface WindowsDebugEndpointPlan {
+interface WindowsDebugEndpointPlan {
   readonly kind: "windowsPipe";
   readonly pipeName: string;
   readonly runtimeIdentity: string;
@@ -77,7 +77,7 @@ export interface DebugRuntimeDirectoryIdentity {
   readonly ownerUid: number;
 }
 
-export type DebugSpawnTargetReference =
+type DebugSpawnTargetReference =
   | { readonly kind: "catalog"; readonly targetId: string }
   | { readonly kind: "file"; readonly fileId: string };
 

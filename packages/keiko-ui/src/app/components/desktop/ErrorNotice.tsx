@@ -14,7 +14,7 @@ interface ErrorNoticeProps {
   readonly onDismiss?: (() => void) | undefined;
 }
 
-export function ErrorNotice({
+function ErrorNotice({
   notice,
   className = "ui-error-notice",
   id,

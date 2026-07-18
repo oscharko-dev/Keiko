@@ -71,7 +71,7 @@ export interface ApprovedExecutablePath {
 // Minimal child surface `escalateKill` needs. Both a real `ChildProcess` and the in-memory fake
 // satisfy it, so the escalation sequence is unit-testable with an injected kill tracker.
 export type KillableChild = SharedKillableChild;
-export type WorkspaceExternalExecutable = SharedWorkspaceExternalExecutable;
+type WorkspaceExternalExecutable = SharedWorkspaceExternalExecutable;
 
 // Resolves a bare executable name on the operator's PATH to an absolute real path that lies OUTSIDE
 // the workspace root (ADR-0069 I2/I5). Throws `EXECUTABLE_NOT_FOUND` when the name has a separator,
@@ -85,7 +85,7 @@ export function resolveExecutableOutsideWorkspace(
   return resolveExecutableCandidateOutsideWorkspace(name, workspace, processEnv, platform).real;
 }
 
-export function resolveExecutableCandidateOutsideWorkspace(
+function resolveExecutableCandidateOutsideWorkspace(
   name: string,
   workspace: WorkspaceInfo,
   processEnv: NodeJS.ProcessEnv,
@@ -107,7 +107,7 @@ export function createEphemeralHome(): EphemeralHome {
   return createIsolatedProcessDirectory("keiko-lsp-home-");
 }
 
-export function createIsolatedProcessDirectory(prefix: string): EphemeralHome {
+function createIsolatedProcessDirectory(prefix: string): EphemeralHome {
   return createSharedIsolatedProcessDirectory(prefix);
 }
 
@@ -276,12 +276,5 @@ export function preflightSpawnEnv(
   if (!decision.allowed) {
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
   }
-  return buildSharedCopyOnlyProcessEnv(processEnv, envAllowlist);
-}
-
-export function buildCopyOnlyProcessEnv(
-  processEnv: NodeJS.ProcessEnv,
-  envAllowlist: readonly string[],
-): Record<string, string> {
   return buildSharedCopyOnlyProcessEnv(processEnv, envAllowlist);
 }

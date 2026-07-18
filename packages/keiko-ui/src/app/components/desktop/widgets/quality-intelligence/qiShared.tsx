@@ -14,17 +14,6 @@ import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts
 import { ApiError } from "@/lib/api";
 import { translateQi, useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 
-// Human labels for review states — shared by the candidate review badges (CandidatesPane) and the
-// run summary (QiRunCard) so the same state never renders in two spellings on one card
-// (uiux-fix F030 C272: "Changes-Requested" via CSS capitalize vs "Changes requested").
-export const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, string>> = {
-  open: "Open",
-  approved: "Approved",
-  "changes-requested": "Changes requested",
-  rejected: "Rejected",
-  withdrawn: "Withdrawn",
-};
-
 export function reviewLabel(state: QualityIntelligenceReviewState, t: I18nTranslate): string {
   if (state === "open") return t("qi.review.open");
   if (state === "approved") return t("qi.review.approved");
@@ -36,7 +25,7 @@ export function reviewLabel(state: QualityIntelligenceReviewState, t: I18nTransl
 // CSS class map for review state badges — shared by CandidatesPane (per-candidate badge) and
 // QiHubPanel (run-row badge) so the same colour tokens apply consistently in both views
 // (Issue #282 / A11y-2: run-row now carries a review badge, must reuse the same CSS map).
-export const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
+const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
   open: "qi-review-open",
   approved: "qi-review-approved",
   "changes-requested": "qi-review-changes",

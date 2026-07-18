@@ -13,7 +13,7 @@ export function shortcutLabelForPlatform(
     .join(platform === "mac" ? "" : "+");
 }
 
-export function shortcutLabelPart(part: string, platform: KeyboardShortcutPlatformLabel): string {
+function shortcutLabelPart(part: string, platform: KeyboardShortcutPlatformLabel): string {
   const modifier = modifierLabel(part, platform);
   if (modifier !== null) return modifier;
   return keyLabel(part);

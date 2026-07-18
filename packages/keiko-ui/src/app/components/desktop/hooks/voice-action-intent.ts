@@ -49,7 +49,7 @@ import type { VoiceTurnSnapshot } from "./voice-turn-manager";
 // ─── Content-free observer (mirrors the #499 / #500 / #502 observers) ─────────────
 // Every field is an enum or an integer; no event field carries committed text, a digest, or transcript.
 // `committedChars` is a character COUNT of the committed projection, never the text itself.
-export interface VoiceActionIntentProposedEvent {
+interface VoiceActionIntentProposedEvent {
   readonly effectClass: SpokenActionEffectClass;
   readonly requiresConfirmation: boolean;
   readonly committedChars: number;
@@ -75,7 +75,7 @@ export interface VoiceActionIntentBindingOptions {
 
 // Read-only view for the consuming hook. `active` mirrors `voiceCanProposeAction`; `proposal` is the
 // active normalized proposal (undefined when none is open); `state` is its current lifecycle state.
-export interface VoiceActionIntentSnapshot {
+interface VoiceActionIntentSnapshot {
   readonly profile: VoiceProfile;
   readonly active: boolean;
   readonly proposal: SpokenActionProposal | undefined;

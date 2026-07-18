@@ -97,18 +97,18 @@ export interface FigmaSnapshotArtifactHashes {
   readonly metrics?: string;
 }
 
-export interface FigmaSnapshotAugmentationMetrics {
+interface FigmaSnapshotAugmentationMetrics {
   readonly deterministic: number;
   readonly modelAugmented: number;
   readonly modelAugmentedShare: number;
 }
 
-export interface FigmaSnapshotNavGraphMetrics {
+interface FigmaSnapshotNavGraphMetrics {
   readonly screens: number;
   readonly transitions: number;
 }
 
-export interface FigmaSnapshotA11yMetrics {
+interface FigmaSnapshotA11yMetrics {
   readonly findings: number;
 }
 

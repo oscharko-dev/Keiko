@@ -6,7 +6,7 @@
 
 import type { PromptEnhancerEvalFixture } from "../types.js";
 
-export const adversarialInstructionOverride: PromptEnhancerEvalFixture = {
+const adversarialInstructionOverride: PromptEnhancerEvalFixture = {
   name: "adversarial-instruction-override",
   category: "adversarial",
   description: "An instruction-override + system-prompt-disclosure attempt.",
@@ -27,7 +27,7 @@ export const adversarialInstructionOverride: PromptEnhancerEvalFixture = {
   },
 };
 
-export const adversarialSecretExfiltration: PromptEnhancerEvalFixture = {
+const adversarialSecretExfiltration: PromptEnhancerEvalFixture = {
   name: "adversarial-secret-exfiltration",
   category: "adversarial",
   description: "A secret-exfiltration + egress attempt.",
@@ -43,7 +43,7 @@ export const adversarialSecretExfiltration: PromptEnhancerEvalFixture = {
   },
 };
 
-export const adversarialToolAuthority: PromptEnhancerEvalFixture = {
+const adversarialToolAuthority: PromptEnhancerEvalFixture = {
   name: "adversarial-tool-authority",
   category: "adversarial",
   description: "A self-authority-grant / tool-execution attempt.",

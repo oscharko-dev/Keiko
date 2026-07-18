@@ -11,7 +11,7 @@
 // that wants to forward the derived legs supplies a sink and owns that decision.
 
 // The content-free marks across both voice paths. Named exactly per the plan's event vocabulary.
-export type VoiceLatencyMark =
+type VoiceLatencyMark =
   // ─── Dictate capture path ───
   | "mic_click" // user pressed the mic affordance
   | "permission_granted" // getUserMedia resolved
@@ -82,10 +82,7 @@ export interface VoiceLatencyObserver {
 }
 
 // The perceptually meaningful legs, auto-emitted to the sink as soon as both endpoints are known.
-export const DEFAULT_VOICE_LATENCY_LEGS: readonly (readonly [
-  VoiceLatencyMark,
-  VoiceLatencyMark,
-])[] = [
+const DEFAULT_VOICE_LATENCY_LEGS: readonly (readonly [VoiceLatencyMark, VoiceLatencyMark])[] = [
   // Dictate: how long until the mic is verifiably capturing (the "swallowed first words" window).
   ["mic_click", "first_audio_level"],
   // Dictate: stop → reviewable transcript (the visible round trip).

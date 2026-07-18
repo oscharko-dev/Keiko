@@ -38,11 +38,8 @@ import type { VoiceProfile } from "@/lib/types";
 import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 import type { VoiceTurnManagerEngine, VoiceTurnSignal } from "./voice-turn-manager";
 
-// Re-export the clock seam so consumers construct the controller from the same primitive as the timing
-// engine and turn manager without importing a third sibling module. The contract's playback vocabulary
-// types are re-exported too, so a consumer reaches the whole playback surface from this one module.
-export { createBrowserVoiceClock };
-export type { VoiceClock };
+// Re-export the contract's playback vocabulary types so a consumer reaches the whole playback
+// surface from this one module.
 export type {
   VoicePlaybackPhase,
   VoicePlaybackFailureKind,
@@ -65,13 +62,13 @@ export type VoicePlaybackCommand =
   | { readonly kind: "replay" }
   | { readonly kind: "set-muted"; readonly muted: boolean };
 
-export type VoicePlaybackCommandKind = VoicePlaybackCommand["kind"];
+type VoicePlaybackCommandKind = VoicePlaybackCommand["kind"];
 
 // ─── Apply outcome (mirrors the turn manager) ───────────────────────────────────
 // `transitioned` — the command changed phase, counters, or the mute flag, and/or emitted effects;
 // `no-op` — valid for the profile but with no meaningful effect in the current phase; `not-allowed-for-
 // profile` — rejected by the capability gate (the only outcome a dormant controller ever produces).
-export type VoicePlaybackApplyOutcome = "transitioned" | "no-op" | "not-allowed-for-profile";
+type VoicePlaybackApplyOutcome = "transitioned" | "no-op" | "not-allowed-for-profile";
 
 // ─── Read-only snapshot ─────────────────────────────────────────────────────────
 export interface VoicePlaybackSnapshot {
@@ -103,7 +100,7 @@ export interface VoicePlaybackApplyResult {
 }
 
 // ─── Content-free observer (AC3/AC4) — every field enum / integer / ms ───────────
-export interface VoicePlaybackTransitionEvent {
+interface VoicePlaybackTransitionEvent {
   readonly from: VoicePlaybackPhase;
   readonly to: VoicePlaybackPhase;
   readonly trigger: VoicePlaybackCommandKind;
@@ -111,13 +108,13 @@ export interface VoicePlaybackTransitionEvent {
   readonly latencyMs: number;
 }
 
-export interface VoicePlaybackInterruptEvent {
+interface VoicePlaybackInterruptEvent {
   readonly phase: VoicePlaybackPhase;
   readonly atMs: number | undefined;
   readonly interruptions: number;
 }
 
-export interface VoicePlaybackEffectEvent {
+interface VoicePlaybackEffectEvent {
   readonly effect: VoicePlaybackEffect;
   readonly phase: VoicePlaybackPhase;
 }

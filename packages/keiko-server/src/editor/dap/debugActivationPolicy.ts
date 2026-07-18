@@ -16,7 +16,7 @@ export function evaluateDebugActivation(value: unknown): DebugActivationResoluti
     : { ok: false, state: "disabled", reasonCode: "INVALID_INPUT", policyResult: "denied" };
 }
 
-export type DebugCapabilityListener = (resolution: DebugActivationResolution) => void;
+type DebugCapabilityListener = (resolution: DebugActivationResolution) => void;
 
 export interface DebugCapabilityGate {
   readonly resolve: (input: DebugActivationInput) => DebugActivationResolution;

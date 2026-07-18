@@ -6,7 +6,7 @@
 import type { VoiceActionEvalFixture } from "../types.js";
 import { buildSegments } from "./segment.js";
 
-export const voiceReadOnly: VoiceActionEvalFixture = {
+const voiceReadOnly: VoiceActionEvalFixture = {
   name: "voice-read-only",
   category: "voice",
   description:
@@ -32,7 +32,7 @@ export const voiceReadOnly: VoiceActionEvalFixture = {
   },
 };
 
-export const voiceMutating: VoiceActionEvalFixture = {
+const voiceMutating: VoiceActionEvalFixture = {
   name: "voice-mutating",
   category: "voice",
   description:
@@ -58,7 +58,7 @@ export const voiceMutating: VoiceActionEvalFixture = {
   },
 };
 
-export const voiceUnknownFailClosed: VoiceActionEvalFixture = {
+const voiceUnknownFailClosed: VoiceActionEvalFixture = {
   name: "voice-unknown-fail-closed",
   category: "voice",
   description:

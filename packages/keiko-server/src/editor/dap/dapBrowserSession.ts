@@ -9,18 +9,18 @@ export const DEBUG_BROWSER_SESSION_CAP = 64;
 const TOKEN_BYTES = 32;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
-export type DebugBrowserAuthorizationFailure =
+type DebugBrowserAuthorizationFailure =
   "missing" | "malformed" | "expired" | "workspace_mismatch" | "profile_mismatch";
 
 export type DebugBrowserAuthorization =
   | { readonly ok: true; readonly browserSessionBinding: string }
   | { readonly ok: false; readonly reason: DebugBrowserAuthorizationFailure };
 
-export type DebugBrowserSessionIssueResult =
+type DebugBrowserSessionIssueResult =
   | { readonly ok: true; readonly setCookies: readonly string[] }
   | { readonly ok: false; readonly reason: "capacity" };
 
-export type DebugBrowserSessionEnsureResult =
+type DebugBrowserSessionEnsureResult =
   | {
       readonly ok: true;
       readonly browserSessionBinding: string;

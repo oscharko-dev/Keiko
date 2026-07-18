@@ -35,15 +35,10 @@ import {
   voiceTranscriptSegmentRedactionClass,
   voiceTranscriptSegmentReplayClass,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  type VoiceClock,
-  createBrowserVoiceClock,
-  resolutionToVoiceProfile,
-} from "./voice-timebase";
+import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 
-// Re-export the clock seam and the capability adapter so a consumer constructs the transcript store from
-// the same primitives as the timing engine and the turn manager without importing three sibling modules.
-export { createBrowserVoiceClock, resolutionToVoiceProfile };
+// Re-export the clock seam type so a consumer constructs the transcript store from the same
+// primitive as the timing engine and the turn manager without importing a third sibling module.
 export type { VoiceClock };
 
 // ─── Input vocabulary (semantic, not the wire encoding) ──────────────────────────
@@ -56,10 +51,10 @@ export type { VoiceClock };
 // never from transcript or provider text. The store forwards `id` verbatim to the content-free observer,
 // so deriving it from text would defeat the no-side-channel guarantee, exactly as the protocol's opaque
 // `sessionId` / `idempotencyKey` are content-free by contract (voice-protocol.ts).
-export type VoiceTranscriptInputKind =
+type VoiceTranscriptInputKind =
   "partial" | "stabilize" | "commit" | "correct" | "discard" | "redact" | "providerError";
 
-export type VoiceTranscriptInput =
+type VoiceTranscriptInput =
   | { readonly kind: "partial"; readonly id: string; readonly seq: number; readonly text: string }
   | {
       readonly kind: "stabilize";
@@ -88,7 +83,7 @@ export type VoiceTranscriptInput =
 // `applied` — the input created or transitioned a segment; `no-op` — admitted for the profile but with no
 // effect (stale seq, illegal transition, unknown id); `not-allowed-for-profile` — rejected by the
 // capability gate (and the only outcome a dormant `none` / `speech-output` store ever produces).
-export type VoiceTranscriptApplyOutcome = "applied" | "no-op" | "not-allowed-for-profile";
+type VoiceTranscriptApplyOutcome = "applied" | "no-op" | "not-allowed-for-profile";
 
 // ─── Content-free observer (AC6) — every field enum / integer / opaque id ────────
 export interface VoiceTranscriptSegmentObservation {
@@ -116,7 +111,7 @@ export interface VoiceTranscriptStoreObserver {
 // Unlike the #498/#499 snapshots, this one DOES carry reviewable text (`segments`, `committed.text`):
 // it is the transcript model the UI renders ("what Keiko heard / what is final"). The privacy rule
 // applies to the observer, logs, and evidence — not to the in-memory render model.
-export interface VoiceTranscriptSnapshot {
+interface VoiceTranscriptSnapshot {
   readonly profile: VoiceProfile;
   readonly source: VoiceTranscriptSource;
   readonly active: boolean;
@@ -126,7 +121,7 @@ export interface VoiceTranscriptSnapshot {
   readonly highestSeq: number;
 }
 
-export interface VoiceTranscriptApplyResult {
+interface VoiceTranscriptApplyResult {
   readonly outcome: VoiceTranscriptApplyOutcome;
   readonly snapshot: VoiceTranscriptSnapshot;
 }

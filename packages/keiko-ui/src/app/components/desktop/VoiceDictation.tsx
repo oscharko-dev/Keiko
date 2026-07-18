@@ -26,7 +26,7 @@ import type {
 
 // Stable id for the local-only privacy disclosure so the mic button can reference it via
 // aria-describedby — the disclosure is discoverable to screen-reader users without opening anything.
-export const VOICE_PRIVACY_HINT_ID = "cmp-voice-privacy-hint";
+const VOICE_PRIVACY_HINT_ID = "cmp-voice-privacy-hint";
 
 // Separate id for the visible privacy note in the preview so it never collides with the button's
 // sr-only hint (both can be in the DOM during the preview phase).

@@ -51,7 +51,7 @@ export interface RequestedSourceBreakpoint {
   readonly logMessage?: string | undefined;
 }
 
-export interface BreakpointVerificationUpdate {
+interface BreakpointVerificationUpdate {
   readonly id: string;
   readonly verification: SourceBreakpoint["verification"];
 }
@@ -76,10 +76,9 @@ interface InstrumentationRecord {
   readonly watches: readonly WatchExpression[];
 }
 
-export type BreakpointStoreRejectionReason =
-  "state_unavailable" | "conflict" | "cap_exceeded" | "invalid";
+type BreakpointStoreRejectionReason = "state_unavailable" | "conflict" | "cap_exceeded" | "invalid";
 
-export type BreakpointStoreSnapshotResult =
+type BreakpointStoreSnapshotResult =
   | { readonly ok: true; readonly snapshot: InstrumentationSnapshot }
   | {
       readonly ok: false;

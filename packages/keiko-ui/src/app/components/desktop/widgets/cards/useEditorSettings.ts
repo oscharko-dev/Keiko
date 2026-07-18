@@ -20,7 +20,7 @@ import {
 import { ApiError, fetchEditorSettings, mutateEditorSettings } from "../../../../../lib/api";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 
-export interface AppliedEditorSettings {
+interface AppliedEditorSettings {
   readonly fontSize: number;
   readonly tabSize: number;
   readonly insertSpaces: boolean;
@@ -55,7 +55,7 @@ export interface EditorSettingsView {
 
 const defaults = defaultEditorM7Settings();
 
-export const DEFAULT_APPLIED_EDITOR_SETTINGS: AppliedEditorSettings = {
+const DEFAULT_APPLIED_EDITOR_SETTINGS: AppliedEditorSettings = {
   fontSize: numberSetting(defaults.fontSize, 13),
   tabSize: numberSetting(defaults.tabSize, 2),
   insertSpaces: booleanSetting(defaults.insertSpaces, true),
@@ -271,7 +271,7 @@ function mutationBody(
   };
 }
 
-export function appliedEditorSettings(
+function appliedEditorSettings(
   snapshot: EditorM7SettingsSnapshot | undefined,
 ): AppliedEditorSettings {
   if (snapshot === undefined) return DEFAULT_APPLIED_EDITOR_SETTINGS;
