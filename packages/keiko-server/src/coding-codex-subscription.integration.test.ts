@@ -82,12 +82,15 @@ function latencySummary(values: readonly number[]): {
   readonly max: number;
 } {
   const sorted = [...values].sort((left, right) => left - right);
-  // Size-agnostic percentiles: the health sample has 100 entries, the coalesced profile sample
-  // only 20, so a fixed index would read past the end and collapse the profile floor to zero.
-  const percentile = (fraction: number): number =>
-    sorted.length === 0
-      ? 0
-      : (sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))] ?? 0);
+  // Size-agnostic nearest-rank percentile (index = ceil(fraction * n) - 1). This keeps the exact
+  // indices the fixed-index version used for the 100-entry health sample (p50→49, p95→94) while
+  // giving a correct percentile for the 20-entry coalesced profile sample — where a plain
+  // floor(fraction * n) would land p95 on the last element (max) and collapse the intended floor.
+  const percentile = (fraction: number): number => {
+    if (sorted.length === 0) return 0;
+    const rank = Math.min(sorted.length - 1, Math.max(0, Math.ceil(fraction * sorted.length) - 1));
+    return sorted[rank] ?? 0;
+  };
   return { p50: percentile(0.5), p95: percentile(0.95), max: sorted.at(-1) ?? 0 };
 }
 
