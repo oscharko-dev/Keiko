@@ -1,6 +1,6 @@
 # Epic 2094 managed language intelligence security and performance review
 
-Review refreshed: 2026-07-18 against `dev@97541fcade42a82bca3466fac714db68e1cffb8d` plus
+Review refreshed: 2026-07-18 against `dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` plus
 the local final Epic #2094 audit diff. Scope: Python, Go, Shell, Java, and Rust activation,
 configuration, process supervision, language operations, semantic tokens, Settings UI, docked-agent
 projection, evidence, performance, rollback, and release gates.
@@ -13,10 +13,9 @@ strict server-owned typed default as the first configuration after activation (#
 projection preserves the required targeted-restart action while the changed pool entry has no health
 sample (#2535).
 
-The real-browser axe/visual lane and controlled orchestration run are green. Fresh
-Linux-authoritative editor evidence and the complete local aggregate remain required before
-publication, and this conclusion remains provisional until the exact-head protected checks are
-green.
+The real-browser axe/visual lane, controlled orchestration run, fresh Linux-authoritative editor
+evidence, and complete no-cache local aggregate are green. This conclusion remains provisional until
+the exact-head protected checks are green.
 
 ## Trust-boundary review
 
@@ -32,7 +31,7 @@ green.
 | Docked agent           | Existing governed action/language routes are reused; review-only results grant no write/delivery authority.                                  | Real-loopback integration covers Python/Go operations, cancellation, workspace switch, stale activation, redacted audit, and byte-identical files for review-only edits. **PASS**.            |
 | UI                     | Settings reflects server state, remains keyboard/focus safe, and does not install providers or expose secrets/paths.                         | Component axe/i18n/state coverage and the composed real-browser axe/visual lane pass, including the complete activate → accept default → restart path. **PASS**.                              |
 | Evidence               | Diagnostics/manifests contain statuses, counts, hashes, reason codes, and relative paths only.                                               | Redaction tests exclude roots, source/diagnostic bodies, executable paths, environment, stderr, configuration bodies, endpoints, and credentials. **PASS**.                                   |
-| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | Focused local gates pass; Linux evidence and the final no-cache aggregate remain required before the exact-head protected checks. **PENDING**.                                                |
+| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | The no-cache local aggregate and Linux-authoritative evidence pass; exact-head protected checks remain required. **LOCAL PASS; REMOTE PENDING**.                                              |
 
 ## Provider-operation-state closure
 
@@ -157,7 +156,7 @@ keyboard paths.
 The Playwright proof covers the real composed Settings window, real BFF state, server-owned initial
 typed configuration, live negotiated capability/health text, keyboard activation/deactivation,
 visible restart impact, guarded real-route restart/rollback, real-browser axe, and a visual
-attachment. It passed 1/1 in 26.5 seconds with zero
+attachment. It passed 1/1 in 1.3 minutes with zero
 serious/critical axe violations. The populated-state PNG SHA-256 is
 `11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5`.
 

@@ -1,10 +1,10 @@
 # Epic 2094 managed language intelligence regression evidence
 
 Evidence refreshed: 2026-07-18. The final Epic #2094 audit is based on
-`dev@97541fcade42a82bca3466fac714db68e1cffb8d` with Node 24.18.0 and npm 11.16.0.
-The focused closeout, real-browser, and controlled orchestration lanes are green. The measured
-product diff still requires fresh Linux-authoritative editor evidence and a final no-cache local
-aggregate. Exact-head protected-check receipts remain mandatory before closure.
+`dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` with Node 24.18.0 and npm 11.16.0.
+The focused closeout, real-browser, controlled orchestration, Linux-authoritative editor-evidence,
+and complete no-cache local aggregate lanes are green. Exact-head protected-check receipts remain
+mandatory before closure.
 
 ## Current closeout status
 
@@ -15,10 +15,10 @@ aggregate. Exact-head protected-check receipts remain mandatory before closure.
 | Provider-operation-state matrix  | **PASS** — 5 tests, including all 675 cells and fail-closed disposition invariants.                                                                                    |
 | Measurement harness unit tests   | **PASS** — 5 tests cover percentiles, recursive disk bytes and error paths, all budget dispositions, controlled enforcement, and five provider profiles.               |
 | Controlled orchestration         | **PASS** — `linux-arm64`, enforced wall-clock/RSS budgets, five isolated provider profiles, and zero residual disk bytes.                                              |
-| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 26.5 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
-| Linux editor release evidence    | **PENDING** — the measured product diff requires a fresh Linux-authoritative production export before publication.                                                     |
-| D12 paired editor evidence       | **PENDING** — the pinned Linux producer must bind the committed candidate and independently validate every budget.                                                     |
-| Aggregate gate                   | **PENDING** — the final no-cache aggregate runs after the Linux-authoritative evidence is regenerated.                                                                 |
+| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 1.3 min through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                     |
+| Linux editor release evidence    | **PASS** — fresh production export: 309 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
+| D12 paired editor evidence       | **PASS** — six orchestrated runs independently validate every budget at candidate `724fd56b37735caa2c97ab70061e18e5dc422bad`.                                          |
+| Aggregate gate                   | **PASS** — `npm run agent:pre-pr -- --no-cache` completed with 28 passed steps, zero failures, and 3 documented non-Linux platform skips.                              |
 
 The local receipt does not replace the required protected checks on the pushed exact head.
 
@@ -100,7 +100,7 @@ The spec covers:
 - populated-state real-browser axe and attached visual evidence;
 - deactivation and typed no-fallback operation failure.
 
-The exact Playwright command passed 1/1 in 26.5 seconds. axe reported no serious or critical
+The exact Playwright command passed 1/1 in 1.3 minutes. axe reported no serious or critical
 violations. The preserved `managed-language-closeout-active.png` attachment has SHA-256
 `11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5` and shows Python and Go
 active/ready with their rolled-back and changed configuration values.
