@@ -16,10 +16,10 @@ both shells. Only the execution shell around it differs:
 | --------------------- | --------------------------------------------- | --------------------------------------------------------- |
 | Evaluator             | `keiko-for-quality-core.mjs` (pure)           | Same file, imported verbatim                              |
 | GitHub helpers        | evidence/merge/render/publish/token in worker | Same functions, imported from the worker module           |
-| Trigger               | GitHub App webhook + per-minute cron          | `check_run` / `issue_comment` / `pull_request` / dispatch |
+| Trigger               | GitHub App webhook + scheduled cron           | `check_run` / `issue_comment` / `pull_request` / dispatch |
 | Deployment            | Manual `wrangler deploy` per change           | Merge to `dev` — "merge = deployed"                       |
 | Replay suppression    | D1 unique-delivery table                      | Not needed (one event → one run; per-pull `concurrency`)  |
-| Pull tracking / sweep | D1 `tracked_pulls` + per-minute cron          | Event triggers (+ a future bounded `schedule`)            |
+| Pull tracking / sweep | D1 `tracked_pulls` + targeted scheduled cron  | Event triggers (+ a future bounded `schedule`)            |
 | Secrets               | App key + webhook HMAC secret                 | App key only (or none, on the `GITHUB_TOKEN` fallback)    |
 | Hosting               | Cloudflare account, Worker, D1, dashboard     | None beyond the repository                                |
 | Check producer        | KFQ App id `4290143`                          | `4290143` (App auth) or `15368` (`GITHUB_TOKEN` fallback) |
