@@ -19,15 +19,19 @@ import worker, {
   hardFailure,
   importAppKey,
   importWebhookKey,
+  isMissingColumnError,
   isValidHeadSha,
   isOwnCheckEvent,
   isOwnCommentEvent,
+  migrateTrackedPullColumns,
+  parseBackstopMs,
   parseJson,
   parseStabilityMs,
   parseTrackedPull,
   privateKeyBytes,
   publishCheck,
   publishDashboardComment,
+  pullNeedsReevaluation,
   pullRequestNumbers,
   reconciliationErrorKind,
   reserveDelivery,
@@ -238,13 +242,16 @@ function insertDeliveryD1(state, values) {
 
 function insertTrackedD1(state, values) {
   const key = `${values[0]}/${values[1]}#${String(values[2])}`;
-  const existing = state.tracked.get(key);
-  if (existing?.installation_id === values[3]) return { meta: { changes: 0 } };
+  // Models the upsert that always refreshes installation and reconcile metadata (last_head_sha,
+  // settled, last_evaluated_at) so a later sweep reads the newest evaluation of every tracked pull.
   state.tracked.set(key, {
     installation_id: values[3],
+    last_evaluated_at: values[6],
+    last_head_sha: values[4],
     owner: values[0],
     pull_number: values[2],
     repository: values[1],
+    settled: values[5],
   });
   return { meta: { changes: 1 } };
 }
@@ -305,12 +312,20 @@ function databaseWithResult(result) {
   return { prepare: vi.fn(() => statement) };
 }
 
-function trackPull(state, pullNumber, installationId = 42) {
+function settledColumn(settled) {
+  if (settled === undefined) return undefined;
+  return settled ? 1 : 0;
+}
+
+function trackPull(state, pullNumber, installationId = 42, metadata = {}) {
   state.tracked.set(`oscharko-dev/Keiko#${String(pullNumber)}`, {
     installation_id: installationId,
+    last_evaluated_at: metadata.lastEvaluatedAt,
+    last_head_sha: metadata.lastHeadSha,
     owner: "oscharko-dev",
     pull_number: pullNumber,
     repository: "Keiko",
+    settled: settledColumn(metadata.settled),
   });
 }
 
@@ -393,9 +408,14 @@ describe("Keiko for Quality worker trust boundary", () => {
     );
     expect(schema).toContain("delivery_id TEXT PRIMARY KEY NOT NULL");
     expect(schema).toContain("PRIMARY KEY (owner, repository, pull_number)");
+    expect(schema).toContain("settled INTEGER NOT NULL DEFAULT 0");
+    expect(schema).toContain("last_evaluated_at INTEGER NOT NULL DEFAULT 0");
     expect(wrangler).toContain('binding = "KEIKO_FOR_QUALITY_DB"');
     expect(wrangler).not.toContain("kv_namespaces");
     expect(wrangler).not.toContain("KEIKO_FOR_QUALITY_STATE");
+    // Reduced, targeted cron cadence (Issue #2507): a two-minute liveness backstop, not per-minute.
+    expect(wrangler).toContain('crons = ["*/2 * * * *"]');
+    expect(wrangler).toContain('RECONCILE_BACKSTOP_MS = "900000"');
   });
 
   it("encodes JWT material and compares signature bytes exactly", async () => {
@@ -891,6 +911,55 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(isValidHeadSha("a".repeat(40))).toBe(true);
     expect(isValidHeadSha(`a${"b".repeat(40)}`)).toBe(false);
     expect(isValidHeadSha({ toString: () => "a".repeat(40) })).toBe(false);
+  });
+
+  it("parses the reconcile backstop interval with a safe fifteen-minute default", () => {
+    expect(parseBackstopMs(undefined)).toBe(900_000);
+    expect(parseBackstopMs("")).toBe(900_000);
+    expect(parseBackstopMs("   ")).toBe(900_000);
+    expect(parseBackstopMs("0")).toBe(0);
+    expect(parseBackstopMs("120000")).toBe(120_000);
+    expect(parseBackstopMs("invalid")).toBe(900_000);
+    expect(parseBackstopMs("-1")).toBe(900_000);
+    expect(parseBackstopMs("Infinity")).toBe(900_000);
+  });
+
+  it("re-evaluates only pending, head-changed, or backstop-due pull requests", () => {
+    const now = 10_000_000;
+    const backstopMs = 900_000;
+    const head = "a".repeat(40);
+    const base = { backstopMs, currentHeadSha: head, now };
+    const settled = (over) => ({ lastEvaluatedAt: now - over, lastHeadSha: head, settled: true });
+    // Never evaluated, or a verdict still waiting on evidence, must always re-evaluate (the stability
+    // window is a timer, not a webhook, so only a re-run flips it).
+    expect(pullNeedsReevaluation({ ...base, persisted: undefined })).toBe(true);
+    expect(
+      pullNeedsReevaluation({
+        ...base,
+        persisted: { lastEvaluatedAt: now, lastHeadSha: head, settled: false },
+      }),
+    ).toBe(true);
+    // A settled verdict whose head moved re-evaluates; unchanged and recent is skipped, even when the
+    // current head is only known from D1 tracking (undefined discovery head).
+    expect(
+      pullNeedsReevaluation({
+        ...base,
+        persisted: { lastEvaluatedAt: now, lastHeadSha: "b".repeat(40), settled: true },
+      }),
+    ).toBe(true);
+    expect(pullNeedsReevaluation({ ...base, persisted: settled(0) })).toBe(false);
+    expect(
+      pullNeedsReevaluation({ ...base, currentHeadSha: undefined, persisted: settled(0) }),
+    ).toBe(false);
+    // The liveness backstop re-evaluates a settled pull request once its last evaluation ages out, or
+    // when the persisted timestamp is unusable.
+    expect(pullNeedsReevaluation({ ...base, persisted: settled(backstopMs) })).toBe(true);
+    expect(
+      pullNeedsReevaluation({
+        ...base,
+        persisted: { lastEvaluatedAt: undefined, lastHeadSha: head, settled: true },
+      }),
+    ).toBe(true);
   });
 
   it("accepts only an exact SHA-256 webhook signature", async () => {
@@ -1878,13 +1947,27 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(state.prepare).toHaveBeenCalledWith(expect.stringContaining("FROM tracked_pulls"));
   });
 
-  it("discovers open dev pull requests without relying on webhook delivery", async () => {
-    githubMock("f".repeat(40), { openPulls: [{ number: 2397 }, { number: "invalid" }] });
+  it("discovers open dev pull requests with their current head without relying on webhooks", async () => {
+    githubMock("f".repeat(40), {
+      openPulls: [
+        { head: { sha: "f".repeat(40) }, number: 2397 },
+        { head: { sha: "short" }, number: 2398 },
+        { number: "invalid" },
+      ],
+    });
     await expect(discoverOpenPullRequests(environment(stateBinding()))).resolves.toEqual([
       {
+        headSha: "f".repeat(40),
         installationId: 42,
         owner: "oscharko-dev",
         pullNumber: 2397,
+        repository: "Keiko",
+      },
+      {
+        headSha: undefined,
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 2398,
         repository: "Keiko",
       },
     ]);
@@ -1920,7 +2003,9 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("discovers each configured repository on its own protected base branch", async () => {
-    const fetchMock = githubMock("f".repeat(40), { openPulls: [{ number: 7 }] });
+    const fetchMock = githubMock("f".repeat(40), {
+      openPulls: [{ head: { sha: "f".repeat(40) }, number: 7 }],
+    });
     const env = {
       ...environment(stateBinding()),
       TARGET_REPOSITORIES_JSON: JSON.stringify([
@@ -1934,8 +2019,15 @@ describe("Keiko for Quality worker trust boundary", () => {
     };
     delete env.TARGET_REPOSITORY;
     await expect(discoverOpenPullRequests(env)).resolves.toEqual([
-      { installationId: 42, owner: "oscharko-dev", pullNumber: 7, repository: "Keiko" },
       {
+        headSha: "f".repeat(40),
+        installationId: 42,
+        owner: "oscharko-dev",
+        pullNumber: 7,
+        repository: "Keiko",
+      },
+      {
+        headSha: "f".repeat(40),
         installationId: 42,
         owner: "oscharko-dev",
         pullNumber: 7,
@@ -2005,6 +2097,55 @@ describe("Keiko for Quality worker trust boundary", () => {
     });
     expect(deduplicatedWaits).toHaveLength(2);
     await Promise.all(deduplicatedWaits);
+  });
+
+  it("skips settled pull requests and re-evaluates pending, changed, or backstop-due ones", async () => {
+    const settledSha = "a".repeat(40);
+    const movedNewSha = "c".repeat(40);
+    const now = Date.parse("2026-07-11T10:00:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const fetchMock = githubMock(settledSha, {
+      openPulls: [
+        { head: { sha: settledSha }, number: 100 },
+        { head: { sha: movedNewSha }, number: 101 },
+        { head: { sha: settledSha }, number: 102 },
+        { head: { sha: settledSha }, number: 103 },
+      ],
+    });
+    const state = stateBinding();
+    // 100: settled, head unchanged, evaluated within the backstop -> skipped.
+    trackPull(state, 100, 42, {
+      lastEvaluatedAt: now - 60_000,
+      lastHeadSha: settledSha,
+      settled: true,
+    });
+    // 101: settled, but its head moved since the last evaluation -> re-evaluated.
+    trackPull(state, 101, 42, {
+      lastEvaluatedAt: now - 60_000,
+      lastHeadSha: "b".repeat(40),
+      settled: true,
+    });
+    // 102: last verdict still waiting on evidence -> re-evaluated so the stability window can converge.
+    trackPull(state, 102, 42, {
+      lastEvaluatedAt: now - 60_000,
+      lastHeadSha: settledSha,
+      settled: false,
+    });
+    // 103: settled and unchanged, but its last evaluation is older than the backstop -> re-evaluated.
+    trackPull(state, 103, 42, {
+      lastEvaluatedAt: now - 2_000_000,
+      lastHeadSha: settledSha,
+      settled: true,
+    });
+    const logMock = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const waits = [];
+    await worker.scheduled({}, environment(state), { waitUntil: (promise) => waits.push(promise) });
+    expect(waits).toHaveLength(3);
+    expect(logMock).toHaveBeenCalledWith("reconcile settled-skip evaluated=3 skipped=1");
+    await Promise.all(waits);
+    // The skipped pull request is never fetched, so no evidence, check, or comment call is spent on it.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/pulls/100"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/pulls/101"))).toBe(true);
   });
 
   it("continues tracked reconciliation and emits redacted diagnostics when discovery fails", async () => {
@@ -2114,6 +2255,108 @@ describe("Keiko for Quality worker trust boundary", () => {
     await expect(trackedPullRequests(malformed)).rejects.toThrow(
       "D1 returned an invalid tracked pull row.",
     );
+  });
+
+  it("recognizes only a missing reconcile-metadata column error", () => {
+    expect(isMissingColumnError(new Error("no such column: settled"))).toBe(true);
+    expect(
+      isMissingColumnError(new Error("table tracked_pulls has no column named last_head_sha")),
+    ).toBe(true);
+    expect(isMissingColumnError(new Error("database is locked"))).toBe(false);
+    expect(isMissingColumnError("no such column: settled")).toBe(false);
+  });
+
+  it("adds each reconcile-metadata column and tolerates one already present", async () => {
+    const runs = [];
+    const database = {
+      prepare: (sql) => ({
+        run: async () => {
+          runs.push(sql);
+          // A concurrent evaluation already added `settled`; that must not abort the migration.
+          if (sql.includes("ADD COLUMN settled")) throw new Error("duplicate column name: settled");
+          return { meta: {} };
+        },
+      }),
+    };
+    await expect(migrateTrackedPullColumns(database)).resolves.toBeUndefined();
+    expect(runs).toEqual([
+      "ALTER TABLE tracked_pulls ADD COLUMN last_head_sha TEXT",
+      "ALTER TABLE tracked_pulls ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE tracked_pulls ADD COLUMN last_evaluated_at INTEGER NOT NULL DEFAULT 0",
+    ]);
+  });
+
+  it("surfaces a non-duplicate schema migration failure", async () => {
+    const database = {
+      prepare: () => ({
+        run: async () => {
+          throw new Error("disk I/O error");
+        },
+      }),
+    };
+    await expect(migrateTrackedPullColumns(database)).rejects.toThrow("disk I/O error");
+  });
+
+  it("self-heals a legacy tracked_pulls schema and retries the read once", async () => {
+    const altered = [];
+    let migrated = false;
+    const rows = [
+      {
+        installation_id: 42,
+        last_evaluated_at: 5,
+        last_head_sha: "a".repeat(40),
+        owner: "oscharko-dev",
+        pull_number: 2329,
+        repository: "Keiko",
+        settled: 1,
+      },
+    ];
+    const database = {
+      prepare: (query) => ({
+        bind: () => ({
+          all: async () => {
+            if (!migrated) throw new Error("no such column: settled");
+            return { results: rows };
+          },
+        }),
+        run: async () => {
+          altered.push(query);
+          if (query.includes("last_evaluated_at")) migrated = true;
+          return { meta: {} };
+        },
+      }),
+    };
+    const pulls = await trackedPullRequests(database);
+    expect(altered).toEqual([
+      "ALTER TABLE tracked_pulls ADD COLUMN last_head_sha TEXT",
+      "ALTER TABLE tracked_pulls ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE tracked_pulls ADD COLUMN last_evaluated_at INTEGER NOT NULL DEFAULT 0",
+    ]);
+    expect(pulls.size).toBe(1);
+    expect([...pulls.values()][0]).toMatchObject({
+      lastEvaluatedAt: 5,
+      lastHeadSha: "a".repeat(40),
+      settled: true,
+    });
+  });
+
+  it("does not migrate on a non-schema tracked-pull read error", async () => {
+    const altered = [];
+    const database = {
+      prepare: () => ({
+        bind: () => ({
+          all: async () => {
+            throw new Error("database is locked");
+          },
+        }),
+        run: async () => {
+          altered.push("altered");
+          return { meta: {} };
+        },
+      }),
+    };
+    await expect(trackedPullRequests(database)).rejects.toThrow("database is locked");
+    expect(altered).toEqual([]);
   });
 
   it("continues discovery when persisted D1 pull state is malformed", async () => {
