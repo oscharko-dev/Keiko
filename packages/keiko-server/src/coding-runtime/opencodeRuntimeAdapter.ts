@@ -1,5 +1,7 @@
 import { isAbsolute } from "node:path";
 
+import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+
 import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
@@ -85,6 +87,9 @@ export interface OpenCodeRuntimeAdapterPorts {
       signal: AbortSignal,
     ) => Promise<readonly OpenCodeReconciliationEvent[]>;
     readonly sessionEcho: () => Promise<string>;
+    readonly takeSafeActivity?:
+      ((identityKey: string) => CodingSafeActivitySignal | undefined) | undefined;
+    readonly clearSafeActivity?: (() => void) | undefined;
   };
   readonly governedSink: {
     readonly execute: (
@@ -92,6 +97,12 @@ export interface OpenCodeRuntimeAdapterPorts {
       event: OpenCodeReconciliationEvent,
     ) => Promise<OpenCodeGovernedSinkReceipt>;
   };
+  readonly safeActivitySink?:
+    | {
+        readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
+        readonly recordDrops: (count: number) => void;
+      }
+    | undefined;
   readonly control: {
     readonly status: (
       sessionId: string,
@@ -514,6 +525,7 @@ async function reconcileHistory(
     await applyHistoryPlan(ports, state, planned, prepared);
     return true;
   } finally {
+    ports.readiness.clearSafeActivity?.();
     release?.();
   }
 }
@@ -559,8 +571,10 @@ async function applyHistoryPlan(
   planned: NonNullable<ReturnType<typeof planHistory>>,
   prepared: Extract<OpenCodeReconciliationPreparation, { readonly ok: true }>,
 ): Promise<void> {
+  const activity = takeSafeActivity(ports, planned.events);
   for (const event of prepared.projections) {
-    const receipt: unknown = await ports.governedSink.execute(eventIdentity(event), event);
+    const identity = eventIdentity(event);
+    const receipt: unknown = await ports.governedSink.execute(identity, event);
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
@@ -568,6 +582,21 @@ async function applyHistoryPlan(
   replaceMap(state.terminalCheckpoints, planned.terminalCheckpoints);
   replaceMap(state.recent, planned.recent);
   replaceMap(state.observedIds, planned.observedIds);
+  for (const signal of activity) {
+    if (ports.safeActivitySink?.ingest(signal) === false) ports.safeActivitySink.recordDrops(1);
+  }
+}
+
+function takeSafeActivity(
+  ports: OpenCodeRuntimeAdapterPorts,
+  events: readonly OpenCodeReconciliationEvent[],
+): readonly CodingSafeActivitySignal[] {
+  const signals: CodingSafeActivitySignal[] = [];
+  for (const event of events) {
+    const signal = ports.readiness.takeSafeActivity?.(eventIdentity(event));
+    if (signal !== undefined) signals.push(signal);
+  }
+  return signals;
 }
 
 interface HistoryPlanDraft {

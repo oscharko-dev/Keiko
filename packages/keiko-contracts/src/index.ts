@@ -1213,9 +1213,39 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  AvailableCodingSafeActivityFeed,
+  CodingSafeActivityFeed,
+  CodingSafeActivityMessage,
+  CodingSafeActivityMessageRole,
+  CodingSafeActivityTextSegment,
+  CodingSafeActivityTool,
+  CodingSafeActivityToolState,
+  CodingSafeActivityTurn,
+  UnavailableCodingSafeActivityFeed,
+} from "./coding-safe-activity.js";
+export {
+  CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+  CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
+  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_TURNS,
+  CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MESSAGE_ROLES,
+  CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS,
+  CODING_SAFE_ACTIVITY_TOOL_STATES,
+  unavailableCodingSafeActivityFeed,
+  validateCodingSafeActivityFeed,
+} from "./coding-safe-activity.js";
+export type {
   CodingAppSessionAcknowledgement,
   CodingAppSessionChannelContent,
   CodingAppSessionChannelSnapshot,
+  CodingAppSessionSafeActivityContent,
+  CodingAppSessionTextContent,
   CodingAppSessionPairingAttestation,
 } from "./coding-app-session.js";
 export {

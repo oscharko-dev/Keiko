@@ -61,6 +61,20 @@ describe("createSessionRegistry", () => {
     expect(registry.verify(mint.cookieToken)).toBeDefined();
   });
 
+  it("does not slide the inactivity window for server-originated stream inspection", () => {
+    const clock = fixedClock(1_000);
+    const registry = createSessionRegistry({
+      now: clock.now,
+      idleTtlMs: 100,
+      absoluteTtlMs: 1_000_000,
+    });
+    const mint = registry.mint("p");
+    clock.advance(80);
+    expect(registry.inspect(mint.cookieToken)).toBeDefined();
+    clock.advance(21);
+    expect(registry.inspect(mint.cookieToken)).toBeUndefined();
+  });
+
   it("expires a session after the absolute lifetime bound", () => {
     const clock = fixedClock(1_000);
     const registry = createSessionRegistry({

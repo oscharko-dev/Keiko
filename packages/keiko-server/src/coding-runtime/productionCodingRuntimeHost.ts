@@ -58,6 +58,9 @@ export function createProductionCodingRuntimeHost(
     approvalAuthority: runtime.approvalAuthority,
     taskDispatcher: runtime.taskDispatcher,
     ...(runtime.questionPort ? { questionPort: runtime.questionPort } : {}),
+    ...(runtime.safeActivityProjection
+      ? { safeActivityProjection: runtime.safeActivityProjection }
+      : {}),
     cancellationRegistry: runtime.cancellationRegistry,
     ...(runtime.runtimeCapabilityAuthenticator
       ? { runtimeCapabilityAuthenticator: runtime.runtimeCapabilityAuthenticator }

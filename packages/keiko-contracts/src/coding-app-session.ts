@@ -9,6 +9,10 @@
 
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 import { exactKeys, invalid, isRecord, result } from "./coding-workbench-runtime-api-validation.js";
+import {
+  validateCodingSafeActivityFeed,
+  type CodingSafeActivityFeed,
+} from "./coding-safe-activity.js";
 
 /** Contract version for the authenticated app-session channel wire shapes (ADR-0141). */
 export const CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION = "1" as const;
@@ -44,11 +48,20 @@ const SAFE_PAIRING_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
  * untrusted runtime text for transient browser rendering only; it reuses the runtime-question
  * bounding discipline (bounded, non-empty, aggregate-capped).
  */
-export interface CodingAppSessionChannelContent {
+export interface CodingAppSessionTextContent {
   readonly kind: string;
   /** Untrusted runtime text for transient browser rendering only. */
   readonly body: string;
 }
+
+/** Structured #2479 activity content; never encoded as JSON inside the generic text body. */
+export interface CodingAppSessionSafeActivityContent {
+  readonly kind: "safe-activity";
+  readonly feed: CodingSafeActivityFeed;
+}
+
+export type CodingAppSessionChannelContent =
+  CodingAppSessionTextContent | CodingAppSessionSafeActivityContent;
 
 /**
  * The authenticated channel snapshot. Fail-closed (ADR-0141 D6): an unpaired caller receives the
@@ -106,6 +119,13 @@ function serializedUtf8Bytes(value: object): number {
 function checkChannelContent(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object or null`);
+    return;
+  }
+  if (value.kind === "safe-activity") {
+    errors.push(...exactKeys(value, ["kind", "feed"], path));
+    if (!validateCodingSafeActivityFeed(value.feed).ok) {
+      errors.push(`${path}.feed is invalid`);
+    }
     return;
   }
   errors.push(...exactKeys(value, ["kind", "body"], path));

@@ -31,6 +31,8 @@ export interface SessionMint {
 export interface SessionRegistry {
   readonly mint: (principalLabel: string) => SessionMint;
   readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
+  readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
   readonly rotate: (sessionId: string) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
   readonly sessionCount: () => number;
@@ -144,6 +146,7 @@ function mintSession(state: RegistryState, principalLabel: string): SessionMint 
 function verifySession(
   state: RegistryState,
   cookieToken: string | undefined,
+  touch: boolean,
 ): AppSession | undefined {
   if (cookieToken === undefined) return undefined;
   const parsed = parseCookieToken(cookieToken);
@@ -156,7 +159,7 @@ function verifySession(
     return undefined;
   }
   if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) return undefined;
-  stored.lastSeenAtMs = nowMs;
+  if (touch) stored.lastSeenAtMs = nowMs;
   return describe(stored);
 }
 
@@ -181,7 +184,9 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
   return {
     mint: (principalLabel: string): SessionMint => mintSession(state, principalLabel),
     verify: (cookieToken: string | undefined): AppSession | undefined =>
-      verifySession(state, cookieToken),
+      verifySession(state, cookieToken, true),
+    inspect: (cookieToken: string | undefined): AppSession | undefined =>
+      verifySession(state, cookieToken, false),
     rotate: (sessionId: string): SessionMint | undefined => rotateSession(state, sessionId),
     revoke: (sessionId: string): void => {
       state.sessions.delete(sessionId);

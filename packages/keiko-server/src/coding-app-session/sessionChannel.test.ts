@@ -1,14 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS } from "./channelContract.js";
+import {
+  CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
+  type CodingAppSessionChannelContent,
+} from "./channelContract.js";
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";
 import {
+  CODING_APP_SESSION_MAX_LIVE_STREAMS,
   createCodingAppSessionChannel,
   type CodingAppSessionContentSource,
 } from "./sessionChannel.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
+import { createCodingSafeActivityProjection } from "../coding-runtime/codingSafeActivityProjection.js";
 
-const CANARY = { kind: "probe", body: "bounded-canary-payload" } as const;
+const CANARY: CodingAppSessionChannelContent = {
+  kind: "probe",
+  body: "bounded-canary-payload",
+};
+
+function liveSource(initial = CANARY): {
+  readonly source: CodingAppSessionContentSource;
+  readonly emit: (content: CodingAppSessionChannelContent | null) => void;
+  readonly subscribers: () => number;
+} {
+  let current: CodingAppSessionChannelContent | null = initial;
+  const listeners = new Set<(content: CodingAppSessionChannelContent | null) => void>();
+  return {
+    source: {
+      contentFor: () => current,
+      subscribeContent: (listener): { readonly admitted: boolean; readonly detach: () => void } => {
+        listeners.add(listener);
+        return { admitted: true, detach: (): void => void listeners.delete(listener) };
+      },
+    },
+    emit: (content): void => {
+      current = content;
+      for (const listener of listeners) listener(content);
+    },
+    subscribers: (): number => listeners.size,
+  };
+}
 
 function pairedChannel(contentSource?: CodingAppSessionContentSource): {
   readonly channel: ReturnType<typeof createCodingAppSessionChannel>;
@@ -96,6 +127,170 @@ describe("createCodingAppSessionChannel", () => {
     channel.signOut(cookieToken);
     expect(channel.snapshot(cookieToken).content).toBeNull();
     expect(channel.sessionCount()).toBe(0);
+  });
+
+  it("streams bounded updates and detaches when rotation invalidates the original cookie", () => {
+    const live = liveSource();
+    const { channel, cookieToken } = pairedChannel(live.source);
+    const snapshots: string[] = [];
+    const subscription = channel.subscribe(cookieToken, (snapshot) => {
+      snapshots.push(JSON.stringify(snapshot));
+      return true;
+    });
+    expect(subscription.live).toBe(true);
+    expect(subscription.snapshot.content).toEqual(CANARY);
+    live.emit({ kind: "probe", body: "second" });
+    expect(snapshots.at(-1)).toContain("second");
+    channel.rotate(cookieToken);
+    live.emit(CANARY);
+    expect(snapshots.at(-1)).toContain('"content":null');
+    expect(live.subscribers()).toBe(0);
+  });
+
+  it("uses passive stream inspection so server updates never extend idle expiry", () => {
+    let now = 1_000;
+    const registry = createSessionRegistry({
+      now: () => now,
+      idleTtlMs: 100,
+      absoluteTtlMs: 1_000,
+    });
+    const live = liveSource();
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+      contentSource: live.source,
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("expected pairing");
+    const snapshots: string[] = [];
+    channel.subscribe(paired.cookieToken, (snapshot) => {
+      snapshots.push(JSON.stringify(snapshot));
+      return true;
+    });
+    now += 80;
+    live.emit(CANARY);
+    now += 21;
+    live.emit(CANARY);
+    expect(snapshots.at(-1)).toContain('"content":null');
+    expect(live.subscribers()).toBe(0);
+  });
+
+  it("rejects excess live streams before allocating a source subscription", () => {
+    const live = liveSource();
+    const { channel, cookieToken } = pairedChannel(live.source);
+    const subscriptions = Array.from({ length: CODING_APP_SESSION_MAX_LIVE_STREAMS }, () =>
+      channel.subscribe(cookieToken, () => true),
+    );
+    expect(subscriptions.every(({ live: accepted }) => accepted)).toBe(true);
+    expect(live.subscribers()).toBe(CODING_APP_SESSION_MAX_LIVE_STREAMS);
+
+    const excess = channel.subscribe(cookieToken, () => true);
+
+    expect(excess.live).toBe(false);
+    expect(live.subscribers()).toBe(CODING_APP_SESSION_MAX_LIVE_STREAMS);
+    for (const subscription of subscriptions) subscription.detach();
+    expect(live.subscribers()).toBe(0);
+  });
+
+  it("releases admission when a source synchronously closes a subscription", () => {
+    let synchronousClose = true;
+    let detached = 0;
+    const source: CodingAppSessionContentSource = {
+      contentFor: () => CANARY,
+      subscribeContent: (listener) => {
+        if (synchronousClose) {
+          synchronousClose = false;
+          listener(null);
+        }
+        return {
+          admitted: true,
+          detach: (): void => {
+            detached += 1;
+          },
+        };
+      },
+    };
+    const { channel, cookieToken } = pairedChannel(source);
+
+    expect(channel.subscribe(cookieToken, () => false).live).toBe(false);
+    const subscriptions = Array.from({ length: CODING_APP_SESSION_MAX_LIVE_STREAMS }, () =>
+      channel.subscribe(cookieToken, () => true),
+    );
+
+    expect(subscriptions.every(({ live }) => live)).toBe(true);
+    expect(detached).toBe(1);
+    for (const subscription of subscriptions) subscription.detach();
+  });
+
+  it("detaches a throwing stream listener and releases its interval and admission slot", () => {
+    vi.useFakeTimers();
+    try {
+      const live = liveSource();
+      const { channel, cookieToken } = pairedChannel(live.source);
+      const throwing = vi.fn(() => {
+        throw new Error("stream-listener-failure");
+      });
+      expect(channel.subscribe(cookieToken, throwing).live).toBe(true);
+
+      expect(() => {
+        live.emit(CANARY);
+      }).not.toThrow();
+      expect(live.subscribers()).toBe(0);
+      vi.advanceTimersByTime(5_000);
+      expect(throwing).toHaveBeenCalledOnce();
+
+      const replacements = Array.from({ length: CODING_APP_SESSION_MAX_LIVE_STREAMS }, () =>
+        channel.subscribe(cookieToken, () => true),
+      );
+      expect(replacements.every(({ live: admitted }) => admitted)).toBe(true);
+      for (const replacement of replacements) replacement.detach();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps unavailable recovery live and releases the stream slot on feed expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T17:00:00.000Z"));
+    try {
+      const projection = createCodingSafeActivityProjection({ ttlMs: 100 });
+      const open = (runId: string): void => {
+        projection.open({
+          runId,
+          workspaceId: "workspace-safe-activity",
+          authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+          workspaceIsCurrent: () => true,
+        });
+      };
+      open("run-safe-activity-1");
+      const { channel, cookieToken } = pairedChannel({
+        contentFor: () => projection.currentContent(),
+        subscribeContent: (listener) => projection.subscribeContent(listener),
+      });
+      const snapshots: string[] = [];
+      const subscription = channel.subscribe(cookieToken, (snapshot) => {
+        snapshots.push(JSON.stringify(snapshot));
+        return snapshot.content !== null;
+      });
+
+      projection.markUnavailable("run-safe-activity-1");
+      open("run-safe-activity-2");
+      expect(snapshots.at(-2)).toContain('"availability":"unavailable"');
+      expect(snapshots.at(-1)).toContain('"availability":"available"');
+      projection.markUnavailable("run-safe-activity-2");
+      vi.advanceTimersByTime(101);
+      expect(snapshots.at(-1)).toContain('"content":null');
+
+      open("run-safe-activity-3");
+      const replacements = Array.from({ length: CODING_APP_SESSION_MAX_LIVE_STREAMS }, () =>
+        channel.subscribe(cookieToken, () => true),
+      );
+      expect(replacements.every(({ live }) => live)).toBe(true);
+      subscription.detach();
+      for (const replacement of replacements) replacement.detach();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rotate and sign-out on an unpaired cookie are safe no-ops", () => {

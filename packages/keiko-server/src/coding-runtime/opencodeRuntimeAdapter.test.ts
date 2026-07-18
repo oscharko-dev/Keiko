@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
+import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 
 const DIGEST = "a".repeat(64);
@@ -91,6 +92,8 @@ interface OpenCodeRuntimeAdapterPorts {
       checkpoints: Readonly<Record<string, number>>,
       signal: AbortSignal,
     ) => Promise<readonly GovernedEvent[]>;
+    takeSafeActivity?: (identityKey: string) => CodingSafeActivitySignal | undefined;
+    clearSafeActivity?: () => void;
     readonly sessionEcho: () => Promise<string>;
   };
   readonly governedSink: {
@@ -98,6 +101,10 @@ interface OpenCodeRuntimeAdapterPorts {
       identityKey: string,
       event: GovernedEvent,
     ) => Promise<"applied" | "duplicate">;
+  };
+  safeActivitySink?: {
+    readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
+    readonly recordDrops: (count: number) => void;
   };
   readonly control: {
     status: () => Promise<"activity" | "terminal" | undefined>;
@@ -529,6 +536,69 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(overflowSnapshots.every((checkpoints) => Object.keys(checkpoints).length === 256)).toBe(
       true,
     );
+    await adapter.close();
+  });
+
+  it("delivers every freshly admitted safe mutation even when observation projection is throttled", async () => {
+    const harness = readinessPorts();
+    const signals = new Map<string, CodingSafeActivitySignal>([
+      [
+        "ses_1\u00000",
+        {
+          kind: "message",
+          messageId: "msg_user",
+          role: "user",
+          occurredAt: "2026-07-18T17:00:00.000Z",
+        },
+      ],
+      [
+        "ses_1\u00001",
+        {
+          kind: "text",
+          messageId: "msg_user",
+          text: "Visible",
+          occurredAt: "2026-07-18T17:00:00.001Z",
+        },
+      ],
+      [
+        "ses_1\u00002",
+        {
+          kind: "message",
+          messageId: "msg_assistant",
+          role: "assistant",
+          parentMessageId: "msg_user",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+      ],
+    ]);
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>
+      Promise.resolve([event(0), event(1), event(2)]);
+    harness.ports.readiness.takeSafeActivity = (
+      identityKey,
+    ): CodingSafeActivitySignal | undefined => {
+      const signal = signals.get(identityKey);
+      signals.delete(identityKey);
+      return signal;
+    };
+    const ingested: CodingSafeActivitySignal[] = [];
+    harness.ports.safeActivitySink = {
+      ingest: (signal): boolean => {
+        ingested.push(signal);
+        return true;
+      },
+      recordDrops: vi.fn(),
+    };
+    harness.ports.readiness.clearSafeActivity = vi.fn(() => {
+      signals.clear();
+    });
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(harness.effects.filter((value) => value.startsWith("evt_"))).toEqual(["evt_0"]);
+    expect(ingested.map(({ kind }) => kind)).toEqual(["message", "text", "message"]);
+    expect(harness.ports.readiness.clearSafeActivity).toHaveBeenCalledTimes(2);
+    await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+    expect(harness.ports.readiness.clearSafeActivity).toHaveBeenCalledTimes(3);
     await adapter.close();
   });
 

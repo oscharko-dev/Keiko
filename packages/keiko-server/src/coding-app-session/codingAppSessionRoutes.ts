@@ -120,21 +120,55 @@ export function handleCodingAppSessionChannelStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): HandlerOutcome {
-  openCodingAppSessionStream(ctx.res, currentSnapshot(deps, ctx.req));
+  openCodingAppSessionStream(
+    ctx.res,
+    ctx.req,
+    deps.codingAppSessionChannel,
+    readSessionCookie(ctx.req),
+  );
   return STREAMING;
 }
 
 export function openCodingAppSessionStream(
   res: ServerResponse,
-  snapshot: CodingAppSessionChannelSnapshot,
+  req: IncomingMessage,
+  channel: UiHandlerDeps["codingAppSessionChannel"],
+  cookieToken: string | undefined,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
-  // W1.4 has no live content feed, so the stream emits the current snapshot and ends rather than
-  // holding the socket open under keep-alive with no further server output. W1.6 replaces this with a
-  // persistent subscription to the live projection (heartbeat- and lifecycle-managed, like the
-  // runtime event stream).
-  res.end();
+  const write = (snapshot: CodingAppSessionChannelSnapshot): boolean =>
+    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+  if (channel === undefined) {
+    write(contentFreeCodingAppSessionChannelSnapshot());
+    res.end();
+    return;
+  }
+  let closeStream = (): void => undefined;
+  const subscription = channel.subscribe(cookieToken, (snapshot): boolean => {
+    const accepted = write(snapshot);
+    if (!accepted || snapshot.content === null) queueMicrotask(closeStream);
+    return accepted && snapshot.content !== null;
+  });
+  if (!write(subscription.snapshot) || !subscription.live) {
+    subscription.detach();
+    res.end();
+    return;
+  }
+  const heartbeat = setInterval(() => {
+    if (!res.write(": heartbeat\n\n")) res.destroy();
+  }, 15_000);
+  heartbeat.unref();
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    subscription.detach();
+    if (!res.writableEnded && !res.destroyed) res.end();
+  };
+  closeStream = close;
+  res.once("close", close);
+  req.once("aborted", close);
 }
 
 /** POST /rotate — rotate the presented session's secret; the prior cookie stops working. */

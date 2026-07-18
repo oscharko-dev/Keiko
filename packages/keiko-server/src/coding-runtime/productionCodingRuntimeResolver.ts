@@ -12,6 +12,7 @@ import {
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import { createCodingRuntimeEditorMutationLeaseCoordinator } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   codingRuntimeStartConfirmationClaim,
@@ -72,6 +73,7 @@ export interface ProductionRuntimeBackendInput {
     | "revokeRuntime"
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly workspaceIsCurrent: () => boolean;
 }
 
 export interface QualifiedProductionRuntimeRun {
@@ -84,6 +86,7 @@ export interface QualifiedProductionRuntimeRun {
 
 export interface ProductionRuntimeBackendResolver {
   readonly createRun: (input: ProductionRuntimeBackendInput) => QualifiedProductionRuntimeRun;
+  readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
 
 export interface ProductionCodingRuntimeResolverInput {
@@ -148,6 +151,9 @@ function composeRuntime(
       authenticate: (capability, audience) =>
         authority.authenticateCapability(capability, audience),
     },
+    ...(input.backend.safeActivityProjection
+      ? { safeActivityProjection: input.backend.safeActivityProjection }
+      : {}),
   };
 }
 
@@ -225,10 +231,7 @@ function createRunRecord(
 ): ResolverRunRecord {
   const controller = new AbortController();
   const invocationRegistry = createCodingToolInvocationRegistry();
-  const leases = createCodingRuntimeEditorMutationLeaseCoordinator({
-    invocationRegistry,
-    cancelPendingByAuthorityRun: (runId) => editorAgentRegistry.cancelPendingByAuthorityRun(runId),
-  });
+  const leases = createLeaseCoordinator(invocationRegistry);
   const toolFacade = createManagedToolFacade(
     input,
     context,
@@ -238,16 +241,18 @@ function createRunRecord(
     leases,
     onRuntimeEvent,
   );
-  const backend = input.backend.createRun({
+  const backend = createBackendRun(
+    input,
     request,
     context,
     minted,
     toolFacade,
-    authorityLifecycle: authorityLifecycle(authority, controller, invocationRegistry, leases, () =>
-      runtimeNow(input),
-    ),
+    authority,
+    controller,
+    invocationRegistry,
+    leases,
     onRuntimeEvent,
-  });
+  );
   validateBackendLaunch(backend.launch, context);
   return {
     manager: backend.manager,
@@ -264,6 +269,42 @@ function createRunRecord(
       await backend.dispose?.();
     },
   };
+}
+
+function createLeaseCoordinator(
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+): ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator> {
+  return createCodingRuntimeEditorMutationLeaseCoordinator({
+    invocationRegistry,
+    cancelPendingByAuthorityRun: (runId) => editorAgentRegistry.cancelPendingByAuthorityRun(runId),
+  });
+}
+
+function createBackendRun(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  toolFacade: CodingToolFacade,
+  authority: CodingRuntimeAuthorityService,
+  controller: AbortController,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): QualifiedProductionRuntimeRun {
+  return input.backend.createRun({
+    request,
+    context,
+    minted,
+    toolFacade,
+    authorityLifecycle: authorityLifecycle(authority, controller, invocationRegistry, leases, () =>
+      runtimeNow(input),
+    ),
+    onRuntimeEvent,
+    workspaceIsCurrent: () =>
+      input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
+      context.workspaceId,
+  });
 }
 
 function createManagedToolFacade(

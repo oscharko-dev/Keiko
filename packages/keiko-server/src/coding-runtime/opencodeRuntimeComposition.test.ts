@@ -264,6 +264,17 @@ interface OpenCodeRuntimeCompositionModule {
         event: Readonly<Record<string, unknown>>,
       ) => Promise<"applied" | "duplicate">;
     };
+    readonly safeActivity?: {
+      readonly arm: () => void;
+      readonly clear: () => void;
+      readonly ingest: (signal: unknown) => boolean;
+      readonly recordDrops: (count: number) => void;
+      readonly settleTool: (input: {
+        readonly actionId: string;
+        readonly state: "succeeded" | "failed" | "denied" | "cancelled";
+        readonly occurredAt: string;
+      }) => void;
+    };
     readonly gatewayReadiness: {
       readonly waitForObservedRequest: () => Promise<boolean>;
       readonly clear: () => void;
@@ -411,36 +422,51 @@ async function responseBeforeEof(response: Promise<HttpResult>): Promise<HttpRes
   ]);
 }
 
+type FixtureSafeActivity = NonNullable<
+  Parameters<
+    OpenCodeRuntimeCompositionModule["createOpenCodeRuntimeComposition"]
+  >[0]["safeActivity"]
+>;
+
+interface StartBridgeControl {
+  readonly startTimeoutMs?: number;
+  readonly historyResponse?: Promise<Response>;
+  readonly expectedStart?: Readonly<Record<string, unknown>>;
+  readonly onSseCancel?: () => void;
+  readonly sseFrame?: string;
+  readonly historyCalls?: Readonly<Record<string, number>>[];
+  readonly governedEvents?: Readonly<Record<string, unknown>>[];
+  readonly safeActivity?: FixtureSafeActivity;
+  readonly runControl?: {
+    readonly promptBodies: string[];
+    readonly abortSessions: string[];
+    readonly statusResponses: unknown[];
+    readonly questionResponses?: unknown[];
+    readonly questionRequests?: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[];
+  };
+  readonly afterStart?: (
+    runtime: OpenCodeRuntimeComposition,
+    runRoot: string,
+  ) => void | Promise<void>;
+}
+
+function optionalSafeActivity(control: StartBridgeControl | undefined): {
+  readonly safeActivity?: FixtureSafeActivity;
+} {
+  return control?.safeActivity === undefined ? {} : { safeActivity: control.safeActivity };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
     requestDeadlineMs: 50,
     maxInFlight: 1,
   },
-  control?: {
-    readonly startTimeoutMs?: number;
-    readonly historyResponse?: Promise<Response>;
-    readonly expectedStart?: Readonly<Record<string, unknown>>;
-    readonly onSseCancel?: () => void;
-    readonly sseFrame?: string;
-    readonly historyCalls?: Readonly<Record<string, number>>[];
-    readonly governedEvents?: Readonly<Record<string, unknown>>[];
-    readonly runControl?: {
-      readonly promptBodies: string[];
-      readonly abortSessions: string[];
-      readonly statusResponses: unknown[];
-      readonly questionResponses?: unknown[];
-      readonly questionRequests?: {
-        readonly method: string;
-        readonly path: string;
-        readonly body?: string;
-      }[];
-    };
-    readonly afterStart?: (
-      runtime: OpenCodeRuntimeComposition,
-      runRoot: string,
-    ) => void | Promise<void>;
-  },
+  control?: StartBridgeControl,
 ): Promise<{ readonly runtime: OpenCodeRuntimeComposition; stop(): Promise<void> }> {
   const root = tempDir("keiko-opencode-tool-bridge-");
   const resourceRoot = join(root, "resources");
@@ -603,6 +629,7 @@ async function startBridgeFixture(
         return Promise.resolve("applied");
       },
     },
+    ...optionalSafeActivity(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
       clear: (): void => undefined,
@@ -1224,6 +1251,31 @@ describe("private OpenCode tool bridge", () => {
     read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
   };
   const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const toolBody = (callId: string): string =>
+    JSON.stringify({
+      action: "read",
+      actionId: `tool:${callId}`,
+      idempotencyKey: `idempotency-${callId}`,
+      relativePath: "src/index.ts",
+    });
+  const activityRecorder = (): {
+    readonly safeActivity: FixtureSafeActivity;
+    readonly settlements: Parameters<FixtureSafeActivity["settleTool"]>[0][];
+  } => {
+    const settlements: Parameters<FixtureSafeActivity["settleTool"]>[0][] = [];
+    return {
+      settlements,
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: () => true,
+        recordDrops: vi.fn(),
+        settleTool: (settlement): void => {
+          settlements.push(settlement);
+        },
+      },
+    };
+  };
 
   it("closes an adapter whose handshake succeeds after manager timeout disposal", async () => {
     let releaseHistory: (() => void) | undefined;
@@ -1246,6 +1298,7 @@ describe("private OpenCode tool bridge", () => {
       };
     });
     let sseCancellations = 0;
+    const clearSafeActivity = vi.fn();
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(
       facade,
@@ -1254,10 +1307,18 @@ describe("private OpenCode tool bridge", () => {
         startTimeoutMs: 20,
         historyResponse,
         expectedStart: { ok: false, failureCode: "start-timeout", retryable: true },
+        safeActivity: {
+          arm: vi.fn(),
+          clear: clearSafeActivity,
+          ingest: () => true,
+          recordDrops: vi.fn(),
+          settleTool: vi.fn(),
+        },
         onSseCancel: (): void => {
           sseCancellations += 1;
         },
         afterStart: async (runtime, runRoot): Promise<void> => {
+          expect(clearSafeActivity).toHaveBeenCalled();
           expect(runtime.manager.health()).toEqual({ status: "stopped" });
           expect(() => {
             accessSync(runRoot, constants.F_OK);
@@ -1277,6 +1338,46 @@ describe("private OpenCode tool bridge", () => {
         },
       },
     );
+    await fixture.stop();
+  });
+
+  it("reports a malformed history page as one bulk drop update", async () => {
+    const recordDrops = vi.fn();
+    const rows = Array.from({ length: 512 }, (_, sequence) => ({
+      id: `evt_malformed_${String(sequence)}`,
+      aggregate_id: "ses_tool",
+      seq: sequence,
+      type: "message.part.updated.1",
+      data: {
+        sessionID: "ses_tool",
+        part: { type: "text", text: "malformed" },
+        time: 1_721_323_200_000 + sequence,
+      },
+    }));
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        historyResponse: Promise.resolve(
+          new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } }),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+        safeActivity: {
+          arm: vi.fn(),
+          clear: vi.fn(),
+          ingest: () => true,
+          recordDrops,
+          settleTool: vi.fn(),
+        },
+      },
+    );
+
+    expect(recordDrops).toHaveBeenCalledOnce();
+    expect(recordDrops).toHaveBeenCalledWith(512);
     await fixture.stop();
   });
 
@@ -1411,6 +1512,41 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  it("settles facade busy and rejected calls as failed", async () => {
+    const activity = activityRecorder();
+    const facade: CodingToolFacade = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce({ status: "busy", evidence: [] })
+        .mockRejectedValueOnce(new Error("facade-rejected")),
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      safeActivity: activity.safeActivity,
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_busy"),
+        }),
+      ).resolves.toMatchObject({ status: 429 });
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_rejected"),
+        }),
+      ).resolves.toMatchObject({ status: 502 });
+      expect(activity.settlements).toEqual([
+        expect.objectContaining({ actionId: "tool:call_busy", state: "failed" }),
+        expect.objectContaining({ actionId: "tool:call_rejected", state: "failed" }),
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("aborts delayed governed work when the client disconnects", async () => {
     let observedSignal: AbortSignal | undefined;
     let release: (() => void) | undefined;
@@ -1433,15 +1569,25 @@ describe("private OpenCode tool bridge", () => {
         });
       }) as CodingToolFacade["execute"],
     };
-    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
+    const activity = activityRecorder();
+    const fixture = await startBridgeFixture(
+      facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      { safeActivity: activity.safeActivity },
+    );
     const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
     try {
-      request.client.end('{"action":"read"}');
+      request.client.end(toolBody("call_disconnect"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
       request.client.destroy();
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
+      });
+      await vi.waitFor(() => {
+        expect(activity.settlements).toEqual([
+          expect.objectContaining({ actionId: "tool:call_disconnect", state: "cancelled" }),
+        ]);
       });
     } finally {
       request.client.destroy();
@@ -1471,16 +1617,24 @@ describe("private OpenCode tool bridge", () => {
         });
       }) as CodingToolFacade["execute"],
     };
-    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
+    const activity = activityRecorder();
+    const fixture = await startBridgeFixture(
+      facade,
+      { requestDeadlineMs: 30, maxInFlight: 1 },
+      { safeActivity: activity.safeActivity },
+    );
     const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
     try {
-      request.client.end('{"action":"read"}');
+      request.client.end(toolBody("call_timeout"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
       await expect(request.response).resolves.toMatchObject({ status: 408 });
+      expect(activity.settlements).toEqual([
+        expect.objectContaining({ actionId: "tool:call_timeout", state: "cancelled" }),
+      ]);
     } finally {
       request.client.destroy();
       await fixture.stop();
