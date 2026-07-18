@@ -251,10 +251,11 @@ export async function run(env, options = {}) {
     console.log("keiko-for-quality-action: no pull requests to evaluate.");
     return;
   }
-  const [owner, repository] = String(env.GITHUB_REPOSITORY ?? "").split("/");
-  if (!hasValue(owner) || !hasValue(repository)) {
+  const repoSlug = String(env.GITHUB_REPOSITORY ?? "");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repoSlug)) {
     throw new Error("GITHUB_REPOSITORY must be owner/repository.");
   }
+  const [owner, repository] = repoSlug.split("/");
   const target = resolveTarget(owner, repository, config.targetEnv);
   if (target === undefined) {
     console.log(`keiko-for-quality-action: ${owner}/${repository} is not a quality target.`);
@@ -283,11 +284,9 @@ async function main() {
   try {
     await run(process.env);
   } catch (error) {
-    console.error(
-      `keiko-for-quality-action: FAIL errorKind=${reconciliationErrorKind(error)} ${
-        error instanceof Error ? error.message : ""
-      }`.trimEnd(),
-    );
+    // Redacted, body-free diagnostic: only the error kind reaches the log, never the
+    // (potentially user-controlled) message.
+    console.error(`keiko-for-quality-action: FAIL errorKind=${reconciliationErrorKind(error)}`);
     process.exitCode = 1;
   }
 }

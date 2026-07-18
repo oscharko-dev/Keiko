@@ -14,6 +14,12 @@ const checkName = "Keiko for Quality";
 const dashboardMarker = "<!-- keiko-for-quality-dashboard:v1 -->";
 const githubApi = "https://api.github.com";
 const githubTimeoutMs = 15_000;
+// Every request path is assembled from an allowlisted repository, an integer pull number, and a
+// 40-hex SHA against the fixed api.github.com host. Validating the whole path before it reaches fetch
+// stops any tainted segment from shaping the request URL (fail closed on this trust boundary). The
+// two quantifiers act on disjoint character classes split by the literal "?", so there is no
+// super-linear backtracking.
+const safeGithubPath = /^\/[A-Za-z0-9._/-]+(?:\?[A-Za-z0-9._=&%+/-]*)?$/u;
 const encoder = new TextEncoder();
 const emptyPullNumbers = Object.freeze([]);
 const deliveryRetentionMs = 86_400_000;
@@ -85,6 +91,9 @@ export function importAppKey(pem) {
 }
 
 export async function github(path, token, init = {}) {
+  if (typeof path !== "string" || !safeGithubPath.test(path)) {
+    throw new Error("Refusing to build a GitHub request from an unexpected path.");
+  }
   const response = await fetch(`${githubApi}${path}`, {
     signal: AbortSignal.timeout(githubTimeoutMs),
     ...init,
