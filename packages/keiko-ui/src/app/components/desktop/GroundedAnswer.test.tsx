@@ -1334,6 +1334,31 @@ describe("GroundedAnswer", () => {
     expect(warning?.textContent?.toLowerCase()).toContain("unsupported citation");
   });
 
+  it("Knowledge M1.2 (#2563): flags unsupported claims (cited but not entailed) at the summary level", () => {
+    const a = answer({
+      uncertainty: [
+        {
+          kind: "unsupported-claim",
+          claim: "The answer made a claim the cited source does not support: policy.md.",
+        },
+      ],
+    });
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("unsupported claim");
+  });
+
+  it("Knowledge M1.2 (#2563): surfaces the entailment-unavailable WARN caveat at the summary level", () => {
+    const a = answer({
+      uncertainty: [
+        { kind: "entailment-unavailable", claim: "Citation support could not be verified." },
+      ],
+    });
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("could not be verified");
+  });
+
   it("RB-4 (GEN-AI-GROUNDING-007): shows no warning banner for a fully grounded answer", () => {
     const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
     expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();

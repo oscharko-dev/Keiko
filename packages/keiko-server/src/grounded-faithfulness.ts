@@ -267,3 +267,284 @@ export function noEvidenceMarker(nowMs: number): UncertaintyMarker {
     emittedAtMs: nowMs,
   };
 }
+
+// ─── Entailment (citation-support) verification (Knowledge M1.2 / Issue #2563) ──
+//
+// Membership reconciliation above answers "was this citation in the pack?". The entailment stage
+// answers the harder question "does the cited excerpt actually SUPPORT the claim?" — upgrading the
+// moat from citation membership to citation support. It runs STRICTLY AFTER membership and ONLY over
+// citations that passed membership, so a fabricated (out-of-pack) citation is never double-reported.
+//
+// The judge is a PORT. Production routes it through the Model Gateway (grounded-entailment-judge.ts);
+// the CI gate (grounded-entailment-eval.ts) scores THIS EXACT segmentation/reconciliation/marker
+// logic with a deterministic scripted judge — which is what makes `check:grounded-entailment`
+// non-tautological (a pass-through judge must let the unsupported fixture through, failing the gate).
+// This leaf stays contracts-only: it defines the port, never the gateway call.
+
+/**
+ * A per-claim entailment verdict. `unavailable` is a first-class discriminant — the judge could not
+ * decide (gateway down, timeout, unparseable output, budget exhausted) — and is NEVER collapsed into
+ * `supported`. Fail-closed: an undecidable claim surfaces a caveat, it is not silently trusted.
+ */
+export type EntailmentVerdict = "supported" | "unsupported" | "unavailable";
+
+export interface EntailmentJudgeInput {
+  readonly claimText: string;
+  readonly excerptText: string;
+}
+
+/**
+ * The entailment judge port. Async because the production implementation is a Model Gateway call;
+ * the deterministic eval implements the SAME port with no network. Implementations MUST fail closed
+ * to `unavailable` (never throw, never default to `supported`).
+ */
+export interface EntailmentJudge {
+  readonly judge: (input: EntailmentJudgeInput, signal?: AbortSignal) => Promise<EntailmentVerdict>;
+}
+
+/** A sentence-level span of the answer paired with the inline citations it carries. */
+export interface CitedClaim {
+  readonly claimText: string;
+  readonly citations: readonly ParsedInlineCitation[];
+}
+
+/** Per-answer bounds so the judge is never invoked unboundedly. */
+export interface EntailmentOptions {
+  readonly maxClaims: number;
+  readonly maxExcerptChars: number;
+}
+
+export const DEFAULT_ENTAILMENT_OPTIONS: EntailmentOptions = {
+  maxClaims: 24,
+  maxExcerptChars: 900,
+};
+
+function isSentenceBoundary(ch: string): boolean {
+  return ch === "." || ch === "!" || ch === "?" || ch === "\n";
+}
+
+/**
+ * Split answer text into sentence-level spans, bracket-aware so a `.` inside a `[routes.ts:5]`
+ * citation never splits mid-citation. A span ends at `.`/`!`/`?`/newline only at bracket depth 0.
+ */
+export function splitClaimSpans(text: string): readonly string[] {
+  const spans: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charAt(i);
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]" && depth > 0) {
+      depth -= 1;
+    } else if (depth === 0 && isSentenceBoundary(ch)) {
+      if (text.slice(start, i + 1).trim().length > 0) {
+        spans.push(text.slice(start, i + 1));
+      }
+      start = i + 1;
+    }
+  }
+  if (text.slice(start).trim().length > 0) {
+    spans.push(text.slice(start));
+  }
+  return spans;
+}
+
+/** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
+export function stripInlineCitations(text: string): string {
+  return text
+    .replace(/\[[^\]\n]{1,200}\]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** Segment an answer into the cited claims (spans that carry at least one inline citation). */
+export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
+  const claims: CitedClaim[] = [];
+  for (const span of splitClaimSpans(answerText)) {
+    const citations = parseInlineCitations(span);
+    if (citations.length > 0) {
+      claims.push({ claimText: stripInlineCitations(span), citations });
+    }
+  }
+  return claims;
+}
+
+/** A claim whose cited excerpt(s) did NOT support it (verdict `unsupported`). */
+export interface UnentailedClaim {
+  readonly citedPaths: readonly string[];
+}
+
+export interface EntailmentReconciliation {
+  // Claims the judge decided are NOT supported by their cited excerpt.
+  readonly unentailed: readonly UnentailedClaim[];
+  // Count of claims actually submitted to the judge (bounded by maxClaims).
+  readonly judgedClaims: number;
+  // Count of claims the judge could not decide (verdict `unavailable`).
+  readonly unavailableClaims: number;
+}
+
+/** Resolve the bounded excerpt text for a membership-valid citation, or `undefined` if none. */
+export type ExcerptTextResolver = (citation: ParsedInlineCitation) => string | undefined;
+
+function collectExcerptText(
+  citations: readonly ParsedInlineCitation[],
+  resolveExcerptText: ExcerptTextResolver,
+  maxExcerptChars: number,
+): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const citation of citations) {
+    const text = resolveExcerptText(citation)?.trim();
+    if (text === undefined || text.length === 0 || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    parts.push(text);
+  }
+  return parts.join("\n\n").slice(0, maxExcerptChars);
+}
+
+async function verdictForClaim(
+  claim: CitedClaim,
+  validCitations: readonly ParsedInlineCitation[],
+  resolveExcerptText: ExcerptTextResolver,
+  judge: EntailmentJudge,
+  maxExcerptChars: number,
+  signal: AbortSignal | undefined,
+): Promise<EntailmentVerdict> {
+  const excerptText = collectExcerptText(validCitations, resolveExcerptText, maxExcerptChars);
+  if (excerptText.length === 0 || claim.claimText.length === 0) {
+    // No usable excerpt/claim text to judge against — undecidable, never assumed supported.
+    return "unavailable";
+  }
+  return judge.judge({ claimText: claim.claimText, excerptText }, signal);
+}
+
+/**
+ * Judge, per cited claim, whether its MEMBERSHIP-VALID citations' excerpts support the claim.
+ * Only citations absent from `membership.unsupported` are judged (so membership failures are never
+ * re-reported as entailment failures). Bounded by `options`. The judge port decides each verdict;
+ * `unavailable` verdicts are counted, never treated as supported.
+ */
+export async function reconcileClaimEntailment(
+  answerText: string,
+  membership: CitationReconciliation,
+  resolveExcerptText: ExcerptTextResolver,
+  judge: EntailmentJudge,
+  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
+  signal?: AbortSignal,
+): Promise<EntailmentReconciliation> {
+  const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
+  const unentailed: UnentailedClaim[] = [];
+  let judgedClaims = 0;
+  let unavailableClaims = 0;
+  for (const claim of segmentCitedClaims(answerText)) {
+    if (judgedClaims >= options.maxClaims) {
+      break;
+    }
+    const valid = claim.citations.filter((c) => !membershipFailed.has(citationDedupKey(c)));
+    if (valid.length === 0) {
+      continue;
+    }
+    const verdict = await verdictForClaim(
+      claim,
+      valid,
+      resolveExcerptText,
+      judge,
+      options.maxExcerptChars,
+      signal,
+    );
+    judgedClaims += 1;
+    if (verdict === "unsupported") {
+      unentailed.push({ citedPaths: [...new Set(valid.map((c) => c.scopePath))] });
+    } else if (verdict === "unavailable") {
+      unavailableClaims += 1;
+    }
+  }
+  return { unentailed, judgedClaims, unavailableClaims };
+}
+
+/**
+ * Build an `unsupported-claim` marker naming the cited paths whose excerpts did not support their
+ * claim, or `undefined` when every judged claim was supported. Body-free: the marker names the
+ * `path:line`-level source (already visible in the answer) but NEVER quotes the claim or excerpt.
+ */
+export function unsupportedClaimMarker(
+  unentailed: readonly UnentailedClaim[],
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  if (unentailed.length === 0) {
+    return undefined;
+  }
+  const paths = [...new Set(unentailed.flatMap((c) => c.citedPaths))].slice(0, 8);
+  const single = unentailed.length === 1;
+  return {
+    kind: "unsupported-claim",
+    claim:
+      `The answer made ${single ? "a claim" : "claims"} that the cited ` +
+      `${paths.length === 1 ? "source does" : "sources do"} not appear to support: ` +
+      `${paths.join(", ")}. Treat ${single ? "that statement" : "those statements"} as unverified.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+/** WARN marker: entailment verification could not run for part of the answer (fail-closed caveat). */
+export function entailmentUnavailableMarker(nowMs: number): UncertaintyMarker {
+  return {
+    kind: "entailment-unavailable",
+    claim:
+      "Citation support could not be verified for part of this answer (the verification step was " +
+      "unavailable); treat the affected claims as unconfirmed.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+interface ExcerptTextEntry {
+  readonly lineRange: LineRange | undefined;
+  readonly content: string;
+}
+
+function excerptMatchesCitation(entry: ExcerptTextEntry, cited: LineRange | undefined): boolean {
+  if (cited === undefined || entry.lineRange === undefined) {
+    // A bare citation (or a window-less excerpt) matches at the path level.
+    return true;
+  }
+  return cited.startLine <= entry.lineRange.endLine && cited.endLine >= entry.lineRange.startLine;
+}
+
+/**
+ * Build an excerpt-text resolver from the evidence pack(s) that reached the model. For a cited
+ * `[path:line]` it returns the concatenated content of the excerpts whose window overlaps the cited
+ * range (or all excerpts for a bare `[path]`). The text is already redacted upstream (contracts
+ * invariant); the entailment stage judges against it and never persists it.
+ */
+export function buildPackExcerptTextResolver(
+  packs: readonly ConnectedContextPack[],
+): ExcerptTextResolver {
+  const byPath = new Map<string, ExcerptTextEntry[]>();
+  for (const pack of packs) {
+    for (const file of pack.files) {
+      for (const excerpt of file.excerpts) {
+        const entries = byPath.get(file.scopePath) ?? [];
+        entries.push({ lineRange: excerpt.atom.lineRange, content: excerpt.content });
+        byPath.set(file.scopePath, entries);
+      }
+    }
+  }
+  return (citation: ParsedInlineCitation): string | undefined => {
+    const entries = byPath.get(citation.scopePath);
+    if (entries === undefined || entries.length === 0) {
+      return undefined;
+    }
+    const matching = entries.filter((entry) => excerptMatchesCitation(entry, citation.lineRange));
+    const chosen = matching.length > 0 ? matching : entries;
+    const text = chosen
+      .map((entry) => entry.content)
+      .join("\n\n")
+      .trim();
+    return text.length > 0 ? text : undefined;
+  };
+}

@@ -293,7 +293,19 @@ export type UncertaintyMarkerKind =
   | "unsupported-citation"
   // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
   // partial answer is surfaced with this marker instead of being consumed as a complete answer.
-  | "incomplete-answer";
+  | "incomplete-answer"
+  // GEN-AI-GROUNDING-001 (RB-4, Knowledge M1.2 / Issue #2563): a grounded answer's inline
+  // `[path:line]` citation passed MEMBERSHIP reconciliation (the excerpt really was in the pack)
+  // but the entailment stage judged that the cited excerpt does NOT support the claim it is cited
+  // for. Surfaced so a real-but-unsupported citation is not read as a grounded claim. Distinct from
+  // `unsupported-citation` (which is a fabricated/out-of-pack citation), so the two failure classes
+  // stay separately measurable.
+  | "unsupported-claim"
+  // Knowledge M1.2 / Issue #2563 (WARN): the entailment verification step could not run (the judge
+  // was unavailable, timed out, produced unparseable output, or the per-answer budget was
+  // exhausted). Surfaced so the reader knows citation SUPPORT was not verified for part of the
+  // answer — fail-closed to a caveat, never silently reported as supported.
+  | "entailment-unavailable";
 
 export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "no-evidence",
@@ -304,6 +316,8 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "low-confidence",
   "unsupported-citation",
   "incomplete-answer",
+  "unsupported-claim",
+  "entailment-unavailable",
 ] as const;
 
 export interface UncertaintyMarker {

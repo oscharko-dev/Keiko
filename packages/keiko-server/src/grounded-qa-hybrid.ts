@@ -106,7 +106,9 @@ import {
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
+import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
+  appendGroundedAnswerEntailment,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -1088,6 +1090,32 @@ function hybridReconciliationUncertainty(
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
+// Knowledge M1.2 (#2563): judge whether the hybrid answer's `[path:line]` citations are SUPPORTED by
+// their folder-evidence excerpts (the same folder packs membership reconciliation checks). Capsule
+// policy applies here — a connector capsule that denies `answerSynthesis` keeps the stage inert.
+async function applyHybridEntailment(
+  ctx: HybridGroundedAskCtx,
+  answer: HybridGroundedAnswer,
+  answerContent: string,
+  folders: readonly RetrievedFolder[],
+  connectors: readonly RetrievedConnector[],
+): Promise<HybridGroundedAnswer> {
+  const capsules = connectors.flatMap((src) => src.selected.capsules);
+  const stage = createEntailmentStage(ctx.deps, capsules, ctx.modelId, {
+    diagnostics: ctx.deps.diagnostics,
+  });
+  if (stage === undefined) {
+    return answer;
+  }
+  return appendGroundedAnswerEntailment(
+    answer,
+    stage,
+    answerContent,
+    folders.map((folder) => folder.pack),
+    ctx.deps.redactor,
+  );
+}
+
 // ─── Evidence persistence ─────────────────────────────────────────────────────
 
 // Persists ONE evidence run per folder source (mirrors the #532 per-source persist) plus the
@@ -1730,6 +1758,25 @@ async function answerAndAssemble(
   );
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
+  return finalizeHybridAnswer(ctx, store, meta, selected, limits, assistant, reranker, {
+    userMessageId: userMessage.id,
+    assistantMessageId: assistantMessage.id,
+  });
+}
+
+// Assemble the hybrid answer, run the entailment stage over its folder evidence (#2563), and attach
+// it. Extracted from answerAndAssemble to keep both functions under the LOC bound.
+async function finalizeHybridAnswer(
+  ctx: HybridGroundedAskCtx,
+  store: KnowledgeStore,
+  meta: AnswerMeta,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+  assistant: GroundedAnswerResult,
+  reranker: GroundedRerankerDiagnostics,
+  ids: { readonly userMessageId: string; readonly assistantMessageId: string },
+): Promise<RouteResult> {
+  const folders = meta.folderResult.retrieved;
   const answer = assembleHybridAnswer(
     ctx,
     {
@@ -1745,11 +1792,18 @@ async function answerAndAssemble(
     limits,
     assistant,
     reranker,
-    { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
+    ids,
+  );
+  const finalAnswer = await applyHybridEntailment(
+    ctx,
+    answer,
+    assistant.content,
+    folders,
+    meta.connectorResult.retrieved,
   );
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
-  return { status: 200, body: answer };
+  ctx.deps.store.attachGroundedAnswer(ids.assistantMessageId, finalAnswer, previewCitations);
+  return { status: 200, body: finalAnswer };
 }
 
 function persistHybridGroundedExchange(

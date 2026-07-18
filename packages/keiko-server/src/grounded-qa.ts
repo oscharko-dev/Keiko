@@ -73,6 +73,7 @@ import {
   type OrchestratorInput,
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
+import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
@@ -856,6 +857,12 @@ function defaultRunner(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
+  // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
+  // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
+  // deny). Undefined ⇒ the stage is inert and the assembled pack is byte-identical to today.
+  const entailmentStage = createEntailmentStage(deps, [], modelId, {
+    diagnostics: deps.diagnostics,
+  });
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
     const budgetedInput =
@@ -872,6 +879,7 @@ function defaultRunner(
       workspaceIndexForRoot: deps.workspaceIndexForRoot,
       ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
       ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
+      ...(entailmentStage === undefined ? {} : { entailmentStage }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
@@ -921,6 +929,31 @@ export function buildUncertainty(
     kind: u.kind,
     claim: redactor(u.claim) as string,
   }));
+}
+
+// Knowledge M1.2 (#2563): run the injected entailment stage over the assembled answer's evidence
+// packs and append any resulting markers (redacted, wire-projected) to the answer's uncertainty.
+// Shared by the multi-source and hybrid paths so the wire projection lives in exactly one place.
+// Generic over the concrete answer shape so each caller keeps its own type. Returns the answer
+// unchanged when the stage produced nothing (the inert / byte-identical path).
+export async function appendGroundedAnswerEntailment<
+  A extends { readonly uncertainty: readonly GroundedUncertainty[] },
+>(
+  answer: A,
+  stage: EntailmentStage,
+  answerContent: string,
+  packs: readonly ConnectedContextPack[],
+  redactor: Redactor,
+): Promise<A> {
+  const markers = await stage.evaluate(answerContent, packs, Date.now());
+  if (markers.length === 0) {
+    return answer;
+  }
+  const projected: readonly GroundedUncertainty[] = markers.map((marker) => ({
+    kind: marker.kind,
+    claim: redactString(redactor, marker.claim),
+  }));
+  return { ...answer, uncertainty: [...answer.uncertainty, ...projected] };
 }
 
 // ─── Composition seam (test injection) ────────────────────────────────────────

@@ -88,6 +88,7 @@ import {
   reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
+import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { collectFollowSymbolTraceEvidence } from "./grounded-symbol-trace.js";
 import {
   defaultGitFileHistoryEvidenceProvider,
@@ -140,6 +141,11 @@ export interface OrchestratorDeps {
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
+  // Knowledge M1.2 (#2563) — optional injected entailment stage. When present AND a compatible judge
+  // model is configured, the model's cited claims are judged for SUPPORT (not just membership) after
+  // answering, and any unsupported-claim / entailment-unavailable markers are appended to the pack's
+  // uncertainty. Absent (the default, and every legacy caller/test) ⇒ byte-identical to today.
+  readonly entailmentStage?: EntailmentStage | undefined;
 }
 
 export interface OrchestratorOutput {
@@ -2951,6 +2957,17 @@ export async function retrieveConnectedContextPack(
   return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
 }
 
+// Knowledge M1.2 (#2563): fetch the injected entailment stage's markers for the answer, or `[]`
+// when no stage is injected (keeps runGroundedExploration under the complexity/LOC bound).
+async function entailmentMarkersFor(
+  deps: OrchestratorDeps,
+  answerContent: string,
+  pack: ConnectedContextPack,
+  nowMs: number,
+): Promise<readonly UncertaintyMarker[]> {
+  return (await deps.entailmentStage?.evaluate(answerContent, [pack], nowMs)) ?? [];
+}
+
 export async function runGroundedExploration(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -2992,6 +3009,10 @@ export async function runGroundedExploration(
   const unsupportedMarker = unsupportedCitationMarker(reconciliation.unsupported, nowMs());
   // GEN-AI-GATEWAY-001 (RB-4): a truncated completion is surfaced, not consumed as complete.
   const truncated = answer.finishReason === "length";
+  // Knowledge M1.2 (#2563): judge whether the cited excerpts SUPPORT the answer's claims (not just
+  // that they were in the pack). Inert (empty) unless an entailment stage was injected AND a judge
+  // model is configured, so the legacy path stays byte-identical.
+  const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
   const groundedPack: ConnectedContextPack = {
     ...pack,
     usage: {
@@ -3007,6 +3028,7 @@ export async function runGroundedExploration(
         : [answerBudgetClipped(exhaustedAnswerDimensions, nowMs())]),
       ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
       ...(truncated ? [incompleteAnswerMarker(nowMs())] : []),
+      ...entailmentMarkers,
     ],
   };
   return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };

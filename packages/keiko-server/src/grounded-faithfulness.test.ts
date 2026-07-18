@@ -4,13 +4,23 @@ import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-c
 import {
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
+  buildPackExcerptTextResolver,
+  type EntailmentJudge,
+  type EntailmentJudgeInput,
+  type EntailmentVerdict,
+  entailmentUnavailableMarker,
   incompleteAnswerMarker,
   packExcerptCount,
   packHasUsableEvidence,
   packsHaveUsableEvidence,
   parseInlineCitations,
+  reconcileClaimEntailment,
   reconcileInlineCitations,
+  segmentCitedClaims,
+  splitClaimSpans,
+  stripInlineCitations,
   unsupportedCitationMarker,
+  unsupportedClaimMarker,
 } from "./grounded-faithfulness.js";
 
 const NOW = 1_700_000_000_000;
@@ -205,5 +215,225 @@ describe("GROUNDED_NO_EVIDENCE_ANSWER", () => {
   it("is a safe, source-neutral abstention message", () => {
     expect(GROUNDED_NO_EVIDENCE_ANSWER.toLowerCase()).toContain("could not find");
     expect(GROUNDED_NO_EVIDENCE_ANSWER).not.toContain("/");
+  });
+});
+
+// ─── Entailment (citation-support) verification (Issue #2563) ───────────────────
+
+function excerptWith(
+  scopePath: string,
+  startLine: number,
+  endLine: number,
+  content: string,
+): ContextExcerpt {
+  return { ...excerpt(scopePath, startLine, endLine), content, contentBytes: content.length };
+}
+
+// Deterministic scripted judge: the excerpt text declares the verdict via an inline token, so the
+// tests score the REAL segmentation/reconciliation logic without any network (same port the gateway
+// judge implements). No token ⇒ `supported` (the default happy path).
+function scriptedJudge(): EntailmentJudge {
+  return {
+    judge: (input: EntailmentJudgeInput): Promise<EntailmentVerdict> => {
+      if (input.excerptText.includes("[[UNAVAIL]]")) return Promise.resolve("unavailable");
+      if (input.excerptText.includes("[[CONTRADICTS]]")) return Promise.resolve("unsupported");
+      return Promise.resolve("supported");
+    },
+  };
+}
+
+describe("splitClaimSpans", () => {
+  it("splits on sentence boundaries but never inside a [citation]", () => {
+    const spans = splitClaimSpans(
+      "Auth lives in [src/auth/login.ts:1-9]. It rotates tokens daily.",
+    );
+    expect(spans).toHaveLength(2);
+    expect(spans[0]).toContain("[src/auth/login.ts:1-9]");
+    expect(spans[1]).toContain("rotates tokens");
+  });
+
+  it("keeps a dotted path in one span (does not split at the file extension dot)", () => {
+    const spans = splitClaimSpans("See [src/config/env.ts:3] for details.");
+    expect(spans).toHaveLength(1);
+  });
+
+  it("splits on newlines for bulleted answers", () => {
+    const spans = splitClaimSpans("- first [a/b.ts:1]\n- second [c/d.ts:2]");
+    expect(spans).toHaveLength(2);
+  });
+});
+
+describe("stripInlineCitations", () => {
+  it("removes citation brackets and collapses whitespace", () => {
+    expect(stripInlineCitations("Login validates in [src/auth/login.ts:10-20] the session.")).toBe(
+      "Login validates in the session.",
+    );
+  });
+});
+
+describe("segmentCitedClaims", () => {
+  it("returns only spans that carry a citation, with brackets stripped from the claim text", () => {
+    const claims = segmentCitedClaims(
+      "The service authenticates users. Login validates in [src/auth/login.ts:10-20].",
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0]?.claimText).toBe("Login validates in .");
+    expect(claims[0]?.citations.map((c) => c.scopePath)).toEqual(["src/auth/login.ts"]);
+  });
+});
+
+describe("buildPackExcerptTextResolver", () => {
+  const resolver = buildPackExcerptTextResolver([
+    packWith([
+      {
+        scopePath: "src/a.ts",
+        excerpts: [
+          excerptWith("src/a.ts", 1, 10, "alpha window content"),
+          excerptWith("src/a.ts", 40, 55, "beta window content"),
+        ],
+      },
+    ]),
+  ]);
+
+  it("returns the overlapping window's content for a line-scoped citation", () => {
+    expect(
+      resolver({ raw: "x", scopePath: "src/a.ts", lineRange: { startLine: 2, endLine: 6 } }),
+    ).toBe("alpha window content");
+  });
+
+  it("concatenates all windows for a bare-path citation", () => {
+    const text = resolver({ raw: "x", scopePath: "src/a.ts", lineRange: undefined });
+    expect(text).toContain("alpha window content");
+    expect(text).toContain("beta window content");
+  });
+
+  it("returns undefined for a path absent from the pack", () => {
+    expect(
+      resolver({ raw: "x", scopePath: "src/missing.ts", lineRange: undefined }),
+    ).toBeUndefined();
+  });
+});
+
+describe("reconcileClaimEntailment", () => {
+  function judgeFixturePack(content: string): ReturnType<typeof buildPackExcerptTextResolver> {
+    return buildPackExcerptTextResolver([
+      packWith([{ scopePath: "src/a.ts", excerpts: [excerptWith("src/a.ts", 1, 20, content)] }]),
+    ]);
+  }
+
+  it("flags a claim whose in-pack (membership-valid) excerpt does NOT support it", async () => {
+    // The citation passes membership (it IS in the pack) but the excerpt contradicts the claim —
+    // the exact gap membership reconciliation is blind to ("10 years" cited to a "30 days" excerpt).
+    const answer = "The retention period is ten years [src/a.ts:1-20].";
+    const resolve = judgeFixturePack("retention period: 30 days [[CONTRADICTS]]");
+    const result = await reconcileClaimEntailment(
+      answer,
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+    );
+    expect(result.unentailed).toHaveLength(1);
+    expect(result.unentailed[0]?.citedPaths).toEqual(["src/a.ts"]);
+    expect(result.judgedClaims).toBe(1);
+  });
+
+  it("passes a claim whose excerpt supports it (no false positive)", async () => {
+    const answer = "The retention period is 30 days [src/a.ts:1-20].";
+    const resolve = judgeFixturePack("retention period: 30 days");
+    const result = await reconcileClaimEntailment(
+      answer,
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+    );
+    expect(result.unentailed).toHaveLength(0);
+    expect(result.judgedClaims).toBe(1);
+  });
+
+  it("counts an unavailable verdict without flagging the claim as unsupported", async () => {
+    const answer = "Config is read from [src/a.ts:1-20].";
+    const resolve = judgeFixturePack("[[UNAVAIL]]");
+    const result = await reconcileClaimEntailment(
+      answer,
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+    );
+    expect(result.unentailed).toHaveLength(0);
+    expect(result.unavailableClaims).toBe(1);
+  });
+
+  it("never judges a citation that already failed membership (composes without double-report)", async () => {
+    const answer = "Claim about [src/ghost.ts:1-3].";
+    // membership marks the citation unsupported (out of pack) -> entailment must skip it entirely.
+    const membership = reconcileInlineCitations(
+      answer,
+      buildPackCitationIndex([
+        packWith([{ scopePath: "src/a.ts", excerpts: [excerpt("src/a.ts", 1, 5)] }]),
+      ]),
+    );
+    let judgeCalls = 0;
+    const countingJudge: EntailmentJudge = {
+      judge: (): Promise<EntailmentVerdict> => {
+        judgeCalls += 1;
+        return Promise.resolve("unsupported");
+      },
+    };
+    const result = await reconcileClaimEntailment(
+      answer,
+      membership,
+      buildPackExcerptTextResolver([]),
+      countingJudge,
+    );
+    expect(judgeCalls).toBe(0);
+    expect(result.judgedClaims).toBe(0);
+    expect(result.unentailed).toHaveLength(0);
+  });
+
+  it("is monotone: strictly more unsupported claims never yields fewer flags", async () => {
+    const resolve = judgeFixturePack("[[CONTRADICTS]]");
+    const oneBad = await reconcileClaimEntailment(
+      "A [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+    );
+    const twoBad = await reconcileClaimEntailment(
+      "A [src/a.ts:1-20]. B [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+    );
+    expect(twoBad.unentailed.length).toBeGreaterThanOrEqual(oneBad.unentailed.length);
+    expect(twoBad.unentailed.length).toBe(2);
+  });
+
+  it("honours the per-answer claim budget", async () => {
+    const resolve = judgeFixturePack("[[CONTRADICTS]]");
+    const answer = "A [src/a.ts:1-20]. B [src/a.ts:1-20]. C [src/a.ts:1-20].";
+    const result = await reconcileClaimEntailment(
+      answer,
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      scriptedJudge(),
+      { maxClaims: 2, maxExcerptChars: 900 },
+    );
+    expect(result.judgedClaims).toBe(2);
+  });
+});
+
+describe("unsupportedClaimMarker / entailmentUnavailableMarker", () => {
+  it("names the unsupported paths and returns undefined when nothing is unentailed", () => {
+    expect(unsupportedClaimMarker([], NOW)).toBeUndefined();
+    const marker = unsupportedClaimMarker([{ citedPaths: ["src/x.ts"] }], NOW);
+    expect(marker?.kind).toBe("unsupported-claim");
+    expect(marker?.claim).toContain("src/x.ts");
+    expect(marker?.claim.toLowerCase()).toContain("unverified");
+  });
+
+  it("emits a WARN entailment-unavailable marker without any body text", () => {
+    const marker = entailmentUnavailableMarker(NOW);
+    expect(marker.kind).toBe("entailment-unavailable");
+    expect(marker.claim.toLowerCase()).toContain("could not be verified");
   });
 });
