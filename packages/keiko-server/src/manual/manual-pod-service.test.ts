@@ -3,17 +3,50 @@
 // orchestration: registry lifecycle, coarse live-progress event application, and the domain->wire
 // projection (which must stay body-free).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   HtmlManualIndexingProgress,
   ManualCrawlEvent,
 } from "@oscharko-dev/keiko-local-knowledge";
+import type { UiHandlerDeps } from "../deps.js";
 import {
   ManualPodJobRegistry,
   applyCrawlEvent,
+  buildHttpManualSource,
+  executeJob,
+  getManualPodJob,
   initialJob,
+  manualPodJobRegistry,
   projectJob,
+  startManualPodCreate,
+  startManualPodRefresh,
+  type ManualPodJobContext,
 } from "./manual-pod-service.js";
+
+const PROGRESS: HtmlManualIndexingProgress = {
+  phase: "ready",
+  crawl: { status: "completed", discovered: 3, accepted: 2, deniedCount: 1, bytesFetched: 64 },
+  indexing: {
+    status: "succeeded",
+    totalDocuments: 2,
+    processedDocuments: 2,
+    failedDocuments: 0,
+    skippedDocuments: 0,
+    vectorsPersisted: 4,
+  },
+  deniedLinks: [],
+  remediations: [],
+};
+
+// A context whose env/fetcher are never touched (the run thunk is injected in these tests).
+function stubContext(): ManualPodJobContext {
+  return {
+    env: { store: {} as never, close: vi.fn(), embeddingAdapter: {} as never },
+    fetcher: {} as never,
+  };
+}
+
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 describe("ManualPodJobRegistry", () => {
   it("registers, reads back, and patches a job", () => {
@@ -113,5 +146,108 @@ describe("projectJob", () => {
     expect(job.crawl).not.toHaveProperty("status");
     expect(job.indexing).not.toHaveProperty("status");
     expect(serialised).not.toContain("html");
+  });
+});
+
+describe("executeJob", () => {
+  it("projects a successful run (with a crawl event) onto the registry as succeeded", async () => {
+    const base = initialJob("exec-ok", "refresh", "c", "s");
+    manualPodJobRegistry.register(base, new AbortController());
+    await executeJob("exec-ok", base, new AbortController(), (onCrawlEvent) => {
+      onCrawlEvent({ kind: "page-accepted", relativePath: "a.html", depth: 1 });
+      return Promise.resolve(PROGRESS);
+    });
+    const job = getManualPodJob("exec-ok");
+    expect(job?.state).toBe("succeeded");
+    expect(job?.crawl.accepted).toBe(2);
+    expect(job?.indexing?.vectorsPersisted).toBe(4);
+  });
+
+  it("fails closed to a failed job (body-free) when the run rejects", async () => {
+    const base = initialJob("exec-fail", "refresh", "c", "s");
+    manualPodJobRegistry.register(base, new AbortController());
+    await executeJob("exec-fail", base, new AbortController(), () =>
+      Promise.reject(new Error("secret crawl detail")),
+    );
+    const job = getManualPodJob("exec-fail");
+    expect(job?.state).toBe("failed");
+    expect(JSON.stringify(job)).not.toContain("secret crawl detail");
+  });
+});
+
+describe("buildHttpManualSource", () => {
+  it("builds a valid http manual source from an approved origin + path prefix", () => {
+    const built = buildHttpManualSource({
+      displayName: "Ops",
+      origin: "https://manual.example.com",
+      pathPrefix: "/docs/",
+    });
+    expect(built.ok).toBe(true);
+    if (built.ok) {
+      expect(built.source.scope).toEqual({
+        kind: "html-manual-http",
+        origin: "https://manual.example.com",
+        pathPrefix: "/docs/",
+      });
+      expect(built.source.proposedPodName).toBe("Ops");
+    }
+  });
+});
+
+describe("startManualPodRefresh (injected seams)", () => {
+  it("registers a running job and executes the injected run", async () => {
+    const run = vi.fn().mockResolvedValue(PROGRESS);
+    const result = startManualPodRefresh(
+      {} as UiHandlerDeps,
+      { capsuleId: "cap", sourceId: "src" },
+      { context: stubContext(), run },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.job.state).toBe("running");
+      await flush();
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(getManualPodJob(result.job.jobId)?.state).toBe("succeeded");
+    }
+  });
+});
+
+describe("startManualPodCreate (injected seams)", () => {
+  it("rejects an invalid source before starting a job", async () => {
+    // A create request whose derived source cannot be validated fails closed as invalid-source.
+    const result = await startManualPodCreate(
+      {} as UiHandlerDeps,
+      { displayName: "", origin: "not-a-url", pathPrefix: null },
+      { context: stubContext(), run: vi.fn(), identity: {} as never },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("invalid-source");
+  });
+
+  it("registers a running create job and executes the injected run", async () => {
+    const run = vi.fn().mockResolvedValue(PROGRESS);
+    const result = await startManualPodCreate(
+      {} as UiHandlerDeps,
+      { displayName: "Ops", origin: "https://manual.example.com", pathPrefix: null },
+      { context: stubContext(), run, identity: {} as never },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.job.operation).toBe("create");
+      await flush();
+      expect(run).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+describe("startManualPodRefresh (real-deps context resolution)", () => {
+  it("returns no-embedding-model when no embedding model is configured", () => {
+    // No gateway config -> createEmbeddingAdapter yields a RouteResult -> openManualEnv is undefined.
+    const result = startManualPodRefresh({ config: undefined } as unknown as UiHandlerDeps, {
+      capsuleId: "cap",
+      sourceId: "src",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no-embedding-model");
   });
 });

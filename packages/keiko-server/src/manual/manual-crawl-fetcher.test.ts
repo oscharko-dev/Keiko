@@ -14,15 +14,15 @@ function fetchFake(
 ): { readonly fetchImpl: typeof fetch; readonly calls: string[] } {
   const calls: string[] = [];
   const fetchImpl = ((input: string | URL | Request): Promise<Response> => {
-    calls.push(typeof input === "string" ? input : input.toString());
-    const body = init.body ?? null;
+    calls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const body = (init.body ?? null) as BodyInit | null;
     return Promise.resolve(new Response(body, { status, headers: init.headers ?? {} }));
   }) as typeof fetch;
   return { fetchImpl, calls };
 }
 
 function throwingFetch(error: Error): typeof fetch {
-  return (() => Promise.reject(error)) as typeof fetch;
+  return () => Promise.reject(error);
 }
 
 describe("createGatewayManualFetcher — success + content classification", () => {

@@ -2,7 +2,7 @@
 // The handlers validate the request against the contract validators before any job starts and thread
 // the correlation id into every fail-closed error body. No crawl or model call is exercised here.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import type { RouteContext } from "../routes.js";
@@ -11,6 +11,7 @@ import {
   handleCreateHtmlManualPod,
   handleGetHtmlManualPodJob,
   handleRefreshHtmlManualPod,
+  type ManualPodRouteService,
 } from "./manual-pod-routes.js";
 import { initialJob, manualPodJobRegistry } from "./manual-pod-service.js";
 
@@ -87,5 +88,61 @@ describe("handleCreateHtmlManualPod", () => {
     };
     const result = await handleCreateHtmlManualPod(ctx, FAKE_DEPS);
     expect(result.status).toBe(400);
+  });
+});
+
+describe("manual-pod route success + service-error mapping (injected service)", () => {
+  it("returns 202 and the job when the refresh service starts a job", async () => {
+    const job = initialJob("route-ok", "refresh", "cap", "src");
+    const service: ManualPodRouteService = {
+      startRefresh: vi.fn().mockReturnValue({ ok: true, job }),
+      startCreate: vi.fn(),
+    };
+    const result = await handleRefreshHtmlManualPod(
+      ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(result.status).toBe(202);
+    expect((result.body as { jobId: string }).jobId).toBe("route-ok");
+  });
+
+  it("maps a no-embedding-model service result to a 409 with a correlation id", async () => {
+    const service: ManualPodRouteService = {
+      startRefresh: vi.fn().mockReturnValue({ ok: false, reason: "no-embedding-model" }),
+      startCreate: vi.fn(),
+    };
+    const result = await handleRefreshHtmlManualPod(
+      ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("corr-xyz");
+  });
+
+  it("returns 202 for a create job and maps invalid-source to 400", async () => {
+    const job = initialJob("route-create", "create", "cap", "src");
+    const okService: ManualPodRouteService = {
+      startRefresh: vi.fn(),
+      startCreate: vi.fn().mockResolvedValue({ ok: true, job }),
+    };
+    const ok = await handleCreateHtmlManualPod(
+      ctxFor({}, { displayName: "Ops", origin: "https://manual.example.com" }),
+      FAKE_DEPS,
+      okService,
+    );
+    expect(ok.status).toBe(202);
+
+    const badService: ManualPodRouteService = {
+      startRefresh: vi.fn(),
+      startCreate: vi.fn().mockResolvedValue({ ok: false, reason: "invalid-source" }),
+    };
+    const bad = await handleCreateHtmlManualPod(
+      ctxFor({}, { displayName: "Ops", origin: "https://manual.example.com" }),
+      FAKE_DEPS,
+      badService,
+    );
+    expect(bad.status).toBe(400);
   });
 });

@@ -120,21 +120,28 @@ function startResult(result: StartManualPodJobResult, ctx: RouteContext): RouteR
       ),
     };
   }
-  if (result.reason === "not-found") {
-    return {
-      status: 404,
-      body: errorBody("CAPSULE_NOT_FOUND", "Capsule not found.", ctx.correlationId),
-    };
-  }
   return {
     status: 400,
     body: errorBody("VALIDATION_FAILED", "The manual source is invalid.", ctx.correlationId),
   };
 }
 
+// The service the routes drive. Injectable so the route trust-boundary (validation + correlation-id
+// error bodies + success projection) is tested without exercising a crawl or the domain layer.
+export interface ManualPodRouteService {
+  readonly startRefresh: typeof startManualPodRefresh;
+  readonly startCreate: typeof startManualPodCreate;
+}
+
+const DEFAULT_SERVICE: ManualPodRouteService = {
+  startRefresh: startManualPodRefresh,
+  startCreate: startManualPodCreate,
+};
+
 export function handleRefreshHtmlManualPod(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  service: ManualPodRouteService = DEFAULT_SERVICE,
 ): Promise<RouteResult> {
   return runHandler(ctx, async () => {
     const request = validateHtmlManualPodRefreshRequest(await readJsonObject(ctx.req));
@@ -144,13 +151,14 @@ export function handleRefreshHtmlManualPod(
         body: errorBody("VALIDATION_FAILED", request.errors.join("; "), ctx.correlationId),
       };
     }
-    return startResult(startManualPodRefresh(deps, request.value), ctx);
+    return startResult(service.startRefresh(deps, request.value), ctx);
   });
 }
 
 export function handleCreateHtmlManualPod(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  service: ManualPodRouteService = DEFAULT_SERVICE,
 ): Promise<RouteResult> {
   return runHandler(ctx, async () => {
     const request = validateHtmlManualPodCreateRequest(await readJsonObject(ctx.req));
@@ -160,7 +168,7 @@ export function handleCreateHtmlManualPod(
         body: errorBody("VALIDATION_FAILED", request.errors.join("; "), ctx.correlationId),
       };
     }
-    return startResult(await startManualPodCreate(deps, request.value), ctx);
+    return startResult(await service.startCreate(deps, request.value), ctx);
   });
 }
 

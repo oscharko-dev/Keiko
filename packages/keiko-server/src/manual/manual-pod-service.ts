@@ -19,16 +19,17 @@ import {
   type HtmlManualPodJobState,
   type HtmlManualPodRefreshRequest,
   type HtmlManualSource,
+  type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createDefaultParserRegistry,
   createHtmlManualPod,
-  getCapsule,
   refreshHtmlManualPod,
   type HtmlManualIndexingProgress,
   type ManualCrawlEvent,
+  type ManualCrawlFetcher,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import { computeManualRootFingerprint } from "../docs-browser-proposal.js";
@@ -166,7 +167,7 @@ interface DomainEnv {
 
 // A run failure is a body-free failure: the error is dropped and the job goes to state=failed. The
 // prior pod (refresh) or no pod (create) is left intact by the domain functions.
-async function executeJob(
+export async function executeJob(
   jobId: string,
   base: HtmlManualPodJob,
   controller: AbortController,
@@ -185,7 +186,7 @@ async function executeJob(
   }
 }
 
-function buildHttpManualSource(
+export function buildHttpManualSource(
   request: HtmlManualPodCreateRequest,
 ): { readonly ok: true; readonly source: HtmlManualSource } | { readonly ok: false } {
   const fingerprint = computeManualRootFingerprint(`${request.origin}${request.pathPrefix ?? ""}`);
@@ -206,87 +207,157 @@ function fetcherFor(deps: UiHandlerDeps): ReturnType<typeof createGatewayManualF
 
 export type StartManualPodJobResult =
   | { readonly ok: true; readonly job: HtmlManualPodJob }
-  | { readonly ok: false; readonly reason: "no-embedding-model" | "invalid-source" | "not-found" };
+  | { readonly ok: false; readonly reason: "no-embedding-model" | "invalid-source" };
 
-// Start a CREATE job: allocate ids, resolve the configured embedding identity, derive the HTTP
-// source, and run createHtmlManualPod in the background. Returns the initial running job.
-export async function startManualPodCreate(
-  deps: UiHandlerDeps,
-  request: HtmlManualPodCreateRequest,
-): Promise<StartManualPodJobResult> {
-  const identity = await resolveNewCapsuleEmbeddingIdentity(deps);
-  if (!identity.ok) return { ok: false, reason: "no-embedding-model" };
-  const built = buildHttpManualSource(request);
-  if (!built.ok) return { ok: false, reason: "invalid-source" };
-  const env = openManualEnv(deps);
-  if (env === undefined) return { ok: false, reason: "no-embedding-model" };
-  const jobId = randomUUID();
-  const capsuleId = randomUUID();
-  const sourceId = randomUUID();
-  const controller = new AbortController();
-  const base = initialJob(jobId, "create", capsuleId, sourceId);
-  manualPodJobRegistry.register(base, controller);
-  const fetcher = fetcherFor(deps);
-  void executeJob(jobId, base, controller, (onCrawlEvent) =>
-    createHtmlManualPod(
-      {
-        store: env.store,
-        parserRegistry: createDefaultParserRegistry(),
-        embeddingAdapter: env.embeddingAdapter,
-        embeddingModelIdentity: identity.identity,
-        fetcher,
-        capsuleId: capsuleId as KnowledgeCapsuleId,
-        sourceId: sourceId as KnowledgeSourceId,
-        signal: controller.signal,
-        onCrawlEvent,
-      },
-      built.source,
-    )
-      .then((result) => result.progress)
-      .finally(() => env.close()),
-  );
-  return { ok: true, job: base };
+// A background job runner: emits crawl events and resolves the domain progress. Injectable so tests
+// exercise the start/registry/projection path without a real store, fetcher, or network.
+export type ManualPodJobRunner = (
+  onCrawlEvent: (event: ManualCrawlEvent) => void,
+) => Promise<HtmlManualIndexingProgress>;
+
+export interface ManualPodJobContext {
+  readonly env: DomainEnv;
+  readonly fetcher: ManualCrawlFetcher;
 }
 
-// Start a REFRESH job for an existing capsule/source. Scope is reconstructed inside
-// refreshHtmlManualPod from persisted state — the caller supplies only the ids.
-export function startManualPodRefresh(
-  deps: UiHandlerDeps,
-  request: HtmlManualPodRefreshRequest,
-): StartManualPodJobResult {
+export interface StartManualPodOverrides {
+  // Test seam: a pre-built domain context (real store + adapter + fetcher). Defaults to one resolved
+  // from `deps` (configured embedding model required).
+  readonly context?: ManualPodJobContext;
+  // Test seam: the background run thunk. Defaults to the real create/refresh domain call.
+  readonly run?: ManualPodJobRunner;
+}
+
+function resolveManualPodContext(deps: UiHandlerDeps): ManualPodJobContext | undefined {
   const env = openManualEnv(deps);
-  if (env === undefined) return { ok: false, reason: "no-embedding-model" };
-  if (getCapsule(env.store, request.capsuleId as KnowledgeCapsuleId) === undefined) {
-    env.close();
-    return { ok: false, reason: "not-found" };
-  }
-  const jobId = randomUUID();
-  const controller = new AbortController();
-  const base = initialJob(jobId, "refresh", request.capsuleId, request.sourceId);
-  manualPodJobRegistry.register(base, controller);
-  const fetcher = fetcherFor(deps);
-  void executeJob(jobId, base, controller, (onCrawlEvent) =>
+  return env === undefined ? undefined : { env, fetcher: fetcherFor(deps) };
+}
+
+function refreshRun(
+  ctx: ManualPodJobContext,
+  request: HtmlManualPodRefreshRequest,
+  controller: AbortController,
+): ManualPodJobRunner {
+  return (onCrawlEvent): Promise<HtmlManualIndexingProgress> =>
     refreshHtmlManualPod({
-      store: env.store,
+      store: ctx.env.store,
       parserRegistry: createDefaultParserRegistry(),
-      embeddingAdapter: env.embeddingAdapter,
-      fetcher,
+      embeddingAdapter: ctx.env.embeddingAdapter,
+      fetcher: ctx.fetcher,
       capsuleId: request.capsuleId as KnowledgeCapsuleId,
       sourceId: request.sourceId as KnowledgeSourceId,
       signal: controller.signal,
       onCrawlEvent,
     })
       .then((result) => result.progress)
-      .finally(() => env.close()),
+      .finally(() => {
+        ctx.env.close();
+      });
+}
+
+function createRun(
+  ctx: ManualPodJobContext,
+  source: HtmlManualSource,
+  identity: KnowledgeCapsule["embeddingModelIdentity"],
+  ids: { readonly capsuleId: string; readonly sourceId: string },
+  controller: AbortController,
+): ManualPodJobRunner {
+  return (onCrawlEvent): Promise<HtmlManualIndexingProgress> =>
+    createHtmlManualPod(
+      {
+        store: ctx.env.store,
+        parserRegistry: createDefaultParserRegistry(),
+        embeddingAdapter: ctx.env.embeddingAdapter,
+        embeddingModelIdentity: identity,
+        fetcher: ctx.fetcher,
+        capsuleId: ids.capsuleId as KnowledgeCapsuleId,
+        sourceId: ids.sourceId as KnowledgeSourceId,
+        signal: controller.signal,
+        onCrawlEvent,
+      },
+      source,
+    )
+      .then((result) => result.progress)
+      .finally(() => {
+        ctx.env.close();
+      });
+}
+
+function startJob(
+  operation: "create" | "refresh",
+  ids: { capsuleId: string; sourceId: string },
+  buildRun: (base: HtmlManualPodJob, controller: AbortController) => ManualPodJobRunner,
+): HtmlManualPodJob {
+  const jobId = randomUUID();
+  const controller = new AbortController();
+  const base = initialJob(jobId, operation, ids.capsuleId, ids.sourceId);
+  manualPodJobRegistry.register(base, controller);
+  void executeJob(jobId, base, controller, buildRun(base, controller));
+  return base;
+}
+
+// Start a CREATE job: allocate ids, resolve the configured embedding identity, derive the HTTP
+// source, and run createHtmlManualPod in the background. Returns the initial running job.
+export async function startManualPodCreate(
+  deps: UiHandlerDeps,
+  request: HtmlManualPodCreateRequest,
+  overrides: StartManualPodOverrides & {
+    readonly identity?: KnowledgeCapsule["embeddingModelIdentity"];
+  } = {},
+): Promise<StartManualPodJobResult> {
+  const built = buildHttpManualSource(request);
+  if (!built.ok) return { ok: false, reason: "invalid-source" };
+  const identity = overrides.identity ?? (await resolveIdentityFor(deps));
+  if (identity === undefined) return { ok: false, reason: "no-embedding-model" };
+  const ctx = overrides.context ?? resolveManualPodContext(deps);
+  if (ctx === undefined) return { ok: false, reason: "no-embedding-model" };
+  const ids = { capsuleId: randomUUID(), sourceId: randomUUID() };
+  const run = overrides.run;
+  const job = startJob(
+    "create",
+    ids,
+    (_base, controller) => run ?? createRun(ctx, built.source, identity, ids, controller),
   );
-  return { ok: true, job: base };
+  return { ok: true, job };
+}
+
+async function resolveIdentityFor(
+  deps: UiHandlerDeps,
+): Promise<KnowledgeCapsule["embeddingModelIdentity"] | undefined> {
+  const identity = await resolveNewCapsuleEmbeddingIdentity(deps);
+  return identity.ok ? identity.identity : undefined;
+}
+
+// Start a REFRESH job for an existing capsule/source. Scope is reconstructed inside
+// refreshHtmlManualPod from persisted state — the caller supplies only the ids. A missing capsule is
+// surfaced as a failed job (refreshHtmlManualPod rejects, executeJob fails closed), not a 404.
+export function startManualPodRefresh(
+  deps: UiHandlerDeps,
+  request: HtmlManualPodRefreshRequest,
+  overrides: StartManualPodOverrides = {},
+): StartManualPodJobResult {
+  const ctx = overrides.context ?? resolveManualPodContext(deps);
+  if (ctx === undefined) return { ok: false, reason: "no-embedding-model" };
+  const run = overrides.run;
+  const job = startJob(
+    "refresh",
+    { capsuleId: request.capsuleId, sourceId: request.sourceId },
+    (_base, controller) => run ?? refreshRun(ctx, request, controller),
+  );
+  return { ok: true, job };
 }
 
 function openManualEnv(deps: UiHandlerDeps): DomainEnv | undefined {
   const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return undefined;
   const store = openStoreForDeps(deps);
-  return { store: store.store, close: store.close, embeddingAdapter };
+  return {
+    store: store.store,
+    close: (): void => {
+      store.close();
+    },
+    embeddingAdapter,
+  };
 }
 
 export function getManualPodJob(jobId: string): HtmlManualPodJob | undefined {
