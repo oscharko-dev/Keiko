@@ -458,8 +458,14 @@ function decodeTextBytes(bytes: Uint8Array): StepResult<{ readonly text: string 
   }
 }
 
-function trimTrailingWhitespace(value: string): string {
-  return value.replace(/\s+$/u, "");
+// Exported for the co-located regression test only — not part of the package's public surface
+// (index.ts re-exports this module's types/functions by name and does not list this helper).
+export function trimTrailingWhitespace(value: string): string {
+  // `String.prototype.trimEnd` strips the same WhiteSpace/LineTerminator code points as `\s`
+  // under the regex `u` flag, without the unanchored `/\s+$/u` pattern: lacking a `^` anchor, that
+  // pattern retries the match at every position inside a long whitespace run before concluding
+  // there is no match — quadratic in input length (SonarCloud S8786, confirmed empirically).
+  return value.trimEnd();
 }
 
 interface ResolvedFile {

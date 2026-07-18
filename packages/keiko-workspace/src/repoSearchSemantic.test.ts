@@ -35,6 +35,12 @@ describe("repoSearchSemantic", () => {
       "repo.semanticSearch:enterprise-provider",
     );
     expect(semanticSearchTool("!!!")).toBe("repo.semanticSearch:unnamed");
+    // Regression for the charCodeAt -> codePointAt rename (typescript:S7758) in
+    // stripEdgeHyphens. A supplementary-plane character (2 UTF-16 code units) is never a "safe"
+    // provider-name character, so safeProviderName drops it before stripEdgeHyphens ever runs;
+    // this proves the surrounding sanitization pipeline still produces a clean, uncorrupted name
+    // end-to-end instead of leaking a stray surrogate into the tool id.
+    expect(semanticSearchTool("😀Provider😀")).toBe("repo.semanticSearch:provider");
   });
 
   it("fuses lexical and semantic ranks deterministically without comparing raw scores", () => {

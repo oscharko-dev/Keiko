@@ -17,7 +17,7 @@ import {
   ActiveWorkspaceProvider,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
-import { codingWorkbenchSetupTaskId } from "./CodingWorkbenchSetup";
+import { codingWorkbenchSetupTaskId, stripLeadingAndTrailingDashes } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
@@ -282,5 +282,26 @@ describe("CodingWorkbenchSetup", () => {
       "coding-workbench-feat-native-program",
     );
     expect(codingWorkbenchSetupTaskId("///")).toBe("coding-workbench");
+  });
+
+  it("strips only leading and trailing dashes, keeping interior runs intact", () => {
+    expect(stripLeadingAndTrailingDashes("")).toBe("");
+    expect(stripLeadingAndTrailingDashes("-")).toBe("");
+    expect(stripLeadingAndTrailingDashes("----")).toBe("");
+    expect(stripLeadingAndTrailingDashes("-a-")).toBe("a");
+    expect(stripLeadingAndTrailingDashes("--a--b--")).toBe("a--b");
+    expect(stripLeadingAndTrailingDashes("a-b")).toBe("a-b");
+  });
+
+  // SonarCloud S8786 regression: the previous /^-+|-+$/gu alternation of two unbounded
+  // quantifiers is provably O(n) here (each side is anchored and can match at most once), but
+  // codingWorkbenchSetupTaskId's own pipeline never hands the strip step more than a single
+  // leading/trailing "-" — so this guards the extracted helper directly against a raw,
+  // adversarially large dash-only input the original regex was designed to handle.
+  it("stays fast trimming an adversarially large dash-only string", () => {
+    const start = Date.now();
+    const result = stripLeadingAndTrailingDashes("-".repeat(20_000));
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(result).toBe("");
   });
 });

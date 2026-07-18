@@ -121,7 +121,7 @@ function redactCandidate(candidate: string, homePrefix: string): string {
 }
 
 function toForwardSlash(value: string): string {
-  return value.replace(/\\/g, "/");
+  return value.replaceAll("\\", "/");
 }
 
 function basenameOf(value: string): string {
@@ -158,7 +158,7 @@ function hasPathBoundary(message: string, index: number): boolean {
 
 function stripTrailingSlash(value: string): string {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+  while (end > 0 && value.codePointAt(end - 1) === 47) {
     end -= 1;
   }
   return end === value.length ? value : value.slice(0, end);

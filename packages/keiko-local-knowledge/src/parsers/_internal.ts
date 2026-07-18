@@ -138,7 +138,7 @@ function decodeUtf16(bytes: Uint8Array): DecodedText | undefined {
   const text = new TextDecoder(codec, { fatal: false }).decode(bytes);
   // The 2-byte UTF-16 BOM is normally consumed by TextDecoder; strip defensively so a leading
   // U+FEFF never survives into offsets. bomBytes is the consumed BOM byte length (2).
-  const stripped = text.length > 0 && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const stripped = text.length > 0 && text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
   return { text: stripped, bomBytes: 2 };
 }
 
@@ -194,7 +194,7 @@ function decodeUtf16WithoutBom(bytes: Uint8Array): DecodedText | undefined {
   const codec = utf16CodecForNulPattern(bytes);
   if (codec === undefined) return undefined;
   const text = new TextDecoder(codec, { fatal: false }).decode(bytes);
-  const stripped = text.length > 0 && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const stripped = text.length > 0 && text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
   return { text: stripped, bomBytes: 0 };
 }
 
@@ -294,7 +294,7 @@ export function decodeBytes(bytes: Uint8Array, fallbackCharset?: string): Decode
   if (utf16 !== undefined) return utf16;
   try {
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    if (raw.length > 0 && raw.charCodeAt(0) === 0xfeff) {
+    if (raw.length > 0 && raw.codePointAt(0) === 0xfeff) {
       return { text: raw.slice(1), bomBytes: hasUtf8Bom(bytes) ? 3 : 0, codec: "utf-8" };
     }
     return { text: raw, bomBytes: 0, codec: "utf-8" };

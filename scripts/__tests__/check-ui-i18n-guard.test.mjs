@@ -103,6 +103,40 @@ test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
   expect(hasUserFacingTextLine("// Called when the user opens a file.")).toBe(false);
 });
 
+// SonarCloud S8786 regression: USER_FACING_ATTRIBUTE_PATTERN's quoted-value alternatives used to
+// sandwich the required letter between two unbounded [^"]* groups that both overlap the letter
+// class, so an unterminated quoted attribute value made the engine try every split between the
+// two groups — O(n^2) worst case. A 20,000-character attribute value with no closing quote must
+// stay well under budget now that the leading group excludes letters.
+test("stays fast on an unterminated attribute value with no closing quote", () => {
+  const line = `title="${"a".repeat(20_000)}`;
+  const start = Date.now();
+  const result = hasUserFacingTextLine(line);
+  expect(Date.now() - start).toBeLessThan(300);
+  expect(result).toBe(false);
+});
+
+// SonarCloud S8786 regression (found while fixing the sibling above): the return-string check used
+// a `"[^"]*\s[A-Za-z][^"]*"`-shaped alternation whose two unbounded groups both overlap the `\s`
+// half of the pivot, so an unterminated quoted return value made the engine try every split between
+// them — O(n^2) worst case (314ms observed at just 20,000 characters before the fix). A 100,000
+// character return value with no closing quote must now resolve in well under budget.
+test("stays fast on an unterminated return string with no closing quote", () => {
+  const line = `return "${"a ".repeat(100_000)}`;
+  const start = Date.now();
+  const result = hasUserFacingTextLine(line);
+  expect(Date.now() - start).toBeLessThan(300);
+  expect(result).toBe(false);
+});
+
+test("still finds a whitespace/letter pivot that isn't the first whitespace in the return string", () => {
+  // The first space (before "2") is not part of a valid pivot; only the second space (before "a")
+  // is. A leading-quantifier fix that merely excludes letters (like the sibling attribute fix)
+  // would stop scanning at the first space and miss this — the correct fix must not do that.
+  expect(hasUserFacingTextLine('return "1 2 a";')).toBe(true);
+  expect(hasUserFacingTextLine('return "1 2 3";')).toBe(false);
+});
+
 test("requires catalog review only for i18n-relevant added lines", () => {
   expect(hasI18nRelevantAddedLine('return <p>{t("feature.title")}</p>;')).toBe(true);
   expect(hasI18nRelevantAddedLine("return <p>{t(`feature.title`)}</p>;")).toBe(true);

@@ -18,10 +18,76 @@ const I18N_USAGE_PATTERNS = [
   /<\s*I18nTranslate\b/,
   /\bOptionalWidgetTranslate\b/,
 ];
-const USER_FACING_ATTRIBUTE_PATTERN =
-  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
-const USER_FACING_STRING_RETURN_PATTERN =
-  /\breturn\s+(?:"[^"]*\s[A-Za-z][^"]*"|'[^']*\s[A-Za-z][^']*'|`[^`]*\s[A-Za-z][^`]*`)/u;
+// Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
+// [A-Za-z] pivot and the unbounded [^"]* that follows it, so a quote-less run of letters made
+// the engine explore every way to split the run between the two — O(n^2) worst case. Excluding
+// letters from the leading quantifier removes the ambiguous split (it can only stop at the first
+// letter) while still matching exactly when the quoted content contains at least one letter.
+//
+// The attribute-name alternation (6 branches) used to live in the same regex literal as the
+// quoted-value alternation (3 branches, each with the S8786-hardened shape above); combined, that
+// crossed SonarCloud S5843's complexity threshold. Splitting the name scan from the value check
+// into two regexes applied in sequence — hasUserFacingAttribute below finds each
+// `name\s*=\s*` occurrence via USER_FACING_ATTRIBUTE_NAME_RE and then tests
+// USER_FACING_ATTRIBUTE_VALUE_RE against the text immediately following it — is behaviourally
+// identical to the single combined pattern's `.test()`: both return true iff some position in the
+// line has one of the 6 attribute names followed by one of the 3 quoted-letter value shapes.
+const USER_FACING_ATTRIBUTE_NAME_RE =
+  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*/gu;
+// Split from one 3-branch alternation into 3 separate patterns tried via `.some()`
+// (typescript:S5843 — the combined form was still over the complexity threshold even after the
+// name/value split above). Only ever used via `.test()` with no group captures, so trying the
+// three quote-shapes independently is behaviorally identical to the single combined pattern.
+const USER_FACING_ATTRIBUTE_VALUE_PATTERNS = [
+  /^"[^"A-Za-z]*[A-Za-z][^"]*"/u,
+  /^'[^'A-Za-z]*[A-Za-z][^']*'/u,
+  /^`[^`A-Za-z]*[A-Za-z][^`]*`/u,
+];
+
+function matchesUserFacingAttributeValue(text) {
+  return USER_FACING_ATTRIBUTE_VALUE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function hasUserFacingAttribute(line) {
+  USER_FACING_ATTRIBUTE_NAME_RE.lastIndex = 0;
+  let nameMatch;
+  while ((nameMatch = USER_FACING_ATTRIBUTE_NAME_RE.exec(line)) !== null) {
+    const valueStart = nameMatch.index + nameMatch[0].length;
+    if (matchesUserFacingAttributeValue(line.slice(valueStart))) {
+      return true;
+    }
+  }
+  return false;
+}
+// This used to be a single alternation of `"[^"]*\s[A-Za-z][^"]*"`-shaped branches (and similarly
+// for '...' and `...`). Unlike USER_FACING_ATTRIBUTE_PATTERN's pivot (a single [A-Za-z] class),
+// this pivot is the two-character sequence `\s[A-Za-z]`, so excluding letters alone from the
+// leading quantifier isn't sufficient — e.g. content "1 2 a" has an early space (before "2") that
+// isn't part of a valid pivot, so a leading class that merely excludes letters would stop too
+// early and miss the real (later) pivot. Since neither `[^"]*` run can cross an interior quote of
+// the same type, the closing quote is always the first one found after the opening quote — so the
+// safe fix is to find that fixed opening/closing quote span with a plain indexOf (no ambiguous
+// backtracking possible) and test the small, unambiguous `/\s[A-Za-z]/` pivot only within that
+// bounded substring, instead of letting a single regex re-explore the split over the whole line.
+const RETURN_QUOTE_OPEN_PATTERN = /\breturn\s+(["'`])/gu;
+const WHITESPACE_LETTER_PIVOT_PATTERN = /\s[A-Za-z]/u;
+
+function hasUserFacingStringReturn(line) {
+  RETURN_QUOTE_OPEN_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = RETURN_QUOTE_OPEN_PATTERN.exec(line)) !== null) {
+    const quote = match[1];
+    const contentStart = match.index + match[0].length;
+    const contentEnd = line.indexOf(quote, contentStart);
+    if (
+      contentEnd !== -1 &&
+      WHITESPACE_LETTER_PIVOT_PATTERN.test(line.slice(contentStart, contentEnd))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+'|`[^`]+`)/u;
 
 const FEATURE_CATALOG_EN_PATTERN = /-i18n\.en\.ts$/u;
@@ -222,9 +288,7 @@ function hasUserFacingJsxText(line) {
 export function hasUserFacingTextLine(line) {
   if (isCommentLine(line)) return false;
   return (
-    hasUserFacingJsxText(line) ||
-    USER_FACING_ATTRIBUTE_PATTERN.test(line) ||
-    USER_FACING_STRING_RETURN_PATTERN.test(line)
+    hasUserFacingJsxText(line) || hasUserFacingAttribute(line) || hasUserFacingStringReturn(line)
   );
 }
 

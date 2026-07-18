@@ -276,6 +276,15 @@ describe("validateKnowledgePodRetrievalActivity", () => {
     expect(isKnowledgePodRetrievalActivitySafeText("alice@example.com")).toBe(false);
   });
 
+  it("treats a supplementary-plane character as a non-ASCII boundary, not a PII code match", () => {
+    // A lone surrogate's code unit value (and a real supplementary-plane code point) can never fall
+    // in the fixed ASCII ranges the PII scanners compare against, so a leading/embedded emoji must
+    // neither hide an email/phone match nor cause one to be invented out of benign text.
+    expect(isKnowledgePodRetrievalActivitySafeText("😀alice@example.com")).toBe(false);
+    expect(isKnowledgePodRetrievalActivitySafeText("Call 😀+1 (415) 555-2671 now")).toBe(false);
+    expect(isKnowledgePodRetrievalActivitySafeText("Contact 😀 support for details")).toBe(true);
+  });
+
   it("redacts every leakage class: embedded paths, traversal, home, endpoints, tokens, and PII", () => {
     for (const unsafeText of UNSAFE_ACTIVITY_TEXTS) {
       expect(isKnowledgePodRetrievalActivitySafeText(unsafeText)).toBe(false);

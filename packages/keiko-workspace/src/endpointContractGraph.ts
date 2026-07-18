@@ -35,19 +35,77 @@ const SPRING_METHODS: Readonly<Record<string, EndpointHttpMethod>> = {
   PatchMapping: "PATCH",
   DeleteMapping: "DELETE",
 };
-const JAVA_ROUTE =
-  /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s*(?:\(([^)]*)\))?[\s\r\n]*(?:public|private|protected)?\s*([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
+// The whitespace runs around the two optional segments (annotation args, access modifier) are
+// bounded ({0,200}) rather than unbounded (`\s*`) so a crafted run of whitespace between the
+// annotation and the method signature cannot make three adjacent quantifiers backtrack against
+// each other with polynomial cost (typescript:S8786). 200 chars comfortably covers any
+// realistically formatted Java source gap.
+//
+// The annotation name used to be a 6-branch alternation
+// (GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping); combined with
+// the rest of this regex's structure, that pushed it over SonarCloud S5843's complexity
+// threshold. `[A-Za-z]+Mapping` matches the same shape generically (a Spring annotation name
+// always ends in "Mapping"), and JAVA_ANNOTATION_NAMES below gates which captured names actually
+// produce a route — extractJava only calls addRoute when the captured name is one of the 6 known
+// annotations, exactly reproducing the original alternation's accept/reject set. An unrecognized
+// "...Mapping" annotation can still structurally match this regex where the literal alternation
+// never would have, but since it's rejected before addRoute either way, the observable output
+// (the routes actually extracted) is unchanged.
+const JAVA_ANNOTATION_NAMES: ReadonlySet<string> = new Set([
+  "GetMapping",
+  "PostMapping",
+  "PutMapping",
+  "PatchMapping",
+  "DeleteMapping",
+  "RequestMapping",
+]);
+// Split from one regex (annotation + optional access-modifier alternation + signature, all in
+// one pattern) into an annotation-scan regex, a plain-code optional-modifier skip, and a
+// signature regex (typescript:S5843 — the combined form was still over the complexity threshold).
+// A modifier-then-type ambiguity rules out folding the modifier back in as a second optional
+// identifier group in the signature regex: since "public" and a real return type are both bare
+// identifiers, an ambiguous optional-identifier-then-identifier shape would force the same kind
+// of backtracking the split is meant to remove. Checking the modifier via a plain Set membership
+// test instead (mirrors csharpPropertyFieldName's approach above) has no such ambiguity.
+const JAVA_ANNOTATION_RE = /@([A-Za-z]+Mapping)\s{0,200}(?:\(([^)]*)\))?\s{0,200}/gu;
+const JAVA_MODIFIERS: ReadonlySet<string> = new Set(["public", "private", "protected"]);
+const JAVA_SIGNATURE_RE = /^([\w.<>?]+)\s+([A-Za-z_$][\w$]*)\s{0,200}\(([^)]*)\)/u;
+
+function skipOptionalJavaModifier(text: string): string {
+  const match = /^([A-Za-z_$][\w$]*)\s{0,200}/u.exec(text);
+  if (match === null || !JAVA_MODIFIERS.has(match[1] ?? "")) {
+    return text;
+  }
+  return text.slice(match[0].length);
+}
 const JAVA_RECORD = /\brecord\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/gu;
 const TS_INTERFACE = /\binterface\s+([A-Za-z_$][\w$]*)\s*\{([^}]*)\}/gu;
 const TS_TYPE_OBJECT = /\btype\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^}]*)\}/gu;
-const AXIOS_CALL =
-  /\baxios\.(get|post|put|patch|delete)\s*(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/gu;
+// Same fix as JAVA_ROUTE: bound the whitespace runs around the optional generic-type argument so
+// the two adjacent `\s*` atoms (before/after the optional `<Type>`) cannot backtrack against each
+// other across an attacker-controlled whitespace run (typescript:S8786).
+//
+// The original AXIOS_CALL combined this call-site prefix (method alternation + optional generic
+// arg) with the quoted-string-literal alternation now in STRING_LITERAL_RE; combined, the two
+// alternations (5 branches here, 3 more-deeply-nested branches there) crossed SonarCloud S5843's
+// complexity threshold even though FETCH_CALL's use of the identical literal alternation alone
+// does not. Splitting the literal out into its own regex, applied to the text immediately
+// following each AXIOS_CALL_PREFIX match, is behaviourally identical to the original single
+// regex: extractTypeScript's exec loop already only advances past a successful prefix match
+// either way, and a prefix match whose first argument isn't a quoted literal (e.g.
+// `axios.get(someVar)`) is skipped exactly like the original's whole-match failure was.
+const AXIOS_CALL_PREFIX =
+  /\baxios\.(get|post|put|patch|delete)\s{0,50}(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s{0,50}\(\s*/gu;
+const STRING_LITERAL_RE = /^(?:`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/u;
 const FETCH_CALL =
   /\bfetch\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")(?:\s*,\s*\{([\s\S]{0,300}?)\})?/gu;
 
 function firstStringLiteral(args: string | undefined): string {
   if (args === undefined) return "/";
-  const match = /(?:path|value)?\s*=?\s*(["'])([^"']+)\1/u.exec(args);
+  // Bound the whitespace runs around the optional `=` (e.g. `path = "/x"` vs `"/x"`) so the two
+  // adjacent `\s*` atoms cannot backtrack against each other over a long non-matching input
+  // (typescript:S8786). Real annotation-argument gaps are a handful of characters at most.
+  const match = /(?:path|value)?\s{0,20}=?\s{0,20}(["'])([^"']+)\1/u.exec(args);
   return match?.[2] ?? "/";
 }
 
@@ -67,7 +125,7 @@ function routeBasePath(text: string): string {
 
 function unwrapType(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
-  const clean = raw.replace(/\?/gu, "").trim();
+  const clean = raw.replaceAll("?", "").trim();
   if (
     /^(void|Void|String|boolean|Boolean|int|long|double|float|Integer|Long|Double)$/u.test(clean)
   ) {
@@ -81,12 +139,20 @@ function requestBodyType(params: string): string | undefined {
   return /@RequestBody\s+([A-Za-z_$][\w$]*(?:<[^>]+>)?)\s+[A-Za-z_$][\w$]*/u.exec(params)?.[1];
 }
 
-function addRoute(state: EndpointBuildState, file: SourceFile, match: RegExpExecArray): void {
-  const method = springMethod(match[1] ?? "RequestMapping", match[2]);
-  const routePath = joinEndpointPaths(routeBasePath(file.text), firstStringLiteral(match[2]));
-  const line = lineNumberOf(file.text, match.index);
-  const responseType = unwrapType(match[3]);
-  const requestType = unwrapType(requestBodyType(match[5] ?? ""));
+function addRoute(
+  state: EndpointBuildState,
+  file: SourceFile,
+  annotationMatch: RegExpExecArray,
+  signatureMatch: RegExpExecArray,
+): void {
+  const method = springMethod(annotationMatch[1] ?? "RequestMapping", annotationMatch[2]);
+  const routePath = joinEndpointPaths(
+    routeBasePath(file.text),
+    firstStringLiteral(annotationMatch[2]),
+  );
+  const line = lineNumberOf(file.text, annotationMatch.index);
+  const responseType = unwrapType(signatureMatch[1]);
+  const requestType = unwrapType(requestBodyType(signatureMatch[3] ?? ""));
   state.routes.push({
     stableId: hashEndpointContractId("ec-route", [method, routePath, file.scopePath, line]),
     method,
@@ -95,17 +161,40 @@ function addRoute(state: EndpointBuildState, file: SourceFile, match: RegExpExec
     scopePath: file.scopePath,
     line,
     framework: "spring",
-    handler: match[4],
+    handler: signatureMatch[2],
     requestType,
     responseType,
     confidence: 0.92,
   });
 }
 
+const IDENT_START = /[A-Za-z_$]/u;
+const IDENT_PART = /[\w$]/u;
+
+// Extracts the field/parameter name trailing a Java type (e.g. "String status" -> "status").
+// Written as a plain backward-then-forward character scan instead of an unanchored
+// `/([A-Za-z_$][\w$]*)\s*$/` regex: that pattern has no `^` anchor, so a non-matching entry (one
+// that doesn't end in an identifier) forces `.exec` to retry the match at every offset, each
+// retry rescanning the remaining suffix - O(n^2) on a crafted entry (typescript:S8786). The scan
+// below visits each character at most twice, so it is linear regardless of input shape.
+function trailingIdentifier(text: string): string | undefined {
+  const end = text.length;
+  let runStart = end;
+  while (runStart > 0 && IDENT_PART.test(text[runStart - 1] ?? "")) {
+    runStart -= 1;
+  }
+  for (let index = runStart; index < end; index += 1) {
+    if (IDENT_START.test(text[index] ?? "")) {
+      return text.slice(index, end);
+    }
+  }
+  return undefined;
+}
+
 function javaFieldNames(fields: string): readonly string[] {
   return fields
     .split(",")
-    .map((entry) => /([A-Za-z_$][\w$]*)\s*$/u.exec(entry.trim())?.[1])
+    .map((entry) => trailingIdentifier(entry.trim()))
     .filter((field): field is string => field !== undefined)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -140,11 +229,17 @@ function addDtoShape(
 }
 
 function extractJava(file: SourceFile, state: EndpointBuildState): void {
-  JAVA_ROUTE.lastIndex = 0;
-  let route: RegExpExecArray | null = JAVA_ROUTE.exec(file.text);
-  while (route !== null) {
-    addRoute(state, file, route);
-    route = JAVA_ROUTE.exec(file.text);
+  JAVA_ANNOTATION_RE.lastIndex = 0;
+  let annotationMatch: RegExpExecArray | null = JAVA_ANNOTATION_RE.exec(file.text);
+  while (annotationMatch !== null) {
+    if (JAVA_ANNOTATION_NAMES.has(annotationMatch[1] ?? "")) {
+      const afterAnnotation = file.text.slice(annotationMatch.index + annotationMatch[0].length);
+      const signatureMatch = JAVA_SIGNATURE_RE.exec(skipOptionalJavaModifier(afterAnnotation));
+      if (signatureMatch !== null) {
+        addRoute(state, file, annotationMatch, signatureMatch);
+      }
+    }
+    annotationMatch = JAVA_ANNOTATION_RE.exec(file.text);
   }
   JAVA_RECORD.lastIndex = 0;
   let dto: RegExpExecArray | null = JAVA_RECORD.exec(file.text);
@@ -198,21 +293,28 @@ function addClientCall(
   });
 }
 
-function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
-  AXIOS_CALL.lastIndex = 0;
-  let axios: RegExpExecArray | null = AXIOS_CALL.exec(file.text);
-  while (axios !== null) {
-    addClientCall(
-      state,
-      file,
-      "axios",
-      (axios[1] ?? "get").toUpperCase() as EndpointHttpMethod,
-      axios[3] ?? "",
-      lineNumberOf(file.text, axios.index),
-      axios[2],
-    );
-    axios = AXIOS_CALL.exec(file.text);
+function extractAxiosCalls(file: SourceFile, state: EndpointBuildState): void {
+  AXIOS_CALL_PREFIX.lastIndex = 0;
+  let prefix: RegExpExecArray | null = AXIOS_CALL_PREFIX.exec(file.text);
+  while (prefix !== null) {
+    const literalMatch = STRING_LITERAL_RE.exec(file.text.slice(prefix.index + prefix[0].length));
+    if (literalMatch !== null) {
+      addClientCall(
+        state,
+        file,
+        "axios",
+        (prefix[1] ?? "get").toUpperCase() as EndpointHttpMethod,
+        literalMatch[0],
+        lineNumberOf(file.text, prefix.index),
+        prefix[2],
+      );
+    }
+    prefix = AXIOS_CALL_PREFIX.exec(file.text);
   }
+}
+
+function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
+  extractAxiosCalls(file, state);
   FETCH_CALL.lastIndex = 0;
   let fetchCall: RegExpExecArray | null = FETCH_CALL.exec(file.text);
   while (fetchCall !== null) {

@@ -163,10 +163,11 @@ function parsePortableArgs(
   if (command === "help") return "help";
   if (command === undefined) return undefined;
   let raw = initialRawOptions(env, deps);
-  for (let index = 1; index < args.length; index += 1) {
+  let index = 1;
+  while (index < args.length) {
     const flag = parsePortableFlag(args, index);
     if (flag === undefined) return undefined;
-    index = flag.nextIndex;
+    index = flag.nextIndex + 1;
     raw = applyPortableFlag(flag, deps.cwd, raw);
   }
   return finalizePortableOptions(command, raw, deps, env);

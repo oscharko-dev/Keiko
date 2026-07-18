@@ -63,8 +63,23 @@ export interface CreateLocalKnowledgeRemediationPortOptions {
     ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
 }
 
-function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
+// Strips trailing slashes with a plain scan rather than `/\/+$/` (typescript/javascript:S8786):
+// that pattern's greedy run is not anchored on its left side, so a `.replace()` search over a
+// long run of slashes that never reaches the string end (e.g. a slash run followed by other
+// path text) re-tries the same greedy-then-backtrack walk from every offset inside the run,
+// which is quadratic in the run length. A backward index scan is linear and does not backtrack.
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression test can call it directly instead of standing up a full remediation port.
+export function normalizedEndpointFingerprint(baseUrl: string): string {
+  const normalized = stripTrailingSlashes(baseUrl.trim());
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 

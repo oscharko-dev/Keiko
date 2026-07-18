@@ -140,6 +140,21 @@ describe("parseSafeMarkdown — bold and italic", () => {
     expect(para?.children?.some((c) => c.kind === "em")).toBe(false);
     expect(para?.children?.map((c) => c.text ?? "").join("")).toBe("NIGHTLY_CHAT_OK");
   });
+
+  it("treats _word_ as emphasis when flanked by a supplementary-plane character", () => {
+    // "😀" (U+1F600) is 2 UTF-16 code units. isWordChar() reads a single code unit at a
+    // time here (raw[pos-1] / raw[pos+1] are always one UTF-16 unit from bracket
+    // indexing), so each surrogate half must still resolve to "not a word char" —
+    // otherwise the emoji would be misread as flanking alphanumeric text and the
+    // underscore-emphasis word-boundary rule would wrongly suppress the emphasis.
+    const nodes = parseSafeMarkdown("😀_word_😀");
+    const para = nodes[0];
+    expect(para?.kind).toBe("paragraph");
+    const em = para?.children?.find((c) => c.kind === "em");
+    expect(em).toBeDefined();
+    expect(em?.children?.[0]?.text).toBe("word");
+    expect(para?.children?.map((c) => c.text ?? "").join("")).toBe("😀😀");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -349,6 +364,17 @@ describe("containsDangerousHtml — obfuscation normalizer", () => {
 
   it("detects tab between < and tag name: <\\tscript>", () => {
     expect(containsDangerousHtml("<\tscript>")).toBe(true);
+  });
+
+  it("does not let a supplementary-plane character splice a fake on*= identifier together", () => {
+    // isAssignmentAfterIdentifier() scans a run of lowercase-ASCII chars after "on" via
+    // codePointAt(); a "😀" (U+1F600) mid-run must still break the scan (its code point,
+    // and each UTF-16 half via charCodeAt, both fall well outside the a-z range), so
+    // "onerr😀or=" is correctly NOT recognized as the event handler "onerror=".
+    expect(containsDangerousHtml("<img src=x onerr😀or=alert(1)>")).toBe(false);
+    // A real handler elsewhere in the same string is still caught, proving the scan
+    // resumes correctly after stepping over a multi-unit character.
+    expect(containsDangerousHtml("<img src=x 😀 onerror=alert(1)>")).toBe(true);
   });
 });
 

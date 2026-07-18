@@ -36,14 +36,30 @@ const WINDOWS_QUALIFIED = /^(?:[A-Za-z]:|\\{2}|\/{2})/u;
 const TSC_DIAGNOSTIC =
   /^(?<file>[^()]+?)\((?<line>\d+),(?<col>\d+)\): (?:error|warning) (?<rule>TS\d+): (?<msg>.*)$/u;
 // ESLint stylish row under a bare file-path header line: "  12:34  error  message  rule-id".
+// The message and rule-id captures are bounded (not `+`/unbounded `{2,}`) rather than left as a
+// lazy quantifier directly adjacent to an optional quantified group — that adjacency is what
+// SonarCloud's S8786 flags as a superlinear-backtracking shape. The 4096 bound mirrors
+// MAX_LINE_LENGTH below, so no line that reaches this regex (already capped) can ever hit it.
 const ESLINT_ROW =
-  /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.+?)(?:\s{2,}(?<rule>[\w@/.-]+))?\s*$/u;
+  /^\s+(?<line>\d+):(?<col>\d+)\s+(?:error|warning)\s+(?<msg>.{1,4096}?)(?:\s{2,4096}(?<rule>[\w@/.-]{1,4096}))?\s*$/u;
 // A bare file-path line preceding ESLint rows (absolute or workspace-relative, no leading space).
 const ESLINT_FILE = /^(?<file>[^\s].*\.[cm]?[jt]sx?)$/u;
 // vitest default failure stack frame: "❯ src/a.test.ts:12:34" or "at src/a.test.ts:12:34".
-const VITEST_FRAME = /(?<file>[^\s()]+\.(?:test|spec)\.[cm]?[jt]sx?):(?<line>\d+):(?<col>\d+)/u;
+// The leading token is bounded to 512 chars (far more than any real workspace-relative path) so a
+// line with no ".test."/".spec." marker anywhere cannot force an O(line-length) greedy backtrack
+// at every scanned start position (S8786) — empirically an O(n^2) case for the previous unbounded
+// `[^\s()]+` (confirmed via adversarial timing before this change).
+const VITEST_FRAME =
+  /(?<file>[^\s()]{1,512}\.(?:test|spec)\.[cm]?[jt]sx?):(?<line>\d+):(?<col>\d+)/u;
 // A vitest failure title line ("FAIL src/a.test.ts > suite > case", "× case", "✗ case").
-const VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.+?)\s*$/u;
+// Bounded for the same reason as ESLINT_ROW above: the lazy title capture and the trailing
+// `\s*$` both match whitespace, so an unbounded title is a genuine (line-length-capped, but
+// otherwise real) polynomial-backtracking shape, not just an S8786 static-analysis preference.
+// The bound alone doesn't remove the *shape* the analyzer flags, though (a capped ambiguity is
+// still ambiguity) — so the trailing `\s*$` is dropped entirely: the capture is greedy and
+// unconditionally reaches `$` in one pass (nothing left to backtrack against), and the title is
+// trimmed in code (`trimEnd`) instead, which can never backtrack.
+const VITEST_TITLE = /^\s*(?:FAIL\b|×|✗|✖)\s*(?<title>.{1,4096})$/u;
 
 function toInt(value: string): number {
   return Number.parseInt(value, 10);
@@ -124,7 +140,7 @@ function extractVitest(lines: readonly string[]): VerificationFailureLocation[] 
   for (const line of lines) {
     const titleMatch = VITEST_TITLE.exec(line)?.groups?.title;
     if (titleMatch !== undefined) {
-      title = titleMatch;
+      title = titleMatch.trimEnd();
       continue;
     }
     const location = matchVitestFrame(line, title);

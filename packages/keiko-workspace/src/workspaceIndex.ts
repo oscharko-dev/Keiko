@@ -631,7 +631,7 @@ function isRuntimeDirMarker(value: string): boolean {
     return false;
   }
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
     const isHyphen = [8, 13, 18, 23].includes(index) && code === 45;
     const isHex = (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
     if (!isHyphen && !isHex) {
@@ -1218,17 +1218,17 @@ const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE = 16;
 const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE = 512;
 
 function isAsciiUpper(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 65 && code <= 90;
 }
 
 function isAsciiLower(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 97 && code <= 122;
 }
 
 function isAsciiDigit(char: string): boolean {
-  const code = char.charCodeAt(0);
+  const code = char.codePointAt(0) ?? 0;
   return code >= 48 && code <= 57;
 }
 
@@ -1279,10 +1279,32 @@ function addTerm(out: string[], seen: Set<string>, term: string): void {
   out.push(trimmed);
 }
 
+const LETTER_OR_NUMBER = /^[\p{L}\p{N}]$/u;
+
+// SonarCloud S8786: `/[^\p{L}\p{N}]+$/u` is anchored at the end but not the start, so an unanchored
+// engine retries every start position looking for a trailing non-letter/non-number run that
+// reaches the true end of the string -- quadratic whenever that run isn't at the very end (e.g. a
+// token content-tokenized from a line full of separator punctuation with one trailing letter). The
+// leading `^[^\p{L}\p{N}]+` sibling is unaffected (anchored at the start, so only one position is
+// ever tried) and is left as a regex. Code points are iterated (not UTF-16 units) to match how
+// `\p{L}`/`\p{N}` classify astral characters under the `u` flag.
+export function stripTrailingNonWordChars(value: string): string {
+  const chars = Array.from(value);
+  let end = chars.length;
+  while (end > 0) {
+    const char = chars[end - 1];
+    if (char !== undefined && LETTER_OR_NUMBER.test(char)) {
+      break;
+    }
+    end -= 1;
+  }
+  return chars.slice(0, end).join("");
+}
+
 function expandContentToken(token: string): readonly string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const normalized = token.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+  const normalized = stripTrailingNonWordChars(token.replace(/^[^\p{L}\p{N}]+/u, ""));
   if (normalized.length === 0) {
     return out;
   }

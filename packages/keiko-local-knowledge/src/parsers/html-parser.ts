@@ -48,7 +48,7 @@ function collapseWhitespace(value: string): string {
   let out = "";
   let inWs = false;
   for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+    const code = value.codePointAt(i);
     const ws = code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
     if (ws) {
       inWs = true;
@@ -124,7 +124,7 @@ function readTagName(
   from: number,
 ): { readonly name: string; readonly after: number } {
   let i = from;
-  while (i < text.length && isNameChar(text.charCodeAt(i))) i += 1;
+  while (i < text.length && isNameChar(text.codePointAt(i) ?? 0)) i += 1;
   return { name: text.slice(from, i).toLowerCase(), after: i };
 }
 
@@ -134,7 +134,7 @@ function skipSpecialMarker(text: string, after: number): number | null {
     const close = text.indexOf("-->", after + 3);
     return close === -1 ? text.length : close + 3;
   }
-  const ch = text.charCodeAt(after);
+  const ch = text.codePointAt(after);
   if (ch === 0x21 /* ! */ || ch === 0x3f /* ? */) {
     const gt = text.indexOf(">", after);
     return gt === -1 ? text.length : gt + 1;
@@ -150,7 +150,7 @@ function skipSpecialMarker(text: string, after: number): number | null {
 function findQuotedTagEnd(text: string, from: number): number {
   let quote = 0; // 0 = not in a quote, else the quote char code (0x22 `"` or 0x27 `'`)
   for (let i = from; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
+    const code = text.codePointAt(i);
     if (quote !== 0) {
       if (code === quote) quote = 0;
       continue;
@@ -179,13 +179,13 @@ function findTagEnd(text: string, from: number): number {
 
 function readTagAt(text: string, lt: number): Tag | null {
   const after = lt + 1;
-  const isClose = text.charCodeAt(after) === 0x2f; /* / */
+  const isClose = text.codePointAt(after) === 0x2f; /* / */
   const nameStart = isClose ? after + 1 : after;
-  if (!isAlpha(text.charCodeAt(nameStart))) return null;
+  if (!isAlpha(text.codePointAt(nameStart) ?? 0)) return null;
   const { name, after: afterName } = readTagName(text, nameStart);
   const gt = findTagEnd(text, afterName);
   if (gt === -1) return null;
-  const selfClosing = !isClose && text.charCodeAt(gt - 1) === 0x2f;
+  const selfClosing = !isClose && text.codePointAt(gt - 1) === 0x2f;
   const kind: TagKind = isClose ? "close" : selfClosing ? "self-closing" : "open";
   return { name, kind, start: lt, end: gt + 1, raw: text.slice(lt, gt + 1) };
 }
@@ -323,8 +323,8 @@ function selectMainContent(text: string): string {
 // ─── Heading stack ───────────────────────────────────────────────────────────
 
 function headingLevel(name: string): number {
-  if (name.length !== 2 || name.charCodeAt(0) !== 0x68 /* h */) return 0;
-  const code = name.charCodeAt(1);
+  if (name.length !== 2 || name.codePointAt(0) !== 0x68 /* h */) return 0;
+  const code = name.codePointAt(1) ?? 0;
   if (code < 0x31 || code > 0x36) return 0;
   return code - 0x30;
 }
@@ -373,7 +373,7 @@ interface ScanState {
 
 function isWhitespaceOnly(text: string, start: number, end: number): boolean {
   for (let i = start; i < end; i += 1) {
-    const code = text.charCodeAt(i);
+    const code = text.codePointAt(i);
     if (code !== 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return false;
   }
   return true;
@@ -462,8 +462,8 @@ function pushCleanedBlock(state: ScanState, text: string): void {
 function pushVerbatimBlock(state: ScanState, text: string): void {
   let start = 0;
   let end = text.length;
-  while (start < end && text.charCodeAt(start) === 0x0a) start += 1;
-  while (end > start && text.charCodeAt(end - 1) === 0x0a) end -= 1;
+  while (start < end && text.codePointAt(start) === 0x0a) start += 1;
+  while (end > start && text.codePointAt(end - 1) === 0x0a) end -= 1;
   pushRenderedBlock(state, text.slice(start, end));
 }
 
@@ -803,8 +803,9 @@ function isCharsetLabelChar(code: number): boolean {
 // Advance past `=`, whitespace, and an opening quote to the first character of the charset value.
 function skipToCharsetValue(head: string, from: number): number {
   let i = from;
-  while (i < head.length && (head.charCodeAt(i) === 0x3d || head.charCodeAt(i) <= 0x20)) i += 1;
-  if (i < head.length && (head.charCodeAt(i) === 0x22 || head.charCodeAt(i) === 0x27)) i += 1;
+  while (i < head.length && (head.codePointAt(i) === 0x3d || (head.codePointAt(i) ?? 0) <= 0x20))
+    i += 1;
+  if (i < head.length && (head.codePointAt(i) === 0x22 || head.codePointAt(i) === 0x27)) i += 1;
   return i;
 }
 
@@ -825,7 +826,7 @@ function charsetFromMetaTag(metaTagLower: string): string | undefined {
   while (
     end < metaTagLower.length &&
     end - start < MAX_CHARSET_LABEL_LENGTH &&
-    isCharsetLabelChar(metaTagLower.charCodeAt(end))
+    isCharsetLabelChar(metaTagLower.codePointAt(end) ?? 0)
   ) {
     end += 1;
   }
@@ -902,7 +903,7 @@ function isAnchorSlugChar(code: number): boolean {
 function isAnchorSlug(value: string): boolean {
   if (value.length === 0 || value.length > 128) return false;
   for (let i = 0; i < value.length; i += 1) {
-    if (!isAnchorSlugChar(value.charCodeAt(i))) return false;
+    if (!isAnchorSlugChar(value.codePointAt(i) ?? 0)) return false;
   }
   return true;
 }

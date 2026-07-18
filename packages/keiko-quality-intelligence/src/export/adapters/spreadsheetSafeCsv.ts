@@ -61,10 +61,15 @@ const LEADING_WHITESPACE_CODE_POINTS: ReadonlySet<number> = new Set<number>([
 const FORMULA_LEAD_AFTER_WHITESPACE: ReadonlySet<string> = new Set<string>(["=", "+", "-", "@"]);
 
 // Scan past a leading whitespace run; return true when the first non-whitespace character is a
-// formula lead. Pure, no regex — scans UTF-16 code units (every listed whitespace point is BMP).
+// formula lead. Pure, no regex — scans Unicode code points (every listed whitespace point is BMP,
+// so a supplementary-plane character, e.g. an emoji, is never mistaken for whitespace).
 function firstNonWhitespaceIsFormulaLead(value: string): boolean {
   let index = 0;
-  while (index < value.length && LEADING_WHITESPACE_CODE_POINTS.has(value.charCodeAt(index))) {
+  while (index < value.length) {
+    // `index` is always a valid position (bounded by the loop condition), so
+    // `codePointAt` always resolves to a code point here.
+    const codePoint = value.codePointAt(index) ?? -1;
+    if (!LEADING_WHITESPACE_CODE_POINTS.has(codePoint)) break;
     index += 1;
   }
   // index === 0 → no leading whitespace (the literal first-char check already handled it);

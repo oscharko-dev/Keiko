@@ -76,7 +76,9 @@ interface RowProjection {
   readonly text: string;
 }
 
-interface XlsxStyles {
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression tests can build a minimal `XlsxStyles` value for `readSheetRows` directly.
+export interface XlsxStyles {
   readonly cellFormatNumFmtIds: readonly number[];
   readonly customNumFmts: ReadonlyMap<number, string>;
 }
@@ -316,7 +318,155 @@ function xmlTextContent(value: string): string {
   return decodeXml(out);
 }
 
-function parseSharedStrings(
+// --- S8786-safe XML element scanning -----------------------------------------------------
+//
+// Every function below replaces a `/<tag\b[\s\S]*?<\/tag>/gi`-or-`/<tag\b[^>]*>/gi`-shaped
+// regex that used to run directly over untrusted, attacker-sized XML (sharedStrings.xml,
+// worksheet XML, styles.xml, relationship XML — each up to MAX_XML_INFLATED_BYTES / 32 MiB).
+// That shape is catastrophic on adversarial input: `.exec()`/`.matchAll()` retries the search
+// from every position where the open-tag literal occurs, and when the corresponding close
+// token (a literal `</tag>`, or just `>`) never appears in the remainder, EACH of those
+// attempts rescans all the way to the end of the string before failing — O(n) work at each of
+// O(n) candidate positions, i.e. O(n^2) (confirmed: 256 KB of "<si " with no "</si>" took
+// ~2.3s with clean ~4x-per-doubling scaling; the same shape reproduces for "<row ...>").
+//
+// A bounded quantifier cannot fix this without being lossy: this file's own 32 MiB ceiling
+// means a single legitimate `<si>`/`<row>`/`<c>` element can be large, and truncating the
+// scan would silently drop or corrupt real spreadsheet content. Instead these scan the input
+// exactly once: each `indexOf` call starts where the previous one finished, so total work is
+// O(n) regardless of how many unmatched "<tag" occurrences a hostile document contains. When a
+// candidate's closing token genuinely does not exist anywhere in the remainder, the scan stops
+// there rather than manufacturing an ever-growing "element" out of the rest of the document —
+// which is also the only situation where a regex-based scan could not have found a further,
+// later element either (a later element's own close token would have to live in that same,
+// entirely-empty remainder).
+// ASCII-only case fold: uppercase A-Z to lowercase, everything else (including any non-ASCII
+// character) unchanged. XML tag/attribute names in an XLSX part are always ASCII, so matching
+// them never needs `String#toLowerCase()`'s general Unicode case fold -- which is exactly what a
+// prior version of this file got wrong. `xml.toLowerCase()` is not always length-preserving (e.g.
+// "İ".toLowerCase() has length 2, not 1); once such a character appears anywhere in a shared
+// string or cell value, indices found by searching that separately-lowercased copy no longer line
+// up with the original `xml` they were later sliced from, silently corrupting every subsequent
+// tag boundary. Scanning `xml` itself, one ASCII-folded character at a time, keeps a single set
+// of indices that is always correct.
+function asciiLowerChar(ch: string): string {
+  const code = ch.codePointAt(0) ?? 0;
+  return code >= 0x41 && code <= 0x5a ? String.fromCodePoint(code + 32) : ch;
+}
+
+// Finds the first case-insensitive occurrence of `needleLower` (already ASCII-lowercase) in
+// `haystack`, starting at `fromIndex`. `needleLower.length` is always small and fixed (a literal
+// tag name or `</tag>` token), so this is linear in `haystack.length` -- the same complexity
+// class `String#indexOf` has, with no possibility of the backtracking this file's regex rewrite
+// was already built to avoid (S8786).
+function indexOfAsciiCaseInsensitive(
+  haystack: string,
+  needleLower: string,
+  fromIndex: number,
+): number {
+  const needleLength = needleLower.length;
+  const limit = haystack.length - needleLength;
+  candidate: for (let index = Math.max(fromIndex, 0); index <= limit; index += 1) {
+    for (let offset = 0; offset < needleLength; offset += 1) {
+      if (asciiLowerChar(haystack.charAt(index + offset)) !== needleLower.charAt(offset)) {
+        continue candidate;
+      }
+    }
+    return index;
+  }
+  return -1;
+}
+
+function isTagNameContinuation(xml: string, index: number): boolean {
+  const ch = xml.charAt(index);
+  if (ch === "") return false;
+  const lowerCh = asciiLowerChar(ch);
+  return (lowerCh >= "a" && lowerCh <= "z") || (ch >= "0" && ch <= "9") || ch === "_";
+}
+
+function findOpenTag(
+  xml: string,
+  tagNameLower: string,
+  fromIndex: number,
+): { readonly openIndex: number; readonly afterOpen: number } | undefined {
+  const openNeedle = `<${tagNameLower}`;
+  let cursor = fromIndex;
+  while (cursor < xml.length) {
+    const openIndex = indexOfAsciiCaseInsensitive(xml, openNeedle, cursor);
+    if (openIndex === -1) return undefined;
+    const afterOpen = openIndex + openNeedle.length;
+    if (isTagNameContinuation(xml, afterOpen)) {
+      cursor = openIndex + 1;
+      continue;
+    }
+    return { openIndex, afterOpen };
+  }
+  return undefined;
+}
+
+// Replacement for `/<tag\b[\s\S]*?<\/tag>/gi`: yields each full `<tag ...>...</tag>` element
+// (open tag through close tag, inclusive) in document order.
+function* iterateXmlElements(xml: string, tagNameLower: string): Generator<string, void, unknown> {
+  const closeNeedle = `</${tagNameLower}>`;
+  let cursor = 0;
+  for (;;) {
+    const open = findOpenTag(xml, tagNameLower, cursor);
+    if (open === undefined) return;
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.afterOpen);
+    if (closeIndex === -1) return;
+    const elementEnd = closeIndex + closeNeedle.length;
+    yield xml.slice(open.openIndex, elementEnd);
+    cursor = elementEnd;
+  }
+}
+
+// Replacement for `/<tag\b[^>]*>([\s\S]*?)<\/tag>/gi`: yields each element's inner content
+// (between the open tag's `>` and the matching `</tag>`) in document order.
+function* iterateXmlElementContents(
+  xml: string,
+  tagNameLower: string,
+): Generator<string, void, unknown> {
+  const closeNeedle = `</${tagNameLower}>`;
+  let cursor = 0;
+  for (;;) {
+    const open = findOpenTag(xml, tagNameLower, cursor);
+    if (open === undefined) return;
+    const openTagEnd = xml.indexOf(">", open.afterOpen);
+    if (openTagEnd === -1) return;
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, openTagEnd + 1);
+    if (closeIndex === -1) return;
+    yield xml.slice(openTagEnd + 1, closeIndex);
+    cursor = closeIndex + closeNeedle.length;
+  }
+}
+
+// Replacement for `/<tag\b[^>]*>/gi`: yields each self-contained start/self-closing tag (no
+// paired close tag required) in document order.
+function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<string, void, unknown> {
+  let cursor = 0;
+  for (;;) {
+    const open = findOpenTag(xml, tagNameLower, cursor);
+    if (open === undefined) return;
+    const tagEnd = xml.indexOf(">", open.afterOpen);
+    if (tagEnd === -1) return;
+    yield xml.slice(open.openIndex, tagEnd + 1);
+    cursor = tagEnd + 1;
+  }
+}
+
+function firstXmlElement(xml: string, tagNameLower: string): string | undefined {
+  return iterateXmlElements(xml, tagNameLower).next().value ?? undefined;
+}
+
+function firstXmlElementContent(xml: string, tagNameLower: string): string | undefined {
+  return iterateXmlElementContents(xml, tagNameLower).next().value ?? undefined;
+}
+
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly with a crafted adversarial shared-strings XML instead
+// of routing it through zip inflation, which would otherwise trip the compression-ratio guard
+// before the vulnerable code path is even reached.
+export function parseSharedStrings(
   xml: string,
   input: ParserSelectionInput,
   options: ParserOptions,
@@ -327,9 +477,7 @@ function parseSharedStrings(
   const strings: string[] = [];
   const diagnostics: ParserDiagnostic[] = [];
   const startedAt = options.now();
-  const itemPattern = /<si\b[\s\S]*?<\/si>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = itemPattern.exec(xml)) !== null) {
+  for (const itemXml of iterateXmlElements(xml, "si")) {
     const limit = shouldStop(startedAt, options, strings.length);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
@@ -339,10 +487,7 @@ function parseSharedStrings(
       diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
       break;
     }
-    const itemXml = match[0];
-    const parts = [...itemXml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)].map((part) =>
-      decodeXml(part[1] ?? ""),
-    );
+    const parts = [...iterateXmlElementContents(itemXml, "t")].map((part) => decodeXml(part));
     strings.push(parts.length > 0 ? parts.join("") : xmlTextContent(itemXml));
   }
   return { strings, diagnostics };
@@ -350,8 +495,7 @@ function parseSharedStrings(
 
 function parseRelationships(xml: string): ReadonlyMap<string, string> {
   const rels = new Map<string, string>();
-  for (const match of xml.matchAll(/<Relationship\b[^>]*>/gi)) {
-    const tag = match[0];
+  for (const tag of iterateXmlStartTags(xml, "relationship")) {
     const id = attribute(tag, "Id");
     const target = attribute(tag, "Target");
     if (id === undefined || target === undefined) continue;
@@ -368,8 +512,7 @@ function parseWorkbookSheets(
   const rels = relsXml === undefined ? new Map<string, string>() : parseRelationships(relsXml);
   const sheets: WorkbookSheet[] = [];
   if (workbookXml !== undefined) {
-    for (const match of workbookXml.matchAll(/<sheet\b[^>]*>/gi)) {
-      const tag = match[0];
+    for (const tag of iterateXmlStartTags(workbookXml, "sheet")) {
       const name = attribute(tag, "name") ?? "Sheet";
       const relId = attribute(tag, "r:id");
       const entryName = relId === undefined ? undefined : rels.get(relId);
@@ -397,10 +540,18 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
   return out;
 }
 
-function columnIndexFromName(column: string): number {
+// Exported (module-local only — not re-exported from the package barrel) so it can be unit
+// tested directly with a supplementary-plane `ch` (see xlsx-parser.test.ts S7758 regression).
+export function columnIndexFromName(column: string): number {
   let out = 0;
   for (const ch of column.toUpperCase()) {
-    const code = ch.charCodeAt(0);
+    // `ch` comes from a `for...of` over a string, so it is already ONE Unicode code point —
+    // 1 UTF-16 unit for a BMP letter, or a 2-unit surrogate pair for a supplementary-plane
+    // character. `codePointAt(0)` reads that whole code point in either case; a lone/derived
+    // surrogate value (0xD800-0xDFFF) and any real supplementary code point (>=0x10000) both
+    // fall well outside the 0x41-0x5a ('A'-'Z') range checked below, so such a `ch` is always
+    // (correctly) skipped rather than miscounted as a column letter.
+    const code = ch.codePointAt(0) ?? 0;
     if (code < 0x41 || code > 0x5a) continue;
     out = out * 26 + (code - 0x40);
   }
@@ -415,11 +566,9 @@ function rowNumber(rowTag: string, fallback: number): number {
 }
 
 function inlineStringValue(cellXml: string): string {
-  const inline = /<is\b[\s\S]*?<\/is>/iu.exec(cellXml)?.[0];
+  const inline = firstXmlElement(cellXml, "is");
   if (inline === undefined) return "";
-  return [...inline.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gi)]
-    .map((part) => decodeXml(part[1] ?? ""))
-    .join("");
+  return [...iterateXmlElementContents(inline, "t")].map((part) => decodeXml(part)).join("");
 }
 
 function rawCellValue(
@@ -434,7 +583,7 @@ function rawCellValue(
 }
 
 function formulaCellValue(cellXml: string): string {
-  const formula = /<f\b[^>]*>([\s\S]*?)<\/f>/iu.exec(cellXml)?.[1];
+  const formula = firstXmlElementContent(cellXml, "f");
   return formula === undefined ? "" : `=${decodeXml(formula)}`;
 }
 
@@ -442,20 +591,18 @@ const BUILT_IN_DATE_NUM_FORMATS: ReadonlySet<number> = new Set([
   14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 57,
 ]);
 
-// eslint-disable-next-line complexity
 function parseStyles(xml: string | undefined): XlsxStyles {
   if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
   const customNumFmts = new Map<number, string>();
-  for (const match of xml.matchAll(/<numFmt\b[^>]*>/gi)) {
-    const tag = match[0];
+  for (const tag of iterateXmlStartTags(xml, "numfmt")) {
     const id = Number.parseInt(attribute(tag, "numFmtId") ?? "", 10);
     const format = attribute(tag, "formatCode");
     if (Number.isFinite(id) && format !== undefined) customNumFmts.set(id, format);
   }
-  const cellXfsXml = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/iu.exec(xml)?.[1] ?? "";
+  const cellXfsXml = firstXmlElementContent(xml, "cellxfs") ?? "";
   const cellFormatNumFmtIds: number[] = [];
-  for (const match of cellXfsXml.matchAll(/<xf\b[^>]*>/gi)) {
-    const id = Number.parseInt(attribute(match[0], "numFmtId") ?? "0", 10);
+  for (const tag of iterateXmlStartTags(cellXfsXml, "xf")) {
+    const id = Number.parseInt(attribute(tag, "numFmtId") ?? "0", 10);
     cellFormatNumFmtIds.push(Number.isFinite(id) ? id : 0);
   }
   return { cellFormatNumFmtIds, customNumFmts };
@@ -516,7 +663,7 @@ function cellValue(cellXml: string, sharedStrings: readonly string[], styles: Xl
   const tag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
   const type = attribute(tag, "t");
   if (type === "inlineStr") return inlineStringValue(cellXml);
-  const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/iu.exec(cellXml)?.[1];
+  const raw = firstXmlElementContent(cellXml, "v");
   if (raw !== undefined) {
     const numFmtId = styleNumFmtId(attribute(tag, "s"), styles);
     if (type === undefined && isDateNumFmt(numFmtId, styles)) {
@@ -527,7 +674,11 @@ function cellValue(cellXml: string, sharedStrings: readonly string[], styles: Xl
   return formulaCellValue(cellXml);
 }
 
-function readSheetRows(
+// Exported (module-local only — not re-exported from the package barrel) so the S8786
+// regression below can call it directly with a crafted adversarial worksheet XML instead of
+// routing it through zip inflation, which would otherwise trip the compression-ratio guard
+// before the vulnerable code path is even reached.
+export function readSheetRows(
   sheetName: string,
   xml: string,
   sharedStrings: readonly string[],
@@ -535,15 +686,13 @@ function readSheetRows(
 ): readonly SheetRow[] {
   const rows: SheetRow[] = [];
   let fallbackRow = 1;
-  for (const rowMatch of xml.matchAll(/<row\b[^>]*>[\s\S]*?<\/row>/gi)) {
-    const rowXml = rowMatch[0];
+  for (const rowXml of iterateXmlElements(xml, "row")) {
     const rowTag = /^<row\b[^>]*>/iu.exec(rowXml)?.[0] ?? "";
     const number = rowNumber(rowTag, fallbackRow);
     fallbackRow = number + 1;
     const cells: CellValue[] = [];
     let fallbackCol = 0;
-    for (const cellMatch of rowXml.matchAll(/<c\b[^>]*>[\s\S]*?<\/c>/gi)) {
-      const cellXml = cellMatch[0];
+    for (const cellXml of iterateXmlElements(rowXml, "c")) {
       const cellTag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
       const column = columnName(attribute(cellTag, "r"), fallbackCol);
       const value = cellValue(cellXml, sharedStrings, styles).trim();

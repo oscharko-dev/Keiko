@@ -76,7 +76,7 @@ export function AgentGateCard({
         </div>
         <div className="row">
           <span aria-hidden="true">✗</span>
-          No extra BFF authority or autonomous follow-up
+          {"No extra BFF authority or autonomous follow-up"}
         </div>
       </div>
       <div className="arun-gate-btns ai-permit-act">

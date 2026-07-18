@@ -43,7 +43,7 @@ export function exceedsLineCount(text: string, maxLines: number): boolean {
   // (maxLines + 1)-th line, which is the first line over budget.
   let newlines = 0;
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10 /* \n */) {
+    if (text.codePointAt(index) === 10 /* \n */) {
       newlines += 1;
       if (newlines >= maxLines) {
         return true;

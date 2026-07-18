@@ -15,7 +15,7 @@ import type {
   EditorSaveRequest,
   EditorSignatureHelpResolver,
 } from "../index.js";
-import { KeikoCodeEditor } from "./KeikoCodeEditor.js";
+import { KeikoCodeEditor, countLines } from "./KeikoCodeEditor.js";
 import { baseProps, buildBuffer, buildFileModel, dirtyFileModel } from "./test-harness.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 
@@ -1025,6 +1025,13 @@ describe("KeikoCodeEditor — diagnostic overview markers", () => {
     expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
       expectedRange,
     );
+  });
+
+  it("counts lines correctly around a supplementary-plane character (feeds the marker position denominator)", () => {
+    // "😀" is 2 UTF-16 code units; the newline scan must still find exactly the 3 "\n"
+    // separators that follow it, regardless of whether it inspects code units or code points.
+    expect(countLines("😀 line one\nline two\nline three\n")).toBe(4);
+    expect(countLines("plain\ntext\n")).toBe(3);
   });
 });
 

@@ -200,8 +200,12 @@ describe("WorkspaceShader", () => {
 
     fireEvent(window, new CustomEvent("keiko:wallpaper-enabled", { detail: true }));
 
-    expect(container.querySelector("canvas")).not.toBeNull();
+    const canvas = container.querySelector("canvas");
+    expect(canvas).not.toBeNull();
     expect(getContext).toHaveBeenCalledWith("webgl", expect.any(Object));
+    // S6825: aria-hidden="true" must not sit on a focusable element — tabIndex={-1} keeps this
+    // purely decorative canvas out of the tab order so the two attributes stay consistent.
+    expect(canvas).toHaveAttribute("tabindex", "-1");
   });
 
   it("does not treat malformed persisted wallpaper values as opt-in", () => {

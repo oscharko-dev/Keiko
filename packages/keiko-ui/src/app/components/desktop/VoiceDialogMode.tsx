@@ -249,6 +249,9 @@ export function VoiceDialogControls({
           }}
         >
           Interrupt
+          {/* No inline space here: aria-label already names the button ("Interrupt the
+              assistant"), so this sr-only hint is read separately via aria-describedby, not
+              concatenated with the visible label text — no space is ever implied (S6772). */}
           <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
             {INTERRUPT_UNAVAILABLE_HINT}
           </span>

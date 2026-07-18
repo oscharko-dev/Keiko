@@ -781,7 +781,7 @@ function envModelIdFromApiKeyName(name: string): string | undefined {
     return undefined;
   }
   const token = name.slice(prefix.length, -suffix.length);
-  return token.length === 0 ? undefined : token.toLowerCase().replace(/_/g, "-");
+  return token.length === 0 ? undefined : token.toLowerCase().replaceAll("_", "-");
 }
 
 function hasEnvProvider(modelId: string, env: EnvSource): boolean {
@@ -1646,15 +1646,23 @@ function buildWorkspaceCleanup(
 // bootstrap, never throw into construction, and never block server start (the reconcile IO is detached
 // and self-contained). A failure simply leaves the persisted classification untouched until the next
 // pass or an explicit refresh.
-function reconcileTaskWorkspacesAtStartup(
+/** @internal Exported only for deterministic server tests. */
+export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
 ): void {
   if (service === undefined) return;
+  // `service.reconcile()` is typed as always returning a Promise, but the call itself (property
+  // lookup + invocation) can still throw synchronously for a non-conforming implementation (e.g. a
+  // test double). Isolate that from the Promise-rejection path below so each failure mode is
+  // handled exactly once.
+  let pending: ReturnType<WorkspaceReconciliationService["reconcile"]>;
   try {
-    void service.reconcile().catch(() => undefined);
+    pending = service.reconcile();
   } catch {
     // construction must never fail because of reconciliation.
+    return;
   }
+  void pending.catch(() => undefined);
 }
 
 function seedInitialProject(

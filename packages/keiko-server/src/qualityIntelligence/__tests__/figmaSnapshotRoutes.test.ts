@@ -1034,6 +1034,25 @@ describe("PATCH /api/figma/snapshots/:runId — handleFigmaUpdateSnapshotMetadat
     expect(entry?.management.displayName).toBe("Release baseline");
   });
 
+  it("accepts a display name containing a supplementary-plane character (not a control character)", async () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair; the control-character scan must keep
+    // treating it as ordinary text (codes <= 0x1f or === 0x7f), not reject it as invalid metadata.
+    const runId = "fs-00000000-0000-0000-0000-000000000303";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+
+    const patchResult = await handleFigmaUpdateSnapshotMetadata(
+      makePatchSnapshotCtx(runId, { displayName: "Release 😀 baseline" }),
+      makeDeps(evidenceDir, {}),
+    );
+
+    expect(patchResult.status).toBe(200);
+    const patched = patchResult.body as FigmaSnapshotSummary;
+    expect(patched.displayName).toBe("Release 😀 baseline");
+  });
+
   it("rejects invalid display names with FIGMA_BAD_METADATA", async () => {
     const runId = "fs-00000000-0000-0000-0000-000000000302";
     seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {

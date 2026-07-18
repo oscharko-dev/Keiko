@@ -1186,7 +1186,7 @@ function decodedTextLooksPrintable(decoded: string): boolean {
   if (decoded.length === 0) return true;
   let printable = 0;
   for (const char of decoded) {
-    const code = char.charCodeAt(0);
+    const code = char.codePointAt(0) ?? 0;
     if (code === 9 || code === 10 || code === 13 || code >= 32) printable += 1;
   }
   return printable / decoded.length > 0.85;

@@ -67,4 +67,11 @@ describe("exceedsLineCount", () => {
   it("handles an empty string as a single line", () => {
     expect(exceedsLineCount("", 1)).toBe(false);
   });
+
+  it("counts newlines correctly around a supplementary-plane character", () => {
+    // "😀" is 2 UTF-16 code units; the scan must still find exactly the surrounding "\n"
+    // separators regardless of whether it inspects code units or full code points at each index.
+    expect(exceedsLineCount("a\n😀\nc\nd", 3)).toBe(true);
+    expect(exceedsLineCount("a\n😀\nc", 3)).toBe(false);
+  });
 });

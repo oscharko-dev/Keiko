@@ -15,6 +15,19 @@ import type { KnowledgeStore } from "./store.js";
 
 export const HTML_MANUAL_SOURCE_SCOPE_VERSION = 1 as const;
 
+// Structural replacement for `value.replace(/\/+$/u, "")` (Sonar S8786): an unanchored
+// character-class quantifier anchored only at `$` forces the engine to retry the match at every
+// position inside a run of "/" when the string does not end in "/" — O(n^2) on a long slash run
+// (e.g. many slashes followed by one non-slash character). A single backward scan over the
+// trailing run is O(n) and strips exactly the same characters for every input.
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return end === value.length ? value : value.slice(0, end);
+}
+
 interface HtmlManualSourceMetadataRow {
   readonly capsule_id: string;
   readonly source_id: string;
@@ -295,7 +308,7 @@ function documentRelativePath(
 function relativePathForSource(source: KnowledgeSource, documentPath: string): string | undefined {
   const scope = source.scope;
   if (scope.kind !== "files" && scope.kind !== "folder") return undefined;
-  const root = scope.rootPath.replace(/\/+$/u, "");
+  const root = stripTrailingSlashes(scope.rootPath);
   const prefix = `${root}/`;
   if (documentPath.startsWith(prefix)) return documentPath.slice(prefix.length);
   return isSafeStorageReference(documentPath) ? documentPath : undefined;
@@ -337,7 +350,7 @@ function httpTarget(
 
 function isWithinApprovedHttpPath(pathname: string, prefix: string | null | undefined): boolean {
   if (prefix === undefined || prefix === null || prefix.length === 0 || prefix === "/") return true;
-  const withoutTrailingSlash = prefix.replace(/\/+$/u, "");
+  const withoutTrailingSlash = stripTrailingSlashes(prefix);
   const normalized = withoutTrailingSlash.startsWith("/")
     ? withoutTrailingSlash
     : `/${withoutTrailingSlash}`;
@@ -353,6 +366,6 @@ function localTarget(
   }
   return {
     ok: true,
-    target: pathToFileURL(`${metadata.rootPath.replace(/\/+$/u, "")}/${relativePath}`).href,
+    target: pathToFileURL(`${stripTrailingSlashes(metadata.rootPath)}/${relativePath}`).href,
   };
 }

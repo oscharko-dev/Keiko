@@ -34,9 +34,19 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
     pattern: /disregard (?:all |the )?(?:previous|above) instructions?/iu,
   },
   { name: "override-system-prompt", pattern: /(?:override|bypass) (?:the )?system prompt/iu },
-  { name: "system-role-injection", pattern: /(^|[\n\r])\s*system\s*:/iu },
-  { name: "assistant-role-injection", pattern: /(^|[\n\r])\s*assistant\s*:/iu },
-  { name: "developer-role-injection", pattern: /(^|[\n\r])\s*developer\s*:/iu },
+  // Role-marker patterns below restrict the gap between the line-start anchor and
+  // the keyword to horizontal whitespace only (Sonar S8786): with an unbounded
+  // `\s*`, every `\n`/`\r` inside a long run is itself both a candidate line-start
+  // AND part of the following quantifier's skippable range, so the engine explores
+  // every way to split a run of N newlines between the two, giving O(n^2). Because
+  // `[ \t]*` excludes `\n`/`\r`, a horizontal-whitespace run between two anchors
+  // belongs to exactly one candidate — each run is scanned once, giving O(n) total
+  // — without capping how far a role marker may be indented (an earlier fix bounded
+  // the gap to 20 characters, which let an attacker evade detection entirely by
+  // padding past the cap; see PR #2471 review).
+  { name: "system-role-injection", pattern: /(^|[\n\r])[ \t]*system\s*:/iu },
+  { name: "assistant-role-injection", pattern: /(^|[\n\r])[ \t]*assistant\s*:/iu },
+  { name: "developer-role-injection", pattern: /(^|[\n\r])[ \t]*developer\s*:/iu },
   { name: "im-start-token", pattern: /<\|im_start\|>/iu },
   { name: "im-end-token", pattern: /<\|im_end\|>/iu },
   { name: "endoftext-token", pattern: /<\|endoftext\|>/iu },
@@ -58,20 +68,29 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
     pattern:
       /(?:reveal|print|show|leak|exfiltrate) (?:the |your |any )?(?:api[\s-]?key|secret|password|token)s?/iu,
   },
+  // The three German "ignore instructions" patterns below fold the trailing shared
+  // `\s*` into each optional keyword's own alternative (Sonar S8786). The original
+  // shape left a freestanding `\s*` after two optional groups that, when both were
+  // skipped, sat directly adjacent to the leading mandatory `\s+` with nothing
+  // anchoring the split between them — the engine explored every way to divide a
+  // whitespace run between the two quantifiers, giving O(n^2) on non-matching
+  // whitespace-only input. Anchoring the gap to whichever keyword actually matched
+  // removes the ambiguity while accepting the exact same set of strings (including
+  // the original's zero-or-more gap after the second keyword).
   {
     name: "de-ignore-previous-instructions",
     pattern:
-      /ignoriere\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+      /ignoriere\s+(?:(?:alle|die)\s+)?(?:(?:bisherigen|vorherigen|obigen)\s*)?(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
   },
   {
     name: "de-forget-previous-instructions",
     pattern:
-      /vergiss\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+      /vergiss\s+(?:(?:alle|die)\s+)?(?:(?:bisherigen|vorherigen|obigen)\s*)?(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
   },
   {
     name: "de-disregard-previous-instructions",
     pattern:
-      /missachte\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+      /missachte\s+(?:(?:alle|die)\s+)?(?:(?:bisherigen|vorherigen|obigen)\s*)?(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
   },
   {
     name: "de-override-system-prompt",
@@ -87,11 +106,11 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
   },
   {
     name: "de-system-role-injection",
-    pattern: /(^|[\n\r])\s*systemnachricht\s*:/iu,
+    pattern: /(^|[\n\r])[ \t]*systemnachricht\s*:/iu,
   },
   {
     name: "de-developer-role-injection",
-    pattern: /(^|[\n\r])\s*entwicklernachricht\s*:/iu,
+    pattern: /(^|[\n\r])[ \t]*entwicklernachricht\s*:/iu,
   },
 ];
 

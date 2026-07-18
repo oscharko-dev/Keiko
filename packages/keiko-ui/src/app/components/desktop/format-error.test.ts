@@ -93,4 +93,17 @@ describe("formatUserError", () => {
     const raw = new Error("Gateway failed with Bearer sk-test-1234567890ABCDEFGH");
     expect(formatUserError(raw, "Retry")).toBe("Gateway failed with [REDACTED]");
   });
+
+  it("stays fast against an adversarial message with no trailing support code (S8786)", () => {
+    // The former `/\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/` has an unanchored leading `\s+`, so a long
+    // internal whitespace run that never reaches a "(CODE)" suffix drove O(n²) backtracking
+    // (empirically ~530ms at 32,000 chars pre-fix on this machine). Non-space start/end characters
+    // keep `toUserErrorNotice`'s own `.trim()` from shrinking the string before it is parsed. The
+    // manual character scan is O(n).
+    const adversarial = `Error: ${" ".repeat(20_000)}!`;
+    const start = Date.now();
+    const notice = toUserErrorNotice(adversarial, "Retry");
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(notice.code).toBeUndefined();
+  });
 });

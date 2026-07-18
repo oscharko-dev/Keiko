@@ -196,6 +196,26 @@ describe("selectMemoryEmbeddingModelId (#204)", () => {
   });
 });
 
+describe("memoryEmbeddingProviderIdentity (#204, SonarCloud S7758)", () => {
+  it("strips trailing slashes correctly when the base URL contains a supplementary-plane character", () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The trailing-slash scan must keep
+    // matching only the fixed ASCII "/" boundary and not be confused by the surrogate halves.
+    const [baseProvider] = gatewayConfig(EMBEDDING_MODEL).providers;
+    if (baseProvider === undefined) throw new Error("expected configured embedding provider");
+    const withTrailingSlashes = {
+      ...baseProvider,
+      baseUrl: "https://gateway.example.test/😀///",
+    };
+    const withoutTrailingSlashes = {
+      ...baseProvider,
+      baseUrl: "https://gateway.example.test/😀",
+    };
+    expect(memoryEmbeddingProviderIdentity(withTrailingSlashes)).toBe(
+      memoryEmbeddingProviderIdentity(withoutTrailingSlashes),
+    );
+  });
+});
+
 describe("embedMemoryText (#204)", () => {
   it("returns a vault-ready embedding input from the adapter", async () => {
     const deps = makeDeps();

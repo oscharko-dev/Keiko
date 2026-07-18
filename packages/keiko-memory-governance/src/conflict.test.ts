@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import { checkStatusTransition, MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
 
-import { buildConflictTransitions, detectConflictPair } from "./conflict.js";
+import { buildConflictTransitions, detectConflictPair, jaccardSimilarity } from "./conflict.js";
 import { GovernanceError } from "./errors.js";
 import { ctx, FIXED_NOW_MS, makeRecord, must, projectScope } from "./_support.js";
 
@@ -109,6 +109,19 @@ describe("detectConflictPair", () => {
       type: "decision",
     });
     expect(detectConflictPair(a, b).hasConflict).toBe(false);
+  });
+});
+
+describe("jaccardSimilarity", () => {
+  it("drops a supplementary-plane character (emoji) without corrupting adjacent tokens", () => {
+    // "😀" (U+1F600) is a 2-UTF-16-code-unit character. mapCharToSafe's letter/digit
+    // range check must reject it the same way whether it reads a lone surrogate's code
+    // unit or the full code point — both are far outside 0-9/a-z — so it is dropped
+    // exactly like any other punctuation, never splitting or merging the surrounding
+    // ASCII tokens.
+    const withEmoji = "hello 😀 world";
+    const withoutEmoji = "hello world";
+    expect(jaccardSimilarity(withEmoji, withoutEmoji)).toBe(1);
   });
 });
 

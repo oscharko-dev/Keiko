@@ -87,10 +87,10 @@ function buildAdapter(
 
 // Strip trailing "/" characters with a single linear scan. The equivalent regex `/\/+$/` is retried
 // at every index by `String.replace`, which is O(n^2) on adversarial input such as `"/".repeat(n)+"x"`
-// (CodeQL js/polynomial-redos). A charCode loop is O(n) and behaviourally identical for URL trimming.
+// (CodeQL js/polynomial-redos). A codePoint loop is O(n) and behaviourally identical for URL trimming.
 function stripTrailingSlashes(value: string): string {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) {
+  while (end > 0 && value.codePointAt(end - 1) === 47 /* "/" */) {
     end -= 1;
   }
   return value.slice(0, end);

@@ -479,7 +479,7 @@ function renderParsedPatch(files: readonly PatchFileChange[]): string {
 
 function normalizeProjectionPath(path: string): string {
   return path
-    .replace(/\\/gu, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join("/");

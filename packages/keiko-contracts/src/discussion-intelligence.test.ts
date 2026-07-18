@@ -330,6 +330,13 @@ describe("topicId validation", () => {
       "topicId: contains a forbidden path fragment",
     );
   });
+
+  it("does not mistake a supplementary-plane character for a control character", () => {
+    // A lone surrogate's code unit (and a real supplementary-plane code point) always falls
+    // outside the C0/DEL/C1 control ranges, so an emoji must never itself trigger the control-
+    // character reason.
+    expect(discussionTopicIdReasons("topic-😀-abc")).toEqual([]);
+  });
 });
 
 describe("turn lifecycle helpers (AC4)", () => {

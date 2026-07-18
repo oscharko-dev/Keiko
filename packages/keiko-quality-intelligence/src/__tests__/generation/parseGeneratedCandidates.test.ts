@@ -941,4 +941,20 @@ describe("parseGeneratedCandidates — adversarial inputs", () => {
     );
     expect(result.candidates).toHaveLength(50);
   });
+
+  // SonarCloud S8786: the internal code-fence stripper used to be a single regex whose lazy
+  // `[\s\S]*?` capture sat between two greedy `\s*` boundaries that can match the same
+  // whitespace characters. On a large, never-closed code fence the engine explored a
+  // combinatorial number of splits between them before giving up — empirically ~1.4s at 2,000
+  // whitespace characters and >12s at 4,000 (super-linear, confirmed before the fix). The
+  // rewritten stripper is two independent, unambiguous string operations; it must stay
+  // near-instant even at 20,000 characters, an input size the old pattern would never finish.
+  it("stays fast on a never-closed ```json fence with a huge body (regression for SonarCloud S8786)", () => {
+    const raw = `\`\`\`json${" ".repeat(20_000)}`;
+    const start = Date.now();
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(result.recovered).toBe(false);
+    expect(result.candidates).toHaveLength(0);
+  });
 });

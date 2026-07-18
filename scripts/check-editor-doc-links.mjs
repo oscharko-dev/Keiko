@@ -20,7 +20,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const LINK_PATTERN = /\[(?:[^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+// Link text/target/title are bounded (S8786): unbounded `[^\]]*`/`[^)\s]+`/`[^"]*` are unanchored,
+// so a string built from many repeated `[` characters forces the engine to retry a full O(n)
+// consume-then-backtrack at every position — O(n^2) overall. 2000 chars is far beyond any real
+// Markdown link in this repository's editor documentation set.
+const LINK_PATTERN = /\[[^\]]{0,2000}\]\(([^)\s]{1,2000})(?:\s+"[^"]{0,2000}")?\)/g;
 const EXTERNAL_PREFIX = /^(?:https?:|mailto:|tel:|#?\/\/|data:)/i;
 
 export function collectDocFiles(repoRoot = DEFAULT_REPO_ROOT) {
@@ -68,14 +72,35 @@ export function isWithinPath(root, candidate) {
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
+// GitHub-style ATX headings allow an optional closing `#…#` sequence, so the original regex chained
+// three overlapping quantifiers around it (`(.*?)\s*#*\s*$`): `.` is a superset of `\s`, so the lazy
+// content group and the trailing whitespace/hash runs can all claim the same characters, and a long
+// non-matching tail made the engine explore that ambiguity exponentially (S8786). Plain string ops
+// — strip the fixed `#{1,6}\s+` prefix, then peel trailing whitespace/hashes/whitespace off the
+// back — recognize exactly the same headings without any of that backtracking.
+const ATX_HEADING_PREFIX = /^#{1,6}\s+/;
+
+function stripTrailingAtxMarkup(text) {
+  const trimmed = text.trimEnd();
+  let end = trimmed.length;
+  while (end > 0 && trimmed.codePointAt(end - 1) === 35 /* '#' */) end -= 1;
+  return trimmed.slice(0, end).trimEnd();
+}
+
+function parseAtxHeadingText(line) {
+  const prefixMatch = ATX_HEADING_PREFIX.exec(line);
+  if (prefixMatch === null) return undefined;
+  return stripTrailingAtxMarkup(line.slice(prefixMatch[0].length));
+}
+
 function anchorsFor(context, absoluteFile) {
   const cached = context.anchorCache.get(absoluteFile);
   if (cached !== undefined) return cached;
   const anchors = new Set();
   if (absoluteFile.endsWith(".md") && existsSync(absoluteFile)) {
     for (const line of readFileSync(absoluteFile, "utf8").split("\n")) {
-      const match = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
-      if (match) anchors.add(slug(match[1]));
+      const headingText = parseAtxHeadingText(line);
+      if (headingText !== undefined) anchors.add(slug(headingText));
     }
   }
   context.anchorCache.set(absoluteFile, anchors);

@@ -12,7 +12,13 @@ import {
 } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { UiStore } from "./store/index.js";
-import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
+import {
+  handleGitHistory,
+  handleGitRemotes,
+  handleGitSummary,
+  parseHistory,
+  parseRemotes,
+} from "./gitRepositoryReads.js";
 import {
   defaultGitNetworkProcessRunner,
   gitEnv,
@@ -861,5 +867,47 @@ describe("read routes — repository root outside the selected root", () => {
       reason: "repository-root-outside-root",
       remotes: [],
     });
+  });
+});
+
+// Regression coverage for the S8786 backtracking fixes in parseRemotes/parseChangedFileCount: both
+// used to combine an unanchored unbounded quantifier with a fixed suffix, so a long non-matching
+// run forced an O(n^2) retry-at-every-position scan. These assert the bounded rewrites stay fast
+// on adversarial input while still producing the same results as before on realistic input (the
+// "GET /api/git/remotes" and "GET /api/git/history" suites above are unmodified and cover that).
+describe("parseRemotes / parseHistory — bounded regex safety (S8786)", () => {
+  it("keeps the widest-valid-split behavior for a remote URL containing internal whitespace", () => {
+    const stdout = "origin\thttps://example.invalid/a b.git (fetch)";
+    expect(parseRemotes(stdout)).toEqual([
+      { name: "origin", fetchUrl: "https://example.invalid/a b.git", pushUrl: undefined },
+    ]);
+  });
+
+  it("ignores a remote line whose name contains whitespace, matching the original anchored regex", () => {
+    const stdout = "not a valid name\thttps://example.invalid/x.git (fetch)";
+    expect(parseRemotes(stdout)).toEqual([]);
+  });
+
+  it("parses a pathologically long non-matching remotes line without catastrophic backtracking", () => {
+    // Shape that made the previous `(\S+)\t(.+?)\s+\(...\)$` regex quadratic: no tab at all, so
+    // `(\S+)` alone never finds a name/URL split, and there is no `(fetch|push)` suffix either.
+    const adversarial = `name${"x ".repeat(20000)}`;
+    const start = Date.now();
+    expect(parseRemotes(adversarial)).toEqual([]);
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it("extracts the changed-file count from a pathologically long non-matching shortstat line without catastrophic backtracking", () => {
+    const head = ["sha1", "sh1", "", "author", "date", "", "subject"].join("\x1f");
+    // Shape that made the previous `(\d+)\s+files?\s+changed` regex quadratic: a long digit run
+    // followed by a long whitespace run, with no "files changed" text anywhere.
+    const remainder = `${"1".repeat(20000)}${" ".repeat(20000)}x`;
+    const record = `\x1e${head}\n${remainder}`;
+
+    const start = Date.now();
+    const entries = parseHistory(record);
+    expect(Date.now() - start).toBeLessThan(1500);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.changedFileCount).toBe(0);
   });
 });

@@ -150,27 +150,38 @@ function slugHeading(heading) {
   return heading
     .trim()
     .toLowerCase()
-    .replace(/`/g, "")
+    .replaceAll("`", "")
     .replace(/[^a-z0-9 -]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 }
 
-function markdownAnchors(markdown) {
+const HEADING_MARKER = /^(#{1,6})\s+/;
+
+export function markdownAnchors(markdown) {
   const anchors = new Set();
   for (const line of markdown.split(/\r?\n/)) {
-    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    // The marker regex captures nothing past the required `\s+`; the body is a plain slice.
+    // A prior `(.+)$` right after `\s+` was still ambiguous (`.` also matches whitespace, so the
+    // boundary between the two is not unique) even though it's a single greedy pass (S8786 flags
+    // the shape regardless of whether backtracking is ever actually triggered). `slugHeading`
+    // already trims, so trailing whitespace doesn't need stripping here either way.
+    const match = HEADING_MARKER.exec(line);
     if (match) {
-      anchors.add(slugHeading(match[2]));
+      anchors.add(slugHeading(line.slice(match[0].length)));
     }
   }
   return anchors;
 }
 
-function markdownLinks(markdown) {
+export function markdownLinks(markdown) {
   const links = [];
-  const regex = /(?<!!)\[[^\]]+\]\(([^)]+)\)/g;
+  // Link text/target are bounded (S8786): unbounded `[^\]]+`/`[^)]+` are unanchored, so a string
+  // built from many repeated `[` (or `(`) characters forces the engine to retry a full O(n) consume
+  // at every position — O(n^2) overall. 2000 chars is far beyond any real Markdown link in this
+  // repository's docs.
+  const regex = /(?<!!)\[[^\]]{1,2000}\]\(([^)]{1,2000})\)/g;
   for (const match of markdown.matchAll(regex)) {
     const target = match[1].trim();
     if (

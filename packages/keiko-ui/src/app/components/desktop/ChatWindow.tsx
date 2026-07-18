@@ -311,13 +311,39 @@ function onComposerKeyDown(
 // uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
 // lenticular 【n】, fullwidth ［n］ — mirroring citation-attacher's tolerance) are
 // stripped together with their leading whitespace so copied prose stays clean.
-const CITATION_MARKER_PATTERN = /\s*[[【［]\d+[\]】］]/g;
+//
+// The marker atom is matched WITHOUT a leading `\s*` on purpose (SonarCloud S8786):
+// an unbounded quantifier directly followed by a mandatory, rarely-occurring atom is
+// the classic super-linear backtracking shape — for a long run of whitespace that
+// never resolves into a marker, a backtracking engine retries the whole run from
+// every offset inside it, which is O(n^2). Leading whitespace is instead trimmed by
+// a bounded backward scan in stripCitationMarkers below, which cannot backtrack.
+const CITATION_MARKER_PATTERN = /[[【［]\d+[\]】］]/g;
+const CITATION_MARKER_WHITESPACE = /\s/u;
 const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
 const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
 const QUESTION_MAP_PREVIEW_MAX = 76;
 
+// Equivalent to `text.replace(/\s*<marker>/g, "")`, but as a single forward pass
+// (matchAll) plus a bounded backward whitespace scan per marker, so total work
+// stays O(n) regardless of how much whitespace precedes a marker.
+function stripCitationMarkers(text: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(CITATION_MARKER_PATTERN)) {
+    const matchStart = match.index ?? 0;
+    let markerStart = matchStart;
+    while (markerStart > cursor && CITATION_MARKER_WHITESPACE.test(text.charAt(markerStart - 1))) {
+      markerStart -= 1;
+    }
+    result += text.slice(cursor, markerStart);
+    cursor = matchStart + match[0].length;
+  }
+  return result + text.slice(cursor);
+}
+
 export function copyableMessageText(content: string): string {
-  return sanitizeRepositoryEvidenceText(content).replace(CITATION_MARKER_PATTERN, "");
+  return stripCitationMarkers(sanitizeRepositoryEvidenceText(content));
 }
 
 function questionMapPreview(content: string): string {
@@ -1186,8 +1212,22 @@ function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
   return chat.connectedScope !== undefined ? [chat.connectedScope] : [];
 }
 
-function rootDisplayName(root: string): string {
-  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+// Plain backward scan instead of a `/\/+$/`-style regex (SonarCloud S8786): an
+// unbounded quantifier anchored only at the end (no leading `^`) retries from
+// every offset inside a long slash run that turns out not to reach the true
+// end, which is O(n^2) under backtracking. A manual scan is O(n).
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charAt(end - 1) === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+// Exported test-referenced helper (same rationale as `copyableMessageText` above): pure,
+// DOM-free, and otherwise only reachable through full ChatWindow rendering.
+export function rootDisplayName(root: string): string {
+  const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
   return parts[parts.length - 1] ?? root;
 }
@@ -2621,7 +2661,10 @@ function ComposerCoreImpl({
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
     (text: string): void => {
-      setDraft(draft.trim().length === 0 ? text : `${draft.replace(/\s+$/u, "")} ${text}`);
+      // SonarCloud S8786 — `/\s+$/` unanchored at the start is O(n^2) under backtracking
+      // for a long trailing-whitespace run (see stripCitationMarkers above for the same
+      // shape); `trimEnd()` is the native, non-regex equivalent for trailing whitespace.
+      setDraft(draft.trim().length === 0 ? text : `${draft.trimEnd()} ${text}`);
       taRef.current?.focus();
     },
     [draft, setDraft],

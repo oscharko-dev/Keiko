@@ -259,7 +259,7 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
       </h3>
       <div style={ROW_STYLE}>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Repository (owner/repo)
+          Repository (owner/repo){" "}
           <input
             style={FIELD_STYLE}
             value={form.ownerAndRepo}
@@ -268,7 +268,7 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
           />
         </label>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Pull Request number
+          Pull Request number{" "}
           <input
             style={FIELD_STYLE}
             value={form.prExternalId}
@@ -292,7 +292,7 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
       </div>
       <div style={ROW_STYLE}>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Base branch
+          Base branch{" "}
           <input
             style={FIELD_STYLE}
             value={form.baseBranchName}
@@ -302,7 +302,7 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
           />
         </label>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Head branch
+          Head branch{" "}
           <input
             style={FIELD_STYLE}
             value={form.headBranchName}
@@ -337,7 +337,7 @@ function StrategySelector({
         <Icons.git size={12} /> Strategy
       </h3>
       <label style={LABEL_STYLE}>
-        Merge strategy
+        Merge strategy{" "}
         <select
           style={FIELD_STYLE}
           value={form.mergeStrategy}
@@ -372,7 +372,7 @@ function StrategySelector({
           disabled={busy}
           onChange={(e) => onChange("deleteBranchAfterMerge", e.target.checked)}
           aria-label="Delete head branch after merge"
-        />
+        />{" "}
         Delete head branch after merge
       </label>
     </section>
@@ -457,7 +457,7 @@ function MergeApprovalGate({
           disabled={busy}
           onChange={(e) => onChange(e.target.checked)}
           aria-label="I confirm this high-risk merge"
-        />
+        />{" "}
         I confirm this high-risk merge
       </label>
     </section>

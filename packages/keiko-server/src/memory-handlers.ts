@@ -126,7 +126,7 @@ function isSensitivityArray(value: unknown): value is MemorySensitivity[] {
 
 function parseIntQuery(raw: string | null, defaultValue: number, max: number): number {
   if (raw === null) return defaultValue;
-  const n = parseInt(raw, 10);
+  const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) return defaultValue;
   return Math.min(n, max);
 }

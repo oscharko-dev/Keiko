@@ -70,6 +70,26 @@ describe("Windows portable ZIP adapter", () => {
     );
   });
 
+  // Regression coverage for the S8786 backtracking fix in `normalizeArchiveEntry`'s trailing-slash
+  // strip: the previous `/\/+$/u` regex is unanchored at the front, so an entry name with a long
+  // run of `/` not at the very end (tar/zip entry names are attacker-controlled input here) forced
+  // an O(n) backtrack retry at every position in that run — O(n^2) overall.
+  it("rejects an entry with a pathologically long slash run without catastrophic backtracking", () => {
+    const adversarialPath = `Keiko/${"/".repeat(20000)}x`;
+    const adapter = createPortableZipAdapter("win32", () => ({
+      stdout: sevenZipList([
+        { path: "Keiko", folder: true },
+        { path: adversarialPath, folder: false },
+      ]),
+    }));
+
+    const start = Date.now();
+    expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
+      "archive entry escapes Keiko",
+    );
+    expect(Date.now() - start).toBeLessThan(300);
+  });
+
   it("rejects symbolic links and special entry types from structured 7z metadata", () => {
     for (const entry of [
       { path: "Keiko/link", folder: false, attributes: "A_ lrwxrwxrwx" },

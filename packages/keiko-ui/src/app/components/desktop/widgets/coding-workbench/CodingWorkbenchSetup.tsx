@@ -53,13 +53,26 @@ export interface CodingWorkbenchSetupProps {
   readonly runtimeUnavailable: boolean;
 }
 
+// Strips a run of leading and/or trailing "-" characters. Plain index scanning instead of a
+// regex (SonarCloud S8786 flagged /^-+|-+$/gu, an alternation of two unbounded quantifiers) —
+// this can't backtrack at all and is the clearest way to express "trim this one character".
+// Exported only so the ReDoS regression test below can exercise it directly with a raw
+// dash-only input; codingWorkbenchSetupTaskId's own pipeline never hands it more than one
+// leading/trailing "-" (the preceding replaceAll already collapses any non-alnum run to one).
+export function stripLeadingAndTrailingDashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value.charAt(start) === "-") start += 1;
+  let end = value.length;
+  while (end > start && value.charAt(end - 1) === "-") end -= 1;
+  return value.slice(start, end);
+}
+
 // Content-free, deterministic task id for a workbench-initiated binding. Derived from the target
 // branch so re-binding the same branch idempotently resumes the same managed workspace (#445).
 export function codingWorkbenchSetupTaskId(targetBranch: string): string {
-  const slug = targetBranch
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/gu, "-")
-    .replaceAll(/^-+|-+$/gu, "");
+  const slug = stripLeadingAndTrailingDashes(
+    targetBranch.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "-"),
+  );
   return slug.length === 0 ? "coding-workbench" : `coding-workbench-${slug}`;
 }
 

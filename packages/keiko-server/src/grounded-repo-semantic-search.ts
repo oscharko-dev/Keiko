@@ -222,7 +222,7 @@ async function embedDocuments(
   documents: readonly CandidateDocument[],
   signal: AbortSignal | undefined,
 ): Promise<readonly (Float32Array | undefined)[]> {
-  const vectors = Array<Float32Array | undefined>(documents.length).fill(undefined);
+  const vectors = new Array<Float32Array | undefined>(documents.length).fill(undefined);
   const missingDocuments: CandidateDocument[] = [];
   const missingKeys: string[] = [];
   const missingIndexes: number[] = [];

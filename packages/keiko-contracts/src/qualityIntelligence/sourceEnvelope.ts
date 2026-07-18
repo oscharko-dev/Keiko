@@ -127,8 +127,13 @@ const containsBidiOrZeroWidth = (value: string): boolean => {
  *       defence-in-depth mirror (Epic #729 — symmetric with the candidate-text scrubber).
  */
 const fieldLooksUnsafe = (value: string): boolean => {
-  // (a) any scheme://
-  if (/[a-z][a-z0-9+.-]*:\/\//iu.test(value)) return true;
+  // (a) any scheme:// — the scheme-name run is bounded to {0,63} (SonarCloud S8786): unbounded, the
+  // unanchored `[a-z]` start combined with the greedy `[a-z0-9+.-]*` backtracking on a long non-URL
+  // run of matching characters gives O(n²) work (the engine retries the same backtrack at every
+  // position within the run). No real URI scheme name is anywhere near 63 characters, and since the
+  // match is unanchored, a scheme longer than the bound is still found from a later starting
+  // position — the bound only caps worst-case backtracking, it does not narrow real-world detection.
+  if (/[a-z][a-z0-9+.-]{0,63}:\/\//iu.test(value)) return true;
   // (b) credential shapes
   if (/AKIA[0-9A-Z]{12,}/u.test(value)) return true;
   if (/(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/u.test(value)) return true;

@@ -221,8 +221,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.directories).toHaveLength(0);
   });
 
-  it("refuses a symlinked state root without following it", () => {
-    if (process.platform === "win32") return;
+  it("refuses a symlinked state root without following it", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const target = join(root, "outside-state");
     const stateDir = join(root, ".keiko");
@@ -335,6 +335,29 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(retainedNames).toContain("keiko-ui.dbackup");
   });
 
+  it("retains a tool-result lookalike whose id contains a supplementary-plane character", () => {
+    // Regression for the S7758 codePointAt() rename in isSha256Hex(): the artifact id
+    // below is 62 ASCII hex chars plus one emoji ("\u{1F600}", a 2-UTF-16-code-unit
+    // supplementary-plane character), which is exactly 64 UTF-16 code units — the same
+    // length as a real sha256 hex digest — but is not valid hex. Both surrogate halves
+    // of the emoji must still fail the digit/lower-hex range check, so this must be
+    // retained as a customer file rather than misclassified as an owned tool-result
+    // artifact.
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
+    const lookalikeId = `${"a".repeat(62)}\u{1F600}`;
+    expect(lookalikeId).toHaveLength(64);
+    const relPath = `evidence/tool-results/${lookalikeId}.tool-result.txt`;
+    touch(join(stateDir, "evidence", "tool-results", `${lookalikeId}.tool-result.txt`));
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, relPath)).toBeUndefined();
+    const retained = scan.retained.find((r) => r.relPath === relPath);
+    expect(retained).toBeDefined();
+    expect(retained?.owned).toBe(false);
+  });
+
   it("retains a customer file and never claims it as Keiko-owned", () => {
     const stateDir = seedRuntimeState(makeRoot());
     const scan = scanRuntimeState(stateDir);
@@ -353,8 +376,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(rels.indexOf("evidence/qi")).toBeLessThan(rels.indexOf("evidence/qi/figma-snapshots"));
   });
 
-  it("flags a symlink in an owned position without following it", () => {
-    if (process.platform === "win32") return;
+  it("flags a symlink in an owned position without following it", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "secret-target"), "x", "utf8");
@@ -366,8 +389,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.files.some((f) => f.relPath === "keiko-ui.db")).toBe(false);
   });
 
-  it("treats a customer symlink in an unowned position as not owned", () => {
-    if (process.platform === "win32") return;
+  it("treats a customer symlink in an unowned position as not owned", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const stateDir = join(makeRoot(), ".keiko");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, "target"), "x", "utf8");
@@ -435,8 +458,8 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(retained).toContain("editor-hot-exit/.secret-vault.abc.deadbeefdeadbeef.tmp");
   });
 
-  it("retains an owned-looking hardlink without classifying it as an owned file", () => {
-    if (process.platform === "win32") return;
+  it("retains an owned-looking hardlink without classifying it as an owned file", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
     mkdirSync(stateDir, { recursive: true });

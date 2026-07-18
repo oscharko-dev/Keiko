@@ -316,6 +316,31 @@ describe("htmlParser — technical manual structure (#1855)", () => {
     expectEverySpanMarkupFree(html);
   });
 
+  // S7758 regression: pushVerbatimBlock trims leading/trailing "\n" via
+  // `text.codePointAt(...) === 0x0a` (renamed from charCodeAt). A supplementary-plane
+  // character (2 UTF-16 code units) sitting right next to the trimmed newline must not
+  // confuse the trim boundary, and characterStart/characterEnd — which downstream citation
+  // slicing relies on — must still be plain UTF-16 offsets that reproduce the emoji exactly.
+  it("keeps a supplementary-plane character intact through verbatim <pre> trimming and citation spans", () => {
+    const html = "<html><body><pre><code>\n😀 emoji at start\nend 😀\n</code></pre></body></html>";
+    const { units, text } = parseHtml(html);
+    const codeUnit = units.find((unit) => {
+      const span = asBlock(unit).span;
+      return text.slice(span.start, span.end).includes("emoji at start");
+    });
+    expect(codeUnit).toBeDefined();
+    const span = asBlock(codeUnit).span;
+    const code = text.slice(span.start, span.end);
+    // Leading/trailing "\n" trimmed even though the block starts and ends with a 2-code-unit
+    // emoji immediately inside the trimmed newline.
+    expect(code).toBe("😀 emoji at start\nend 😀");
+    // characterStart/characterEnd are UTF-16 code-unit offsets into `text` (JS string
+    // indexing is always UTF-16-unit based) — slicing at those exact offsets must reproduce
+    // the emoji byte-for-byte on both ends of the span.
+    expect(text.slice(span.start, span.start + 2)).toBe("😀");
+    expect(text.slice(span.end - 2, span.end)).toBe("😀");
+  });
+
   it("stamps the nearest heading anchor id onto blocks in that section", () => {
     const { units } = parseHtml(
       '<html><body><h2 id="error-codes">Error Codes</h2><p>E_TIMEOUT means the call expired.</p>' +

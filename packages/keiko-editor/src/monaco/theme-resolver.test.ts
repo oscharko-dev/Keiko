@@ -36,6 +36,13 @@ describe("hexFromColorString", () => {
     expect(hexFromColorString("oklch(98.5% 0.003 160)")).toBe("#f8fbf9");
   });
 
+  it("keeps oklch channel tokenisation correct around a supplementary-plane character", () => {
+    // "😀" is 2 UTF-16 code units glued directly onto the hue token; the CSS-whitespace scan
+    // must not miscount it as a delimiter, so parsing still yields exactly 3 channel tokens and
+    // the same leading-numeric hue as the plain "160" case.
+    expect(hexFromColorString("oklch(0.16 0.004 160😀)")).toBe("#0c0e0d");
+  });
+
   it("converts browser-normalised lab() colours to hex", () => {
     expect(hexFromColorString("lab(3.73244% -.759594 .301895)")).toBe("#0c0e0d");
     expect(hexFromColorString("lab(54.2917% 80.8128 69.8851 / 0.5)")).toBe("#ff000080");
