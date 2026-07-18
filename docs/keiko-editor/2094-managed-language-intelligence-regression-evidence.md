@@ -1,161 +1,191 @@
 # Epic 2094 managed language intelligence regression evidence
 
-Evidence refreshed: 2026-07-16. Foundation-wave audit baseline: `origin/dev` at
-`1056821a5b861f076cc88e120492aaf5cad37b9d`. The signed implementation candidate measured below is
-`5456afe9e5ef7792e478a70dbfe4745b8e22f3cb`; delivery-wide aggregate and remote checks remain
-separate from this focused M6 record.
+Evidence refreshed: 2026-07-18. The local Issue #2282 implementation is based on
+`dev@1325bf1321f15956afd08d7988bae3e24e6c8387` with Node 24.18.0 and npm 11.16.0.
+The real-browser, controlled Linux orchestration, and Linux-authoritative editor-evidence lanes are
+green. Exact-head signed-commit, aggregate, and required-check receipts remain mandatory before
+closure.
 
-## Focused closeout result
+## Current closeout status
 
-```text
-$ npm run test:managed-lsp-closeout
-Test Files  34 passed | 5 skipped (39)
-Tests       471 passed | 5 skipped (476)
-Duration    17.07s
+| Evidence                         | Current disposition                                                                                                                                                    |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Failure-first guard              | **PASS** — the new guard failed 4/4 before implementation: incomplete suite collection, missing browser proof, missing matrix/p50 evidence, and stale setup/M5 claims. |
+| Focused closeout                 | **PASS** — 52 files and 642 tests passed; 5 optional real-provider files/tests skipped. UI continuation: 2 files and 102 tests passed.                                 |
+| Provider-operation-state matrix  | **PASS** — 5 tests, including all 675 cells and fail-closed disposition invariants.                                                                                    |
+| Measurement harness unit tests   | **PASS** — 5 tests cover percentiles, recursive disk bytes and error paths, all budget dispositions, controlled enforcement, and five provider profiles.               |
+| Controlled orchestration         | **PASS** — `linux-arm64`, enforced wall-clock/RSS budgets, five isolated provider profiles, and zero residual disk bytes.                                              |
+| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 32.4 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
+| Linux editor release evidence    | **PASS** — fresh production export: 307 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
+| D12 paired editor evidence       | **PASS** — independent validation reports fresh Linux-authoritative evidence at `1e7d0742a095dd37fde6ab77885e6f58ee79fed3`, with all budgets inside their limits.      |
+| Aggregate gate                   | **PENDING** — a clean `npm run agent:pre-pr -- --no-cache` remains required after the authoritative evidence files are settled.                                        |
 
-UI Test Files  2 passed (2)
-UI Tests       102 passed (102)
-UI Duration    3.07s
-```
+Existing `dev` checks do not validate the uncommitted Issue #2282 diff and are not reused as
+exact-head evidence.
 
-The five skips are the offline real-provider smoke files for Python, Go, Shell, Java, and Rust. No
-approved real-provider directory was provisioned in this environment; no download was attempted.
-The mandatory fake-protocol conformance and product-path tests all executed.
+## Failure-first receipt
 
-## Linux orchestration performance
-
-`npm run check:managed-lsp-performance` passed on Linux arm64 with Node 24.18.0 and npm 11.16.0.
-The deterministic fake-provider harness measured Keiko's process-manager orchestration rather than
-claiming real-provider indexing performance:
-
-| Metric                    | Samples | Observed p95 |  Maximum | Budget | Result   |
-| ------------------------- | ------: | -----------: | -------: | -----: | -------- |
-| cold initialize           |      20 |     0.550 ms | 2.869 ms | 250 ms | **PASS** |
-| warm JSON-RPC request     |     100 |     0.047 ms | 0.216 ms |  25 ms | **PASS** |
-| graceful disposal         |      20 |     0.127 ms | 0.407 ms | 100 ms | **PASS** |
-| process RSS delta         |       - |  1,470,464 B |        - | 64 MiB | **PASS** |
-| persistent disk from test |       - |          0 B |        - |  1 MiB | **PASS** |
-
-## Provider and operation matrix
-
-`providerOperationMatrix.test.ts` pins the candidate matrix, and each provider conformance suite
-initializes a real JSON-RPC session against a deterministic fake process, intersects the advertised
-surface with the negotiated capabilities, executes every retained operation, and verifies bounded
-sanitized results. Unsupported cells remain explicit rather than being represented as successes.
-
-| Operation           | Python                   | Go                      | Shell                    | Java                    | Rust                    |
-| ------------------- | ------------------------ | ----------------------- | ------------------------ | ----------------------- | ----------------------- |
-| diagnostics         | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| completion          | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| hover               | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| symbols             | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| formatting          | Unsupported by candidate | Executed                | Unsupported by candidate | Executed                | Executed                |
-| definition          | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| type definition     | Executed                 | Executed                | Unsupported by candidate | Executed                | Executed                |
-| implementation      | Executed                 | Executed                | Unsupported by candidate | Executed                | Executed                |
-| references          | Executed                 | Executed                | Executed                 | Executed                | Executed                |
-| call hierarchy      | Executed                 | Executed                | Unsupported by candidate | Executed                | Executed                |
-| inlay hints         | Executed                 | Executed                | Unsupported by candidate | Executed                | Executed                |
-| rename preparation  | Executed, review-only    | Executed, review-only   | Unsupported by candidate | Executed, review-only   | Executed, review-only   |
-| rename apply result | Executed, no file write  | Executed, no file write | Unsupported by candidate | Executed, no file write | Executed, no file write |
-| code actions        | Executed, review-only    | Executed, review-only   | Unsupported by candidate | Executed, review-only   | Executed, review-only   |
-| signature help      | Executed                 | Executed                | Unsupported by candidate | Executed                | Executed                |
-
-Rust semantic tokens are an additional negotiated lane. The sanitizer maps 10,000 tokens inside the
-250 ms committed response budget and rejects malformed deltas, overlaps, out-of-range positions,
-unknown token types, unsupported modifiers, oversized documents, and over-cap token arrays.
-
-## Effective-state matrix
-
-The state matrix is executed across `managed-lsp-activation.test.ts`, `managedLspPolicy.test.ts`,
-`managedLspControl.test.ts`, `managedLspRoutes.test.ts`, `lspProcessManager.test.ts`, provider
-conformance, and the real-BFF agent integration.
-
-| State or transition | Executed evidence and closed result                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| default-off / unset | Five providers resolve disabled; no legacy environment variable bypasses canonical activation.                                 |
-| active              | Explicit local-human activation plus provisioning, safe configuration, healthy runtime, and negotiation produces availability. |
-| disabled            | Deactivation at the current revision prevents spawn and returns `PROVIDER_UNAVAILABLE` to a stale agent host.                  |
-| policy blocked      | Deployment denial wins over workspace activation and produces `disabledByPolicy`.                                              |
-| not provisioned     | Explicit activation remains `notProvisioned`; no process starts and no installer is offered.                                   |
-| unhealthy           | Health input produces `unhealthy`; old process state is not reused.                                                            |
-| capability missing  | The effective state is `capabilityMissing`, and the unnegotiated operation is not advertised or dispatched.                    |
-| restart required    | Configuration identifies restart fields; only explicit restart/disposal advances the serving generation.                       |
-| starting / degraded | Health projection remains typed and bounded; operation availability follows current negotiated state.                          |
-| stale revision      | The write returns `STALE_REVISION` without changing state, evidence, or process count.                                         |
-| stale generation    | Late exit and response events from a superseded child are discarded.                                                           |
-| timeout             | Initialization and request deadlines return typed timeout codes and dispose pending work.                                      |
-| cancellation        | Pre-dispatch and in-flight cancellation are typed; the real BFF propagates the agent connection close to the managed request.  |
-| crash loop          | Bounded restart attempts end in `RESTART_THROTTLED`; no retry storm occurs.                                                    |
-| oversized/malformed | Frames, capabilities, settings, tokens, and HTTP bodies fail closed without content reflection.                                |
-| workspace switch    | Activation is re-read for the new selected root; the old workspace provider is not used as fallback.                           |
-| rollback            | The immediately previous typed configuration is restored atomically and the affected pool entry is disposed.                   |
-
-## Product-path evidence
-
-`tests/editor-agent-managed-lsp.integration.test.ts` is the required composition test:
+Before implementation:
 
 ```text
-EditorAgentToolHost
-  -> EditorAgentHttpClient.action()
-  -> real loopback POST /api/editor/agent/actions
-  -> server-resolved /api/editor/language control plane
-  -> managed activation and negotiation
-  -> fake LSP stdio process
+$ npx vitest run tests/qa/managed-language-closeout-evidence.test.ts
+Test Files  1 failed (1)
+Tests       4 failed (4)
 ```
 
-It proves Python diagnostics and Go definition, a root-relative Go location, no absolute workspace
-root or diagnostic body in audit, review-only Python rename/code actions with byte-identical files,
-stale deactivation, workspace switch, and in-flight cancellation. The test never substitutes a
-direct action or language-handler call for this positive evidence.
+The failures independently proved the four closeout gaps. The retained test now requires complete
+LSP directory collection, the Issue #2282 Playwright config/spec, 675-cell and dual-percentile
+documentation, Node/npm lockfile setup, and a current M5 disposition.
 
-## UI, accessibility, i18n, and visual state
+## Provider-operation-state matrix
 
-`ManagedLanguageSettings.test.tsx` covers default, loading, active, blocked, not-provisioned,
-unhealthy, restart-required, stale-revision, rollback, and unavailable-state rendering. It verifies
-semantic controls, keyboard-operable buttons, status text that does not rely on color, and axe
-results. English and German strings are owned by `managed-language-i18n.ts`; the full
-`check:ui-i18n` gate detects raw or missing UI text. Styling is component-scoped in
-`ManagedLanguageSettings.module.css`; the SHA-pinned global stylesheet is unchanged.
+`providerOperationMatrix.test.ts` assigns an explicit result to all 675 provider-operation-state
+cells:
 
-The final Foundation-wave source candidate additionally passed the Linux editor bundle
-producer/checker and the paired D12 browser comparison recorded in the release artifacts. The
-delivery-wide exact-head aggregate and remote checks remain mandatory; macOS-generated editor
-fingerprints are not authoritative.
+```text
+5 providers × 15 operations × 9 effective states = 675 cells
+```
+
+| Disposition                 |   Cells | Meaning                                                                                                                                                     |
+| --------------------------- | ------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executed/conformance-backed |     260 | A reviewed candidate operation in `available`, `starting`, `active`, or `degraded`; provider suites must negotiate and execute the operation over JSON-RPC. |
+| Unsupported by candidate    |      40 | A spawnable state, but the provider profile deliberately excludes the operation.                                                                            |
+| Blocked by effective state  |     375 | `disabled`, `disabledByPolicy`, `notProvisioned`, `unhealthy`, or `restartRequired`; operation dispatch fails closed.                                       |
+| **Total**                   | **675** | Every cell has one closed disposition.                                                                                                                      |
+
+Candidate operation counts are Python 14, Go 15, Shell 6, Java 15, and Rust 15. The executable
+provider suites remain the capability evidence: they initialize a deterministic JSON-RPC session,
+intersect the candidate set with the live server result, execute every retained operation, and
+sanitize the bounded response. The 675-cell ledger does not advertise a static candidate by itself.
+
+| Operation           | Python                   | Go                       | Shell       | Java                     | Rust                     |
+| ------------------- | ------------------------ | ------------------------ | ----------- | ------------------------ | ------------------------ |
+| diagnostics         | candidate                | candidate                | candidate   | candidate                | candidate                |
+| completion          | candidate                | candidate                | candidate   | candidate                | candidate                |
+| hover               | candidate                | candidate                | candidate   | candidate                | candidate                |
+| symbols             | candidate                | candidate                | candidate   | candidate                | candidate                |
+| formatting          | unsupported              | candidate                | unsupported | candidate                | candidate                |
+| definition          | candidate                | candidate                | candidate   | candidate                | candidate                |
+| type definition     | candidate                | candidate                | unsupported | candidate                | candidate                |
+| implementation      | candidate                | candidate                | unsupported | candidate                | candidate                |
+| references          | candidate                | candidate                | candidate   | candidate                | candidate                |
+| call hierarchy      | candidate                | candidate                | unsupported | candidate                | candidate                |
+| inlay hints         | candidate                | candidate                | unsupported | candidate                | candidate                |
+| rename preparation  | candidate, review-only   | candidate, review-only   | unsupported | candidate, review-only   | candidate, review-only   |
+| rename apply result | candidate, no file write | candidate, no file write | unsupported | candidate, no file write | candidate, no file write |
+| code actions        | candidate, review-only   | candidate, review-only   | unsupported | candidate, review-only   | candidate, review-only   |
+| signature help      | candidate                | candidate                | unsupported | candidate                | candidate                |
+
+Rust semantic tokens remain an additional negotiated lane with fixed vocabulary remapping and
+bounded token/document/result sizes. Disabled, unhealthy, missing, malformed, or over-budget input
+returns `supported: false` and preserves syntax highlighting.
+
+## Hermetic product-path browser proof
+
+The new `test:e2e:managed-language-closeout-2282` command owns a real Settings-to-BFF-to-process
+proof. It uses no network and no route interception. Temporary external executables named
+`pyright-langserver` and `gopls` run one real stdio fixture, while production code still owns
+discovery, spawn, framing, initialization, negotiation, operation dispatch, health, restart,
+deactivation, and disposal.
+
+The spec covers:
+
+- five-provider default-off presentation;
+- keyboard activation for Python and Go;
+- real capability negotiation and READY health;
+- Python diagnostics and Go definition through `POST /api/editor/language`;
+- Python Settings edit, visible restart impact, real-route rollback, restored-value presentation,
+  revision/ETag-protected restart, and restored-generation negotiation;
+- Go Settings edit, visible restart impact, real-route restart, and changed-generation negotiation;
+- disabled Rust semantic-token fallback;
+- populated-state real-browser axe and attached visual evidence;
+- deactivation and typed no-fallback operation failure.
+
+The exact Playwright command passed 1/1 in 32.4 seconds. axe reported no serious or critical
+violations. The preserved `managed-language-closeout-active.png` attachment has SHA-256
+`4554ed9eac369e1f167ca9a232d45d5734317ec106e458e826088e860390e9ba` and shows Python and Go
+active/ready with their rolled-back and changed configuration values.
+
+The browser fixture seeds initial typed Python/Go configurations through the real BFF because the
+current Settings surface cannot create the first record after activation. Follow-up #2534 owns that
+product defect. Settings does expose the restart impact after an edit, but the live projection hides
+the restart action by resolving the provider back to `available`; #2535 owns that second defect. The
+test therefore performs restart and rollback through the real guarded BFF route rather than a stub.
+
+## Per-provider orchestration measurements
+
+`npm run check:managed-lsp-performance` now measures each provider/workspace profile independently.
+It records 20 cold/disposal and 100 warm samples per provider, actual recursive disk delta, and the
+process RSS delta. The 2026-07-18 `linux-arm64` run enforced the ADR-0139 budgets:
+
+| Provider             | Cold Observed p50 | Cold Observed p95 | Warm Observed p50 | Warm Observed p95 | Disposal Observed p50 | Disposal Observed p95 |   RSS delta | Disk delta |
+| -------------------- | ----------------: | ----------------: | ----------------: | ----------------: | --------------------: | --------------------: | ----------: | ---------: |
+| Pyright              |          0.239 ms |          0.597 ms |          0.028 ms |          0.054 ms |              0.080 ms |              0.217 ms | 5,111,808 B |        0 B |
+| gopls                |          0.110 ms |          0.178 ms |          0.020 ms |          0.035 ms |              0.043 ms |              0.064 ms | 5,767,168 B |        0 B |
+| Bash Language Server |          0.087 ms |          0.276 ms |          0.015 ms |          0.033 ms |              0.031 ms |              0.052 ms | 3,932,160 B |        0 B |
+| Eclipse JDT LS       |          0.075 ms |          0.131 ms |          0.013 ms |          0.028 ms |              0.027 ms |              0.039 ms |   131,072 B |        0 B |
+| rust-analyzer        |          0.076 ms |          0.189 ms |          0.016 ms |          0.028 ms |              0.028 ms |              0.038 ms | 2,883,584 B |        0 B |
+
+Committed budgets remain cold p95 250 ms, warm p95 25 ms, disposal p95 100 ms, RSS delta 64 MiB,
+and disk delta 1 MiB. Disk is enforced in every mode. Wall-clock and RSS fail the command only when
+`KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1` identifies a controlled measurement context. The fake provider
+measures Keiko process-manager overhead, not provider-native indexing or child-process RSS.
+
+Queueing, large document/result bounds, cancellation, initialization deadlines, crash-loop
+throttling, stale-generation rejection, and disposal escalation remain executable unit/integration
+evidence in the complete LSP directory. The optional real-provider files are additive and must skip
+explicitly when approved offline profiles are absent.
+
+## Security and rollback coverage
+
+The focused collection includes planted/symlinked executable rejection, environment closure,
+configuration injection, malformed/oversized frames and capabilities, server mutation requests,
+descendant restrictions, crash loops, cancellation, network denial, Java import/build execution
+denial, Rust build-script/proc-macro denial, Shell execution denial, evidence redaction, and private
+state cleanup. The separate security/performance review records the trust-boundary disposition.
+
+Rollback evidence covers deactivation, policy downgrade, missing binary, corrupt/schema-skewed
+state, failed atomic write, unhealthy/crash-loop runtime, previous typed configuration, stale
+revision/generation, cancellation, and semantic-token fallback. No rollback downloads or substitutes
+a runtime.
+
+## Accessibility, i18n, and visual state
+
+Component tests cover semantic controls, keyboard behavior, focus restoration, every effective
+state, English/German message ownership, and axe. The new browser spec adds the missing composed
+Settings/BFF state, real computed accessibility tree, and image attachment. The real-browser axe
+and visual lane is green with the receipt recorded above.
+
+Styling remains component-scoped. The SHA-pinned global stylesheet is unchanged.
 
 ## Coverage and release gates
 
-The focused suite is not a substitute for the repository green bar. Before delivery, rerun:
+Before delivery, run the clean aggregate and report `.agent/pre-pr-report.json`:
 
 ```bash
-npm run typecheck
-NODE_OPTIONS=--max-old-space-size=8192 npm run lint
-npm run format:check
-npm test
-npm run arch:check
-npm run arch:check:negative
-npm run conversation:release-check
-npm run test:coverage:quality
-npm run check:package-surface
-npm run check:adr-index
-npm run check:error-observability
-npm run check:security-regression-matrix
-npm run check:ui-i18n
-npm run check:editor-release-evidence
+npm run agent:pre-pr -- --no-cache
+npm run test:e2e:managed-language-closeout-2282
+npm run check:managed-lsp-performance
+KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1 npm run check:managed-lsp-performance
 ```
 
-No coverage baseline, branch floor, assertion, architecture boundary, security gate, or evidence
-fingerprint may be lowered to obtain a pass.
+The controlled performance command belongs on the documented measurement runner, not an arbitrary
+PR runner. No coverage baseline, branch floor, assertion, budget, architecture boundary, security
+gate, or evidence fingerprint may be lowered to obtain a pass.
 
 ## Known limitations and follow-ups
 
-- Mandatory CI is hermetic. Real-provider compatibility is optional per developer environment and
-  must be run offline before changing an approved provider profile.
-- Rust is the first semantic-token provider. Python, Go, Java, and Shell retain syntax highlighting
-  until a separately reviewed semantic-token mapping is implemented and proven.
-- Provider resource controls are enforcing for process launch, egress, private state, request/frame
-  bounds, crash loops, and configured runtime-state quotas. They are not a general-purpose operating
-  system container or a promise of perfect RSS attribution across every supported host.
-- PR #2260's non-blocking M5 audit identified two source-control conflict-UX follow-ups. The
-  maintainer merged that PR after the review with all 13 required checks green. They are outside
-  Epic #2094's managed-language source and are not silently patched by this verification shard.
+- Exact-head aggregate and protected-check receipts remain required.
+- Optional real-provider compatibility requires exact operator-provisioned offline profiles; no
+  download was attempted.
+- Provider-native indexing latency/RSS varies by real workspace and is not claimed by the fake
+  orchestration harness.
+- Settings cannot create the first typed runtime-configuration record after activation; #2534 owns
+  the product fix. The closeout fixture uses the real BFF to establish this explicit precondition.
+- The live projection hides the restart action after a configuration mutation; #2535 owns the
+  product fix. The browser proof still verifies visible restart impact and the real guarded restart
+  route.
+- Rust remains the first semantic-token provider; Python, Go, Java, and Shell retain syntax
+  highlighting until separately reviewed mappings exist.
+- The two M5 conflict-UX findings were resolved in `94fa38d42c9b9ec62e72b0464e30b5a526865bde`:
+  conflict acceptance now requires conflict state, and large-file conflict scanning is disabled.
