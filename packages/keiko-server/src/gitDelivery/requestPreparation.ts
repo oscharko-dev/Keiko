@@ -1,12 +1,13 @@
-// Shared request-preparation prologue for the governed remote Git delivery routes that resolve a
-// project workspace (publish #476, pull request #477, merge #478). Each of those route groups opened
-// BOTH its preview and execute handler with the same three steps: read + JSON-parse the bounded body,
-// validate it, then authorize the project workspace — differing only in the typed error envelope and
-// the per-route validator. This module is the single home for that prologue so the handlers never
-// re-duplicate it.
+// Shared request-preparation prologue for the governed Git delivery routes that resolve a project
+// workspace (publish #476, pull request #477, merge #478, and the fetch/pull sync routes). Each of
+// those route groups opens BOTH its preview and execute handler with the same three steps: read +
+// JSON-parse the bounded body, validate it, then authorize the project workspace — differing only in
+// the typed error envelope and the per-route validator. This module is the single home for that
+// prologue so the handlers never re-duplicate it.
 //
-// The sync (#479), commit, and local-mutation routes take a different handler shape (a mode / spec
-// parameter) and share only the lower-level readParsedGitDeliveryBody guard, not this scaffold.
+// The commit, local-mutation, and agent-operations routes take a different handler shape (a spec or
+// composite-dispatch parameter) and share only the lower-level readParsedGitDeliveryBody guard, not
+// this scaffold.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteResult } from "../routes.js";
