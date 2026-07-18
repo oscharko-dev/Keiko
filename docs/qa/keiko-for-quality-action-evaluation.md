@@ -31,18 +31,28 @@ pull-request code cannot mint the required aggregate check." That is true for a 
 workflow — which checks out and runs pull-controlled code — but it is **not** a property of GitHub
 Actions in general. Which branch's workflow definition runs depends on the event:
 
-| Trigger             | Workflow definition runs from     | Pull can alter it? | Token / secrets                      |
-| ------------------- | --------------------------------- | ------------------ | ------------------------------------ |
-| `check_run`         | Repository default branch (`dev`) | No                 | Full, repository secrets available   |
-| `issue_comment`     | Repository default branch (`dev`) | No                 | Full, repository secrets available   |
-| `schedule` (future) | Repository default branch (`dev`) | No                 | Full, repository secrets available   |
-| `pull_request`      | The pull request's own head/merge | Yes (same-repo)    | Read-only + no secrets for **forks** |
+| Trigger             | Workflow definition runs from     | Pull can alter it? | Token / secrets                               |
+| ------------------- | --------------------------------- | ------------------ | --------------------------------------------- |
+| `check_run`         | Repository default branch (`dev`) | No                 | Full, repository secrets available            |
+| `issue_comment`     | Repository default branch (`dev`) | No                 | Full, repository secrets available            |
+| `schedule` (future) | Repository default branch (`dev`) | No                 | Full, repository secrets available            |
+| `pull_request`      | The pull request's own head/merge | Yes (same-repo)    | `preview` job: read-only, no secrets, dry-run |
 
-The KFQ **gate authority rests on the base-branch triggers** (`check_run`, `issue_comment`), which
-pull-request code cannot alter — the same tamper-resistance the Worker provides. The `pull_request`
-trigger is retained only for fast first feedback; its verdict is always superseded by the next
-base-branch re-evaluation of the exact current head, and a fork's `pull_request` run cannot publish
-at all (read-only token, no secrets). The proof-of-concept additionally reacts to a `check_run`
+The workflow encodes this as two jobs with different trust levels so pull-request-controlled code can
+never reach the privileged publisher (Qodo review of PR #2513):
+
+- The **authoritative `evaluate` job** runs only on the default-branch-defined triggers (`check_run`,
+  `issue_comment`, `workflow_dispatch`), holds `checks`/`issues`/`pull-requests: write` and the App
+  private key, and publishes the aggregate. This is the same tamper-resistance the Worker provides.
+- The **untrusted `preview` job** runs only on `pull_request` (the pull's own copy of the workflow):
+  it is read-only, holds no secrets, and runs dry-run — it logs the verdict for fast feedback and
+  performs no writes. Pull-controlled code therefore cannot exfiltrate credentials or publish under
+  any identity. The authoritative verdict is always the next base-branch re-evaluation of the exact
+  current head.
+
+The `evaluate` job's per-pull `concurrency` group resolves to the pull number (via
+`check_run.pull_requests[0].number`, not the per-check id) so concurrent check completions for one
+pull cannot race to PATCH the aggregate into a stale state. It also reacts to a `check_run`
 completion only when the completed check is one the aggregate reads, which both scopes work and
 structurally prevents a self-trigger loop (its own job status check and posted aggregate check are
 not aggregated names).

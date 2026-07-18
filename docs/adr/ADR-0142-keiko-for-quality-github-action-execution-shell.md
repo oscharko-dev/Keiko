@@ -61,13 +61,22 @@ is unnecessary (GitHub delivers each event to one workflow run, and per-pull `co
 overlapping runs), and tracked-pull persistence is replaced by event triggers plus a bounded
 reconciliation (deferred to the cron child).
 
-### D3 — Base-branch triggers are the gate authority
+### D3 — Base-branch triggers are the gate authority; the pull-request path is untrusted
 
-The workflow is triggered on `check_run`, `issue_comment`, and (future) `schedule`, which run the
-definition from the default branch and cannot be altered by pull-request code, plus `pull_request`
-for fast first feedback. The base-branch triggers are the tamper-resistant authority; the
-`pull_request` run, which uses the pull's own copy, is a convenience whose verdict is superseded by
-the next base-branch re-evaluation of the exact current head.
+The workflow separates trust into two jobs so pull-request-controlled code can never reach the
+privileged publisher (Qodo review of PR #2513):
+
+- The **authoritative `evaluate` job** runs only on the default-branch-defined triggers
+  (`check_run`, `issue_comment`, `workflow_dispatch`, and future `schedule`), whose definition
+  pull-request code cannot alter. It holds `checks`/`issues`/`pull-requests: write` and the App
+  private key, and publishes the aggregate. Its per-pull `concurrency` group resolves to the pull
+  number (via `check_run.pull_requests[0].number`, not the per-check id) so concurrent check
+  completions for one pull cannot race to PATCH the aggregate into a stale state.
+- The **untrusted `preview` job** runs only on `pull_request`, which uses the pull's own copy of the
+  workflow and script. It is read-only, holds no secrets, and runs dry-run (`KFQ_DRY_RUN`): it logs
+  the verdict for fast feedback and performs no writes. Pull-controlled code therefore cannot
+  exfiltrate credentials or publish under any identity. The authoritative verdict is always the next
+  base-branch re-evaluation of the exact current head.
 
 ### D4 — Producer identity is preserved by default
 
@@ -77,7 +86,9 @@ targets — the migration requires **no** branch-protection change. Absent the A
 back to the workflow `GITHUB_TOKEN`, producing the check under the GitHub Actions App id (`15368`);
 that path is for a zero-secret proof-of-concept and would require re-pinning protection. The App
 private key moves from Cloudflare secret storage to a repository Actions secret — a lateral move, not
-new attack surface — and the webhook HMAC secret is deleted outright.
+new attack surface — and the webhook HMAC secret is deleted outright. Per D3 the App private key is
+exposed only on the authoritative `evaluate` job; the untrusted `pull_request` `preview` job never
+receives it.
 
 ### D5 — Fail-closed and head-SHA currency are unchanged
 
