@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { LanguageServiceOperation } from "@oscharko-dev/keiko-contracts";
+import {
+  LANGUAGE_SERVICE_OPERATIONS,
+  MANAGED_LSP_EFFECTIVE_STATES,
+  MANAGED_LSP_LANGUAGES,
+  type LanguageServiceOperation,
+  type ManagedLspEffectiveState,
+  type ManagedLspLanguage,
+} from "@oscharko-dev/keiko-contracts";
 
 import { HOST_LANGUAGE_PROVIDER_SPECS } from "./hostLanguageProviders.js";
 import { providerConformanceRequests } from "./testing/providerConformanceFixture.js";
@@ -31,6 +38,50 @@ const MATRIX: Readonly<Record<string, readonly LanguageServiceOperation[]>> = {
   "rust-lsp": FULL,
 };
 
+const SPAWNABLE_STATES: ReadonlySet<ManagedLspEffectiveState> = new Set([
+  "available",
+  "starting",
+  "active",
+  "degraded",
+]);
+
+type CellDisposition = "executed" | "unsupported-by-candidate" | "blocked-by-state";
+
+interface ProviderOperationStateCell {
+  readonly language: ManagedLspLanguage;
+  readonly operation: LanguageServiceOperation;
+  readonly state: ManagedLspEffectiveState;
+  readonly disposition: CellDisposition;
+}
+
+function operationsFor(language: ManagedLspLanguage): readonly LanguageServiceOperation[] {
+  return (
+    HOST_LANGUAGE_PROVIDER_SPECS.find((spec) => spec.languages.includes(language))?.operations ?? []
+  );
+}
+
+function dispositionFor(
+  language: ManagedLspLanguage,
+  operation: LanguageServiceOperation,
+  state: ManagedLspEffectiveState,
+): CellDisposition {
+  if (!SPAWNABLE_STATES.has(state)) return "blocked-by-state";
+  return operationsFor(language).includes(operation) ? "executed" : "unsupported-by-candidate";
+}
+
+function providerOperationStateCells(): readonly ProviderOperationStateCell[] {
+  return MANAGED_LSP_LANGUAGES.flatMap((language) =>
+    LANGUAGE_SERVICE_OPERATIONS.flatMap((operation) =>
+      MANAGED_LSP_EFFECTIVE_STATES.map((state) => ({
+        language,
+        operation,
+        state,
+        disposition: dispositionFor(language, operation, state),
+      })),
+    ),
+  );
+}
+
 describe("managed provider operation matrix", () => {
   it("pins every provider candidate cell to its conformance-backed surface", () => {
     const actual = Object.fromEntries(
@@ -55,5 +106,34 @@ describe("managed provider operation matrix", () => {
       for (const operation of candidates) expect(operations.has(operation), operation).toBe(true);
     }
     expect(operations).toEqual(new Set(FULL));
+  });
+
+  it("assigns an explicit disposition to all 675 provider-operation-state cells", () => {
+    const cells = providerOperationStateCells();
+    expect(cells).toHaveLength(
+      MANAGED_LSP_LANGUAGES.length *
+        LANGUAGE_SERVICE_OPERATIONS.length *
+        MANAGED_LSP_EFFECTIVE_STATES.length,
+    );
+    expect(cells).toHaveLength(675);
+    expect(cells.every((cell) => cell.disposition.length > 0)).toBe(true);
+  });
+
+  it("executes only candidate operations in spawnable states", () => {
+    for (const cell of providerOperationStateCells()) {
+      const candidate = operationsFor(cell.language).includes(cell.operation);
+      const executable = SPAWNABLE_STATES.has(cell.state) && candidate;
+      expect(cell.disposition === "executed", JSON.stringify(cell)).toBe(executable);
+    }
+  });
+
+  it("fails closed for non-spawnable states and keeps unsupported cells explicit", () => {
+    for (const cell of providerOperationStateCells()) {
+      if (!SPAWNABLE_STATES.has(cell.state)) {
+        expect(cell.disposition, JSON.stringify(cell)).toBe("blocked-by-state");
+      } else if (!operationsFor(cell.language).includes(cell.operation)) {
+        expect(cell.disposition, JSON.stringify(cell)).toBe("unsupported-by-candidate");
+      }
+    }
   });
 });
