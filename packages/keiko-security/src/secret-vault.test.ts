@@ -146,8 +146,8 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
     expect(first.key.equals(second.key)).toBe(true);
   });
 
-  it("rejects a keyfile path through a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("rejects a keyfile path through a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-key-dir");
     mkdirSync(realSub);
     const linkSub = join(dir, "link-key-dir");
@@ -165,8 +165,8 @@ describe("resolveLocalVaultKey — KEYFILE tier", () => {
     ).toThrow("symlinked path");
   });
 
-  it("rejects a final keyfile path that is itself a symlink", () => {
-    if (process.platform === "win32") return;
+  it("rejects a final keyfile path that is itself a symlink", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     writeFileSync(join(dir, "real-test-vault.key"), Buffer.alloc(32, 4).toString("base64"));
     symlinkSync(join(dir, "real-test-vault.key"), join(dir, "test-vault.key"));
 
@@ -429,8 +429,8 @@ describe("createLocalSecretVault — corrupt store", () => {
 });
 
 describe("createLocalSecretVault — symlink guard", () => {
-  it("throws when the storePath contains a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("throws when the storePath contains a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     // Build a real sub-directory and a symlink to it.
     const realSub = join(dir, "real-sub");
     mkdirSync(realSub);
@@ -446,8 +446,8 @@ describe("createLocalSecretVault — symlink guard", () => {
     }).toThrow("symlinked path");
   });
 
-  it("throws on read paths through a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("throws on read paths through a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-read-sub");
     mkdirSync(realSub);
     const linkSub = join(dir, "link-read-sub");
@@ -463,8 +463,8 @@ describe("createLocalSecretVault — symlink guard", () => {
     expect(() => vault.list()).toThrow("symlinked path");
   });
 
-  it("throws when the final store file path is itself a symlink", () => {
-    if (process.platform === "win32") return;
+  it("throws when the final store file path is itself a symlink", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realStore = join(dir, "real-vault.enc.json");
     vaultAt(realStore).set("cred:a", "secret-A");
     const linkStore = join(dir, "link-vault.enc.json");
@@ -478,8 +478,8 @@ describe("createLocalSecretVault — symlink guard", () => {
     }).toThrow("symlinked path");
   });
 
-  it("throws before deleting an empty replacement through a symlinked directory segment", () => {
-    if (process.platform === "win32") return;
+  it("throws before deleting an empty replacement through a symlinked directory segment", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const realSub = join(dir, "real-delete-sub");
     mkdirSync(realSub);
     const linkSub = join(dir, "link-delete-sub");

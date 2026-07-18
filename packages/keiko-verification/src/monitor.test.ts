@@ -22,9 +22,9 @@ describe("nodeResourceMonitor — documented no-op paths", () => {
     }).not.toThrow();
   });
 
-  it("on non-Linux platforms watch is a no-op (memory dimension is enforced:false there)", () => {
+  it("on non-Linux platforms watch is a no-op (memory dimension is enforced:false there)", (ctx) => {
     if (process.platform === "linux") {
-      return; // covered by the Linux sampler test below
+      ctx.skip(); // covered by the Linux sampler test below
     }
     let fired = false;
     const unwatch = nodeResourceMonitor.watch(process.pid, 1, () => {

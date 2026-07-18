@@ -111,8 +111,8 @@ describe("loadState / saveState", () => {
     expect(loaded.entries).toEqual([entry]);
   });
 
-  it("creates the state dir with mode 0o700", () => {
-    if (osPlatform() === "win32") return;
+  it("creates the state dir with mode 0o700", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, "deep", "nested", ".keiko");
     saveState(stateDir, { version: LAUNCHER_STATE_VERSION, entries: [] });
@@ -120,16 +120,16 @@ describe("loadState / saveState", () => {
     expect(mode).toBe(0o700);
   });
 
-  it("writes the state file with mode 0o600", () => {
-    if (osPlatform() === "win32") return;
+  it("writes the state file with mode 0o600", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     saveState(root, { version: LAUNCHER_STATE_VERSION, entries: [] });
     const mode = statSync(join(root, "launcher-state.json")).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 
-  it("F6 — surfaces non-ENOENT stat errors via onWarn instead of silently emptying", () => {
-    if (osPlatform() === "win32") return;
+  it("F6 — surfaces non-ENOENT stat errors via onWarn instead of silently emptying", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     // Replace the would-be state file path with a directory → lstat succeeds but
     // readWithoutFollow path will be skipped via !isFile; the warning path we want to
@@ -194,8 +194,8 @@ describe("loadState / saveState", () => {
     expect(warnings.join("")).toContain("not valid JSON");
   });
 
-  it("refuses to load via a symlinked state file (defense-in-depth)", () => {
-    if (osPlatform() === "win32") return;
+  it("refuses to load via a symlinked state file (defense-in-depth)", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     const realTarget = join(root, "real.json");
     writeFileSync(realTarget, JSON.stringify({ version: 1, entries: [] }));
@@ -206,8 +206,8 @@ describe("loadState / saveState", () => {
     expect(() => loadState(root)).toThrow(LauncherError);
   });
 
-  it("refuses to save into a symlinked state file path", () => {
-    if (osPlatform() === "win32") return;
+  it("refuses to save into a symlinked state file path", (ctx) => {
+    if (osPlatform() === "win32") ctx.skip();
     const root = makeRoot();
     const realTarget = join(root, "real.json");
     writeFileSync(realTarget, "{}");
