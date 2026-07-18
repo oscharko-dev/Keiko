@@ -15,6 +15,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { ApiError } from "./api";
+import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import {
   answerCodingWorkbenchRuntimeQuestion,
   listCodingWorkbenchRuntimeQuestions,
@@ -218,6 +219,10 @@ function useQuestionListing(input: ListingInput): void {
     );
     void (async (): Promise<void> => {
       try {
+        // #2478: order every list behind the boot pairing attempt (resolves immediately when no
+        // attempt started), so a freshly opened window cannot race its own redemption into a
+        // stale unpaired state.
+        await codingAppSessionPairingSettled();
         const response = await listCodingWorkbenchRuntimeQuestions(
           runId,
           {

@@ -20,7 +20,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { computeLauncherPairingClaim } from "@oscharko-dev/keiko-server";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { runLifecycleCli, safeKillProcess } from "./lifecycle.js";
+import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
 import type { CliIo } from "./runner.js";
 
 interface Captured {
@@ -470,6 +470,19 @@ describe("runLifecycleCli", () => {
     expect(c.err()).toBe("");
     expect(openExternal).toHaveBeenCalledTimes(1);
     expectPairedOpen(spawnedEnvs[0], String(openExternal.mock.calls[0]?.[0]));
+  });
+
+  // #2478 (Qodo #2514 finding 1): a percent-encoded pairing fragment must never pass through
+  // cmd.exe, whose %...% expansion corrupts the URL and leaves the opened window unpaired.
+  it("opens Windows URLs through an encoded PowerShell command, never cmd start", () => {
+    const url = "http://127.0.0.1:1983/#keiko-app-session=%7B%22requestId%22%3A%22r%22%7D";
+    const win = resolveExternalOpener(url, "win32");
+    expect(win.command).toBe("powershell.exe");
+    expect(win.args).not.toContain(url);
+    const encoded = win.args.at(-1) ?? "";
+    expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
+    expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
+    expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
   });
 
   it("opens an unpaired URL for an already-running UI and says how to re-pair", async () => {

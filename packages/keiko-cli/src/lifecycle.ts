@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { Buffer } from "node:buffer";
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
@@ -425,14 +426,35 @@ function cliEntryPath(cwd: string): string {
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
 
+/**
+ * Resolve the platform opener for an external URL without routing it through a shell parser.
+ * `cmd /c start` percent-expands its argument, which corrupts a percent-encoded pairing fragment
+ * (#2478), so on Windows the URL travels only inside a Base64-encoded PowerShell command — no
+ * cmd.exe interpolation ever sees it.
+ */
+export function resolveExternalOpener(
+  url: string,
+  platform: NodeJS.Platform = process.platform,
+): { readonly command: string; readonly args: readonly string[] } {
+  if (platform === "darwin") return { command: "open", args: [url] };
+  if (platform === "win32") {
+    const command = `Start-Process '${url.replaceAll("'", "''")}'`;
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(command, "utf16le").toString("base64"),
+      ],
+    };
+  }
+  return { command: "xdg-open", args: [url] };
+}
+
 function defaultOpenExternal(url: string): void {
-  const opener =
-    process.platform === "darwin"
-      ? { command: "open", args: [url] }
-      : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url] }
-        : { command: "xdg-open", args: [url] };
-  const child = spawn(opener.command, opener.args, {
+  const opener = resolveExternalOpener(url);
+  const child = spawn(opener.command, [...opener.args], {
     detached: true,
     stdio: "ignore",
   });

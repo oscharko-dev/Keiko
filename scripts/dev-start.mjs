@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
@@ -77,14 +78,28 @@ async function pairedDevBrowserUrl(pairingSecret) {
   return `${publicBrowserUrl(publicPort)}/${fragment}`;
 }
 
+// `cmd /c start` percent-expands its argument, which corrupts a percent-encoded pairing fragment
+// (#2478); on Windows the URL therefore travels only inside a Base64-encoded PowerShell command.
+export function resolveExternalOpener(url, platform = process.platform) {
+  if (platform === "darwin") return { command: "open", args: [url] };
+  if (platform === "win32") {
+    const command = `Start-Process '${url.replaceAll("'", "''")}'`;
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(command, "utf16le").toString("base64"),
+      ],
+    };
+  }
+  return { command: "xdg-open", args: [url] };
+}
+
 function openExternal(url) {
-  const opener =
-    process.platform === "darwin"
-      ? { command: "open", args: [url] }
-      : process.platform === "win32"
-        ? { command: "cmd", args: ["/c", "start", "", url] }
-        : { command: "xdg-open", args: [url] };
-  const child = spawn(opener.command, opener.args, { detached: true, stdio: "ignore" });
+  const opener = resolveExternalOpener(url);
+  const child = spawn(opener.command, [...opener.args], { detached: true, stdio: "ignore" });
   child.unref();
 }
 

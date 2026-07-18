@@ -67,3 +67,23 @@ export async function redeemCodingAppSessionPairingFragment(
     return false;
   }
 }
+
+let bootRedemption: Promise<boolean> | undefined;
+
+/**
+ * Desktop-boot entry: runs the fragment redemption exactly once per page load (StrictMode's second
+ * invocation joins the same promise) and remembers it so data surfaces can order behind it.
+ */
+export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
+  bootRedemption ??= redeemCodingAppSessionPairingFragment();
+  return bootRedemption;
+}
+
+/**
+ * Resolves once the boot pairing attempt has settled — immediately when no attempt was started.
+ * The questions surface awaits this before its first list so a freshly opened window can never
+ * race its own redemption into a stale `unpaired` state; no timers or retries are involved.
+ */
+export function codingAppSessionPairingSettled(): Promise<boolean> {
+  return bootRedemption ?? Promise.resolve(false);
+}

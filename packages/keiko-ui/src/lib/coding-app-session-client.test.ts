@@ -5,7 +5,9 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import {
+  codingAppSessionPairingSettled,
   redeemCodingAppSessionPairingFragment,
+  redeemCodingAppSessionPairingOnBoot,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 
@@ -72,5 +74,21 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
 
   it("is a no-op outside a browser context", async () => {
     await expect(redeemCodingAppSessionPairingFragment(undefined)).resolves.toBe(false);
+  });
+});
+
+describe("boot pairing ordering (#2478, Qodo #2514 finding 3)", () => {
+  it("settles immediately when no boot redemption was started", async () => {
+    await expect(codingAppSessionPairingSettled()).resolves.toBe(false);
+  });
+
+  it("runs the boot redemption single-flight and orders settled() behind it", async () => {
+    // jsdom location carries no pairing fragment, so the boot attempt resolves false without
+    // posting — the point here is identity (single flight) and settled() joining that promise.
+    const first = redeemCodingAppSessionPairingOnBoot();
+    const second = redeemCodingAppSessionPairingOnBoot();
+    expect(second).toBe(first);
+    expect(codingAppSessionPairingSettled()).toBe(first);
+    await expect(first).resolves.toBe(false);
   });
 });

@@ -1,6 +1,7 @@
+import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { npmCommand, run, shouldShellNpmCommand } from "../dev-start.mjs";
+import { npmCommand, resolveExternalOpener, run, shouldShellNpmCommand } from "../dev-start.mjs";
 
 describe("dev-start npm process wrapper", () => {
   afterEach(() => {
@@ -19,6 +20,19 @@ describe("dev-start npm process wrapper", () => {
     expect(shouldShellNpmCommand("node", "win32")).toBe(false);
     expect(shouldShellNpmCommand("npm", "linux")).toBe(false);
     expect(shouldShellNpmCommand("npm.cmd", "linux")).toBe(false);
+  });
+
+  // #2478 (Qodo #2514 finding 1): a percent-encoded pairing fragment must never pass through
+  // cmd.exe, whose %...% expansion corrupts the URL and leaves the opened window unpaired.
+  it("opens Windows URLs through an encoded PowerShell command, never cmd start", () => {
+    const url = "http://localhost:1983/#keiko-app-session=%7B%22requestId%22%3A%22r%22%7D";
+    const win = resolveExternalOpener(url, "win32");
+    expect(win.command).toBe("powershell.exe");
+    expect(win.args).not.toContain(url);
+    const encoded = win.args.at(-1) ?? "";
+    expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(`Start-Process '${url}'`);
+    expect(resolveExternalOpener(url, "darwin")).toEqual({ command: "open", args: [url] });
+    expect(resolveExternalOpener(url, "linux")).toEqual({ command: "xdg-open", args: [url] });
   });
 
   it("spawns Windows npm.cmd with shell=true and disables npm audit/fund prompts", () => {

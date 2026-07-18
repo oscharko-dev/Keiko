@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { redeemCodingAppSessionPairingFragment } from "@/lib/coding-app-session-client";
+import { redeemCodingAppSessionPairingOnBoot } from "@/lib/coding-app-session-client";
 import { KeikoDesktop } from "./KeikoDesktop";
 
 vi.mock("./AppShell", () => ({
@@ -8,7 +8,7 @@ vi.mock("./AppShell", () => ({
 }));
 
 vi.mock("@/lib/coding-app-session-client", () => ({
-  redeemCodingAppSessionPairingFragment: vi.fn(() => Promise.resolve(false)),
+  redeemCodingAppSessionPairingOnBoot: vi.fn(() => Promise.resolve(false)),
 }));
 
 describe("KeikoDesktop", () => {
@@ -21,6 +21,6 @@ describe("KeikoDesktop", () => {
   it("redeems a launcher pairing fragment on boot (#2478)", () => {
     render(<KeikoDesktop />);
 
-    expect(redeemCodingAppSessionPairingFragment).toHaveBeenCalled();
+    expect(redeemCodingAppSessionPairingOnBoot).toHaveBeenCalled();
   });
 });
