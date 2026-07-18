@@ -462,6 +462,28 @@ describe("Keiko for Quality worker trust boundary", () => {
     );
   });
 
+  it("refuses to build a request from an unexpected path and never calls fetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    for (const badPath of [
+      "",
+      "items",
+      "/path with space",
+      "/path\ninjection",
+      "/repos/o/r?q=<script>",
+      "https://evil.example/x",
+    ]) {
+      await expect(github(badPath, "token")).rejects.toThrow("unexpected path");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockImplementation(() => Promise.resolve(response({ ok: true })));
+    await expect(github("/repos/oscharko-dev/Keiko/pulls/2329", "token")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(
+      github(`/repos/o/r/commits/${"a".repeat(40)}/check-runs?per_page=100&page=1`, "token"),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("paginates bounded GitHub arrays with and without an existing query", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
       const page = Number(new URL(url).searchParams.get("page"));
