@@ -13,20 +13,27 @@ const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
 const CANDIDATE_COMMIT = "6c3d061e6c3d061e6c3d061e6c3d061e6c3d061e";
 const SOURCE_DIGESTS = { baseline: "a".repeat(64), candidate: "b".repeat(64) };
 const HARNESS_DIGEST = "c".repeat(64);
+const LOCKFILE_CONTENTS = {
+  baseline: "{}\n",
+  candidate: '{"candidate":true}\n',
+};
+const LOCKFILE_DIGESTS = Object.fromEntries(
+  Object.entries(LOCKFILE_CONTENTS).map(([revision, contents]) => [revision, sha256(contents)]),
+);
 const roots = [];
 
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function provenance() {
+function provenance(revision) {
   return {
     platform: "linux",
     architecture: "x64",
     osRelease: "6.8.0-test",
     nodeVersion: "24.18.0",
     npmVersion: "11.16.0",
-    lockfileSha256: "d".repeat(64),
+    lockfileSha256: LOCKFILE_DIGESTS[revision],
     playwrightVersion: "1.61.1",
     zlibVersion: "1.3.1",
     chromiumVersion: "140.0.7339.16",
@@ -40,7 +47,7 @@ function rawArtifact(revision, sequence) {
     measuredAtIso: `2026-07-15T12:00:${String(sequence * 2).padStart(2, "0")}.000Z`,
     sourceTreeSha256: SOURCE_DIGESTS[revision],
     measurementHarnessSha256: HARNESS_DIGEST,
-    provenance: provenance(),
+    provenance: provenance(revision),
   };
 }
 
@@ -51,8 +58,8 @@ function fixture(names = {}) {
   const candidateRoot = join(root, names.candidate ?? "candidate");
   mkdirSync(baselineRoot);
   mkdirSync(candidateRoot);
-  writeFileSync(join(baselineRoot, "package-lock.json"), "{}\n", "utf8");
-  writeFileSync(join(candidateRoot, "package-lock.json"), "{}\n", "utf8");
+  writeFileSync(join(baselineRoot, "package-lock.json"), LOCKFILE_CONTENTS.baseline, "utf8");
+  writeFileSync(join(candidateRoot, "package-lock.json"), LOCKFILE_CONTENTS.candidate, "utf8");
   return { root, baselineRoot, candidateRoot };
 }
 
@@ -320,11 +327,11 @@ describe("D12 performance comparison runner", () => {
     expect(readFileSync(join(result.artifactsRoot, ".keiko-d12-runner-owned"), "utf8")).toBe(
       "keiko-d12-performance-runner-v1\n",
     );
-    expect(manifest.schemaVersion).toBe("3");
+    expect(manifest.schemaVersion).toBe("4");
     expect(manifest.dependencyProvisioning).toEqual({
       command: "npm",
       args: ["ci", "--ignore-scripts"],
-      lockfileSha256: sha256("{}\n"),
+      lockfileSha256ByRevision: LOCKFILE_DIGESTS,
     });
     expect(result.comparison.args).toContain("--self-check");
     expect(manifest.repetitions.map((entry) => entry.order)).toEqual([
@@ -483,9 +490,8 @@ describe("D12 performance comparison runner", () => {
     await expect(runD12Comparison(args)).rejects.toThrow(/unexpected argument/u);
   });
 
-  it("rejects non-equivalent lockfiles before dependency provisioning", async () => {
+  it("accepts revision-specific lockfiles and provisions both exact checkouts", async () => {
     const paths = fixture();
-    writeFileSync(join(paths.candidateRoot, "package-lock.json"), '{"changed":true}\n', "utf8");
     const provisionDependencies = vi.fn();
 
     await expect(
@@ -493,8 +499,12 @@ describe("D12 performance comparison runner", () => {
         ...preflightDependencies(paths),
         provisionDependencies,
       }),
-    ).rejects.toThrow(/package-lock\.json digests differ/u);
-    expect(provisionDependencies).not.toHaveBeenCalled();
+    ).rejects.toThrow(/Playwright CLI is missing/u);
+    expect(provisionDependencies).toHaveBeenCalledTimes(2);
+    expect(provisionDependencies.mock.calls.map(([plan]) => plan.revision)).toEqual([
+      "baseline",
+      "candidate",
+    ]);
   });
 
   it.each([

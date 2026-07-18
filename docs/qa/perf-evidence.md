@@ -26,7 +26,7 @@ agent involvement.
 npm run perf:evidence:regen
 ```
 
-On Linux this provisions two clean checkouts (pinned baseline `bbda3c43…`, candidate = your
+On Linux this provisions two clean checkouts (pinned baseline `18750d07…`, candidate = your
 HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs,
 wall-clock budgets enforced via `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
@@ -39,8 +39,10 @@ installs Linux binaries into `node_modules`; re-run `npm install` on the host af
 
 ## Invariants
 
-- Baseline and candidate `package-lock.json` digests must match; the producer provisions both
-  checkouts with `npm ci --ignore-scripts` under a deterministic environment allowlist.
+- Baseline and candidate each bind their own commit-exact `package-lock.json` digest; the producer
+  provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
+  allowlist. A dependency change is therefore measured as part of the candidate instead of making
+  evidence generation impossible or silently substituting dependency state.
 - Wall-clock budgets are enforced only in this controlled context and in the scheduled workflow
   (ADR-0139 D1); required CI runners record but do not assert them. The committed comparison
   still enforces every budget deterministically at PR time.

@@ -170,23 +170,61 @@ function validateWarmUp(value) {
   };
 }
 
-function validateDependencyProvisioning(value) {
-  const provisioning = assertExactKeys(
-    value,
-    ["args", "command", "lockfileSha256"],
-    "dependency provisioning",
-  );
+function validateProvisioningCommand(value, expectedKeys, label) {
+  const provisioning = assertExactKeys(value, expectedKeys, label);
   if (provisioning.command !== "npm") fail("dependency provisioning command must be npm");
   if (!isDeepStrictEqual(provisioning.args, ["ci", "--ignore-scripts"])) {
     fail("dependency provisioning arguments must equal npm ci --ignore-scripts");
   }
-  if (!SHA_256.test(provisioning.lockfileSha256 ?? "")) {
-    fail("dependency provisioning lockfileSha256 must be a lowercase SHA-256 digest");
+  return provisioning;
+}
+
+function validateLockfileSha256(value, label) {
+  if (!SHA_256.test(value ?? "")) {
+    fail(`${label} must be a lowercase SHA-256 digest`);
   }
+  return value;
+}
+
+function validateBundleDependencyProvisioning(value) {
+  const provisioning = validateProvisioningCommand(
+    value,
+    ["args", "command", "lockfileSha256"],
+    "bundle dependency provisioning",
+  );
   return {
     command: "npm",
     args: ["ci", "--ignore-scripts"],
-    lockfileSha256: provisioning.lockfileSha256,
+    lockfileSha256: validateLockfileSha256(
+      provisioning.lockfileSha256,
+      "bundle dependency provisioning lockfileSha256",
+    ),
+  };
+}
+
+function validateDependencyProvisioning(value) {
+  const provisioning = validateProvisioningCommand(
+    value,
+    ["args", "command", "lockfileSha256ByRevision"],
+    "dependency provisioning",
+  );
+  const digests = assertExactKeys(
+    provisioning.lockfileSha256ByRevision,
+    ["baseline", "candidate"],
+    "dependency provisioning lockfileSha256ByRevision",
+  );
+  return {
+    command: "npm",
+    args: ["ci", "--ignore-scripts"],
+    lockfileSha256ByRevision: Object.fromEntries(
+      REVISIONS.map((revision) => [
+        revision,
+        validateLockfileSha256(
+          digests[revision],
+          `dependency provisioning ${revision} lockfileSha256`,
+        ),
+      ]),
+    ),
   };
 }
 
@@ -273,7 +311,7 @@ function validateBundleBindings(bundle, expectedBindings, label) {
   if (bundle.measurementHarnessSha256 !== expectedBindings.measurementHarnessSha256) {
     fail(`${label} bundle measurementHarnessSha256 differs from the common toolchain`);
   }
-  const provisioning = validateDependencyProvisioning(bundle.dependencyProvisioning);
+  const provisioning = validateBundleDependencyProvisioning(bundle.dependencyProvisioning);
   if (provisioning.lockfileSha256 !== expectedBindings.lockfileSha256) {
     fail(`${label} bundle dependency lockfile differs from the current checkout`);
   }
@@ -777,7 +815,7 @@ function validateManifestRepetition(entryValue, index, state) {
 
 function validateOrderManifest(value) {
   const manifest = object(value, "order manifest");
-  if (manifest.schemaVersion !== "3") fail("order manifest schemaVersion must be 3");
+  if (manifest.schemaVersion !== "4") fail("order manifest schemaVersion must be 4");
   if (!Array.isArray(manifest.repetitions) || manifest.repetitions.length !== 3) {
     fail("order manifest must contain exactly three paired repetitions");
   }
@@ -848,7 +886,7 @@ function buildRepetition(entry, index, context) {
     if (run.measurementHarnessSha256 !== context.referenceHarness) {
       fail(`repetition ${index + 1} ${revision} measurement harness digest differs`);
     }
-    if (!isDeepStrictEqual(run.provenance, context.referenceProvenance)) {
+    if (!isDeepStrictEqual(run.provenance, context.referenceProvenanceByRevision[revision])) {
       fail(`repetition ${index + 1} ${revision} provenance differs`);
     }
     measurements[revision] = buildMeasurement(
@@ -872,12 +910,12 @@ function readComparisonBundleBytes({
   candidateBundle,
   commits,
   expectedSourceDigests,
-  lockfileSha256,
+  lockfileSha256ByRevision,
   referenceHarness,
   referenceProvenance,
 }) {
-  const bindings = (sourceTreeSha256) => ({
-    lockfileSha256,
+  const bindings = (revision, sourceTreeSha256) => ({
+    lockfileSha256: lockfileSha256ByRevision[revision],
     measurementHarnessSha256: referenceHarness,
     producerCommit: commits.candidate,
     runtime: bundleRuntimeFromProvenance(referenceProvenance),
@@ -887,13 +925,13 @@ function readComparisonBundleBytes({
     baseline: readBundleBytes(
       baselineBundle,
       commits.baseline,
-      bindings(expectedSourceDigests.baseline),
+      bindings("baseline", expectedSourceDigests.baseline),
       "baseline",
     ),
     candidate: readBundleBytes(
       candidateBundle,
       commits.candidate,
-      bindings(expectedSourceDigests.candidate),
+      bindings("candidate", expectedSourceDigests.candidate),
       "candidate",
     ),
   };
@@ -907,7 +945,9 @@ function buildComparisonContext({
   rawInputs,
   warmUp,
 }) {
-  const referenceProvenance = entries[0].baseline.provenance;
+  const referenceProvenanceByRevision = Object.fromEntries(
+    REVISIONS.map((revision) => [revision, entries[0][revision].provenance]),
+  );
   return {
     bytes: {
       baseline: bundles.baseline.bytes,
@@ -918,14 +958,47 @@ function buildComparisonContext({
     expectedSourceDigests,
     rawInputs,
     referenceHarness: entries[0].baseline.measurementHarnessSha256,
-    referenceProvenance,
+    referenceProvenanceByRevision,
     warmUp,
   };
 }
 
-function validateManifestLockfile(dependencyProvisioning, expectedLockfileSha256) {
-  if (dependencyProvisioning.lockfileSha256 !== expectedLockfileSha256) {
-    fail("dependency provisioning lockfileSha256 differs from current package-lock.json");
+function provenanceWithoutLockfile(provenance) {
+  const shared = { ...provenance };
+  delete shared.lockfileSha256;
+  return shared;
+}
+
+function validateRevisionProvenance(entries, dependencyProvisioning) {
+  const references = Object.fromEntries(
+    REVISIONS.map((revision) => [revision, entries[0][revision].provenance]),
+  );
+  for (const revision of REVISIONS) {
+    if (
+      references[revision].lockfileSha256 !==
+      dependencyProvisioning.lockfileSha256ByRevision[revision]
+    ) {
+      fail(`${revision} dependency provisioning lockfile digest differs from measured provenance`);
+    }
+  }
+  if (
+    !isDeepStrictEqual(
+      provenanceWithoutLockfile(references.baseline),
+      provenanceWithoutLockfile(references.candidate),
+    )
+  ) {
+    fail("baseline and candidate provenance differs outside revision-specific lockfile digest");
+  }
+}
+
+function validateManifestLockfiles(dependencyProvisioning, expectedLockfileSha256ByRevision) {
+  if (
+    !isDeepStrictEqual(
+      dependencyProvisioning.lockfileSha256ByRevision,
+      expectedLockfileSha256ByRevision,
+    )
+  ) {
+    fail("dependency provisioning lockfile digests differ from current package-lock.json files");
   }
 }
 
@@ -935,11 +1008,12 @@ export function buildD12Comparison({
   baselineBundle,
   candidateBundle,
   expectedHeads,
-  expectedLockfileSha256,
+  expectedLockfileSha256ByRevision,
   expectedSourceDigests,
 }) {
   const { dependencyProvisioning, repetitions: entries, warmUp } = validateOrderManifest(manifest);
-  validateManifestLockfile(dependencyProvisioning, expectedLockfileSha256);
+  validateManifestLockfiles(dependencyProvisioning, expectedLockfileSha256ByRevision);
+  validateRevisionProvenance(entries, dependencyProvisioning);
   const commits = { baseline: BASELINE_COMMIT, candidate: expectedHeads.candidate };
   const referenceHarness = entries[0].baseline.measurementHarnessSha256;
   const referenceProvenance = entries[0].baseline.provenance;
@@ -948,7 +1022,7 @@ export function buildD12Comparison({
     candidateBundle,
     commits,
     expectedSourceDigests,
-    lockfileSha256: expectedLockfileSha256,
+    lockfileSha256ByRevision: expectedLockfileSha256ByRevision,
     referenceHarness,
     referenceProvenance,
   });
@@ -960,9 +1034,6 @@ export function buildD12Comparison({
     rawInputs,
     warmUp,
   });
-  if (context.referenceProvenance.lockfileSha256 !== dependencyProvisioning.lockfileSha256) {
-    fail("dependency provisioning lockfile digest differs from measured provenance");
-  }
   const repetitions = entries.map((entry, index) => buildRepetition(entry, index, context));
   const aggregates = {
     baseline: aggregate(repetitions, "baseline"),
@@ -991,7 +1062,7 @@ function buildComparisonResult({
   warmUp,
 }) {
   return {
-    schemaVersion: "1",
+    schemaVersion: "2",
     baselineCommit: commits.baseline,
     baselineSourceTreeSha256,
     bundles,
@@ -1322,14 +1393,10 @@ function bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, 
   expectedSourceDigests.baseline = pinnedBaselineDigest;
 }
 
-function matchingLockfileSha256(roots, getLockfileSha256) {
-  const digests = Object.fromEntries(
+function lockfileSha256ByRevision(roots, getLockfileSha256) {
+  return Object.fromEntries(
     REVISIONS.map((revision) => [revision, getLockfileSha256(roots[revision])]),
   );
-  if (digests.baseline !== digests.candidate) {
-    fail("baseline and candidate current package-lock.json digests differ");
-  }
-  return digests.candidate;
 }
 
 function resolveCheckoutEvidence(options, dependencies) {
@@ -1353,10 +1420,10 @@ function resolveCheckoutEvidence(options, dependencies) {
   validateCheckoutHeads(roots, expectedHeads, isAncestor);
   const expectedSourceDigests = computeCheckoutDigests(roots, listDirtyPaths, computeDigest);
   bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, roots.candidate);
-  const expectedLockfileSha256 = matchingLockfileSha256(roots, getLockfileSha256);
+  const expectedLockfileSha256ByRevision = lockfileSha256ByRevision(roots, getLockfileSha256);
   return {
     expectedHeads,
-    expectedLockfileSha256,
+    expectedLockfileSha256ByRevision,
     expectedSourceDigests,
     getFreshnessOptions: () => ({
       computeBaselineSourceTreeSha256: () =>
@@ -1405,7 +1472,7 @@ export function runD12Builder(argv, dependencies = {}) {
     baselineBundle: readJson(resolve(options["baseline-bundle"]), "baseline bundle evidence"),
     candidateBundle: readJson(resolve(options["candidate-bundle"]), "candidate bundle evidence"),
     expectedHeads: checkout.expectedHeads,
-    expectedLockfileSha256: checkout.expectedLockfileSha256,
+    expectedLockfileSha256ByRevision: checkout.expectedLockfileSha256ByRevision,
     expectedSourceDigests: checkout.expectedSourceDigests,
   });
   const output = buildOverlay(
