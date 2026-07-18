@@ -2256,6 +2256,27 @@ export {
   validateManualRefreshChangeSummary,
 } from "./html-manual-refresh.js";
 
+// ─── HTML Manual Knowledge Pod live create/refresh job (Issue #2063) ────────────────
+export type {
+  HtmlManualPodJobOperation,
+  HtmlManualPodJobState,
+  HtmlManualPodJobPhase,
+  HtmlManualPodJobCrawl,
+  HtmlManualPodJobIndexing,
+  HtmlManualPodJobRemediation,
+  HtmlManualPodJob,
+  HtmlManualPodRefreshRequest,
+  HtmlManualPodCreateRequest,
+} from "./html-manual-job.js";
+export {
+  HTML_MANUAL_POD_JOB_SCHEMA_VERSION,
+  HTML_MANUAL_POD_JOB_OPERATIONS,
+  HTML_MANUAL_POD_JOB_STATES,
+  HTML_MANUAL_POD_JOB_PHASES,
+  validateHtmlManualPodRefreshRequest,
+  validateHtmlManualPodCreateRequest,
+} from "./html-manual-job.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,

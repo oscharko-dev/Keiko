@@ -14,9 +14,11 @@
 // a model here — producing a proposal or an approval starts no indexing work.
 //
 // Epic #1853's domain-layer crawler/indexer (`createHtmlManualPod`, `refreshHtmlManualPod` in
-// keiko-local-knowledge) is implemented and locally verified, but nothing in keiko-server or the UI
-// calls it yet: there is no live BFF trigger route and no gatewayFetch-backed HTTP fetcher for
-// intranet manuals. Wiring that live entry point is tracked separately in Issue #2063.
+// keiko-local-knowledge) now has a live entry point (Issue #2063): the BFF create/refresh routes
+// (`manual/manual-pod-routes.ts`) drive them as bounded background jobs through the
+// `gatewayFetch`-backed HTTP `ManualCrawlFetcher` (`manual/manual-crawl-fetcher.ts`), and the UI
+// polls the projected `HtmlManualPodJob` for live progress. This proposal/approval surface stays
+// side-effect-free; the trigger routes are the live indexing entry point.
 
 import {
   applyAuthenticationRequiredOverride,

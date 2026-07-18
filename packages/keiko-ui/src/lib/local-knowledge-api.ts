@@ -8,6 +8,7 @@ import { bffFetchJson } from "./http";
 import type {
   CapsuleSetId,
   CapsuleContextualRetrievalSettings,
+  HtmlManualPodJob,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceScope,
@@ -706,6 +707,27 @@ export async function refreshCapsuleChangedFiles(
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/manual-pods/refresh — start a live HTML-manual refresh (Issue #2063)
+// GET  /api/local-knowledge/manual-pods/jobs/:jobId — poll the live create/refresh job
+// ---------------------------------------------------------------------------
+
+export async function startHtmlManualPodRefresh(
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: string,
+): Promise<HtmlManualPodJob> {
+  return fetchJson<HtmlManualPodJob>("/api/local-knowledge/manual-pods/refresh", {
+    method: "POST",
+    body: JSON.stringify({ capsuleId, sourceId }),
+  });
+}
+
+export async function getHtmlManualPodJob(jobId: string): Promise<HtmlManualPodJob> {
+  return fetchJson<HtmlManualPodJob>(
+    `/api/local-knowledge/manual-pods/jobs/${encodeURIComponent(jobId)}`,
   );
 }
 
