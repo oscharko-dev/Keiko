@@ -189,6 +189,7 @@ export default defineConfig(
     files: ["scripts/keiko-for-quality-worker.mjs"],
     languageOptions: {
       globals: {
+        AbortSignal: "readonly",
         Response: "readonly",
         TextEncoder: "readonly",
         atob: "readonly",
