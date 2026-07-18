@@ -551,6 +551,10 @@ describe("managed LSP activation control service", () => {
     });
     expect(first.kind).toBe("ok");
     if (first.kind !== "ok") throw new Error("configuration setup failed");
+    expect(await service.readConfiguration(root, "shell")).toMatchObject({
+      restartRequired: true,
+      restartFields: ["runtime", "settings"],
+    });
     const second = await service.mutate({
       action: "configure",
       actorClass: "localHuman",
@@ -561,6 +565,10 @@ describe("managed LSP activation control service", () => {
       configuration: shellConfiguration(1, first.etag, "posix"),
     });
     expect(second.kind).toBe("ok");
+    expect(await service.readConfiguration(root, "shell")).toMatchObject({
+      restartRequired: true,
+      restartFields: ["settings"],
+    });
     const rollback = await service.mutate({
       action: "rollback",
       actorClass: "localHuman",
@@ -588,7 +596,7 @@ describe("managed LSP activation control service", () => {
       revision: 3,
       etag: rollback.kind === "ok" ? rollback.etag : "unreachable",
       restartRequired: true,
-      restartFields: ["runtime", "settings"],
+      restartFields: ["settings"],
       settings: { dialect: "bash" },
     });
     expect(await service.readConfiguration(root, "python")).toBeUndefined();

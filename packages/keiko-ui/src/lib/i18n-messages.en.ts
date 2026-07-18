@@ -1168,6 +1168,8 @@ export const EN_MESSAGES = {
   "managedLanguage.unsaved": "Unsaved workspace settings",
   "managedLanguage.invalidTarget":
     "Use an empty target or a target triple containing only letters, digits, dots, underscores, and hyphens.",
+  "managedLanguage.invalidJavaLevels":
+    "The Java source level cannot be newer than the target level.",
   "managedLanguage.guidancePolicy":
     "An operator policy prevents activation. No change can be sent from this screen.",
   "managedLanguage.guidanceProvisioning":

@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  ManagedLspLanguage,
   ManagedLspProcessHealthSnapshot,
+  ManagedLspRuntimeConfiguration,
   ManagedLspShellConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -133,6 +135,105 @@ async function mutation(
   });
 }
 
+interface InitialConfigurationFixture {
+  readonly revision: number;
+  readonly etag: string;
+  readonly configuration: ManagedLspRuntimeConfiguration;
+}
+
+async function initialConfigurationFor(
+  language: ManagedLspLanguage,
+): Promise<InitialConfigurationFixture> {
+  const response = await snapshot();
+  const body = (await response.json()) as {
+    readonly revision: number;
+    readonly etag: string;
+    readonly configurationDefaults: readonly ManagedLspRuntimeConfiguration[];
+  };
+  const configuration = body.configurationDefaults.find((entry) => entry.language === language);
+  if (configuration === undefined) throw new Error("missing server-owned configuration default");
+  return { revision: body.revision, etag: body.etag, configuration };
+}
+
+async function expectInvalidInitialConfiguration(
+  language: ManagedLspLanguage,
+  fixture: InitialConfigurationFixture,
+): Promise<void> {
+  const response = await mutation(
+    {
+      root: workspaceRoot,
+      language,
+      action: "configure",
+      expectedRevision: fixture.revision,
+      configuration: {
+        ...fixture.configuration,
+        runtime: { kind: "operatorApproved", runtimeId: "SENTINEL_SECRET_UNAPPROVED" },
+      },
+    },
+    { "If-Match": fixture.etag, "Idempotency-Key": `invalid-initial-${language}` },
+  );
+  expect(response.status).toBe(400);
+  expect(await response.text()).not.toContain("SENTINEL_SECRET");
+}
+
+async function acceptInitialConfiguration(
+  language: ManagedLspLanguage,
+  fixture: InitialConfigurationFixture,
+): Promise<void> {
+  const response = await mutation(
+    {
+      root: workspaceRoot,
+      language,
+      action: "configure",
+      expectedRevision: fixture.revision,
+      configuration: fixture.configuration,
+    },
+    { "If-Match": fixture.etag, "Idempotency-Key": `accept-initial-${language}` },
+  );
+  expect(response.status).toBe(200);
+}
+
+async function expectInitialRestartProjection(language: ManagedLspLanguage): Promise<void> {
+  const projected = (await (await snapshot()).json()) as {
+    readonly languages: readonly {
+      readonly language: string;
+      readonly state: string;
+      readonly reasonCode: string;
+    }[];
+    readonly settings: readonly {
+      readonly language: string;
+      readonly restartRequired: boolean;
+      readonly restartFields: readonly string[];
+    }[];
+  };
+  expect(projected.languages.find((entry) => entry.language === language)).toMatchObject({
+    state: "restartRequired",
+    reasonCode: "RESTART_REQUIRED",
+  });
+  expect(projected.settings.find((entry) => entry.language === language)).toMatchObject({
+    restartRequired: true,
+    restartFields: ["runtime", "settings"],
+  });
+}
+
+async function expectStaleInitialConfiguration(
+  language: ManagedLspLanguage,
+  fixture: InitialConfigurationFixture,
+): Promise<void> {
+  const response = await mutation(
+    {
+      root: workspaceRoot,
+      language,
+      action: "configure",
+      expectedRevision: fixture.revision,
+      configuration: fixture.configuration,
+    },
+    { "If-Match": fixture.etag, "Idempotency-Key": `stale-initial-${language}` },
+  );
+  expect(response.status).toBe(412);
+  expect(await response.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
+}
+
 function activateBody(expectedRevision = 0): Record<string, unknown> {
   return { root: workspaceRoot, language: "python", action: "activate", expectedRevision };
 }
@@ -243,6 +344,15 @@ describe("managed LSP same-origin control routes", () => {
       readonly languages: readonly { readonly state: string }[];
       readonly settings: readonly { readonly workspaceActivation: string }[];
       readonly configurations: readonly unknown[];
+      readonly configurationDefaults: readonly {
+        readonly language: string;
+        readonly runtime: { readonly kind: string; readonly runtimeId: string };
+        readonly provenance: {
+          readonly activation: string;
+          readonly runtime: string;
+          readonly settings: string;
+        };
+      }[];
       readonly health: readonly unknown[];
       readonly providerMetadata: readonly {
         readonly language: string;
@@ -259,6 +369,23 @@ describe("managed LSP same-origin control routes", () => {
     expect(body.languages.every((entry) => entry.state === "disabled")).toBe(true);
     expect(body.settings.every((entry) => entry.workspaceActivation === "unset")).toBe(true);
     expect(body.configurations).toEqual([]);
+    expect(body.configurationDefaults.map((entry) => entry.language)).toEqual([
+      "python",
+      "go",
+      "shell",
+      "java",
+      "rust",
+    ]);
+    expect(
+      body.configurationDefaults.every(
+        (entry) =>
+          entry.runtime.kind === "operatorApproved" &&
+          entry.runtime.runtimeId === `${entry.language}-lsp` &&
+          entry.provenance.activation === "workspace" &&
+          entry.provenance.runtime === "operatorProvisioning" &&
+          entry.provenance.settings === "builtInDefault",
+      ),
+    ).toBe(true);
     expect(body.health).toEqual([]);
     expect(body.providerMetadata).toEqual([
       {
@@ -401,6 +528,48 @@ describe("managed LSP same-origin control routes", () => {
       expect(await response.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
       expect(after).toMatchObject(before);
       expect(dispose).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves a persisted restart requirement when pool disposal removes live health", async () => {
+    const control = createManagedLspControlService({
+      store: createManagedLspActivationStore({ stateDir }),
+      processEnv: {},
+      provisioning: () => true,
+      disposePoolEntry: () => Promise.resolve(),
+      runtimeApproved: () => true,
+      configurationSafe: () => true,
+      projectEvidence: () => "projected",
+      mutex: createWorkspaceMutexRegistry(),
+    });
+    const initial = await control.read(workspaceRoot);
+    await control.mutate({
+      action: "configure",
+      actorClass: "localHuman",
+      expectedRevision: 0,
+      expectedEtag: initial.etag,
+      idempotencyKey: "configure-with-disposed-health",
+      language: "shell",
+      root: workspaceRoot,
+      configuration: shellConfigureBody(initial.etag).configuration as ManagedLspShellConfiguration,
+    });
+
+    const raw = await control.read(workspaceRoot);
+    const shell = projectManagedLspLiveLanguages(raw, []).find(
+      (entry) => entry.ok && entry.language === "shell",
+    );
+
+    expect(shell).toMatchObject({ state: "restartRequired", reasonCode: "RESTART_REQUIRED" });
+  });
+
+  it.each(["python", "go", "shell", "java", "rust"] as const)(
+    "accepts the first server-owned %s configuration and preserves all write guards",
+    async (language: ManagedLspLanguage) => {
+      const fixture = await initialConfigurationFor(language);
+      await expectInvalidInitialConfiguration(language, fixture);
+      await acceptInitialConfiguration(language, fixture);
+      await expectInitialRestartProjection(language);
+      await expectStaleInitialConfiguration(language, fixture);
     },
   );
 

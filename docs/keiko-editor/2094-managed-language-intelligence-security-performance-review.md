@@ -1,21 +1,22 @@
 # Epic 2094 managed language intelligence security and performance review
 
-Review refreshed: 2026-07-18 against `dev@1325bf1321f15956afd08d7988bae3e24e6c8387` plus
-the local verification-only Issue #2282 diff. Scope: Python, Go, Shell, Java, and Rust activation,
+Review refreshed: 2026-07-18 against `dev@97541fcade42a82bca3466fac714db68e1cffb8d` plus
+the local final Epic #2094 audit diff. Scope: Python, Go, Shell, Java, and Rust activation,
 configuration, process supervision, language operations, semantic tokens, Settings UI, docked-agent
 projection, evidence, performance, rollback, and release gates.
 
 ## Conclusion and evidence status
 
-No unresolved critical or high security defect was found in the reviewed product boundaries or in
-the Issue #2282 verification harness. The closeout found two non-security product gaps: Settings
-cannot create the first typed runtime configuration after activation (#2534), and the live
-projection hides the restart action after a configuration mutation (#2535). Issue #2282 is
-verification-only, so neither product-source fix is folded into this closeout.
+No unresolved critical or high security defect was found in the reviewed product boundaries or
+closeout harness. The final audit corrected two non-security product gaps: Settings now persists a
+strict server-owned typed default as the first configuration after activation (#2534), and the live
+projection preserves the required targeted-restart action while the changed pool entry has no health
+sample (#2535).
 
-The real-browser axe/visual lane, controlled Linux orchestration run, Linux-authoritative editor
-evidence, and complete local aggregate are green. This conclusion remains provisional until the
-exact-head protected checks are green.
+The real-browser axe/visual lane and controlled orchestration run are green. Fresh
+Linux-authoritative editor evidence and the complete local aggregate remain required before
+publication, and this conclusion remains provisional until the exact-head protected checks are
+green.
 
 ## Trust-boundary review
 
@@ -29,9 +30,9 @@ exact-head protected checks are green.
 | Protocol               | Frames, pending requests, documents, results, display strings, edits, diagnostics, locations, and tokens are bounded and sanitized.          | Malformed/accessor-hostile/oversized fixtures, server mutation requests, unknown capabilities, stale generations, cancellation, and timeout tests remain collected. **PASS**.                 |
 | Capability negotiation | A static provider candidate must never become an executable UI/agent claim without live initialize evidence.                                 | Per-provider conformance executes every negotiated candidate. The 675-cell ledger references those suites and keeps unsupported/blocked cells explicit. **PASS**.                             |
 | Docked agent           | Existing governed action/language routes are reused; review-only results grant no write/delivery authority.                                  | Real-loopback integration covers Python/Go operations, cancellation, workspace switch, stale activation, redacted audit, and byte-identical files for review-only edits. **PASS**.            |
-| UI                     | Settings reflects server state, remains keyboard/focus safe, and does not install providers or expose secrets/paths.                         | Component axe/i18n/state coverage and the composed real-browser axe/visual lane pass. The two product gaps are tracked in #2534 and #2535. **PASS WITH FOLLOW-UPS**.                          |
+| UI                     | Settings reflects server state, remains keyboard/focus safe, and does not install providers or expose secrets/paths.                         | Component axe/i18n/state coverage and the composed real-browser axe/visual lane pass, including the complete activate → accept default → restart path. **PASS**.                              |
 | Evidence               | Diagnostics/manifests contain statuses, counts, hashes, reason codes, and relative paths only.                                               | Redaction tests exclude roots, source/diagnostic bodies, executable paths, environment, stderr, configuration bodies, endpoints, and credentials. **PASS**.                                   |
-| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | The no-cache local aggregate passes; exact-head protected checks are still required before merge and closure. **LOCAL PASS; REMOTE PENDING**.                                                 |
+| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | Focused local gates pass; Linux evidence and the final no-cache aggregate remain required before the exact-head protected checks. **PENDING**.                                                |
 
 ## Provider-operation-state closure
 
@@ -100,9 +101,9 @@ for:
 Optional real-provider lanes supplement this inventory. They may skip only when exact approved
 offline binaries are absent; no test is authorized to install or download them.
 
-The refreshed focused command passed 52 files and 642 tests. Five real-provider files (five tests)
+The refreshed focused command passed 53 files and 655 tests. Five real-provider files (five tests)
 skipped because no approved offline provider directories were configured. The focused UI
-continuation passed 2 files and 102 tests.
+continuation passed 2 files and 114 tests.
 
 ## Performance and resource review
 
@@ -153,11 +154,12 @@ native controls, an alert dialog, focus restoration, a polite live region, Engli
 ownership, and component-scoped styling. Existing component tests cover axe and all state/error/
 keyboard paths.
 
-The new Playwright proof adds the real composed Settings window, real BFF state, live negotiated
-capability/health text, keyboard activation/deactivation, visible restart impact, guarded real-route
-restart/rollback, real-browser axe, and a visual attachment. It passed 1/1 in 32.4 seconds with zero
+The Playwright proof covers the real composed Settings window, real BFF state, server-owned initial
+typed configuration, live negotiated capability/health text, keyboard activation/deactivation,
+visible restart impact, guarded real-route restart/rollback, real-browser axe, and a visual
+attachment. It passed 1/1 in 26.5 seconds with zero
 serious/critical axe violations. The populated-state PNG SHA-256 is
-`4554ed9eac369e1f167ca9a232d45d5734317ec106e458e826088e860390e9ba`.
+`11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5`.
 
 The SHA-pinned global stylesheet remains unchanged. No product styling was added by #2282.
 
@@ -174,9 +176,6 @@ Residual limitations:
 - exact-head protected-check receipts remain required;
 - provider-native indexing/RSS varies by approved binary and workspace and is not represented by the
   fake orchestration result;
-- Settings cannot create the first runtime configuration; #2534 owns that product correction;
-- the live projection hides the restart action after configuration changes; #2535 owns that product
-  correction;
 - real-provider smoke requires operator-provisioned offline profiles and was not run in this local
   refresh;
 - semantic tokens remain Rust-first;

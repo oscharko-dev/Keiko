@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ import {
   type ManagedLspEvidenceAction,
   type ManagedLspEvidenceOutcome,
   type ManagedLspLanguage,
+  type ManagedLspRestartField,
   type ManagedLspRuntimeConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -308,17 +310,30 @@ function previousState(entry: ManagedLspPersistedLanguageEntry): ManagedLspPersi
 
 function revisionedConfiguration(
   configuration: ManagedLspRuntimeConfiguration,
+  current: ManagedLspRuntimeConfiguration | undefined,
   revision: number,
   nextEtag: string,
 ): ManagedLspRuntimeConfiguration | undefined {
+  const restartFields = changedRestartFields(current, configuration);
   const parsed = parseManagedLspRuntimeConfiguration({
     ...configuration,
     revision,
     etag: nextEtag,
     restartRequired: true,
-    restartFields: ["runtime", "settings"],
+    restartFields,
   });
   return parsed.ok ? parsed.value : undefined;
+}
+
+function changedRestartFields(
+  current: ManagedLspRuntimeConfiguration | undefined,
+  configuration: ManagedLspRuntimeConfiguration,
+): readonly ManagedLspRestartField[] {
+  if (current === undefined) return ["runtime", "settings"];
+  const changed: ManagedLspRestartField[] = [];
+  if (!isDeepStrictEqual(current.runtime, configuration.runtime)) changed.push("runtime");
+  if (!isDeepStrictEqual(current.settings, configuration.settings)) changed.push("settings");
+  return changed;
 }
 
 function changedLanguageEntry(
@@ -364,7 +379,12 @@ function rollbackEntry(
   if (prior.configuration === undefined) {
     return { ...prior, previous: previousState(current) };
   }
-  const configuration = revisionedConfiguration(prior.configuration, nextRevision, nextEtag);
+  const configuration = revisionedConfiguration(
+    prior.configuration,
+    current.configuration,
+    nextRevision,
+    nextEtag,
+  );
   return configuration === undefined
     ? current
     : { ...prior, configuration, previous: previousState(current) };
@@ -395,7 +415,12 @@ function nextConfiguration(
 ): ManagedLspRuntimeConfiguration | undefined {
   return mutation.configuration === undefined
     ? current?.configuration
-    : revisionedConfiguration(mutation.configuration, nextRevision, nextEtag);
+    : revisionedConfiguration(
+        mutation.configuration,
+        current?.configuration,
+        nextRevision,
+        nextEtag,
+      );
 }
 
 function referencedRuntimeIds(configuration: ManagedLspRuntimeConfiguration): readonly string[] {
