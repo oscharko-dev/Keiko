@@ -103,15 +103,20 @@ export function parseQodoFindings(body) {
   return counts.reduce((total, count) => total + (count ?? 0), 0);
 }
 
-// Select the newest current-head Qodo summary. Currency is the head SHA embedded in the comment
-// body — present even for a clean review via Qodo's footer commit marker, not only via finding
-// permalinks. Requiring a parseable summary prevents a newer non-summary Qodo comment from shadowing
-// the real summary and forcing a false "missing or unparseable" result.
-export function latestQodoReview(comments, headSha) {
+// Select the newest current-head Qodo summary. Currency is the reviewed commit SHA embedded in the
+// comment body (present even for a clean review via Qodo's footer commit marker, not only via finding
+// permalinks). For a merge-commit head (e.g. "Merge dev into <branch>") Qodo pins its review to the
+// feature parent, not the merge SHA, so the head's parent SHAs are accepted too — the worker only
+// supplies them for an actual merge commit, so a non-merge head still binds to its exact SHA.
+// Requiring a parseable summary prevents a newer non-summary Qodo comment from shadowing the real one.
+export function latestQodoReview(comments, headSha, mergeParents = []) {
+  const currentShas = [headSha, ...mergeParents];
   return comments
     .filter((comment) => isBotEvidence(comment, qodoIdentity, true))
     .filter(
-      (comment) => comment.body.includes(headSha) && parseQodoFindings(comment.body) !== undefined,
+      (comment) =>
+        currentShas.some((sha) => comment.body.includes(sha)) &&
+        parseQodoFindings(comment.body) !== undefined,
     )
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
@@ -168,9 +173,16 @@ export function hasCurrentSocketNoAlertEvidence(checks, headSha) {
   );
 }
 
-function reviewFailures(checks, comments, headSha, socketRiskAllowlist, socketRiskActors) {
+function reviewFailures(
+  checks,
+  comments,
+  headSha,
+  socketRiskAllowlist,
+  socketRiskActors,
+  mergeParents,
+) {
   const failures = [];
-  const qodo = latestQodoReview(comments, headSha);
+  const qodo = latestQodoReview(comments, headSha, mergeParents);
   const findings = qodo === undefined ? undefined : parseQodoFindings(qodo.body);
   if (findings === undefined)
     failures.push("Current Qodo finding evidence is missing or unparseable.");
@@ -198,7 +210,7 @@ function reviewFailures(checks, comments, headSha, socketRiskAllowlist, socketRi
   return failures;
 }
 
-export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
+export function stabilityFailures(checks, comments, now, stabilityMs, headSha, mergeParents = []) {
   const socketStart = currentCheckStart(checks, headSha, [
     "Socket Security: Project Report",
     "Socket Security: Pull Request Alerts",
@@ -209,7 +221,7 @@ export function stabilityFailures(checks, comments, now, stabilityMs, headSha) {
     currentSocket === undefined && hasCurrentSocketNoAlertEvidence(checks, headSha);
   const evidenceTimes = [
     ...checks.filter((check) => check.name.startsWith("Socket Security:")).map(completedAt),
-    latestQodoReview(comments, headSha)?.updatedAt,
+    latestQodoReview(comments, headSha, mergeParents)?.updatedAt,
     currentSocket?.updatedAt,
   ]
     .map((value) => (typeof value === "number" ? value : Date.parse(value)))
@@ -235,15 +247,24 @@ export function validatedRiskAllowlist(value) {
 export function evaluateKeikoForQuality(input) {
   const riskAllowlist = validatedRiskAllowlist(input.socketRiskAllowlist);
   const riskActors = validatedSet(input.socketRiskActors, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u);
+  const mergeParents = Array.isArray(input.mergeParents) ? input.mergeParents : [];
   const failures = [
     ...checkFailures(input.checks, input.headSha, input.requiredChecks),
-    ...reviewFailures(input.checks, input.comments, input.headSha, riskAllowlist, riskActors),
+    ...reviewFailures(
+      input.checks,
+      input.comments,
+      input.headSha,
+      riskAllowlist,
+      riskActors,
+      mergeParents,
+    ),
     ...stabilityFailures(
       input.checks,
       input.comments,
       input.now,
       input.stabilityMs ?? 60_000,
       input.headSha,
+      mergeParents,
     ),
   ];
   return { failures, passed: failures.length === 0 };
