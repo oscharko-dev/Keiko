@@ -242,6 +242,29 @@ describe("EditorAgentToolHost route dispatch", () => {
     });
   });
 
+  // Issue #2489 (Finding 3) — additive #2217 human/agent search parity: regex mode + wholeWord.
+  it("queues a bounded regex workspace search with wholeWord", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_search_workspace", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      query: "config-.*-value",
+      mode: "regex",
+      wholeWord: true,
+      maxResults: 3,
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action).toMatchObject({
+      type: "searchWorkspace",
+      searchWorkspace: {
+        mode: "regex",
+        query: "config-.*-value",
+        wholeWord: true,
+        maxResults: 3,
+      },
+    });
+  });
+
   // Issue #2298 — the read-only git-query tool queues a queryGit action with the file as its target.
   it("queues a bounded read-only git context query", async () => {
     const route = recordingRoute();
@@ -524,8 +547,9 @@ describe("EditorAgentToolHost route dispatch", () => {
   });
 
   it.each([
-    ["invalid mode", { mode: "regex" }],
+    ["invalid mode", { mode: "fuzzy" }],
     ["invalid caseSensitive", { mode: "text", caseSensitive: "yes" }],
+    ["invalid wholeWord", { mode: "text", wholeWord: "yes" }],
     ["invalid includeGlobs type", { mode: "text", includeGlobs: "src" }],
     ["empty includeGlob", { mode: "text", includeGlobs: [""] }],
     [

@@ -111,6 +111,7 @@
     "EcosystemStructureExtractorContext",
     "EcosystemStructureProfile",
     "EcosystemVersionDeclaration",
+    "EditorAgentTurnInput",
     "EmbeddingCapabilityCheck",
     "EmbeddingFailureReason",
     "EmbeddingIdentityHardeningStatus",

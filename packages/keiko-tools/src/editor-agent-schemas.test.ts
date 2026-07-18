@@ -96,7 +96,11 @@ describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
     ).toMatchObject({
       required: ["sessionId", "idempotencyKey", "query", "mode"],
       additionalProperties: false,
-      properties: { mode: { enum: ["text", "symbol"] } },
+      // Issue #2489 (Finding 3) — "regex" + wholeWord are additive #2217 human/agent search parity.
+      properties: {
+        mode: { enum: ["text", "symbol", "regex"] },
+        wholeWord: { type: "boolean", default: false },
+      },
     });
   });
 
