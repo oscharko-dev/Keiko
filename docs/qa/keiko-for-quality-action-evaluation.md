@@ -80,6 +80,9 @@ Both preserved, because the pure core and the exact-head evidence fetch are iden
 - Evidence is filtered to the pull's freshly fetched `head.sha`; stale-head results are never reused.
 - A hard failure publishes a `failure` conclusion; missing or in-progress evidence publishes an
   `in_progress` check with no conclusion, keeping the required check pending and the merge blocked.
+- A verdict pending on the stability window alone is settled within the same run: the shell waits
+  out the bounded remainder (at most five minutes) and re-evaluates on refreshed evidence, because
+  the triggering event can be the Qodo comment itself with no later event to re-run the evaluator.
 - A merge-commit head whose Qodo review is pinned to a feature parent is resolved through the shared
   `mergeContextForHead` helper, exactly as in the Worker, and only accepts a parent-bound review that
   post-dates the merge commit.

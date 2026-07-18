@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
-import { evaluateKeikoForQuality, isValidHeadSha } from "./keiko-for-quality-core.mjs";
+import {
+  evaluateKeikoForQuality,
+  isValidHeadSha,
+  latestQodoReview,
+} from "./keiko-for-quality-core.mjs";
 import {
   evidence,
   github,
@@ -206,8 +211,62 @@ async function publishResult(context) {
   });
 }
 
+async function evaluateHeadOnce(context, headSha, evaluationTime) {
+  const { config, owner, pullNumber, repository, token } = context;
+  const currentEvidence = await evidence(owner, repository, pullNumber, token);
+  const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
+  const decisionResult = evaluateKeikoForQuality({
+    comments: currentEvidence.comments,
+    headSha,
+    mergeCommitTime: merge.commitTime,
+    mergeParents: merge.parents,
+    now: evaluationTime,
+    stabilityMs: config.stabilityMs,
+  });
+  return { currentEvidence, decisionResult, merge };
+}
+
+// The in-window stability wait is the one pending state with a known, bounded settlement time —
+// and, because the Action is purely event-driven, the triggering event can be the Qodo comment
+// itself with no later allowlisted completion to re-run the evaluator (Qodo review of PR #2519).
+// Return the remaining wait when the verdict is pending on the stability window alone; anything
+// longer than this bound stays pending and settles through a later event or manual dispatch.
+const stabilityWindowFailure = "Review-product evidence is inside the stability window.";
+const maxSettleWaitMs = 300_000;
+
+function settleDelayMs({ currentEvidence, decisionResult, merge }, headSha, config, now) {
+  const stabilityOnly =
+    decisionResult.failures.length === 1 && decisionResult.failures[0] === stabilityWindowFailure;
+  if (!stabilityOnly) return undefined;
+  const review = latestQodoReview(
+    currentEvidence.comments,
+    headSha,
+    merge.parents,
+    merge.commitTime,
+  );
+  if (review === undefined) return undefined;
+  const waitMs = Date.parse(review.updatedAt) + config.stabilityMs - now;
+  return waitMs > 0 && waitMs <= maxSettleWaitMs ? waitMs : undefined;
+}
+
+// Evaluate once; when the only failure is the still-open stability window, hold this run for the
+// bounded remaining time and re-evaluate on refreshed evidence so the same run settles the verdict
+// instead of stranding an in_progress check. A review that moved during the wait re-enters the
+// window and is carried by its own issue_comment event, so one settle pass is enough.
+async function settledEvaluation(context, headSha) {
+  const first = await evaluateHeadOnce(context, headSha, context.now);
+  const waitMs = context.dryRun
+    ? undefined
+    : settleDelayMs(first, headSha, context.config, context.now);
+  if (waitMs === undefined) return { ...first, evaluatedAt: context.now };
+  console.log(`keiko-for-quality-action: settle-wait ms=${String(waitMs)}`);
+  await context.delay(waitMs);
+  const evaluatedAt = context.now + waitMs;
+  return { ...(await evaluateHeadOnce(context, headSha, evaluatedAt)), evaluatedAt };
+}
+
 async function evaluatePull(context) {
-  const { config, dryRun, eventName, identity, now, owner, pullNumber, repository, target, token } =
+  const { dryRun, eventName, identity, now, owner, pullNumber, repository, target, token } =
     context;
   const pull = await github(`/repos/${owner}/${repository}/pulls/${String(pullNumber)}`, token);
   if (!pullNeedsEvaluation(pull, target.baseBranch, now)) {
@@ -220,17 +279,11 @@ async function evaluatePull(context) {
   }
   const headSha = pull.head?.sha;
   if (!isValidHeadSha(headSha)) throw new Error("Pull request head SHA is invalid.");
-  const currentEvidence = await evidence(owner, repository, pullNumber, token);
-  const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
-  const decisionResult = evaluateKeikoForQuality({
-    comments: currentEvidence.comments,
+  const { currentEvidence, decisionResult, evaluatedAt } = await settledEvaluation(
+    context,
     headSha,
-    mergeCommitTime: merge.commitTime,
-    mergeParents: merge.parents,
-    now,
-    stabilityMs: config.stabilityMs,
-  });
-  const result = { ...decisionResult, evaluatedAt: now };
+  );
+  const result = { ...decisionResult, evaluatedAt };
   logVerdict(pullNumber, headSha, result, dryRun);
   if (dryRun) return;
   await publishResult({
@@ -265,9 +318,12 @@ export async function run(env, options = {}) {
   }
   const token = await resolveToken(auth, owner, repository, installationId);
   const dryRun = isDryRun(env);
+  // Injectable for deterministic tests; the runner path waits in real time.
+  const delay = options.delay ?? ((ms) => sleep(ms));
   for (const pullNumber of prNumbers) {
     await evaluatePull({
       config,
+      delay,
       dryRun,
       eventName,
       identity,

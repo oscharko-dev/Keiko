@@ -241,6 +241,62 @@ describe("Keiko for Quality Action execution shell", () => {
     expect(requestPaths(fetchMock).some((path) => /\/pulls\/\d+$/u.test(path))).toBe(true);
   });
 
+  it("settles a stability-window-only verdict within the same run", async () => {
+    const headSha = "a".repeat(40);
+    // The Qodo review is bound to the head and clean, but was (re)posted thirty seconds ago: the
+    // only failure is the open stability window. The triggering event may have been that very
+    // comment, so the run itself must wait out the bounded remainder and re-evaluate.
+    const fetchMock = githubMock(headSha);
+    const delays = [];
+    await run(baseEnv({ KFQ_PR: "2329", STABILITY_WINDOW_MS: "60000" }), {
+      delay: (ms) => {
+        delays.push(ms);
+        return Promise.resolve();
+      },
+      now: Date.parse("2026-07-11T09:00:30.000Z"),
+    });
+    expect(delays).toEqual([30_000]);
+    expect(checkPost(fetchMock)).toMatchObject({ conclusion: "success", status: "completed" });
+    // Evidence is refreshed for the post-wait evaluation (two comment listings, one run).
+    const commentReads = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        new URL(String(url)).pathname.endsWith("/comments") && init?.method === undefined,
+    );
+    expect(commentReads).toHaveLength(2);
+  });
+
+  it("publishes pending when the stability wait exceeds the bounded settle window", async () => {
+    const headSha = "a".repeat(40);
+    const fetchMock = githubMock(headSha);
+    const delays = [];
+    await run(baseEnv({ KFQ_PR: "2329", STABILITY_WINDOW_MS: "600000" }), {
+      delay: (ms) => {
+        delays.push(ms);
+        return Promise.resolve();
+      },
+      now: Date.parse("2026-07-11T09:00:30.000Z"),
+    });
+    expect(delays).toEqual([]);
+    const body = checkPost(fetchMock);
+    expect(body.status).toBe("in_progress");
+    expect(body).not.toHaveProperty("conclusion");
+    expect(body.output.summary).toContain("inside the stability window");
+  });
+
+  it("does not hold a dry run for the stability window", async () => {
+    const fetchMock = githubMock("a".repeat(40));
+    const delays = [];
+    await run(baseEnv({ KFQ_DRY_RUN: "1", KFQ_PR: "2329", STABILITY_WINDOW_MS: "60000" }), {
+      delay: (ms) => {
+        delays.push(ms);
+        return Promise.resolve();
+      },
+      now: Date.parse("2026-07-11T09:00:30.000Z"),
+    });
+    expect(delays).toEqual([]);
+    expect(hasWrite(fetchMock)).toBe(false);
+  });
+
   it("skips a pull request that has not opted into the proof-of-concept", async () => {
     const headSha = "a".repeat(40);
     const fetchMock = githubMock(headSha, { pull: pullFor(headSha, { labels: [] }) });

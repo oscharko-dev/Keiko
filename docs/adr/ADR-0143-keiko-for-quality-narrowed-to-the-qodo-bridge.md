@@ -75,6 +75,13 @@ they are the natural "time passed on this pull" signals that let a stability-win
 without extra scheduling. The Action's fixed name list is a trigger filter (and the structural
 self-trigger-loop guard), not merge authority, and is maintained in the Action shell.
 
+Because the Action is purely event-driven, the triggering event can be the Qodo comment itself with
+no later listed completion to re-run the evaluator. When a verdict is pending on the stability
+window alone, the Action therefore holds the same run for the bounded remaining time (at most five
+minutes) and re-evaluates on refreshed evidence, so the verdict settles instead of stranding an
+`in_progress` check. The Worker needs no equivalent: its scheduled reconciliation already re-runs
+still-waiting verdicts.
+
 ### D6 — Target profiles survive as validated configuration only
 
 `TARGET_REPOSITORIES_JSON` keeps its `profile` field so deployed Worker and workflow configuration
