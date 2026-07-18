@@ -14,7 +14,6 @@
 // Content-free in evidence: only the merge inputs (PR number, strategy, delete flag) and outcome enter the
 // ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { IncomingMessage } from "node:http";
 import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -24,7 +23,6 @@ import {
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
-import { resolveProjectWorkspace } from "./execution.js";
 import {
   buildGitDeliveryMergePreview,
   executeGovernedMerge,
@@ -34,14 +32,14 @@ import {
   type GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
 import {
-  GitDeliveryBodyTooLargeError,
   hasOnlyAllowedKeys,
   isNonEmptyString,
   isPlainObject,
-  readGitDeliveryBody,
+  isSafeGitRef,
   scanForbiddenStrings,
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
+import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -67,45 +65,16 @@ const errResult = (status: number, code: GitDeliveryMergeErrorCode): RouteResult
   body: { error: { code, message: SAFE_MESSAGES[code] } },
 });
 
+const MERGE_REQUEST_ERRORS: GitDeliveryRequestErrors = {
+  tooLarge: errResult(413, "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"),
+  badRequest: errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST"),
+  unknownProject: errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"),
+};
+
 // ─── Options ────────────────────────────────────────────────────────────────────────────────
 
 export interface GitDeliveryMergeRouteOptions {
   readonly execution?: GitDeliveryMergeSeams;
-}
-
-type BodyRead =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly result: RouteResult };
-
-async function readParsed(req: IncomingMessage): Promise<BodyRead> {
-  let raw: string;
-  try {
-    raw = await readGitDeliveryBody(req);
-  } catch (error) {
-    const result =
-      error instanceof GitDeliveryBodyTooLargeError
-        ? errResult(413, "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE")
-        : errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST");
-    return { ok: false, result };
-  }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, result: errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST") };
-  }
-}
-
-// A git ref operand: non-empty, no whitespace, no leading "-" (flag-injection guard), no NUL/control.
-// eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
-
-function isSafeGitRef(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0) return false;
-  if (/\s/.test(value)) return false;
-  if (value.startsWith("-")) return false;
-  if (REF_CONTROL_CHAR.test(value)) return false;
-  if (value.includes(":")) return false;
-  return true;
 }
 
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
@@ -213,13 +182,10 @@ export const createHandleMergePreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, command } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { command } = prepared.value;
     const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_MERGE_POLICY_PACK };
     const strategyPolicy = seams.strategyPolicy ?? {
       allowedStrategies: ["squash", "rebase", "merge-commit", "provider-default"],
@@ -239,13 +205,10 @@ export const createHandleMergeExecute = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    const read = await readParsed(ctx.req);
-    if (!read.ok) return read.result;
-    const validation = validate(read.value);
-    if (validation.kind === "err") return validation.result;
-    const { projectId, command, approval } = validation.value;
-    const workspace = resolveProjectWorkspace(deps, projectId);
-    if (workspace === undefined) return errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT");
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command, approval } = prepared.value;
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
       store: seams.approvalStore,
       binding: { projectId, operation: "merge", command },
