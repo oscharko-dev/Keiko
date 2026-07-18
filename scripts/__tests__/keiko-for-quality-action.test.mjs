@@ -13,7 +13,6 @@ import {
   resolveAuth,
   run,
 } from "../keiko-for-quality-action.mjs";
-import { requiredChecks } from "../keiko-for-quality-core.mjs";
 
 const evaluatedAt = Date.parse("2026-07-12T00:00:00.000Z");
 let signingKey;
@@ -59,25 +58,21 @@ function response(payload, status = 200) {
   });
 }
 
-function checkRunsFor(headSha, options = {}) {
-  return requiredChecks.map(({ appId, name }, index) => ({
-    app: { id: appId },
-    completed_at: "2026-07-11T09:00:00.000Z",
-    conclusion: options.failedCheck === name ? "failure" : "success",
-    head_sha: headSha,
-    id: index + 1,
-    name,
-    ...(name === "Socket Security: Pull Request Alerts"
-      ? {
-          output: {
-            annotations_count: 0,
-            summary: "Pull request contains no net changes to dependencies",
-          },
-        }
-      : {}),
-    started_at: "2026-07-11T08:59:00.000Z",
-    status: "completed",
-  }));
+// Only the publish path lists check runs (to locate an existing aggregate run to PATCH); the
+// narrowed evaluation itself reads no check-run evidence (Issue #2508).
+function checkRunsFor(headSha) {
+  return [
+    {
+      app: { id: 15368 },
+      completed_at: "2026-07-11T09:00:00.000Z",
+      conclusion: "success",
+      head_sha: headSha,
+      id: 1,
+      name: "ci",
+      started_at: "2026-07-11T08:59:00.000Z",
+      status: "completed",
+    },
+  ];
 }
 
 // Qodo posts a comment (no check-run): the header, a counts line, and the footer commit marker that
@@ -119,7 +114,7 @@ function readEvidenceRouter(path, method, headSha, options) {
     return response(options.comments ?? [qodoComment(headSha)]);
   }
   if (path.includes(`/commits/${headSha}/check-runs`)) {
-    const runs = options.checkRuns ?? checkRunsFor(headSha, options);
+    const runs = options.checkRuns ?? checkRunsFor(headSha);
     return response({ check_runs: runs, total_count: runs.length });
   }
   if (path.endsWith(`/commits/${headSha}`)) {
@@ -159,8 +154,6 @@ function baseEnv(overrides = {}) {
   return {
     GITHUB_REPOSITORY: "oscharko-dev/Keiko",
     GITHUB_TOKEN: "token",
-    SOCKET_RISK_ACTORS_JSON: "[]",
-    SOCKET_RISK_ALLOWLIST_JSON: "[]",
     STABILITY_WINDOW_MS: "0",
     TARGET_REPOSITORIES_JSON:
       '[{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"}]',
@@ -213,31 +206,32 @@ describe("Keiko for Quality Action execution shell", () => {
 
   it("keeps missing evidence pending without a failure conclusion (fail-closed)", async () => {
     const headSha = "b".repeat(40);
-    const fetchMock = githubMock(headSha, { checkRuns: checkRunsFor(headSha).slice(1) });
+    // No Qodo review comment at all: the aggregate stays pending, never a terminal failure.
+    const fetchMock = githubMock(headSha, { comments: [] });
     await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
     const body = checkPost(fetchMock);
     expect(body.status).toBe("in_progress");
     expect(body).not.toHaveProperty("conclusion");
-    expect(body.output.summary).toContain("Missing current-head check: ci.");
+    expect(body.output.summary).toContain("Qodo finding evidence is missing");
   });
 
-  it("blocks with a failure conclusion on a hard direct-check failure", async () => {
+  it("blocks with a failure conclusion on an unresolved Qodo finding", async () => {
     const headSha = "c".repeat(40);
-    const fetchMock = githubMock(headSha, { failedCheck: "ci" });
+    const fetchMock = githubMock(headSha, { comments: [qodoComment(headSha, 2)] });
     await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
     expect(checkPost(fetchMock)).toMatchObject({ conclusion: "failure", status: "completed" });
-    expect(checkPost(fetchMock).output.summary).toContain("Check is not successful: ci.");
+    expect(checkPost(fetchMock).output.summary).toContain("Qodo has 2 unresolved finding(s).");
   });
 
-  it("evaluates only exact-current-head check evidence", async () => {
+  it("evaluates only exact-current-head review evidence", async () => {
     const headSha = "d".repeat(40);
-    // Direct checks are bound to a different head; none satisfy the current head, so the aggregate
-    // stays pending rather than reusing stale success.
-    const fetchMock = githubMock(headSha, { checkRuns: checkRunsFor("e".repeat(40)) });
+    // The Qodo review is bound to a different head, so the aggregate stays pending rather than
+    // reusing stale review evidence.
+    const fetchMock = githubMock(headSha, { comments: [qodoComment("e".repeat(40))] });
     await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
     const body = checkPost(fetchMock);
     expect(body.status).toBe("in_progress");
-    expect(body.output.summary).toContain("Missing current-head check: ci.");
+    expect(body.output.summary).toContain("Qodo finding evidence is missing");
   });
 
   it("performs no writes in dry-run mode", async () => {

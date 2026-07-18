@@ -35,13 +35,11 @@ import worker, {
   pullRequestNumbers,
   reconciliationErrorKind,
   reserveDelivery,
-  socketNoAlertEvidence,
   targetForRepository,
   targetRepositories,
   trackedPullRequests,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
-import { requiredChecks } from "../keiko-for-quality-core.mjs";
 
 let signingKey;
 
@@ -81,27 +79,21 @@ function response(payload, status = 200) {
   });
 }
 
+// Only the publish path lists check runs (to locate an existing aggregate run to PATCH); the
+// narrowed evaluation itself reads no check-run evidence (Issue #2508).
 function checkRuns(headSha) {
-  return requiredChecks.map(({ appId, name }, index) => ({
-    app: { id: appId },
-    completed_at: "2026-07-11T09:00:00.000Z",
-    conclusion: "success",
-    head_sha: headSha,
-    id: index + 1,
-    name,
-    // Socket posts an explicit clean PR-alert check output; this lets the
-    // no-Socket-comment path resolve without a comment.
-    ...(name === "Socket Security: Pull Request Alerts"
-      ? {
-          output: {
-            annotations_count: 0,
-            summary: "Pull request contains no net changes to dependencies",
-          },
-        }
-      : {}),
-    started_at: "2026-07-11T08:59:00.000Z",
-    status: "completed",
-  }));
+  return [
+    {
+      app: { id: 15368 },
+      completed_at: "2026-07-11T09:00:00.000Z",
+      conclusion: "success",
+      head_sha: headSha,
+      id: 1,
+      name: "ci",
+      started_at: "2026-07-11T08:59:00.000Z",
+      status: "completed",
+    },
+  ];
 }
 
 // Qodo posts a summary issue comment (no check-run): h3 header, emoji/HTML
@@ -134,24 +126,16 @@ function commentsResponse(url, headSha, options = {}) {
   const comments = [
     qodoReviewComment(options.qodoSha ?? headSha, { bugs: options.qodoBugs ?? 0 }),
     {
-      author_association: "NONE",
-      body: "[!WARNING] https://socket.dev/npm/package/execa/overview/9.6.1",
-      id: 11,
-      performed_via_github_app: { id: 156372 },
-      updated_at: "2026-07-11T09:00:00.000Z",
-      user: { id: 95510084, login: "socket-security[bot]", type: "Bot" },
-    },
-    {
       author_association: "MEMBER",
-      body: "@SocketSecurity ignore npm/execa@9.6.1",
+      body: "An unrelated human conversation comment.",
       id: 12,
       updated_at: "2026-07-11T09:00:00.000Z",
       user: { id: 1, login: "oscharko", type: "User" },
     },
   ];
   return response(
-    options.omitSocketComment
-      ? comments.filter((comment) => comment.user.id !== 95510084)
+    options.omitQodoComment
+      ? comments.filter((comment) => comment.user.id !== 151058649)
       : comments,
   );
 }
@@ -335,8 +319,6 @@ function environment(state, secret = "test-secret") {
     GITHUB_APP_ID: "999",
     GITHUB_PRIVATE_KEY_PKCS8: signingKey,
     GITHUB_WEBHOOK_SECRET: secret,
-    SOCKET_RISK_ALLOWLIST_JSON: '["npm/execa@9.6.1"]',
-    SOCKET_RISK_ACTORS_JSON: '["oscharko"]',
     STABILITY_WINDOW_MS: "0",
     TARGET_REPOSITORY: "oscharko-dev/Keiko",
   };
@@ -579,19 +561,12 @@ describe("Keiko for Quality worker trust boundary", () => {
     );
   });
 
-  it("classifies only exact hard failures", () => {
-    for (const failure of [
-      "Wrong producer for ci.",
-      "Qodo has 1 unresolved finding(s).",
-      "1 Socket warning(s) remain.",
-      "Socket reports an error alert.",
-      "Check is not successful: ci.",
-    ]) {
-      expect(hardFailure(["soft", failure])).toBe(true);
-    }
+  it("classifies only an unresolved Qodo finding as a hard failure", () => {
+    expect(hardFailure(["soft", "Qodo has 1 unresolved finding(s)."])).toBe(true);
     expect(hardFailure([])).toBe(false);
-    expect(hardFailure(["Missing current-head check: ci."])).toBe(false);
-    expect(hardFailure(["Check is pending: ci."])).toBe(false);
+    expect(hardFailure(["Current Qodo finding evidence is missing or unparseable."])).toBe(false);
+    expect(hardFailure(["Review-product stability evidence is incomplete."])).toBe(false);
+    expect(hardFailure(["Review-product evidence is inside the stability window."])).toBe(false);
   });
 
   it("matches only this app's exact check event", () => {
@@ -635,15 +610,7 @@ describe("Keiko for Quality worker trust boundary", () => {
 
   it("renders a redacted in-place dashboard for ready, waiting, and blocked states", () => {
     const headSha = "a".repeat(40);
-    const checks = requiredChecks.map(({ appId: requiredAppId, name }) => ({
-      appId: requiredAppId,
-      conclusion: "success",
-      headSha,
-      name,
-      status: "completed",
-    }));
     const ready = dashboardComment({
-      checks,
       headSha,
       pull: { auto_merge: { enabled_at: "2026-07-13T18:00:00.000Z" } },
       result: {
@@ -663,10 +630,7 @@ describe("Keiko for Quality worker trust boundary", () => {
         "",
         "| Gate group | Evidence |",
         "| --- | --- |",
-        "| Required checks | 13/13 successful |",
-        "| SonarQube Cloud | ✅ native quality gate passed |",
         "| Qodo review | ✅ zero unresolved findings |",
-        "| Socket Security | ✅ zero unresolved alerts |",
         "| Stability window | ✅ settled |",
         "",
         "| Automation | State |",
@@ -686,15 +650,12 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(ready).not.toContain(headSha);
 
     const waiting = dashboardComment({
-      checks: checks.filter(
-        (check) => check.name !== "ci" && check.name !== "SonarCloud Code Analysis",
-      ),
       headSha,
       pull: { auto_merge: null },
       result: {
         failures: [
-          "Missing current-head check: ci.",
-          "Missing current-head check: SonarCloud Code Analysis.",
+          "Current Qodo finding evidence is missing or unparseable.",
+          "Review-product stability evidence is incomplete.",
         ],
         passed: false,
       },
@@ -702,18 +663,19 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(waiting).toContain("⏳ **Waiting for evidence**");
     expect(waiting).toContain("<details>");
     expect(waiting).not.toContain("<details open>");
-    expect(waiting).toContain("| Required checks | 11/13 successful |");
-    expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
-    expect(waiting).toContain("Missing current-head check: ci.");
     expect(waiting).toContain(
-      "| SonarQube Cloud | ⏳ Missing current-head check: SonarCloud Code Analysis. |",
+      "| Qodo review | ⏳ Current Qodo finding evidence is missing or unparseable. |",
     );
     expect(waiting).toContain(
-      "- Missing current-head check: ci.\n- Missing current-head check: SonarCloud Code Analysis.",
+      "| Stability window | ⏳ Review-product stability evidence is incomplete. |",
+    );
+    expect(waiting).toContain("| GitHub Auto-Merge | not armed |");
+    expect(waiting).toContain(
+      "- Current Qodo finding evidence is missing or unparseable.\n" +
+        "- Review-product stability evidence is incomplete.",
     );
 
     const blocked = dashboardComment({
-      checks,
       headSha,
       pull: { auto_merge: null },
       result: { failures: ["Qodo has 1 unresolved finding(s)."], passed: false },
@@ -721,30 +683,26 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(blocked).toContain("❌ **Blocked**");
     expect(blocked).toContain("<details open>");
     expect(blocked).toContain("<summary>Blocking evidence (1)</summary>");
+    expect(blocked).toContain("| Qodo review | ❌ Qodo has 1 unresolved finding(s). |");
+    expect(blocked).toContain("| Stability window | ✅ settled |");
     expect(blocked).not.toContain("secret-value");
 
-    const invalidChecks = [
-      { ...checks[0], appId: -1 },
-      { ...checks[0], conclusion: "failure" },
-      { ...checks[0], headSha: "b".repeat(40) },
-      { ...checks[0], name: "wrong check" },
-      { ...checks[0], status: "in_progress" },
-    ];
-    const invalidCount = dashboardComment({
-      checks: invalidChecks,
+    const missingAutoMerge = dashboardComment({
       headSha,
       pull: {},
       result: { failures: [], passed: false },
     });
-    expect(invalidCount).toContain("| Required checks | 0/13 successful |");
-    expect(invalidCount).toContain("| GitHub Auto-Merge | not armed |");
+    expect(missingAutoMerge).toContain("| GitHub Auto-Merge | not armed |");
   });
 
   it("creates one dashboard comment and subsequently updates the app-owned marker", async () => {
     const headSha = "a".repeat(40);
-    const baseEvidence = { checks: [], comments: [] };
+    const baseEvidence = { comments: [] };
     const pull = { auto_merge: null, head: { sha: headSha } };
-    const result = { failures: ["Missing current-head check: ci."], passed: false };
+    const result = {
+      failures: ["Current Qodo finding evidence is missing or unparseable."],
+      passed: false,
+    };
     const createFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ id: 100 }));
     await publishDashboardComment({
       owner: "owner",
@@ -803,7 +761,6 @@ describe("Keiko for Quality worker trust boundary", () => {
 
     vi.restoreAllMocks();
     const stableBody = dashboardComment({
-      ...baseEvidence,
       headSha,
       pull,
       result,
@@ -829,50 +786,6 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(appId({ id: 999 })).toBe(999);
     expect(appId(null)).toBeUndefined();
     expect(appId(undefined)).toBeUndefined();
-  });
-
-  it("derives only an explicit clean Socket PR-alert result without retaining output text", () => {
-    const clean = {
-      app: { id: 156372 },
-      conclusion: "success",
-      name: "Socket Security: Pull Request Alerts",
-      output: {
-        annotations_count: 0,
-        summary: "Pull request contains no net changes to dependencies",
-        text: "No dependency changes detected in pull request",
-        title: "Pull Request Alerts: Skipped",
-      },
-    };
-    expect(socketNoAlertEvidence(clean)).toBe(true);
-    expect(socketNoAlertEvidence({ ...clean, app: { id: 1 } })).toBe(false);
-    expect(socketNoAlertEvidence({ ...clean, conclusion: "neutral" })).toBe(false);
-    expect(socketNoAlertEvidence({ ...clean, name: "Project Report" })).toBe(false);
-    expect(socketNoAlertEvidence({ ...clean, output: undefined })).toBe(false);
-    expect(socketNoAlertEvidence({ ...clean, output: {} })).toBe(false);
-    expect(
-      socketNoAlertEvidence({
-        ...clean,
-        output: { ...clean.output, annotations_count: 1 },
-      }),
-    ).toBe(false);
-    expect(
-      socketNoAlertEvidence({
-        ...clean,
-        output: { annotations_count: 0, text: ["no new alerts"] },
-      }),
-    ).toBe(false);
-    expect(
-      socketNoAlertEvidence({
-        ...clean,
-        output: { annotations_count: 0, title: "Success: NO NEW ALERTS" },
-      }),
-    ).toBe(true);
-    expect(
-      socketNoAlertEvidence({
-        ...clean,
-        output: { annotations_count: 0, text: "No new alert" },
-      }),
-    ).toBe(true);
   });
 
   it("does not trust absent event collection shapes", () => {
@@ -1023,37 +936,6 @@ describe("Keiko for Quality worker trust boundary", () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
   });
 
-  it("publishes success with explicit clean Socket evidence and no Socket comment", async () => {
-    const headSha = "6".repeat(40);
-    const fetchMock = githubMock(headSha, {
-      omitSocketComment: true,
-    });
-    const waits = [];
-    await worker.fetch(
-      await signedRequest(
-        {
-          installation: { id: 42 },
-          number: 2329,
-          pull_request: { number: 2329 },
-          repository: { full_name: "oscharko-dev/Keiko" },
-        },
-        "test-secret",
-        "source-only",
-      ),
-      environment(stateBinding()),
-      { waitUntil: (promise) => waits.push(promise) },
-    );
-    await Promise.all(waits);
-    const publish = fetchMock.mock.calls.find(
-      ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
-    );
-    expect(JSON.parse(publish[1].body)).toMatchObject({
-      conclusion: "success",
-      head_sha: headSha,
-      status: "completed",
-    });
-  });
-
   it("publishes exact success, failure, and pending check contracts", async () => {
     const headSha = "9".repeat(40);
     for (const [result, expected] of [
@@ -1069,21 +951,24 @@ describe("Keiko for Quality worker trust boundary", () => {
         },
       ],
       [
-        { failures: ["Wrong producer for ci.", "second failure"], passed: false },
+        { failures: ["Qodo has 2 unresolved finding(s).", "second failure"], passed: false },
         {
           conclusion: "failure",
           output: {
-            summary: "Wrong producer for ci.\nsecond failure",
+            summary: "Qodo has 2 unresolved finding(s).\nsecond failure",
             title: "Keiko for Quality",
           },
           status: "completed",
         },
       ],
       [
-        { failures: ["Missing current-head check: ci.", "waiting"], passed: false },
+        {
+          failures: ["Current Qodo finding evidence is missing or unparseable.", "waiting"],
+          passed: false,
+        },
         {
           output: {
-            summary: "Missing current-head check: ci.\nwaiting",
+            summary: "Current Qodo finding evidence is missing or unparseable.\nwaiting",
             title: "Keiko for Quality",
           },
           status: "in_progress",
@@ -1173,9 +1058,8 @@ describe("Keiko for Quality worker trust boundary", () => {
   it("publishes failures and updates an existing app check", async () => {
     const headSha = "b".repeat(40);
     const runs = checkRuns(headSha);
-    runs[0] = { ...runs[0], conclusion: "failure" };
     runs.push({ app: { id: 999 }, head_sha: headSha, id: 90, name: "Keiko for Quality" });
-    const fetchMock = githubMock(headSha, { checkRuns: runs });
+    const fetchMock = githubMock(headSha, { checkRuns: runs, qodoBugs: 2 });
     const waits = [];
     const state = stateBinding();
     const request = await signedRequest(
@@ -1337,7 +1221,8 @@ describe("Keiko for Quality worker trust boundary", () => {
 
   it("keeps missing evidence pending and ignores its own check event", async () => {
     const headSha = "c".repeat(40);
-    const fetchMock = githubMock(headSha, { checkRuns: checkRuns(headSha).slice(1) });
+    // No current Qodo review at all: the aggregate must stay pending, never fail terminally.
+    const fetchMock = githubMock(headSha, { omitQodoComment: true });
     const waits = [];
     const state = stateBinding();
     const request = await signedRequest(
@@ -1589,48 +1474,18 @@ describe("Keiko for Quality worker trust boundary", () => {
   });
 
   it("maps absent GitHub evidence fields without trusting implicit identities", async () => {
-    const headSha = "4".repeat(40);
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        response({
-          check_runs: [
-            {
-              app: null,
-              completed_at: null,
-              conclusion: null,
-              head_sha: headSha,
-              name: "ci",
-              started_at: null,
-              status: "queued",
-            },
-          ],
-          total_count: 1,
-        }),
-      )
-      .mockResolvedValueOnce(
-        response([
-          {
-            author_association: "NONE",
-            body: null,
-            performed_via_github_app: null,
-            updated_at: "2026-07-11T09:00:00.000Z",
-            user: null,
-          },
-        ]),
-      );
-    await expect(evidence("owner", "repo", 2, headSha, "token")).resolves.toEqual({
-      checks: [
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      response([
         {
-          appId: undefined,
-          completedAt: null,
-          conclusion: null,
-          headSha,
-          name: "ci",
-          socketNoAlerts: false,
-          startedAt: null,
-          status: "queued",
+          author_association: "NONE",
+          body: null,
+          performed_via_github_app: null,
+          updated_at: "2026-07-11T09:00:00.000Z",
+          user: null,
         },
-      ],
+      ]),
+    );
+    await expect(evidence("owner", "repo", 2, "token")).resolves.toEqual({
       comments: [
         {
           appId: undefined,
@@ -1645,23 +1500,15 @@ describe("Keiko for Quality worker trust boundary", () => {
     });
   });
 
-  it("rejects null current-head evidence instead of trusting optional fields", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(response(null))
-      .mockResolvedValueOnce(response([]));
-    await expect(evidence("owner", "repo", 2, "a".repeat(40), "token")).rejects.toThrow(
-      "omitted check runs",
-    );
-  });
-
-  it("uses fail-closed defaults when optional policy environment values are absent", async () => {
+  it("uses the fail-closed default stability window when the variable is absent", async () => {
     const headSha = "8".repeat(40);
     const fetchMock = githubMock(headSha);
     const state = stateBinding();
     const env = environment(state);
-    delete env.SOCKET_RISK_ALLOWLIST_JSON;
-    delete env.SOCKET_RISK_ACTORS_JSON;
     delete env.STABILITY_WINDOW_MS;
+    // Qodo (re)posted its review at 09:00:00; thirty seconds later the default 60-second window is
+    // still open, so the aggregate must stay pending rather than turning green early.
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-11T09:00:30.000Z"));
     const waits = [];
     await worker.fetch(
       await signedRequest(
@@ -1681,10 +1528,10 @@ describe("Keiko for Quality worker trust boundary", () => {
     const publish = fetchMock.mock.calls.find(
       ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
     );
-    expect(JSON.parse(publish[1].body)).toMatchObject({
-      conclusion: "failure",
-      status: "completed",
-    });
+    const body = JSON.parse(publish[1].body);
+    expect(body.status).toBe("in_progress");
+    expect(body).not.toHaveProperty("conclusion");
+    expect(body.output.summary).toContain("inside the stability window");
   });
 
   it("rejects a signed delivery without an event name", async () => {
@@ -1890,8 +1737,10 @@ describe("Keiko for Quality worker trust boundary", () => {
     await expect(waits[0]).rejects.toThrow("Expected paginated array");
   });
 
-  it("rejects a GitHub response that omits current-head checks", async () => {
+  it("rejects a check-runs listing that omits runs on the publish path", async () => {
     const headSha = "3".repeat(40);
+    // Evaluation no longer reads check runs; the publish path still lists them to locate an
+    // existing aggregate run, and a malformed listing must surface, not be silently trusted.
     githubMock(headSha, { omitCheckRuns: true });
     const waits = [];
     await worker.fetch(

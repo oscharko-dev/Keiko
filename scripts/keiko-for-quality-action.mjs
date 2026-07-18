@@ -1,20 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import {
-  evaluateKeikoForQuality,
-  isValidHeadSha,
-  nativeRequiredChecks,
-  requiredChecks,
-  requiredChecksForProfile,
-} from "./keiko-for-quality-core.mjs";
+import { evaluateKeikoForQuality, isValidHeadSha } from "./keiko-for-quality-core.mjs";
 import {
   evidence,
   github,
   installationToken,
   isOwnCommentEvent,
   mergeContextForHead,
-  parseJson,
   parseStabilityMs,
   publishCheck,
   publishDashboardComment,
@@ -38,13 +31,30 @@ const defaultCheckName = "Keiko for Quality (Action)";
 const defaultMarker = "<!-- keiko-for-quality-action-dashboard:v1 -->";
 const defaultLabel = "kfq-action-poc";
 
-// React only to completions of checks the aggregate actually reads. This both scopes work to
-// relevant evidence and structurally prevents a self-trigger loop: neither this workflow's job
-// status check nor the aggregate check it posts is an aggregated name, so their completions are
-// ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth would not).
-const aggregatedCheckNames = new Set(
-  [...requiredChecks, ...nativeRequiredChecks].map((check) => check.name),
-);
+// React only to completions of the direct required-check contexts (the union across quality
+// targets). Since Issue #2508 the aggregate no longer reads check-run evidence — branch protection
+// owns those contexts directly — but their completions remain the natural "time passed on this
+// pull" signals that let a stability-window verdict settle without a cron. The fixed allowlist is a
+// trigger filter, not merge authority, and it structurally prevents a self-trigger loop: neither
+// this workflow's job status check nor the aggregate check it posts is a listed name, so their
+// completions are ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth would
+// not).
+const reevaluationCheckNames = new Set([
+  "ci",
+  "actionlint",
+  "Verify pinned action SHAs",
+  "zizmor",
+  "Analyze (actions)",
+  "Analyze (javascript-typescript)",
+  "Build, scan, SBOM, smoke",
+  "Review dependency diff (dev/main)",
+  "ui",
+  "native",
+  "Scan dependency lockfiles",
+  "SonarCloud Code Analysis",
+  "Socket Security: Project Report",
+  "Socket Security: Pull Request Alerts",
+]);
 
 function hasValue(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -94,8 +104,6 @@ export function parseEvent(env) {
 
 function parseConfig(env) {
   return {
-    socketRiskActors: parseJson(env.SOCKET_RISK_ACTORS_JSON ?? "[]") ?? [],
-    socketRiskAllowlist: parseJson(env.SOCKET_RISK_ALLOWLIST_JSON ?? "[]") ?? [],
     stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
     targetEnv: {
       TARGET_REPOSITORIES_JSON: env.TARGET_REPOSITORIES_JSON,
@@ -104,12 +112,12 @@ function parseConfig(env) {
   };
 }
 
-// The pull requests this event should (re)evaluate. A completed run of a non-aggregated check (our
-// own job status, our posted aggregate check) yields none; an edit to our own dashboard comment
-// yields none; everything else maps through the shared worker extractor.
+// The pull requests this event should (re)evaluate. A completed run of an unlisted check (our own
+// job status, our posted aggregate check) yields none; an edit to our own dashboard comment yields
+// none; everything else maps through the shared worker extractor.
 export function affectedPullNumbers(eventName, payload, producerAppId) {
   if (eventName === "check_run") {
-    return aggregatedCheckNames.has(payload?.check_run?.name)
+    return reevaluationCheckNames.has(payload?.check_run?.name)
       ? pullRequestNumbers(eventName, payload)
       : [];
   }
@@ -187,7 +195,6 @@ async function publishResult(context) {
   await publishDashboardComment({
     currentEvidence: context.currentEvidence,
     env,
-    expectedChecks: context.expectedChecks,
     marker: context.identity.marker,
     name: context.identity.name,
     owner: context.owner,
@@ -213,18 +220,14 @@ async function evaluatePull(context) {
   }
   const headSha = pull.head?.sha;
   if (!isValidHeadSha(headSha)) throw new Error("Pull request head SHA is invalid.");
-  const currentEvidence = await evidence(owner, repository, pullNumber, headSha, token);
+  const currentEvidence = await evidence(owner, repository, pullNumber, token);
   const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
-  const expectedChecks = requiredChecksForProfile(target.profile);
   const decisionResult = evaluateKeikoForQuality({
-    ...currentEvidence,
+    comments: currentEvidence.comments,
     headSha,
     mergeCommitTime: merge.commitTime,
     mergeParents: merge.parents,
     now,
-    requiredChecks: expectedChecks,
-    socketRiskActors: config.socketRiskActors,
-    socketRiskAllowlist: config.socketRiskAllowlist,
     stabilityMs: config.stabilityMs,
   });
   const result = { ...decisionResult, evaluatedAt: now };
@@ -233,7 +236,6 @@ async function evaluatePull(context) {
   await publishResult({
     ...context,
     currentEvidence,
-    expectedChecks,
     headSha,
     producerAppId: context.producerAppId,
     pull,
