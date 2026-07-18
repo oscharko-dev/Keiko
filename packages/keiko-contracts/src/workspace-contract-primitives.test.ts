@@ -85,6 +85,9 @@ describe("workspace contract primitives", () => {
     expect(isCanonicalWorkspaceRoot("/work/keiko")).toBe(true);
     expect(isCanonicalWorkspaceRoot("C:\\work\\keiko")).toBe(true);
     expect(isCanonicalWorkspaceRoot("/work/../escape")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("/work\\..\\escape")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("C:\\work/../escape")).toBe(false);
+    expect(isCanonicalWorkspaceRoot("C:\\work/child")).toBe(false);
     expect(isPortableWorkspaceRelativePath("src/main.ts")).toBe(true);
     for (const path of ["/etc/passwd", "../escape", "C:\\repo", "\\\\host\\share", "a\\b"]) {
       expect(isPortableWorkspaceRelativePath(path)).toBe(false);
@@ -101,5 +104,10 @@ describe("workspace contract primitives", () => {
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "/work/application"])).toBe(true);
     expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "/work/app/packages/ui"])).toBe(false);
     expect(workspaceCanonicalRootsDoNotOverlap(["C:\\work", "C:\\work\\child"])).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["C:\\work", "C:\\work/child"])).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["C:\\Work", "c:\\work\\child"])).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "/work/app"])).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "relative/root"])).toBe(false);
+    expect(workspaceCanonicalRootsDoNotOverlap(["/work/app", "C:\\work\\app"])).toBe(true);
   });
 });

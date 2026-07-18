@@ -96,6 +96,15 @@ describe("workspace manifest", () => {
         roots: [roots[0], { ...roots[1], canonicalRoot: "/work/keiko/nested" }],
       }).ok,
     ).toBe(false);
+    expect(
+      validateWorkspaceManifest({
+        ...validManifest(),
+        roots: [
+          { ...roots[0], canonicalRoot: "C:\\work" },
+          { ...roots[1], canonicalRoot: "C:\\work/child" },
+        ],
+      }).ok,
+    ).toBe(false);
   });
 
   it("enforces root count, display-name, source-fact, and schema bounds", () => {

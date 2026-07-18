@@ -214,5 +214,9 @@ function resolveSetting(
 export function resolveEditorM11Settings(
   input: EditorM11SettingsResolutionInput,
 ): readonly EditorM11ResolvedSetting[] {
-  return Object.freeze(EDITOR_M7_SETTING_REGISTRY.map((entry) => resolveSetting(entry, input)));
+  return Object.freeze(
+    EDITOR_M7_SETTING_REGISTRY.map((entry): EditorM11ResolvedSetting =>
+      resolveSetting(entry, input),
+    ),
+  );
 }
