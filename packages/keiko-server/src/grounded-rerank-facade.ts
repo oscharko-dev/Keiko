@@ -32,6 +32,7 @@ export interface RerankSelectionInput<T> {
   readonly documentFor: (candidate: T) => string;
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly fetchImpl?: typeof fetch | undefined;
   readonly policy?: RerankSelectionPolicy | undefined;
   readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
   readonly fallbackMode: RerankFallbackMode;
@@ -48,6 +49,7 @@ interface MaterializedRerankInput {
   readonly documents: readonly string[];
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly fetchImpl?: typeof fetch | undefined;
 }
 
 interface SafeRerankTransportResult {
@@ -184,6 +186,7 @@ function buildRerankRequest(
     timeoutMs: reranker.timeoutMs,
     ...(egress === undefined ? {} : { egress }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
   };
 }
 
@@ -242,6 +245,7 @@ async function configuredSelection<T>(
     documents: providerCandidates.map(input.documentFor),
     topN: input.topN,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
   };
   const transport = await requestRerankTransport(requestInput, reranker);
   if (transport.outcome?.ok !== true) {

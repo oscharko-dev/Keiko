@@ -1154,10 +1154,11 @@ interface FusedCandidate {
 }
 
 const RRF_K = 60;
-// OR-fallback lexical candidates fuse at half weight: a fallback hit may match only ONE query
-// term, and at full weight such a hit ties with (and can displace via tiebreak) a top dense
-// candidate. At any weight < 1 a candidate that ranks higher in the dense lane strictly beats
-// the mirrored fallback-favoured candidate: (1/(K+1) + w/(K+2)) > (w/(K+1) + 1/(K+2)) for w < 1.
+// OR-fallback lexical candidates are recall-only because they may match only ONE query term. A
+// fallback-only candidate receives half weight so it remains behind a top dense hit. When the same
+// candidate already exists in the dense lane, the fallback contributes metadata but zero score;
+// otherwise even half of rank 1 can promote dense rank 2 above dense rank 1 and make a weak lexical
+// coincidence override semantic relevance. Strict lexical matches continue to fuse at full weight.
 const LEXICAL_OR_FALLBACK_RRF_WEIGHT = 0.5;
 const LEXICAL_CANDIDATE_LIMIT = 100;
 const QUERY_TRANSFORM_MAX_VARIANTS = 4;
@@ -1783,6 +1784,15 @@ function lexicalFusionWeight(candidate: LexicalCandidate): number {
   return candidate.viaOrFallback ? LEXICAL_OR_FALLBACK_RRF_WEIGHT : 1;
 }
 
+function lexicalFusionIncrement(
+  candidate: LexicalCandidate,
+  existing: FusedCandidate | undefined,
+  rank: number,
+): number {
+  if (candidate.viaOrFallback && existing?.denseRank !== undefined) return 0;
+  return lexicalFusionWeight(candidate) * rrf(rank);
+}
+
 function fuseCandidates(
   denseCandidates: readonly DenseCandidate[],
   lexicalCandidates: readonly LexicalCandidate[],
@@ -1810,6 +1820,7 @@ function fuseCandidates(
   rankedLexical.forEach((candidate, index) => {
     const rank = index + 1;
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const increment = lexicalFusionIncrement(candidate, byKey.get(key), rank);
     upsertFusedCandidate(
       byKey,
       key,
@@ -1819,7 +1830,7 @@ function fuseCandidates(
         lexicalRank: rank,
         lexicalBm25Score: candidate.bm25Score,
       },
-      lexicalFusionWeight(candidate) * rrf(rank),
+      increment,
     );
   });
   return [...byKey.values()].sort(fusedScoreDesc).slice(0, limit);

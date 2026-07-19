@@ -34,7 +34,9 @@ import type {
 import {
   createDefaultParserRegistry,
   createRepositoryPodShell,
+  listRepositoryChunkLineRanges,
   openKnowledgeStore,
+  readRepositoryFileFingerprints,
   refreshRepositoryPod,
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -49,7 +51,10 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import {
+  configuredRepoSemanticSearchProviderFor,
+  type RepositoryPodRetrievalObservation,
+} from "./grounded-repo-semantic-search.js";
 import {
   rerankAndSelect,
   withFinalMarkers,
@@ -73,9 +78,10 @@ export type GroundedRetrievalEvalMode =
 
 // ─── Concept (semantic) embedding ─────────────────────────────────────────────
 // Per concept: a scopePath, plus DISJOINT document vs query vocabularies. A document and its query
-// share NO literal words except the weak shared `service` token — so lexical overlap can never
-// discriminate the target from the distractors, and ONLY the semantic concept vector can. This is
-// what makes the harness a genuine SEMANTIC retrieval test rather than a lexical substring test.
+// share NO literal words; the document-side `service` and query-side `system` tokens map to the
+// same weak embedding dimension. Lexical overlap therefore cannot discriminate the target from the
+// distractors, and ONLY the semantic concept vector can. This makes the harness a genuine SEMANTIC
+// retrieval test rather than a lexical substring test.
 
 interface ConceptModel {
   readonly id: string;
@@ -84,7 +90,8 @@ interface ConceptModel {
   readonly queryWords: readonly string[];
 }
 
-const SYSTEM_WORD = "service";
+const DOCUMENT_SYSTEM_WORD = "service";
+const QUERY_SYSTEM_WORD = "system";
 
 const CONCEPT_MODEL: readonly ConceptModel[] = [
   {
@@ -158,7 +165,8 @@ function buildSynonymMap(): ReadonlyMap<string, number> {
   CONCEPT_MODEL.forEach((concept, index) => {
     for (const word of [...concept.docWords, ...concept.queryWords]) map.set(word, index);
   });
-  map.set(SYSTEM_WORD, SYSTEM_DIM);
+  map.set(DOCUMENT_SYSTEM_WORD, SYSTEM_DIM);
+  map.set(QUERY_SYSTEM_WORD, SYSTEM_DIM);
   return map;
 }
 
@@ -208,16 +216,19 @@ interface EvalCase {
 }
 
 // Generated from CONCEPT_MODEL so the doc/query vocabularies stay provably disjoint. Every document
-// carries the shared `service` token, so all ten are returned for EVERY query with a non-zero cosine
-// — a genuine distractor-dense set where RANKING (not presence) decides the winner.
+// carries the embedding-synonymous `service`/`system` concept, so all ten are returned for EVERY
+// query with a non-zero cosine while lexical overlap remains zero — a genuine distractor-dense set
+// where SEMANTIC RANKING (not presence or lexical fallback) decides the winner.
 const CORPUS: readonly EvalDocument[] = CONCEPT_MODEL.map((concept) => ({
   scopePath: concept.scopePath,
-  text: `${SYSTEM_WORD} ${concept.docWords.join(" ")}`,
+  text: `export const ${concept.id}Signals = ["${DOCUMENT_SYSTEM_WORD}", ${concept.docWords
+    .map((word) => `"${word}"`)
+    .join(", ")}];`,
 }));
 
 const CASES: readonly EvalCase[] = CONCEPT_MODEL.map((concept) => ({
   id: concept.id,
-  query: `In the ${SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}?`,
+  query: `In the ${QUERY_SYSTEM_WORD}, which module handles ${concept.queryWords.join(" ")}?`,
   relevantPath: concept.scopePath,
 }));
 
@@ -225,8 +236,12 @@ const CASES: readonly EvalCase[] = CONCEPT_MODEL.map((concept) => ({
 
 function scriptedEmbeddingPort(
   mode: GroundedRetrievalEvalMode,
+  audit: EmbeddingAudit,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
   return (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+    if (audit.askPhase && request.input.startsWith("Path:")) {
+      audit.askTimeDocumentEmbeddingCount += 1;
+    }
     // `embedding-flat`: a broken embedding that maps everything to the same vector. Semantic ranking
     // collapses to arbitrary tie-breaks, so retrieval can no longer surface the relevant document.
     const vector = scriptedVector(mode, request.input);
@@ -274,6 +289,7 @@ function evalFileMap(): Readonly<Record<string, string>> {
 }
 
 function evalRelativePath(absolutePath: string): string {
+  if (absolutePath === EVAL_REPOSITORY_ROOT) return "";
   return absolutePath.startsWith(`${EVAL_REPOSITORY_ROOT}/`)
     ? absolutePath.slice(EVAL_REPOSITORY_ROOT.length + 1)
     : absolutePath;
@@ -379,10 +395,26 @@ function evalGatewayConfig(): GatewayConfig {
   };
 }
 
-function evalDeps(mode: GroundedRetrievalEvalMode): UiHandlerDeps {
+interface EmbeddingAudit {
+  askPhase: boolean;
+  askTimeDocumentEmbeddingCount: number;
+  readonly retrievalModeCounts: Map<string, number>;
+}
+
+interface EvalRuntime {
+  readonly deps: UiHandlerDeps;
+  readonly audit: EmbeddingAudit;
+}
+
+function evalRuntime(mode: GroundedRetrievalEvalMode): EvalRuntime {
   const config = evalGatewayConfig();
   const env: Record<string, string> = {};
-  return {
+  const audit: EmbeddingAudit = {
+    askPhase: false,
+    askTimeDocumentEmbeddingCount: 0,
+    retrievalModeCounts: new Map(),
+  };
+  const deps: UiHandlerDeps = {
     config,
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
@@ -391,14 +423,40 @@ function evalDeps(mode: GroundedRetrievalEvalMode): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
-    localKnowledgeEmbeddingRequest: scriptedEmbeddingPort(mode),
+    localKnowledgeEmbeddingRequest: scriptedEmbeddingPort(mode, audit),
     rerankRequest: scriptedRerankPort(mode),
   };
+  return { deps, audit };
 }
 
 interface EvalRepositoryPod {
   readonly store: KnowledgeStore;
   readonly fs: WorkspaceFs;
+  readonly fingerprintCount: number;
+  readonly indexedPathCount: number;
+  readonly alignedVectorCount: number;
+}
+
+interface StoredEvalVector {
+  readonly document_path: string;
+  readonly embedding: Uint8Array;
+}
+
+function alignedVectorCount(store: KnowledgeStore): number {
+  const rows = store._internal.db
+    .prepare(
+      "SELECT d.document_path, v.embedding FROM vectors v JOIN documents d ON d.id = v.document_id",
+    )
+    .all() as unknown as readonly StoredEvalVector[];
+  return rows.filter((row) => {
+    const conceptIndex = CONCEPT_MODEL.findIndex(
+      (concept) => concept.scopePath === row.document_path,
+    );
+    const bytes = row.embedding;
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const vector = new Float32Array(buffer);
+    return conceptIndex >= 0 && (vector[conceptIndex] ?? 0) > 0.5;
+  }).length;
 }
 
 async function seedEvalRepositoryPod(deps: UiHandlerDeps): Promise<EvalRepositoryPod> {
@@ -437,7 +495,17 @@ async function seedEvalRepositoryPod(deps: UiHandlerDeps): Promise<EvalRepositor
     },
     { runId: "grounded-retrieval-eval-index" },
   );
-  return { store, fs };
+  const fingerprints = readRepositoryFileFingerprints(store, EVAL_CAPSULE_ID, EVAL_SOURCE_ID);
+  const indexedPaths = new Set(
+    listRepositoryChunkLineRanges(store, EVAL_CAPSULE_ID).map((range) => range.relativePath),
+  );
+  return {
+    store,
+    fs,
+    fingerprintCount: fingerprints.size,
+    indexedPathCount: indexedPaths.size,
+    alignedVectorCount: alignedVectorCount(store),
+  };
 }
 
 // ─── Pipeline drive: semantic → RRF → model rerank ────────────────────────────
@@ -520,6 +588,12 @@ async function applyModelRerank(
 
 export interface GroundedRetrievalScorecard {
   readonly mode: GroundedRetrievalEvalMode;
+  readonly semanticProviderName: string;
+  readonly askTimeDocumentEmbeddingCount: number;
+  readonly fingerprintCount: number;
+  readonly indexedPathCount: number;
+  readonly alignedVectorCount: number;
+  readonly retrievalModeCounts: Readonly<Record<string, number>>;
   readonly cases: number;
   readonly top1Rate: number;
   readonly recallAtK: number;
@@ -550,18 +624,32 @@ function average(values: readonly number[]): number {
   return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function observeEvalRetrieval(
+  audit: EmbeddingAudit,
+): (observation: RepositoryPodRetrievalObservation) => void {
+  return ({ mode, denseCandidateCount, lexicalCandidateCount, lexicalOrFallbackUsed }): void => {
+    const key = `${mode}:d${String(denseCandidateCount)}:l${String(
+      lexicalCandidateCount,
+    )}:f${lexicalOrFallbackUsed ? "1" : "0"}`;
+    audit.retrievalModeCounts.set(key, (audit.retrievalModeCounts.get(key) ?? 0) + 1);
+  };
+}
+
 export async function runGroundedRetrievalQualityEval(
   mode: GroundedRetrievalEvalMode = "baseline",
 ): Promise<GroundedRetrievalScorecard> {
-  const deps = evalDeps(mode);
+  const runtime = evalRuntime(mode);
+  const { deps } = runtime;
   const pod = await seedEvalRepositoryPod(deps);
   try {
     const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
       fs: pod.fs,
       maxCandidates: CORPUS.length,
       repositoryPod: { store: pod.store, repositoryRoot: EVAL_REPOSITORY_ROOT },
+      observePodRetrieval: observeEvalRetrieval(runtime.audit),
     });
     if (provider === undefined) throw new Error("expected a configured semantic search provider");
+    runtime.audit.askPhase = true;
     const perCase = await Promise.all(
       CASES.map(async (evalCase) => {
         const paths = rankedPaths(await rankCase(deps, provider, evalCase));
@@ -576,7 +664,15 @@ export async function runGroundedRetrievalQualityEval(
         };
       }),
     );
-    return scorecardFor(mode, perCase);
+    return {
+      ...scorecardFor(mode, perCase),
+      semanticProviderName: provider.name,
+      askTimeDocumentEmbeddingCount: runtime.audit.askTimeDocumentEmbeddingCount,
+      fingerprintCount: pod.fingerprintCount,
+      indexedPathCount: pod.indexedPathCount,
+      alignedVectorCount: pod.alignedVectorCount,
+      retrievalModeCounts: Object.fromEntries(runtime.audit.retrievalModeCounts),
+    };
   } finally {
     pod.store.close();
     deps.store.close();
@@ -594,7 +690,15 @@ interface EvalCaseScore {
 function scorecardFor(
   mode: GroundedRetrievalEvalMode,
   perCase: readonly EvalCaseScore[],
-): GroundedRetrievalScorecard {
+): Omit<
+  GroundedRetrievalScorecard,
+  | "semanticProviderName"
+  | "askTimeDocumentEmbeddingCount"
+  | "fingerprintCount"
+  | "indexedPathCount"
+  | "alignedVectorCount"
+  | "retrievalModeCounts"
+> {
   return {
     mode,
     cases: perCase.length,
