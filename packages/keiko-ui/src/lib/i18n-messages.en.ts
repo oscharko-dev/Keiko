@@ -1701,6 +1701,15 @@ export const EN_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
   "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
   "gitClientWindow.panel.diffOpened": "Diff panel opened.",
+  "manualPodRefresh.button": "Refresh manual",
+  "manualPodRefresh.confirm.body": "Re-crawl and re-index this HTML manual?",
+  "manualPodRefresh.confirm.cancel": "Cancel",
+  "manualPodRefresh.confirm.confirm": "Refresh manual",
+  "manualPodRefresh.progress.running": "Refreshing manual…",
+  "manualPodRefresh.progress.crawl": "{accepted} pages indexed, {denied} links skipped",
+  "manualPodRefresh.progress.index": "{processed} of {total} documents processed",
+  "manualPodRefresh.state.succeeded": "Manual refreshed",
+  "manualPodRefresh.state.failed": "Refresh failed; the previous manual is unchanged",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

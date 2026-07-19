@@ -287,18 +287,6 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.detail.actions.refresh.confirm": "Refresh",
   "localKnowledge.detail.actions.refresh.button": "Refresh changed files",
   "localKnowledge.detail.actions.refresh.aria": "Refresh changed files for Knowledge Pod {name}",
-  "localKnowledge.detail.manualRefresh.button": "Refresh manual",
-  "localKnowledge.detail.manualRefresh.confirm.body": "Re-crawl and re-index this HTML manual?",
-  "localKnowledge.detail.manualRefresh.confirm.cancel": "Cancel",
-  "localKnowledge.detail.manualRefresh.confirm.confirm": "Refresh manual",
-  "localKnowledge.detail.manualRefresh.progress.running": "Refreshing manual…",
-  "localKnowledge.detail.manualRefresh.progress.crawl":
-    "{accepted} pages indexed, {denied} links skipped",
-  "localKnowledge.detail.manualRefresh.progress.index":
-    "{processed} of {total} documents processed",
-  "localKnowledge.detail.manualRefresh.state.succeeded": "Manual refreshed",
-  "localKnowledge.detail.manualRefresh.state.failed":
-    "Refresh failed; the previous manual is unchanged",
   "localKnowledge.detail.actions.repair.title": "Repair failed files",
   "localKnowledge.detail.actions.repair.description":
     "Retries files that previously failed indexing and also picks up newly changed files in the same incremental pass.",
@@ -759,19 +747,6 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.actions.refresh.button": "Geänderte Dateien aktualisieren",
   "localKnowledge.detail.actions.refresh.aria":
     "Geänderte Dateien für Knowledge Pod {name} aktualisieren",
-  "localKnowledge.detail.manualRefresh.button": "Handbuch aktualisieren",
-  "localKnowledge.detail.manualRefresh.confirm.body":
-    "Dieses HTML-Handbuch neu crawlen und neu indexieren?",
-  "localKnowledge.detail.manualRefresh.confirm.cancel": "Abbrechen",
-  "localKnowledge.detail.manualRefresh.confirm.confirm": "Handbuch aktualisieren",
-  "localKnowledge.detail.manualRefresh.progress.running": "Handbuch wird aktualisiert…",
-  "localKnowledge.detail.manualRefresh.progress.crawl":
-    "{accepted} Seiten indexiert, {denied} Links übersprungen",
-  "localKnowledge.detail.manualRefresh.progress.index":
-    "{processed} von {total} Dokumenten verarbeitet",
-  "localKnowledge.detail.manualRefresh.state.succeeded": "Handbuch aktualisiert",
-  "localKnowledge.detail.manualRefresh.state.failed":
-    "Aktualisierung fehlgeschlagen; das vorherige Handbuch bleibt unverändert",
   "localKnowledge.detail.actions.repair.title": "Fehlgeschlagene Dateien reparieren",
   "localKnowledge.detail.actions.repair.description":
     "Versucht zuvor fehlgeschlagene Dateien erneut und nimmt neu geänderte Dateien im selben inkrementellen Lauf mit.",

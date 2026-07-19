@@ -1744,4 +1744,14 @@ export const DE_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
   "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
   "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
+  "manualPodRefresh.button": "Handbuch aktualisieren",
+  "manualPodRefresh.confirm.body": "Dieses HTML-Handbuch neu crawlen und neu indexieren?",
+  "manualPodRefresh.confirm.cancel": "Abbrechen",
+  "manualPodRefresh.confirm.confirm": "Handbuch aktualisieren",
+  "manualPodRefresh.progress.running": "Handbuch wird aktualisiert…",
+  "manualPodRefresh.progress.crawl": "{accepted} Seiten indexiert, {denied} Links übersprungen",
+  "manualPodRefresh.progress.index": "{processed} von {total} Dokumenten verarbeitet",
+  "manualPodRefresh.state.succeeded": "Handbuch aktualisiert",
+  "manualPodRefresh.state.failed":
+    "Aktualisierung fehlgeschlagen; das vorherige Handbuch bleibt unverändert",
 } satisfies MessageCatalog;

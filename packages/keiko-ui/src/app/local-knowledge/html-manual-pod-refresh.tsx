@@ -2,15 +2,15 @@
 
 // Live HTML Manual Knowledge Pod refresh control (Issue #2063). Renders a refresh button for an
 // HTML-manual pod; on confirm it starts the governed BFF refresh job and polls its body-free
-// `HtmlManualPodJob` projection, surfacing live crawl/index progress until the job settles. All
-// strings go through the Local Knowledge i18n catalog; only existing global classes are reused (no
-// globals.css edit, #1300). Every API call is an injectable seam so the flow is tested without a
-// real network.
+// `HtmlManualPodJob` projection, surfacing live crawl/index progress until the job settles. Strings
+// go through the shared `manualPodRefresh.*` i18n catalog (en+de); only existing global classes are
+// reused (no globals.css edit, #1300). Every API call is an injectable seam so the flow is tested
+// without a real network.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { HtmlManualPodJob, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { getHtmlManualPodJob, startHtmlManualPodRefresh } from "@/lib/local-knowledge-api";
-import { useLocalKnowledgeTranslate as useTranslate } from "./local-knowledge-i18n";
+import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 const POLL_INTERVAL_MS = 1500;
@@ -34,9 +34,9 @@ type RefreshState =
 type Translate = ReturnType<typeof useTranslate>;
 
 function stateLabel(job: HtmlManualPodJob, t: Translate): string {
-  if (job.state === "running") return t("localKnowledge.detail.manualRefresh.progress.running");
-  if (job.state === "succeeded") return t("localKnowledge.detail.manualRefresh.state.succeeded");
-  return t("localKnowledge.detail.manualRefresh.state.failed");
+  if (job.state === "running") return t("manualPodRefresh.progress.running");
+  if (job.state === "succeeded") return t("manualPodRefresh.state.succeeded");
+  return t("manualPodRefresh.state.failed");
 }
 
 function ProgressView({
@@ -50,14 +50,14 @@ function ProgressView({
     <div className="lkd-action-progress" role="status" aria-live="polite">
       <p>{stateLabel(job, t)}</p>
       <p>
-        {t("localKnowledge.detail.manualRefresh.progress.crawl", {
+        {t("manualPodRefresh.progress.crawl", {
           accepted: String(job.crawl.accepted),
           denied: String(job.crawl.deniedCount),
         })}
       </p>
       {job.indexing !== null ? (
         <p>
-          {t("localKnowledge.detail.manualRefresh.progress.index", {
+          {t("manualPodRefresh.progress.index", {
             processed: String(job.indexing.processedDocuments),
             total: String(job.indexing.totalDocuments),
           })}
@@ -73,7 +73,6 @@ function useJobPolling(
   getJob: typeof getHtmlManualPodJob,
   setState: (next: RefreshState) => void,
   onComplete: (() => void) | undefined,
-  t: Translate,
   intervalMs: number,
 ): void {
   // Key the poll on the running job's id (stable across progress ticks) so the effect starts once
@@ -100,7 +99,7 @@ function useJobPolling(
           }
         })
         .catch((error: unknown) => {
-          if (!cancelled) setState({ kind: "error", message: formatError(error, t) });
+          if (!cancelled) setState({ kind: "error", message: formatError(error) });
         });
     };
     timer = window.setTimeout(poll, intervalMs);
@@ -108,7 +107,7 @@ function useJobPolling(
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [pollJobId, getJob, setState, onComplete, t, intervalMs]);
+  }, [pollJobId, getJob, setState, onComplete, intervalMs]);
 }
 
 export function HtmlManualPodRefresh(props: HtmlManualPodRefreshProps): ReactNode {
@@ -123,7 +122,6 @@ export function HtmlManualPodRefresh(props: HtmlManualPodRefreshProps): ReactNod
     getJob,
     setState,
     props.onRefreshComplete,
-    t,
     props.pollIntervalMs ?? POLL_INTERVAL_MS,
   );
 
@@ -132,11 +130,11 @@ export function HtmlManualPodRefresh(props: HtmlManualPodRefreshProps): ReactNod
     busyRef.current = true;
     void start(props.capsuleId, props.sourceId)
       .then((job) => setState({ kind: "active", job }))
-      .catch((error: unknown) => setState({ kind: "error", message: formatError(error, t) }))
+      .catch((error: unknown) => setState({ kind: "error", message: formatError(error) }))
       .finally(() => {
         busyRef.current = false;
       });
-  }, [start, props.capsuleId, props.sourceId, t]);
+  }, [start, props.capsuleId, props.sourceId]);
 
   if (state.kind === "active") {
     return <ProgressView job={state.job} t={t} />;
@@ -156,7 +154,7 @@ export function HtmlManualPodRefresh(props: HtmlManualPodRefreshProps): ReactNod
           className="lk-btn lk-btn-ghost"
           onClick={() => setState({ kind: "confirm" })}
         >
-          {t("localKnowledge.detail.manualRefresh.button")}
+          {t("manualPodRefresh.button")}
         </button>
       )}
     </div>
@@ -174,12 +172,12 @@ function ConfirmRow({
 }): ReactNode {
   return (
     <div className="lkd-manual-refresh-confirm" role="group">
-      <span>{t("localKnowledge.detail.manualRefresh.confirm.body")}</span>
+      <span>{t("manualPodRefresh.confirm.body")}</span>
       <button type="button" className="lk-btn lk-btn-ghost" onClick={onCancel}>
-        {t("localKnowledge.detail.manualRefresh.confirm.cancel")}
+        {t("manualPodRefresh.confirm.cancel")}
       </button>
       <button type="button" className="lk-btn" onClick={onConfirm}>
-        {t("localKnowledge.detail.manualRefresh.confirm.confirm")}
+        {t("manualPodRefresh.confirm.confirm")}
       </button>
     </div>
   );
