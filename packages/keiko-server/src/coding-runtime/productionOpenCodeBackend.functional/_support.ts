@@ -196,7 +196,12 @@ function withScriptedModelSeams(deps: UiHandlerDeps, script: ScriptState): UiHan
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (): AsyncIterable<GatewayStreamChunk> {
-        yield { type: "done" as const, response: await chat() };
+        // A real model streams its assistant content as deltas before the terminal chunk; the
+        // gateway's SSE synthesis needs them to forward the content to OpenCode. Emitting only a
+        // done chunk left the real binary with no assistant text to persist.
+        const response = await chat();
+        if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
+        yield { type: "done" as const, response };
       },
   };
 }
@@ -437,8 +442,11 @@ function digest(value: string): string {
 function normal(): NormalizedResponse {
   return {
     modelId: "functional-model",
+    // Intrinsically over the projection's segment bound so the assistant text truncates identically
+    // for the scripted child and the real binary (which streams the raw content, without the
+    // child's artificial display expansion). Exercises the long-text admission fix end to end.
     content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
-      Math.floor(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS / 8),
+      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS + 512,
     )}${FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL}`,
     finishReason: "stop",
     toolCalls: [],
