@@ -1,0 +1,59 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createNodeUiStore, SCHEMA_VERSION, UiStoreSchemaVersionError } from "./index.js";
+
+let tmp: string;
+let project: string;
+let dbPath: string;
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "keiko-manifest-migration-"));
+  project = join(tmp, "project");
+  dbPath = join(tmp, "ui.db");
+  mkdirSync(project);
+});
+
+afterEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("workspace manifest migration", () => {
+  it("upgrades pre-M11 projects deterministically without changing the project registry", () => {
+    const initial = createNodeUiStore(dbPath, { now: () => 42 });
+    initial.createProject(project, "Project");
+    const expected = initial.listWorkspaceManifestRecords()[0];
+    initial.close();
+    if (expected === undefined) throw new Error("missing initial manifest");
+
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(
+      "DROP TABLE workspace_manifest_roots; DROP TABLE workspace_manifests; PRAGMA user_version = 11;",
+    );
+    legacy.close();
+
+    const migrated = createNodeUiStore(dbPath, { now: () => 999 });
+    expect(migrated.listProjects()).toHaveLength(1);
+    expect(migrated.listWorkspaceManifestRecords()).toHaveLength(1);
+    expect(migrated.listWorkspaceManifestRecords()[0]?.recordJson).toBe(expected.recordJson);
+    migrated.close();
+  });
+
+  it("rejects a future schema with a typed downgrade reason and no reinterpretation", () => {
+    const store = createNodeUiStore(dbPath);
+    store.close();
+    const future = new DatabaseSync(dbPath);
+    future.exec(`PRAGMA user_version = ${String(SCHEMA_VERSION + 1)}`);
+    future.close();
+
+    try {
+      createNodeUiStore(dbPath);
+      throw new Error("expected schema rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiStoreSchemaVersionError);
+      expect((error as UiStoreSchemaVersionError).code).toBe("UI_STORE_SCHEMA_NEWER");
+    }
+  });
+});

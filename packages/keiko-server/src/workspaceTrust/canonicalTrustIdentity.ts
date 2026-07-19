@@ -1,14 +1,15 @@
-// Issue #2521, ADR-0144 D1/D3 — pure derivation of the canonical WorkspaceTrustBinding from a
+// Issue #2521/#2524, ADR-0145 D1/D3 — pure derivation of WorkspaceTrustBinding from a
 // server-resolved canonical root and the observed package-script trust basis. No IO: the caller
 // resolves realpath and reads the manifest; this module only frames and hashes already-canonical
 // facts. Every digest is domain-separated and length-framed so no field concatenation is ambiguous
-// (ADR-0144 D1). Derivation is deterministic: the same canonical root yields the same references and
+// (ADR-0145 D1). Derivation is deterministic: the same canonical root yields the same references and
 // digests across restarts, so a persisted record matches on reload and any root change fails closed.
 
 import { createHash } from "node:crypto";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type {
   WorkspaceFact,
+  WorkspaceManifest,
   WorkspaceManifestDigest,
   WorkspaceManifestRef,
   WorkspaceRootIdentityDigest,
@@ -16,6 +17,7 @@ import type {
   WorkspaceTrustBasisDigest,
   WorkspaceTrustBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { deriveWorkspaceRootRef as deriveCanonicalWorkspaceRootRef } from "../workspace-root-identity.js";
 
 // Single synthetic-root manifest revision. #2521 owns exactly one canonical root per project;
 // ordered multi-root membership and real manifest revisions land with #2524, at which point older
@@ -46,15 +48,10 @@ function framedDigestHex(domain: string, parts: readonly string[]): string {
 // A self-computed SHA-256 hex string is by construction a valid digest brand; a derived
 // "root-"/"mf-" + hex string is by construction a valid opaque reference. The casts document that
 // these values never cross a trust boundary — untrusted input is validated separately on store read.
-function rootIdentityDigestOf(canonicalRoot: string): WorkspaceRootIdentityDigest {
+function legacyRootIdentityDigestOf(canonicalRoot: string): WorkspaceRootIdentityDigest {
   return framedDigestHex("keiko.m11.root-identity.v1", [
     canonicalRoot,
   ]) as WorkspaceRootIdentityDigest;
-}
-
-function rootReferenceOf(canonicalRoot: string): WorkspaceRootRef {
-  const digest = framedDigestHex("keiko.m11.root-ref.v1", [canonicalRoot]);
-  return `root-${digest.slice(0, REFERENCE_HEX_CHARS)}` as WorkspaceRootRef;
 }
 
 function manifestReferenceOf(canonicalRoot: string): WorkspaceManifestRef {
@@ -77,15 +74,30 @@ function manifestDigestOf(
 // The opaque root reference is also the persistence key; exposed so the store lookup and the derived
 // binding always agree on the identity of the root under evaluation.
 export function deriveWorkspaceRootRef(canonicalRoot: string): WorkspaceRootRef {
-  return rootReferenceOf(canonicalRoot);
+  return deriveCanonicalWorkspaceRootRef(canonicalRoot);
 }
 
 export function deriveWorkspaceTrustBinding(
   canonicalRoot: string,
   trustBasisDigest: WorkspaceFact<WorkspaceTrustBasisDigest>,
+  manifest?: WorkspaceManifest,
 ): WorkspaceTrustBinding {
-  const rootIdentityDigest = rootIdentityDigestOf(canonicalRoot);
-  const rootRef = rootReferenceOf(canonicalRoot);
+  const manifestRoot = manifest?.roots.find((root) => root.canonicalRoot === canonicalRoot);
+  if (manifest !== undefined && manifestRoot === undefined) {
+    throw new Error("WORKSPACE_ROOT_NOT_MEMBER");
+  }
+  if (manifest !== undefined && manifestRoot !== undefined) {
+    return {
+      manifestRef: manifest.manifestRef,
+      manifestRevision: manifest.revision,
+      manifestDigest: manifest.manifestDigest,
+      rootRef: manifestRoot.rootRef,
+      rootIdentityDigest: manifestRoot.identityDigest,
+      trustBasisDigest,
+    };
+  }
+  const rootIdentityDigest = legacyRootIdentityDigestOf(canonicalRoot);
+  const rootRef = deriveCanonicalWorkspaceRootRef(canonicalRoot);
   return {
     manifestRef: manifestReferenceOf(canonicalRoot),
     manifestRevision: SINGLE_ROOT_MANIFEST_REVISION,

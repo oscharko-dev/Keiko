@@ -30,6 +30,8 @@ import type {
   UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,
+  WorkspaceManifestMutationInput,
+  WorkspaceManifestRecordRow,
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./types.js";
@@ -67,6 +69,16 @@ import {
   readWorkspaceTrustRecord as sqlReadWorkspaceTrustRecord,
   writeWorkspaceTrustRecord as sqlWriteWorkspaceTrustRecord,
 } from "./workspaceTrust.js";
+import {
+  deleteSingletonWorkspaceManifestForProject,
+  ensureProjectWorkspaceManifest,
+  findWorkspaceManifestRecordByProject as sqlFindWorkspaceManifestRecordByProject,
+  findWorkspaceManifestRecordByRoot as sqlFindWorkspaceManifestRecordByRoot,
+  listWorkspaceManifestRecords as sqlListWorkspaceManifestRecords,
+  readWorkspaceManifestRecord as sqlReadWorkspaceManifestRecord,
+  replaceWorkspaceManifest as sqlReplaceWorkspaceManifest,
+  workspaceManifestRootCountForProject,
+} from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
 import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
@@ -141,7 +153,17 @@ function createProjectRecord(
 ): Project {
   const normalized = validateProjectPath(path, { mustExist: true });
   const resolvedName = deriveProjectName(name, normalized);
-  return sqlUpsertProject(db, normalized, resolvedName, name !== undefined, options.now());
+  const now = options.now();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
+    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+    db.exec("COMMIT");
+    return project;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function updateProjectRecord(
@@ -156,7 +178,19 @@ function updateProjectRecord(
 
 function deleteProjectRecord(db: DatabaseSync, path: string): void {
   const normalized = validateProjectPath(path, { mustExist: false });
-  sqlDeleteProject(db, normalized);
+  const rootCount = workspaceManifestRootCountForProject(db, normalized);
+  if (rootCount !== undefined && rootCount > 1) {
+    throw invalidRequest("Project is bound to a multi-root workspace.");
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    deleteSingletonWorkspaceManifestForProject(db, normalized);
+    sqlDeleteProject(db, normalized);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function createMessageBatch(
@@ -238,6 +272,18 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     pruneWorkspaceTrustRecords: (max: number): void => {
       sqlPruneWorkspaceTrustRecords(db, max);
     },
+    listWorkspaceManifestRecords: (): readonly WorkspaceManifestRecordRow[] =>
+      sqlListWorkspaceManifestRecords(db),
+    readWorkspaceManifestRecord: (workspaceId: string): WorkspaceManifestRecordRow | undefined =>
+      sqlReadWorkspaceManifestRecord(db, workspaceId),
+    findWorkspaceManifestRecordByRoot: (rootRef: string): WorkspaceManifestRecordRow | undefined =>
+      sqlFindWorkspaceManifestRecordByRoot(db, rootRef),
+    findWorkspaceManifestRecordByProject: (
+      projectPath: string,
+    ): WorkspaceManifestRecordRow | undefined =>
+      sqlFindWorkspaceManifestRecordByProject(db, projectPath),
+    replaceWorkspaceManifest: (input: WorkspaceManifestMutationInput): boolean =>
+      sqlReplaceWorkspaceManifest(db, input, options.now()),
     close: (): void => {
       db.close();
     },
