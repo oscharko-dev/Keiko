@@ -11,13 +11,13 @@ an agent to bypass it.
 | Surface           | Workflows                                          |
 | Stable identifier | `Current-head evidence age: unavailable (missing)` |
 
-**Symptom**
+## Symptom
 
 The KFQ check is pending, its dashboard comment is older than the pull request's current head, or
 the comment reports `Current-head evidence age` as `unavailable (missing)`. A pull request that is
 otherwise healthy cannot merge because live branch protection requires KFQ.
 
-**Root Cause**
+## Root Cause
 
 KFQ fails closed: absent, stale, malformed, or still-settling Qodo evidence remains pending rather
 than being reported as successful. The dashboard binds an evaluation to a head SHA and exposes only
@@ -31,18 +31,20 @@ minutes by default). A webhook normally carries same-head evidence changes; the 
 backstop for lost or rejected events. The Action proof of concept is diagnostic only until its
 documented cutover: it is not the canonical recovery path before then.
 
-**Diagnostic Steps**
+## Diagnostic Steps
 
 1. Verify the mutable live protection state before relying on the conditional escape:
 
    ```bash
-   gh api repos/oscharko-dev/Keiko/branches/dev/protection \
-     --jq '{enforce_admins: .enforce_admins.enabled, kfq: [.required_status_checks.checks[] | select(.context == "Keiko for Quality") | {context, app_id}]}'
+   gh api "repos/<owner>/<repository>/branches/<protected-branch>/protection" \
+     --jq '{enforce_admins: .enforce_admins.enabled, required_checks: [.required_status_checks.checks[] | {context, app_id}]}'
    ```
 
-   Continue only when `enforce_admins` is `false` and exactly one KFQ entry is pinned to App ID
-   `4290143`. Otherwise, the admin escape described here is not verified; stop and use the current
-   protection policy. Protection is mutable, so this live preflight is required at incident time.
+   Replace every angle-bracketed value with the incident repository's identifiers. Continue only
+   when `enforce_admins` is `false` and exactly one `Keiko for Quality` entry is pinned to the
+   installed KFQ GitHub App for that repository. Otherwise, the admin escape described here is not
+   verified; stop and use the current protection policy. Protection is mutable, so this live
+   preflight is required at incident time.
 
 2. Open the pull request and compare the short SHA in the dashboard's `Last evaluated head` row
    with the current head shown by GitHub for the pull request. If they differ, the verdict is stale
@@ -60,7 +62,9 @@ documented cutover: it is not the canonical recovery path before then.
    evaluation of the pull request:
 
    ```bash
-   gh workflow run keiko-for-quality-action.yml --ref dev -f pr=<pull-request-number>
+   gh workflow run <kfq-diagnostic-workflow> \
+     --ref <protected-branch> \
+     -f pr=<pull-request-number>
    ```
 
    Inspect the resulting run and compare its redacted dashboard/check output with the canonical
@@ -71,7 +75,7 @@ Do not copy review bodies, source URLs, tokens, webhook payloads, or private run
 incident record. Record pull-request number, head SHA, normalized timestamps, check state, event
 type, and redacted error category only.
 
-**Resolution**
+## Resolution
 
 1. Preserve the failed state while the automatic path recovers. Trigger or await the relevant
    Qodo/comment or check event, then allow the two-minute sweep and, where applicable, the
