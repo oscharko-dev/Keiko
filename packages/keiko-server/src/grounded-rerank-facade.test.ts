@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   GatewayConfig,
@@ -70,6 +70,28 @@ function successfulOutcome(results: readonly { readonly index: number }[]): Rera
 }
 
 describe("rerankSelection", () => {
+  it("passes the readiness fetch seam through the sole facade transport", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    let captured: LiteLLMRerankRequest | undefined;
+    const deps = depsWith(gatewayConfig(), (request) => {
+      captured = request;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["alpha document"],
+      documentFor: (candidate) => candidate,
+      topN: 1,
+      fetchImpl,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(captured?.fetchImpl).toBe(fetchImpl);
+    deps.store.close();
+  });
+
   it("passes the shared gateway egress config when the reranker has no override", async () => {
     let captured: LiteLLMRerankRequest | undefined;
     const deps = depsWith(gatewayConfig(), (request) => {

@@ -78,6 +78,8 @@ interface EmbeddingContext {
   readonly localKnowledgeEmbeddingAdapter: OpenAIEmbeddingAdapter;
   readonly podEmbeddingVectorCache: Map<string, Float32Array>;
   readonly repositoryPod: RepositoryPodResolution;
+  readonly observePodRetrieval?:
+    ((observation: RepositoryPodRetrievalObservation) => void) | undefined;
 }
 
 interface CandidateDocument {
@@ -108,6 +110,16 @@ export interface ConfiguredRepoSemanticSearchOptions {
   readonly fs?: WorkspaceFs | undefined;
   readonly maxCandidates?: number | undefined;
   readonly repositoryPod?: RepositoryPodSemanticSearchContext | undefined;
+  readonly observePodRetrieval?:
+    ((observation: RepositoryPodRetrievalObservation) => void) | undefined;
+}
+
+export interface RepositoryPodRetrievalObservation {
+  readonly mode: string;
+  readonly referenceCount: number;
+  readonly denseCandidateCount: number;
+  readonly lexicalCandidateCount: number;
+  readonly lexicalOrFallbackUsed: boolean;
 }
 
 export interface RepositoryPodSemanticSearchContext {
@@ -793,6 +805,13 @@ async function repositoryPodHits(
       ...(pod.context.vectorIndex === undefined ? {} : { vectorIndex: pod.context.vectorIndex }),
     },
   );
+  ctx.observePodRetrieval?.({
+    mode: outcome.diagnostics.mode,
+    referenceCount: outcome.references.length,
+    denseCandidateCount: outcome.diagnostics.denseCandidateCount,
+    lexicalCandidateCount: outcome.diagnostics.lexicalCandidateCount,
+    lexicalOrFallbackUsed: outcome.diagnostics.lexicalOrFallbackUsed,
+  });
   return repositoryPodMatches(outcome.references, pod, documents, queryTerms);
 }
 
@@ -901,6 +920,9 @@ export function configuredRepoSemanticSearchProviderFor(
     ),
     podEmbeddingVectorCache,
     repositoryPod: resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
+    ...(options.observePodRetrieval === undefined
+      ? {}
+      : { observePodRetrieval: options.observePodRetrieval }),
   };
   return {
     name: "configured-repo-semantic-search",

@@ -3,13 +3,11 @@ import {
   isConversationEligibleModel,
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
-  requestLiteLLMRerank,
   requestOpenAIEmbedding,
   vectorL2Norm,
   type GatewayConfig,
   type ModelCapability,
   type ModelProviderConfig,
-  type RerankerConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
@@ -22,6 +20,7 @@ import type {
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
@@ -304,44 +303,36 @@ async function probeEmbedding(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
-async function probeReranker(
-  deps: UiHandlerDeps,
-  config: GatewayConfig,
-  reranker: RerankerConfig | undefined,
-): Promise<GatewayReadinessProbeResult> {
+// eslint-disable-next-line complexity
+async function probeReranker(deps: UiHandlerDeps): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
+  const reranker = currentGatewayConfig(deps)?.reranker;
   if (reranker === undefined) {
     return skipped("reranker", "No reranker is configured.");
   }
   try {
-    const outcome = await requestLiteLLMRerank({
-      endpoint: reranker.baseUrl,
-      apiKey: reranker.apiKey,
-      ...(reranker.apiKeyHeaderName !== undefined
-        ? { apiKeyHeaderName: reranker.apiKeyHeaderName }
-        : {}),
-      modelId: reranker.modelId,
+    const documents = ["alpha readiness match", "unrelated beta"] as const;
+    const selection = await rerankSelection({
+      deps,
       query: "alpha readiness match",
-      documents: ["alpha readiness match", "unrelated beta"],
+      candidates: documents,
+      documentFor: (document) => document,
       topN: 1,
       ...(deps.gatewayReadinessFetch !== undefined
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
-      timeoutMs: reranker.timeoutMs,
-      egress: config.egress,
+      fallbackMode: "slice-topN",
     });
-    if (!outcome.ok) {
+    if (selection.diagnostics.status !== "applied") {
+      const kind = selection.diagnostics.failureKind ?? "transport";
       return result(
         "reranker",
-        outcome.kind === "unsupported-model" || outcome.kind === "not-configured"
-          ? "unsupported"
-          : "failed",
+        kind === "unsupported-model" || kind === "not-configured" ? "unsupported" : "failed",
         start,
-        `Reranker endpoint could not be verified (${outcome.kind}).`,
+        `Reranker endpoint could not be verified (${kind}).`,
       );
     }
-    const passed = outcome.value.results[0]?.index === 0;
+    const passed = selection.selected[0] === documents[0];
     return result(
       "reranker",
       passed ? "passed" : "unsupported",
@@ -959,7 +950,7 @@ async function runProbe(
   if (name === "tool_calling") return probeToolCalling(deps, selection.config, selection.provider);
   if (name === "json_schema") return probeJsonSchema(deps, selection.config, selection.provider);
   if (name === "embedding") return probeEmbedding(deps, selection.config);
-  if (name === "reranker") return probeReranker(deps, selection.config, selection.config.reranker);
+  if (name === "reranker") return probeReranker(deps);
   if (name === "reasoning") return probeReasoning(deps, selection.config, selection.provider);
   if (name === "image_input") return probeImageInput(deps, selection.config, selection.provider);
   if (name === "document_input")

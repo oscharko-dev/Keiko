@@ -114,6 +114,7 @@
     "check:retrieval-quality": "node --disable-warning=ExperimentalWarning scripts/check-retrieval-quality.mjs",
     "check:grounded-retrieval-quality": "node scripts/check-grounded-retrieval-quality.mjs",
     "check:grounded-faithfulness": "node scripts/check-grounded-faithfulness.mjs",
+    "check:knowledge-m2-closeout": "node --disable-warning=ExperimentalWarning scripts/check-knowledge-m2-closeout.mjs",
     "check:grounded-entailment": "node scripts/check-grounded-entailment.mjs",
     "check:context-quality": "node scripts/check-context-quality.mjs",
     "check:error-observability": "node scripts/check-error-observability.mjs",
