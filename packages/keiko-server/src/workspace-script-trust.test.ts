@@ -284,11 +284,15 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     const rootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(root));
     const record = JSON.parse(store.readWorkspaceTrustRecord(rootRef)?.recordJson ?? "{}") as {
       binding: MutatedBinding;
+      revision: number;
     };
     mutate(record.binding);
+    // Supersede the grant (revision 0) at a higher revision so the monotonic store guard admits the
+    // injected stale record; the resulting invalidation then lands at revision 2.
+    record.revision = 1;
     store.writeWorkspaceTrustRecord({
       rootRef,
-      revision: 0,
+      revision: 1,
       trust: "trusted",
       recordJson: JSON.stringify(record),
     });
