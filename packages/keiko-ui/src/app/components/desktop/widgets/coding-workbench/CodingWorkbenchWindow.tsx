@@ -341,14 +341,7 @@ function ResearchDestination({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (state.status === "idle") return null;
-  const detail =
-    state.ask === null
-      ? t(
-          state.status === "loading"
-            ? "codingWorkbench.approval.research.loading"
-            : "codingWorkbench.approval.research.unavailable",
-        )
-      : null;
+  const ask = state.ask;
   return (
     <div
       className={styles.approvalResearch}
@@ -356,17 +349,20 @@ function ResearchDestination({
       aria-label={t("codingWorkbench.approval.research.title")}
     >
       <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.research.title")}</p>
-      {detail !== null ? (
-        <p className={styles.approvalResearchDetail}>{detail}</p>
+      {ask === null ? (
+        <p className={styles.approvalResearchDetail}>
+          {t(
+            state.status === "loading"
+              ? "codingWorkbench.approval.research.loading"
+              : "codingWorkbench.approval.research.unavailable",
+          )}
+        </p>
       ) : (
         <dl className={styles.approvalFacts}>
-          <ApprovalFact
-            label={t("codingWorkbench.approval.research.host")}
-            value={state.ask.host}
-          />
+          <ApprovalFact label={t("codingWorkbench.approval.research.host")} value={ask.host} />
           <ApprovalFact
             label={t("codingWorkbench.approval.research.requestLine")}
-            value={state.ask.requestLine}
+            value={ask.requestLine}
           />
         </dl>
       )}
