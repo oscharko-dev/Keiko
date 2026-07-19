@@ -39,7 +39,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 
 import { mean } from "../metrics.js";
-import { evaluateMinimumFloors } from "../quality-helpers.js";
+import { evaluateFloors } from "../quality-helpers.js";
 
 import {
   scoreCitationQuality,
@@ -349,7 +349,7 @@ function buildScorecard(
     contextBudgetFit: mean(perQuery.map((q) => q.scores.contextBudgetFit)),
     latencyMs: perQuery.reduce((acc, q) => acc + q.scores.latencyTicks, 0),
   };
-  const passed = evaluateMinimumFloors(dimensions, PASS_THRESHOLDS).ok;
+  const passed = evaluateFloors(dimensions, PASS_THRESHOLDS).ok;
   const outcomes = buildOutcomeSummary(perQuery);
   return modelJudged === undefined
     ? { fixtureId: fixture.id, runId, dimensions, outcomes, passed }

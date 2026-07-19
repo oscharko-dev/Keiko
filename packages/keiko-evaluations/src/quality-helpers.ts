@@ -23,8 +23,6 @@ export function evaluateFloors<const Metric extends string>(
   return { ok: failures.length === 0, failures };
 }
 
-export { evaluateFloors as evaluateMinimumFloors };
-
 export interface RegressionProbeObservation {
   readonly fixtureId: string;
   readonly droppedBelowFloors: boolean;

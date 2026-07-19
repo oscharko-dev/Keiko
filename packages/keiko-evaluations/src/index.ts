@@ -14,7 +14,7 @@ export type { ScoringInput } from "./scorer.js";
 export { checkSurfaceParity } from "./surface-parity.js";
 export { renderEvalSummary } from "./render.js";
 export { binaryNdcgAtK, mean } from "./metrics.js";
-export { evaluateFloors, evaluateMinimumFloors, runRegressionProbes } from "./quality-helpers.js";
+export { evaluateFloors, runRegressionProbes } from "./quality-helpers.js";
 export type {
   MinimumFloorResult,
   RegressionProbeObservation,

@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateFloors, evaluateMinimumFloors, runRegressionProbes } from "./quality-helpers.js";
+import { evaluateFloors, runRegressionProbes } from "./quality-helpers.js";
 
 const SAMPLES = [0, 0.5, 0.999, 1, 1.5] as const;
 
-describe("evaluateMinimumFloors", () => {
+describe("evaluateFloors", () => {
   it("is monotonic, reports every strict failure, and equals the floor conjunction", () => {
     for (const floor of SAMPLES) {
       for (const left of SAMPLES) {
         for (const right of SAMPLES) {
-          const result = evaluateMinimumFloors({ left, right }, { left: floor, right: floor });
+          const result = evaluateFloors({ left, right }, { left: floor, right: floor });
           expect(result.ok).toBe(left >= floor && right >= floor);
           expect(result.failures.includes("left")).toBe(left < floor);
           expect(result.failures.includes("right")).toBe(right < floor);
-          const raised = evaluateMinimumFloors(
+          const raised = evaluateFloors(
             { left: left + 1, right: right + 1 },
             { left: floor, right: floor },
           );
@@ -24,11 +24,11 @@ describe("evaluateMinimumFloors", () => {
   });
 
   it("admits no epsilon below a hard 1.0 floor", () => {
-    expect(evaluateMinimumFloors({ isolation: 1 }, { isolation: 1 })).toEqual({
+    expect(evaluateFloors({ isolation: 1 }, { isolation: 1 })).toEqual({
       ok: true,
       failures: [],
     });
-    expect(evaluateMinimumFloors({ isolation: 1 - Number.EPSILON }, { isolation: 1 })).toEqual({
+    expect(evaluateFloors({ isolation: 1 - Number.EPSILON }, { isolation: 1 })).toEqual({
       ok: false,
       failures: ["isolation"],
     });

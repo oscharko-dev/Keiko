@@ -726,8 +726,9 @@ export interface GroundedUncertainty {
 
 // "not-configured" is intentionally not a member here: a not-configured reranker is the default,
 // fully-supported install state and always carries status "disabled" with
-// failureKind: "not-configured" (see grounded-model-reranker.ts disabledDiagnostics and
-// local-knowledge-grounded-qa.ts). Branch on failureKind, not status, to detect it.
+// failureKind: "not-configured" (see `disabledDiagnostics` in
+// keiko-server/src/grounded-rerank-facade.ts, and local-knowledge-grounded-qa.ts). Branch on
+// failureKind, not status, to detect it.
 export type GroundedRerankerStatus =
   "disabled" | "denied" | "unavailable" | "invalid-response" | "applied";
 
