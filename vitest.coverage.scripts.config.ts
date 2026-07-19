@@ -17,6 +17,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["scripts/__tests__/**/*.test.mjs"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "scripts/__tests__/check-package-surface.test.mjs",
+    ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     maxWorkers: 2,
     testTimeout: 15_000,
