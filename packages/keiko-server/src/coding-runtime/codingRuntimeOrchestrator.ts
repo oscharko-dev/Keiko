@@ -12,6 +12,7 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
+  type CodingWorkbenchRuntimePendingResearch,
   type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeStartRequest,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
@@ -22,6 +23,7 @@ import type {
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
+import { reviewableResearchAsk } from "./researchApprovalIssuance.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import { CodingRuntimeOrchestratorState } from "./codingRuntimeOrchestratorState.js";
@@ -191,6 +193,28 @@ export class CodingRuntimeOrchestrator {
       registry.invalidateRun(runId);
       return this.advanceRevision(current);
     });
+  }
+
+  /**
+   * The reviewable facts of the run's live research ask, for the AUTHENTICATED research channel
+   * only (#2387 "visible sanitized queries"). Never reaches the unauthenticated status or SSE
+   * projection: the host and request line are model-chosen text and those surfaces stay
+   * content-free. Returns undefined when nothing is pending, the ask expired, or the run is not
+   * the current one — a stale panel can never review an ask that is no longer approvable.
+   */
+  pendingResearchAsk(runId: string): CodingWorkbenchRuntimePendingResearch | undefined {
+    const store = this.deps.pendingResearchApprovals;
+    if (store === undefined || this.current()?.runId !== runId) return undefined;
+    const pending = store.peek(runId, this.now().getTime());
+    if (pending === undefined) return undefined;
+    const reviewable = reviewableResearchAsk(pending);
+    if (reviewable === undefined) return undefined;
+    return {
+      requestId: pending.requestId,
+      host: reviewable.host,
+      requestLine: reviewable.requestLine,
+      expiresAt: new Date(pending.expiresAtMs).toISOString(),
+    };
   }
 
   /** Aggregates the run's live grants into the single content-free snapshot projection. */

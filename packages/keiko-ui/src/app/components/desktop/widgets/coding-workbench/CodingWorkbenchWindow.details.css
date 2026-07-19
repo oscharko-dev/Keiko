@@ -172,6 +172,32 @@
   overflow-wrap: anywhere;
 }
 
+/* #2387: the destination of a pending research fetch, set apart from the vocabulary facts above
+   because it is the one part of the approval carrying model-chosen text the operator must read. */
+.approvalResearch {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+}
+
+.approvalResearchTitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.approvalResearchDetail {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-label);
+}
+
+.approvalResearch .approvalFacts {
+  margin-top: var(--space-2);
+}
+
 .button {
   min-height: var(--control-height);
   max-width: 100%;

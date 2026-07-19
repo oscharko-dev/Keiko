@@ -12,23 +12,41 @@ function seed(entries: readonly unknown[]): readonly SkillCatalogEntryInput[] {
 }
 
 describe("createServerApprovedSkillCatalog", () => {
-  it("seeds a small default read-only set with exact id@version lookup", () => {
+  it("seeds the default read-only set with exact id@version lookup", () => {
     const catalog = createServerApprovedSkillCatalog();
     expect(catalog.has("skl_repo-structure-summary@1")).toBe(true);
     expect(catalog.isImplicitAllowed("skl_repo-structure-summary@1")).toBe(true);
-    expect(catalog.isImplicitAllowed("skl_public-docs-lookup@1")).toBe(false);
-    expect(catalog.get("skl_public-docs-lookup@1")?.category).toBe("public-research");
-    expect(catalog.list().length).toBeGreaterThanOrEqual(3);
+    expect(catalog.get("skl_repo-structure-summary@1")?.category).toBe("repository-analysis");
+    expect(catalog.list().length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("#2387: seeds only categories the production skill port can execute", () => {
+    // A seeded skill whose category has no handler always answers `skill-handler-unavailable`, so
+    // the catalog would advertise capability the product does not have. Guard the seed, not just
+    // the handler: re-adding a category here without its handler must fail this test.
+    const executable = new Set(["repository-analysis"]);
+
+    for (const entry of createServerApprovedSkillCatalog().list()) {
+      expect(executable.has(entry.category)).toBe(true);
+    }
   });
 
   it("fails closed for an unknown id, an unknown version, and malformed lookups", () => {
     const catalog = createServerApprovedSkillCatalog();
-    expect(catalog.has("skl_public-docs-lookup@2")).toBe(false);
-    expect(catalog.get("skl_public-docs-lookup@2")).toBeUndefined();
+    expect(catalog.has("skl_repo-structure-summary@2")).toBe(false);
+    expect(catalog.get("skl_repo-structure-summary@2")).toBeUndefined();
     expect(catalog.get("skl_unknown-skill@1")).toBeUndefined();
     expect(catalog.isImplicitAllowed("skl_unknown-skill@1")).toBe(false);
     expect(catalog.has("garbage")).toBe(false);
     expect(catalog.isImplicitAllowed("")).toBe(false);
+  });
+
+  it("still admits a non-implicit injected entry from another category", () => {
+    const catalog = createServerApprovedSkillCatalog([
+      { skillId: "skl_public-docs-lookup@1", implicitAllowed: false, category: "public-research" },
+    ]);
+    expect(catalog.isImplicitAllowed("skl_public-docs-lookup@1")).toBe(false);
+    expect(catalog.get("skl_public-docs-lookup@1")?.category).toBe("public-research");
   });
 
   it("injected entries replace the default seed", () => {

@@ -126,62 +126,80 @@ function governedPorts(
   input: ProductionManagedWorktreeToolInput,
   readEdit: CodingToolReadEditPorts,
 ): CodingToolGovernedPorts {
-  let verificationSequence = 0;
   const catalog = input.skillCatalog ?? createServerApprovedSkillCatalog();
   const failed = (): Promise<{ readonly status: "failed" }> =>
     Promise.resolve({ status: "failed" });
   return {
     ...readEdit,
-    ...createProductionAuxiliaryPorts({
-      authority: {
-        state: () =>
-          input.authority.state?.() ?? {
-            schemaVersion: "1" as const,
-            state: "running" as const,
-            revision: 0,
-            updatedAt: new Date().toISOString(),
-            runId: input.authorityRef.runId,
-          },
-      },
-      taskId: input.taskId ?? input.authorityRef.runId,
-      runId: input.authorityRef.runId,
-      workspaceId: () => input.liveFacts().binding.workspaceId,
-      workspaceRoot: input.workspaceRoot,
-      modelId: input.modelId ?? "unavailable-model",
-      authorityExpiresAt: input.authorityExpiresAt,
-      catalog,
-      explicitSkills:
-        input.explicitSkillInvocations ?? createExplicitSkillInvocationTracker(catalog),
-      modelPortFactory: input.childModelPortFactory ?? ((): undefined => undefined),
-      secureWorkspaceTextRead: input.secureWorkspaceTextRead,
-      researchGrantRegistry: input.researchGrantRegistry,
-      emit: input.onRuntimeEvent,
-    }),
+    ...auxiliaryPorts(input, catalog),
     commandRunner: { execute: failed },
-    verificationRunner: {
-      execute: async (
-        request,
-        signal,
-        guard,
-      ): Promise<{ readonly status: "completed" | "failed" }> => {
-        if (!guard.check() || !live(input)) return { status: "failed" };
-        const kind = verificationKind(request.verifierId);
-        if (kind === undefined) return { status: "failed" };
-        const report = await input.verificationRunner.runToReport(
-          { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
-          signal ?? new AbortController().signal,
-        );
-        verificationSequence += 1;
-        publishVerification(input, verificationSequence, report);
-        return {
-          status: report.overallStatus === "passed" && live(input) ? "completed" : "failed",
-        };
-      },
-    },
+    verificationRunner: buildVerificationRunner(input),
     gitAuthority: { execute: failed },
     deliveryAuthority: { execute: failed },
     connectorAuthority: { execute: failed },
     egressAuthority: buildEgressAuthority(input, failed),
+  };
+}
+
+// The #2387 skill and read-only child-agent ports. Every identity field is resolved from the live
+// run so a child can never outlive or out-scope the authority that spawned it.
+function auxiliaryPorts(
+  input: ProductionManagedWorktreeToolInput,
+  catalog: SkillCatalog,
+): ReturnType<typeof createProductionAuxiliaryPorts> {
+  return createProductionAuxiliaryPorts({
+    authority: {
+      state: () =>
+        input.authority.state?.() ?? {
+          schemaVersion: "1" as const,
+          state: "running" as const,
+          revision: 0,
+          updatedAt: new Date().toISOString(),
+          runId: input.authorityRef.runId,
+        },
+    },
+    taskId: input.taskId ?? input.authorityRef.runId,
+    runId: input.authorityRef.runId,
+    workspaceId: () => input.liveFacts().binding.workspaceId,
+    workspaceRoot: input.workspaceRoot,
+    // Empty means "no coding-safe provider model resolved": the child-agent port then stays
+    // unmounted (fail closed) instead of running a child against an unusable model id.
+    modelId: input.modelId ?? "",
+    authorityExpiresAt: input.authorityExpiresAt,
+    catalog,
+    explicitSkills: input.explicitSkillInvocations ?? createExplicitSkillInvocationTracker(catalog),
+    modelPortFactory: input.childModelPortFactory ?? ((): undefined => undefined),
+    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    researchGrantRegistry: input.researchGrantRegistry,
+    emit: input.onRuntimeEvent,
+  });
+}
+
+// Liveness is re-checked both before the run and after the report lands, so a verification that
+// completes after the authority expired is reported failed rather than completed.
+function buildVerificationRunner(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolGovernedPorts["verificationRunner"] {
+  let verificationSequence = 0;
+  return {
+    execute: async (
+      request,
+      signal,
+      guard,
+    ): Promise<{ readonly status: "completed" | "failed" }> => {
+      if (!guard.check() || !live(input)) return { status: "failed" };
+      const kind = verificationKind(request.verifierId);
+      if (kind === undefined) return { status: "failed" };
+      const report = await input.verificationRunner.runToReport(
+        { projectId: input.workspaceRoot, kinds: [kind], requestId: request.actionId },
+        signal ?? new AbortController().signal,
+      );
+      verificationSequence += 1;
+      publishVerification(input, verificationSequence, report);
+      return {
+        status: report.overallStatus === "passed" && live(input) ? "completed" : "failed",
+      };
+    },
   };
 }
 

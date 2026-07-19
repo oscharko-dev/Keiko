@@ -249,6 +249,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.notApplicable": "Nicht anwendbar",
   "codingWorkbench.approval.noneRequested": "Nicht angefordert",
   "codingWorkbench.approval.unspecified": "Nicht spezifiziert",
+  "codingWorkbench.approval.research.title": "Ziel der Recherche",
+  "codingWorkbench.approval.research.host": "Öffentliche Domain",
+  "codingWorkbench.approval.research.requestLine": "Angefragter Pfad und Suchtext",
+  "codingWorkbench.approval.research.loading": "Ziel wird geladen …",
+  "codingWorkbench.approval.research.unavailable":
+    "Ziel nicht abrufbar. Fenster erneut koppeln, um es vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",

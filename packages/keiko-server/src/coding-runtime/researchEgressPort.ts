@@ -139,12 +139,22 @@ export function sha256Hex(value: string): string {
 }
 
 /**
- * The canonical request-line digest for a research URL: `sha256Hex(sanitizeVisibleText(<decoded
- * pathname> + " " + <decoded query>))`. The grant-minting side (approval issuance) and the
- * executor's request-line binding MUST both call this function so an approved URL always verifies.
+ * The canonical reviewable request-line TEXT for a research URL: the sanitized decoded pathname
+ * plus the decoded visible query. This is both what the operator is shown before approving
+ * (#2387 "visible sanitized queries") and the exact input the digest below is computed over, so the
+ * approved text and the bound text can never drift apart.
+ */
+export function researchRequestLineText(url: URL): string {
+  return sanitizeVisibleText(decodeRequestLine(url));
+}
+
+/**
+ * The canonical request-line digest for a research URL: `sha256Hex(researchRequestLineText(url))`.
+ * The grant-minting side (approval issuance) and the executor's request-line binding MUST both call
+ * this function so an approved URL always verifies.
  */
 export function researchRequestLineDigest(url: URL): string {
-  return sha256Hex(sanitizeVisibleText(decodeRequestLine(url)));
+  return sha256Hex(researchRequestLineText(url));
 }
 
 // ─── Executor ───────────────────────────────────────────────────────────────────────
@@ -303,8 +313,11 @@ function digestsEqual(left: string, right: string): boolean {
 // A DISTINCT egress config: proxy/CA are copied from the gateway config, but loopback is denied and
 // NO private-network / link-local / metadata allowance is inherited. Research egress starts from
 // the most restrictive posture regardless of what the gateway itself is permitted.
-// NOTE: `denyLoopback` is assumed to be added to `OutboundHttpEgressConfig` (types.ts) and honored
-// in egress-policy.ts by the coordinator — see the wiring manifest.
+// `denyLoopback` is declared on `OutboundHttpEgressConfig` (keiko-model-gateway/src/types.ts) and
+// enforced in `isTargetClassBlocked` (keiko-model-gateway/src/egress-policy.ts), which blocks the
+// "loopback" target class only when this flag is set. `gatewayFetch` additionally resolves the
+// target for policy even on the proxied path while the flag is set, so a public name that resolves
+// to loopback cannot slip past the proxy hand-off.
 function researchEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {

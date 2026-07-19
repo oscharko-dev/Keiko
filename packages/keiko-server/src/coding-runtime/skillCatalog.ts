@@ -43,19 +43,20 @@ export interface SkillCatalog {
   readonly isImplicitAllowed: (skillId: string) => boolean;
 }
 
-// A small default seed of read-only skills. It flows through the same canonicalization path as any
+// The default seed of read-only skills. It flows through the same canonicalization path as any
 // injected entry, so there is exactly one admission gate for the catalog.
+//
+// The seed lists ONLY categories the production skill port can actually execute — today just
+// `repository-analysis` (productionAuxiliaryPorts.executeApprovedSkill). Advertising a skill whose
+// category has no handler is worse than not advertising it: the model reads the catalog, invokes
+// it, and burns a turn on a `skill-handler-unavailable` outcome it cannot learn from. The
+// `public-research` and `documentation-lookup` categories stay defined in SKILL_CATEGORIES and are
+// re-seeded here by whichever child implements their handler.
 const DEFAULT_APPROVED_SKILLS: readonly SkillCatalogEntryInput[] = Object.freeze([
   {
     skillId: "skl_repo-structure-summary@1",
     implicitAllowed: true,
     category: "repository-analysis",
-  },
-  { skillId: "skl_public-docs-lookup@1", implicitAllowed: false, category: "public-research" },
-  {
-    skillId: "skl_dependency-changelog@1",
-    implicitAllowed: false,
-    category: "documentation-lookup",
   },
 ]);
 

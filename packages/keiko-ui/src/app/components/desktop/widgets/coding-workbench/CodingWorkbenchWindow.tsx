@@ -19,6 +19,10 @@ import {
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
+import {
+  useCodingWorkbenchResearchAsk,
+  type CodingWorkbenchResearchAskState,
+} from "@/lib/useCodingWorkbenchResearchAsk";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import {
   ModeAuthority,
@@ -165,18 +169,26 @@ function WorkbenchColumns({
   const showSetup = activeWorkspace.activeBinding === null;
   const runtimeUnavailable =
     state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
-  const runtimeEventCount = state.events.filter((event) => event.kind === "runtime-event").length;
+  // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
+  // its length plateaus on a long run and every change-driven resync — questions and the activity
+  // feed's automatic reconnect — would silently stop firing exactly when a run is busiest. The
+  // highest observed runtime-event sequence keeps advancing for as long as the run produces events.
+  const runtimeEventSignal = state.events.reduce(
+    (highest, event) =>
+      event.kind === "runtime-event" && event.sequence > highest ? event.sequence : highest,
+    0,
+  );
   const questions = useCodingWorkbenchQuestions({
     runId: state.run.value?.runId,
     revision: state.run.value?.revision,
     runState: state.run.value?.state,
-    runtimeEventCount,
+    runtimeEventSignal,
     refreshSnapshot: actions.refreshRun,
   });
   const activity = useCodingWorkbenchSafeActivity({
     runId: state.run.value?.runId,
     runState: state.run.value?.state,
-    runtimeEventCount,
+    runtimeEventSignal,
   });
   return (
     <div className={styles.grid}>
@@ -278,6 +290,11 @@ function PermissionPrompt({
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
+  const research = useCodingWorkbenchResearchAsk({
+    runId: state.run.value?.runId,
+    permissionRequestId: request?.requestId,
+    isNetworkEgress: request?.kind === "network-egress",
+  });
   if (request === undefined) return null;
   const busy = state.mutation.status === "pending";
   return (
@@ -286,6 +303,7 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
+      <ResearchDestination state={research} t={t} />
       <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
       <div className={styles.controls}>
         <button
@@ -306,6 +324,53 @@ function PermissionPrompt({
         </button>
       </div>
     </section>
+  );
+}
+
+/**
+ * The destination of a pending research fetch (#2387). Both values are model-chosen and therefore
+ * untrusted: they are rendered as plain text nodes, never as markup or as a live link, so reviewing
+ * an ask can never itself navigate anywhere. While the read is in flight, or when the window is not
+ * paired, the panel says so rather than implying there is no destination.
+ */
+function ResearchDestination({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchResearchAskState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (state.status === "idle") return null;
+  const detail =
+    state.ask === null
+      ? t(
+          state.status === "loading"
+            ? "codingWorkbench.approval.research.loading"
+            : "codingWorkbench.approval.research.unavailable",
+        )
+      : null;
+  return (
+    <div
+      className={styles.approvalResearch}
+      role="group"
+      aria-label={t("codingWorkbench.approval.research.title")}
+    >
+      <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.research.title")}</p>
+      {detail !== null ? (
+        <p className={styles.approvalResearchDetail}>{detail}</p>
+      ) : (
+        <dl className={styles.approvalFacts}>
+          <ApprovalFact
+            label={t("codingWorkbench.approval.research.host")}
+            value={state.ask.host}
+          />
+          <ApprovalFact
+            label={t("codingWorkbench.approval.research.requestLine")}
+            value={state.ask.requestLine}
+          />
+        </dl>
+      )}
+    </div>
   );
 }
 

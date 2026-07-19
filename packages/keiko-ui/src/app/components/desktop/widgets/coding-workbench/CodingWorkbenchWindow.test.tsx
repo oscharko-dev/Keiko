@@ -19,6 +19,7 @@ import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
+const researchAskHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -30,6 +31,10 @@ vi.mock("@/lib/useCodingWorkbenchQuestions", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
   useCodingWorkbenchSafeActivity: activityHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchResearchAsk", () => ({
+  useCodingWorkbenchResearchAsk: researchAskHookMock,
 }));
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -153,7 +158,32 @@ describe("CodingWorkbenchWindow", () => {
   beforeEach(() => {
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
+    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
   });
+
+  function egressApprovalState(
+    kind: "network-egress" | "delivery-substrate" = "network-egress",
+  ): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "research-approval-1",
+            kind,
+            actionClass: "network-egress",
+            reasonCode: "research-approval-required",
+            actionKind: "research",
+            risk: "medium",
+            expiresAt: "2026-07-13T12:02:00.000Z",
+          },
+        }),
+      },
+    });
+  }
 
   it("renders only live server-confirmed readiness and starts with transient task intent", async () => {
     const user = userEvent.setup();
@@ -206,6 +236,41 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(1, "approved");
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
+  });
+
+  it("#2387: shows the research destination the operator is about to approve", async () => {
+    researchAskHookMock.mockReturnValue({
+      status: "ready",
+      ask: {
+        requestId: "research-approval-1",
+        host: "nodejs.org",
+        requestLine: "/docs/latest/api/stream.html backpressure",
+        expiresAt: "2026-07-13T12:02:00.000Z",
+      },
+    });
+    renderWorkbench(egressApprovalState());
+
+    const destination = screen.getByRole("group", { name: "Research destination" });
+    expect(destination).toHaveTextContent("nodejs.org");
+    expect(destination).toHaveTextContent("/docs/latest/api/stream.html backpressure");
+    // The destination is reviewable text, never a live link that reviewing could follow.
+    expect(destination.querySelector("a")).toBeNull();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#2387: says the destination is unavailable rather than implying there is none", () => {
+    researchAskHookMock.mockReturnValue({ status: "unavailable", ask: null });
+    renderWorkbench(egressApprovalState());
+
+    expect(screen.getByText(/Destination unavailable\. Re-pair this window/u)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+  });
+
+  it("#2387: shows no destination block for an approval that is not network egress", () => {
+    researchAskHookMock.mockReturnValue({ status: "idle", ask: null });
+    renderWorkbench(egressApprovalState("delivery-substrate"));
+
+    expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
   });
 
   it("renders recovery acknowledgement before allowing a fresh retry", async () => {

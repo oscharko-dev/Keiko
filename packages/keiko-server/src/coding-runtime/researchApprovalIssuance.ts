@@ -2,9 +2,10 @@
 //
 // The decided flow (see the #2387 handoff, "request-scoped grants"): the model asks for a research
 // fetch of one exact URL → the egress port finds no covering grant and hands the URL to
-// `requestResearchApproval`, which retains it TRANSIENTLY (in memory only, never persisted,
-// evidenced, or projected) and raises a content-free `network-egress` permission request → the
-// operator approves through the ordinary #2386 approval route → `registerApprovedResearchGrant`
+// `requestResearchApproval`, which retains it TRANSIENTLY (in memory only, never persisted and
+// never written to durable evidence) and raises a content-free `network-egress` permission
+// request → the operator approves through the ordinary #2386 approval route →
+// `registerApprovedResearchGrant`
 // consumes the retained URL exactly once and mints a grant whose `queryTextDigest` binds the
 // approved request line via the SAME `researchRequestLineDigest` the executor verifies, so the
 // approved URL — and nothing else on that host — becomes fetchable.
@@ -13,6 +14,11 @@
 // grant; a second concurrent ask per run is refused (one pending research approval at a time); a
 // non-public host never enters the store. The optional `GovernedActionV1` sink receives the
 // validated, content-free decision projection produced for #2388.
+//
+// The retained host and request line ARE readable — but only through `peek`/`reviewableResearchAsk`
+// and only over the authenticated app-session channel (ADR-0141), because the operator cannot give
+// meaningful consent to a destination they were never shown. The unauthenticated status/SSE
+// surfaces stay content-free: they never carry the host, the URL, the path, or the query.
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   isCodeTaskPublicDomain,
@@ -23,7 +29,7 @@ import {
   type GovernedActionV1,
 } from "@oscharko-dev/keiko-contracts";
 
-import { researchRequestLineDigest } from "./researchEgressPort.js";
+import { researchRequestLineDigest, researchRequestLineText } from "./researchEgressPort.js";
 import { normalizeResearchHost, type ResearchGrantRegistry } from "./researchGrantRegistry.js";
 
 /** How long an unanswered research ask stays consumable; mirrors the sidecar approval window. */
@@ -56,6 +62,12 @@ export interface PendingResearchApprovals {
     requestId: string,
     nowMs: number,
   ) => PendingResearchApproval | undefined;
+  /**
+   * Non-consuming read of the live ask, for the authenticated operator-review projection only
+   * (#2387 "visible sanitized queries"). Returns undefined once the ask has expired, so a stale
+   * panel can never show a request line that is no longer approvable.
+   */
+  readonly peek: (runId: string, nowMs: number) => PendingResearchApproval | undefined;
   readonly invalidateRun: (runId: string) => void;
 }
 
@@ -106,9 +118,28 @@ class InMemoryPendingResearchApprovals implements PendingResearchApprovals {
     return pending;
   }
 
+  public peek(runId: string, nowMs: number): PendingResearchApproval | undefined {
+    const pending = this.byRun.get(runId);
+    return pending !== undefined && pending.expiresAtMs > nowMs ? pending : undefined;
+  }
+
   public invalidateRun(runId: string): void {
     this.byRun.delete(runId);
   }
+}
+
+/**
+ * Projects a live ask into the operator-reviewable facts: the public host and the sanitized decoded
+ * request line. `requestLine` is produced by the SAME sanitizer the grant's request-line digest is
+ * computed over, so the text the operator reads is exactly the text the executor later re-verifies.
+ * Returns undefined for a non-public host, which can never become a grant anyway.
+ */
+export function reviewableResearchAsk(
+  pending: PendingResearchApproval,
+): { readonly host: string; readonly requestLine: string } | undefined {
+  const host = publicResearchHost(pending.url);
+  if (host === undefined) return undefined;
+  return { host, requestLine: researchRequestLineText(pending.url) };
 }
 
 export function createPendingResearchApprovals(): PendingResearchApprovals {

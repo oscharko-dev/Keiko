@@ -18,6 +18,7 @@ import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 
 export interface CodingRuntimeLaunchResolver {
@@ -59,6 +60,12 @@ export interface CodingRuntimeOrchestratorDeps {
    * runtime host), the snapshot never shows a grant and revoke fails closed.
    */
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  /**
+   * The live #2387 research asks awaiting an operator decision. Read non-consumingly to project the
+   * reviewable host and request line onto the AUTHENTICATED research channel; when absent, that
+   * channel reports no pending ask and the operator simply sees the content-free approval facts.
+   */
+  readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
   readonly now?: () => Date;
   readonly newRunId?: () => string;
 }

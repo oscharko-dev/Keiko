@@ -44,13 +44,13 @@ export function CodingWorkbenchQuestions({
   runId,
   revision,
   runState,
-  runtimeEventCount,
+  runtimeEventSignal,
   refreshSnapshot,
 }: {
   readonly runId: string | undefined;
   readonly revision: number | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
-  readonly runtimeEventCount: number;
+  readonly runtimeEventSignal: number;
   readonly refreshSnapshot: () => Promise<void>;
 }): ReactNode {
   const terminal = runId !== undefined && TERMINAL_STATES.has(runState ?? "idle");
@@ -58,7 +58,7 @@ export function CodingWorkbenchQuestions({
     runId,
     revision,
     runState,
-    runtimeEventCount,
+    runtimeEventSignal,
     refreshSnapshot,
   });
   if (runId === undefined && !terminal) return null;

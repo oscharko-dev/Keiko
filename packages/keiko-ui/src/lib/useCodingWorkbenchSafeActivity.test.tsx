@@ -59,7 +59,7 @@ describe("useCodingWorkbenchSafeActivity", () => {
         useCodingWorkbenchSafeActivity({
           runId: "run-1",
           runState,
-          runtimeEventCount: 0,
+          runtimeEventSignal: 0,
         }),
       { initialProps: { runState: "running" as "running" | "paused" } },
     );
@@ -90,7 +90,7 @@ describe("useCodingWorkbenchSafeActivity", () => {
       useCodingWorkbenchSafeActivity({
         runId: "run-1",
         runState: "running",
-        runtimeEventCount: 0,
+        runtimeEventSignal: 0,
       }),
     );
     await waitFor(() => expect(view.result.current.status).toBe("live"));
@@ -115,7 +115,7 @@ describe("useCodingWorkbenchSafeActivity", () => {
       useCodingWorkbenchSafeActivity({
         runId: "run-1",
         runState: "running",
-        runtimeEventCount: 0,
+        runtimeEventSignal: 0,
       }),
     );
     await waitFor(() => expect(view.result.current.status).toBe("live"));
@@ -132,7 +132,7 @@ describe("useCodingWorkbenchSafeActivity", () => {
       useCodingWorkbenchSafeActivity({
         runId: "run-1",
         runState: "running",
-        runtimeEventCount: 0,
+        runtimeEventSignal: 0,
       }),
     );
 

@@ -1033,6 +1033,31 @@ async function fetchDirectWithCaFallback(
   }
 }
 
+// How DNS participates in one gatewayFetch call.
+//   * `pinForConnect` — Keiko resolves the target itself and pins the vetted address set for the
+//     actual connect. Only possible on the direct native-fetch path, where Keiko owns the socket.
+//   * `resolveForPolicy` — the target is resolved and address-classified for the policy decision
+//     even when the connect is not Keiko's. It additionally covers the proxied path under the
+//     research-only `denyLoopback` posture: a proxy performs the connect, so no address can be
+//     pinned there, but without resolving here a public-looking name that resolves to loopback
+//     would slip past the proxy hand-off.
+interface GatewayDnsPlan {
+  readonly pinForConnect: boolean;
+  readonly resolveForPolicy: boolean;
+}
+
+function planGatewayDns(
+  usesRealTransport: boolean,
+  proxy: URL | undefined,
+  doFetch: typeof globalThis.fetch,
+  egress: OutboundHttpEgressConfig | undefined,
+): GatewayDnsPlan {
+  const pinForConnect = usesRealTransport && proxy === undefined && doFetch === NATIVE_FETCH;
+  const resolveForPolicy =
+    pinForConnect || (usesRealTransport && proxy !== undefined && egress?.denyLoopback === true);
+  return { pinForConnect, resolveForPolicy };
+}
+
 export async function gatewayFetch(
   url: string,
   options: GatewayFetchOptions = {},
@@ -1053,23 +1078,17 @@ export async function gatewayFetch(
       : { ...rest, redirect: "manual" };
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
-  const proxyRaw = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
+  const usesRealTransport = fetchImpl === undefined;
+  const proxyRaw = usesRealTransport ? proxyForTarget(target, egress) : undefined;
   // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
   // fail with their deterministic policy error rather than an unrelated target lookup failure.
   const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
-  const pinDnsForConnect =
-    fetchImpl === undefined && proxy === undefined && doFetch === NATIVE_FETCH;
-  // A proxy performs the eventual connect, so Keiko cannot pin its vetted address set there. The
-  // research-only denyLoopback posture still resolves and enforces the target before handing its
-  // hostname to that proxy; otherwise a public-looking name resolving to loopback bypasses it.
-  const resolveDnsForPolicy =
-    pinDnsForConnect ||
-    (fetchImpl === undefined && proxy !== undefined && egress?.denyLoopback === true);
+  const dns = planGatewayDns(usesRealTransport, proxy, doFetch, egress);
   const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, {
-    resolveDns: resolveDnsForPolicy,
+    resolveDns: dns.resolveForPolicy,
   });
-  const pinnedAddresses = pinDnsForConnect ? vettedAddresses : undefined;
-  const redirectPolicy = { resolveDns: resolveDnsForPolicy };
+  const pinnedAddresses = dns.pinForConnect ? vettedAddresses : undefined;
+  const redirectPolicy = { resolveDns: dns.resolveForPolicy };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
     await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);

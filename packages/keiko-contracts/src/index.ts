@@ -1244,6 +1244,18 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchRuntimePendingResearch,
+  CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeResearchSession,
+} from "./coding-workbench-runtime-research.js";
+export {
+  CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS,
+  CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES,
+  unpairedCodingWorkbenchRuntimeResearchChannelPayload,
+  validateCodingWorkbenchRuntimeResearchChannelPayload,
+} from "./coding-workbench-runtime-research.js";
+export type {
   AvailableCodingSafeActivityFeed,
   CodingSafeActivityFeed,
   CodingSafeActivityMessage,

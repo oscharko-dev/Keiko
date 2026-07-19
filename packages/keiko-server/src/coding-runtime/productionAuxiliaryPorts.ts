@@ -52,7 +52,8 @@ export interface ProductionAuxiliaryPortInput {
 
 export interface ProductionAuxiliaryPorts {
   readonly skillAuthority: GovernedCodingToolPort<"skill">;
-  readonly childAgentAuthority: GovernedCodingToolPort<"child-agent">;
+  /** Absent when no coding-safe provider model is configured; the delegate then fails closed. */
+  readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
 
 export function createProductionAuxiliaryPorts(
@@ -64,7 +65,11 @@ export function createProductionAuxiliaryPorts(
   });
   return {
     skillAuthority: skillPort(input),
-    childAgentAuthority: childPort(input, runner),
+    // A child agent needs a resolvable PROVIDER model id. When the deployment has no coding-safe
+    // model configured, the port is not mounted at all and the governed delegate answers "failed"
+    // — a child must never be launched against a placeholder or a launch-profile identifier the
+    // gateway cannot resolve.
+    ...(input.modelId === "" ? {} : { childAgentAuthority: childPort(input, runner) }),
   };
 }
 
@@ -133,10 +138,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type AuxiliaryPortResult = {
+interface AuxiliaryPortResult {
   readonly status: "completed";
   readonly auxiliary: AuxiliaryCapabilityOutcomeV1;
-};
+}
 
 function skillRequest(
   input: ProductionAuxiliaryPortInput,
@@ -210,7 +215,7 @@ function childRequest(
     capability: "child-agent",
     childRunId,
     maxToolCalls: request.maxToolCalls,
-  } as AuxiliaryCapabilityRequestV1;
+  };
 }
 
 function target(
@@ -267,7 +272,7 @@ function researchScope(grant: ResolvedResearchGrant): AuxiliaryResearchScopeV1 {
     queryTextDigest:
       grant.queryTextDigest === undefined
         ? { outcome: "absent" }
-        : { outcome: "known", value: grant.queryTextDigest as CodeTaskSha256Digest },
+        : { outcome: "known", value: grant.queryTextDigest },
   };
 }
 

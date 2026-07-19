@@ -24,6 +24,7 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import {
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
   RESEARCH_JOURNEY_HOST,
+  RESEARCH_JOURNEY_REQUEST_LINE,
   researchRepositoryRoot,
   researchStateDir,
 } from "./support/coding-runtime-2387-research.js";
@@ -94,6 +95,16 @@ async function expectResearchApprovalPrompt(page: Page): Promise<void> {
     timeout: 90_000,
   });
   await expect(page.getByRole("heading", { name: "Review the bounded action" })).toBeVisible();
+  // #2387: the operator must be able to READ the destination before deciding — approving a request
+  // line nobody was shown would make the grant's request-line binding meaningless. The host and the
+  // sanitized request line arrive over the authenticated app-session channel, never on the
+  // content-free runtime event that raised the ask.
+  const destination = page.getByRole("group", { name: "Research destination" });
+  await expect(destination).toBeVisible();
+  await expect(destination.getByText(RESEARCH_JOURNEY_HOST, { exact: false })).toBeVisible();
+  await expect(
+    destination.getByText(RESEARCH_JOURNEY_REQUEST_LINE, { exact: false }),
+  ).toBeVisible();
 }
 
 // The composer only offers "Send follow-up" while the run is paused (#2386 sticky-pause design):
@@ -142,6 +153,23 @@ async function expectStaleRevokeFailsClosed(page: Page, runId: string): Promise<
   expect(stale.status()).toBe(400);
 }
 
+// All three #2387 auxiliary capabilities must reach the governed timeline as content-free labels:
+// the research fetch, the explicit skill invocation, and the read-only child agent's start and
+// completion. The generous timeout covers a full real agent loop, not a fixed delay.
+async function expectAuxiliaryTimelineActivity(page: Page): Promise<void> {
+  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
+  for (const label of [
+    "Research performed",
+    "Skill invoked",
+    "Child agent started",
+    "Child agent completed",
+  ]) {
+    await expect(timeline.getByText(label, { exact: true }).first()).toBeVisible({
+      timeout: 90_000,
+    });
+  }
+}
+
 test("#2387 research: approval mints the grant, the governed fetch runs, revoke cuts it off", async ({
   page,
 }) => {
@@ -172,19 +200,7 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
   // governed fetch for real (against the hermetic transport) inside the running run and the
   // content-free event reaches the timeline.
   await answerBlockingQuestion(page);
-  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
-  await expect(timeline.getByText("Research performed", { exact: true }).first()).toBeVisible({
-    timeout: 90_000,
-  });
-  await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible({
-    timeout: 90_000,
-  });
-  await expect(timeline.getByText("Child agent started", { exact: true }).first()).toBeVisible({
-    timeout: 90_000,
-  });
-  await expect(timeline.getByText("Child agent completed", { exact: true }).first()).toBeVisible({
-    timeout: 90_000,
-  });
+  await expectAuxiliaryTimelineActivity(page);
 
   await expectStaleRevokeFailsClosed(page, runId);
   await expect(chip).toBeVisible();

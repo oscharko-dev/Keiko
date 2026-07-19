@@ -58,7 +58,7 @@ export interface UseCodingWorkbenchQuestionsInput {
    * changes alongside runtime activity (the managed runtime publishes a content-free observation
    * when a question is raised or settled), so a change here re-lists the pending questions.
    */
-  readonly runtimeEventCount: number;
+  readonly runtimeEventSignal: number;
   /** Re-anchor the parent snapshot after the server advances its own revision on every operation. */
   readonly refreshSnapshot: () => Promise<void>;
 }
@@ -92,7 +92,7 @@ interface QuestionContext {
 export function useCodingWorkbenchQuestions(
   input: UseCodingWorkbenchQuestionsInput,
 ): UseCodingWorkbenchQuestionsResult {
-  const { runId, revision, runState, runtimeEventCount, refreshSnapshot } = input;
+  const { runId, revision, runState, runtimeEventSignal, refreshSnapshot } = input;
   const active = isActive(runState, revision, runId);
   const terminal = runId !== undefined && TERMINAL_STATES.has(runState ?? "idle");
   const [state, setState] = useState<CodingWorkbenchQuestionsState>(EMPTY_STATE);
@@ -126,7 +126,7 @@ export function useCodingWorkbenchQuestions(
     active,
     runId,
     runState,
-    runtimeEventCount,
+    runtimeEventSignal,
     questionsVisible: state.questions.length > 0,
     bumpEpoch,
   });
@@ -164,11 +164,11 @@ function useQuestionResync(input: {
   readonly active: boolean;
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
-  readonly runtimeEventCount: number;
+  readonly runtimeEventSignal: number;
   readonly questionsVisible: boolean;
   readonly bumpEpoch: () => void;
 }): void {
-  const { active, runId, runState, runtimeEventCount, questionsVisible, bumpEpoch } = input;
+  const { active, runId, runState, runtimeEventSignal, questionsVisible, bumpEpoch } = input;
   const questionsVisibleRef = useRef(questionsVisible);
   questionsVisibleRef.current = questionsVisible;
   const seenRef = useRef<
@@ -184,14 +184,14 @@ function useQuestionResync(input: {
     const activated =
       active &&
       runId !== undefined &&
-      ((previous === undefined && runtimeEventCount > 0) ||
+      ((previous === undefined && runtimeEventSignal > 0) ||
         (previous !== undefined && previous.runId !== runId));
     const changed =
       activated ||
       (previous !== undefined &&
         previous.runId === runId &&
-        (previous.count !== runtimeEventCount || previous.state !== runState));
-    seenRef.current = { count: runtimeEventCount, runId, state: runState };
+        (previous.count !== runtimeEventSignal || previous.state !== runState));
+    seenRef.current = { count: runtimeEventSignal, runId, state: runState };
     if (!active || !changed) return undefined;
     const timer = setTimeout(() => {
       if (!questionsVisibleRef.current) bumpEpoch();
@@ -199,7 +199,7 @@ function useQuestionResync(input: {
     return () => {
       clearTimeout(timer);
     };
-  }, [active, runId, runState, runtimeEventCount, bumpEpoch]);
+  }, [active, runId, runState, runtimeEventSignal, bumpEpoch]);
 }
 
 function isActive(

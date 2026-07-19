@@ -10,6 +10,7 @@ import {
   type CodingRuntimeLaunchResolver,
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
+import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
@@ -27,6 +28,10 @@ export interface CodingRuntimeHost {
   // Server-level registry of read-only research grants (#2387). Present once the runtime host is
   // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  // Live #2387 research asks awaiting a decision. Present once the runtime host is composed; the
+  // orchestrator reads it non-consumingly to project the reviewable host and request line onto the
+  // authenticated research channel so the operator can see what they are approving.
+  readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
@@ -104,6 +109,9 @@ export function createCodingRuntimeControlPlane(
     serverPrincipal: input.serverPrincipal,
     ...(input.runtimeHost?.researchGrants
       ? { researchGrants: input.runtimeHost.researchGrants }
+      : {}),
+    ...(input.runtimeHost?.pendingResearchApprovals
+      ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }
       : {}),
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {

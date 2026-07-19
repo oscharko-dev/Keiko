@@ -16,6 +16,11 @@ export const RESEARCH_APP_SESSION_LAUNCHER_SECRET =
 // real network is ever touched (the server entry injects the research fetch seam).
 export const RESEARCH_JOURNEY_HOST = "docs.example.org";
 
+// The sanitized request line the approval panel must show for that URL (#2387 visible sanitized
+// queries). The server entry asserts at boot that this equals `researchRequestLineText` of the
+// scripted URL, so the spec's expectation can never drift from what the server actually projects.
+export const RESEARCH_JOURNEY_REQUEST_LINE = "/guide/streams topic=backpressure";
+
 // Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
 // re-derive the identical directory. The config's prepare step wipes it before every boot.
 export function researchStateDir(): string {

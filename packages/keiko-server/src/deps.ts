@@ -979,6 +979,19 @@ function defaultContextProfile(
   return modelId === undefined ? DEFAULT_CONTEXT_PROFILE : resolveProfile(modelId);
 }
 
+/**
+ * The provider model id a #2387 read-only child agent runs on: the coding-safe sidecar profile's
+ * resolved alias, i.e. exactly what the sidecar gateway maps the runtime's "coding" alias onto.
+ * Undefined when no coding-safe model is available, which keeps the child-agent port unmounted
+ * rather than launching a child against an id the gateway cannot resolve.
+ */
+function codingSafeChildModelId(runtimeConfig: RuntimeGatewayConfig): string | undefined {
+  const config = runtimeConfig.current();
+  if (config === undefined) return undefined;
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config);
+  return resolved.status === "available" ? resolved.modelAlias : undefined;
+}
+
 function codingSafeSidecarProvider(config: GatewayConfig): ModelProviderConfig | undefined {
   const resolved = resolveCodingSafeSidecarGatewayProfile(config);
   if (resolved.status !== "available") {
@@ -3141,6 +3154,10 @@ function productionRuntimeResolver(
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
       args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+    // #2387: a read-only child agent calls the gateway directly, so it needs the same resolved
+    // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
+    // Resolved per call because the gateway config can change while the server is up.
+    childModelId: (): string | undefined => codingSafeChildModelId(args.runtimeConfig),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
   return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);

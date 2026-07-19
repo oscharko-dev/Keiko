@@ -227,6 +227,16 @@ function executeMissingPayloadProbe(stateDir) {
   });
   const passed =
     result.status === 0 && result.stdout.includes("KEIKO_2483_UNAVAILABLE payload-missing");
+  if (!passed) {
+    // The negative probe is the honest half of the readiness proof, so a failure must say WHY.
+    // Without this the runner exits nonzero with no signal at all and the next operator has to
+    // re-stage the payload by hand to reproduce it.
+    console.error(
+      `[code-task-real-binary] payload-missing probe failed: exit=${String(result.status)}` +
+        ` signal=${String(result.signal)}\n--- probe stdout ---\n${result.stdout}` +
+        `\n--- probe stderr ---\n${result.stderr}`,
+    );
+  }
   return { passed, unavailableReason: passed ? "payload-missing" : "probe-failed" };
 }
 
@@ -282,6 +292,32 @@ function buildJourneyReport(input) {
   };
 }
 
+/**
+ * Names every observation the evidence predicate requires but the report does not carry. Empty means
+ * the report is complete; the list is the operator-facing explanation of a failed run.
+ */
+export function missingRealBinaryEvidence(report) {
+  const limits = report.limits;
+  const gaps = [];
+  if (report.journey.exitCode !== 0)
+    gaps.push(`journey exit code ${String(report.journey.exitCode)}`);
+  if (!limits.materializedChildLimits.some((l) => l.context === 32_768 && l.output === 4_096)) {
+    gaps.push("no materialized child limits of context 32768 / output 4096");
+  }
+  if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
+  if (!limits.observedGatewayOutputTokenLimits.includes(4_096)) {
+    gaps.push("no gateway request carried the effective output limit 4096");
+  }
+  if (report.missingPayload?.passed !== true) {
+    gaps.push(
+      `payload-missing probe did not pass (reason ${String(report.missingPayload?.unavailableReason)})`,
+    );
+  } else if (report.missingPayload.unavailableReason !== "payload-missing") {
+    gaps.push(`payload-missing probe reported ${report.missingPayload.unavailableReason}`);
+  }
+  return gaps;
+}
+
 export function realBinaryEvidenceComplete(report) {
   const limits = report.limits;
   return (
@@ -331,7 +367,14 @@ export async function runRealBinaryJourney() {
   writeEvidence(context.evidencePath, report);
   rmSync(context.stateDir, { recursive: true, force: true });
   rmSync(context.probeState, { recursive: true, force: true });
-  if (!realBinaryEvidenceComplete(report)) process.exitCode = 1;
+  if (!realBinaryEvidenceComplete(report)) {
+    // Name the missing observation. A bare nonzero exit forces the next reader to diff the evidence
+    // file against the predicate by hand to learn which half of the proof did not hold.
+    for (const gap of missingRealBinaryEvidence(report)) {
+      console.error(`[code-task-real-binary] incomplete evidence: ${gap}`);
+    }
+    process.exitCode = 1;
+  }
   return report;
 }
 

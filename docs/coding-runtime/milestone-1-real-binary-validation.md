@@ -2,8 +2,8 @@
 
 ## Evidence posture
 
-The `Code task real binary` workflow is the Wave-1 anti-false-green lane. It runs nightly and by
-manual dispatch on `macos-14`, stages the review-approved OpenCode 1.17.17 payload with
+The `Code task real binary` workflow is the Wave-1 anti-false-green lane. It runs nightly and on
+demand on `macos-14`, stages the review-approved OpenCode 1.17.17 payload with
 `npm run dev:coding-runtime:stage`, and drives the existing Milestone-1 browser journey through
 production discovery and production composition. The server entry supplies no runtime resolver,
 runtime ports, supervisor, or `KEIKO_OPENCODE_REAL_*` environment seam. The lane carries the
@@ -34,6 +34,26 @@ level denial. The `EXCLUDED-POLICY` rows therefore remain excluded until the Wav
 The first recorded dataset is
 [`evidence/2483-first-real-binary-observation.json`](evidence/2483-first-real-binary-observation.json).
 Every workflow run uploads the same schema as `code-task-real-binary-evidence` with 30-day retention.
+
+## Running the lane on demand
+
+GitHub resolves `workflow_dispatch` against the workflow file on the **default branch**, so while
+this lane lives only on a feature branch it cannot be dispatched by its own name — the API answers
+`404`. It is therefore also exposed as a reusable workflow (`workflow_call`) and invoked from the
+already-dispatchable `E2E Extended` workflow behind a boolean input:
+
+```bash
+gh workflow run e2e-extended.yml --ref <branch> -f code_task_real_binary=true
+```
+
+That input runs the real-binary job alone and skips the two Ubuntu suites, so the macOS lane can be
+re-proved on an exact SHA without paying for the full extended matrix. Once this lane is on the
+default branch, `gh workflow run code-task-real-binary.yml` also works and the nightly `schedule`
+becomes active — a scheduled workflow never fires from a non-default branch.
+
+Re-dispatch the lane whenever a change lands in the production composition the journey exercises
+(runtime resolver, tool facade and its governed ports, the OpenCode adapter/protocol, or the staged
+payload pin). A green run on an earlier epic SHA is not evidence for a later one.
 
 ## Runtime limits validation
 

@@ -62,7 +62,13 @@ const stableRefresh = vi.fn(() => Promise.resolve());
 function activeInput(
   refreshSnapshot: () => Promise<void> = stableRefresh,
 ): Parameters<typeof useCodingWorkbenchQuestions>[0] {
-  return { runId: "run-1", revision: 3, runState: "paused", runtimeEventCount: 0, refreshSnapshot };
+  return {
+    runId: "run-1",
+    revision: 3,
+    runState: "paused",
+    runtimeEventSignal: 0,
+    refreshSnapshot,
+  };
 }
 
 describe("useCodingWorkbenchQuestions", () => {
@@ -101,7 +107,7 @@ describe("useCodingWorkbenchQuestions", () => {
       await flush();
       expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
 
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
@@ -144,13 +150,13 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
       const inFlightSignal = vi.mocked(listCodingWorkbenchRuntimeQuestions).mock.calls[1]?.[2];
 
-      view.rerender({ ...activeInput(), runtimeEventCount: 2 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 2 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
@@ -209,7 +215,7 @@ describe("useCodingWorkbenchQuestions", () => {
         .mockResolvedValueOnce(emptyActive)
         .mockResolvedValueOnce(pending);
       const view = renderHook(() =>
-        useCodingWorkbenchQuestions({ ...activeInput(), runtimeEventCount: 1 }),
+        useCodingWorkbenchQuestions({ ...activeInput(), runtimeEventSignal: 1 }),
       );
       await flush();
       await act(async () => {
@@ -269,7 +275,7 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
@@ -300,13 +306,13 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
       await flush();
 
-      view.rerender({ ...activeInput(), runId: "run-2", runtimeEventCount: 0 });
+      view.rerender({ ...activeInput(), runId: "run-2", runtimeEventSignal: 0 });
       await flush();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
@@ -332,7 +338,7 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
@@ -358,7 +364,7 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
@@ -382,7 +388,7 @@ describe("useCodingWorkbenchQuestions", () => {
         initialProps: activeInput(),
       });
       await flush();
-      view.rerender({ ...activeInput(), runtimeEventCount: 1 });
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
@@ -429,7 +435,7 @@ describe("useCodingWorkbenchQuestions", () => {
         runId: "run-1",
         revision: 3,
         runState: "idle",
-        runtimeEventCount: 0,
+        runtimeEventSignal: 0,
         refreshSnapshot: stableRefresh,
       }),
     );
@@ -443,7 +449,7 @@ describe("useCodingWorkbenchQuestions", () => {
         runId: "run-1",
         revision: 3,
         runState: "succeeded",
-        runtimeEventCount: 0,
+        runtimeEventSignal: 0,
         refreshSnapshot: stableRefresh,
       }),
     );

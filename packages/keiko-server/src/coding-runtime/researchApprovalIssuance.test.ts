@@ -10,9 +10,14 @@ import {
   buildResearchPermissionEvent,
   createPendingResearchApprovals,
   registerApprovedResearchGrant,
+  reviewableResearchAsk,
   type ApprovedResearchIssuanceDeps,
 } from "./researchApprovalIssuance.js";
-import { createResearchEgressPort, researchRequestLineDigest } from "./researchEgressPort.js";
+import {
+  createResearchEgressPort,
+  researchRequestLineDigest,
+  researchRequestLineText,
+} from "./researchEgressPort.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 
@@ -100,6 +105,71 @@ describe("pending research approvals", () => {
     const { pending } = askFor("https://docs.example.org/");
     pending.invalidateRun(RUN);
     expect(pending.consume(RUN, "research-approval-1", NOW_MS)).toBeUndefined();
+  });
+});
+
+describe("operator-reviewable research ask (#2387 visible sanitized queries)", () => {
+  it("peeks the live ask without consuming it, so reviewing never spends the approval", () => {
+    const { pending, requestId } = askFor("https://docs.example.org/guide?q=streams");
+
+    expect(pending.peek(RUN, NOW_MS)).toBeDefined();
+    // A second peek still sees it, and the ask can still be consumed afterwards.
+    expect(pending.peek(RUN, NOW_MS)).toBeDefined();
+    expect(pending.consume(RUN, requestId ?? "", NOW_MS)).toBeDefined();
+    expect(pending.peek(RUN, NOW_MS)).toBeUndefined();
+  });
+
+  it("stops showing an expired ask, so a stale panel cannot review what is no longer approvable", () => {
+    const { pending } = askFor("https://docs.example.org/guide?q=streams");
+
+    expect(pending.peek(RUN, NOW_MS + RESEARCH_APPROVAL_TTL_MS - 1)).toBeDefined();
+    expect(pending.peek(RUN, NOW_MS + RESEARCH_APPROVAL_TTL_MS)).toBeUndefined();
+  });
+
+  it("has nothing to peek for a run with no ask", () => {
+    const { pending } = askFor("https://docs.example.org/guide?q=streams");
+
+    expect(pending.peek("run-other", NOW_MS)).toBeUndefined();
+  });
+
+  it("projects the host and the SAME request-line text the grant digest binds", () => {
+    const { pending } = askFor("https://docs.example.org/guide?q=streams%20backpressure");
+    const ask = pending.peek(RUN, NOW_MS);
+    if (ask === undefined) throw new Error("expected a pending ask");
+
+    const reviewable = reviewableResearchAsk(ask);
+
+    expect(reviewable).toEqual({
+      host: "docs.example.org",
+      requestLine: "/guide q=streams backpressure",
+    });
+    // The operator reads exactly the text the executor later re-verifies: same function, so the
+    // approved request line and the bound digest can never drift apart.
+    expect(researchRequestLineDigest(ask.url)).toBe(
+      researchRequestLineDigest(
+        new URL(`https://${reviewable?.host ?? ""}${ask.url.pathname}${ask.url.search}`),
+      ),
+    );
+    expect(reviewable?.requestLine).toBe(researchRequestLineText(ask.url));
+  });
+
+  it("reviews a bare root fetch as the root path rather than as blank text", () => {
+    const { pending } = askFor("https://docs.example.org/");
+    const ask = pending.peek(RUN, NOW_MS);
+    if (ask === undefined) throw new Error("expected a pending ask");
+
+    expect(reviewableResearchAsk(ask)).toEqual({ host: "docs.example.org", requestLine: "/" });
+  });
+
+  it("strips control characters from the reviewed request line so it cannot forge panel structure", () => {
+    const { pending } = askFor("https://docs.example.org/guide?q=a%00b%0Ac");
+    const ask = pending.peek(RUN, NOW_MS);
+    if (ask === undefined) throw new Error("expected a pending ask");
+
+    const reviewable = reviewableResearchAsk(ask);
+
+    expect(reviewable?.requestLine).toBe("/guide q=a b c");
+    expect(reviewable?.requestLine).not.toMatch(/[\p{Cc}]/u);
   });
 });
 

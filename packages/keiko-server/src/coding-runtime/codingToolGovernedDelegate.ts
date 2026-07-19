@@ -50,21 +50,42 @@ export function createCodingToolGovernedDelegate(
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const result = await dispatch(ports, request, signal, mutationGuard);
-      // Repository reads AND research fetches (#2387) carry their governed payload back; every
-      // other action returns only the bare outcome.
-      return (request.action === "read" || request.action === "egress") &&
-        result.status === "completed" &&
-        result.read !== undefined
-        ? { outcome: "completed", read: result.read }
-        : (request.action === "skill" || request.action === "child-agent") &&
-            result.status === "completed" &&
-            result.auxiliary !== undefined
-          ? { outcome: "completed", auxiliary: result.auxiliary }
-          : { outcome: result.status };
+      return governedOutcome(request.action, result);
     },
   };
 }
 
+// Repository reads AND research fetches (#2387) carry their governed payload back; skills and
+// read-only child agents carry their auxiliary outcome. Every other action, and every non-completed
+// result, returns the bare outcome only — a payload never rides out on a status the port did not
+// complete.
+const READ_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
+  "read",
+  "egress",
+]);
+const AUXILIARY_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
+  "skill",
+  "child-agent",
+]);
+
+function governedOutcome(
+  action: CodingToolActionRequest["action"],
+  result: GovernedCodingToolResult,
+): unknown {
+  if (result.status !== "completed") return { outcome: result.status };
+  if (READ_BEARING_ACTIONS.has(action) && result.read !== undefined) {
+    return { outcome: "completed", read: result.read };
+  }
+  if (AUXILIARY_BEARING_ACTIONS.has(action) && result.auxiliary !== undefined) {
+    return { outcome: "completed", auxiliary: result.auxiliary };
+  }
+  return { outcome: result.status };
+}
+
+// One exhaustive line per governed action class: the switch IS the routing table and the compiler
+// proves it total. A lookup object would need an `as never` cast to keep the per-action request
+// types, trading a proven narrowing for an unchecked one.
+// eslint-disable-next-line complexity -- exhaustive port routing table, see above
 function dispatch(
   ports: CodingToolGovernedPorts,
   request: CodingToolActionRequest,

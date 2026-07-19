@@ -3,6 +3,7 @@
 import {
   validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
+  validateCodingWorkbenchRuntimeResearchChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchMode,
@@ -10,6 +11,7 @@ import {
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  type CodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchRuntimeResearchRevokeRequest,
   type CodingWorkbenchRuntimeRetryRequest,
   type CodingWorkbenchRuntimeSnapshot,
@@ -89,6 +91,13 @@ function questionsValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeQuestionsChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeQuestionsChannelPayload);
+}
+
+function researchAskValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeResearchChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeResearchChannelPayload);
 }
 
 function runPath(runId: string, suffix = ""): string {
@@ -236,6 +245,23 @@ export function revokeCodingWorkbenchRuntimeResearchGrant(
   input: CodingWorkbenchRuntimeResearchRevokeRequest,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/research/revoke"), input);
+}
+
+/**
+ * Read the run's pending research ask — the public host and the sanitized request line the grant
+ * would bind — over the authenticated app-session channel (#2387). The operator has to see the
+ * destination before approving egress to it; an unpaired window receives the constant content-free
+ * `{ session: "unpaired" }` projection instead of an error or a leaked host.
+ */
+export function getCodingWorkbenchRuntimeResearchAsk(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeResearchChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/research"),
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: researchAskValidator },
+  );
 }
 
 /**

@@ -46,7 +46,7 @@ export interface CodingWorkbenchSafeActivityState {
 export interface UseCodingWorkbenchSafeActivityInput {
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
-  readonly runtimeEventCount: number;
+  readonly runtimeEventSignal: number;
 }
 
 export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSafeActivityState {
@@ -62,7 +62,7 @@ const IDLE_STATE: CodingWorkbenchSafeActivityState = {
 export function useCodingWorkbenchSafeActivity(
   input: UseCodingWorkbenchSafeActivityInput,
 ): UseCodingWorkbenchSafeActivityResult {
-  const { runId, runState, runtimeEventCount } = input;
+  const { runId, runState, runtimeEventSignal } = input;
   const [state, setState] = useState<CodingWorkbenchSafeActivityState>(IDLE_STATE);
   const [epoch, setEpoch] = useState(0);
   const runStateRef = useRef(runState);
@@ -74,7 +74,7 @@ export function useCodingWorkbenchSafeActivity(
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
   useActivityConnection({ runId, epoch, batch, runStateRef, setState });
-  useActivityResync({ runId, runtimeEventCount, status: state.status, retry });
+  useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
   return { ...state, retry };
 }
 
@@ -214,9 +214,11 @@ function stateForLifecycle(
   current: CodingWorkbenchSafeActivityState,
   runState: CodingWorkbenchRuntimeStateName | undefined,
 ): CodingWorkbenchSafeActivityState {
-  if (current.feed !== null && lifecycleStatus(runState) === "ended") {
-    return { ...current, status: "ended" };
-  }
+  // A failed projection keeps its failure status even once the run reaches a terminal state. The
+  // feed we hold was captured BEFORE the channel dropped, so calling it "ended" would caption a
+  // stale snapshot as the final confirmed transcript and remove the reconnect affordance — the
+  // exact "stale content presented as live" the acceptance criterion forbids. Honest failure
+  // first; the operator reconnects and only then sees a real terminal feed.
   if (current.feed === null || failureStatus(current.status)) return current;
   return { ...current, status: lifecycleStatus(runState) };
 }
@@ -250,19 +252,19 @@ function failureStatus(status: CodingWorkbenchSafeActivityStatus): boolean {
 
 function useActivityResync(input: {
   readonly runId: string | undefined;
-  readonly runtimeEventCount: number;
+  readonly runtimeEventSignal: number;
   readonly status: CodingWorkbenchSafeActivityStatus;
   readonly retry: () => void;
 }): void {
-  const { retry, runId, runtimeEventCount, status } = input;
-  const seenRef = useRef(runtimeEventCount);
+  const { retry, runId, runtimeEventSignal, status } = input;
+  const seenRef = useRef(runtimeEventSignal);
   useEffect(() => {
-    const changed = seenRef.current !== runtimeEventCount;
-    seenRef.current = runtimeEventCount;
+    const changed = seenRef.current !== runtimeEventSignal;
+    seenRef.current = runtimeEventSignal;
     if (runId === undefined || !changed || !resyncStatus(status)) return undefined;
     const timer = setTimeout(retry, RESYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [retry, runId, runtimeEventCount, status]);
+  }, [retry, runId, runtimeEventSignal, status]);
 }
 
 function resyncStatus(status: CodingWorkbenchSafeActivityStatus): boolean {

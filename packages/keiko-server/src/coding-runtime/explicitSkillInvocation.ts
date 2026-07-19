@@ -27,6 +27,8 @@ export function createExplicitSkillInvocationTracker(
       if (!isCodeTaskSkillId(skillId) || !pending.delete(skillId)) return false;
       return true;
     },
-    clear: (): void => pending.clear(),
+    clear: (): void => {
+      pending.clear();
+    },
   };
 }

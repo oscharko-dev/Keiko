@@ -240,6 +240,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.notApplicable": "Not applicable",
   "codingWorkbench.approval.noneRequested": "None requested",
   "codingWorkbench.approval.unspecified": "Unspecified",
+  "codingWorkbench.approval.research.title": "Research destination",
+  "codingWorkbench.approval.research.host": "Public domain",
+  "codingWorkbench.approval.research.requestLine": "Requested path and query",
+  "codingWorkbench.approval.research.loading": "Loading the destination…",
+  "codingWorkbench.approval.research.unavailable":
+    "Destination unavailable. Re-pair this window to see it before deciding.",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",

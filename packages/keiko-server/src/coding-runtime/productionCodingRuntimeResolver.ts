@@ -121,6 +121,15 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly gatewayEgress?: ProductionManagedWorktreeToolInput["gatewayEgress"] | undefined;
   readonly childModelPortFactory?:
     ProductionManagedWorktreeToolInput["childModelPortFactory"] | undefined;
+  /**
+   * The PROVIDER model id a read-only child agent runs on (#2387). Resolved per run because the
+   * coding-safe gateway profile can change while the server is up. This is deliberately NOT the
+   * run's `modelProfile.profileId`: that is a Keiko launch-profile identifier
+   * (`coding-safe-openai-compatible`), which the model gateway cannot resolve — handing it to a
+   * child session would fail every child's first model call. When no coding-safe model is
+   * configured the child port stays fail-closed rather than guessing an id.
+   */
+  readonly childModelId?: (() => string | undefined) | undefined;
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
 }
@@ -209,6 +218,7 @@ function composeRuntime(
     // manager's approval issuance (approval digest + expiry) and the retained approved URL.
     approvalAuthority: researchIssuingApprovalAuthority(manager, research, () => runtimeNow(input)),
     researchGrants,
+    pendingResearchApprovals: pendingResearch,
     taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
     questionPort: createProductionRuntimeQuestionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
@@ -295,7 +305,18 @@ function confirmationFacts(
   };
 }
 
-function createRunRecord(
+// The per-run governed tool surface: the invocation registry every tool call is recorded against,
+// its mutation-lease coordinator, the explicit-skill tracker seeded from this turn's intent, and the
+// managed facade the runtime actually calls. Built as one unit because the facade closes over the
+// other three.
+interface RunToolSurface {
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createLeaseCoordinator>;
+  readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
+  readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
+}
+
+function createRunToolSurface(
   input: ProductionCodingRuntimeResolverInput,
   request: ProductionRuntimeBackendInput["request"],
   context: CodingRuntimeTrustedContext,
@@ -303,8 +324,7 @@ function createRunRecord(
   authority: CodingRuntimeAuthorityService,
   research: ResearchComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): ResolverRunRecord {
-  const controller = new AbortController();
+): RunToolSurface {
   const invocationRegistry = createCodingToolInvocationRegistry();
   const leases = createLeaseCoordinator(invocationRegistry);
   const skillCatalog = createServerApprovedSkillCatalog();
@@ -320,6 +340,28 @@ function createRunRecord(
     research,
     skillCatalog,
     explicitSkills,
+    onRuntimeEvent,
+  );
+  return { invocationRegistry, leases, explicitSkills, toolFacade };
+}
+
+function createRunRecord(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  research: ResearchComposition,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): ResolverRunRecord {
+  const controller = new AbortController();
+  const { invocationRegistry, leases, explicitSkills, toolFacade } = createRunToolSurface(
+    input,
+    request,
+    context,
+    minted,
+    authority,
+    research,
     onRuntimeEvent,
   );
   const backend = createBackendRun(
@@ -461,7 +503,9 @@ function createManagedToolFacade(
     authority,
     authorityRef: minted.authorityRef,
     taskId: context.taskId,
-    modelId: context.modelProfile.profileId,
+    // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
+    // never the run's launch-profile identifier, which the gateway cannot resolve.
+    ...(input.childModelId?.() === undefined ? {} : { modelId: input.childModelId() }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
     researchGrantRegistry: research.grants,

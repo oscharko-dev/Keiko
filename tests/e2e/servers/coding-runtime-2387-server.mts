@@ -54,10 +54,12 @@ import {
   RESEARCH_JOURNEY_URL,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import { researchRequestLineText } from "../../../packages/keiko-server/src/coding-runtime/researchEgressPort.js";
 import {
   RESEARCH_DEFAULT_UI_PORT,
   RESEARCH_APP_SESSION_LAUNCHER_SECRET,
   RESEARCH_JOURNEY_HOST,
+  RESEARCH_JOURNEY_REQUEST_LINE,
   researchManagedWorkspaceRoot,
   researchRepositoryRoot,
   researchStateDir,
@@ -253,7 +255,9 @@ function buildResearchComposition(stateDir: string, port: number): ResearchCompo
     createSupervisor: scripted.createSupervisor,
     researchEgressEnabled: true,
     researchFetchImpl: hermeticResearchFetch(),
-    childModelPortFactory: () => ({ call: () => Promise.resolve(childResponse()) }),
+    childModelPortFactory: () => ({
+      call: (): Promise<NormalizedResponse> => Promise.resolve(childResponse()),
+    }),
   });
   const deps = buildUiHandlerDeps({
     configPath: undefined,
@@ -290,6 +294,11 @@ async function main(): Promise<void> {
   // would fail closed for the wrong reason and the journey would time out confusingly.
   if (new URL(RESEARCH_JOURNEY_URL).hostname !== RESEARCH_JOURNEY_HOST) {
     throw new Error("research journey host mismatch");
+  }
+  // The spec asserts the approval panel shows this exact request line; deriving it here from the
+  // production sanitizer makes a silent drift between the fixture and the server impossible.
+  if (researchRequestLineText(new URL(RESEARCH_JOURNEY_URL)) !== RESEARCH_JOURNEY_REQUEST_LINE) {
+    throw new Error("research journey request-line mismatch");
   }
   await new Promise<void>((resolve) => {
     server.listen(port, UI_HOST, resolve);

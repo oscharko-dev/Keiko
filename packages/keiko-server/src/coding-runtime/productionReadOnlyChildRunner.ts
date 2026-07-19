@@ -58,10 +58,18 @@ async function runChildSession(
       workingDirectory: input.workspaceRoot,
       dryRun: true,
       limits: {
-        maxIterations: Math.max(2, input.maxToolCalls + 1),
-        maxModelCalls: Math.max(2, input.maxToolCalls + 1),
+        // A tool-calling turn costs two iterations and two model calls (ask → run tool → report),
+        // so the budget has to clear that floor or the child ends `limit-exceeded` having read
+        // nothing.
+        maxIterations: Math.max(4, input.maxToolCalls * 2 + 2),
+        maxModelCalls: Math.max(3, input.maxToolCalls + 2),
         maxToolCalls: input.maxToolCalls,
-        maxCommandExecutions: 0,
+        // NOT zero. The harness enters the tool-call state only while
+        // `commandExecutions < maxCommandExecutions`, so a zero budget rejects EVERY tool call —
+        // including this child's only tool, `read_file` — before it runs. Command containment here
+        // comes from the tool surface itself: `readOnlyTools` offers exactly one read tool, so no
+        // tool result can ever set `commandExecuted` and this counter is never consumed.
+        maxCommandExecutions: input.maxToolCalls + 1,
         maxContextBytes: 128_000,
         maxPatchBytes: 0,
         maxWallTimeMs: 120_000,
@@ -70,7 +78,9 @@ async function runChildSession(
     },
     { model, tools: readOnlyTools(deps, input, state), sink: TRANSIENT_SINK },
   );
-  const abort = (): void => session.cancel("parent-stopped");
+  const abort = (): void => {
+    session.cancel("parent-stopped");
+  };
   input.signal.addEventListener("abort", abort, { once: true });
   if (input.signal.aborted) abort();
   try {
