@@ -2232,7 +2232,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     processEnv: args.options.env,
     redact: args.liveRedactor,
     evidenceStore: args.evidenceStore,
-    workspaceTrust: (realRoot) => workspaceScriptTrust.trustLevelForRoot(realRoot),
+    workspaceTrust: (realRoot): "trusted" | "restricted" =>
+      workspaceScriptTrust.trustLevelForRoot(realRoot),
   });
   const debugActivationControl = buildDebugActivationControl(args);
   return {

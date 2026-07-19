@@ -94,6 +94,39 @@ function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string
   }
 }
 
+function realPathOrUndefined(fs: WorkspaceFs, path: string): string | undefined {
+  try {
+    return fs.realPath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function registeredProjectPathForRoot(
+  store: UiStore,
+  fs: WorkspaceFs,
+  root: string,
+): string | undefined {
+  const canonicalRoot = realPathOrUndefined(fs, root);
+  if (canonicalRoot === undefined) return undefined;
+  return store
+    .listProjects()
+    .find((project): boolean => realPathOrUndefined(fs, project.path) === canonicalRoot)?.path;
+}
+
+function workspaceInfoForRoot(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
 // registered, both the project root and the resolved workspace root are realpath-canonicalized, and
 // the workspace root must equal the project root. Richer multi-root resolution lands additively with
@@ -319,19 +352,19 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
-  public readonly trustLevelForRoot = (root: string): WorkspaceTrustLevel =>
-    this.isTrusted(root, {
-      root,
-      name: undefined,
-      version: undefined,
-      testFramework: "unknown",
-      sourceDirs: [],
-      testDirs: [],
-      languages: [],
-      ignoreLines: [],
-    })
-      ? "trusted"
-      : "restricted";
+  public readonly trustLevelForRoot = (root: string): WorkspaceTrustLevel => {
+    try {
+      const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+      if (projectPath === undefined) return "restricted";
+      const canonicalRoot = realPathOrUndefined(this.fs, root);
+      if (canonicalRoot === undefined) return "restricted";
+      return this.isTrusted(projectPath, workspaceInfoForRoot(canonicalRoot))
+        ? "trusted"
+        : "restricted";
+    } catch {
+      return "restricted";
+    }
+  };
 }
 
 export function createWorkspaceScriptTrustService(

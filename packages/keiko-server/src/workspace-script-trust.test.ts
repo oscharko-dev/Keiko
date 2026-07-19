@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +73,20 @@ describe("WorkspaceScriptTrustService", () => {
     writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
     expect(trust.trustLevelForRoot(root)).toBe("restricted");
     expect(onRestricted).toHaveBeenCalledTimes(2);
+  });
+
+  it("projects trust through a registered symlink by canonical root identity", () => {
+    const symlinkRoot = `${root}-link`;
+    symlinkSync(root, symlinkRoot, "dir");
+    try {
+      store.createProject(symlinkRoot, "symlink-fixture");
+      const trust = createWorkspaceScriptTrustService({ store });
+
+      expect(trust.grant(symlinkRoot)).toEqual({ trusted: true });
+      expect(trust.trustLevelForRoot(nodeWorkspaceFs.realPath(symlinkRoot))).toBe("trusted");
+    } finally {
+      rmSync(symlinkRoot, { force: true });
+    }
   });
 
   it("fails closed, grants explicitly, and invalidates the grant after a manifest change", () => {
