@@ -67,4 +67,24 @@ describe("memory autonomy policy routes", () => {
     ).resolves.toMatchObject({ status: 400 });
     expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
   });
+
+  it("rejects an empty request body without changing persisted policy", async () => {
+    const handlerDeps = deps();
+    await expect(handlePutMemoryAutonomyPolicy(context(""), handlerDeps)).resolves.toMatchObject({
+      status: 400,
+    });
+    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+  });
+
+  it("rejects a request body over the byte limit without changing persisted policy", async () => {
+    const handlerDeps = deps();
+    const oversized = JSON.stringify({
+      requestedMode: "autonomous-delivery",
+      pad: "x".repeat(2048),
+    });
+    await expect(
+      handlePutMemoryAutonomyPolicy(context(oversized), handlerDeps),
+    ).resolves.toMatchObject({ status: 400 });
+    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+  });
 });
