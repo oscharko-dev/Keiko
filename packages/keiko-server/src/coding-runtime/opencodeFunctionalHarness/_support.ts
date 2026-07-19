@@ -23,7 +23,10 @@ import type {
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
 import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
-import { projectOpenCodeProtocolSurface } from "../opencodeProtocolSurface.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeProtocolSurface,
+} from "../opencodeProtocolSurface.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -255,7 +258,12 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   if (digest(resolve(stagedBinary)) !== digest(binary)) {
     throw new Error("functional-opencode-binary-copy-mismatch");
   }
-  const sidecar = verification(installRoot, target);
+  // The staged artifact IS the pinned binary: its live /doc re-projects onto the product
+  // surface pin, not onto the scripted harness surface digest.
+  const sidecar = {
+    ...verification(installRoot, target),
+    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  };
   return {
     evidenceClass: "functional-not-platform-qualified",
     installRoot,
