@@ -19,6 +19,7 @@ import {
   type HtmlManualPodJobState,
   type HtmlManualPodRefreshRequest,
   type HtmlManualSource,
+  type ManualRefreshOutcome,
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
@@ -165,13 +166,44 @@ interface DomainEnv {
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
 }
 
+// The resolved domain outcome the runner reports back: the progress projection plus the terminal job
+// state each operation derived from its own domain result (so a fail-closed refresh/create is never
+// reported as `succeeded` merely because the promise resolved).
+export interface ManualPodRunOutcome {
+  readonly progress: HtmlManualIndexingProgress;
+  readonly state: HtmlManualPodJobState;
+}
+
+// The terminal state for a refresh: `succeeded` ONLY when the index-apply path ran (`applied`: a
+// completed, non-empty crawl) AND the apply itself did not fail. A not-applied refresh (limit-reached
+// / empty / cancelled crawl) leaves the prior pod intact, and an apply that failed outright changed
+// nothing — both are `failed`, so the poller never reports a non-applied refresh as a success.
+export function refreshTerminalState(
+  applied: boolean,
+  outcome: ManualRefreshOutcome,
+): HtmlManualPodJobState {
+  if (!applied) return "failed";
+  return outcome === "failed" ? "failed" : "succeeded";
+}
+
+// The terminal state for a create: `succeeded` ONLY when at least one document's vectors were
+// persisted (a searchable pod exists). An empty or cancelled crawl (no indexing) or an all-failed
+// index persists nothing, so there is no usable pod → `failed`.
+export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlManualPodJobState {
+  return progress.indexing !== null && progress.indexing.vectorsPersisted > 0
+    ? "succeeded"
+    : "failed";
+}
+
 // A run failure is a body-free failure: the error is dropped and the job goes to state=failed. The
-// prior pod (refresh) or no pod (create) is left intact by the domain functions.
+// prior pod (refresh) or no pod (create) is left intact by the domain functions. A resolved run
+// carries the domain-derived terminal state, so a fail-closed outcome settles as `failed`, not
+// `succeeded`.
 export async function executeJob(
   jobId: string,
   base: HtmlManualPodJob,
   controller: AbortController,
-  run: (onCrawlEvent: (event: ManualCrawlEvent) => void) => Promise<HtmlManualIndexingProgress>,
+  run: ManualPodJobRunner,
 ): Promise<void> {
   let current = base;
   const onCrawlEvent = (event: ManualCrawlEvent): void => {
@@ -179,8 +211,8 @@ export async function executeJob(
     manualPodJobRegistry.patch(jobId, current);
   };
   try {
-    const progress = await run(onCrawlEvent);
-    manualPodJobRegistry.patch(jobId, projectJob(current, progress, "succeeded"));
+    const { progress, state } = await run(onCrawlEvent);
+    manualPodJobRegistry.patch(jobId, projectJob(current, progress, state));
   } catch {
     manualPodJobRegistry.patch(jobId, failedJob(current));
   }
@@ -213,7 +245,7 @@ export type StartManualPodJobResult =
 // exercise the start/registry/projection path without a real store, fetcher, or network.
 export type ManualPodJobRunner = (
   onCrawlEvent: (event: ManualCrawlEvent) => void,
-) => Promise<HtmlManualIndexingProgress>;
+) => Promise<ManualPodRunOutcome>;
 
 export interface ManualPodJobContext {
   readonly env: DomainEnv;
@@ -238,7 +270,7 @@ function refreshRun(
   request: HtmlManualPodRefreshRequest,
   controller: AbortController,
 ): ManualPodJobRunner {
-  return (onCrawlEvent): Promise<HtmlManualIndexingProgress> =>
+  return (onCrawlEvent): Promise<ManualPodRunOutcome> =>
     refreshHtmlManualPod({
       store: ctx.env.store,
       parserRegistry: createDefaultParserRegistry(),
@@ -249,7 +281,10 @@ function refreshRun(
       signal: controller.signal,
       onCrawlEvent,
     })
-      .then((result) => result.progress)
+      .then((result) => ({
+        progress: result.progress,
+        state: refreshTerminalState(result.applied, result.changeSummary.outcome),
+      }))
       .finally(() => {
         ctx.env.close();
       });
@@ -262,7 +297,7 @@ function createRun(
   ids: { readonly capsuleId: string; readonly sourceId: string },
   controller: AbortController,
 ): ManualPodJobRunner {
-  return (onCrawlEvent): Promise<HtmlManualIndexingProgress> =>
+  return (onCrawlEvent): Promise<ManualPodRunOutcome> =>
     createHtmlManualPod(
       {
         store: ctx.env.store,
@@ -277,7 +312,10 @@ function createRun(
       },
       source,
     )
-      .then((result) => result.progress)
+      .then((result) => ({
+        progress: result.progress,
+        state: createTerminalState(result.progress),
+      }))
       .finally(() => {
         ctx.env.close();
       });

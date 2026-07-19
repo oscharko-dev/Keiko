@@ -13,11 +13,13 @@ import {
   ManualPodJobRegistry,
   applyCrawlEvent,
   buildHttpManualSource,
+  createTerminalState,
   executeJob,
   getManualPodJob,
   initialJob,
   manualPodJobRegistry,
   projectJob,
+  refreshTerminalState,
   startManualPodCreate,
   startManualPodRefresh,
   type ManualPodJobContext,
@@ -155,12 +157,25 @@ describe("executeJob", () => {
     manualPodJobRegistry.register(base, new AbortController());
     await executeJob("exec-ok", base, new AbortController(), (onCrawlEvent) => {
       onCrawlEvent({ kind: "page-accepted", relativePath: "a.html", depth: 1 });
-      return Promise.resolve(PROGRESS);
+      return Promise.resolve({ progress: PROGRESS, state: "succeeded" });
     });
     const job = getManualPodJob("exec-ok");
     expect(job?.state).toBe("succeeded");
     expect(job?.crawl.accepted).toBe(2);
     expect(job?.indexing?.vectorsPersisted).toBe(4);
+  });
+
+  it("projects a resolved-but-failed run as failed (a fail-closed refresh is not a success)", async () => {
+    const base = initialJob("exec-noapply", "refresh", "c", "s");
+    manualPodJobRegistry.register(base, new AbortController());
+    // The domain run resolved (no throw) but the operation did not take effect — the runner reports
+    // state=failed, and executeJob must honor it rather than defaulting to succeeded.
+    await executeJob("exec-noapply", base, new AbortController(), () =>
+      Promise.resolve({ progress: { ...PROGRESS, phase: "degraded" }, state: "failed" }),
+    );
+    const job = getManualPodJob("exec-noapply");
+    expect(job?.state).toBe("failed");
+    expect(job?.phase).toBe("degraded");
   });
 
   it("fails closed to a failed job (body-free) when the run rejects", async () => {
@@ -172,6 +187,48 @@ describe("executeJob", () => {
     const job = getManualPodJob("exec-fail");
     expect(job?.state).toBe("failed");
     expect(JSON.stringify(job)).not.toContain("secret crawl detail");
+  });
+});
+
+describe("refreshTerminalState", () => {
+  it("is succeeded only for an applied refresh whose index-apply did not fail", () => {
+    expect(refreshTerminalState(true, "updated")).toBe("succeeded");
+    expect(refreshTerminalState(true, "unchanged")).toBe("succeeded");
+    expect(refreshTerminalState(true, "partial")).toBe("succeeded");
+    expect(refreshTerminalState(true, "failed")).toBe("failed");
+  });
+
+  it("is failed for every not-applied refresh (prior pod intact), whatever the outcome", () => {
+    // The regression: a limit-reached crawl reports outcome "partial" but never applied, so the
+    // prior pod is intact — it must read as failed, not as a successful refresh.
+    expect(refreshTerminalState(false, "partial")).toBe("failed");
+    expect(refreshTerminalState(false, "failed")).toBe("failed");
+    expect(refreshTerminalState(false, "cancelled")).toBe("failed");
+    expect(refreshTerminalState(false, "unchanged")).toBe("failed");
+  });
+});
+
+describe("createTerminalState", () => {
+  it("is succeeded only when at least one document's vectors were persisted", () => {
+    expect(createTerminalState(PROGRESS)).toBe("succeeded");
+  });
+
+  it("is failed when nothing was indexed or the index persisted no vectors", () => {
+    expect(createTerminalState({ ...PROGRESS, indexing: null })).toBe("failed");
+    expect(
+      createTerminalState({
+        ...PROGRESS,
+        phase: "degraded",
+        indexing: {
+          status: "failed",
+          totalDocuments: 2,
+          processedDocuments: 2,
+          failedDocuments: 2,
+          skippedDocuments: 0,
+          vectorsPersisted: 0,
+        },
+      }),
+    ).toBe("failed");
   });
 });
 
@@ -196,7 +253,7 @@ describe("buildHttpManualSource", () => {
 
 describe("startManualPodRefresh (injected seams)", () => {
   it("registers a running job and executes the injected run", async () => {
-    const run = vi.fn().mockResolvedValue(PROGRESS);
+    const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
     const result = startManualPodRefresh(
       {} as UiHandlerDeps,
       { capsuleId: "cap", sourceId: "src" },
@@ -225,7 +282,7 @@ describe("startManualPodCreate (injected seams)", () => {
   });
 
   it("registers a running create job and executes the injected run", async () => {
-    const run = vi.fn().mockResolvedValue(PROGRESS);
+    const run = vi.fn().mockResolvedValue({ progress: PROGRESS, state: "succeeded" });
     const result = await startManualPodCreate(
       {} as UiHandlerDeps,
       { displayName: "Ops", origin: "https://manual.example.com", pathPrefix: null },
