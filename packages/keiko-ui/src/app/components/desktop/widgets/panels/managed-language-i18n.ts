@@ -72,6 +72,7 @@ const MANAGED_LANGUAGE_MESSAGE_KEYS = {
   saveSettings: "managedLanguage.saveSettings",
   unsaved: "managedLanguage.unsaved",
   invalidTarget: "managedLanguage.invalidTarget",
+  invalidJavaLevels: "managedLanguage.invalidJavaLevels",
   guidancePolicy: "managedLanguage.guidancePolicy",
   guidanceProvisioning: "managedLanguage.guidanceProvisioning",
   guidanceUnavailable: "managedLanguage.guidanceUnavailable",

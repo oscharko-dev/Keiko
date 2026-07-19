@@ -56,7 +56,8 @@ failed handshake or runtime. `RESTART_REQUIRED` confirms a valid pending configu
 3. Select the approved interpreter and optional venv identities in governed workspace settings.
    These stay opaque approved identities for deterministic reporting only; Keiko never sends a
    path derived from them to Pyright, so they do not change what Pyright itself analyzes.
-4. Activate Python. If Settings reports **Restart required**, use the targeted Python restart.
+4. Activate Python, accept or edit the server-owned typed default, and save it. Settings must show
+   the precise restart impact; use the targeted Python restart before expecting an active provider.
 5. To roll back, restore the previous governed settings revision and restart Python. If the runtime
    remains unhealthy, deactivate Python; Keiko then fails closed to its in-process fallback where
    one exists and does not spawn Pyright.

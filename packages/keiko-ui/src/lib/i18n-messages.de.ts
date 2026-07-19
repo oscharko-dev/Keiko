@@ -1194,6 +1194,8 @@ export const DE_MESSAGES = {
   "managedLanguage.unsaved": "Ungespeicherte Workspace-Einstellungen",
   "managedLanguage.invalidTarget":
     "Verwende ein leeres Ziel oder ein Ziel-Tripel nur aus Buchstaben, Ziffern, Punkten, Unterstrichen und Bindestrichen.",
+  "managedLanguage.invalidJavaLevels":
+    "Das Java-Quelllevel darf nicht neuer als das Ziellevel sein.",
   "managedLanguage.guidancePolicy":
     "Eine Operator-Richtlinie verhindert die Aktivierung. Dieser Bildschirm sendet keine Änderung.",
   "managedLanguage.guidanceProvisioning":

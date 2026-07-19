@@ -274,6 +274,7 @@ describe("SettingsPanel managed language composition", () => {
       languages: [],
       settings: [],
       configurations: [],
+      configurationDefaults: [],
       health: [],
     });
     render(<SettingsPanel root="/workspace/settings" />);

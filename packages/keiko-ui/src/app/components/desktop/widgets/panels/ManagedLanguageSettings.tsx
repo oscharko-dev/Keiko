@@ -18,6 +18,7 @@ import { managedLanguageTranslate, type ManagedLanguageTranslate } from "./manag
 import { useManagedLanguageSettings } from "./useManagedLanguageSettings";
 
 const MAX_CAPABILITIES = 12;
+const JAVA_LANGUAGE_LEVELS = ["8", "11", "17", "21", "25"] as const;
 
 interface Confirmation {
   readonly action: Exclude<ManagedLspSettingsAction, "activate" | "configure">;
@@ -128,6 +129,9 @@ export function ManagedLanguageSettings({
                     runtimeConfiguration={view.data?.configurations.find(
                       (item) => item.language === entry.language,
                     )}
+                    configurationDefault={view.data?.configurationDefaults.find(
+                      (item) => item.language === entry.language,
+                    )}
                     providerConfigurationSource={
                       view.data?.providerMetadata?.find((item) => item.language === entry.language)
                         ?.configurationSource
@@ -146,8 +150,17 @@ export function ManagedLanguageSettings({
                         ...configuration,
                         revision: current.revision,
                         etag: current.etag,
+                        provenance: {
+                          ...configuration.provenance,
+                          activation: "workspace",
+                          settings: "workspace",
+                        },
                         restartRequired: true,
-                        restartFields: ["settings"],
+                        restartFields: current.configurations.some(
+                          (item) => item.language === configuration.language,
+                        )
+                          ? ["settings"]
+                          : ["runtime", "settings"],
                       });
                     }}
                     t={t}
@@ -201,6 +214,7 @@ interface LanguageCardProps {
   readonly configuration: ManagedLspConfigurationSummary | undefined;
   readonly health: ManagedLspProcessHealthSnapshot | undefined;
   readonly runtimeConfiguration: ManagedLspRuntimeConfiguration | undefined;
+  readonly configurationDefault: ManagedLspRuntimeConfiguration | undefined;
   readonly providerConfigurationSource: string | undefined;
   readonly root: string;
   readonly disabled: boolean;
@@ -219,6 +233,7 @@ function LanguageCard(props: LanguageCardProps): ReactNode {
     configuration,
     health,
     runtimeConfiguration,
+    configurationDefault,
     providerConfigurationSource,
     root,
     disabled,
@@ -227,6 +242,10 @@ function LanguageCard(props: LanguageCardProps): ReactNode {
     t,
   } = props;
   const language = languageLabel(status.language, t);
+  const initialConfiguration = initialConfigurationFor(status, configuration, configurationDefault);
+  const editableConfiguration = configurationEditable(status)
+    ? (runtimeConfiguration ?? initialConfiguration)
+    : undefined;
   return (
     <article className={styles.card} aria-labelledby={`managed-language-${status.language}`}>
       <div className={styles.cardHeader}>
@@ -247,34 +266,37 @@ function LanguageCard(props: LanguageCardProps): ReactNode {
         <HealthSummary health={health} t={t} />
         <ConfigurationSummary
           configuration={configuration}
-          runtimeConfiguration={runtimeConfiguration}
+          runtimeConfiguration={editableConfiguration}
           providerConfigurationSource={providerConfigurationSource}
           t={t}
         />
       </div>
-      {runtimeConfiguration === undefined ? null : (
+      {editableConfiguration === undefined ? null : (
         <RuntimeSettingsEditor
-          key={`${root}:${runtimeConfiguration.language}:${runtimeConfiguration.revision.toString()}`}
+          key={`${root}:${editableConfiguration.language}:${editableConfiguration.revision.toString()}`}
           root={root}
-          configuration={runtimeConfiguration}
+          configuration={editableConfiguration}
+          initial={runtimeConfiguration === undefined}
           disabled={disabled}
           onSave={onSaveConfiguration}
           t={t}
         />
       )}
       <div className={styles.actions}>
-        {actionsFor(status.state, status.reasonCode).map((action) => (
-          <button
-            type="button"
-            key={action}
-            className={`${styles.button} ${action === "activate" ? styles.primary : ""}`}
-            disabled={disabled}
-            aria-label={actionAria(action, language, t)}
-            onClick={(event) => onAction(status.language, action, event.currentTarget)}
-          >
-            {actionLabel(action, t)}
-          </button>
-        ))}
+        {actionsFor(status.state, status.reasonCode, configuration?.workspaceActivation).map(
+          (action) => (
+            <button
+              type="button"
+              key={action}
+              className={`${styles.button} ${action === "activate" ? styles.primary : ""}`}
+              disabled={disabled}
+              aria-label={actionAria(action, language, t)}
+              onClick={(event) => onAction(status.language, action, event.currentTarget)}
+            >
+              {actionLabel(action, t)}
+            </button>
+          ),
+        )}
       </div>
     </article>
   );
@@ -435,25 +457,39 @@ type RuntimeDraft =
 
 const runtimeDrafts = new Map<string, RuntimeDraft>();
 
+function initialRuntimeDraft(
+  identity: string,
+  initialWrite: boolean,
+  serverDraft: RuntimeDraft,
+): RuntimeDraft {
+  const draft = initialWrite ? serverDraft : (runtimeDrafts.get(identity) ?? serverDraft);
+  runtimeDrafts.set(identity, draft);
+  return draft;
+}
+
 function RuntimeSettingsEditor({
   root,
   configuration,
+  initial: initialWrite,
   disabled,
   onSave,
   t,
 }: {
   readonly root: string;
   readonly configuration: ManagedLspRuntimeConfiguration;
+  readonly initial: boolean;
   readonly disabled: boolean;
   readonly onSave: (configuration: ManagedLspRuntimeConfiguration) => void;
   readonly t: ManagedLanguageTranslate;
 }): ReactNode {
   const identity = `${root}\0${configuration.language}`;
-  const initial = draftFromConfiguration(configuration);
-  const [draft, setDraft] = useState<RuntimeDraft>(runtimeDrafts.get(identity) ?? initial);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  const error =
-    draft.language === "rust" && !validRustTarget(draft.target) ? t("invalidTarget") : "";
+  const initialDraft = draftFromConfiguration(configuration);
+  const [draft, setDraft] = useState<RuntimeDraft>((): RuntimeDraft =>
+    initialRuntimeDraft(identity, initialWrite, initialDraft),
+  );
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
+  const submittable = initialWrite || dirty;
+  const error = draftValidationError(draft, t);
   const update = (next: RuntimeDraft): void => {
     runtimeDrafts.set(identity, next);
     setDraft(next);
@@ -463,7 +499,7 @@ function RuntimeSettingsEditor({
       className={styles.form}
       onSubmit={(event) => {
         event.preventDefault();
-        if (!dirty || error.length > 0) return;
+        if (!submittable || error.length > 0) return;
         onSave(configurationFromDraft(configuration, draft));
       }}
     >
@@ -478,7 +514,7 @@ function RuntimeSettingsEditor({
         <button
           type="submit"
           className={`${styles.button} ${styles.primary}`}
-          disabled={disabled || !dirty || error.length > 0}
+          disabled={disabled || !submittable || error.length > 0}
         >
           {t("saveSettings")}
         </button>
@@ -556,13 +592,12 @@ function javaDraftControls(
   update: (draft: RuntimeDraft) => void,
   t: ManagedLanguageTranslate,
 ): ReactNode {
-  const levels = ["8", "11", "17", "21", "25"] as const;
   return (
     <>
       {selectDraft(
         "editJavaSource",
         draft.sourceLevel,
-        levels,
+        JAVA_LANGUAGE_LEVELS,
         (sourceLevel) => {
           update({ ...draft, sourceLevel });
         },
@@ -571,7 +606,7 @@ function javaDraftControls(
       {selectDraft(
         "editJavaTarget",
         draft.targetLevel,
-        levels,
+        JAVA_LANGUAGE_LEVELS,
         (targetLevel) => {
           update({ ...draft, targetLevel });
         },
@@ -665,12 +700,21 @@ function configurationFromDraft(
 }
 
 function validRustTarget(value: string): boolean {
-  return value.length <= 128 && (value.length === 0 || /^[a-zA-Z0-9._-]+$/u.test(value));
+  return value.length === 0 || /^\w[\w.-]{0,127}$/u.test(value);
+}
+
+function draftValidationError(draft: RuntimeDraft, t: ManagedLanguageTranslate): string {
+  if (draft.language === "rust" && !validRustTarget(draft.target)) return t("invalidTarget");
+  if (draft.language === "java" && Number(draft.sourceLevel) > Number(draft.targetLevel)) {
+    return t("invalidJavaLevels");
+  }
+  return "";
 }
 
 function actionsFor(
   state: ManagedLspEffectiveState,
   reason: ManagedLspActivationReasonCode,
+  workspaceActivation: "enabled" | "disabled" | "unset" | undefined,
 ): readonly ManagedLspSettingsAction[] {
   if (
     state === "disabledByPolicy" ||
@@ -679,9 +723,35 @@ function actionsFor(
   ) {
     return ["reset"];
   }
+  if (state === "available" && workspaceActivation === "enabled") return ["deactivate", "reset"];
   if (state === "disabled" || state === "available") return ["activate", "reset"];
   if (state === "starting") return ["deactivate", "reset"];
   return ["restart", "deactivate", "reset"];
+}
+
+function initialConfigurationFor(
+  status: Extract<ManagedLspActivationResolution, { readonly ok: true }>,
+  summary: ManagedLspConfigurationSummary | undefined,
+  configuration: ManagedLspRuntimeConfiguration | undefined,
+): ManagedLspRuntimeConfiguration | undefined {
+  if (
+    status.policyResult === "denied" ||
+    status.state === "notProvisioned" ||
+    summary?.workspaceActivation !== "enabled"
+  ) {
+    return undefined;
+  }
+  return configuration;
+}
+
+function configurationEditable(
+  status: Extract<ManagedLspActivationResolution, { readonly ok: true }>,
+): boolean {
+  return (
+    status.policyResult === "allowed" &&
+    status.state !== "notProvisioned" &&
+    status.reasonCode !== "STATE_UNAVAILABLE"
+  );
 }
 
 function guidance(
