@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 interface Migration {
   readonly version: number;
@@ -335,6 +335,34 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V11 (issue #2521, epic #2285, ADR-0144 D3/D8) — persisted canonical workspace-trust records.
+// ADR-0144 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
+// invalidation commit atomically; JSON-beside-SQLite was explicitly rejected. Content-free by
+// construction: `root_ref` is an opaque derived reference, `record_json` is the validated
+// WorkspaceTrustRecord (opaque digests, closed enums, revisions — never paths or manifest bytes).
+// The authoritative payload is `record_json`, re-validated through the contract validator on read.
+// The denormalized columns are written from that same record and are never used as authority:
+// `revision` backs monotonic revision reads, `updated_at` orders deterministic bounded pruning, and
+// the `trust` enum is DB-layer enum enforcement plus cheap content-free inspection.
+const V11_SQL = `
+CREATE TABLE workspace_trust_records (
+  root_ref     TEXT NOT NULL PRIMARY KEY,
+  revision     INTEGER NOT NULL,
+  trust        TEXT NOT NULL,
+  record_json  TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  CHECK (
+    revision >= 0
+    AND trust IN ('trusted','restricted')
+    AND length(root_ref) BETWEEN 3 AND 96
+    AND length(record_json) BETWEEN 1 AND 8192
+    AND updated_at >= 0
+  )
+) STRICT;
+
+CREATE INDEX idx_workspace_trust_updated ON workspace_trust_records(updated_at, root_ref);
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -346,6 +374,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 8, sql: V8_SQL },
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
+  { version: 11, sql: V11_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

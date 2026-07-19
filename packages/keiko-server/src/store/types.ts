@@ -80,7 +80,32 @@ export interface UiStore {
     timestamp: number,
   ) => ChatMessage;
 
+  // Canonical workspace-trust persistence (issue #2521, ADR-0144 D3/D8). The store persists opaque,
+  // content-free rows; all trust semantics (derivation, validation, projection) live above the port.
+  readonly readWorkspaceTrustRecord: (rootRef: string) => WorkspaceTrustRecordRow | undefined;
+  readonly writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput) => void;
+  readonly pruneWorkspaceTrustRecords: (max: number) => void;
+
   readonly close: () => void;
+}
+
+// A persisted workspace-trust row. `recordJson` is the authoritative, contract-validated
+// WorkspaceTrustRecord payload; `trust`/`revision` are denormalized for monotonic revision reads and
+// deterministic bounded pruning. All fields are content-free (opaque reference, closed enum,
+// revision, digest-bearing JSON — never paths or manifest bytes).
+export interface WorkspaceTrustRecordRow {
+  readonly rootRef: string;
+  readonly revision: number;
+  readonly trust: string;
+  readonly recordJson: string;
+  readonly updatedAt: number;
+}
+
+export interface WorkspaceTrustRecordRowInput {
+  readonly rootRef: string;
+  readonly revision: number;
+  readonly trust: "trusted" | "restricted";
+  readonly recordJson: string;
 }
 
 export interface UpdateChatOptions {
