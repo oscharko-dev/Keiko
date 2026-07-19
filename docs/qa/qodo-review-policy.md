@@ -84,7 +84,8 @@ Quality` (which bridges Qodo findings) is advisory and non-required until the AD
   `docs/qa/keiko-for-quality.md`, and the applicable ADRs.
 - `npm run check:qodo-config` validates that both files exist, reference the canonical governance,
   carry the core review instructions, stay under the length ceiling, and never enable auto-approval.
-- `npm run agent:pre-pr` and the required CI job execute that validator.
+- The required CI job executes that validator; run `npm run check:qodo-config` directly when
+  editing these files.
 
 ## Review lifecycle
 

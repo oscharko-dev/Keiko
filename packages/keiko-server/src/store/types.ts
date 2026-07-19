@@ -83,13 +83,13 @@ export interface UiStore {
     timestamp: number,
   ) => ChatMessage;
 
-  // Canonical workspace-trust persistence (issue #2521, ADR-0145 D3/D8). The store persists opaque,
+  // Canonical workspace-trust persistence (issue #2521, ADR-0146 D3/D8). The store persists opaque,
   // content-free rows; all trust semantics (derivation, validation, projection) live above the port.
   readonly readWorkspaceTrustRecord: (rootRef: string) => WorkspaceTrustRecordRow | undefined;
   readonly writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput) => void;
   readonly pruneWorkspaceTrustRecords: (max: number) => void;
 
-  // M11 multi-root workspace manifests (issue #2524, ADR-0145 D1/D8). The projects table remains
+  // M11 multi-root workspace manifests (issue #2524, ADR-0146 D1/D8). The projects table remains
   // the root registry; these methods persist ordered membership and atomically invalidate trust.
   readonly listWorkspaceManifestRecords: () => readonly WorkspaceManifestRecordRow[];
   readonly readWorkspaceManifestRecord: (

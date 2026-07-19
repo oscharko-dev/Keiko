@@ -350,8 +350,8 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
-// V11 (issue #2521, epic #2285, ADR-0145 D3/D8) — persisted canonical workspace-trust records.
-// ADR-0145 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
+// V11 (issue #2521, epic #2285, ADR-0146 D3/D8) — persisted canonical workspace-trust records.
+// ADR-0146 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
 // invalidation commit atomically; JSON-beside-SQLite was explicitly rejected. Content-free by
 // construction: `root_ref` is an opaque derived reference, `record_json` is the validated
 // WorkspaceTrustRecord (opaque digests, closed enums, revisions — never paths or manifest bytes).
@@ -378,7 +378,7 @@ CREATE TABLE workspace_trust_records (
 CREATE INDEX idx_workspace_trust_updated ON workspace_trust_records(updated_at, root_ref);
 `;
 
-// V12 (issue #2524, epic #2285, ADR-0145 D1/D8/D9) — server-owned ordered workspace manifests.
+// V12 (issue #2524, epic #2285, ADR-0146 D1/D8/D9) — server-owned ordered workspace manifests.
 // Root rows reference, rather than replace, the existing projects registry. `record_json` is the
 // authoritative closed WorkspaceManifest contract; relational columns enforce unique membership,
 // stable order, and the one-transaction root-removal/trust-invalidation boundary.

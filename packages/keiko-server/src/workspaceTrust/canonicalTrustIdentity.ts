@@ -1,8 +1,8 @@
-// Issue #2521/#2524, ADR-0145 D1/D3 — pure derivation of WorkspaceTrustBinding from a
+// Issue #2521/#2524, ADR-0146 D1/D3 — pure derivation of WorkspaceTrustBinding from a
 // server-resolved canonical root and the observed package-script trust basis. No IO: the caller
 // resolves realpath and reads the manifest; this module only frames and hashes already-canonical
 // facts. Every digest is domain-separated and length-framed so no field concatenation is ambiguous
-// (ADR-0145 D1). Derivation is deterministic: the same canonical root yields the same references and
+// (ADR-0146 D1). Derivation is deterministic: the same canonical root yields the same references and
 // digests across restarts, so a persisted record matches on reload and any root change fails closed.
 
 import { createHash } from "node:crypto";

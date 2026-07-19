@@ -10,7 +10,7 @@ The two committed editor evidence documents live in `docs/release/`:
 ## When evidence must be regenerated
 
 Almost never on a pull request (ADR-0139 D10). The pull-request gate
-(`check:perf-evidence:editor`, also an `agent:pre-pr` step) validates evidence **integrity** —
+(`check:perf-evidence:editor`) validates evidence **integrity** —
 canonical structure, budgets, stamps, the pinned-baseline anchor, and the D12
 measurement-toolchain digest — and deliberately does **not** require the recorded source tree,
 lockfile, or working tree to match HEAD. Per-PR performance protection comes from the

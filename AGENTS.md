@@ -114,46 +114,24 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
-For PR-bound work, use the agent pre-PR gate instead of manually stitching a partial checklist
-together. This is the single, agent-agnostic quality gate every agent (Claude Code, Codex,
-Cursor, …) runs before a push or a PR update:
-
-```bash
-npm run agent:pre-pr
-```
-
-The gate is **diff-scoped by default** (ADR-0139 D4): it computes your change set versus the
-integration base (`origin/dev`; override with `-- --base <ref>`) and runs only the steps whose
-declared input scope that change set touches — a docs-only change runs the handful of steps that
-can see docs, a server change runs the full test/build chain. Steps that are skipped as out of
-scope are reported visibly with the reason, never silently. Steps without a declared scope always
-run. `npm run agent:pre-pr -- --full` runs the complete fixed sequence (typecheck, lint, format,
-shell-spawn guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping,
-architecture checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor
-bundle size, installable-package smoke, and smoke coverage). Every run writes a machine-readable
-report to `.agent/pre-pr-report.json` — including the scope decision — so the exact local outcome
-is inspectable.
-
-On top of the diff scope, the gate keeps a content-addressed step cache
-(`.agent/pre-pr-cache.json`, ADR-0139 D4): in-scope steps whose declared inputs are
-byte-identical to the last passing run report `cached` instead of re-executing. Pass `--no-cache`
-to bypass it; CI never uses the cache.
+For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
+`agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
+any touched-area gate from the table below, and let the required CI run on the pull request be
+the complete arbiter.
 
 ### Local-first gate policy
 
 Verify locally what your change can affect; required CI is the authoritative full matrix on every
-pull request. Never push a change whose scoped local gate is red, and never use CI to discover
-what your own diff obviously breaks. Concretely:
+pull request. Never use CI to discover what your own diff obviously breaks. Concretely:
 
-1. Run `npm run agent:pre-pr` (diff-scoped) before every push or PR update, plus any
-   touched-area gate from the table below that is not part of the gate.
-2. If a required CI gate goes red, reproduce that exact failure locally — targeted, or with
-   `-- --full` — before pushing another fix; after the fix, rerun the failed gate locally first.
-3. Push only after the scoped local gate is green or a documented platform-specific local skip is
-   unavoidable (the report records those skips).
-4. Report outcomes from the generated pre-PR report, not from memory.
-5. The full local matrix (`-- --full`) is for parity debugging, not for every iteration — the
-   required CI run on the pull request is the final, complete arbiter.
+1. Before a push or PR update, run the minimum-loop commands scoped to what your change touches,
+   plus any touched-area gate from the table below.
+2. If a required CI gate goes red, reproduce that exact failure locally with the targeted
+   command before pushing another fix; after the fix, rerun that command first.
+3. Push only when your targeted local runs are green or a documented platform-specific local
+   skip is unavoidable.
+4. Report outcomes from the runs you actually executed, not from memory.
+5. The required CI run on the pull request is the final, complete arbiter.
 
 If a required gate cannot be run locally, state that in the PR instead of guessing.
 
