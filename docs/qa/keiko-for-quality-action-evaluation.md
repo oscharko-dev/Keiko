@@ -134,7 +134,24 @@ branch-protection pin are unchanged. The Action is strictly simpler (no D1, no c
 redeploy, no webhook secret, versioned in-repo) while preserving every gate property. The cutover is
 gated on the live-probe conditions below; the Worker stays canonical until they pass.
 
+## Migration status (2026-07-19)
+
+All five steps are DONE: the PoC landed, all six live probes passed (ledger above), the App
+secrets `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` are set as repository Actions secrets, the Action
+carries the canonical identity and publishes the required `Keiko for Quality` check under App id
+`4290143` (verified live against the branch-protection pin on 2026-07-19), and the
+Worker/cron/D1/webhook secret are decommissioned. The App secrets remain load-bearing: if they
+are removed or become invalid, the Action falls back to publishing under the `GITHUB_TOKEN`
+identity, which the pinned protection context does not accept — the gate then fails closed for
+every pull request until the secrets are repaired (see the
+[liveness runbook](../troubleshooting/keiko-for-quality-liveness.md)).
+
 ## Migration plan
+
+> Historical — executed and completed on 2026-07-19; retained as the audit trail. Rollback now
+> requires full re-provisioning of the Worker stack (D1, webhook plus secret, cron, credentials),
+> not a bare `wrangler deploy` — see
+> [`infrastructure/keiko-for-quality/README.md`](../../infrastructure/keiko-for-quality/README.md).
 
 1. **Land the PoC (this change).** The Action coexists under `Keiko for Quality (Action)` + the
    `kfq-action-poc` label. The Worker is untouched and canonical.
