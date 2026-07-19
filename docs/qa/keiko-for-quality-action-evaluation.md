@@ -136,12 +136,15 @@ gated on the live-probe conditions below; the Worker stays canonical until they 
 
 ## Migration status (2026-07-19)
 
-Steps 1, 3, 4, and 5 are DONE: the PoC landed, all six live probes passed (ledger above), the
-Action carries the canonical identity, and the Worker/cron/D1/webhook secret are decommissioned.
-Step 2 (App secrets `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8`) is the remaining upgrade: until they are
-set the Action publishes under the `GITHUB_TOKEN` fallback, and because branch protection now
-pins the required `Keiko for Quality` context to App id `4290143`, the App secrets are REQUIRED
-for the gate to function — set them before relying on the check.
+All five steps are DONE: the PoC landed, all six live probes passed (ledger above), the App
+secrets `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` are set as repository Actions secrets, the Action
+carries the canonical identity and publishes the required `Keiko for Quality` check under App id
+`4290143` (verified live against the branch-protection pin on 2026-07-19), and the
+Worker/cron/D1/webhook secret are decommissioned. The App secrets remain load-bearing: if they
+are removed or become invalid, the Action falls back to publishing under the `GITHUB_TOKEN`
+identity, which the pinned protection context does not accept — the gate then fails closed for
+every pull request until the secrets are repaired (see the
+[liveness runbook](../troubleshooting/keiko-for-quality-liveness.md)).
 
 ## Migration plan
 

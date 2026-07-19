@@ -33,7 +33,7 @@ nightly cycle and corrects itself without agent involvement.
 npm run perf:evidence:regen
 ```
 
-On Linux this provisions two clean checkouts (pinned baseline `18750d07…`, candidate = your
+On Linux this provisions two clean checkouts (pinned baseline `18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your
 HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs,
 wall-clock budgets enforced via `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
@@ -50,7 +50,7 @@ throwaway clone below; only after mounting your working checkout directly re-run
 - **Full, non-worktree checkout.** In a git worktree, `$PWD/.git` is a file pointing at the main
   repository and the container cannot resolve it. Make a self-contained clone first —
   `git clone --no-local . <dest>` — and mount that alone; the pinned baseline commit must be
-  present (`git merge-base --is-ancestor 18750d07… HEAD`). Name the clone directory `*.noindex`
+  present (`git merge-base --is-ancestor 18750d079e2a61c7d7044f3f6ec977a104b9884f HEAD`). Name the clone directory `*.noindex`
   so Spotlight does not index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
   `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
