@@ -408,6 +408,8 @@ export const DE_MESSAGES = {
     "Neue Erinnerungen erscheinen hier, nachdem MemoriaViva sie aus einem Gespräch erfasst hat.",
   "memoria.journal.list": "Aktuelle Erinnerungserfassungen",
   "memoria.journal.contentUnavailable": "Erinnerungsinhalt ist nicht verfügbar",
+  "memoria.journal.refusedBody":
+    "Erfassung durch Richtlinie abgelehnt. Es wurde kein Inhalt gespeichert.",
   "memoria.journal.source": "Quelle {source}",
   "memoria.journal.reason": "Erfassungsgrund {reason}",
   "memoria.journal.capturedAt": "Erfasst {time}",
@@ -418,6 +420,7 @@ export const DE_MESSAGES = {
   "memoria.journal.indicator.proposed": "Wartet auf Review",
   "memoria.journal.indicator.auto": "Automatisch erfasst",
   "memoria.journal.indicator.kept": "Behalten",
+  "memoria.journal.indicator.refused": "Abgelehnt",
   "memoria.journal.keep": "Behalten",
   "memoria.journal.keeping": "Wird behalten…",
   "memoria.journal.forget": "Vergessen",

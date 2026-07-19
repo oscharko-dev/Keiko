@@ -25,6 +25,7 @@ describe("CaptureRejection", () => {
       "provider-base-url",
       "raw-log-content",
       "customer-identifier",
+      "denied-category",
       "empty-content",
       "exceeds-length-limit",
       "ambiguous-forget",
@@ -32,7 +33,7 @@ describe("CaptureRejection", () => {
       "restricted-sensitivity",
       "scope-not-resolvable",
     ];
-    expect(reasons).toHaveLength(11);
+    expect(reasons).toHaveLength(12);
   });
 
   // GEN-MAINT-COUPLING-003/004 guard: CaptureRejection is a thrown error, so it now extends the

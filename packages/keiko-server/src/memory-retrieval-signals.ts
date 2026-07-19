@@ -64,6 +64,7 @@ const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
   "provider-base-url",
   "raw-log-content",
   "customer-identifier",
+  "denied-category",
 ]);
 
 const SEMANTIC_SWEEP_MAX_CANDIDATES = 160;

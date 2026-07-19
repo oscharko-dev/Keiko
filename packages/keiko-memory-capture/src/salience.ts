@@ -15,9 +15,9 @@
 
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildProposal } from "./_envelopes.js";
+import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { scanForSecrets } from "./secret-patterns.js";
 import type {
   CaptureContext,
   CaptureOutcome,
@@ -379,7 +379,7 @@ function candidateBody(item: RawSalienceItem, policy: CapturePolicyOptions): str
   const body = item.body.trim();
   const max = policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT;
   if (body.length === 0 || body.length > max) return null;
-  return scanForSecrets(body, policy.customerIdentifierMatchers ?? []) === null ? body : null;
+  return memoryTextSecretEgressRejectionReason(body, policy) === null ? body : null;
 }
 
 function candidateScope(

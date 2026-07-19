@@ -14,9 +14,13 @@ import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
 import styles from "./MemoryJournal.module.css";
 
-interface JournalCapture extends MemoryRecentCapture {
+interface PersistedJournalCapture extends MemoryRecentCapture {
+  readonly outcome: Exclude<MemoryRecentCapture["outcome"], "rejected">;
   readonly memoryId: string;
 }
+
+type RefusedJournalCapture = MemoryRecentCapture & { readonly outcome: "rejected" };
+type JournalCapture = PersistedJournalCapture | RefusedJournalCapture;
 
 interface JournalRowState {
   readonly capture: JournalCapture;
@@ -37,7 +41,14 @@ interface MemoryJournalProps {
 }
 
 function isJournalCapture(capture: MemoryRecentCapture): capture is JournalCapture {
-  return capture.outcome !== "rejected" && capture.memoryId !== undefined;
+  return capture.outcome === "rejected" || capture.memoryId !== undefined;
+}
+
+function journalCaptureKey(capture: JournalCapture): string {
+  return (
+    capture.memoryId ??
+    `rejected:${String(capture.occurredAt)}:${capture.mode ?? "unknown"}:${capture.reason}`
+  );
 }
 
 export function orderJournalCaptures(
@@ -62,7 +73,7 @@ function modeLabel(capture: JournalCapture, t: I18nTranslate): string {
   }
 }
 
-function statusForCapture(capture: JournalCapture): MemoryRecord["status"] {
+function statusForCapture(capture: PersistedJournalCapture): MemoryRecord["status"] {
   return capture.outcome === "proposed" ? "proposed" : "accepted";
 }
 
@@ -91,33 +102,41 @@ function JournalMetadata({
 }
 
 interface JournalActionsProps {
-  readonly row: JournalRowState;
+  readonly capture: PersistedJournalCapture;
+  readonly acknowledged: boolean;
   readonly busyAction: "keep" | "forget" | null;
-  readonly onKeep: (capture: JournalCapture) => void;
-  readonly onForget: (capture: JournalCapture) => void;
+  readonly onKeep: (capture: PersistedJournalCapture) => void;
+  readonly onForget: (capture: PersistedJournalCapture) => void;
   readonly t: I18nTranslate;
 }
 
-function JournalActions({ row, busyAction, onKeep, onForget, t }: JournalActionsProps): ReactNode {
-  const proposed = row.capture.outcome === "proposed";
+function JournalActions({
+  capture,
+  acknowledged,
+  busyAction,
+  onKeep,
+  onForget,
+  t,
+}: JournalActionsProps): ReactNode {
+  const proposed = capture.outcome === "proposed";
   const busy = busyAction !== null;
-  const indicator = row.acknowledged
+  const indicator = acknowledged
     ? t("memoria.journal.indicator.kept")
     : proposed
       ? t("memoria.journal.indicator.proposed")
       : t("memoria.journal.indicator.auto");
   return (
     <div className={styles.mvJournalTrailing}>
-      <StatusBadge status={statusForCapture(row.capture)} t={t} />
+      <StatusBadge status={statusForCapture(capture)} t={t} />
       <span className={styles.mvJournalIndicator}>{indicator}</span>
       <div className={styles.mvJournalActions}>
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          aria-pressed={row.acknowledged}
+          aria-pressed={acknowledged}
           aria-disabled={busy}
           onClick={() => {
-            if (!busy) onKeep(row.capture);
+            if (!busy) onKeep(capture);
           }}
         >
           {busyAction === "keep" ? t("memoria.journal.keeping") : t("memoria.journal.keep")}
@@ -127,7 +146,7 @@ function JournalActions({ row, busyAction, onKeep, onForget, t }: JournalActions
           className="lk-btn lk-btn-danger"
           aria-disabled={busy}
           onClick={() => {
-            if (!busy) onForget(row.capture);
+            if (!busy) onForget(capture);
           }}
         >
           {busyAction === "forget" ? t("memoria.journal.forgetting") : t("memoria.journal.forget")}
@@ -141,30 +160,65 @@ interface JournalRowProps extends JournalActionsProps {
   readonly registerRow: (id: string, node: HTMLLIElement | null) => void;
 }
 
+interface RefusedJournalRowProps {
+  readonly capture: RefusedJournalCapture;
+  readonly registerRow: (id: string, node: HTMLLIElement | null) => void;
+  readonly t: I18nTranslate;
+}
+
+function RefusedJournalRow({ capture, registerRow, t }: RefusedJournalRowProps): ReactNode {
+  const key = journalCaptureKey(capture);
+  return (
+    <li
+      ref={(node) => registerRow(key, node)}
+      className={`mc-row ${styles.mvJournalRow}`}
+      data-testid="memory-journal-row"
+      data-outcome="rejected"
+      data-created-at={String(capture.occurredAt)}
+      tabIndex={-1}
+    >
+      <MemoryRowScaffold
+        body={t("memoria.journal.refusedBody")}
+        metadata={<JournalMetadata capture={capture} t={t} />}
+        trailing={
+          <div className={styles.mvJournalTrailing}>
+            <span className={styles.mvJournalIndicator}>
+              {t("memoria.journal.indicator.refused")}
+            </span>
+          </div>
+        }
+      />
+    </li>
+  );
+}
+
 function JournalRow({
-  row,
+  capture,
+  acknowledged,
   busyAction,
   onKeep,
   onForget,
   registerRow,
   t,
 }: JournalRowProps): ReactNode {
-  const body = row.capture.bodyExcerpt ?? t("memoria.journal.contentUnavailable");
+  const body = capture.bodyExcerpt ?? t("memoria.journal.contentUnavailable");
   return (
     <li
-      ref={(node) => registerRow(row.capture.memoryId, node)}
+      ref={(node) => registerRow(capture.memoryId, node)}
       className={`mc-row ${styles.mvJournalRow}`}
       data-testid="memory-journal-row"
-      data-memory-id={row.capture.memoryId}
-      data-created-at={String(row.capture.occurredAt)}
+      data-memory-id={capture.memoryId}
+      data-outcome={capture.outcome}
+      data-created-at={String(capture.occurredAt)}
       tabIndex={-1}
     >
       <MemoryRowScaffold
         body={body}
-        metadata={<JournalMetadata capture={row.capture} t={t} />}
+        metadata={<JournalMetadata capture={capture} t={t} />}
         trailing={
           <JournalActions
-            row={row}
+            capture={capture}
+            acknowledged={acknowledged}
             busyAction={busyAction}
             onKeep={onKeep}
             onForget={onForget}
@@ -181,8 +235,8 @@ interface JournalBodyProps {
   readonly keepBusyId: string | null;
   readonly forgetBusyId: string | null;
   readonly onRetry: () => void;
-  readonly onKeep: (capture: JournalCapture) => void;
-  readonly onForget: (capture: JournalCapture) => void;
+  readonly onKeep: (capture: PersistedJournalCapture) => void;
+  readonly onForget: (capture: PersistedJournalCapture) => void;
   readonly registerRow: (id: string, node: HTMLLIElement | null) => void;
   readonly t: I18nTranslate;
 }
@@ -222,23 +276,33 @@ function JournalRows({
 }: JournalBodyProps): ReactNode {
   return (
     <ul className={styles.mvJournalList} aria-label={t("memoria.journal.list")}>
-      {state.rows.map((row) => (
-        <JournalRow
-          key={row.capture.memoryId}
-          row={row}
-          busyAction={
-            keepBusyId === row.capture.memoryId
-              ? "keep"
-              : forgetBusyId === row.capture.memoryId
-                ? "forget"
-                : null
-          }
-          onKeep={onKeep}
-          onForget={onForget}
-          registerRow={registerRow}
-          t={t}
-        />
-      ))}
+      {state.rows.map((row) =>
+        row.capture.outcome === "rejected" ? (
+          <RefusedJournalRow
+            key={journalCaptureKey(row.capture)}
+            capture={row.capture}
+            registerRow={registerRow}
+            t={t}
+          />
+        ) : (
+          <JournalRow
+            key={row.capture.memoryId}
+            capture={row.capture}
+            acknowledged={row.acknowledged}
+            busyAction={
+              keepBusyId === row.capture.memoryId
+                ? "keep"
+                : forgetBusyId === row.capture.memoryId
+                  ? "forget"
+                  : null
+            }
+            onKeep={onKeep}
+            onForget={onForget}
+            registerRow={registerRow}
+            t={t}
+          />
+        ),
+      )}
     </ul>
   );
 }
@@ -259,8 +323,11 @@ function useJournalRows(
       .then((response) => {
         if (seq !== requestSeqRef.current) return;
         const rows = orderJournalCaptures(response.captures)
-          .filter(({ memoryId }) => !forgottenIds.current.has(memoryId))
-          .map((capture) => ({ capture, acknowledged: keptIds.current.has(capture.memoryId) }));
+          .filter(({ memoryId }) => memoryId === undefined || !forgottenIds.current.has(memoryId))
+          .map((capture) => ({
+            capture,
+            acknowledged: capture.memoryId !== undefined && keptIds.current.has(capture.memoryId),
+          }));
         setState({ rows, loading: false, error: null });
         setAnnouncement(t("memoria.journal.loaded", { count: rows.length }));
       })
@@ -310,14 +377,23 @@ interface ActionHookOptions {
   readonly t: I18nTranslate;
 }
 
+function acknowledgeJournalRow(row: JournalRowState, memoryId: string): JournalRowState {
+  const capture = row.capture;
+  if (capture.outcome === "rejected" || capture.memoryId !== memoryId) return row;
+  return {
+    capture: { ...capture, outcome: "auto-accepted" },
+    acknowledged: true,
+  };
+}
+
 function useKeepAction(
   options: ActionHookOptions,
   keptIds: MutableRefObject<Set<string>>,
   acceptImpl: typeof acceptMemoryProposal,
-): readonly [string | null, (capture: JournalCapture) => void] {
+): readonly [string | null, (capture: PersistedJournalCapture) => void] {
   const [busyId, setBusyId] = useState<string | null>(null);
   const keep = useCallback(
-    (capture: JournalCapture): void => {
+    (capture: PersistedJournalCapture): void => {
       const current = options.rows.find((row) => row.capture.memoryId === capture.memoryId);
       if (busyId !== null || current?.acknowledged === true) return;
       setBusyId(capture.memoryId);
@@ -328,11 +404,7 @@ function useKeepAction(
         .then(() => {
           keptIds.current.add(capture.memoryId);
           options.setRows((rows) =>
-            rows.map((row) =>
-              row.capture.memoryId === capture.memoryId
-                ? { capture: { ...row.capture, outcome: "auto-accepted" }, acknowledged: true }
-                : row,
-            ),
+            rows.map((row) => acknowledgeJournalRow(row, capture.memoryId)),
           );
           options.setAnnouncement(options.t("memoria.journal.kept"));
         })
@@ -351,7 +423,8 @@ function focusTargetAfterRemoval(
   const index = rows.findIndex((row) => row.capture.memoryId === memoryId);
   const remaining = rows.filter((row) => row.capture.memoryId !== memoryId);
   if (remaining.length === 0) return null;
-  return remaining[Math.min(Math.max(index, 0), remaining.length - 1)]?.capture.memoryId ?? null;
+  const target = remaining[Math.min(Math.max(index, 0), remaining.length - 1)]?.capture;
+  return target === undefined ? null : journalCaptureKey(target);
 }
 
 function useForgetAction(
@@ -359,10 +432,10 @@ function useForgetAction(
   forgottenIds: MutableRefObject<Set<string>>,
   forgetImpl: typeof forgetMemory,
   requestFocus: (targetId: string | null) => void,
-): readonly [string | null, (capture: JournalCapture) => void] {
+): readonly [string | null, (capture: PersistedJournalCapture) => void] {
   const [busyId, setBusyId] = useState<string | null>(null);
   const forget = useCallback(
-    (capture: JournalCapture): void => {
+    (capture: PersistedJournalCapture): void => {
       if (busyId !== null || forgottenIds.current.has(capture.memoryId)) return;
       setBusyId(capture.memoryId);
       options.setActionError(null);

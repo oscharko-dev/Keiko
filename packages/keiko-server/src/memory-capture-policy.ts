@@ -15,6 +15,36 @@ export const SENSITIVE_MEMORY_REJECTION_REASON: RejectionReason =
 export const FORGOTTEN_MEMORY_SUPPRESSION_REASON: RejectionReason = "suppressed-by-forget";
 export const SENSITIVE_MEMORY_ACTION_BODY = "Sensitive memory pending review.";
 
+const DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS: NonNullable<
+  CapturePolicyOptions["deniedCategoryMatchers"]
+> = [
+  {
+    category: "health-data",
+    matchers: [
+      /\bhealth data\b/iu,
+      /\bmedical (?:record|history)\b/iu,
+      /\bdiagnos(?:is|ed)\b/iu,
+      /\b(?:prescription|medication|blood type)\b/iu,
+      /\b(?:my|the user's) chronic condition\b/iu,
+      /\b(?:my|the user's) allerg(?:y|ies)\b/iu,
+      /\b(?:my|the user's) (?:disability|therapy|treatment)\b/iu,
+      /\b(?:gesundheitsdaten|diagnose|krankenakte)\b/iu,
+      /\bmedikament(?:e|ation)?\b/iu,
+    ],
+  },
+  {
+    category: "identifiable-third-party",
+    matchers: [
+      /\bmy (?:colleague|coworker|manager|client|customer)\b/iu,
+      /\bmy (?:partner|spouse|friend|doctor|patient)\b/iu,
+      /\bthe user's (?:colleague|coworker|manager|client|customer)\b/iu,
+      /\bthe user's (?:partner|spouse|friend|doctor|patient)\b/iu,
+      /\bmein(?:e|er|em|en)? (?:kolleg(?:e|in)|chef(?:in)?|kund(?:e|in))\b/iu,
+      /\bmein(?:e|er|em|en)? (?:partner(?:in)?|arzt|ärztin|patient(?:in)?)\b/iu,
+    ],
+  },
+];
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -50,7 +80,15 @@ export function memoryCapturePolicyForDeps(
     ...(base.customerIdentifierMatchers ?? []),
     ...memoryCaptureCustomerMatchers(deps),
   ];
-  return matchers.length === 0 ? base : { ...base, customerIdentifierMatchers: matchers };
+  const deniedCategoryMatchers =
+    base.deniedCategoryMatchers ??
+    deps.memoryDeniedCategoryMatchers ??
+    DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS;
+  return {
+    ...base,
+    deniedCategoryMatchers,
+    ...(matchers.length === 0 ? {} : { customerIdentifierMatchers: matchers }),
+  };
 }
 
 export function isPersistableMemoryCandidate(
