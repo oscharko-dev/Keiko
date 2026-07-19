@@ -21,6 +21,7 @@ import type {
   FunctionalPortableOpenCodeRuntime,
   ProductionOpenCodeBackendInput,
 } from "../productionOpenCodeBackend.js";
+import { parseOpenCodeHistory } from "../opencodeProtocol.js";
 import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
 import { projectOpenCodeProtocolSurface } from "../opencodeProtocolSurface.js";
 import {
@@ -542,9 +543,13 @@ class FakeOpenCodeChild {
   private readonly sseClients = new Set<ServerResponse>();
   private readonly questions = new Map<string, PendingFakeQuestion>();
   private readonly transcript: Record<string, unknown>[] = [];
+  private readonly historyFixtureFailures: string[] = [];
+  private readonly requestTargets: string[] = [];
   private historySequence = 0;
   private liveEventSequence = 0;
   private questionSequence = 0;
+  private messageSequence = 0;
+  private fixtureTimeMs = 1_700_000_000_000;
   private sessionCreated = false;
   private busy = false;
   private finished = 0;
@@ -566,6 +571,14 @@ class FakeOpenCodeChild {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
     });
+  }
+
+  public fixtureFailures(): readonly string[] {
+    return [...this.historyFixtureFailures];
+  }
+
+  public requestedTargets(): readonly string[] {
+    return [...this.requestTargets];
   }
 
   public listen(): Promise<number> {
@@ -608,6 +621,7 @@ class FakeOpenCodeChild {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
+      this.requestTargets.push(request.url ?? "/");
       const body = await readBoundedBody(request);
       if (!this.authorized(request)) {
         response.writeHead(401).end();
@@ -736,13 +750,17 @@ class FakeOpenCodeChild {
   }
 
   private appendHistory(type: string, data: Record<string, unknown>): void {
-    this.historyRows.push({
+    const row = {
       id: `evt_h${String(this.historyRows.length + 1)}`,
       aggregate_id: FAKE_SESSION_ID,
       seq: this.historySequence++,
       type,
       data,
-    });
+    };
+    const parsed = parseOpenCodeHistory([row]);
+    if (!parsed.ok) this.historyFixtureFailures.push(`${type}:${parsed.reason}`);
+    this.historyRows.push(row);
+    this.broadcast("history.updated", {});
   }
 
   private async runTurn(text: string, controller: AbortController): Promise<void> {
@@ -750,9 +768,10 @@ class FakeOpenCodeChild {
     this.busy = true;
     this.appendHistory("session.status", { sessionID: FAKE_SESSION_ID, status: "busy" });
     this.broadcast("session.status", { sessionID: FAKE_SESSION_ID, status: { type: "busy" } });
+    const userMessageId = this.appendUserMessage(text);
     this.transcript.push({ role: "user", content: text });
     try {
-      await this.agentLoop(controller.signal);
+      await this.agentLoop(controller.signal, userMessageId);
     } catch {
       // A denied gateway or tool exchange settles the turn; the session returns to idle.
     }
@@ -762,17 +781,118 @@ class FakeOpenCodeChild {
     this.broadcast("session.idle", { sessionID: FAKE_SESSION_ID });
   }
 
-  private async agentLoop(signal: AbortSignal): Promise<void> {
+  private async agentLoop(signal: AbortSignal, userMessageId: string): Promise<void> {
     for (let step = 0; step < MAX_FAKE_AGENT_STEPS; step += 1) {
       if (signal.aborted) return;
       const turn = await this.callGateway(signal);
+      const assistantMessageId = this.beginAssistantMessage(userMessageId, turn.content);
       this.transcript.push(assistantMessage(turn));
-      if (turn.toolCalls.length === 0) return;
+      if (turn.toolCalls.length === 0) {
+        this.completeAssistantMessage(userMessageId, assistantMessageId, "stop");
+        return;
+      }
       for (const call of turn.toolCalls) {
+        if (call.name !== "question") this.appendToolPart(assistantMessageId, call, "pending");
+        if (call.name !== "question") this.appendToolPart(assistantMessageId, call, "running");
         const output = await this.executeToolCall(call, signal);
+        if (call.name !== "question") {
+          this.appendToolPart(assistantMessageId, call, "completed", output);
+        }
         this.transcript.push({ role: "tool", content: output, tool_call_id: call.id });
       }
+      this.completeAssistantMessage(userMessageId, assistantMessageId, "tool-calls");
     }
+  }
+
+  private appendUserMessage(text: string): string {
+    const messageId = this.nextMessageId("user");
+    const created = this.nextFixtureTime();
+    this.appendHistory("message.updated.1", {
+      sessionID: FAKE_SESSION_ID,
+      info: {
+        id: messageId,
+        sessionID: FAKE_SESSION_ID,
+        role: "user",
+        time: { created },
+        agent: "build",
+        model: { providerID: "keiko-runtime", modelID: "coding" },
+      },
+    });
+    this.appendHistory("message.part.updated.1", {
+      sessionID: FAKE_SESSION_ID,
+      part: {
+        id: `prt_${messageId}_text`,
+        sessionID: FAKE_SESSION_ID,
+        messageID: messageId,
+        type: "text",
+        text,
+      },
+      time: this.nextFixtureTime(),
+    });
+    return messageId;
+  }
+
+  private beginAssistantMessage(parentId: string, text: string): string {
+    const messageId = this.nextMessageId("assistant");
+    const created = this.nextFixtureTime();
+    this.appendHistory("message.updated.1", {
+      sessionID: FAKE_SESSION_ID,
+      info: assistantHistoryInfo(messageId, parentId, { created }),
+    });
+    for (const [index, chunk] of splitFunctionalText(expandFunctionalDisplayText(text)).entries()) {
+      this.appendHistory("message.part.updated.1", {
+        sessionID: FAKE_SESSION_ID,
+        part: {
+          id: `prt_${messageId}_text_${String(index + 1)}`,
+          sessionID: FAKE_SESSION_ID,
+          messageID: messageId,
+          type: "text",
+          text: chunk,
+        },
+        time: this.nextFixtureTime(),
+      });
+    }
+    return messageId;
+  }
+
+  private completeAssistantMessage(
+    parentId: string,
+    messageId: string,
+    finish: "stop" | "tool-calls",
+  ): void {
+    const completed = this.nextFixtureTime();
+    this.appendHistory("message.updated.1", {
+      sessionID: FAKE_SESSION_ID,
+      info: assistantHistoryInfo(messageId, parentId, {
+        created: completed - 1,
+        completed,
+        finish,
+      }),
+    });
+  }
+
+  private appendToolPart(
+    messageId: string,
+    call: FakeToolCall,
+    status: "pending" | "running" | "completed",
+    output = "",
+  ): void {
+    const time = this.nextFixtureTime();
+    this.appendHistory("message.part.updated.1", {
+      sessionID: FAKE_SESSION_ID,
+      part: fakeToolPart(messageId, call, status, output, time),
+      time,
+    });
+  }
+
+  private nextMessageId(role: "user" | "assistant"): string {
+    this.messageSequence += 1;
+    return `msg_${role}_${String(this.messageSequence)}`;
+  }
+
+  private nextFixtureTime(): number {
+    this.fixtureTimeMs += 1;
+    return this.fixtureTimeMs;
   }
 
   private async callGateway(signal: AbortSignal): Promise<FakeGatewayTurn> {
@@ -831,7 +951,7 @@ class FakeOpenCodeChild {
     if (definition === undefined) return '{"status":"invalid"}';
     const identity = `${FAKE_SESSION_ID}:${call.id}`;
     this.appendHistory("session.next.tool.called", {
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(this.nextFixtureTime()).toISOString(),
       sessionID: FAKE_SESSION_ID,
       assistantMessageID: "msg_functional",
       callID: call.id,
@@ -855,6 +975,80 @@ class FakeOpenCodeChild {
     if (!response.ok) return '{"status":"failed"}';
     return await response.text();
   }
+}
+
+function splitFunctionalText(value: string): readonly string[] {
+  const chunks: string[] = [];
+  for (let start = 0; start < value.length; start += 4096) {
+    chunks.push(value.slice(start, start + 4096));
+  }
+  return chunks;
+}
+
+function expandFunctionalDisplayText(value: string): string {
+  if (value.length === 0) return value;
+  return `${value.slice(0, 256)}${"x".repeat(4096 * 5)}${value.slice(-128)}`;
+}
+
+function assistantHistoryInfo(
+  messageId: string,
+  parentId: string,
+  time: { readonly created: number; readonly completed?: number; readonly finish?: string },
+): Record<string, unknown> {
+  return {
+    id: messageId,
+    sessionID: FAKE_SESSION_ID,
+    role: "assistant",
+    time:
+      time.completed === undefined
+        ? { created: time.created }
+        : { created: time.created, completed: time.completed },
+    parentID: parentId,
+    modelID: "coding",
+    providerID: "keiko-runtime",
+    mode: "build",
+    agent: "build",
+    path: { cwd: "/private/workspace", root: "/private/workspace" },
+    cost: 0,
+    tokens: emptyTokenCounts(),
+    ...(time.finish === undefined ? {} : { finish: time.finish }),
+  };
+}
+
+function fakeToolPart(
+  messageId: string,
+  call: FakeToolCall,
+  status: "pending" | "running" | "completed",
+  output: string,
+  time: number,
+): Record<string, unknown> {
+  const input = call.args;
+  const state =
+    status === "pending"
+      ? { status, input, raw: JSON.stringify(input) }
+      : status === "running"
+        ? { status, input, title: call.name, metadata: {}, time: { start: time } }
+        : {
+            status,
+            input,
+            output,
+            title: call.name,
+            metadata: {},
+            time: { start: time - 1, end: time },
+          };
+  return {
+    id: `prt_tool_${call.id}`,
+    sessionID: FAKE_SESSION_ID,
+    messageID: messageId,
+    type: "tool",
+    callID: call.id,
+    tool: call.name,
+    state,
+  };
+}
+
+function emptyTokenCounts(): Record<string, unknown> {
+  return { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
 }
 
 function requiredEnv(env: Readonly<Record<string, string>>, name: string): string {

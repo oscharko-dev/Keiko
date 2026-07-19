@@ -215,6 +215,7 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import {
   createCodingRuntimeControlPlane,
   type CodingRuntimeHost,
@@ -407,6 +408,8 @@ export interface UiHandlerDeps {
    * present, in which case it fails closed to a content-free projection.
    */
   readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
+  /** Process-memory #2479 feed; never part of persistence or unauthenticated runtime SSE. */
+  readonly codingSafeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Content-free control-plane capability; false/absent means no qualified runtime host. */
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
@@ -2799,6 +2802,51 @@ function gatewayOutcomeFailureCode(
   return {};
 }
 
+function safeActivityContentSource(
+  projection: CodingSafeActivityProjection | undefined,
+): CodingAppSessionContentSource | undefined {
+  return projection === undefined
+    ? undefined
+    : {
+        contentFor: () => projection.currentContent(),
+        subscribeContent: (listener) => projection.subscribeContent(listener),
+      };
+}
+
+function activityAwareWorkspaceLifecycle(
+  lifecycle: WorkspaceLifecycleService | undefined,
+  projection: CodingSafeActivityProjection | undefined,
+): WorkspaceLifecycleService | undefined {
+  if (lifecycle === undefined || projection === undefined) return lifecycle;
+  const purge = (): void => {
+    projection.purgeAll("workspace-switch");
+  };
+  return {
+    list: lifecycle.list,
+    getActive: lifecycle.getActive,
+    setActive: (request): ReturnType<WorkspaceLifecycleService["setActive"]> => {
+      purge();
+      return lifecycle.setActive(request);
+    },
+    clearActive: (): void => {
+      purge();
+      lifecycle.clearActive();
+    },
+    pause: (request): ReturnType<WorkspaceLifecycleService["pause"]> => {
+      purge();
+      return lifecycle.pause(request);
+    },
+    resume: (request): ReturnType<WorkspaceLifecycleService["resume"]> => {
+      purge();
+      return lifecycle.resume(request);
+    },
+    prepareHandoff: (request): ReturnType<WorkspaceLifecycleService["prepareHandoff"]> => {
+      purge();
+      return lifecycle.prepareHandoff(request);
+    },
+  };
+}
+
 // eslint-disable-next-line complexity, max-lines-per-function -- process-lifetime dependency composition remains reviewable as one explicit manifest
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime: DapRuntimeReference = {
@@ -2842,8 +2890,14 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     registry: createSessionRegistry(),
     pairingPort:
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
-    contentSource: args.options.codingAppSessionContentSource,
+    contentSource:
+      args.options.codingAppSessionContentSource ??
+      safeActivityContentSource(codingRuntimeControlPlane?.safeActivityProjection),
   });
+  const workspaceLifecycle = activityAwareWorkspaceLifecycle(
+    args.bundle.workspaceLifecycle,
+    codingRuntimeControlPlane?.safeActivityProjection,
+  );
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
     evidenceStore: args.evidenceStore,
@@ -2863,6 +2917,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
           codingRuntimeOrchestrator: codingRuntimeControlPlane.orchestrator,
           codingRuntimeEventHub: codingRuntimeControlPlane.eventHub,
           codingRuntimeHostQualified: codingRuntimeControlPlane.runtimeHostQualified,
+          ...(codingRuntimeControlPlane.safeActivityProjection
+            ? { codingSafeActivityProjection: codingRuntimeControlPlane.safeActivityProjection }
+            : {}),
           ...(codingRuntimeControlPlane.runtimeHostQualified
             ? {}
             : {
@@ -2922,12 +2979,18 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
+    ...(workspaceLifecycle === undefined ? {} : { workspaceLifecycle }),
     dispose: async (): Promise<void> => {
-      await shutdownHostLspPool();
-      await dapProduction?.dispose();
-      peripherals.debugActivationControl.dispose();
-      peripherals.workspaceWatchService.disposeAll();
-      args.bundle.dispose?.();
+      try {
+        await codingRuntimeControlPlane?.orchestrator.shutdown();
+      } finally {
+        codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
+        await shutdownHostLspPool();
+        await dapProduction?.dispose();
+        peripherals.debugActivationControl.dispose();
+        peripherals.workspaceWatchService.disposeAll();
+        args.bundle.dispose?.();
+      }
     },
   };
 }

@@ -6,6 +6,10 @@ import type {
 } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import {
+  createCodingSafeActivityProjection,
+  type CodingSafeActivityProjection,
+} from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
@@ -26,7 +30,7 @@ function rowFor(
   return row;
 }
 
-function fixture() {
+function fixture(activityProjection?: CodingSafeActivityProjection) {
   const rows = new Map<string, CodingRuntimeSnapshot>();
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -139,6 +143,7 @@ function fixture() {
     answer: vi.fn(() => Promise.resolve(true)),
     reject: vi.fn(() => Promise.resolve(true)),
   } satisfies CodingRuntimeQuestionPort;
+  const safeActivityProjection = activityProjection ?? fakeSafeActivityProjection();
   const orchestrator = createCodingRuntimeOrchestrator({
     manager: manager,
     approvalAuthority,
@@ -154,6 +159,7 @@ function fixture() {
     launchResolver: launchResolver as never,
     taskDispatcher,
     questionPort,
+    safeActivityProjection,
     serverPrincipal: () => "server",
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     newRunId: () => `run-${String(rows.size + 1)}`,
@@ -168,8 +174,23 @@ function fixture() {
     launchResolver,
     taskDispatcher,
     questionPort,
+    safeActivityProjection,
     listPrunableSettled,
     deletePruned,
+  };
+}
+
+function fakeSafeActivityProjection(): CodingSafeActivityProjection {
+  return {
+    open: vi.fn(),
+    ingest: vi.fn(() => true),
+    recordDrop: vi.fn(),
+    recordDrops: vi.fn(),
+    purge: vi.fn(),
+    purgeAll: vi.fn(),
+    markUnavailable: vi.fn(),
+    currentContent: vi.fn(() => null),
+    subscribeContent: vi.fn(() => ({ admitted: true, detach: vi.fn() })),
   };
 }
 
@@ -495,16 +516,52 @@ describe("CodingRuntimeOrchestrator", () => {
     await f.orchestrator.startupReconcile();
     expect(f.manager.start).toHaveBeenCalledTimes(1);
     expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+    expect(f.safeActivityProjection.markUnavailable).toHaveBeenCalledWith("run-1");
     const g = fixture();
     await g.orchestrator.start(start);
     expect(
       successfulSnapshot(await g.orchestrator.takeover("run-1", { requestId: "run-1" })).state,
     ).toBe("taken-over");
+    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-1", "takeover");
     await g.orchestrator.start(start);
     expect(
       successfulSnapshot(await g.orchestrator.stop("run-2", { requestId: "run-2" })).state,
     ).toBe("cancelled");
+    expect(g.safeActivityProjection.purge).toHaveBeenCalledWith("run-2", "stop");
     expect(g.evidence.settle).toHaveBeenCalled();
+  });
+
+  it("replaces retained activity with unavailable state during crash recovery", async () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => Date.parse("2026-01-01T00:00:00.000Z"),
+    });
+    const f = fixture(projection);
+    await f.orchestrator.start(start);
+    projection.open({
+      runId: "run-1",
+      workspaceId: "workspace-1",
+      authorityExpiresAt: "2026-01-01T01:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest("run-1", {
+      kind: "message",
+      messageId: "msg_user",
+      role: "user",
+      occurredAt: "2026-01-01T00:00:00.001Z",
+    });
+    projection.ingest("run-1", {
+      kind: "text",
+      messageId: "msg_user",
+      text: "RESTART_CANARY_2479",
+      occurredAt: "2026-01-01T00:00:00.002Z",
+    });
+
+    await f.orchestrator.startupReconcile();
+
+    expect(projection.currentContent()).toMatchObject({
+      feed: { availability: "unavailable", runId: "run-1" },
+    });
+    expect(JSON.stringify(projection.currentContent())).not.toContain("RESTART_CANARY_2479");
   });
 
   it("contains rejected host lifecycle promises as recovery-required", async () => {

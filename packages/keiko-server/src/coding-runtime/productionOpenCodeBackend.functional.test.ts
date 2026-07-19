@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  CodingAppSessionChannelSnapshot,
   CodingWorkbenchRuntimeQuestionRequest,
   CodingWorkbenchRuntimeSseEvent,
   EditorVerificationEvent,
@@ -18,7 +19,13 @@ import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { createUiServer, UI_HOST } from "../server.js";
+import { fakePairingRequestBody } from "../coding-app-session/_support.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { runMigrations } from "../store/schema.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
@@ -50,6 +57,8 @@ import {
   createFunctionalRuntimeResolver,
   functionalBffDeps,
   productionDiscoveryBffDeps,
+  FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
+  FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
   type ScriptState,
 } from "./productionOpenCodeBackend.functional/_support.js";
 
@@ -57,6 +66,7 @@ const SECRET = "TASK_SECRET_2258";
 const OLD = "export const value = 'ORIGINAL_SECRET_2258';\n";
 const NEW = "export const value = 'NEW_SECRET_2258';\n";
 const OUTSIDE = "OUTSIDE_SECRET_2258\n";
+const OVERSIZED_CALL_ID = `RAW_TOOL_CALL_ID_2479_${"x".repeat(256)}`;
 const roots: string[] = [];
 const servers: Server[] = [];
 const disposers: (() => Promise<void> | void)[] = [];
@@ -87,6 +97,7 @@ interface FunctionalPipeline {
   readonly timeline: CodingWorkbenchRuntimeSseEvent[];
   readonly verification: FunctionalVerificationFixture;
   readonly evidenceBodies: ReadonlyMap<string, string>;
+  readonly diagnostics: readonly ServerDiagnosticRecord[];
   readonly subscribeTimeline: (runId: string) => void;
 }
 
@@ -103,18 +114,80 @@ afterEach(async () => {
 });
 
 describe("production OpenCode backend functional pipeline", () => {
+  it("leaves no available feed when backend construction fails", async () => {
+    const fixture = await setupWorkspace();
+    const portable = scriptedFunctionalPortable(fixture.root);
+    const pipeline = await bootPipeline(fixture, portable, () => {
+      throw new Error("construction-failure");
+    });
+
+    await expect(
+      post(
+        pipeline.baseUrl,
+        "/api/coding-workbench/runtime/runs",
+        startBody("construction-failure"),
+      ),
+    ).resolves.toMatchObject({ status: 403 });
+    expect(pipeline.deps.codingSafeActivityProjection?.currentContent()).toBeNull();
+  });
+
+  it("rejects an oversized tool correlation identity without retaining raw content", async () => {
+    const fixture = await setupWorkspace();
+    fixture.script.toolCallId = OVERSIZED_CALL_ID;
+    const scripted = createScriptedOpenCodeHarness();
+    disposers.push(() => scripted.closeAll());
+    const portable = scriptedFunctionalPortable(fixture.root);
+    const pipeline = await bootPipeline(fixture, portable, scripted.createSupervisor);
+    const cookie = await pairAppSession(pipeline.baseUrl);
+    const started = await post(
+      pipeline.baseUrl,
+      "/api/coding-workbench/runtime/runs",
+      startBody("oversized-tool-correlation"),
+    );
+    expect(started.status).toBe(200);
+    const run = (await started.json()) as { readonly runId: string };
+    let snapshot = "";
+    await vi.waitFor(
+      async () => {
+        snapshot = JSON.stringify(await codingAppSessionSnapshot(pipeline.baseUrl, cookie));
+        expect(snapshot).toMatch(/"droppedEventCount":[1-9]/u);
+      },
+      { timeout: 30_000, interval: 100 },
+    );
+    expect(snapshot).not.toContain(OVERSIZED_CALL_ID);
+    await stopRun(pipeline.baseUrl, run.runId);
+  }, 120_000);
+
   it("drives the managed OpenCode composition end to end with a scripted child and model gateway", async () => {
     const fixture = await setupWorkspace();
     const scripted = createScriptedOpenCodeHarness();
     disposers.push(() => scripted.closeAll());
     const portable = scriptedFunctionalPortable(fixture.root);
-    const pipeline = await bootPipeline(fixture, portable, scripted.createSupervisor);
-    await runProductiveScenario(fixture, pipeline);
-    await runAuthorityScenarios(fixture, pipeline);
-    await runRejectedQuestionScenario(fixture, pipeline, scripted);
-    await runStopPendingQuestionScenario(fixture, pipeline);
-    await runOutOfScopeScenario(fixture, pipeline, scripted);
-    assertRedactedEvidence(fixture, pipeline);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const pipeline = await bootPipeline(fixture, portable, scripted.createSupervisor, {
+        mirrorDiagnosticsToDefaultLog: true,
+      });
+      try {
+        await runProductiveScenario(fixture, pipeline);
+      } catch (error) {
+        throw new Error(
+          `functional-scenario-failed:${scripted.children
+            .flatMap((child) => child.fixtureFailures())
+            .join(",")}`,
+          { cause: error },
+        );
+      }
+      await runAuthorityScenarios(fixture, pipeline);
+      await runRejectedQuestionScenario(fixture, pipeline, scripted);
+      await runStopPendingQuestionScenario(fixture, pipeline);
+      await runOutOfScopeScenario(fixture, pipeline, scripted);
+      assertRedactedEvidence(fixture, pipeline);
+      assertCanariesAbsentFromRequestTargets(scripted);
+      assertCanariesAbsentFromOperatorDiagnostics(pipeline.diagnostics, logged.mock.calls);
+    } finally {
+      logged.mockRestore();
+    }
   }, 120_000);
 
   it.skipIf(!functionalArtifactAvailable())(
@@ -207,6 +280,7 @@ async function bootDiscoveryPipeline(
     timeline,
     verification,
     evidenceBodies: new Map<string, string>(),
+    diagnostics: [],
     subscribeTimeline: (runId): void => {
       const subscribed = eventHub.subscribe(runId, undefined, {
         write: (event): boolean => {
@@ -275,10 +349,20 @@ async function bootPipeline(
   fixture: FunctionalWorkspaceFixture,
   portable: FunctionalPortableOpenCodeRuntime,
   createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>,
+  options: { readonly mirrorDiagnosticsToDefaultLog?: boolean } = {},
 ): Promise<FunctionalPipeline> {
   const verification = createVerification(fixture.workspace);
   const evidenceBodies = new Map<string, string>();
   const runtimeEvidence = createCodingRuntimeEvidenceAggregator(memoryEvidence(evidenceBodies));
+  const diagnosticRecords: ServerDiagnosticRecord[] = [];
+  const diagnostics: ServerDiagnosticSink = {
+    record: (record): void => {
+      diagnosticRecords.push(record);
+      if (options.mirrorDiagnosticsToDefaultLog === true) {
+        defaultServerDiagnosticSink.record(record);
+      }
+    },
+  };
   const port = await reserveLoopbackPort();
   const resolver = createFunctionalRuntimeResolver({
     portable,
@@ -293,6 +377,7 @@ async function bootPipeline(
     verificationRunner: verification.manager,
     runtimeEvidence,
     createSupervisor,
+    diagnostics,
   });
   const deps = functionalBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
@@ -325,6 +410,7 @@ async function bootPipeline(
     timeline,
     verification,
     evidenceBodies,
+    diagnostics: diagnosticRecords,
     subscribeTimeline: (runId): void => {
       const subscribed = eventHub.subscribe(runId, undefined, {
         write: (event): boolean => {
@@ -342,6 +428,7 @@ async function runProductiveScenario(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
 ): Promise<void> {
+  const sessionCookie = await pairAppSession(pipeline.baseUrl);
   const started = await post(
     pipeline.baseUrl,
     "/api/coding-workbench/runtime/runs",
@@ -354,6 +441,10 @@ async function runProductiveScenario(
   const question = await waitForQuestion(pipeline.orchestrator, run.runId, "productive-question");
   expect(question.questions).toHaveLength(1);
   expect(question.questions[0]?.question).toBe("Approve?");
+  const preAnswerActivity = JSON.stringify(
+    await codingAppSessionSnapshot(pipeline.baseUrl, sessionCookie),
+  );
+  expect(preAnswerActivity).toContain(SECRET);
   // #2386: the question's arrival must surface on the workbench event stream as a content-free
   // observation signal — pull-based clients re-list on it instead of hanging on a stale empty list.
   await vi.waitFor(
@@ -385,6 +476,21 @@ async function runProductiveScenario(
     },
     { timeout: 30_000, interval: 100 },
   );
+  const activity = await waitForSafeActivity(pipeline.baseUrl, sessionCookie);
+  expect(activity).toContain(SECRET);
+  expect(activity).toContain(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX);
+  expect(activity).not.toContain(FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL);
+  expect(activity).not.toContain(OLD);
+  expect(activity).not.toContain(NEW);
+  expect(activity).toContain('"state":"succeeded"');
+  expect(activity).toContain('"truncated":true');
+  const unpaired = await codingAppSessionSnapshot(pipeline.baseUrl);
+  expect(unpaired).toEqual({ schemaVersion: "1", content: null });
+  const unauthenticatedTimeline = JSON.stringify(pipeline.timeline);
+  for (const canary of rawActivityCanaries()) {
+    expect(unauthenticatedTimeline).not.toContain(canary);
+    expect(JSON.stringify(unpaired)).not.toContain(canary);
+  }
   expect(
     pipeline.timeline.filter(
       (event) => event.kind === "runtime-event" && event.eventKind === "verification-summarized",
@@ -393,7 +499,49 @@ async function runProductiveScenario(
   expect(
     pipeline.verification.events.find((event) => event.kind === "run-completed"),
   ).toMatchObject({ report: { overallStatus: "passed" } });
+  pipeline.deps.codingSafeActivityProjection?.recordDrop(run.runId, "validation-rejected");
   await stopRun(pipeline.baseUrl, run.runId);
+  await expect(codingAppSessionSnapshot(pipeline.baseUrl, sessionCookie)).resolves.toEqual({
+    schemaVersion: "1",
+    content: null,
+  });
+}
+
+async function pairAppSession(baseUrl: string): Promise<string> {
+  const response = await post(
+    baseUrl,
+    "/api/coding-workbench/app-session/pair",
+    fakePairingRequestBody(),
+  );
+  expect(response.status).toBe(200);
+  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+  if (cookie === undefined) throw new Error("functional-app-session-pairing-failed");
+  return cookie;
+}
+
+async function codingAppSessionSnapshot(
+  baseUrl: string,
+  cookie?: string,
+): Promise<CodingAppSessionChannelSnapshot> {
+  const response = await fetch(`${baseUrl}/api/coding-workbench/app-session/channel`, {
+    headers: cookie === undefined ? {} : { Cookie: cookie },
+  });
+  assertResponseMetadata(response);
+  expect(response.status).toBe(200);
+  return (await response.json()) as CodingAppSessionChannelSnapshot;
+}
+
+async function waitForSafeActivity(baseUrl: string, cookie: string): Promise<string> {
+  let body = "";
+  await vi.waitFor(
+    async () => {
+      body = JSON.stringify(await codingAppSessionSnapshot(baseUrl, cookie));
+      expect(body).toContain(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX);
+      expect(body).toContain('"state":"succeeded"');
+    },
+    { timeout: 30_000, interval: 100 },
+  );
+  return body;
 }
 
 async function runAuthorityScenarios(
@@ -515,8 +663,42 @@ function assertRedactedEvidence(
     ...(workbenchStore?.list() ?? []).map((id) => workbenchStore?.get(id) ?? ""),
   ].join("\n");
   const snapshots = JSON.stringify(pipeline.deps.codingRuntimeSnapshotStore?.listAll() ?? []);
-  expect(`${evidence}${snapshots}`).not.toMatch(new RegExp(`${SECRET}|${OLD}|${OUTSIDE}`, "u"));
+  for (const canary of rawActivityCanaries()) {
+    expect(`${evidence}${snapshots}`).not.toContain(canary);
+  }
   expect(readFile(fixture.target)).toBe(expectedTarget);
+}
+
+function rawActivityCanaries(): readonly string[] {
+  return [
+    SECRET,
+    OLD,
+    NEW,
+    OUTSIDE,
+    FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
+    FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
+    OVERSIZED_CALL_ID,
+  ];
+}
+
+function assertCanariesAbsentFromRequestTargets(scripted: ScriptedOpenCodeHarness): void {
+  const targets = JSON.stringify(scripted.children.flatMap((child) => child.requestedTargets()));
+  for (const canary of rawActivityCanaries()) expect(targets).not.toContain(canary);
+}
+
+function assertCanariesAbsentFromOperatorDiagnostics(
+  diagnostics: readonly ServerDiagnosticRecord[],
+  defaultLogCalls: readonly unknown[],
+): void {
+  expect(diagnostics.length).toBeGreaterThan(0);
+  expect(defaultLogCalls.length).toBeGreaterThan(0);
+  const operatorOutput = JSON.stringify({ diagnostics, defaultLogCalls });
+  for (const canary of rawActivityCanaries()) expect(operatorOutput).not.toContain(canary);
+}
+
+function assertResponseMetadata(response: Response): void {
+  expect(response.redirected).toBe(false);
+  for (const canary of rawActivityCanaries()) expect(response.url).not.toContain(canary);
 }
 
 function setupWorkspace(
@@ -639,12 +821,14 @@ function startBody(requestId: string): {
   return { requestId, taskIntent: SECRET, requestedMode: "autonomous-delivery" };
 }
 
-function post(base: string, path: string, body: unknown): Promise<Response> {
-  return fetch(`${base}${path}`, {
+async function post(base: string, path: string, body: unknown): Promise<Response> {
+  const response = await fetch(`${base}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1", Origin: base },
     body: JSON.stringify(body),
   });
+  assertResponseMetadata(response);
+  return response;
 }
 
 async function stopRun(base: string, runId: string): Promise<void> {

@@ -9,6 +9,7 @@ import {
 
 import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
   discoverDevLaneOpenCode,
@@ -52,6 +53,7 @@ export interface ProductionOpenCodeActivationInput {
   readonly editorAgentClient?:
     ProductionCodingRuntimeResolverInput["editorAgentClient"] | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -91,6 +93,7 @@ export function resolveProductionOpenCodeActivation(
         gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
         runtimeEvidence: input.runtimeEvidence,
         gatewayReadiness: input.gatewayReadiness,
+        ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
         ...(input.fetch ? { fetch: input.fetch } : {}),
       }),
       secureWorkspaceTextRead,

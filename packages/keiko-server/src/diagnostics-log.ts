@@ -28,6 +28,8 @@ export interface ServerDiagnosticRecord {
   // The upstream model-gateway request id when the failure originated from a gateway call — this is
   // what links a UI/server correlation id to the gateway's own record (GEN-OBS-CORRELATION-503).
   readonly gatewayRequestId?: string | undefined;
+  // Bounded numeric occurrence for rate-limited diagnostics; never parsed from content.
+  readonly occurrenceCount?: number | undefined;
 }
 
 export interface ServerDiagnosticSink {

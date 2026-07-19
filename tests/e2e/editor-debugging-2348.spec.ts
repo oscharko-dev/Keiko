@@ -23,6 +23,10 @@ import {
   openTreeFile,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import {
+  capturedStartedSessionIdAfter,
+  capturedStartedSessionIds,
+} from "./support/debugSessionStartCapture.js";
 
 const { computeD12NearestRankPercentile: percentile } = (await import(
   new URL("../../scripts/check-perf-evidence.mjs", import.meta.url).href
@@ -434,24 +438,22 @@ async function capturedExceptionEvent(page: Page): Promise<unknown> {
   });
 }
 
-async function capturedStartedSessionId(page: Page): Promise<string> {
+async function capturedDebugSessionEvents(page: Page): Promise<readonly CapturedDebugEvent[]> {
+  return await page.evaluate(() => window.__keikoCapturedDebugEvents ?? []);
+}
+
+async function capturedStartedSessionCount(page: Page): Promise<number> {
+  return capturedStartedSessionIds(await capturedDebugSessionEvents(page)).length;
+}
+
+async function capturedStartedSessionId(page: Page, observedStartCount: number): Promise<string> {
   let sessionId: string | undefined;
   await expect
     .poll(async () => {
-      sessionId = await page.evaluate(() => {
-        for (const candidate of [...(window.__keikoCapturedDebugEvents ?? [])].reverse()) {
-          if (candidate.event !== "editor-debug:session-started") continue;
-          try {
-            const parsed = JSON.parse(candidate.data) as {
-              readonly event?: { readonly sessionId?: unknown };
-            };
-            if (typeof parsed.event?.sessionId === "string") return parsed.event.sessionId;
-          } catch {
-            continue;
-          }
-        }
-        return undefined;
-      });
+      sessionId = capturedStartedSessionIdAfter(
+        await capturedDebugSessionEvents(page),
+        observedStartCount,
+      );
       return sessionId;
     })
     .not.toBeUndefined();
@@ -707,18 +709,10 @@ function editorWindow(page: Page): Locator {
 }
 
 async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionProjection> {
-  const started = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/editor/debug/sessions") &&
-      response.request().method() === "POST",
-  );
+  const observedStartCount = await capturedStartedSessionCount(page);
   await pane.locator(EDITOR_SELECTORS.monaco).click();
   await page.keyboard.press("F5");
-  const response = await started;
-  if (response.status() !== 201) {
-    throw new Error(`DEBUG_SESSION_START_FAILED:${String(response.status())}`);
-  }
-  const sessionId = await capturedStartedSessionId(page);
+  const sessionId = await capturedStartedSessionId(page, observedStartCount);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
@@ -729,17 +723,9 @@ async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionP
 }
 
 async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSessionProjection> {
-  const started = page.waitForResponse(
-    (response) =>
-      response.url().includes("/api/editor/debug/sessions") &&
-      response.request().method() === "POST",
-  );
+  const observedStartCount = await capturedStartedSessionCount(page);
   await panel.getByRole("button", { name: "Start debugging current file" }).click();
-  const response = await started;
-  if (response.status() !== 201) {
-    throw new Error(`DEBUG_SESSION_START_FAILED:${String(response.status())}`);
-  }
-  const sessionId = await capturedStartedSessionId(page);
+  const sessionId = await capturedStartedSessionId(page, observedStartCount);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,

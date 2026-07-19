@@ -20,9 +20,17 @@ import {
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
 
+export const CODING_APP_SESSION_MAX_LIVE_STREAMS = 32;
+
 /** Source of the bounded content a paired session may read. Absent means the channel is content-free. */
 export interface CodingAppSessionContentSource {
   readonly contentFor: (session: AppSession) => CodingAppSessionChannelContent | null;
+  readonly subscribeContent?:
+    | ((listener: (content: CodingAppSessionChannelContent | null) => void) => {
+        readonly admitted: boolean;
+        readonly detach: () => void;
+      })
+    | undefined;
 }
 
 export type CodingAppSessionPairResult =
@@ -44,6 +52,14 @@ export interface CodingAppSessionChannel {
    * successful verification refreshes the session's inactivity window.
    */
   readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
+  readonly subscribe: (
+    cookieToken: string | undefined,
+    listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+  ) => {
+    readonly snapshot: CodingAppSessionChannelSnapshot;
+    readonly live: boolean;
+    readonly detach: () => void;
+  };
 }
 
 export interface CodingAppSessionChannelDeps {
@@ -73,10 +89,118 @@ function projectContent(
     : contentFreeCodingAppSessionChannelSnapshot();
 }
 
+function snapshotForContent(
+  content: CodingAppSessionChannelContent | null,
+): CodingAppSessionChannelSnapshot {
+  if (content === null || !validateCodingAppSessionChannelContent(content).ok) {
+    return contentFreeCodingAppSessionChannelSnapshot();
+  }
+  const snapshot: CodingAppSessionChannelSnapshot = {
+    schemaVersion: contentFreeCodingAppSessionChannelSnapshot().schemaVersion,
+    content,
+  };
+  return validateCodingAppSessionChannelSnapshot(snapshot).ok
+    ? snapshot
+    : contentFreeCodingAppSessionChannelSnapshot();
+}
+
+function subscribeToContent(
+  registry: SessionRegistry,
+  contentSource: CodingAppSessionContentSource | undefined,
+  cookieToken: string | undefined,
+  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+  admission: LiveSubscriptionAdmission,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  const session = registry.verify(cookieToken);
+  const snapshot =
+    session === undefined
+      ? contentFreeCodingAppSessionChannelSnapshot()
+      : projectContent(session, contentSource);
+  if (session === undefined || contentSource?.subscribeContent === undefined) {
+    return { snapshot, live: false, detach: (): void => undefined };
+  }
+  return liveSubscription(registry, contentSource, cookieToken, snapshot, listener, admission);
+}
+
+interface LiveSubscriptionAdmission {
+  readonly acquire: () => boolean;
+  readonly release: () => void;
+}
+
+function rejectedSourceSubscription(
+  source: ReturnType<NonNullable<CodingAppSessionContentSource["subscribeContent"]>> | undefined,
+  detach: () => void,
+  snapshot: CodingAppSessionChannelSnapshot,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  source?.detach();
+  detach();
+  return { snapshot, live: false, detach: (): void => undefined };
+}
+
+function liveSubscription(
+  registry: SessionRegistry,
+  contentSource: CodingAppSessionContentSource,
+  cookieToken: string | undefined,
+  snapshot: CodingAppSessionChannelSnapshot,
+  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+  admission: LiveSubscriptionAdmission,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
+  const lifecycle: {
+    active: boolean;
+    sourceDetach: () => void;
+    expiryTimer?: ReturnType<typeof setInterval>;
+  } = { active: true, sourceDetach: (): void => undefined };
+  const detach = (): void => {
+    if (!lifecycle.active) return;
+    lifecycle.active = false;
+    if (lifecycle.expiryTimer !== undefined) clearInterval(lifecycle.expiryTimer);
+    lifecycle.sourceDetach();
+    admission.release();
+  };
+  const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
+  const publish = (content: CodingAppSessionChannelContent | null): void => {
+    if (!lifecycle.active) return;
+    const valid = validity();
+    try {
+      const accepted = listener(
+        valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
+      );
+      if (!valid || !accepted) detach();
+    } catch {
+      detach();
+    }
+  };
+  const sourceSubscription = contentSource.subscribeContent?.(publish);
+  if (!sourceSubscription?.admitted)
+    return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
+  if (!lifecycle.active) {
+    sourceSubscription.detach();
+    return { snapshot, live: false, detach: (): void => undefined };
+  }
+  lifecycle.sourceDetach = sourceSubscription.detach;
+  lifecycle.expiryTimer = setInterval(() => {
+    if (!validity()) publish(null);
+  }, 1_000);
+  lifecycle.expiryTimer.unref();
+  return { snapshot, live: true, detach };
+}
+
 export function createCodingAppSessionChannel(
   deps: CodingAppSessionChannelDeps,
 ): CodingAppSessionChannel {
   const { registry, pairingPort, contentSource } = deps;
+  let liveSubscriptions = 0;
+  const admission: LiveSubscriptionAdmission = {
+    acquire: (): boolean => {
+      if (liveSubscriptions >= CODING_APP_SESSION_MAX_LIVE_STREAMS) return false;
+      liveSubscriptions += 1;
+      return true;
+    },
+    release: (): void => {
+      liveSubscriptions = Math.max(0, liveSubscriptions - 1);
+    },
+  };
   return {
     pair: (attestation: unknown): CodingAppSessionPairResult => {
       if (pairingPort === undefined) return { paired: false };
@@ -106,5 +230,7 @@ export function createCodingAppSessionChannel(
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
+    subscribe: (cookieToken, listener) =>
+      subscribeToContent(registry, contentSource, cookieToken, listener, admission),
   };
 }
