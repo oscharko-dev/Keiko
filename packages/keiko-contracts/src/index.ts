@@ -802,6 +802,7 @@ export type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
   CodingWorkbenchCommandPolicy,
@@ -842,6 +843,7 @@ export type {
 export {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -992,6 +994,32 @@ export {
   validateRuntimeGovernanceOutcomeV1,
   validateRuntimeGovernanceRequestV1,
 } from "./code-task-run-control.js";
+
+// ─── Auxiliary-capability contract (Issue #2387, produced for #2388) ───────────────
+// Governed read-only research / approved skills / one-layer read-only child agents: the strictly
+// narrower companion to GovernedActionV1 — bounded scope, derived authority, content-free outcome.
+export type {
+  AuxiliaryCapability,
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityPortV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryOutcomeStatus,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskSkillId,
+} from "./code-task-auxiliary.js";
+export {
+  AUXILIARY_CAPABILITIES,
+  AUXILIARY_INVOCATIONS,
+  AUXILIARY_OUTCOME_STATUSES,
+  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+  isCodeTaskChildRunId,
+  isCodeTaskPublicDomain,
+  isCodeTaskSkillId,
+  validateAuxiliaryCapabilityOutcomeV1,
+  validateAuxiliaryCapabilityRequestV1,
+} from "./code-task-auxiliary.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded
@@ -1158,6 +1186,8 @@ export type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeResearchRevokeRequest,
   CodingWorkbenchRuntimeRetryRequest,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -1178,6 +1208,7 @@ export {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,

@@ -1,9 +1,11 @@
+import { isCodeTaskPublicDomain } from "./code-task-auxiliary.js";
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchAuxiliaryStatus,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchMode,
   type CodingWorkbenchPermissionRequest,
@@ -132,6 +134,15 @@ export interface CodingWorkbenchRuntimeApprovalDecisionRequest {
   readonly decision: CodingWorkbenchRuntimeApprovalDecision;
 }
 
+// Body for POST /runs/:runId/research/revoke (#2387). Bound to the observed revision and the exact
+// grant id so a stale or forged revoke fails closed; the server drops the grant for the parent AND
+// every child and answers with the revision-bumped, grant-absent snapshot.
+export interface CodingWorkbenchRuntimeResearchRevokeRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly grantId: string;
+}
+
 export interface CodingWorkbenchRuntimeRecoveryAcknowledgementRequest {
   readonly requestId: string;
   readonly acknowledged: true;
@@ -155,6 +166,19 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
+  /**
+   * Present only while a governed read-only research grant is live for this run (#2387). Content
+   * free: the grant id, its named public domains (a policy allowlist, not query evidence), and the
+   * exact expiry — never the sanitized query digest or any fetched bytes. Revoking it (the
+   * /research/revoke route) drops this field for the parent AND every child in one revision bump.
+   */
+  readonly researchGrant?: CodingWorkbenchRuntimeResearchGrant | undefined;
+}
+
+export interface CodingWorkbenchRuntimeResearchGrant {
+  readonly grantId: string;
+  readonly domains: readonly string[];
+  readonly expiresAt: string;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -191,6 +215,12 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly revision: number;
       readonly eventKind: CodingWorkbenchRuntimeEventKind;
       readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      /**
+       * The normalized #2387 outcome for a research-performed / skill-invoked / child-run-* frame.
+       * `limit-reached` and `stopped` stay distinct from `denied` so the timeline never mislabels an
+       * exhausted budget or a cascaded stop as a failure. Absent for every other event kind.
+       */
+      readonly auxiliaryOutcome?: CodingWorkbenchAuxiliaryStatus | undefined;
     };
 
 export function parseCodingWorkbenchRuntimeStartRequest(
@@ -272,6 +302,19 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
   return result(value, errors);
 }
 
+export function parseCodingWorkbenchRuntimeResearchRevokeRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchRevokeRequest> {
+  if (!isRecord(value)) return invalid("research revoke request must be an object");
+  const errors = exactKeys(value, ["requestId", "expectedRevision", "grantId"], "researchRevoke");
+  validateRequestId(value.requestId, errors);
+  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
+    errors.push("expectedRevision must be a non-negative safe integer");
+  }
+  validateSafeId(value.grantId, "grantId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
+  return result(value, errors);
+}
+
 export function parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeRecoveryAcknowledgementRequest> {
@@ -300,6 +343,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "failureCode",
       "recoveryAcknowledged",
       "pendingPermission",
+      "researchGrant",
     ],
     "runtimeSnapshot",
   );
@@ -409,6 +453,33 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateFailureCode(value.failureCode, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
+  validateResearchGrant(value.researchGrant, errors);
+}
+
+// A live research grant projection: content-free grant id, a non-empty list of validated public
+// domains (a policy allowlist — never an IP literal, loopback, or reserved name), and an exact
+// expiry. The queryTextDigest and any fetched bytes never cross into this UI-facing snapshot.
+function validateResearchGrant(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("researchGrant must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["grantId", "domains", "expiresAt"], "researchGrant"));
+  validateSafeId(
+    value.grantId,
+    "researchGrant.grantId",
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  );
+  if (
+    !Array.isArray(value.domains) ||
+    value.domains.length === 0 ||
+    !value.domains.every((domain) => isCodeTaskPublicDomain(domain))
+  ) {
+    errors.push("researchGrant.domains must be a non-empty list of public domains");
+  }
+  validateStrictUtcInstant(value.expiresAt, "researchGrant.expiresAt", errors);
 }
 
 function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {

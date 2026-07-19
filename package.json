@@ -57,6 +57,7 @@
     "test:e2e:local-knowledge": "playwright test --config tests/e2e/config/playwright.local-knowledge-regression.config.ts",
     "test:e2e:editor-perf": "playwright test --config tests/e2e/config/playwright.editor-performance.config.ts --project=chromium --grep @release-evidence",
     "test:e2e:editor-debugging-2348": "playwright test --config tests/e2e/config/playwright.issue-2348-editor-debugging.config.ts --project=chromium",
+    "test:e2e:code-task-research-2387": "playwright test --config tests/e2e/config/playwright.code-task-research-skills-subagents.config.ts --project=chromium",
     "test:e2e:workspace-perf": "playwright test --config tests/e2e/config/playwright.workspace-performance.config.ts --project=chromium --grep @release-evidence",
     "build:d12-bundle-input": "node scripts/build-d12-bundle-input.mjs",
     "build:d12-perf-comparison": "node scripts/build-d12-perf-comparison.mjs",

@@ -1,3 +1,5 @@
+import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
+
 import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
@@ -12,6 +14,12 @@ export interface CodingToolProducerBinding {
 export interface CodingToolMutationGuard {
   /** Must be called at the final governed mutation/commit boundary. */
   readonly check: () => boolean;
+  /** Server-private live authority projection for narrower auxiliary composition. */
+  readonly resolveParentAuthority?:
+    (() => CodingWorkbenchAuthorityEnvelope | undefined) | undefined;
+  /** Charges one concrete read-only child call against the parent runtime budget. */
+  readonly chargeDelegatedRead?:
+    ((delegationId: string, idempotencyKey: string) => boolean) | undefined;
   readonly binding?: CodingToolProducerBinding | undefined;
 }
 

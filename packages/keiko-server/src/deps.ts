@@ -704,6 +704,13 @@ export interface BuildHandlerDepsOptions {
   // KEIKO_CODING_DEPLOYMENT_CEILING environment value, then the governed-assist default. An
   // unrecognized environment value is ignored fail-closed (the narrowest posture wins).
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  /**
+   * Read-only public research egress (#2387). Enabled by default: this only opens the
+   * network-egress ACTION CLASS in the run envelope — every individual fetch still requires an
+   * operator-approved, host- and request-line-bound grant, so no approval means no outbound
+   * request. Set false to deny the class entirely for deployments that forbid research.
+   */
+  readonly codingRuntimeResearchEgressEnabled?: boolean | undefined;
   readonly codingRuntimeServerPrincipal?: (() => string | undefined) | undefined;
   // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
@@ -3078,6 +3085,21 @@ function materializedManagedRoot(managedTaskWorkspaceRoot: string): boolean {
   }
 }
 
+function runtimeWorkspaceAuthority(
+  args: UiHandlerDepsAssemblyArgs,
+  workspaceLifecycle: NonNullable<UiHandlerDepsAssemblyArgs["bundle"]["workspaceLifecycle"]>,
+  managedTaskWorkspaceRoot: string,
+  deploymentCeiling: CodingWorkbenchMode,
+): Parameters<typeof createProductionCodingRuntimeResolver>[0]["workspaceAuthority"] {
+  return {
+    workspaceLifecycle,
+    managedTaskWorkspaceRoot,
+    deploymentCeiling,
+    readWorkspaceHead: readProductionWorkspaceHead,
+    researchEgressEnabled: args.options.codingRuntimeResearchEgressEnabled ?? true,
+  };
+}
+
 function productionRuntimeResolver(
   args: UiHandlerDepsAssemblyArgs,
   verificationRunner: PeripheralManagers["verificationRunner"],
@@ -3107,15 +3129,18 @@ function productionRuntimeResolver(
     (resolution.activated ? createAuthenticatedSessionStartConfirmationPlane() : undefined);
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createProductionCodingRuntimeResolver({
-    workspaceAuthority: {
+    workspaceAuthority: runtimeWorkspaceAuthority(
+      args,
       workspaceLifecycle,
       managedTaskWorkspaceRoot,
       deploymentCeiling,
-      readWorkspaceHead: readProductionWorkspaceHead,
-    },
+    ),
     ...resolution.ports,
     verificationRunner,
     runtimeMutationLeaseBroker,
+    gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+    childModelPortFactory:
+      args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
   return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);

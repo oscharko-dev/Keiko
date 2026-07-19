@@ -161,6 +161,18 @@
   background: var(--surface-inset);
 }
 
+.researchGrant {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+  background: var(--surface-inset);
+}
+
 .modeOption,
 .sourceCard {
   display: grid;

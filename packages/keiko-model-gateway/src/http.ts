@@ -961,11 +961,10 @@ async function fetchHttpsViaProxy(
 function fetchViaProxy(
   target: URL,
   init: RequestInit,
-  proxyRaw: string,
+  proxy: URL,
   egress: OutboundHttpEgressConfig | undefined,
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const proxy = parseProxyUrl(proxyRaw);
   const ca = gatewayTrustedCaCertificates(egress?.caBundlePath);
   return target.protocol === "https:"
     ? fetchHttpsViaProxy(target, init, proxy, ca, maxResponseBytes)
@@ -1054,10 +1053,23 @@ export async function gatewayFetch(
       : { ...rest, redirect: "manual" };
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
-  const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
-  const resolveDns = fetchImpl === undefined && proxy === undefined && doFetch === NATIVE_FETCH;
-  const pinnedAddresses = await enforceOutboundTargetPolicy(target, egress, { resolveDns });
-  const redirectPolicy = { resolveDns };
+  const proxyRaw = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
+  // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
+  // fail with their deterministic policy error rather than an unrelated target lookup failure.
+  const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
+  const pinDnsForConnect =
+    fetchImpl === undefined && proxy === undefined && doFetch === NATIVE_FETCH;
+  // A proxy performs the eventual connect, so Keiko cannot pin its vetted address set there. The
+  // research-only denyLoopback posture still resolves and enforces the target before handing its
+  // hostname to that proxy; otherwise a public-looking name resolving to loopback bypasses it.
+  const resolveDnsForPolicy =
+    pinDnsForConnect ||
+    (fetchImpl === undefined && proxy !== undefined && egress?.denyLoopback === true);
+  const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, {
+    resolveDns: resolveDnsForPolicy,
+  });
+  const pinnedAddresses = pinDnsForConnect ? vettedAddresses : undefined;
+  const redirectPolicy = { resolveDns: resolveDnsForPolicy };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
     await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);

@@ -29,6 +29,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
+  readonly revokeResearchGrant: () => Promise<void>;
 }
 
 interface RuntimeActionInput {
@@ -59,6 +60,7 @@ function createCodingWorkbenchRuntimeActions({
     pause,
     resume,
     retry,
+    revokeResearchGrant,
     start,
     stop,
     submitFollowUp,
@@ -86,6 +88,7 @@ function createCodingWorkbenchRuntimeActions({
     pause,
     resume,
     submitFollowUp,
+    revokeResearchGrant,
   };
 }
 
@@ -108,6 +111,7 @@ export function useCodingWorkbenchRuntimeActions(
     pause,
     resume,
     retry,
+    revokeResearchGrant,
     start,
     stop,
     submitFollowUp,
@@ -133,6 +137,7 @@ export function useCodingWorkbenchRuntimeActions(
           pause,
           resume,
           retry,
+          revokeResearchGrant,
           start,
           stop,
           submitFollowUp,
@@ -152,6 +157,7 @@ export function useCodingWorkbenchRuntimeActions(
       refreshSource,
       resume,
       retry,
+      revokeResearchGrant,
       sourceSequence,
       start,
       stateRef,

@@ -10,6 +10,9 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_workspace_read",
   "keiko_changeset_edit",
   "keiko_verification",
+  "keiko_research_fetch",
+  "keiko_skill",
+  "keiko_child_agent",
 ] as const;
 const MODEL_VISIBLE_TOOLS = ["question", "todowrite", ...KEIKO_PRODUCER_TOOLS] as const;
 const READY_LINE = "opencode server listening on http://127.0.0.1:43123\n";

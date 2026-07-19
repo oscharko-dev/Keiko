@@ -1,0 +1,65 @@
+{
+  "epicIssue": 2473,
+  "childIssue": 2387,
+  "scenarios": [
+    {
+      "scenarioId": "research-skills-child-unit-contracts",
+      "evidenceClass": "unit-contract",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "research-skills-child-owned-journey",
+      "evidenceClass": "playwright-journey",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "research-skills-child-production-composition",
+      "evidenceClass": "production-functional",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "research-skills-child-security-regressions",
+      "evidenceClass": "mocked-failure-integration",
+      "platform": "macos-arm64"
+    },
+    {
+      "scenarioId": "research-skills-child-mutation-security",
+      "evidenceClass": "mocked-failure-integration",
+      "platform": "macos-arm64"
+    }
+  ],
+  "salvage": [
+    {
+      "sourceBranch": "claude/issue-2387-research-skills",
+      "sourceSha": "6f6ee51d714044db9af2567791120a0773ca8e51",
+      "path": "packages/keiko-contracts/src/code-task-auxiliary.ts",
+      "disposition": "taken-verbatim",
+      "reshaping": { "outcome": "absent" }
+    },
+    {
+      "sourceBranch": "claude/issue-2387-research-skills",
+      "sourceSha": "6f6ee51d714044db9af2567791120a0773ca8e51",
+      "path": "packages/keiko-server/src/coding-runtime/researchEgressPort.ts",
+      "disposition": "reshaped",
+      "reshaping": { "outcome": "known", "value": "tightened request binding and proxy policy" }
+    },
+    {
+      "sourceBranch": "claude/issue-2387-research-skills",
+      "sourceSha": "6f6ee51d714044db9af2567791120a0773ca8e51",
+      "path": "packages/keiko-server/src/coding-runtime/skillInvocationPort.ts",
+      "disposition": "reshaped",
+      "reshaping": { "outcome": "known", "value": "mounted through the governed production facade" }
+    },
+    {
+      "sourceBranch": "claude/issue-2387-research-skills",
+      "sourceSha": "6f6ee51d714044db9af2567791120a0773ca8e51",
+      "path": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts",
+      "disposition": "reshaped",
+      "reshaping": {
+        "outcome": "known",
+        "value": "bound to the harness and parent authority budget"
+      }
+    }
+  ],
+  "knownLimitations": ["linux platform evidence is produced by the epic integration lane"]
+}

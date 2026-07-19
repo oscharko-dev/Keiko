@@ -7,6 +7,7 @@ import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
@@ -456,5 +457,97 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "raw-stack-trace" }),
     ).toMatchObject({ ok: false, errors: ["failureCode is invalid"] });
+  });
+
+  it("carries a bounded #2387 auxiliaryOutcome on a runtime-event frame", () => {
+    const event = {
+      schemaVersion: "1",
+      cursor: "cursor-2",
+      sequence: 4,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 5,
+      eventKind: "child-run-completed",
+      auxiliaryOutcome: "limit-reached",
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(event)).toEqual({ ok: true, value: event });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, auxiliaryOutcome: "granted" }),
+    ).toMatchObject({ ok: false, errors: ["auxiliaryOutcome is invalid"] });
+    // auxiliaryOutcome is not part of the status-frame key set.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-3",
+        sequence: 6,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "running",
+        revision: 7,
+        auxiliaryOutcome: "accepted",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("projects a live research grant on the snapshot and revokes it fail-closed", () => {
+    const withGrant = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      researchGrant: {
+        grantId: "grant-1",
+        domains: ["developer.mozilla.org", "nodejs.org"],
+        expiresAt: AT,
+      },
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(withGrant)).toEqual({
+      ok: true,
+      value: withGrant,
+    });
+    // Empty domains, an IP literal, and a smuggled sub-key all fail closed.
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, domains: [] },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, domains: ["127.0.0.1"] },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...withGrant,
+        researchGrant: { ...withGrant.researchGrant, queryTextDigest: "x" },
+      }),
+    ).toMatchObject({ ok: false });
+
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({
+        requestId: "req-1",
+        expectedRevision: 2,
+        grantId: "grant-1",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({
+        requestId: "req-1",
+        expectedRevision: -1,
+        grantId: "grant-1",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["expectedRevision must be a non-negative safe integer"],
+    });
+    expect(
+      parseCodingWorkbenchRuntimeResearchRevokeRequest({ requestId: "req-1", grantId: "grant-1" }),
+    ).toMatchObject({ ok: false });
   });
 });

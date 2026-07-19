@@ -51,7 +51,7 @@ export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope" | "discovery";
+  mode: "productive" | "out-of-scope" | "discovery" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -73,6 +73,12 @@ export interface FunctionalRuntimeResolverInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** #2387: opens the network-egress class so the research approval loop is reachable. */
+  readonly researchEgressEnabled?: boolean | undefined;
+  /** #2387 hermetic research transport; tests never touch the real network. */
+  readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
+  /** #2387 hermetic child model; production resolves the same model through the gateway. */
+  readonly childModelPortFactory?: ProductionCodingRuntimeResolverInput["childModelPortFactory"];
 }
 
 /**
@@ -92,7 +98,12 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
+      ...(input.researchEgressEnabled === undefined
+        ? {}
+        : { researchEgressEnabled: input.researchEgressEnabled }),
     },
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+    ...(input.childModelPortFactory ? { childModelPortFactory: input.childModelPortFactory } : {}),
     backend: createProductionOpenCodeBackend({
       portable: input.portable,
       runtimeStateRoot: input.runtimeStateRoot,
@@ -378,8 +389,35 @@ function workspace(root: string): WorkspaceInfo {
   };
 }
 
+/** The exact URL the #2387 research journey asks for; the request line binds the minted grant. */
+export const RESEARCH_JOURNEY_URL = "https://docs.example.org/guide/streams?topic=backpressure";
+
+// #2387 journey turns. The blocking `question` steps are the halt points that keep every governed
+// fetch inside a RUNNING run (a paused run's sticky ingest guard would drop the content-free
+// research events): step 0 asks for the URL (no grant → permission request, fetch fails closed),
+// step 1 blocks on a question until the operator has approved, step 2 performs the governed fetch,
+// steps 3 and 4 invoke the approved skill and bounded child, and step 5 ends turn 1; step 6 (turn 2,
+// after revoke) blocks again and step 7 retries the fetch under a fresh approval request.
+function researchScriptedResponse(step: number): NormalizedResponse {
+  if (step === 0 || step === 2 || step === 7) {
+    return tool("keiko_research_fetch", { target: RESEARCH_JOURNEY_URL });
+  }
+  if (step === 1 || step === 6) return tool("question", question());
+  if (step === 3) {
+    return tool("keiko_skill", { skillId: "skl_repo-structure-summary@1" });
+  }
+  if (step === 4) {
+    return tool("keiko_child_agent", {
+      objective: "Inspect the repository structure without mutation",
+      maxToolCalls: 2,
+    });
+  }
+  return normal();
+}
+
 export function scriptedResponse(script: ScriptState): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "research") return researchScriptedResponse(step);
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {
@@ -494,6 +532,9 @@ function tool(
     | "keiko_workspace_read"
     | "keiko_changeset_edit"
     | "keiko_verification"
+    | "keiko_research_fetch"
+    | "keiko_skill"
+    | "keiko_child_agent"
     | "question"
     | "todowrite",
   args: Record<string, unknown>,

@@ -1,6 +1,11 @@
 import { isUtf8 } from "node:buffer";
 
-import { isEditorAgentChangeset, type EditorAgentChangeset } from "@oscharko-dev/keiko-contracts";
+import {
+  isCodeTaskSkillId,
+  isEditorAgentChangeset,
+  type AuxiliaryCapabilityOutcomeV1,
+  type EditorAgentChangeset,
+} from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
@@ -8,7 +13,16 @@ export const CODING_TOOL_MAX_IN_FLIGHT = 8;
 export const CODING_TOOL_MAX_READ_BYTES = 65_536;
 
 export type CodingToolAction =
-  "read" | "edit" | "command" | "verification" | "git" | "delivery" | "connector" | "egress";
+  | "read"
+  | "edit"
+  | "command"
+  | "verification"
+  | "git"
+  | "delivery"
+  | "connector"
+  | "egress"
+  | "skill"
+  | "child-agent";
 
 export interface CodingToolRequestIdentity {
   readonly actionId: string;
@@ -29,7 +43,13 @@ export type CodingToolActionRequest =
       readonly intent: "commit" | "push" | "pull-request" | "merge";
     })
   | (CodingToolRequestIdentity & { readonly action: "connector"; readonly scope: string })
-  | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string });
+  | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
+  | (CodingToolRequestIdentity & { readonly action: "skill"; readonly skillId: string })
+  | (CodingToolRequestIdentity & {
+      readonly action: "child-agent";
+      readonly objective: string;
+      readonly maxToolCalls: number;
+    });
 
 export type CodingToolResult =
   | {
@@ -38,6 +58,11 @@ export type CodingToolResult =
       readonly read: CodingToolReadResult;
     }
   | { readonly status: "completed" | "failed"; readonly evidence: readonly CodingToolEvidence[] }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly auxiliary: AuxiliaryCapabilityOutcomeV1;
+    }
   | {
       readonly status: "denied" | "invalid" | "cancelled" | "busy" | "observed";
       readonly evidence: readonly [];
@@ -114,9 +139,37 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return namedRequest(value, "scope", "connector");
     case "egress":
       return namedRequest(value, "target", "egress");
+    case "skill":
+      return skillRequest(value);
+    case "child-agent":
+      return childAgentRequest(value);
     default:
       return undefined;
   }
+}
+
+function skillRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "skillId"]) &&
+    isCodeTaskSkillId(value.skillId)
+    ? { ...identity, action: "skill", skillId: value.skillId }
+    : undefined;
+}
+
+function childAgentRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "objective", "maxToolCalls"]) &&
+    nonEmpty(value.objective) &&
+    positiveBoundedInteger(value.maxToolCalls, 32)
+    ? {
+        ...identity,
+        action: "child-agent",
+        objective: value.objective,
+        maxToolCalls: value.maxToolCalls,
+      }
+    : undefined;
 }
 
 function readRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
@@ -266,4 +319,7 @@ function nonEmpty(value: unknown): value is string {
 }
 function deliveryIntent(value: unknown): value is "commit" | "push" | "pull-request" | "merge" {
   return value === "commit" || value === "push" || value === "pull-request" || value === "merge";
+}
+function positiveBoundedInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
 }

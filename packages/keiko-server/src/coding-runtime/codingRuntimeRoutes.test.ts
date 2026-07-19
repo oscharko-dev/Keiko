@@ -25,6 +25,7 @@ import {
   handleCodingRuntimeQuestionList,
   handleCodingRuntimeQuestionReject,
   handleCodingRuntimeRecoveryAcknowledgement,
+  handleCodingRuntimeResearchRevoke,
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
   handleCodingRuntimeStatus,
@@ -112,6 +113,7 @@ function runtime(overrides: Partial<Record<string, unknown>> = {}): UiHandlerDep
     acknowledgeRecovery: () => Promise.resolve({ ok: true as const, snapshot }),
     pause: () => Promise.resolve({ ok: true as const, snapshot }),
     resume: () => Promise.resolve({ ok: true as const, snapshot }),
+    revokeResearch: () => Promise.resolve({ ok: true as const, snapshot }),
     submitFollowUp: (_runId: string, body: unknown) => {
       calls.push(body);
       return Promise.resolve({ ok: true as const, snapshot });
@@ -168,6 +170,8 @@ describe("coding runtime routes", () => {
     expect(patterns.some((pattern) => pattern.endsWith("/follow-up"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/pause"))).toBe(true);
     expect(patterns.some((pattern) => pattern.endsWith("/resume"))).toBe(true);
+    // #2387: the research revoke mutation shares the same guarded runtime group.
+    expect(patterns.some((pattern) => pattern.endsWith("/research/revoke"))).toBe(true);
   });
 
   it("declares the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
@@ -185,6 +189,7 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/pause",
         "POST /api/coding-workbench/runtime/runs/:runId/resume",
         "POST /api/coding-workbench/runtime/runs/:runId/follow-up",
+        "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
         "POST /api/coding-workbench/runtime/runs/:runId/questions",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/reject",
@@ -204,6 +209,7 @@ describe("coding runtime routes", () => {
     const handlers = [
       handleCodingRuntimePause,
       handleCodingRuntimeResume,
+      handleCodingRuntimeResearchRevoke,
       handleCodingRuntimeFollowUp,
       handleCodingRuntimeQuestionAnswer,
       handleCodingRuntimeQuestionReject,

@@ -61,6 +61,7 @@ export function createProductionCodingRuntimeHost(
     ...(runtime.safeActivityProjection
       ? { safeActivityProjection: runtime.safeActivityProjection }
       : {}),
+    ...(runtime.researchGrants ? { researchGrants: runtime.researchGrants } : {}),
     cancellationRegistry: runtime.cancellationRegistry,
     ...(runtime.runtimeCapabilityAuthenticator
       ? { runtimeCapabilityAuthenticator: runtime.runtimeCapabilityAuthenticator }

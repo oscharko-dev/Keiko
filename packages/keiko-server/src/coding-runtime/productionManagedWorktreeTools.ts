@@ -10,11 +10,25 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
-import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
+import type {
+  CodingToolGovernedPorts,
+  GovernedCodingToolPort,
+} from "./codingToolGovernedDelegate.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
+import {
+  createExplicitSkillInvocationTracker,
+  type ExplicitSkillInvocationTracker,
+} from "./explicitSkillInvocation.js";
+import { createResearchEgressPort, type ResearchFetch } from "./researchEgressPort.js";
+import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
+import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 import {
   createCodingToolReadEditPorts,
   type CodingToolReadEditPortDeps,
@@ -27,8 +41,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly authority: Pick<
     CodingRuntimeAuthorityService,
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
-  >;
+  > &
+    Partial<Pick<CodingRuntimeAuthorityService, "state">>;
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
+  readonly taskId?: string | undefined;
+  readonly modelId?: string | undefined;
   readonly adapterKind?: CodingWorkbenchRuntimeAdapterKind | undefined;
   readonly workspaceRoot: string;
   readonly authorityExpiresAt: string;
@@ -38,8 +55,21 @@ export interface ProductionManagedWorktreeToolInput {
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
   readonly invocationRegistry: CodingToolInvocationRegistry;
+  readonly skillCatalog?: SkillCatalog | undefined;
+  readonly explicitSkillInvocations?: ExplicitSkillInvocationTracker | undefined;
+  readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  // Present only when read-only public research (#2387) is activated for this run: the run-bound
+  // grant registry and the gateway's outbound egress config (proxy/CA). When absent, the egress
+  // authority stays the fail-closed stub, so a run without research can never reach the internet.
+  readonly researchGrantRegistry?: ResearchGrantRegistry | undefined;
+  readonly gatewayEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
+  // Raises the #2387 approval ask for a research URL that no live grant covers. Optional: without
+  // it the egress port still fails closed, it just cannot open the approval loop.
+  readonly requestResearchApproval?: ((url: URL) => void) | undefined;
+  /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
+  readonly researchFetchImpl?: ResearchFetch | undefined;
 }
 
 export function createProductionManagedWorktreeToolFacade(
@@ -97,10 +127,36 @@ function governedPorts(
   readEdit: CodingToolReadEditPorts,
 ): CodingToolGovernedPorts {
   let verificationSequence = 0;
+  const catalog = input.skillCatalog ?? createServerApprovedSkillCatalog();
   const failed = (): Promise<{ readonly status: "failed" }> =>
     Promise.resolve({ status: "failed" });
   return {
     ...readEdit,
+    ...createProductionAuxiliaryPorts({
+      authority: {
+        state: () =>
+          input.authority.state?.() ?? {
+            schemaVersion: "1" as const,
+            state: "running" as const,
+            revision: 0,
+            updatedAt: new Date().toISOString(),
+            runId: input.authorityRef.runId,
+          },
+      },
+      taskId: input.taskId ?? input.authorityRef.runId,
+      runId: input.authorityRef.runId,
+      workspaceId: () => input.liveFacts().binding.workspaceId,
+      workspaceRoot: input.workspaceRoot,
+      modelId: input.modelId ?? "unavailable-model",
+      authorityExpiresAt: input.authorityExpiresAt,
+      catalog,
+      explicitSkills:
+        input.explicitSkillInvocations ?? createExplicitSkillInvocationTracker(catalog),
+      modelPortFactory: input.childModelPortFactory ?? ((): undefined => undefined),
+      secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+      researchGrantRegistry: input.researchGrantRegistry,
+      emit: input.onRuntimeEvent,
+    }),
     commandRunner: { execute: failed },
     verificationRunner: {
       execute: async (
@@ -125,8 +181,31 @@ function governedPorts(
     gitAuthority: { execute: failed },
     deliveryAuthority: { execute: failed },
     connectorAuthority: { execute: failed },
-    egressAuthority: { execute: failed },
+    egressAuthority: buildEgressAuthority(input, failed),
   };
+}
+
+// Mounts the real research-egress executor only when the run activated read-only research (registry
+// and gateway egress both present); otherwise the egress authority stays the fail-closed stub, so a
+// run without a research grant can never reach the internet.
+function buildEgressAuthority(
+  input: ProductionManagedWorktreeToolInput,
+  failed: () => Promise<{ readonly status: "failed" }>,
+): GovernedCodingToolPort<"egress"> {
+  const registry = input.researchGrantRegistry;
+  const gatewayEgress = input.gatewayEgress;
+  if (registry === undefined || gatewayEgress === undefined) {
+    return { execute: failed };
+  }
+  return createResearchEgressPort({
+    registry,
+    resolveRunId: (): string => input.authorityRef.runId,
+    gatewayEgress: (): OutboundHttpEgressConfig | undefined => gatewayEgress(),
+    emitEvent: input.onRuntimeEvent,
+    ...(input.requestResearchApproval ? { onGrantMissing: input.requestResearchApproval } : {}),
+    ...(input.researchFetchImpl ? { fetchImpl: input.researchFetchImpl } : {}),
+    now: (): number => Date.now(),
+  });
 }
 
 function live(input: ProductionManagedWorktreeToolInput): boolean {
