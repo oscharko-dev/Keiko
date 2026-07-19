@@ -17,6 +17,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createRuntimeProcessSupervisor,
@@ -437,6 +438,7 @@ interface StartBridgeControl {
   readonly historyCalls?: Readonly<Record<string, number>>[];
   readonly governedEvents?: Readonly<Record<string, unknown>>[];
   readonly safeActivity?: FixtureSafeActivity;
+  readonly diagnostics?: ServerDiagnosticSink;
   readonly runControl?: {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
@@ -458,6 +460,12 @@ function optionalSafeActivity(control: StartBridgeControl | undefined): {
   readonly safeActivity?: FixtureSafeActivity;
 } {
   return control?.safeActivity === undefined ? {} : { safeActivity: control.safeActivity };
+}
+
+function optionalDiagnostics(control: StartBridgeControl | undefined): {
+  readonly diagnostics?: ServerDiagnosticSink;
+} {
+  return control?.diagnostics === undefined ? {} : { diagnostics: control.diagnostics };
 }
 
 async function startBridgeFixture(
@@ -630,6 +638,7 @@ async function startBridgeFixture(
       },
     },
     ...optionalSafeActivity(control),
+    ...optionalDiagnostics(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
       clear: (): void => undefined,
@@ -1542,6 +1551,49 @@ describe("private OpenCode tool bridge", () => {
         expect.objectContaining({ actionId: "tool:call_busy", state: "failed" }),
         expect.objectContaining({ actionId: "tool:call_rejected", state: "failed" }),
       ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("surfaces a synchronous facade throw as a redacted operator diagnostic", async () => {
+    const activity = activityRecorder();
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => {
+        throw new Error("facade died before returning a promise");
+      }),
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      safeActivity: activity.safeActivity,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_sync_throw"),
+        }),
+      ).resolves.toMatchObject({ status: 502 });
+      expect(activity.settlements).toEqual([
+        expect.objectContaining({ actionId: "tool:call_sync_throw", state: "failed" }),
+      ]);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "tool:call_sync_throw",
+          operation: "coding-runtime.tool-bridge",
+          source: "opencode-runtime-composition.start-facade",
+          errorClass: "Error",
+          message: "tool-facade-sync-throw",
+        }),
+      ]);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain("facade died");
     } finally {
       await fixture.stop();
     }
