@@ -287,6 +287,50 @@
     "en": "Security",
     "de": "Sicherheit"
   },
+  "settings.profiles.title": {
+    "en": "Editor profiles",
+    "de": "Editorprofile"
+  },
+  "settings.profiles.description": {
+    "en": "Group editor settings and keyboard shortcuts into named, locally persisted profiles.",
+    "de": "Gruppiere Editoreinstellungen und Tastenkürzel in benannten, lokal gespeicherten Profilen."
+  },
+  "settings.profiles.current": {
+    "en": "Current profile: {name}",
+    "de": "Aktuelles Profil: {name}"
+  },
+  "settings.profiles.unavailable": {
+    "en": "Editor profiles are unavailable. Default settings remain active.",
+    "de": "Editorprofile sind nicht verfügbar. Die Standardeinstellungen bleiben aktiv."
+  },
+  "settings.profiles.profile": {
+    "en": "Profile",
+    "de": "Profil"
+  },
+  "settings.profiles.name": {
+    "en": "Profile name",
+    "de": "Profilname"
+  },
+  "settings.profiles.create": {
+    "en": "Create",
+    "de": "Erstellen"
+  },
+  "settings.profiles.rename": {
+    "en": "Rename",
+    "de": "Umbenennen"
+  },
+  "settings.profiles.duplicate": {
+    "en": "Duplicate",
+    "de": "Duplizieren"
+  },
+  "settings.profiles.switch": {
+    "en": "Switch",
+    "de": "Wechseln"
+  },
+  "settings.profiles.delete": {
+    "en": "Delete",
+    "de": "Löschen"
+  },
   "settings.editor.title": {
     "en": "Editor settings",
     "de": "Editor-Einstellungen"
@@ -314,6 +358,10 @@
   "settings.editor.scopeRoot": {
     "en": "Root",
     "de": "Stammordner"
+  },
+  "settings.editor.scopeProfile": {
+    "en": "Active profile",
+    "de": "Aktives Profil"
   },
   "settings.editor.modifiedOnly": {
     "en": "Modified only",

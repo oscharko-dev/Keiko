@@ -52,7 +52,7 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-function isPortableDisplayName(value: unknown): value is string {
+export function isWorkspaceProfileDisplayName(value: unknown): value is string {
   if (typeof value !== "string") return false;
   return [
     value.length > 0,
@@ -68,7 +68,7 @@ function isWorkspaceProfileManifest(value: unknown): value is WorkspaceProfileMa
     value.kind === "workspace-profile",
     value.schemaVersion === WORKSPACE_PROFILE_SCHEMA_VERSION,
     isWorkspaceProfileRef(value.profileRef),
-    isPortableDisplayName(value.displayName),
+    isWorkspaceProfileDisplayName(value.displayName),
     isRevision(value.revision),
     value.settings.profileRef === value.profileRef,
     value.settings.revision === value.revision,

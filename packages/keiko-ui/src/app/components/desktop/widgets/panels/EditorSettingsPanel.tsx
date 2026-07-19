@@ -2,26 +2,27 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts";
 import type {
   EditorM7AiActivationStatus,
   EditorM7SettingDefinition,
   EditorM7SettingId,
   EditorM7SettingValue,
   EditorM11ResolvedSetting,
-  EditorM11SettingScope,
 } from "@oscharko-dev/keiko-contracts";
-import { useEditorSettings } from "../cards/useEditorSettings";
+import { useEditorSettings, type EditorSettingsEditScope } from "../cards/useEditorSettings";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsPanel";
 import { WorkspaceSnippetsPanel } from "./WorkspaceSnippetsPanel";
+import { EditorProfilesPanel } from "./EditorProfilesPanel";
 
 import styles from "./EditorSettingsPanel.module.css";
 
 export function EditorSettingsPanel({ root }: { readonly root?: string | undefined }): ReactNode {
   const t = useTranslate();
   const view = useEditorSettings(root);
-  const [scope, setScope] = useState<EditorM11SettingScope>("user");
+  const [scope, setScope] = useState<EditorSettingsEditScope>("user");
   const [query, setQuery] = useState("");
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [pendingAiConfirm, setPendingAiConfirm] = useState<EditorM7SettingId | null>(null);
@@ -36,6 +37,10 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
       ),
     [modifiedOnly, query, t, view.snapshot],
   );
+  const activeProfile = view.snapshot?.profiles?.activeProfileRef;
+  useEffect(() => {
+    if (scope === "profile" && activeProfile === EDITOR_M11_DEFAULT_PROFILE_REF) setScope("user");
+  }, [activeProfile, scope]);
   const resetVisible = (): void => {
     void view.reset(
       scope,
@@ -68,7 +73,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           <select
             className={styles.select}
             value={scope}
-            onChange={(event) => setScope(event.target.value as EditorM11SettingScope)}
+            onChange={(event) => setScope(event.target.value as EditorSettingsEditScope)}
           >
             <option value="user">{t("settings.editor.scopeUser")}</option>
             <option value="workspace" disabled={root === undefined}>
@@ -76,6 +81,14 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
             </option>
             <option value="root" disabled={root === undefined}>
               {t("settings.editor.scopeRoot")}
+            </option>
+            <option
+              value="profile"
+              disabled={
+                activeProfile === undefined || activeProfile === EDITOR_M11_DEFAULT_PROFILE_REF
+              }
+            >
+              {t("settings.editor.scopeProfile")}
             </option>
           </select>
         </label>
@@ -97,7 +110,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           {t("settings.editor.resetAll")}
         </button>
       </div>
-      {scope !== "user" && root === undefined ? (
+      {requiresRoot(scope) && root === undefined ? (
         <p className={styles.empty}>{t("settings.editor.noWorkspace")}</p>
       ) : null}
       {view.issue !== undefined ? (
@@ -147,6 +160,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           />
         ))}
       </div>
+      <EditorProfilesPanel view={view} />
       <KeyboardShortcutsPanel root={root} scope={scope} view={view} />
       <WorkspaceSnippetsPanel root={root} />
       {pendingAiConfirm === null ? null : (
@@ -219,7 +233,7 @@ function EditorSettingCard({
   readonly definition: EditorM7SettingDefinition;
   readonly disabled: boolean;
   readonly root: string | undefined;
-  readonly scope: EditorM11SettingScope;
+  readonly scope: EditorSettingsEditScope;
   readonly setting: EditorM11ResolvedSetting;
   readonly t: I18nTranslate;
   readonly onReset: (id: EditorM7SettingId) => void;
@@ -439,11 +453,11 @@ function AiActivationConfirmDialog({
 function unavailable(
   definition: EditorM7SettingDefinition,
   setting: EditorM11ResolvedSetting,
-  scope: EditorM11SettingScope,
+  scope: EditorSettingsEditScope,
   root: string | undefined,
   t: I18nTranslate,
 ): string | undefined {
-  if (scope !== "user" && root === undefined) return t("settings.editor.noWorkspace");
+  if (requiresRoot(scope) && root === undefined) return t("settings.editor.noWorkspace");
   if (!settingSupportsScope(definition, scope)) return t("settings.editor.scopeUnavailable");
   if (setting.policyLocked) {
     return t("settings.editor.policyLocked", { reason: setting.reasonCode ?? "policy" });
@@ -479,9 +493,14 @@ function settingLabel(id: EditorM7SettingId, t: I18nTranslate): string {
 
 function settingSupportsScope(
   definition: EditorM7SettingDefinition,
-  scope: EditorM11SettingScope,
+  scope: EditorSettingsEditScope,
 ): boolean {
-  return definition.scopes.includes(scope === "root" ? "workspace" : scope);
+  const inheritedScope = scope === "root" ? "workspace" : scope === "profile" ? "user" : scope;
+  return definition.scopes.includes(inheritedScope);
+}
+
+function requiresRoot(scope: EditorSettingsEditScope): boolean {
+  return scope === "workspace" || scope === "root";
 }
 
 function sourceLabel(source: EditorM11ResolvedSetting["source"], t: I18nTranslate): string {

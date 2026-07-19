@@ -164,7 +164,9 @@ function idempotencyKey(ctx: RouteContext): string | undefined {
 function parseRevisionPrecondition(ctx: RouteContext): ParsedRevisionPrecondition | undefined {
   const value = singleHeader(ctx, "if-match");
   const match =
-    value === undefined ? null : /^"edm7-(\d+)-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
+    value === undefined
+      ? null
+      : /^"edm7-(\d+)-(\d+)-(\d+)(?:-p\d+)?-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
   if (match === null) return undefined;
   const userRevision = Number(match[1]);
   const workspaceRevision = Number(match[2]);

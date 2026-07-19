@@ -30,6 +30,19 @@
   gap: 8px;
 }
 
+.profileCurrent {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.profileActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px;
+}
+
 .field {
   display: grid;
   gap: 4px;

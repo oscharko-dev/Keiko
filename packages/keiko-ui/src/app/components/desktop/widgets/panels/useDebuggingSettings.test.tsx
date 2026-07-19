@@ -95,6 +95,11 @@ function view(snapshot: EditorM7SettingsSnapshot | undefined): EditorSettingsVie
     refresh: vi.fn().mockResolvedValue(undefined),
     setValue: vi.fn().mockResolvedValue(undefined),
     reset: vi.fn(),
+    createProfile: vi.fn(),
+    renameProfile: vi.fn(),
+    duplicateProfile: vi.fn(),
+    deleteProfile: vi.fn(),
+    switchProfile: vi.fn(),
   };
 }
 
