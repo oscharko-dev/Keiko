@@ -104,9 +104,7 @@ commands scoped to what your change touches, plus the touched-area gates from `A
 section 3; the required CI run on the pull request is the complete arbiter:
 
 ```bash
-npm run typecheck && npm run lint && npm run format:check
-npm test
-npm run arch:check && npm run arch:check:negative
+npm run typecheck && npm run lint && npm run format:check && npm test && npm run arch:check && npm run arch:check:negative
 ```
 
 ### Start the repository in development mode
