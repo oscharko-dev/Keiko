@@ -1,4 +1,5 @@
 import {
+  CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
@@ -74,7 +75,7 @@ export function sseEventKeys(kind: unknown): readonly string[] {
     "revision",
     "failureCode",
   ];
-  return kind === "runtime-event" ? [...common, "eventKind"] : common;
+  return kind === "runtime-event" ? [...common, "eventKind", "auxiliaryOutcome"] : common;
 }
 
 export function validateSseEventFields(
@@ -98,6 +99,12 @@ export function validateSseEventFields(
     !isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)
   ) {
     errors.push("eventKind is invalid");
+  }
+  if (
+    value.auxiliaryOutcome !== undefined &&
+    !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
+  ) {
+    errors.push("auxiliaryOutcome is invalid");
   }
   if (
     value.failureCode !== undefined &&

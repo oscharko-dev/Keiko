@@ -271,11 +271,48 @@ const TODO_WRITE_SCHEMA = {
   required: ["todos"],
 } as const;
 
+const RESEARCH_FETCH_SCHEMA = {
+  type: "object",
+  properties: {
+    target: {
+      type: "string",
+      minLength: 9,
+      maxLength: 512,
+      pattern: "^https://",
+    },
+  },
+  required: ["target"],
+} as const;
+
+const SKILL_SCHEMA = {
+  type: "object",
+  properties: {
+    skillId: {
+      type: "string",
+      pattern: "^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\\.[0-9]{1,4}){0,2}$",
+      maxLength: 80,
+    },
+  },
+  required: ["skillId"],
+} as const;
+
+const CHILD_AGENT_SCHEMA = {
+  type: "object",
+  properties: {
+    objective: { type: "string", minLength: 1, maxLength: 512 },
+    maxToolCalls: { type: "integer", minimum: 1, maximum: 32 },
+  },
+  required: ["objective", "maxToolCalls"],
+} as const;
+
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
+  { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
+  { name: "keiko_skill", parameters: SKILL_SCHEMA },
+  { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
   { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
@@ -389,6 +426,9 @@ describe("coding-sidecar gateway", () => {
       ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
       ["keiko_changeset_edit", "720fa492da7b2ff3cb0f6c3c19e1cf68d714d850207d1c614c37c8b6499c0089"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+      ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
+      ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
+      ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
       ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>
@@ -589,6 +629,30 @@ describe("coding-sidecar gateway", () => {
             parameters: {
               required: ["verifierId"],
               properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_research_fetch",
+            parameters: {
+              required: ["target"],
+              properties: { ...RESEARCH_FETCH_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_skill",
+            parameters: {
+              required: ["skillId"],
+              properties: { ...SKILL_SCHEMA.properties },
+              type: "object",
+            },
+          },
+          {
+            name: "keiko_child_agent",
+            parameters: {
+              required: ["objective", "maxToolCalls"],
+              properties: { ...CHILD_AGENT_SCHEMA.properties },
               type: "object",
             },
           },

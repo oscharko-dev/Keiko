@@ -28,6 +28,7 @@ import {
 export { PanelTitle } from "./CodingWorkbenchPanelTitle";
 export { Timeline } from "./CodingWorkbenchTimeline";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
+import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>> = {
@@ -296,7 +297,7 @@ export function ReadinessGrid({
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: Pick<
     CodingWorkbenchRuntimeActions,
-    "refreshRuntime" | "refreshRun" | "refreshSource"
+    "refreshRuntime" | "refreshRun" | "refreshSource" | "revokeResearchGrant"
   >;
   readonly refreshWorkspace: () => Promise<void>;
 }): ReactNode {
@@ -314,6 +315,11 @@ export function ReadinessGrid({
         actions={actions}
         refreshWorkspace={refreshWorkspace}
         t={t}
+      />
+      <ResearchGrantChip
+        grant={state.run.value?.researchGrant}
+        busy={state.mutation.status === "pending"}
+        onRevoke={() => void actions.revokeResearchGrant()}
       />
     </section>
   );

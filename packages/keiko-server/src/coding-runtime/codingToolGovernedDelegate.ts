@@ -1,3 +1,5 @@
+import type { AuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts";
+
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
@@ -20,7 +22,11 @@ interface GovernedCodingToolRead {
   readonly digest: string;
 }
 type GovernedCodingToolResult =
-  | { readonly status: "completed"; readonly read?: GovernedCodingToolRead | undefined }
+  | {
+      readonly status: "completed";
+      readonly read?: GovernedCodingToolRead | undefined;
+      readonly auxiliary?: AuxiliaryCapabilityOutcomeV1 | undefined;
+    }
   | { readonly status: "failed" };
 
 export interface CodingToolGovernedPorts {
@@ -32,6 +38,8 @@ export interface CodingToolGovernedPorts {
   readonly deliveryAuthority: GovernedCodingToolPort<"delivery">;
   readonly connectorAuthority: GovernedCodingToolPort<"connector">;
   readonly egressAuthority: GovernedCodingToolPort<"egress">;
+  readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
+  readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
 
 export function createCodingToolGovernedDelegate(
@@ -42,9 +50,17 @@ export function createCodingToolGovernedDelegate(
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const result = await dispatch(ports, request, signal, mutationGuard);
-      return request.action === "read" && result.status === "completed" && result.read !== undefined
+      // Repository reads AND research fetches (#2387) carry their governed payload back; every
+      // other action returns only the bare outcome.
+      return (request.action === "read" || request.action === "egress") &&
+        result.status === "completed" &&
+        result.read !== undefined
         ? { outcome: "completed", read: result.read }
-        : { outcome: result.status };
+        : (request.action === "skill" || request.action === "child-agent") &&
+            result.status === "completed" &&
+            result.auxiliary !== undefined
+          ? { outcome: "completed", auxiliary: result.auxiliary }
+          : { outcome: result.status };
     },
   };
 }
@@ -72,5 +88,13 @@ function dispatch(
       return ports.connectorAuthority.execute(request, signal, mutationGuard);
     case "egress":
       return ports.egressAuthority.execute(request, signal, mutationGuard);
+    case "skill":
+      return ports.skillAuthority?.execute(request, signal, mutationGuard) ?? failed();
+    case "child-agent":
+      return ports.childAgentAuthority?.execute(request, signal, mutationGuard) ?? failed();
   }
+}
+
+function failed(): Promise<GovernedCodingToolResult> {
+  return Promise.resolve({ status: "failed" });
 }

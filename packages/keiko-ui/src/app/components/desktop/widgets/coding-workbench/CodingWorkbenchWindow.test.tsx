@@ -67,6 +67,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     pause: vi.fn(() => Promise.resolve()),
     resume: vi.fn(() => Promise.resolve()),
     submitFollowUp: vi.fn(() => Promise.resolve()),
+    revokeResearchGrant: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -325,6 +326,37 @@ describe("CodingWorkbenchWindow", () => {
         ["serious", "critical"].includes(violation.impact ?? ""),
       ),
     ).toEqual([]);
+  });
+
+  it("surfaces the internet research grant and revokes it during a live run", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "running",
+            runId: "run-1",
+            researchGrant: {
+              grantId: "grant-1",
+              domains: ["developer.mozilla.org", "nodejs.org"],
+              expiresAt: "2026-07-13T12:30:00.000Z",
+            },
+          }),
+        },
+      }),
+    );
+
+    const group = screen.getByRole("group", { name: "Internet · Research only" });
+    expect(group).toHaveTextContent("developer.mozilla.org, nodejs.org");
+    expect(group).toHaveTextContent("2026-07-13T12:30:00.000Z");
+    const revoke = screen.getByRole("button", {
+      name: "Revoke the internet research grant for this run and its child agents",
+    });
+    expect(revoke).toBeEnabled();
+    await user.click(revoke);
+    expect(liveActions.revokeResearchGrant).toHaveBeenCalledOnce();
   });
 });
 

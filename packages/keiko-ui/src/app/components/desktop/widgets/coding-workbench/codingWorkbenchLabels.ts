@@ -82,6 +82,13 @@ function setupAnnouncement(
   return "";
 }
 
+function researchAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return state.run.value?.researchGrant ? t("codingWorkbench.announcement.researchActive") : "";
+}
+
 export function lifecycleAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -103,6 +110,7 @@ export function lifecycleAnnouncement(
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
     recovery,
+    researchAnnouncement(state, t),
     setupAnnouncement(state.codexSetup.status, t),
   ]
     .filter((announcement) => announcement.length > 0)
@@ -176,13 +184,28 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  return event.failureCode
+  const base = event.failureCode
     ? t("codingWorkbench.event.detailFailure", {
         sequence: event.sequence,
         revision: event.revision,
         failure: event.failureCode,
       })
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
+  const outcome = eventOutcomeDetail(event, t);
+  return outcome.length > 0 ? `${base} ${outcome}` : base;
+}
+
+// #2387: research-performed / skill-invoked / child-run-* frames carry a normalized outcome. It is
+// appended as a content-free sentence so an exhausted budget or a cascaded stop is never mislabeled
+// as a hard failure. Absent for every other event kind.
+function eventOutcomeDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.auxiliaryOutcome === undefined) return "";
+  return t("codingWorkbench.event.detailOutcome", {
+    outcome: t(`codingWorkbench.outcomeLabel.${event.auxiliaryOutcome}`),
+  });
 }
 
 export function visibleAlert(

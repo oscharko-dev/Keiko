@@ -692,6 +692,27 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
+  it("validates proxy targets against DNS policy before handing them to the proxy", async () => {
+    vi.resetModules();
+    vi.doMock("node:dns/promises", () => ({
+      lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+    }));
+    try {
+      const { gatewayFetch: proxyGatewayFetch } = await import("./http.js");
+      await expect(
+        proxyGatewayFetch("https://public-looking.invalid/docs", {
+          egress: {
+            denyLoopback: true,
+            httpsProxy: "http://127.0.0.1:65535",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
   it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
     // The origin is a legitimate, allowed target; its redirect Location points at a second
     // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop

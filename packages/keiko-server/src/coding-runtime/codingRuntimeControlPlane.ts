@@ -10,6 +10,7 @@ import {
   type CodingRuntimeLaunchResolver,
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
+import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
@@ -23,6 +24,9 @@ export interface CodingRuntimeHost {
   readonly approvalAuthority: CodingRuntimeApprovalAuthority;
   readonly taskDispatcher?: CodingRuntimeTaskDispatcher | undefined;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
+  // Server-level registry of read-only research grants (#2387). Present once the runtime host is
+  // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
+  readonly researchGrants?: ResearchGrantRegistry | undefined;
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
@@ -98,6 +102,9 @@ export function createCodingRuntimeControlPlane(
       ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
       : {}),
     serverPrincipal: input.serverPrincipal,
+    ...(input.runtimeHost?.researchGrants
+      ? { researchGrants: input.runtimeHost.researchGrants }
+      : {}),
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
     void orchestrator.ingest(event);

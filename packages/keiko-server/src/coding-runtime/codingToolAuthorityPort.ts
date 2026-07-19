@@ -1,4 +1,5 @@
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeAuthorityFacts,
@@ -110,7 +111,10 @@ function admit(
 }
 
 function guarded(
-  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
@@ -118,6 +122,10 @@ function guarded(
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   const mutationGuard = {
     check: (): boolean => revalidate(authority, context, capability, request),
+    resolveParentAuthority: (): CodingWorkbenchAuthorityEnvelope | undefined =>
+      revalidateEnvelope(authority, context, capability, request)?.authority,
+    chargeDelegatedRead: (delegationId: string, idempotencyKey: string): boolean =>
+      chargeDelegatedRead(authority, context, capability, delegationId, idempotencyKey),
     ...(binding === undefined ? {} : { binding }),
   };
   return {
@@ -175,6 +183,15 @@ function revalidate(
   capability: string,
   request: CodingToolActionRequest,
 ): boolean {
+  return revalidateEnvelope(authority, context, capability, request) !== undefined;
+}
+
+function revalidateEnvelope(
+  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  request: CodingToolActionRequest,
+): CodingWorkbenchRuntimeAuthorityEnvelope | undefined {
   const trusted = context();
   const resolved = authority.revalidateCapabilityForMutation({
     capability,
@@ -184,7 +201,28 @@ function revalidate(
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
   });
-  return resolved.ok && actionAllowed(resolved.envelope, request);
+  return resolved.ok && actionAllowed(resolved.envelope, request) ? resolved.envelope : undefined;
+}
+
+function chargeDelegatedRead(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  delegationId: string,
+  idempotencyKey: string,
+): boolean {
+  const trusted = context();
+  return authority.resolveCapabilityForDelegation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    delegationId,
+    idempotencyKey,
+    usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  }).ok;
 }
 
 function actionAllowed(
@@ -217,6 +255,9 @@ function requiredClasses(
       return ["connector-access", "network-egress"];
     case "egress":
       return ["network-egress"];
+    case "skill":
+    case "child-agent":
+      return ["workspace-read"];
   }
 }
 
@@ -239,6 +280,9 @@ function additionalPolicyAllowed(
       return connectorAllowed(envelope, request.scope);
     case "egress":
       return networkAllowed(envelope);
+    case "skill":
+    case "child-agent":
+      return true;
   }
 }
 

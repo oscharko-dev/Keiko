@@ -41,7 +41,7 @@ const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
 const PROTOCOL_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
-const MAX_FAKE_AGENT_STEPS = 8;
+const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
 /** OpenAPI projection served by the scripted child; it projects to the pinned handshake digest. */
@@ -527,11 +527,14 @@ interface PendingFakeQuestion {
 }
 
 const FAKE_TOOL_ACTIONS: Readonly<
-  Record<string, { readonly action: string; readonly argument: string }>
+  Record<string, { readonly action: string; readonly arguments: readonly string[] }>
 > = {
-  keiko_workspace_read: { action: "read", argument: "relativePath" },
-  keiko_changeset_edit: { action: "edit", argument: "changeset" },
-  keiko_verification: { action: "verification", argument: "verifierId" },
+  keiko_workspace_read: { action: "read", arguments: ["relativePath"] },
+  keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
+  keiko_verification: { action: "verification", arguments: ["verifierId"] },
+  keiko_research_fetch: { action: "egress", arguments: ["target"] },
+  keiko_skill: { action: "skill", arguments: ["skillId"] },
+  keiko_child_agent: { action: "child-agent", arguments: ["objective", "maxToolCalls"] },
 };
 
 /**
@@ -979,7 +982,7 @@ class FakeOpenCodeChild {
         action: definition.action,
         actionId: identity,
         idempotencyKey: identity,
-        [definition.argument]: call.args[definition.argument],
+        ...Object.fromEntries(definition.arguments.map((name) => [name, call.args[name]])),
       }),
     });
     if (!response.ok) return '{"status":"failed"}';

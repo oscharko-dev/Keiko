@@ -3,6 +3,7 @@ import {
   validateCodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingPermission,
+  type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -17,6 +18,8 @@ export class CodingRuntimeOrchestratorState {
       readonly pendingPermission: (
         runId: string,
       ) => CodingWorkbenchRuntimePendingPermission | undefined;
+      /** Live #2387 research grant projection; undefined when no grant is active for the run. */
+      readonly researchGrant: (runId: string) => CodingWorkbenchRuntimeResearchGrant | undefined;
     },
   ) {}
 
@@ -38,6 +41,7 @@ export class CodingRuntimeOrchestratorState {
       ...(snapshot.state === "awaiting-approval" && this.deps.pendingPermission(snapshot.runId)
         ? { pendingPermission: this.deps.pendingPermission(snapshot.runId) }
         : {}),
+      ...projectedResearchGrant(this.deps.researchGrant, snapshot),
     };
     if (!validateCodingWorkbenchRuntimeSnapshot(out).ok) {
       throw new Error("invalid runtime snapshot projection");
@@ -78,4 +82,25 @@ export class CodingRuntimeOrchestratorState {
           },
     ).ok;
   }
+}
+
+// The grant rides only on states where the run's authority is still live; terminal and
+// recovery-required snapshots never show internet reach (the registry is invalidated on
+// revoke/terminate anyway, so this is belt-and-braces at the projection boundary).
+const GRANT_VISIBLE_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  "starting",
+  "ready",
+  "running",
+  "awaiting-approval",
+  "paused",
+  "stopping",
+]);
+
+function projectedResearchGrant(
+  resolve: (runId: string) => CodingWorkbenchRuntimeResearchGrant | undefined,
+  snapshot: CodingRuntimeSnapshot,
+): Pick<PublicSnapshot, "researchGrant"> {
+  if (!GRANT_VISIBLE_STATES.has(snapshot.state)) return {};
+  const grant = resolve(snapshot.runId);
+  return grant === undefined ? {} : { researchGrant: grant };
 }

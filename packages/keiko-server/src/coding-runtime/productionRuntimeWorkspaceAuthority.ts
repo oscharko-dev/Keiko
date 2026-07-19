@@ -3,7 +3,9 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import type {
+  CodingWorkbenchActionClass,
   CodingWorkbenchMode,
+  CodingWorkbenchNetworkPolicy,
   CodingWorkbenchRuntimeAuthorityFacts,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -27,6 +29,33 @@ export interface ProductionWorkspaceAuthorityInput {
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly now?: (() => Date) | undefined;
+  // When the deployment activates read-only public research (#2387), the base envelope admits the
+  // network-egress action class and moves the network policy to governed-egress. This only opens
+  // the CLASS; a specific fetch still requires a live research grant in the registry AND passes the
+  // human-approval gate, so no grant means no outbound request (fail closed).
+  readonly researchEgressEnabled?: boolean | undefined;
+}
+
+// The base workspace action classes, plus network-egress only when research egress is activated.
+// Kept in lock-step with the network policy below so validateNetworkPolicyActionClassConsistency
+// holds (mode !== "deny-all" iff the action classes include network-egress).
+function researchActionClasses(
+  researchEgressEnabled: boolean | undefined,
+): readonly CodingWorkbenchActionClass[] {
+  const base: readonly CodingWorkbenchActionClass[] = [
+    "workspace-read",
+    "workspace-write",
+    "verification",
+  ];
+  return researchEgressEnabled === true ? [...base, "network-egress"] : base;
+}
+
+function researchNetworkPolicy(
+  researchEgressEnabled: boolean | undefined,
+): CodingWorkbenchNetworkPolicy {
+  return researchEgressEnabled === true
+    ? { mode: "governed-egress", allowLoopback: false, connectorScopes: [] }
+    : { mode: "deny-all", allowLoopback: false, connectorScopes: [] };
 }
 
 export function resolveProductionRuntimeContext(
@@ -73,7 +102,7 @@ function contextFromActive(
     },
     deploymentCeiling: input.deploymentCeiling,
     runtimeSource: runtimeProfile.runtimeSource,
-    actionClasses: ["workspace-read", "workspace-write", "verification"],
+    actionClasses: researchActionClasses(input.researchEgressEnabled),
     connectorScopes: [],
     modelProfile: {
       profileId: runtimeProfile.profileId,
@@ -88,7 +117,7 @@ function contextFromActive(
       maxCommandTimeoutMs: 1,
       requirePerCommandApproval: true,
     },
-    networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    networkPolicy: researchNetworkPolicy(input.researchEgressEnabled),
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs: RUNTIME_TTL_MS,

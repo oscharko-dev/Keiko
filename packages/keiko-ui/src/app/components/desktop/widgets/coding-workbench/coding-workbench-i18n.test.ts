@@ -41,6 +41,28 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  it("localizes the #2387 research grant, revoke, and auxiliary-outcome vocabulary", () => {
+    const keys = [
+      "codingWorkbench.research.chipLabel",
+      "codingWorkbench.research.revoke",
+      "codingWorkbench.research.revokeLabel",
+      "codingWorkbench.announcement.researchActive",
+      "codingWorkbench.event.child-run-completed",
+      "codingWorkbench.outcomeLabel.denied",
+      "codingWorkbench.outcomeLabel.limit-reached",
+    ] as const;
+    for (const key of keys) {
+      const en = translateCodingWorkbench("en", key);
+      const de = translateCodingWorkbench("de", key);
+      expect(en.length).toBeGreaterThan(0);
+      expect(de.length).toBeGreaterThan(0);
+      expect(en).not.toBe(de);
+    }
+    expect(translateCodingWorkbench("en", "codingWorkbench.research.chipLabel")).toBe(
+      "Internet · Research only",
+    );
+  });
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

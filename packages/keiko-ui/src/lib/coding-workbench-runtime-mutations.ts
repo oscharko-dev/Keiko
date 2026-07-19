@@ -10,6 +10,7 @@ import {
   pauseCodingWorkbenchRuntime,
   resumeCodingWorkbenchRuntime,
   retryCodingWorkbenchRuntime,
+  revokeCodingWorkbenchRuntimeResearchGrant,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
   submitCodingWorkbenchRuntimeFollowUp,
@@ -161,6 +162,30 @@ export function createRetryMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+      }),
+  };
+}
+
+export function createResearchRevokeMutation(
+  current: CodingWorkbenchRuntimeState,
+): CodingWorkbenchMutationCommand {
+  const snapshot = current.run.value;
+  const runId = snapshot?.runId;
+  const grant = snapshot?.researchGrant;
+  // Fail closed: a revoke is only ever built against a run that still carries a live grant, so a
+  // stale click after the server already dropped it surfaces as an action error, not a phantom POST.
+  if (!runId || snapshot === null || grant === undefined)
+    throw codingWorkbenchRuntimeActionError("No internet research grant is available to revoke.");
+  const id = newCodingWorkbenchRuntimeRequestId();
+  return {
+    requestId: id,
+    expected: { runId, revision: snapshot.revision },
+    mayInstallNewRun: false,
+    run: () =>
+      revokeCodingWorkbenchRuntimeResearchGrant(runId, {
+        requestId: id,
+        expectedRevision: snapshot.revision,
+        grantId: grant.grantId,
       }),
   };
 }
