@@ -809,6 +809,15 @@ const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
 const CLOSE_ABORT = "tool-bridge-close";
 
+// The execution collaborators travel the whole bridge chain (listener → handler → executor) as
+// one unit; bundling them keeps every signature within the parameter budget (typescript:S107).
+interface ToolBridgeExecutionDeps {
+  readonly capability: string;
+  readonly facade: CodingToolFacade;
+  readonly settleTool: SafeToolSettlement | undefined;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+}
+
 function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
@@ -822,16 +831,10 @@ function createToolBridge(
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
   const sockets = new Set<Socket>();
+  const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
-    handleDirectToolRequest(listening, capability, facade, gate, request, settleTool, diagnostics);
-  const listener = bridgeRequestListener(
-    () => listening,
-    capability,
-    facade,
-    gate,
-    settleTool,
-    diagnostics,
-  );
+    handleDirectToolRequest(listening, deps, gate, request);
+  const listener = bridgeRequestListener(() => listening, deps, gate);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
       return url;
@@ -863,48 +866,25 @@ function createToolBridge(
 // semantics it replaces: a request that arrives after close() is rejected by the preflight.
 function bridgeRequestListener(
   isListening: () => boolean,
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   gate: ToolBridgeAdmissionGate,
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response): void => {
-    void handleIncomingToolRequest(
-      request,
-      response,
-      isListening(),
-      capability,
-      facade,
-      gate.admit,
-      settleTool,
-      diagnostics,
-    );
+    void handleIncomingToolRequest(request, response, isListening(), deps, gate.admit);
   };
 }
 
 function handleDirectToolRequest(
   active: boolean,
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
-  const rejection = preflightToolRequest(active, capability, input.headers, input.body);
+  const rejection = preflightToolRequest(active, deps.capability, input.headers, input.body);
   if (rejection !== undefined) return Promise.resolve(rejection);
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(
-    facade,
-    capability,
-    input.headers,
-    input.body,
-    admission,
-    settleTool,
-    diagnostics,
-  );
+  return executeToolRequest(deps, input.headers, input.body, admission);
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
@@ -1027,14 +1007,12 @@ function declaredBodyLength(value: string | null): number | "invalid" {
 }
 
 async function executeToolRequest(
-  facade: CodingToolFacade,
-  capability: string,
+  deps: ToolBridgeExecutionDeps,
   headers: Headers,
   body: string,
   admission: AdmittedToolRequest,
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
+  const { facade, capability, settleTool, diagnostics } = deps;
   if (!validJson(body)) {
     admission.release();
     return { status: 400, body: "" };
@@ -1196,18 +1174,15 @@ async function handleIncomingToolRequest(
   request: IncomingMessage,
   response: ServerResponse,
   active: boolean,
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   admit: () => AdmittedToolRequest | undefined,
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<void> {
   if (request.method !== "POST" || request.url !== "/tool") {
     response.writeHead(404).end();
     return;
   }
   const headers = incomingHeaders(request.headers);
-  const rejection = preflightToolRequest(active, capability, headers);
+  const rejection = preflightToolRequest(active, deps.capability, headers);
   if (rejection !== undefined) {
     response.writeHead(rejection.status).end();
     return;
@@ -1221,15 +1196,7 @@ async function handleIncomingToolRequest(
   try {
     const bytes = await readBoundedBody(request, admission.controller.signal);
     const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(
-      facade,
-      capability,
-      headers,
-      body,
-      admission,
-      settleTool,
-      diagnostics,
-    );
+    const result = await executeToolRequest(deps, headers, body, admission);
     if (!response.destroyed) {
       response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
     }
