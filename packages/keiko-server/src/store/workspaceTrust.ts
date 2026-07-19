@@ -27,9 +27,11 @@ function rowToRecord(row: WorkspaceTrustRow): WorkspaceTrustRecordRow {
 const SQL_GET =
   "SELECT root_ref, revision, trust, record_json, updated_at FROM workspace_trust_records WHERE root_ref = ?";
 
-// UPSERT keyed by the derived opaque root reference. The newest record for a root wins; a demotion
-// or revocation overwrites in place at a higher revision so a restored older manifest never
-// resurrects a prior grant (ADR-0144 D3).
+// UPSERT keyed by the derived opaque root reference. Monotonic by construction: the DO UPDATE is
+// guarded by `excluded.revision > current.revision`, so the row only ever moves forward. A stale or
+// replayed write at an equal-or-lower revision is silently ignored, so a restored older manifest (or
+// a rolled-back store) can never resurrect a prior grant — the invariant is enforced at the DB layer,
+// not only by caller discipline (ADR-0144 D3).
 const SQL_UPSERT = `
 INSERT INTO workspace_trust_records (root_ref, revision, trust, record_json, updated_at)
 VALUES (?, ?, ?, ?, ?)
@@ -38,6 +40,7 @@ ON CONFLICT(root_ref) DO UPDATE SET
   trust = excluded.trust,
   record_json = excluded.record_json,
   updated_at = excluded.updated_at
+WHERE excluded.revision > workspace_trust_records.revision
 `;
 
 // Deterministic bounded pruning: keep the newest `max` rows by recency, delete the rest. Ordering is
