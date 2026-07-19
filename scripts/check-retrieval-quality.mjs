@@ -11,7 +11,7 @@ import { TextEncoder } from "node:util";
 import {
   LocalKnowledgeEval,
   binaryNdcgAtK,
-  evaluateMinimumFloors,
+  evaluateFloors,
   mean,
   runRegressionProbes,
 } from "@oscharko-dev/keiko-evaluations";
@@ -295,7 +295,7 @@ export function ndcgAtK(paths, relevantPaths, k) {
 }
 
 export function evaluateQualityBudget(summary, budget) {
-  const minimumResult = evaluateMinimumFloors(summary, {
+  const minimumResult = evaluateFloors(summary, {
     top1Rate: budget.minTop1Rate,
     recallAtK: budget.minRecallAtK,
     mrr: budget.minMrr,
@@ -516,7 +516,7 @@ async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
 }
 
 function localKnowledgeFailuresFor(scorecard) {
-  const failures = [...evaluateMinimumFloors(scorecard.dimensions, PASS_THRESHOLDS).failures];
+  const failures = [...evaluateFloors(scorecard.dimensions, PASS_THRESHOLDS).failures];
   if (!scorecard.passed && failures.length === 0) failures.push("passed");
   return failures;
 }

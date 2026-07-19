@@ -1,15 +1,19 @@
 // Shared evaluation-gate helpers (ADR-0152 D5). The helpers operate on structural metric records
 // and injected fixture runners only; they never import a system under test or persist evidence.
 
-export interface MinimumFloorResult<Metric extends string = string> {
-  readonly ok: boolean;
-  readonly failures: readonly Metric[];
-}
+import type {
+  EvalBudget,
+  EvalFloorResult,
+  RegressionProbeResult,
+} from "@oscharko-dev/keiko-contracts";
 
-export function evaluateMinimumFloors<const Metric extends string>(
+export type MinimumFloorResult<Metric extends string = string> = EvalFloorResult<Metric>;
+export type { EvalBudget, EvalFloorResult, RegressionProbeResult };
+
+export function evaluateFloors<const Metric extends string>(
   metrics: Readonly<Partial<Record<NoInfer<Metric>, number>>>,
-  minimums: Readonly<Record<Metric, number>>,
-): MinimumFloorResult<Metric> {
+  minimums: EvalBudget<Metric>,
+): EvalFloorResult<Metric> {
   const failures: Metric[] = [];
   const metricNames = Object.keys(minimums) as Metric[];
   for (const metric of metricNames) {
@@ -19,16 +23,11 @@ export function evaluateMinimumFloors<const Metric extends string>(
   return { ok: failures.length === 0, failures };
 }
 
+export { evaluateFloors as evaluateMinimumFloors };
+
 export interface RegressionProbeObservation {
   readonly fixtureId: string;
   readonly droppedBelowFloors: boolean;
-}
-
-export interface RegressionProbeResult {
-  readonly ok: boolean;
-  readonly tautological: readonly string[];
-  readonly probed: number;
-  readonly unresolved: readonly string[];
 }
 
 export interface RunRegressionProbesOptions<Fixture, Scorecard> {

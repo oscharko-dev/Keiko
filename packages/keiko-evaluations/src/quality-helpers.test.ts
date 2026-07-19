@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateMinimumFloors, runRegressionProbes } from "./quality-helpers.js";
+import { evaluateFloors, evaluateMinimumFloors, runRegressionProbes } from "./quality-helpers.js";
 
 const SAMPLES = [0, 0.5, 0.999, 1, 1.5] as const;
 
@@ -31,6 +31,10 @@ describe("evaluateMinimumFloors", () => {
     expect(evaluateMinimumFloors({ isolation: 1 - Number.EPSILON }, { isolation: 1 })).toEqual({
       ok: false,
       failures: ["isolation"],
+    });
+    expect(evaluateFloors({ isolation: 1 }, { isolation: 1 })).toEqual({
+      ok: true,
+      failures: [],
     });
   });
 });
