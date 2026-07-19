@@ -186,12 +186,25 @@ async function captureAndOpenJournal(
   const memoryWindow = await openMemoryWindow(context.page);
   await memoryWindow.getByRole("button", { name: "Journal", exact: true }).click();
   const rows = memoryWindow.getByTestId("memory-journal-row");
-  await expect(rows).toHaveCount(1);
-  const row = rows.first();
+  // Two rows: the just-captured proposal, plus a content-free "Refused" row for the earlier
+  // secret-content turn from exerciseDeniedCaptures() — #2551 made denied/secret captures
+  // visible-but-content-free in the Journal for transparency (certified by
+  // tests/e2e/memoriaviva-m1-certification.spec.ts's certifyContentFreeJournalRefusal), so a
+  // refused turn is no longer literally absent from the Journal, only its content is withheld.
+  await expect(rows).toHaveCount(2);
+  const row = memoryWindow.locator(
+    `[data-testid="memory-journal-row"][data-memory-id="${memoryId ?? ""}"]`,
+  );
   await expect(row).toHaveAttribute("data-memory-id", memoryId ?? "");
   await expect(row.getByText("Ask for approval")).toBeVisible();
   await expect(row.getByText("Awaiting review")).toBeVisible();
   await expect(row.getByText(/^Capture reason /)).toBeVisible();
+  const refusedRow = rows.filter({ hasNotText: "Awaiting review" });
+  await expect(refusedRow).toHaveCount(1);
+  await expect(refusedRow.getByText("Refused", { exact: true })).toBeVisible();
+  await expect(
+    refusedRow.getByText("Capture refused by policy. No content was retained."),
+  ).toBeVisible();
   return { memoryId: memoryId ?? "", memoryWindow, row };
 }
 
@@ -239,8 +252,14 @@ async function completeForget(
   memoryId: string,
 ): Promise<void> {
   await forget.click();
-  await expect(memoryWindow.getByTestId("memory-journal-empty")).toBeVisible();
-  await expect(memoryWindow.getByRole("heading", { name: "Memory Journal" })).toBeFocused();
+  // The kept capture's row is removed, but the content-free "Refused" row from the earlier
+  // secret-content turn was never persisted (no memoryId), so it is not affected by this Forget
+  // and remains — one row, not the empty state. Focus moves to that remaining row, not the
+  // heading (the heading is only focused when the list becomes fully empty).
+  const rows = memoryWindow.getByTestId("memory-journal-row");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.getByText("Refused", { exact: true })).toBeVisible();
+  await expect(rows).toBeFocused();
   await expect(memoryWindow.getByRole("status")).toContainText("Memory forgotten");
   await expect
     .poll(async () => persistedCaptures(await fetchRecent(context.request, context.since)).length)
