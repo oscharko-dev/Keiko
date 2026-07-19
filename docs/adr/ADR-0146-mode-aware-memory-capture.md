@@ -31,8 +31,9 @@ the shared vocabulary. Memory capture predates that rule and never made this map
 in **Ask for approval** and a user in **Full access** get byte-identical capture behavior, even
 though the product's stated meaning of Full access is that validated, in-envelope work proceeds
 without per-action review. Epic #2537 (MemoriaViva program) and its Wave 1 (#2546–#2551) close this
-gap. The companion Memory Journal (#2547, M1.2) will render the `proposed` vs. `accepted`
-distinction this ADR establishes, so the distinction must be meaningful before the Journal ships.
+gap. The companion Memory Journal (#2547's capture-decision projection, rendered by #2548's
+Journal UI, M1.2/M1.3) will render the `proposed` vs. `accepted` distinction this ADR establishes,
+so the distinction must be meaningful before the Journal ships.
 
 This ADR establishes memory capture as a governed autonomy-capable surface and fixes the one
 open design question: what does mode *do* to a capture outcome, and where does that decision sit
@@ -140,8 +141,9 @@ bodies or user text.
 - Memory capture now means what the product's autonomy model says it means: Ask for approval holds
   routine memories for review; Supervised workspace and Full access let them through, subject to the
   same confidence gate the maintenance sweep already enforces.
-- The Memory Journal (#2547, M1.2) has a real `proposed` vs. `accepted` distinction to render,
-  driven by mode, instead of a distinction that was previously a fixed function of content alone.
+- The Memory Journal (#2547's projection, #2548's UI, M1.2/M1.3) has a real `proposed` vs.
+  `accepted` distinction to render, driven by mode, instead of a distinction that was previously a
+  fixed function of content alone.
 - Legacy callers that omit `ConversationMemoryRequestWire.mode` are byte-identical to the original
   #2546 behavior: the server-owned deployment ceiling remains the effective capture mode.
 - No new capture path, promotion mechanism, mode ordering, or memory-local autonomy model is
