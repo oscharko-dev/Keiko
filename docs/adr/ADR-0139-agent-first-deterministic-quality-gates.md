@@ -139,6 +139,31 @@ baseline. Requiring both commits to have an identical lockfile would deadlock th
 change after a baseline was pinned; substituting either lockfile into the other checkout would no
 longer measure an exact commit. Both failure modes are therefore rejected.
 
+### D10 — The pull-request lane checks evidence integrity; the regeneration lane owns source freshness
+
+D2 narrowed the performance subject; in practice the subject still spans surfaces broad enough
+(the whole UI and contracts packages plus the root lockfile) that unrelated merged work invalidated
+committed timing evidence several times per day, and every invalidation demanded a ~35-minute
+Linux re-measurement from whichever pull request happened to be open — an unwinnable race against
+integration velocity that measured nothing new about the pull request itself.
+
+The freshness gate therefore runs in two modes. The pull-request lane (default,
+`check:perf-evidence:editor` in CI and `agent:pre-pr`) validates evidence integrity: canonical
+structure, budgets, stamps, the pinned-baseline anchor digest, and the measurement-toolchain
+digest (changing the ruler still requires re-measuring, on the pull request that changes it). It
+no longer requires the recorded source tree, the current lockfile, or a clean subject working tree
+to match HEAD. The regeneration lane (`--enforce-source-freshness`, asserted by
+`perf:evidence:regen` immediately after producing evidence, where the tree matches by
+construction) enforces the full exact-tree contract unchanged.
+
+Per-pull-request performance protection does not regress: the deterministic bundle gates
+(`check:editor-release-evidence`, `check:editor-bundle-size`) rebuild the shipped editor on every
+pull request and fail on any change to what users load, and the scheduled nightly lane (D3)
+re-measures `dev` daily and fails loudly on a budget breach. Timing evidence may lag `dev` by at
+most one nightly cycle; it can no longer be silently wrong, hand-edited, or measured with a
+different toolchain. This supersedes the D2/D3 expectation that a pull request touching a measured
+surface regenerates timing evidence in-flight.
+
 ## Invariants that do not change
 
 Performance budgets, coverage ratchet floors and per-file floors, architecture and trust-boundary

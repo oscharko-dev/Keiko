@@ -596,6 +596,9 @@ describe("D12 performance comparison builder", () => {
         computeMeasurementHarnessSha256: expect.any(Function),
         computeSourceTreeSha256: expect.any(Function),
         dirtySubjectPaths: [],
+        // ADR-0139 D10: the producer's own self-check must keep the full source-freshness
+        // contract; only the pull-request lane is lenient.
+        enforceSourceFreshness: true,
         isAncestor: expect.any(Function),
       }),
     );

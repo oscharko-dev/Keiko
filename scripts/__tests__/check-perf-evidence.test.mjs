@@ -1688,6 +1688,7 @@ describe("performance measurement subject", () => {
         evaluateFreshness(workspaceEvidence(), {
           computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
           dirtySubjectPaths,
+          enforceSourceFreshness: true,
           isAncestor: () => true,
         }).failures,
       ).toContain(
@@ -1719,6 +1720,7 @@ describe("evaluateFreshness", () => {
     const currentDigest = "c".repeat(64);
     const result = evaluateFreshness(workspaceEvidence(), {
       computeSourceTreeSha256: () => currentDigest,
+      enforceSourceFreshness: true,
       isAncestor,
     });
 
@@ -1800,6 +1802,7 @@ describe("evaluateFreshness", () => {
     const result = evaluateFreshness(evidence, {
       computeSourceTreeSha256: () =>
         performanceSubjectDigest({ "packages/keiko-ui/src/app.tsx": "changed\n" }),
+      enforceSourceFreshness: true,
       isAncestor: () => false,
     });
 
@@ -1815,6 +1818,7 @@ describe("evaluateFreshness", () => {
 
     const result = evaluateFreshness(evidence, {
       computeSourceTreeSha256: () => performanceSubjectDigest(currentFiles),
+      enforceSourceFreshness: true,
       isAncestor: () => false,
     });
 
@@ -1860,6 +1864,7 @@ describe("evaluateFreshness", () => {
     expect(
       evaluateFreshness(evidence, {
         computeSourceTreeSha256: () => performanceSubjectDigest(files),
+        enforceSourceFreshness: true,
         isAncestor: () => false,
       }).passed,
     ).toBe(false);
@@ -1873,6 +1878,7 @@ describe("evaluateFreshness", () => {
     const failures = evaluateFreshness(evidence, {
       computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
       computeSourceTreeSha256: () => currentDigest,
+      enforceSourceFreshness: true,
       isAncestor: () => false,
     }).failures;
     expect(failures.join("\n")).not.toMatch(/stale\/foreign-branch evidence/u);
@@ -1888,10 +1894,108 @@ describe("evaluateFreshness", () => {
       computeLockfileSha256: () => "a".repeat(64),
       computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
       computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+      enforceSourceFreshness: true,
       isAncestor,
     });
 
     expect(result).toEqual({ passed: true, failures: [] });
+  });
+
+  it("rejects a drifted lockfile in the enforcing (nightly/regen) mode", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "b".repeat(64),
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+      enforceSourceFreshness: true,
+      isAncestor,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/stale D12 dependency evidence/u);
+  });
+});
+
+// ADR-0139 D10: the pull-request gate validates evidence integrity + budgets only; source-tree
+// freshness (tree digest, lockfile drift, dirty inputs) is owned by the nightly regeneration lane
+// and the regen wrapper's --enforce-source-freshness validation. These tests pin the split: the
+// exact churn classes that used to force a 35-minute re-measurement on unrelated PRs no longer
+// fail the default (pull-request) mode, while genuinely semantic drift still does.
+describe("evaluateFreshness — pull-request mode (source freshness owned by the nightly lane)", () => {
+  const isAncestor = () => true;
+  const computeMatchingSourceTreeSha256 = () => SOURCE_TREE_SHA_256;
+
+  it("accepts source-tree drift (an unrelated UI/contracts change no longer forces a re-measure)", () => {
+    const result = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "a".repeat(64),
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: () => "c".repeat(64),
+      isAncestor,
+    });
+
+    expect(result).toEqual({ passed: true, failures: [] });
+  });
+
+  it("accepts a drifted lockfile (dependency churn from other merged work)", () => {
+    const result = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "b".repeat(64),
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+    });
+
+    expect(result).toEqual({ passed: true, failures: [] });
+  });
+
+  it("ignores dirty subject paths (local working-tree edits are the regen lane's concern)", () => {
+    const result = evaluateFreshness(workspaceEvidence(), {
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      dirtySubjectPaths: ["packages/keiko-ui/src/untracked.ts"],
+      isAncestor,
+    });
+
+    expect(result).toEqual({ passed: true, failures: [] });
+  });
+
+  it("still rejects measurement-toolchain drift (changing the ruler always requires re-measuring)", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => BASELINE_SOURCE_TREE_SHA_256,
+      computeLockfileSha256: () => "a".repeat(64),
+      computeMeasurementHarnessSha256: () => "e".repeat(64),
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/stale D12 measurement toolchain evidence/u);
+  });
+
+  it("still rejects a drifted pinned-baseline subject digest", () => {
+    const failures = evaluateFreshness(editorEvidence(), {
+      computeBaselineSourceTreeSha256: () => "f".repeat(64),
+      computeLockfileSha256: () => "a".repeat(64),
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/pinned baseline performance subject/u);
+  });
+
+  it("still rejects missing commit / source-tree / timestamp stamps", () => {
+    const evidence = workspaceEvidence();
+    delete evidence.commit;
+    delete evidence.sourceTreeSha256;
+    delete evidence.measuredAtIso;
+
+    const failures = evaluateFreshness(evidence, {
+      computeSourceTreeSha256: () => SOURCE_TREE_SHA_256,
+      isAncestor,
+    }).failures;
+
+    expect(failures.join("\n")).toMatch(/missing a valid `commit`/u);
+    expect(failures.join("\n")).toMatch(/missing a valid lowercase `sourceTreeSha256`/u);
+    expect(failures.join("\n")).toMatch(/missing a parseable `measuredAtIso`/u);
   });
 
   it("rejects D12 evidence generated by stale committed toolchain bytes", () => {
@@ -1917,6 +2021,7 @@ describe("evaluateFreshness", () => {
       computeLockfileSha256: () => currentDigest,
       computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
       computeSourceTreeSha256: computeMatchingSourceTreeSha256,
+      enforceSourceFreshness: true,
       isAncestor,
     });
 
@@ -1930,6 +2035,7 @@ describe("evaluateFreshness", () => {
     const result = evaluateFreshness(workspaceEvidence(), {
       computeSourceTreeSha256: computeMatchingSourceTreeSha256,
       dirtySubjectPaths: ["docs/release/1209-perf-evidence.json", "packages/keiko-ui/src/app.tsx"],
+      enforceSourceFreshness: true,
       isAncestor,
     });
 

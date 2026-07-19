@@ -9,16 +9,23 @@ The two committed editor evidence documents live in `docs/release/`:
 
 ## When evidence must be regenerated
 
-Evidence binds the **measured product surfaces** only (ADR-0139 D2): `packages/keiko-editor/`,
-`packages/keiko-ui/`, `packages/keiko-server/src/editor/`, `packages/keiko-contracts/`, `src/`,
-the root `package-lock.json`, and `tsconfig*` — excluding test-only files and `package.json`
-script/metadata churn — plus the dedicated D12
-measurement-toolchain digest. If your change touches none of those, committed evidence stays
-valid; repository tooling, workflow, docs, and test-only changes never require regeneration.
+Almost never on a pull request (ADR-0139 D10). The pull-request gate
+(`check:perf-evidence:editor`, also an `agent:pre-pr` step) validates evidence **integrity** —
+canonical structure, budgets, stamps, the pinned-baseline anchor, and the D12
+measurement-toolchain digest — and deliberately does **not** require the recorded source tree,
+lockfile, or working tree to match HEAD. Per-PR performance protection comes from the
+deterministic bundle gates (`check:editor-release-evidence`, `check:editor-bundle-size`), which
+rebuild the shipped editor on every pull request.
+
+You must regenerate in-flight only when your change edits the **measurement toolchain itself**
+(the scripts listed in `scripts/d12-measurement-toolchain.mjs`) — changing the ruler requires
+re-measuring with it. The regeneration wrapper validates its own output with the full
+source-freshness contract (`--enforce-source-freshness`), which additionally requires exact
+source-tree equality, the current lockfile, and a clean subject working tree.
 
 The scheduled workflow `nightly-perf-evidence` re-measures `dev` every night and opens a bot
-pull request when the committed documents drifted, so accumulation drift corrects itself without
-agent involvement.
+pull request when the committed documents drifted, so timing evidence lags `dev` by at most one
+nightly cycle and corrects itself without agent involvement.
 
 ## How to regenerate (one command)
 
