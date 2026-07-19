@@ -250,6 +250,7 @@ import {
   handleEditorAgentActions,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
+  handleEditorAgentScopedSessions,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
 } from "./editor/agentRoutes.js";
@@ -854,6 +855,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/agent/sessions",
     handler: handleEditorAgentSessions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/sessions",
+    handler: handleEditorAgentScopedSessions,
   },
   {
     method: "POST",

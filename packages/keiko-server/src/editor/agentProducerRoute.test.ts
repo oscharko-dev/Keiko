@@ -361,7 +361,7 @@ function expectSucceededToolOutcome(
   toolName: string,
   expectedStatus: string,
 ): void {
-  expect(response.status).toBe(200);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
   expect(response.body.outcome).toBe("completed");
   expect(response.body.toolCallCount).toBe(1);
   expect(response.body.toolNames).toEqual([toolName]);

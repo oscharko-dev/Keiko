@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { Activity, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type {
+  EditorAgentRootBinding,
   WorkspaceManifest,
   WorkspaceRootDescriptor,
   WorkspaceRootRef,
@@ -45,6 +46,21 @@ interface MultiRootEditorHostProps {
 function stringValue(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function agentRootBinding(
+  manifest: WorkspaceManifest,
+  root: WorkspaceRootDescriptor,
+): EditorAgentRootBinding | undefined {
+  if (manifest.roots.length === 1) return undefined;
+  return {
+    workspaceId: manifest.workspaceId,
+    manifestRef: manifest.manifestRef,
+    manifestRevision: manifest.revision,
+    manifestDigest: manifest.manifestDigest,
+    rootRef: root.rootRef,
+    rootIdentityDigest: root.identityDigest,
+  };
 }
 
 function stringList(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
@@ -256,6 +272,7 @@ export function MultiRootEditorHost({
                 {...baseProps}
                 {...initialSessionProps(root, sessions, cfg)}
                 root={root.canonicalRoot}
+                agentRootBinding={agentRootBinding(manifest, root)}
                 sessionActive={active}
                 windowId={`${baseProps.windowId ?? "editor"}-${root.rootRef}`}
                 onWorkspaceChange={sessionChangeHandlers.get(root.rootRef)}

@@ -25,6 +25,15 @@ import {
   type GitEditorDiffScope,
 } from "./git-editor.js";
 import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
+import {
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceRootRef,
+} from "./workspace-contract-primitives.js";
+import {
+  WORKSPACE_MANIFEST_SCHEMA_VERSION,
+  validateWorkspaceRootDispatch,
+  type WorkspaceRootDispatch,
+} from "./workspace-manifest.js";
 
 export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
@@ -68,6 +77,26 @@ export interface EditorAgentGovernedAuthorityReference {
   readonly envelopeDigest: string;
 }
 
+/**
+ * Content-free routing intent for exactly one current M11 workspace root. The server re-resolves
+ * every field against its manifest and filesystem identity before reading, mutating, or executing.
+ */
+export type EditorAgentRootBinding = Pick<
+  WorkspaceRootDispatch,
+  | "workspaceId"
+  | "manifestRef"
+  | "manifestRevision"
+  | "manifestDigest"
+  | "rootRef"
+  | "rootIdentityDigest"
+>;
+
+/** Opaque, content-free attribution attached to proposals, applies, and audit evidence. */
+export type EditorAgentRootAttribution = Pick<
+  WorkspaceRootDispatch,
+  "rootRef" | "rootIdentityDigest"
+>;
+
 export interface EditorAgentOneUseApprovalReference {
   readonly approvalId: string;
   readonly actionId: string;
@@ -105,6 +134,8 @@ export interface EditorAgentSessionSnapshot {
   readonly sessionId: string;
   readonly windowId: string;
   readonly workspaceRoot: string;
+  /** Required for multi-root sessions; omitted legacy single-root snapshots remain compatible. */
+  readonly rootBinding?: EditorAgentRootBinding | undefined;
   readonly activePaneId: string | null;
   readonly panes: readonly EditorAgentPaneSnapshot[];
   readonly dirtyFiles: readonly string[];
@@ -390,6 +421,8 @@ export interface EditorAgentAction {
   readonly actionId: string;
   readonly idempotencyKey: string;
   readonly sessionId: string;
+  /** Required for multi-root actions and must exactly match the session's bound root. */
+  readonly rootBinding?: EditorAgentRootBinding | undefined;
   readonly type: EditorAgentActionType;
   readonly origin?: EditorAgentActionOrigin | undefined;
   readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
@@ -430,6 +463,7 @@ export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "confl
 //                            action (Issue #1392 — the session's SSE bridge has disconnected).
 //   - INVALID_EDITS          the edits/patch are structurally invalid (overlap, inverted, malformed).
 //   - OUT_OF_SCOPE           the target escapes the workspace root or the action is unsupported here.
+//   - DECOMPOSE_PER_ROOT     the request spans multiple manifest roots and must be split.
 //   - PRECONDITION_REQUIRED  a write action omitted the mandatory version/hash precondition (AC2).
 //   - POLICY_DENIED          validated policy or authority denies the action.
 //   - APPROVAL_REQUIRED      policy requires a review mechanism not available for this action.
@@ -441,6 +475,7 @@ export type EditorAgentConflictCode =
   | "NO_ACTIVE_BRIDGE"
   | "INVALID_EDITS"
   | "OUT_OF_SCOPE"
+  | "DECOMPOSE_PER_ROOT"
   | "PRECONDITION_REQUIRED"
   | "POLICY_DENIED"
   | "APPROVAL_REQUIRED";
@@ -453,6 +488,7 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "NO_ACTIVE_BRIDGE",
   "INVALID_EDITS",
   "OUT_OF_SCOPE",
+  "DECOMPOSE_PER_ROOT",
   "PRECONDITION_REQUIRED",
   "POLICY_DENIED",
   "APPROVAL_REQUIRED",
@@ -507,6 +543,7 @@ export interface EditorAgentActionResult {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly actionId: string;
   readonly sessionId: string;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly status: EditorAgentActionStatus;
   readonly message?: string | undefined;
   readonly conflict?: EditorAgentConflictDetail | undefined;
@@ -545,8 +582,16 @@ export type EditorAgentEvent =
 export interface EditorAgentSnapshotRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly sessionId?: string | undefined;
+  readonly rootBinding?: EditorAgentRootBinding | undefined;
+  readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
   readonly maxBytes?: number | undefined;
+}
+
+export interface EditorAgentSessionsRequest {
+  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
+  readonly authorityRef: EditorAgentGovernedAuthorityReference;
+  readonly rootBinding?: EditorAgentRootBinding | undefined;
 }
 
 export interface EditorAgentBridgeSnapshotRequest {
@@ -742,6 +787,44 @@ export function isEditorAgentGovernedAuthorityReference(
     isRecord(value) &&
     isBoundedNonEmptyString(value.runId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
     isSha256Hex(value.envelopeDigest)
+  );
+}
+
+const EDITOR_AGENT_ROOT_BINDING_KEYS = [
+  "workspaceId",
+  "manifestRef",
+  "manifestRevision",
+  "manifestDigest",
+  "rootRef",
+  "rootIdentityDigest",
+] as const;
+
+export function isEditorAgentRootBinding(value: unknown): value is EditorAgentRootBinding {
+  if (!isRecord(value) || !hasOnlyObjectKeys(value, EDITOR_AGENT_ROOT_BINDING_KEYS)) return false;
+  return validateWorkspaceRootDispatch({
+    kind: "workspace-root-dispatch",
+    schemaVersion: WORKSPACE_MANIFEST_SCHEMA_VERSION,
+    ...value,
+    operationClass: "executing",
+  }).ok;
+}
+
+export function isEditorAgentRootAttribution(value: unknown): value is EditorAgentRootAttribution {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["rootRef", "rootIdentityDigest"]) &&
+    isWorkspaceRootRef(value.rootRef) &&
+    isWorkspaceRootIdentityDigest(value.rootIdentityDigest)
+  );
+}
+
+export function isEditorAgentSessionsRequest(value: unknown): value is EditorAgentSessionsRequest {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["schemaVersion", "authorityRef", "rootBinding"]) &&
+    value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION &&
+    isEditorAgentGovernedAuthorityReference(value.authorityRef) &&
+    isUndefinedOr(value.rootBinding, isEditorAgentRootBinding)
   );
 }
 
@@ -960,6 +1043,7 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
     isBoundedUtf8String(value.windowId, EDITOR_AGENT_WINDOW_ID_MAX_BYTES),
     isBoundedUtf8String(value.workspaceRoot, EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES),
+    isUndefinedOr(value.rootBinding, isEditorAgentRootBinding),
     isNullOr(value.activePaneId, (paneId) =>
       isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
     ),
@@ -1450,6 +1534,7 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES),
     isBoundedUtf8String(value.idempotencyKey, EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES),
     isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
+    isUndefinedOr(value.rootBinding, isEditorAgentRootBinding),
     isActionType(value.type),
     isUndefinedOr(value.origin, isEditorAgentActionOrigin),
     isUndefinedOr(value.authorityRef, isEditorAgentGovernedAuthorityReference),
@@ -1590,15 +1675,26 @@ function isEditorAgentFailureDetail(value: unknown): boolean {
   );
 }
 
+function isOptionalEditorAgentRootAttribution(value: unknown): boolean {
+  return isUndefinedOr(value, isEditorAgentRootAttribution);
+}
+
+function hasValidActionResultMetadata(value: Record<string, unknown>): boolean {
+  return (
+    isUndefinedOr(value.message, isBoundedResultMessage) &&
+    isOptionalEditorAgentConflictDetail(value.conflict)
+  );
+}
+
 export function isEditorAgentActionResult(value: unknown): value is EditorAgentActionResult {
   return (
     isRecord(value) &&
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION &&
     isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES) &&
     isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES) &&
+    isOptionalEditorAgentRootAttribution(value.rootAttribution) &&
     isActionStatus(value.status) &&
-    isUndefinedOr(value.message, isBoundedResultMessage) &&
-    isOptionalEditorAgentConflictDetail(value.conflict) &&
+    hasValidActionResultMetadata(value) &&
     isEditorAgentFailureDetail(value.failure) &&
     isEditorAgentFileActionResultArray(value.files) &&
     isUndefinedOr(value.data, isEditorAgentActionData)
@@ -1737,6 +1833,62 @@ const EDITOR_AGENT_BRIDGE_SNAPSHOT_REQUEST_KEYS = new Set([
   "bridgeDecisionCapability",
 ]);
 
+type SnapshotRequestScope = Pick<EditorAgentSnapshotRequest, "rootBinding" | "authorityRef">;
+
+function parseSnapshotRequestScope(
+  value: Record<string, unknown>,
+): EditorAgentParse<SnapshotRequestScope> {
+  if (value.rootBinding !== undefined && !isEditorAgentRootBinding(value.rootBinding)) {
+    return { ok: false, errors: ["rootBinding must identify one bounded workspace root"] };
+  }
+  if (
+    value.authorityRef !== undefined &&
+    !isEditorAgentGovernedAuthorityReference(value.authorityRef)
+  ) {
+    return { ok: false, errors: ["authorityRef must be a governed authority reference"] };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(value.rootBinding === undefined
+        ? {}
+        : { rootBinding: canonicalRootBinding(value.rootBinding) }),
+      ...(value.authorityRef === undefined
+        ? {}
+        : {
+            authorityRef: {
+              runId: value.authorityRef.runId,
+              envelopeDigest: value.authorityRef.envelopeDigest,
+            },
+          }),
+    },
+  };
+}
+
+type SnapshotRequestBounds = Pick<EditorAgentSnapshotRequest, "sessionId" | "maxBytes">;
+
+function parseSnapshotRequestBounds(
+  value: Record<string, unknown>,
+): EditorAgentParse<SnapshotRequestBounds> {
+  const { sessionId, maxBytes } = value;
+  if (
+    sessionId !== undefined &&
+    !isBoundedUtf8String(sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES)
+  ) {
+    return { ok: false, errors: ["sessionId must be a bounded string when present"] };
+  }
+  if (maxBytes !== undefined && !isNonNegativeInteger(maxBytes)) {
+    return { ok: false, errors: ["maxBytes must be a non-negative integer when present"] };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(maxBytes === undefined ? {} : { maxBytes }),
+    },
+  };
+}
+
 function parseReadSnapshotRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentSnapshotRequest> {
@@ -1751,22 +1903,17 @@ function parseReadSnapshotRequest(
   if (!isSnapshotTextMode(textMode)) {
     return { ok: false, errors: ["textMode must be none, selection, or activeFile"] };
   }
-  if (
-    value.sessionId !== undefined &&
-    !isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES)
-  ) {
-    return { ok: false, errors: ["sessionId must be a bounded string when present"] };
-  }
-  if (value.maxBytes !== undefined && !isNonNegativeInteger(value.maxBytes)) {
-    return { ok: false, errors: ["maxBytes must be a non-negative integer when present"] };
-  }
+  const bounds = parseSnapshotRequestBounds(value);
+  if (!bounds.ok) return bounds;
+  const scope = parseSnapshotRequestScope(value);
+  if (!scope.ok) return scope;
   return {
     ok: true,
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId }),
+      ...bounds.value,
+      ...scope.value,
       textMode,
-      ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes }),
     },
   };
 }
@@ -1784,6 +1931,26 @@ function canonicalRange(range: LanguageRange): LanguageRange {
   return {
     start: { line: range.start.line, character: range.start.character },
     end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+function canonicalRootBinding(binding: EditorAgentRootBinding): EditorAgentRootBinding {
+  return {
+    workspaceId: binding.workspaceId,
+    manifestRef: binding.manifestRef,
+    manifestRevision: binding.manifestRevision,
+    manifestDigest: binding.manifestDigest,
+    rootRef: binding.rootRef,
+    rootIdentityDigest: binding.rootIdentityDigest,
+  };
+}
+
+function canonicalRootAttribution(
+  attribution: EditorAgentRootAttribution,
+): EditorAgentRootAttribution {
+  return {
+    rootRef: attribution.rootRef,
+    rootIdentityDigest: attribution.rootIdentityDigest,
   };
 }
 
@@ -1957,6 +2124,9 @@ function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentActio
     actionId: action.actionId,
     idempotencyKey: action.idempotencyKey,
     sessionId: action.sessionId,
+    ...(action.rootBinding === undefined
+      ? {}
+      : { rootBinding: canonicalRootBinding(action.rootBinding) }),
     type: action.type,
     origin: resolveEditorAgentActionOrigin(action.origin),
     ...(action.authorityRef === undefined
@@ -2013,6 +2183,9 @@ function canonicalActionResult(result: EditorAgentActionResult): EditorAgentActi
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     actionId: result.actionId,
     sessionId: result.sessionId,
+    ...(result.rootAttribution === undefined
+      ? {}
+      : { rootAttribution: canonicalRootAttribution(result.rootAttribution) }),
     status: result.status,
     ...(result.message === undefined ? {} : { message: result.message }),
     ...(result.conflict === undefined ? {} : { conflict: canonicalConflict(result.conflict) }),

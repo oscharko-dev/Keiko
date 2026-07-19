@@ -368,6 +368,14 @@ export function postEditorAgentResult(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
       sessionId: action.sessionId,
+      ...(action.rootBinding === undefined
+        ? {}
+        : {
+            rootAttribution: {
+              rootRef: action.rootBinding.rootRef,
+              rootIdentityDigest: action.rootBinding.rootIdentityDigest,
+            },
+          }),
       status,
       ...(message === undefined ? {} : { message }),
       ...(conflict === undefined ? {} : { conflict }),

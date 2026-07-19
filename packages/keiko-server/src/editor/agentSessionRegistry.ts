@@ -153,10 +153,25 @@ function lifecycleFailure(
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     actionId: action.actionId,
     sessionId: action.sessionId,
+    ...resultRootAttribution(action),
     status: "failed",
     message,
     failure: { code, message },
   };
+}
+
+function resultRootAttribution(
+  action: EditorAgentAction,
+): Pick<EditorAgentActionResult, "rootAttribution"> | Record<never, never> {
+  const binding = action.rootBinding;
+  return binding === undefined
+    ? {}
+    : {
+        rootAttribution: {
+          rootRef: binding.rootRef,
+          rootIdentityDigest: binding.rootIdentityDigest,
+        },
+      };
 }
 
 function eventSessionId(event: EditorAgentEvent): string | undefined {
@@ -187,6 +202,7 @@ function bodyFreeResult(result: EditorAgentActionResult): EditorAgentActionResul
     schemaVersion: result.schemaVersion,
     actionId: result.actionId,
     sessionId: result.sessionId,
+    ...(result.rootAttribution === undefined ? {} : { rootAttribution: result.rootAttribution }),
     status: result.status,
     ...(result.conflict === undefined ? {} : { conflict: bodyFreeConflict(result.conflict) }),
     ...(result.failure === undefined
@@ -291,6 +307,7 @@ function cancelledRuntimeResult(action: EditorAgentAction): EditorAgentActionRes
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     actionId: action.actionId,
     sessionId: action.sessionId,
+    ...resultRootAttribution(action),
     status: "failed",
     message: "The runtime action was cancelled.",
   };
@@ -364,6 +381,7 @@ function rejectedQueueOutcome(action: EditorAgentAction, message: string): Edito
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
       sessionId: action.sessionId,
+      ...resultRootAttribution(action),
       status: "failed",
       message,
     },
@@ -396,6 +414,7 @@ function queueActionImpl(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
       sessionId: action.sessionId,
+      ...resultRootAttribution(action),
       status: "queued",
     },
   };

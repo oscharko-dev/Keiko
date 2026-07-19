@@ -200,6 +200,36 @@ describe("EditorAgentHttpClient", () => {
     expect(result).toEqual({ ok: true, value: { sessions: [] } });
   });
 
+  it("sends agent-scoped session discovery in a POST body", async () => {
+    let seen: EditorAgentHttpTransportRequest | undefined;
+    const transport: EditorAgentHttpTransport = {
+      request: (request) => {
+        seen = request;
+        return Promise.resolve({
+          status: 200,
+          body: encoder.encode('{"sessions":[]}'),
+          url: request.url,
+          redirected: false,
+        });
+      },
+    };
+    const authorityRef = { runId: "run-sessions", envelopeDigest: "a".repeat(64) };
+    const result = await client(transport).listSessions(
+      new AbortController().signal,
+      undefined,
+      authorityRef,
+    );
+    expect(result).toEqual({ ok: true, value: { sessions: [] } });
+    expect(seen).toMatchObject({
+      method: "POST",
+      url: "http://127.0.0.1:1983/api/editor/agent/sessions",
+      body: JSON.stringify({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        authorityRef,
+      }),
+    });
+  });
+
   it("reports an oversized streamed fetch response without leaking its body", async () => {
     const transport = createFetchEditorAgentHttpTransport(
       fetchReturning(streamingResponse(["SECRET", "_VALUE"])),
