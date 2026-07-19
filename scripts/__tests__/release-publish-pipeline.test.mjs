@@ -768,6 +768,9 @@ const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
 // the always-on "proves the latest dist-tag path" test in release-impact-notes.test.mjs pins
 // that rejection — so the stable-flow suite runs only on stable versions (dev).
 const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
+// An explicit empty value blocks release-publish's intentional local `.env` fallback, keeping the
+// no-token scenarios hermetic even when a developer has registry credentials in the repository.
+const NO_REGISTRY_TOKEN_ENV = { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: "" };
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
   "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
@@ -1336,7 +1339,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = runPublish({
         npmBody,
         initState: { published: false },
-        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+        qualificationEnv: NO_REGISTRY_TOKEN_ENV,
       });
 
       expect(lastRun.status).toBe(0);
@@ -1380,7 +1383,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = runPublish({
         npmBody,
         initState: { published: false },
-        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+        qualificationEnv: NO_REGISTRY_TOKEN_ENV,
       });
 
       expect(lastRun.status).toBe(0);
@@ -1403,7 +1406,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: false },
-        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+        qualificationEnv: NO_REGISTRY_TOKEN_ENV,
       });
 
       expect(lastRun.status).toBe(1);
