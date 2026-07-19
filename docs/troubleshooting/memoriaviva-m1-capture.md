@@ -28,38 +28,40 @@ Journal (`Journal` header action in the MemoriaViva window) after the turn compl
 **Root Cause**
 
 Capture is gated by several independent, fail-closed conditions evaluated in a fixed order before a
-candidate ever reaches the mode-aware decision: memory must be enabled for the request
-(`memory-salience.ts`'s `captureSalientFromTurn`), the turn's salience extraction must yield at
-least one candidate fact, the candidate must clear the secret scanner
-(`scanForSecrets`), and it must clear the category denylist (default categories: health data,
-identifiable-third-party statements) before the mode decision ever runs. A candidate refused by
-either hard denial is **never** captured or proposed, in any mode — this is by design, not a bug.
-Separately, in **Ask for approval** a routine fact is captured as a `proposed` row (visible in the
-Journal, but not yet applied) rather than silently dropped — if you expected silent learning, you
-are likely in a stricter mode than intended.
+candidate ever reaches the mode-aware decision: the caller's Authority Envelope must be valid and
+unexpired, memory must be enabled for the request (`memory-salience.ts`'s
+`captureSalientFromTurn`), the turn's salience extraction must yield at least one candidate fact,
+the candidate must clear the secret scanner (`scanForSecrets`), and it must clear the category
+denylist (default categories: health data, identifiable-third-party statements) before the mode
+decision ever runs. A candidate refused by a secret, category, or authority hard denial is
+**never** captured or proposed, in any mode — this is by design, not a bug. Separately, in **Ask
+for approval** a routine fact is captured as a `proposed` row (visible in the Journal, but not yet
+applied) rather than silently dropped — if you expected silent learning, you are likely in a
+stricter mode than intended.
 
 **Diagnostic Steps**
 
 1. Open the MemoriaViva window and confirm the **Use MemoriaViva in chat requests** toggle is on;
    if it is off, capture does not run at all for that turn.
 2. Open the **Journal** and check for a content-free **Refused** row for the turn in question. A
-   Refused row (with no body) confirms the secret gate or category denylist fired — this is
-   expected behavior, not a defect, and the reason is never shown because the row is content-free
-   by design.
+   Refused row (with no body) confirms a hard denial fired — this is expected behavior, not a
+   defect; no memory body or denied input is shown, but a redacted reason code (e.g.
+   `denied-category`) may be visible.
 3. Confirm the active autonomy mode in **MemoriaViva → Request settings**. In **Ask for approval**
    a routine fact is captured as a `proposed` row, not a silently-applied one; check the Journal
    for a row with the "Awaiting review" indicator rather than assuming nothing happened.
-4. For a realtime-voice turn, confirm the Journal row (once background capture settles, typically
-   within a few seconds) carries no visible surface label today — voice- and desktop-originated
-   captures are tagged internally (`conversation-center` vs `voice`) for future provenance
-   surfacing, but both currently render identically in the Journal.
+4. For a realtime-voice turn, background capture settles asynchronously (typically within a few
+   seconds); voice- and desktop-originated captures are tagged distinctly in the underlying data
+   (`voice` vs `conversation-center`) so a future Journal revision can surface it, but today's
+   Journal UI renders both surfaces identically — the absence of a visible surface badge is not a
+   defect.
 
 **Resolution**
 
 1. If the toggle was off, turn it on and repeat the turn.
-2. If a Refused row is present, the content matched a hard denial; this is the fail-closed
-   boundary working as intended — do not attempt to relax the secret gate or the category denylist
-   to force a capture through, in any mode.
+2. If a Refused row is present, a fail-closed hard-denial gate (authority, secret, or category)
+   rejected the request; this is the boundary working as intended — do not attempt to relax it to
+   force a capture through, in any mode.
 3. If the row is `proposed` rather than auto-accepted, either select a more permissive mode
    (**Supervised workspace** or **Full access**) in Request settings, or use the Journal's **Keep**
    action to promote the individual proposal.

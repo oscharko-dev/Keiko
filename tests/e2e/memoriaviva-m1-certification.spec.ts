@@ -424,7 +424,7 @@ This evidence contains only metric names, counts, rates, and a hash of content-f
 `;
 }
 
-function writeAndVerifyBaseline(metrics: MetricCounters): void {
+function verifyCommittedBaseline(metrics: MetricCounters): void {
   expect(metrics).toEqual({
     correctCaptures: 6,
     totalCaptures: 6,
@@ -435,7 +435,11 @@ function writeAndVerifyBaseline(metrics: MetricCounters): void {
   });
   const generated = renderBaseline(metrics);
   const committed = readFileSync(BASELINE_PATH, "utf8");
-  writeFileSync(BASELINE_PATH, generated, "utf8");
+  // Compare only — never write here. Writing before the assertion would let a genuinely drifted
+  // baseline self-heal on the very run that should catch the drift, defeating the guard: the first
+  // run fails correctly, but the file is already rewritten by then, so a rerun reads the new
+  // content and passes. Regenerate deliberately (docs/qa/memoriaviva-m1-baseline.md's own
+  // instructions) when the metrics genuinely change; never let the test do it silently.
   expect(committed).toBe(generated);
   for (const input of DENIED_INPUTS) expect(generated).not.toContain(input.text);
   expect(generated).not.toMatch(/\bpassword\s*=/iu);
@@ -465,5 +469,5 @@ test("certifies the real default-on M1 chat, voice, Journal, denial, forget, and
   await certifyModeIndependentDenials(context);
   await certifyDisabledPath(context);
   await certifyContentFreeJournalRefusal(context);
-  writeAndVerifyBaseline(metrics);
+  verifyCommittedBaseline(metrics);
 });
