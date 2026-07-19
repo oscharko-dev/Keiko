@@ -1000,15 +1000,8 @@ async function executeToolRequest(
     return { status: 400, body: "" };
   }
   const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
-  let facadeWork: Promise<CodingToolResult>;
-  try {
-    facadeWork = facade.execute({
-      body,
-      capability,
-      headers,
-      signal: admission.controller.signal,
-    });
-  } catch {
+  const facadeWork = startFacadeExecution(facade, capability, headers, body, admission);
+  if (facadeWork === undefined) {
     admission.release();
     settleSafeTool(settleTool, actionId, "failed");
     return { status: 502, body: "" };
@@ -1043,6 +1036,24 @@ function responseForToolResult(
   return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
     ? { status: 200, body: responseBody }
     : { status: 502, body: "" };
+}
+
+// Start the facade call, containing only its SYNCHRONOUS throw (a facade that dies before
+// returning a promise). `undefined` signals that failure to the caller; the returned promise's
+// rejection is handled by the awaiting request path, so no promise ever lives inside a try
+// (typescript:S4822).
+function startFacadeExecution(
+  facade: CodingToolFacade,
+  capability: string,
+  headers: Headers,
+  body: string,
+  admission: AdmittedToolRequest,
+): Promise<CodingToolResult> | undefined {
+  try {
+    return facade.execute({ body, capability, headers, signal: admission.controller.signal });
+  } catch {
+    return undefined;
+  }
 }
 
 function releaseAdmissionWhenSettled(
