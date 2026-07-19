@@ -88,12 +88,50 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.eventStream.resumable": "Resumable live events",
   "codingWorkbench.readiness.eventStream.waiting": "Waiting for a run",
   "codingWorkbench.readiness.eventStream.resnapshot": "Resnapshot",
-  "codingWorkbench.timeline.eyebrow": "Event stream",
-  "codingWorkbench.timeline.title": "Content-free timeline",
-  "codingWorkbench.timeline.empty": "No runtime events yet.",
+  "codingWorkbench.timeline.eyebrow": "Authenticated activity",
+  "codingWorkbench.timeline.title": "Live activity timeline",
+  "codingWorkbench.timeline.empty": "No confirmed activity yet.",
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.timeline.listLabel": "Coding run event timeline",
+  "codingWorkbench.activity.reasoningBoundary":
+    "This timeline shows observable conversation and work activity. It never exposes private reasoning.",
+  "codingWorkbench.activity.status.idle": "Start a run to watch its activity here.",
+  "codingWorkbench.activity.status.loading": "Connecting to the protected activity projection…",
+  "codingWorkbench.activity.status.live": "Protected activity is updating live.",
+  "codingWorkbench.activity.status.paused":
+    "Run paused. The transcript below is the latest confirmed snapshot, not live activity.",
+  "codingWorkbench.activity.status.recovery":
+    "Recovery is required. The transcript below is the last confirmed snapshot, not live activity.",
+  "codingWorkbench.activity.status.ended": "Run ended. Final confirmed activity is shown.",
+  "codingWorkbench.activity.status.unavailable":
+    "The protected activity projection is unavailable. Content-free runtime events remain visible.",
+  "codingWorkbench.activity.status.disconnected":
+    "The live activity connection closed. Previously confirmed content is not presented as live.",
+  "codingWorkbench.activity.status.offline":
+    "The activity stream is offline. Previously confirmed content is not presented as live.",
+  "codingWorkbench.activity.status.error":
+    "The activity stream could not be read. Previously confirmed content is not presented as live.",
+  "codingWorkbench.activity.retry": "Reconnect activity",
+  "codingWorkbench.activity.truncated":
+    "Older or oversized activity was omitted from this bounded transcript.",
+  "codingWorkbench.activity.dropped": "{count} activity update(s) could not be projected.",
+  "codingWorkbench.activity.truncationMark": "Output truncated",
+  "codingWorkbench.activity.role.user": "You",
+  "codingWorkbench.activity.role.assistant": "Coding agent",
+  "codingWorkbench.activity.tool": "Tool activity: {tool}",
+  "codingWorkbench.activity.toolState.pending": "Pending",
+  "codingWorkbench.activity.toolState.running": "Running",
+  "codingWorkbench.activity.toolState.succeeded": "Succeeded",
+  "codingWorkbench.activity.toolState.failed": "Failed",
+  "codingWorkbench.activity.toolState.denied": "Denied",
+  "codingWorkbench.activity.toolState.cancelled": "Cancelled",
+  "codingWorkbench.activity.plan.title": "Current plan",
+  "codingWorkbench.activity.plan.truncated": "Part of this plan was omitted.",
+  "codingWorkbench.activity.planState.pending": "Pending",
+  "codingWorkbench.activity.planState.active": "In progress",
+  "codingWorkbench.activity.planState.completed": "Completed",
+  "codingWorkbench.activity.planState.cancelled": "Cancelled",
   "codingWorkbench.source.eyebrow": "Model source",
   "codingWorkbench.source.title": "Choose a server-confirmed source",
   "codingWorkbench.source.group": "Runtime model source",

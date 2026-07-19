@@ -83,7 +83,12 @@
   .setupPlan,
   .taskInput,
   .setupInput,
-  .alert {
+  .alert,
+  .activityStatus,
+  .toolCard,
+  .planCard,
+  .questionInline,
+  .activityBadge {
     border-color: CanvasText;
     color: CanvasText;
     background: Canvas;
@@ -110,9 +115,15 @@
 
   .statePill,
   .statusBadge,
-  .resourceState {
+  .resourceState,
+  .activityBadge {
     border-color: CanvasText;
     color: CanvasText;
+    background: Canvas;
+  }
+
+  .timelineMarker {
+    border-color: CanvasText;
     background: Canvas;
   }
 }

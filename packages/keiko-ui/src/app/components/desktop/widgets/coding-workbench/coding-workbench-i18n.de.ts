@@ -91,12 +91,54 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.eventStream.resumable": "Fortsetzbare Live-Ereignisse",
   "codingWorkbench.readiness.eventStream.waiting": "Wartet auf einen Lauf",
   "codingWorkbench.readiness.eventStream.resnapshot": "Snapshot erneuern",
-  "codingWorkbench.timeline.eyebrow": "Ereignisstrom",
-  "codingWorkbench.timeline.title": "Inhaltsfreie Zeitleiste",
-  "codingWorkbench.timeline.empty": "Noch keine Runtime-Ereignisse.",
+  "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
+  "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
+  "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
+  "codingWorkbench.activity.reasoningBoundary":
+    "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
+  "codingWorkbench.activity.status.idle":
+    "Starte einen Lauf, um seine Aktivität hier zu verfolgen.",
+  "codingWorkbench.activity.status.loading":
+    "Verbindung zur geschützten Aktivitätsprojektion wird hergestellt…",
+  "codingWorkbench.activity.status.live": "Geschützte Aktivität wird live aktualisiert.",
+  "codingWorkbench.activity.status.paused":
+    "Lauf pausiert. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
+  "codingWorkbench.activity.status.recovery":
+    "Wiederherstellung ist erforderlich. Das Transkript unten ist der letzte bestätigte Snapshot und keine Live-Aktivität.",
+  "codingWorkbench.activity.status.ended":
+    "Lauf beendet. Die endgültige bestätigte Aktivität wird angezeigt.",
+  "codingWorkbench.activity.status.unavailable":
+    "Die geschützte Aktivitätsprojektion ist nicht verfügbar. Inhaltsfreie Runtime-Ereignisse bleiben sichtbar.",
+  "codingWorkbench.activity.status.disconnected":
+    "Die Live-Aktivitätsverbindung wurde geschlossen. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.status.offline":
+    "Der Aktivitätsstrom ist offline. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.status.error":
+    "Der Aktivitätsstrom konnte nicht gelesen werden. Zuvor bestätigte Inhalte werden nicht als live dargestellt.",
+  "codingWorkbench.activity.retry": "Aktivität erneut verbinden",
+  "codingWorkbench.activity.truncated":
+    "Ältere oder zu große Aktivität wurde aus diesem begrenzten Transkript ausgelassen.",
+  "codingWorkbench.activity.dropped":
+    "{count} Aktivitätsaktualisierung(en) konnten nicht projiziert werden.",
+  "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
+  "codingWorkbench.activity.role.user": "Du",
+  "codingWorkbench.activity.role.assistant": "Coding-Agent",
+  "codingWorkbench.activity.tool": "Tool-Aktivität: {tool}",
+  "codingWorkbench.activity.toolState.pending": "Ausstehend",
+  "codingWorkbench.activity.toolState.running": "Wird ausgeführt",
+  "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
+  "codingWorkbench.activity.toolState.failed": "Fehlgeschlagen",
+  "codingWorkbench.activity.toolState.denied": "Abgelehnt",
+  "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
+  "codingWorkbench.activity.plan.title": "Aktueller Plan",
+  "codingWorkbench.activity.plan.truncated": "Ein Teil dieses Plans wurde ausgelassen.",
+  "codingWorkbench.activity.planState.pending": "Ausstehend",
+  "codingWorkbench.activity.planState.active": "In Bearbeitung",
+  "codingWorkbench.activity.planState.completed": "Abgeschlossen",
+  "codingWorkbench.activity.planState.cancelled": "Abgebrochen",
   "codingWorkbench.source.eyebrow": "Modellquelle",
   "codingWorkbench.source.title": "Serverbestätigte Quelle auswählen",
   "codingWorkbench.source.group": "Runtime-Modellquelle",

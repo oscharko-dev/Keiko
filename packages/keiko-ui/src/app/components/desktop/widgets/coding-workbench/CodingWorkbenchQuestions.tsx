@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -22,8 +23,9 @@ import {
 import {
   useCodingWorkbenchQuestions,
   type CodingWorkbenchQuestionsStatus,
+  type UseCodingWorkbenchQuestionsResult,
 } from "@/lib/useCodingWorkbenchQuestions";
-import { PanelTitle } from "./CodingWorkbenchSections";
+import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -59,10 +61,27 @@ export function CodingWorkbenchQuestions({
     runtimeEventCount,
     refreshSnapshot,
   });
+  if (runId === undefined && !terminal) return null;
+  return <CodingWorkbenchQuestionsSurface result={result} variant="standalone" />;
+}
+
+export interface CodingWorkbenchQuestionsSurfaceProps {
+  readonly result: UseCodingWorkbenchQuestionsResult;
+  readonly variant: "standalone" | "inline";
+  readonly restoreFocusRef?: RefObject<HTMLElement | null>;
+}
+
+export function CodingWorkbenchQuestionsSurface({
+  result,
+  variant,
+  restoreFocusRef,
+}: CodingWorkbenchQuestionsSurfaceProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const focusedRequestRef = useRef<string | undefined>(undefined);
   const firstRequestId = result.questions[0]?.id;
+  const answer = useFocusRestoringAction(result.answer, restoreFocusRef);
+  const reject = useFocusRestoringAction(result.reject, restoreFocusRef);
 
   useEffect(() => {
     if (firstRequestId === undefined || focusedRequestRef.current === firstRequestId) return;
@@ -70,12 +89,11 @@ export function CodingWorkbenchQuestions({
     headingRef.current?.focus();
   }, [firstRequestId]);
 
-  if (runId === undefined && !terminal) return null;
   const retryable =
     result.status === "offline" || result.status === "error" || result.status === "stale";
   return (
     <section
-      className={styles.card}
+      className={variant === "inline" ? styles.questionInline : styles.card}
       aria-label={t("codingWorkbench.questions.sectionLabel")}
       data-testid="coding-workbench-questions"
       data-question-state={result.status}
@@ -101,14 +119,28 @@ export function CodingWorkbenchQuestions({
               request={request}
               busy={result.status !== "ready"}
               headingRef={headingRef}
-              onAnswer={result.answer}
-              onReject={result.reject}
+              onAnswer={answer}
+              onReject={reject}
               t={t}
             />
           ))}
         </div>
       ) : null}
     </section>
+  );
+}
+
+function useFocusRestoringAction<T extends readonly unknown[]>(
+  action: (...args: T) => Promise<boolean>,
+  restoreFocusRef: RefObject<HTMLElement | null> | undefined,
+): (...args: T) => Promise<boolean> {
+  return useCallback(
+    async (...args: T): Promise<boolean> => {
+      const accepted = await action(...args);
+      if (accepted) restoreFocusRef?.current?.focus();
+      return accepted;
+    },
+    [action, restoreFocusRef],
   );
 }
 

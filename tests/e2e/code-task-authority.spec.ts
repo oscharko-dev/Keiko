@@ -30,6 +30,11 @@ import { join } from "node:path";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
+import {
+  FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
+  FUNCTIONAL_PLAN_STEP_READ,
+  FUNCTIONAL_PLAN_STEP_VERIFY,
+} from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
@@ -146,6 +151,9 @@ async function proveUnpairedClientReadsNoQuestionText(
   runId: string,
 ): Promise<void> {
   const headers = { origin, "x-keiko-csrf": "1" };
+  const activity = await stranger.get("/api/coding-workbench/app-session/channel");
+  expect(activity.status()).toBe(200);
+  expect(await activity.json()).toEqual({ schemaVersion: "1", content: null });
   const listed = await stranger.post(`/api/coding-workbench/runtime/runs/${runId}/questions`, {
     headers,
     data: { requestId: "req_stranger-list", expectedRevision: 0 },
@@ -187,6 +195,37 @@ async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
   ).toBeVisible();
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
+}
+
+async function proveLiveActivityTimeline(
+  page: Page,
+  request: APIRequestContext,
+  timeline: Locator,
+  runId: string,
+): Promise<void> {
+  await awaitRequiredQuestion(page);
+  await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
+  await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
+  await expect(timeline.locator('[data-tool-state="succeeded"]')).toContainText("workspace");
+  await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
+  await answerVisibleQuestion(page);
+  await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+  await expect(
+    timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
+  ).toBeVisible();
+  const browserRetention = await page.evaluate(() => ({
+    url: window.location.href,
+    local: Object.keys(window.localStorage).map((key) => window.localStorage.getItem(key)),
+    session: Object.keys(window.sessionStorage).map((key) => window.sessionStorage.getItem(key)),
+  }));
+  expect(JSON.stringify(browserRetention)).not.toContain(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX);
+  await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_VERIFY, { exact: true })).toBeVisible();
+  await expect(timeline.getByText("Output truncated", { exact: false })).toBeVisible();
+  const edited = findManagedTargetFiles(managedRoot, 4);
+  expect(edited).toHaveLength(1);
+  expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
 }
 
 // Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while
@@ -236,20 +275,14 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await start.click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
   const runId = await currentRunId(page);
+  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
 
   // The required question must surface in the paired browser (#2478: the round-trip now runs over
   // the authenticated app-session channel); while it is pending, an unpaired local client with
   // every routing fact must receive no question text and no blind-answer authority.
-  await awaitRequiredQuestion(page);
-  await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
-  await answerVisibleQuestion(page);
-  const timeline = page.getByRole("list", { name: "Coding run event timeline" });
-  await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
-    timeout: 90_000,
-  });
-  const edited = findManagedTargetFiles(managedRoot, 4);
-  expect(edited).toHaveLength(1);
-  expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
+  // #2481: the question is part of the authenticated activity transcript itself, after the
+  // completed read tool and the plan snapshot that causally preceded it — not a detached widget.
+  await proveLiveActivityTimeline(page, request, timeline, runId);
 
   // Pause is sticky: the run must stay paused across runtime activity until an explicit Resume.
   await page.getByRole("button", { name: "Pause run" }).click();

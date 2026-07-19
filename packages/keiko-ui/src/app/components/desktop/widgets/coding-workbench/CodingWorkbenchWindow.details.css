@@ -274,6 +274,152 @@
   pointer-events: none;
 }
 
+.activityStatus {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  border-inline-start: 3px solid var(--feedback-info);
+  padding: var(--space-2) var(--space-3);
+  background: var(--feedback-info-surface);
+  color: var(--text-primary);
+}
+
+.activityStatus[data-activity-state="paused"],
+.activityStatus[data-activity-state="recovery"],
+.activityStatus[data-activity-state="unavailable"],
+.activityStatus[data-activity-state="disconnected"] {
+  border-inline-start-color: var(--feedback-warning);
+  background: var(--feedback-warning-surface);
+}
+
+.activityStatus[data-activity-state="offline"],
+.activityStatus[data-activity-state="error"] {
+  border-inline-start-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+
+.activityStatus p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.timelineBody,
+.toolCard,
+.planCard,
+.questionInline {
+  min-width: 0;
+}
+
+.messageText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.messageText p,
+.planCard p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.toolCard {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--surface-inset);
+}
+
+.toolCard[data-tool-state="succeeded"] {
+  border-color: var(--feedback-success);
+}
+
+.toolCard[data-tool-state="failed"],
+.toolCard[data-tool-state="denied"] {
+  border-color: var(--feedback-danger);
+}
+
+.toolCard[data-tool-state="cancelled"] {
+  border-color: var(--feedback-warning);
+}
+
+.activityBadge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.activityBadge[data-state="succeeded"],
+.activityBadge[data-state="completed"] {
+  border-color: var(--feedback-success);
+}
+
+.activityBadge[data-state="failed"],
+.activityBadge[data-state="denied"] {
+  border-color: var(--feedback-danger);
+}
+
+.activityBadge[data-state="cancelled"] {
+  border-color: var(--feedback-warning);
+}
+
+.planCard {
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--surface-accent-subtle);
+}
+
+.planSteps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding-inline-start: var(--space-5);
+}
+
+.planSteps li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planSteps .activityBadge {
+  margin-inline-start: var(--space-2);
+}
+
+.questionInline {
+  width: 100%;
+  border: 1px solid var(--feedback-warning);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  background: var(--feedback-warning-surface);
+}
+
+.truncationMark {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--feedback-warning);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
 .questionStatus {
   margin: 0;
   font-size: var(--text-body-sm);

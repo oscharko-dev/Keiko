@@ -16,6 +16,8 @@ import {
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
+import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
+import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import {
   ModeAuthority,
@@ -26,7 +28,6 @@ import {
   WorkbenchHeader,
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
-import { CodingWorkbenchQuestions } from "./CodingWorkbenchQuestions";
 import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
 import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -154,6 +155,19 @@ function WorkbenchColumns({
   const showSetup = activeWorkspace.activeBinding === null;
   const runtimeUnavailable =
     state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
+  const runtimeEventCount = state.events.filter((event) => event.kind === "runtime-event").length;
+  const questions = useCodingWorkbenchQuestions({
+    runId: state.run.value?.runId,
+    revision: state.run.value?.revision,
+    runState: state.run.value?.state,
+    runtimeEventCount,
+    refreshSnapshot: actions.refreshRun,
+  });
+  const activity = useCodingWorkbenchSafeActivity({
+    runId: state.run.value?.runId,
+    runState: state.run.value?.state,
+    runtimeEventCount,
+  });
   return (
     <div className={styles.grid}>
       <div className={styles.stack}>
@@ -187,16 +201,9 @@ function WorkbenchColumns({
       </div>
       <div className={styles.stack}>
         <PermissionPrompt state={state} onDecision={onDecision} />
-        <CodingWorkbenchQuestions
-          runId={state.run.value?.runId}
-          revision={state.run.value?.revision}
-          runState={state.run.value?.state}
-          runtimeEventCount={state.events.filter((event) => event.kind === "runtime-event").length}
-          refreshSnapshot={actions.refreshRun}
-        />
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <RuntimeControls state={state} actions={actions} />
-        <Timeline events={state.events} />
+        <Timeline events={state.events} activity={activity} questions={questions} />
       </div>
     </div>
   );
