@@ -10,7 +10,7 @@ import { managedLspConfigurationDefaults } from "./managedLspConfigurationDefaul
 const ETAG = '"lspcfg-7-abcdefghijklmnop"';
 
 describe("managed LSP server-owned configuration defaults", () => {
-  it("projects one current, valid, safe default for every managed language", () => {
+  it("projects one current, valid, safe default for every managed language", (): void => {
     const defaults = managedLspConfigurationDefaults(7, ETAG, "linux", "x64");
 
     expect(Object.isFrozen(defaults)).toBe(true);
@@ -40,7 +40,7 @@ describe("managed LSP server-owned configuration defaults", () => {
     });
   });
 
-  it("contains no browser-selectable execution, environment, download, or capability authority", () => {
+  it("contains no browser-selectable execution, environment, download, or capability authority", (): void => {
     const serialized = JSON.stringify(managedLspConfigurationDefaults(7, ETAG));
 
     for (const forbidden of [
@@ -67,7 +67,7 @@ describe("managed LSP server-owned configuration defaults", () => {
     ["aix", "ppc64", "linux", "amd64"],
   ] as const)(
     "maps the server platform %s/%s into a closed Go target %s/%s",
-    (platform, architecture, goos, goarch) => {
+    (platform, architecture, goos, goarch): void => {
       const go = managedLspConfigurationDefaults(7, ETAG, platform, architecture).find(
         (configuration) => configuration.language === "go",
       );

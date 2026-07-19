@@ -312,7 +312,7 @@ describe("ManagedLanguageSettings", () => {
     ["rust", "Rust"],
   ] as const)(
     "accepts the server-owned initial %s configuration without inventing browser runtime identities",
-    async (language, _label) => {
+    async (language, _label): Promise<void> => {
       fetchSettingsMock
         .mockResolvedValueOnce(initialConfigurationSnapshot(language))
         .mockResolvedValueOnce(
@@ -348,7 +348,7 @@ describe("ManagedLanguageSettings", () => {
 
   it.each(["python", "go", "shell", "java", "rust"] as const)(
     "preserves the initial %s configuration intent across a stale revision",
-    async (language) => {
+    async (language): Promise<void> => {
       fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot(language));
       mutateSettingsMock.mockRejectedValue(new ApiError("STALE_REVISION", "stale", 412));
       renderSettings(`/workspace/initial-stale-${language}`);
@@ -361,7 +361,7 @@ describe("ManagedLanguageSettings", () => {
     },
   );
 
-  it("blocks an invalid initial Rust target before any mutation", async () => {
+  it("blocks an invalid initial Rust target before any mutation", async (): Promise<void> => {
     fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("rust"));
     renderSettings("/workspace/initial-invalid-rust");
 
@@ -373,7 +373,7 @@ describe("ManagedLanguageSettings", () => {
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
-  it("blocks incompatible initial Java source and target levels before any mutation", async () => {
+  it("blocks incompatible initial Java source and target levels before any mutation", async (): Promise<void> => {
     fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("java"));
     renderSettings("/workspace/initial-invalid-java");
 
@@ -385,6 +385,34 @@ describe("ManagedLanguageSettings", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/source level cannot be newer/i);
     expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled();
     expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale configured draft when accepting a server-owned initial default", async (): Promise<void> => {
+    const root = "/workspace/stale-initial-draft";
+    fetchSettingsMock.mockResolvedValue(snapshot());
+    const configured = renderSettings(root);
+    const configuredMode = await screen.findByRole("combobox", { name: "Type-checking mode" });
+    fireEvent.change(configuredMode, { target: { value: "strict" } });
+    expect(configuredMode).toHaveValue("strict");
+    configured.unmount();
+
+    fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("python"));
+    mutateSettingsMock.mockResolvedValue(undefined);
+    renderSettings(root);
+
+    const initialMode = await screen.findByRole("combobox", { name: "Type-checking mode" });
+    expect(initialMode).toHaveValue("standard");
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(mutateSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuration: expect.objectContaining({
+          settings: expect.objectContaining({ typeCheckingMode: "standard" }),
+        }),
+      }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
   });
 
   it("does not show a false active state before the server acknowledges activation", async () => {

@@ -531,7 +531,7 @@ describe("managed LSP same-origin control routes", () => {
     },
   );
 
-  it("preserves a persisted restart requirement when pool disposal removes live health", async () => {
+  it("preserves a persisted restart requirement when pool disposal removes live health", async (): Promise<void> => {
     const control = createManagedLspControlService({
       store: createManagedLspActivationStore({ stateDir }),
       processEnv: {},
@@ -564,7 +564,7 @@ describe("managed LSP same-origin control routes", () => {
 
   it.each(["python", "go", "shell", "java", "rust"] as const)(
     "accepts the first server-owned %s configuration and preserves all write guards",
-    async (language: ManagedLspLanguage) => {
+    async (language: ManagedLspLanguage): Promise<void> => {
       const fixture = await initialConfigurationFor(language);
       await expectInvalidInitialConfiguration(language, fixture);
       await acceptInitialConfiguration(language, fixture);

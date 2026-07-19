@@ -602,6 +602,44 @@ describe("managed LSP activation control service", () => {
     expect(await service.readConfiguration(root, "python")).toBeUndefined();
   });
 
+  it("records an identical configuration as a no-op without revision or pool churn", async (): Promise<void> => {
+    const root = temporaryDirectory("workspace-configuration-noop");
+    const dispose = vi.fn(() => Promise.resolve());
+    const service = createManagedLspControlService(serviceOptions({ dispose }));
+    const initial = await service.read(root);
+    const first = await service.mutate({
+      action: "configure",
+      actorClass: "localHuman",
+      expectedRevision: 0,
+      idempotencyKey: "configure-shell-initial",
+      language: "shell",
+      root,
+      configuration: shellConfiguration(0, initial.etag),
+    });
+    if (first.kind !== "ok") throw new Error("configuration setup failed");
+
+    const noOp = await service.mutate({
+      action: "configure",
+      actorClass: "localHuman",
+      expectedRevision: first.revision,
+      idempotencyKey: "configure-shell-noop",
+      language: "shell",
+      root,
+      configuration: shellConfiguration(first.revision, first.etag),
+    });
+
+    expect(noOp).toMatchObject({ kind: "ok", changed: false, revision: first.revision });
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(await service.readConfiguration(root, "shell")).toMatchObject({
+      revision: first.revision,
+      restartRequired: true,
+      restartFields: ["runtime", "settings"],
+    });
+    const persisted = readFileSync(managedLspActivationRecordPath(service.stateDir, root), "utf8");
+    expect(persisted).toContain('"action": "configure"');
+    expect(persisted).toContain('"outcome": "noOp"');
+  });
+
   it("rejects unapproved secret-shaped runtime identities without persistence or response echo", async () => {
     const root = temporaryDirectory("workspace-secret-runtime");
     const service = createManagedLspControlService(serviceOptions());

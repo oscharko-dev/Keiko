@@ -390,6 +390,15 @@ function rollbackEntry(
     : { ...prior, configuration, previous: previousState(current) };
 }
 
+function isIdenticalConfiguration(
+  mutation: ManagedLspControlMutation,
+  current: ManagedLspPersistedLanguageEntry | undefined,
+): boolean {
+  if (mutation.action !== "configure" || current?.activation !== "enabled") return false;
+  if (current.configuration === undefined || mutation.configuration === undefined) return false;
+  return changedRestartFields(current.configuration, mutation.configuration).length === 0;
+}
+
 function configuredEntry(
   mutation: ManagedLspControlMutation,
   current: ManagedLspPersistedLanguageEntry | undefined,
@@ -398,6 +407,7 @@ function configuredEntry(
 ): ManagedLspPersistedLanguageEntry | undefined {
   const activation = mutation.action === "deactivate" ? "disabled" : "enabled";
   if (mutation.configuration === undefined && current?.activation === activation) return current;
+  if (isIdenticalConfiguration(mutation, current)) return current;
   const configuration = nextConfiguration(mutation, current, nextRevision, nextEtag);
   if (mutation.action === "configure" && configuration === undefined) return current;
   return {
@@ -683,9 +693,6 @@ async function commitAccepted(
     nextRevision,
     etag(mutation.root, nextRevision),
   );
-  if (mutation.action === "configure" && entry === record.languages[mutation.language]) {
-    return { kind: "invalid", code: "INVALID_REQUEST" };
-  }
   const restartAccepted =
     mutation.action === "restart" && record.languages[mutation.language]?.activation === "enabled";
   const changed =

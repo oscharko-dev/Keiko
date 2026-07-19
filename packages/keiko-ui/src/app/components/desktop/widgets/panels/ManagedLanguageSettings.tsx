@@ -457,6 +457,16 @@ type RuntimeDraft =
 
 const runtimeDrafts = new Map<string, RuntimeDraft>();
 
+function initialRuntimeDraft(
+  identity: string,
+  initialWrite: boolean,
+  serverDraft: RuntimeDraft,
+): RuntimeDraft {
+  const draft = initialWrite ? serverDraft : (runtimeDrafts.get(identity) ?? serverDraft);
+  runtimeDrafts.set(identity, draft);
+  return draft;
+}
+
 function RuntimeSettingsEditor({
   root,
   configuration,
@@ -474,7 +484,9 @@ function RuntimeSettingsEditor({
 }): ReactNode {
   const identity = `${root}\0${configuration.language}`;
   const initialDraft = draftFromConfiguration(configuration);
-  const [draft, setDraft] = useState<RuntimeDraft>(runtimeDrafts.get(identity) ?? initialDraft);
+  const [draft, setDraft] = useState<RuntimeDraft>((): RuntimeDraft =>
+    initialRuntimeDraft(identity, initialWrite, initialDraft),
+  );
   const dirty = JSON.stringify(draft) !== JSON.stringify(initialDraft);
   const submittable = initialWrite || dirty;
   const error = draftValidationError(draft, t);
