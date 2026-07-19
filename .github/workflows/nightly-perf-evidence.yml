@@ -39,6 +39,32 @@ jobs:
           node-version: "24.18.0"
       - name: Install Bubblewrap for the DAP cap runs
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - name: Grant Bubblewrap user namespaces via its own AppArmor profile
+        # Ubuntu 24.04 restricts unprivileged user-namespace creation globally via AppArmor, so
+        # bwrap fails and the debug capability reports notProvisioned — every nightly run since
+        # the lane was created failed on exactly this assertion. The D12 cap runs need bwrap (the
+        # product's own sandbox) to create namespaces, so grant exactly that one binary the
+        # `userns` permission through AppArmor's per-application profile mechanism — the
+        # distribution-documented path for sandboxing tools. The global restriction stays in
+        # force for every other process on the runner; no kernel security knob is changed. The
+        # verification step below fails the job immediately if the sandbox still cannot
+        # provision, instead of 30 minutes later inside the measurement.
+        shell: bash
+        run: |
+          if [ -d /etc/apparmor.d ] && command -v apparmor_parser >/dev/null 2>&1; then
+            printf '%s\n' \
+              'abi <abi/4.0>,' \
+              'include <tunables/global>' \
+              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' \
+              '  userns,' \
+              '  include if exists <local/bwrap>' \
+              '}' | sudo tee /etc/apparmor.d/bwrap >/dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          else
+            echo "No AppArmor mediation on this runner; Bubblewrap needs no profile grant."
+          fi
+      - name: Verify the Bubblewrap sandbox can provision
+        run: bwrap --unshare-user --ro-bind / / true
       - run: npm ci --ignore-scripts
       - name: Install Playwright browser
         run: node node_modules/playwright/cli.js install --with-deps chromium
