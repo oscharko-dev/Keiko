@@ -17,6 +17,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import {
   buildRedactor,
   createFilesEntry,
@@ -33,6 +34,8 @@ import {
 } from "./index.js";
 import { resolveRoot } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { createEditorLocalHistoryStore } from "./editor/localHistory/localHistoryStore.js";
 import type { UiStore } from "./store/index.js";
 
 // Mirrors the (non-exported) editable size limit in files.ts; used for boundary tests.
@@ -784,6 +787,55 @@ describe("desktop files browser", () => {
 
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("keeps a user save successful when local-history capture fails", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const secret = "capture-secret-marker";
+    const failingVault: LocalSecretVault = {
+      get: () => undefined,
+      set: (): never => {
+        throw new Error(secret);
+      },
+      replaceAll: () => undefined,
+      delete: () => undefined,
+      has: () => false,
+      list: () => [],
+    };
+    const failingHistory = createEditorLocalHistoryStore({
+      stateDir: join(root, ".history-test-state"),
+      env: {},
+      vaultFactory: () => failingVault,
+    });
+    const result = await handleFilesContent(
+      patchContentContext({ root, path: "src/app.ts", content: "saved despite history failure\n" }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        editorLocalHistoryStore: failingHistory,
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
+        },
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { content: "saved despite history failure\n" },
+    });
+    await expect(readFile(join(root, "src", "app.ts"), "utf8")).resolves.toBe(
+      "saved despite history failure\n",
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "user-save",
+      source: "editor.local-history.capture",
+      code: "LOCAL_HISTORY_VAULT_WRITE_FAILED",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain(secret);
+    expect(JSON.stringify(diagnostics)).not.toContain("saved despite history failure");
   });
 
   it("keeps denied-path precedence before malformed baseVersion validation at the route", async () => {

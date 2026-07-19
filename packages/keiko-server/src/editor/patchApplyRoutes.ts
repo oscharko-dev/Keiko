@@ -17,6 +17,8 @@
 // failed verification a guarded restore proposal for explicit re-apply is surfaced; the server never
 // reverts silently (AC5).
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
   parseEditorPatchApplyRequest,
@@ -45,6 +47,10 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
 import { clientAbortSignal } from "./languageRoutes.js";
+import {
+  captureEditorLocalHistorySafely,
+  emitEditorLocalHistoryCaptureFailure,
+} from "./localHistory/localHistoryCapture.js";
 import { recordPatchApplyEvidence, recordPatchVerificationEvidence } from "./patchApplyEvidence.js";
 import {
   defaultPostApplyVerification,
@@ -199,6 +205,28 @@ function changeCounts(result: PatchApplyResult): EditorPatchApplyChangeCounts {
 function verifiableFiles(result: PatchApplyResult): readonly string[] {
   const deleted = new Set(result.deleted);
   return result.changedFiles.filter((path) => !deleted.has(path));
+}
+
+function captureAppliedHistory(ctx: ApplyContext, result: PatchApplyResult): void {
+  for (const relativePath of verifiableFiles(result)) {
+    const absolutePath = resolve(ctx.realRoot, ...relativePath.split("/"));
+    let content: string;
+    try {
+      content = readFileSync(absolutePath, "utf8");
+    } catch (error) {
+      emitEditorLocalHistoryCaptureFailure(ctx.deps, "agent-apply", error, ctx.nowMs);
+      continue;
+    }
+    captureEditorLocalHistorySafely({
+      deps: ctx.deps,
+      realRoot: ctx.realRoot,
+      relativePath,
+      absolutePath,
+      content,
+      origin: "agent-apply",
+      nowMs: ctx.nowMs,
+    });
+  }
 }
 
 function verifiableValidationFiles(files: readonly PatchFileChange[]): readonly string[] {
@@ -402,6 +430,7 @@ async function handleApply(ctx: ApplyContext): Promise<EditorPatchApplyWireRespo
   } catch {
     return failureOutcome(ctx);
   }
+  captureAppliedHistory(ctx, result);
   return appliedOutcome(ctx, result, restoreDiff);
 }
 

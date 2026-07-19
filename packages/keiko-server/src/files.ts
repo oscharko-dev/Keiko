@@ -39,6 +39,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
+import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -178,6 +179,12 @@ interface ResolvedTarget {
   readonly path: string;
   readonly stats: Stats;
   readonly symlink: boolean;
+}
+
+export interface ResolvedEditorFileIdentity {
+  readonly realRoot: string;
+  readonly relativePath: string;
+  readonly absolutePath: string;
 }
 
 // Exported for reuse by the editor language-service route (#1198): the same realpath +
@@ -1468,6 +1475,23 @@ export async function readFilesContent(
   return editableTextContent(target);
 }
 
+export async function resolveEditorFileIdentity(
+  store: UiStore,
+  rootInput: string | null,
+  pathInput: string | null,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+): Promise<ResolvedEditorFileIdentity> {
+  const target = await resolveInsideRoot(store, rootInput, pathInput, redactor);
+  if (!target.stats.isFile()) {
+    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+  }
+  return {
+    realRoot: target.realRoot,
+    relativePath: target.relativePath,
+    absolutePath: target.path,
+  };
+}
+
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
   readonly content: string;
@@ -2230,6 +2254,14 @@ async function writeFilesContentRoute(
     baseVersion,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
+  captureEditorLocalHistorySafely({
+    deps,
+    realRoot: target.realRoot,
+    relativePath: target.relativePath,
+    absolutePath: target.path,
+    content: fields.content,
+    origin: "user-save",
+  });
   return { status: 200, body: response };
 }
 

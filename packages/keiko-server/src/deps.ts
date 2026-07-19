@@ -108,6 +108,10 @@ import {
 } from "./memory-audit-handler.js";
 import { createEditorHotExitStore, type EditorHotExitStore } from "./editor/hotExitStore.js";
 import {
+  createEditorLocalHistoryStore,
+  type EditorLocalHistoryStore,
+} from "./editor/localHistory/localHistoryStore.js";
+import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
@@ -500,6 +504,9 @@ export interface UiHandlerDeps {
   // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
   // reference in IndexedDB.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // ADR-0146 D7 — server-owned encrypted, bounded file checkpoints. This is intentionally
+  // independent from hot-exit recovery and from Code-task history.
+  readonly editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
   // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
   // deployments must inject the authenticated principal's reviewer id and authorized scopes.
@@ -734,6 +741,9 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Optional injected editor local-history store (tests); production creates one dedicated vault
+  // namespace under the runtime state directory.
+  readonly editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   // Optional published DAP service. Activation only uses this bounded revocation seam; it never
   // reaches into adapter transport or launch internals.
   readonly dapDebug?: DapDebugRouteService | undefined;
@@ -1747,6 +1757,7 @@ interface PeripheralManagers {
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
+  readonly editorLocalHistoryStore: EditorLocalHistoryStore;
   readonly managedLspControl: ManagedLspControlService;
   readonly debugActivationControl: DebugActivationControlService;
   readonly editorSettingsControl: EditorSettingsControlService;
@@ -2286,6 +2297,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     editorHotExitStore:
       args.options.editorHotExitStore ??
       createEditorHotExitStore({
+        stateDir: args.runtimeStateDir,
+        env: args.options.env,
+      }),
+    editorLocalHistoryStore:
+      args.options.editorLocalHistoryStore ??
+      createEditorLocalHistoryStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
       }),

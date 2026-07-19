@@ -245,6 +245,7 @@ import {
   handleEditorHotExitRead,
   handleEditorHotExitWrite,
 } from "./editor/hotExitRoutes.js";
+import { EDITOR_LOCAL_HISTORY_ROUTE_GROUP } from "./editor/localHistory/localHistoryRoutes.js";
 import {
   handleEditorAgentActions,
   handleEditorAgentAudit,
@@ -425,6 +426,7 @@ function health(): RouteResult {
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   ...WORKSPACE_MANIFEST_ROUTE_GROUP,
+  ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
   ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },

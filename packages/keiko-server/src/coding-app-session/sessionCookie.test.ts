@@ -25,9 +25,9 @@ describe("serializeSessionCookie", () => {
     expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=sess_abc.secret`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
-    // #2478 widened the scope to the coding-workbench surface so the browser presents the session
-    // to the enforced content-bearing runtime routes; it must never widen past that surface.
-    expect(cookie).toContain("Path=/api/coding-workbench;");
+    // ADR-0146 adds authenticated editor local-history beside coding-workbench, so `/api` is the
+    // narrow common path on which the browser must present the HttpOnly session.
+    expect(cookie).toContain("Path=/api;");
     expect(cookie).toContain("Max-Age=3600");
     expect(cookie).not.toContain("Secure");
   });
