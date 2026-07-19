@@ -13,6 +13,17 @@ export { scoreFixture, aggregateScorecard, summarizeScorecard } from "./scorer.j
 export type { ScoringInput } from "./scorer.js";
 export { checkSurfaceParity } from "./surface-parity.js";
 export { renderEvalSummary } from "./render.js";
+export { binaryNdcgAtK, mean } from "./metrics.js";
+export { evaluateMinimumFloors, runRegressionProbes } from "./quality-helpers.js";
+export type {
+  MinimumFloorResult,
+  RegressionProbeObservation,
+  RegressionProbeResult,
+  RunRegressionProbesOptions,
+} from "./quality-helpers.js";
+// Local Knowledge retrieval evaluation suite (Issue #2568; ADR-0152 D5). A namespace avoids
+// colliding with the ADR-0012 suite's canonical ALL_FIXTURES registry.
+export * as LocalKnowledgeEval from "./local-knowledge/index.js";
 // Prompt Enhancer evaluation suite (Epic #1307, Issue #1315). Exposed as a single auditable namespace,
 // mirroring the gateway's `PromptEnhancer` and evidence's `PromptEnhancement` namespace convention.
 export * as PromptEnhancerEval from "./promptEnhancer/index.js";

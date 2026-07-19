@@ -25,13 +25,13 @@ import type {
   KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   ParsedUnit,
+  RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   RetrievalDiagnostics,
   RetrievalNoEvidenceReason,
-  RetrievalReference,
   RetrievalStrategy,
-} from "../retrieval/types.js";
+} from "@oscharko-dev/keiko-local-knowledge";
 
 // ─── Fixture specs ───────────────────────────────────────────────────────────
 // A fixture is the deterministic seed for a single eval run. The runner materialises the

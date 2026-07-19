@@ -49,7 +49,7 @@ const htmlManualReleaseEvidence = readFileSync(
   "utf8",
 );
 const retrievalFixtures = readFileSync(
-  resolve(repoRoot, "packages/keiko-local-knowledge/src/evaluations/fixtures.ts"),
+  resolve(repoRoot, "packages/keiko-evaluations/src/local-knowledge/fixtures.ts"),
   "utf8",
 );
 

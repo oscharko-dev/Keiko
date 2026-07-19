@@ -14,6 +14,7 @@
     { "path": "../keiko-contracts" },
     { "path": "../keiko-evidence" },
     { "path": "../keiko-harness" },
+    { "path": "../keiko-local-knowledge" },
     { "path": "../keiko-model-gateway" },
     { "path": "../keiko-security" },
     { "path": "../keiko-tools" },

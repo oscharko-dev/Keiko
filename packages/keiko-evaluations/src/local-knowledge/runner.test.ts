@@ -25,7 +25,7 @@ import {
 } from "./fixtures.js";
 import { runRetrievalEval } from "./runner.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
-import type { VectorIndexAdapter } from "../retrieval/vector-index.js";
+import type { VectorIndexAdapter } from "@oscharko-dev/keiko-local-knowledge";
 
 describe("runRetrievalEval — single-topic fixture", () => {
   it("hits recall=1.0 and precision=1.0 on the ground-truth query", async () => {

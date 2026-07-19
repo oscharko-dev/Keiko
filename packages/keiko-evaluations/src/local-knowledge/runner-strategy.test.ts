@@ -12,9 +12,9 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import type { RetrievalQuery } from "@oscharko-dev/keiko-local-knowledge";
 
 import { EVAL_EMBEDDING_IDENTITY } from "./fixtures.js";
-import type { RetrievalQuery } from "../retrieval/types.js";
 import type { RetrievalEvalFixture } from "./types.js";
 
 const observedQueries: RetrievalQuery[] = [];
@@ -35,23 +35,27 @@ function chunkId(value: string): ChunkId {
   return value as ChunkId;
 }
 
-vi.mock("../retrieval/index.js", () => ({
-  resolveVectorIndexOptions: (): { readonly mode: "disabled"; readonly now: typeof Date.now } => ({
-    mode: "disabled",
-    now: Date.now,
-  }),
-  runLocalKnowledgeRetrieval: (
-    _deps: unknown,
-    query: RetrievalQuery,
-  ): {
-    readonly references: readonly [];
-    readonly noEvidence: true;
-    readonly reason: "no-evidence-stated";
-  } => {
-    observedQueries.push(query);
-    return { references: [], noEvidence: true, reason: "no-evidence-stated" };
-  },
-}));
+vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-local-knowledge")>();
+  return {
+    ...actual,
+    resolveVectorIndexOptions: (): {
+      readonly mode: "disabled";
+      readonly now: typeof Date.now;
+    } => ({ mode: "disabled", now: Date.now }),
+    runLocalKnowledgeRetrieval: (
+      _deps: unknown,
+      query: RetrievalQuery,
+    ): {
+      readonly references: readonly [];
+      readonly noEvidence: true;
+      readonly reason: "no-evidence-stated";
+    } => {
+      observedQueries.push(query);
+      return { references: [], noEvidence: true, reason: "no-evidence-stated" };
+    },
+  };
+});
 
 const fixture: RetrievalEvalFixture = {
   id: "strategy-forwarding",

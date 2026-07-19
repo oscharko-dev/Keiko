@@ -363,3 +363,13 @@ export async function seedCapsuleWithVectors(
     vectorTexts: chunks.map((chunk) => chunk.text),
   };
 }
+
+// Test-support seam for the retrieval evaluation harness folded into keiko-evaluations by
+// ADR-0152 D5. These are the existing Local Knowledge persistence primitives; exporting them only
+// from the private `./testing` subpath keeps production callers on the governed package surface.
+export { createCapsule } from "./capsule-lifecycle.js";
+export { createCapsuleSet, getCapsuleSet } from "./capsule-set-lifecycle.js";
+export { insertChunkRow } from "./chunking/chunker-persist.js";
+export { insertDocumentRow, insertParsedUnitRow } from "./discovery/persist.js";
+export { upsertLexicalRows, type LexicalChunkIndexRow } from "./indexing/lexical-index-persist.js";
+export { addSourceToCapsule } from "./source-lifecycle.js";

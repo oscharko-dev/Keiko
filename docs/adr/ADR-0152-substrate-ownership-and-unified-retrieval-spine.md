@@ -246,7 +246,7 @@ package; `keiko-server`, `keiko-cli`, and `keiko-ui` remain forbidden.
 The fold must not change any floor, fixture, proof, deterministic seed, or report meaning:
 
 - `PASS_THRESHOLDS` remains byte-identical, including the three hard `1.0` invariants
-  ([`evaluations/types.ts:218-227`](../../packages/keiko-local-knowledge/src/evaluations/types.ts#L218-L227));
+  ([`local-knowledge/types.ts:218-227`](../../packages/keiko-evaluations/src/local-knowledge/types.ts#L218-L227));
 - `DEFAULT_GROUNDED_RETRIEVAL_BUDGET` remains `0.8 / 0.9 / 0.85 / 0.8`, and
   `DEFAULT_GROUNDED_FAITHFULNESS_BUDGET` remains all `1.0`
   ([`grounded-retrieval-eval.ts:463-477`](../../packages/keiko-server/src/grounded-retrieval-eval.ts#L463-L477),
