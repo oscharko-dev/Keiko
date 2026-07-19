@@ -48,6 +48,13 @@ function getSnapshot(): ConversationMemorySettingsSnapshot {
   return currentSettings;
 }
 
+// Synchronous, non-subscribing read of the current mode — lets a background hydration (see
+// useChatSession's autonomy-policy hydration effect) detect whether a newer selection landed
+// while its request was in flight, without needing a full revision counter on the store.
+export function currentConversationMemoryMode(): CodingWorkbenchMode {
+  return currentSettings.mode;
+}
+
 export function useConversationMemorySettings(): {
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;

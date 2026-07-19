@@ -28,6 +28,7 @@ import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "./memorySettings";
+import { loadMemoryAutonomyMode } from "@/lib/memory-api";
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -914,5 +915,70 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
 
     expect(sendDesktopChat).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("first");
+  });
+});
+
+describe("useChatSession memory autonomy hydration", () => {
+  function mockMinimalBootstrap(): void {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+  }
+
+  it("applies the persisted mode on mount", async () => {
+    mockMinimalBootstrap();
+    vi.mocked(loadMemoryAutonomyMode).mockResolvedValue({
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+    });
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    const settings = renderHook(() => useConversationMemorySettings());
+
+    await waitFor(() => expect(settings.result.current.memoryMode).toBe("autonomous-delivery"));
+  });
+
+  it("does not let a stale hydration response overwrite a newer selection", async () => {
+    mockMinimalBootstrap();
+    const hydration = deferred<{
+      requestedMode: "supervised-coding";
+      effectiveMode: "supervised-coding";
+      deploymentCeiling: "supervised-coding";
+    }>();
+    vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    const settings = renderHook(() => useConversationMemorySettings());
+
+    act(() => {
+      settings.result.current.setMemoryMode("autonomous-delivery");
+    });
+
+    await act(async () => {
+      hydration.resolve({
+        requestedMode: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+      });
+      await hydration.promise;
+    });
+
+    expect(settings.result.current.memoryMode).toBe("autonomous-delivery");
+  });
+
+  it("warns and keeps the default mode when hydration fails", async () => {
+    mockMinimalBootstrap();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(loadMemoryAutonomyMode).mockRejectedValue(new Error("network unavailable"));
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    const settings = renderHook(() => useConversationMemorySettings());
+
+    await waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(1));
+    expect(warnSpy.mock.calls[0]?.[0]).not.toContain("network unavailable");
+    expect(settings.result.current.memoryMode).toBe("governed-assist");
+    warnSpy.mockRestore();
   });
 });

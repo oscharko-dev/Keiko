@@ -63,7 +63,7 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
-import { useConversationMemorySettings } from "./memorySettings";
+import { currentConversationMemoryMode, useConversationMemorySettings } from "./memorySettings";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -977,13 +977,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // "governed-assist" default untouched, matching the window's own hydrate-failure fallback.
   useEffect(() => {
     let active = true;
+    const modeAtHydrationStart = currentConversationMemoryMode();
     void loadMemoryAutonomyModeImpl()
       .then((policy) => {
-        if (active) setMemoryMode(policy.requestedMode);
+        // A newer selection (this hydration in another mounted session, or a change made through
+        // MemoriaVivaWindow) already landed while this request was in flight — applying the stale
+        // response now would overwrite it, so skip.
+        if (active && currentConversationMemoryMode() === modeAtHydrationStart) {
+          setMemoryMode(policy.requestedMode);
+        }
       })
       .catch(() => {
         // Fail closed to the existing default; MemoriaVivaWindow surfaces a visible error if the
-        // user opens that window, this background hydration stays silent by design.
+        // user opens that window, this background hydration stays silent toward chat/voice by
+        // design (a top-level session error would misrepresent an unrelated settings hiccup as a
+        // chat failure). Still surfaced as a bounded, body-free console warning so the failure is
+        // observable, matching useWorkspace.ts's sync-failure warning convention.
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn(
+            "memory-mode: autonomy policy hydration failed; chat/voice requests use the default mode until this recovers",
+          );
+        }
       });
     return () => {
       active = false;
