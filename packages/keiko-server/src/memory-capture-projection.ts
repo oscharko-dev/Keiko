@@ -22,10 +22,10 @@ const CAPTURE_DECISION_SUMMARY_PREFIX = "capture-decision:v1";
 // realtime voice, per #2550) -- every other MemoryAuditInitiatorSurface value (memory-center,
 // workflow, consolidation, retention, system) belongs to a different audit-event family and must
 // stay excluded from this projection.
-const TURN_CAPTURE_INITIATOR_SURFACES: readonly MemoryAuditInitiatorSurface[] = [
+const TURN_CAPTURE_INITIATOR_SURFACES: ReadonlySet<MemoryAuditInitiatorSurface> = new Set([
   "conversation-center",
   "voice",
-];
+]);
 
 export type MemoryCaptureDecisionOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
 
@@ -265,7 +265,7 @@ function projectEvent(
 ): IndexedDecision | null {
   if (
     event.occurredAt < options.since ||
-    !TURN_CAPTURE_INITIATOR_SURFACES.includes(event.initiatorSurface)
+    !TURN_CAPTURE_INITIATOR_SURFACES.has(event.initiatorSurface)
   ) {
     return null;
   }
@@ -309,9 +309,8 @@ export function projectMemoryCaptureDecisions(
     );
     return decision === null ? [] : [decision];
   });
-  return projected
-    .sort((left, right) => compareIndexedDecisions(left, right, options.order))
-    .map(({ decision }) => decision);
+  projected.sort((left, right) => compareIndexedDecisions(left, right, options.order));
+  return projected.map(({ decision }) => decision);
 }
 
 function isRelevantAuditKind(
@@ -385,7 +384,7 @@ function relevantAuditRunIds(store: EvidenceStore, since: number): readonly stri
   return store
     .list()
     .filter((runId) => runId.startsWith(RUNID_PREFIX) && runId >= firstRunId)
-    .sort();
+    .sort((left, right) => left.localeCompare(right));
 }
 
 export function replayMemoryCaptureAuditLedger(

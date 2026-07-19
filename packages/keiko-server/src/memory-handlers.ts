@@ -529,6 +529,18 @@ function attachGovernedExcerpts(
   });
 }
 
+// Recent-captures pages only ever reference a handful of records; redacting the whole authorized
+// vault before slicing to the page made this endpoint O(authorized vault size) on every request.
+function recordsForPage(
+  liveRecords: readonly MemoryRecord[],
+  page: readonly MemoryCaptureDecision[],
+): readonly MemoryRecord[] {
+  const pageIds = new Set(
+    page.flatMap((decision) => (decision.memoryId === undefined ? [] : [decision.memoryId])),
+  );
+  return liveRecords.filter((record) => pageIds.has(String(record.id)));
+}
+
 function handleRecentMemories(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -546,7 +558,10 @@ function handleRecentMemories(
     liveRecords,
   });
   const page = projected.slice(0, params.limit);
-  const captures = attachGovernedExcerpts(page, governedExcerptMap(deps, liveRecords));
+  const captures = attachGovernedExcerpts(
+    page,
+    governedExcerptMap(deps, recordsForPage(liveRecords, page)),
+  );
   return {
     status: 200,
     body: {

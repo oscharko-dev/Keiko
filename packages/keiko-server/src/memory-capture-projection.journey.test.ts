@@ -172,7 +172,7 @@ describe("recent memory capture journey", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const ctx = context();
-    const since = Date.now() - 1_000;
+    const since = 0;
     const governed = depsFor(
       vault,
       evidenceStore,
@@ -254,7 +254,7 @@ describe("voice-passive-capture journey", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
     const ctx = context();
-    const since = Date.now() - 1_000;
+    const since = 0;
     const governed = depsFor(
       vault,
       evidenceStore,
