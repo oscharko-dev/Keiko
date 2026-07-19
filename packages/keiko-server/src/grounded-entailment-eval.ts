@@ -24,6 +24,7 @@ import {
   type EntailmentReconciliation,
   type EntailmentVerdict,
 } from "./grounded-faithfulness.js";
+import { buildEvalContextPack, evalFileEntry } from "./grounded-eval-support.js";
 import type { ConnectedContextPack, LineRange } from "@oscharko-dev/keiko-contracts";
 
 type EntailmentVariant = "supported" | "unsupported-claim" | "unavailable";
@@ -135,19 +136,11 @@ const PASS_THROUGH_JUDGE: EntailmentJudge = {
 };
 
 function packFor(fixture: EntailmentFixture): ConnectedContextPack {
-  return {
-    files: Object.entries(fixture.excerpts).map(([scopePath, excerpt]) => ({
-      scopePath,
-      excerpts: [
-        {
-          atom: { scopePath, lineRange: excerpt.lineRange },
-          content: excerpt.content,
-          contentBytes: excerpt.content.length,
-        },
-      ],
-    })),
-    uncertainty: [],
-  } as unknown as ConnectedContextPack;
+  return buildEvalContextPack(
+    Object.entries(fixture.excerpts).map(([scopePath, excerpt]) =>
+      evalFileEntry(scopePath, [{ content: excerpt.content, lineRange: excerpt.lineRange }]),
+    ),
+  );
 }
 
 async function evaluateFixture(
