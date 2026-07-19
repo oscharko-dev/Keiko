@@ -75,6 +75,7 @@ export interface MemoryCaptureDecisionProvenance {
 }
 
 export interface MemoryCaptureDecision {
+  readonly eventId: string;
   readonly outcome: MemoryCaptureDecisionOutcome;
   readonly scope: MemoryScope;
   readonly mode: CodingWorkbenchMode;
@@ -245,6 +246,7 @@ function buildProjectedDecision(
   memoryId: string | undefined,
 ): MemoryCaptureDecision {
   return {
+    eventId: event.eventId,
     outcome: parsed.outcome,
     scope: sanitizeMemoryScope(event.scope, (value) => value),
     mode: parsed.mode,

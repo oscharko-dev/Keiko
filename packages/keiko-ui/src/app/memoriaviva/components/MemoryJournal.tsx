@@ -49,11 +49,13 @@ function isJournalCapture(capture: MemoryRecentCapture): capture is JournalCaptu
   return capture.outcome === "rejected" || capture.memoryId !== undefined;
 }
 
+// Non-rejected rows key by memoryId, matching JournalRow's own registerRow/key usage below.
+// Rejected captures have no memoryId; eventId is the server-minted per-decision UUID (present on
+// every projected decision, see memory-capture-projection.ts) and is the only value guaranteed
+// unique across two rejected decisions that share the same turn occurredAt/mode/reason — the
+// previous occurredAt/mode/reason-derived fallback could collide.
 function journalCaptureKey(capture: JournalCapture): string {
-  return (
-    capture.memoryId ??
-    `rejected:${String(capture.occurredAt)}:${capture.mode ?? "unknown"}:${capture.reason}`
-  );
+  return capture.memoryId ?? capture.eventId;
 }
 
 export function orderJournalCaptures(

@@ -105,6 +105,7 @@ export interface MemoryListFilters {
 export type MemoryRecentCaptureOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
 
 export interface MemoryRecentCapture {
+  readonly eventId: string;
   readonly outcome: MemoryRecentCaptureOutcome;
   readonly scope: MemoryScope;
   readonly mode?: CodingWorkbenchMode;

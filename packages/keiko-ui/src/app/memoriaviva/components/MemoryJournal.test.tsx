@@ -16,6 +16,7 @@ function makeCapture(
   overrides: Partial<MemoryRecentCapture> = {},
 ): MemoryRecentCapture {
   return {
+    eventId: `event-${id}`,
     outcome: "auto-accepted",
     scope: { kind: "global" },
     mode: "autonomous-delivery",
@@ -68,6 +69,7 @@ describe("MemoryJournal loading and ordering", () => {
     const oldest = makeCapture("oldest", 100);
     const newest = makeCapture("newest", 300, { outcome: "proposed" });
     const refused: MemoryRecentCapture = {
+      eventId: "event-refused",
       outcome: "rejected",
       scope: { kind: "global" },
       mode: "supervised-coding",
@@ -114,6 +116,7 @@ describe("MemoryJournal loading and ordering", () => {
 
   it("degrades safely when the capture mode or body excerpt is absent", async () => {
     const legacy: MemoryRecentCapture = {
+      eventId: "event-legacy",
       outcome: "captured",
       scope: { kind: "global" },
       provenance: {
@@ -199,6 +202,35 @@ describe("MemoryJournal Keep and Forget", () => {
     expect(forgetImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("focuses the correct rejected row after Forget when rejected decisions share occurredAt/mode/reason", async () => {
+    const user = userEvent.setup();
+    const sharedRejectedShape = {
+      outcome: "rejected",
+      scope: { kind: "global" },
+      mode: "supervised-coding",
+      provenance: { initiatorSurface: "conversation-center", sourceKind: "system-default" },
+      occurredAt: 500,
+      reason: "denied-category",
+    } as const;
+    const rejectedFirst: MemoryRecentCapture = { ...sharedRejectedShape, eventId: "event-first" };
+    const rejectedSecond: MemoryRecentCapture = {
+      ...sharedRejectedShape,
+      eventId: "event-second",
+    };
+    const toRemove = makeCapture("toRemove", 700);
+    const forgetImpl = vi
+      .fn()
+      .mockResolvedValue({ forgotten: true, memoryIds: ["toRemove"], count: 1 });
+    renderJournal([toRemove, rejectedFirst, rejectedSecond], { forgetMemoryImpl: forgetImpl });
+
+    const rows = await screen.findAllByTestId("memory-journal-row");
+    await user.click(within(rows[0]!).getByRole("button", { name: "Forget" }));
+
+    await waitFor(() => expect(screen.getAllByTestId("memory-journal-row")).toHaveLength(2));
+    const remaining = screen.getAllByTestId("memory-journal-row");
+    expect(remaining[0]).toHaveFocus();
+  });
+
   it("focuses the heading when Forget empties the Journal", async () => {
     const user = userEvent.setup();
     renderJournal([makeCapture("only", 100)], {
@@ -236,6 +268,7 @@ describe("MemoryJournal Keep and Forget", () => {
 describe("MemoryJournal accessibility", () => {
   it("has no detectable accessibility violations", async () => {
     const refused: MemoryRecentCapture = {
+      eventId: "event-refused",
       outcome: "rejected",
       scope: { kind: "global" },
       mode: "governed-assist",
