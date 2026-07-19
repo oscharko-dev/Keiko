@@ -8,6 +8,7 @@ import {
   createDefaultParserRegistry,
   createRepositoryPodShell,
   openKnowledgeStore,
+  listRepositoryChunkLineRanges,
   refreshRepositoryPod,
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -614,6 +615,100 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     // The observation carries counts and a mode label only — no path, body, or query text.
     expect(JSON.stringify(observations)).not.toContain("src/auth.ts");
     expect(JSON.stringify(observations)).not.toContain(QUERY.text);
+    deps.store.close();
+  });
+
+  it("scores every fresh candidate when the pod indexes far more files than the candidate set", async () => {
+    // The pod query has no path filter, so its topK is a race across the WHOLE pod index. Sizing it
+    // from the candidate count let unrelated-but-higher-scoring files consume the entire budget:
+    // both candidates then received no pod reference AND were never handed to the legacy leg, so
+    // they disappeared from a successful result (ADR-0152 D3).
+    const files: Record<string, string> = {
+      "src/alpha.ts": "export const alphaHelper = () => computeTotals();\n",
+      "src/beta.ts": "export const betaHelper = () => computeAverages();\n",
+    };
+    for (let index = 0; index < 40; index += 1) {
+      files[`src/noise-${String(index)}.ts`] =
+        `export const noise${String(index)} = () => refresh token rotation;\n`;
+    }
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: vectorFor(request.input), modelId: request.modelId },
+        }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const fs = testFs(files);
+    const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs,
+      maxCandidates: 8,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+    });
+    if (provider === undefined) throw new Error("expected semantic provider");
+
+    const hits = await provider.search({
+      query: QUERY,
+      documents: [
+        { scopePath: "src/alpha.ts", text: files["src/alpha.ts"] ?? "" },
+        { scopePath: "src/beta.ts", text: files["src/beta.ts"] ?? "" },
+      ],
+    });
+
+    expect([...hits].map((hit) => hit.scopePath).sort()).toEqual(["src/alpha.ts", "src/beta.ts"]);
+    for (const hit of hits) {
+      expect(hit.score).toBeGreaterThan(0);
+    }
+    pod.store.close();
+    deps.store.close();
+  });
+
+  it("routes a fresh candidate the pod never referenced back through the legacy leg", async () => {
+    // Above the pod topK ceiling the reference set can still be monopolised by one large file. The
+    // ceiling is a cost bound, not a correctness bound: a fresh candidate that the pod returned NO
+    // reference for belongs to `partition.indexed`, so it is not in the fallback partition either —
+    // without the rescue it is scored by neither leg and silently vanishes.
+    const dominatingFile = Array.from(
+      { length: 400 },
+      (_unused, index) => `export const noise${String(index)} = () => refresh token rotation;`,
+    ).join("\n");
+    const files: Record<string, string> = {
+      "src/alpha.ts": "export const alphaHelper = () => computeTotals();\n",
+      "src/dominating.ts": `${dominatingFile}\n`,
+    };
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: vectorFor(request.input), modelId: request.modelId },
+        }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const fs = testFs(files);
+    const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
+    expect(listRepositoryChunkLineRanges(pod.store, POD_CAPSULE_ID).length).toBeGreaterThan(128);
+    embeddingRequest.mockClear();
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs,
+      maxCandidates: 8,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+    });
+    if (provider === undefined) throw new Error("expected semantic provider");
+
+    const hits = await provider.search({
+      query: QUERY,
+      documents: [{ scopePath: "src/alpha.ts", text: files["src/alpha.ts"] ?? "" }],
+    });
+    const inputs = embeddingRequest.mock.calls.map(([request]) => request.input);
+
+    expect(hits.map((hit) => hit.scopePath)).toEqual(["src/alpha.ts"]);
+    expect(hits[0]?.score).toBeGreaterThan(0);
+    // The rescue stays narrow: exactly the unreferenced candidate is embedded, nothing else.
+    expect(inputs.filter((input) => input.startsWith("Path: "))).toEqual([
+      expect.stringContaining("Path: src/alpha.ts\n"),
+    ]);
+    pod.store.close();
     deps.store.close();
   });
 

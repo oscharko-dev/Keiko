@@ -752,23 +752,38 @@ function repositoryPodMatch(
   };
 }
 
+interface RepositoryPodHitOutcome {
+  readonly matches: readonly SemanticSearchMatch[];
+  // Every candidate path the pod query returned at least one reference for. A candidate that is
+  // absent here received NO pod signal at all — it lost the pod-wide topK race rather than being
+  // judged dissimilar — and must be handed to the legacy leg, or it is scored by neither leg and
+  // vanishes from the result (ADR-0152 D3: no adapter may turn a partition mismatch into an empty
+  // successful result). A candidate that IS referenced but scores zero was genuinely evaluated and
+  // found dissimilar; that is a real "no match", identical to the legacy path's score<=0 filter,
+  // and is deliberately not re-embedded.
+  readonly referencedPaths: ReadonlySet<string>;
+}
+
 function repositoryPodMatches(
   references: readonly RetrievalReference[],
   pod: ResolvedRepositoryPod,
   documents: readonly CandidateDocument[],
   queryTerms: readonly string[],
-): readonly SemanticSearchMatch[] {
+): RepositoryPodHitOutcome {
   const documentsByPath = new Map(documents.map((document) => [document.scopePath, document]));
+  const referencedPaths = new Set<string>();
   const intersected = references.filter((reference) => {
     const range = pod.lineRangeByChunk.get(String(reference.chunkId));
-    return range !== undefined && documentsByPath.has(range.relativePath);
+    if (range === undefined || !documentsByPath.has(range.relativePath)) return false;
+    referencedPaths.add(range.relativePath);
+    return true;
   });
   const maxScore = intersected.reduce(
     (current, reference) =>
       Math.max(current, Number.isFinite(reference.score) ? reference.score : 0),
     0,
   );
-  if (maxScore <= 0) return [];
+  if (maxScore <= 0) return { matches: [], referencedPaths };
   const bestByPath = new Map<string, SemanticSearchMatch>();
   for (const reference of intersected) {
     const match = repositoryPodMatch(reference, pod, documentsByPath, queryTerms, maxScore);
@@ -777,7 +792,25 @@ function repositoryPodMatches(
       bestByPath.set(match.scopePath, match);
     }
   }
-  return [...bestByPath.values()];
+  return { matches: [...bestByPath.values()], referencedPaths };
+}
+
+// `searchVectorsForScope` has no path filter, so the requested topK is a race across EVERY chunk in
+// the pod — not just the candidates'. Sizing that budget from the candidate count (as this once did)
+// therefore let a handful of large or lexically dominant files monopolise it and return zero
+// references for a candidate the caller explicitly asked about. The budget is instead sized against
+// the pod's own indexed reference population, so every indexed chunk can in principle surface, and
+// clamped only by a ceiling that keeps a very large pod from turning one search into an unbounded
+// reference set. The ceiling is a cost bound, NOT a correctness bound: a pod larger than it can
+// still starve a candidate, and that residue is covered by routing unreferenced candidates back
+// into the legacy leg — never by silence. Its value is the widest set the intersection can ever
+// use: at most `MAX_SEMANTIC_CANDIDATES` documents survive, each keeping its single best chunk, so
+// asking for more than the same result multiplier applied to that cap buys no additional coverage
+// while making the pod query measurably more expensive.
+const POD_RETRIEVAL_TOPK_CEILING = MAX_SEMANTIC_CANDIDATES * SEMANTIC_CANDIDATE_RESULT_MULTIPLIER;
+
+function podRetrievalTopK(pod: ResolvedRepositoryPod, maxResults: number): number {
+  return Math.max(maxResults, Math.min(pod.lineRangeByChunk.size, POD_RETRIEVAL_TOPK_CEILING));
 }
 
 async function repositoryPodHits(
@@ -788,8 +821,8 @@ async function repositoryPodHits(
   queryTerms: readonly string[],
   signal: AbortSignal | undefined,
   maxResults: number,
-): Promise<readonly SemanticSearchMatch[]> {
-  const topK = Math.max(maxResults, documents.length * SEMANTIC_CANDIDATE_RESULT_MULTIPLIER);
+): Promise<RepositoryPodHitOutcome> {
+  const topK = podRetrievalTopK(pod, maxResults);
   const outcome = await searchVectorsForScope(
     pod.context.store,
     ctx.localKnowledgeEmbeddingAdapter,
@@ -861,6 +894,50 @@ function observePodDegradation(ctx: EmbeddingContext, mode: string): void {
   });
 }
 
+// Candidates the pod query never referenced join the legacy leg. Scope this to genuinely
+// unreferenced documents only: `legacyHits` embeds document bodies through the model gateway, so
+// widening it to the whole indexed partition would re-introduce exactly the egress burst the pod
+// path exists to avoid.
+function legacyLegDocuments(
+  partition: PodDocumentPartition,
+  referencedPaths: ReadonlySet<string>,
+): readonly CandidateDocument[] {
+  const unreferenced = partition.indexed.filter(
+    (document) => !referencedPaths.has(document.scopePath),
+  );
+  return unreferenced.length === 0 ? partition.fallback : [...partition.fallback, ...unreferenced];
+}
+
+async function podRankedHits(
+  ctx: EmbeddingContext,
+  pod: ResolvedRepositoryPod,
+  prepared: PreparedSemanticSearch,
+  partition: PodDocumentPartition,
+): Promise<readonly SemanticSearchMatch[]> {
+  const { documents, maxResults, queryTerms, queryText, signal } = prepared;
+  const podOutcome = await repositoryPodHits(
+    ctx,
+    pod,
+    partition.indexed,
+    queryText,
+    queryTerms,
+    signal,
+    maxResults,
+  );
+  const sharedQueryVector = ctx.podEmbeddingVectorCache.get(
+    podEmbeddingCacheKey(ctx.provider.modelId, queryText),
+  );
+  const fallbackHits = await legacyHits(
+    ctx,
+    legacyLegDocuments(partition, podOutcome.referencedPaths),
+    queryText,
+    queryTerms,
+    signal,
+    sharedQueryVector,
+  );
+  return rankHits([...podOutcome.matches, ...fallbackHits], documents, maxResults);
+}
+
 async function semanticSearch(
   ctx: EmbeddingContext,
   request: SemanticSearchInput,
@@ -880,27 +957,7 @@ async function semanticSearch(
     return legacyRankedHits(ctx, documents, queryText, queryTerms, signal, maxResults);
   }
   try {
-    const indexedHits = await repositoryPodHits(
-      ctx,
-      ctx.repositoryPod.pod,
-      partition.indexed,
-      queryText,
-      queryTerms,
-      signal,
-      maxResults,
-    );
-    const sharedQueryVector = ctx.podEmbeddingVectorCache.get(
-      podEmbeddingCacheKey(ctx.provider.modelId, queryText),
-    );
-    const fallbackHits = await legacyHits(
-      ctx,
-      partition.fallback,
-      queryText,
-      queryTerms,
-      signal,
-      sharedQueryVector,
-    );
-    return rankHits([...indexedHits, ...fallbackHits], documents, maxResults);
+    return await podRankedHits(ctx, ctx.repositoryPod.pod, prepared, partition);
   } catch {
     if (!isAborted(signal)) observePodDegradation(ctx, "pod-query-failed");
     return [];
