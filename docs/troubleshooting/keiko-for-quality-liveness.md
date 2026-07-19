@@ -68,8 +68,9 @@ Worker era only; the rollback template in `infrastructure/keiko-for-quality/` re
    request's events before assuming an evaluator defect.
 6. Request an explicit evaluation with the canonical recovery dispatch shown above
    (`gh workflow run keiko-for-quality-action.yml --ref dev -f pr=<number>`; safe to repeat,
-   serialised per pull request). Inspect the resulting run: it must publish the `Keiko for
-Quality` check on the pull request's exact current head under the KFQ GitHub App identity.
+   serialised per pull request). Inspect the resulting run: it must publish the
+   `Keiko for Quality` check on the pull request's exact current head under the KFQ GitHub App
+   identity.
    A run that publishes under the GitHub Actions fallback identity indicates the App credentials
    (`KFQ_APP_ID` / `KFQ_PRIVATE_KEY_PKCS8` repository secrets) are missing or invalid — the
    pinned protection context will not accept that check, so repair the secrets rather than

@@ -40,9 +40,12 @@ The following analysis remains valuable but is not merge-critical:
 - `Keiko for Quality` is required and app-bound since the ADR-0142 cutover (2026-07-19): the six
   live-probe conditions below were proven on live pull requests (ledger in
   [`keiko-for-quality-action-evaluation.md`](keiko-for-quality-action-evaluation.md)) and the
-  maintainer promoted the check. Its own repair path stays gate-independent: the Action's
-  workflow/script fixes merge through the 13 direct checks, and the aggregate never re-checks
-  them.
+  maintainer promoted the check. Repair path when the aggregate itself is broken: a fix pull
+  request still needs all 14 required checks, `Keiko for Quality` included; only when the
+  aggregate is unavailable and cannot go green on its own fix does the documented ADR-0135 D7
+  administrator escape in the
+  [liveness runbook](../troubleshooting/keiko-for-quality-liveness.md) apply, as the explicit,
+  owner-approved exception. The aggregate never re-checks the 13 direct contexts.
 - Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
   remains required engineering evidence for tractable trust-boundary changes.
 - The per-pull aggregate is the Qodo bridge only (Issue #2508,
@@ -124,11 +127,12 @@ cutover (2026-07-19) it runs as the GitHub Action
 the canonical check name and dashboard marker, with no D1 database, no scheduled cron, no manual
 `wrangler deploy`, and no webhook secret — "merge = deployed". The base-branch `check_run` and
 `issue_comment` triggers run the workflow definition from `dev`, which pull-request code cannot
-alter, so the Action preserves the Worker's tamper-resistance. It currently publishes under the
-documented `GITHUB_TOKEN` fallback (the aggregate is advisory and non-required); adding
-`KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` as repository secrets restores App-bound producer identity
-without code changes and is required before the aggregate could ever become a branch-protection
-requirement.
+alter, so the Action preserves the Worker's tamper-resistance. Since the cutover it publishes
+under the App-bound identity the branch-protection pin requires (`KFQ_APP_ID` /
+`KFQ_PRIVATE_KEY_PKCS8` repository secrets, App id `4290143`); the `GITHUB_TOKEN` fallback
+identity remains only as the documented failure signature for missing or invalid secrets — the
+pinned context rejects it, so the gate fails closed until the secrets are repaired (see the
+[liveness runbook](../troubleshooting/keiko-for-quality-liveness.md)).
 
 All six live-probe conditions above were proven on live pull requests before the cutover; the
 probe ledger, trade-off analysis, tamper-resistance comparison, empirical equivalence evidence,

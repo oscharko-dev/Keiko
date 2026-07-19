@@ -2,8 +2,10 @@
 
 > **Retired on the ADR-0142 cutover (2026-07-19).** The canonical producer is the GitHub Action
 > (`.github/workflows/keiko-for-quality-action.yml`); the Worker cron, webhook, and D1 database are
-> decommissioned. This directory is retained solely as the documented rollback path:
-> `wrangler deploy` from here plus reverting the workflow identity block restores the Worker.
+> decommissioned. This directory is retained solely as the documented rollback TEMPLATE: restoring
+> the Worker requires full re-provisioning — `wrangler deploy` from here, a fresh D1 database and
+> its bindings, a new webhook plus secret, the cron schedule, and Worker credentials — plus
+> reverting the workflow identity block. `wrangler deploy` alone is not sufficient.
 
 This directory contains the deployment template for the independent GitHub App described in
 [`../../docs/qa/keiko-for-quality.md`](../../docs/qa/keiko-for-quality.md). The runtime is

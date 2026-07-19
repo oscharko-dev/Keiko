@@ -148,6 +148,11 @@ every pull request until the secrets are repaired (see the
 
 ## Migration plan
 
+> Historical — executed and completed on 2026-07-19; retained as the audit trail. Rollback now
+> requires full re-provisioning of the Worker stack (D1, webhook plus secret, cron, credentials),
+> not a bare `wrangler deploy` — see
+> [`infrastructure/keiko-for-quality/README.md`](../../infrastructure/keiko-for-quality/README.md).
+
 1. **Land the PoC (this change).** The Action coexists under `Keiko for Quality (Action)` + the
    `kfq-action-poc` label. The Worker is untouched and canonical.
 2. **Add App secrets.** Store `KFQ_APP_ID` and `KFQ_PRIVATE_KEY_PKCS8` (the existing PKCS#8 key) as

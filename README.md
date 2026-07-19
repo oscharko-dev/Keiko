@@ -99,11 +99,14 @@ npm install
 
 ### Run the repository checks
 
-The pre-PR expectation is the diff-scoped agent gate — it runs exactly the steps your change set
-can affect and reports skipped steps visibly (see `AGENTS.md` section 3 for the full loop):
+There is deliberately no aggregate pre-PR wrapper (ADR-0145 retired it): run the minimum-loop
+commands scoped to what your change touches, plus the touched-area gates from `AGENTS.md`
+section 3; the required CI run on the pull request is the complete arbiter:
 
 ```bash
-npm run agent:pre-pr
+npm run typecheck && npm run lint && npm run format:check
+npm test
+npm run arch:check && npm run arch:check:negative
 ```
 
 ### Start the repository in development mode

@@ -43,10 +43,12 @@ jobs:
         # Ubuntu 24.04 restricts unprivileged user-namespace creation globally via AppArmor, so
         # bwrap fails and the debug capability reports notProvisioned — every nightly run since
         # the lane was created failed on exactly this assertion. The D12 cap runs need bwrap (the
-        # product's own sandbox) to create namespaces, so grant exactly that one binary the
-        # `userns` permission through AppArmor's per-application profile mechanism — the
-        # distribution-documented path for sandboxing tools. The global restriction stays in
-        # force for every other process on the runner; no kernel security knob is changed. The
+        # product's own sandbox) to create namespaces. On the runner image bwrap ships with NO
+        # AppArmor profile — it already runs unconfined, so this profile removes no confinement.
+        # `flags=(unconfined)` plus `userns,` is the distribution-documented per-application
+        # mechanism (the same profile shape Ubuntu 24.04 itself ships for sandboxing tools) whose
+        # only effect here is granting this one binary the user-namespace permission. The global
+        # restriction stays in force for every other process; no kernel-wide knob is changed. The
         # verification step below fails the job immediately if the sandbox still cannot
         # provision, instead of 30 minutes later inside the measurement.
         shell: bash

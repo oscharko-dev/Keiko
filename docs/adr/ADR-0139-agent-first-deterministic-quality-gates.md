@@ -87,6 +87,10 @@ independent re-validation) so the procedure is reproducible and not session folk
 
 ### D4 — Local-first parity is mechanical, and iteration is incremental
 
+> Superseded (2026-07-19): [ADR-0145](ADR-0145-retire-the-agent-pre-pr-aggregate-gate.md) retires
+> the `agent:pre-pr` aggregate wrapper this decision introduced; the underlying deterministic
+> checks and the required CI matrix remain unchanged.
+
 Every deterministic required check is represented as a step of `npm run agent:pre-pr`, including
 the packaging shell-spawn guardrail and the installable-package smoke (platform-skipped where the
 authoritative platform is Linux, with the container path documented). The pre-PR gate maintains a
