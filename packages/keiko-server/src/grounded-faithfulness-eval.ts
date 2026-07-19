@@ -14,7 +14,12 @@ import {
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
 import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
-import type { ConnectedContextPack, LineRange } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConnectedContextPack,
+  EvalBudget,
+  EvalFloorResult,
+  LineRange,
+} from "@oscharko-dev/keiko-contracts";
 
 type FaithfulnessVariant =
   "faithful" | "hallucinated-citation" | "confident-over-empty" | "refusal";
@@ -202,11 +207,10 @@ export function runGroundedFaithfulnessEval(): GroundedFaithfulnessScorecard {
   };
 }
 
-export interface GroundedFaithfulnessBudget {
-  readonly minUnsupportedDetectionRate: number;
-  readonly minCitationPrecision: number;
-  readonly minAbstentionOnEmptyRate: number;
-}
+type GroundedFaithfulnessBudgetMetric =
+  "minUnsupportedDetectionRate" | "minCitationPrecision" | "minAbstentionOnEmptyRate";
+
+export type GroundedFaithfulnessBudget = EvalBudget<GroundedFaithfulnessBudgetMetric>;
 
 // Faithfulness is a correctness invariant: fabricated citations must ALWAYS be flagged and empty
 // evidence must ALWAYS abstain (rates = 1). Citation precision is gated < 1 tolerance is NOT allowed
@@ -220,7 +224,7 @@ export const DEFAULT_GROUNDED_FAITHFULNESS_BUDGET: GroundedFaithfulnessBudget = 
 export function evaluateGroundedFaithfulnessBudget(
   scorecard: GroundedFaithfulnessScorecard,
   budget: GroundedFaithfulnessBudget = DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
-): { readonly ok: boolean; readonly failures: readonly string[] } {
+): EvalFloorResult {
   const failures = [...scorecard.failures];
   if (scorecard.unsupportedDetectionRate < budget.minUnsupportedDetectionRate)
     failures.push("unsupportedDetectionRate");

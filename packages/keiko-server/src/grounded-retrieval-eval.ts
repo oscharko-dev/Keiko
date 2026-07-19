@@ -23,6 +23,7 @@ import type {
   RerankOutcome,
   LiteLLMRerankRequest,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { EvalBudget, EvalFloorResult } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs, WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace";
 
 import type { UiHandlerDeps } from "./deps.js";
@@ -459,12 +460,12 @@ export async function runGroundedRetrievalQualityEval(
 
 // ─── Budget evaluation ────────────────────────────────────────────────────────
 
-export interface GroundedRetrievalBudget {
-  readonly minTop1Rate: number;
-  readonly minRecallAtK: number;
-  readonly minNdcgAtK: number;
-  readonly minCitationSupport: number;
-}
+type GroundedRetrievalBudgetMetric =
+  "minTop1Rate" | "minRecallAtK" | "minNdcgAtK" | "minCitationSupport";
+
+export type GroundedRetrievalBudget = EvalBudget<GroundedRetrievalBudgetMetric>;
+
+type GroundedRetrievalMetric = "top1Rate" | "recallAtK" | "ndcgAtK" | "citationSupport";
 
 // NON-TAUTOLOGICAL floors: all < 1. The baseline pipeline clears them; the injected regressions do
 // not (proven by grounded-retrieval-eval.test.ts and the check:grounded-retrieval-quality gate).
@@ -478,8 +479,8 @@ export const DEFAULT_GROUNDED_RETRIEVAL_BUDGET: GroundedRetrievalBudget = {
 export function evaluateGroundedRetrievalBudget(
   scorecard: GroundedRetrievalScorecard,
   budget: GroundedRetrievalBudget = DEFAULT_GROUNDED_RETRIEVAL_BUDGET,
-): { readonly ok: boolean; readonly failures: readonly string[] } {
-  const failures: string[] = [];
+): EvalFloorResult<GroundedRetrievalMetric> {
+  const failures: GroundedRetrievalMetric[] = [];
   if (scorecard.top1Rate < budget.minTop1Rate) failures.push("top1Rate");
   if (scorecard.recallAtK < budget.minRecallAtK) failures.push("recallAtK");
   if (scorecard.ndcgAtK < budget.minNdcgAtK) failures.push("ndcgAtK");

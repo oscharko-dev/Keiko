@@ -25,7 +25,12 @@ import {
   type EntailmentVerdict,
 } from "./grounded-faithfulness.js";
 import { buildEvalContextPack, evalFileEntry } from "./grounded-eval-support.js";
-import type { ConnectedContextPack, LineRange } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConnectedContextPack,
+  EvalBudget,
+  EvalFloorResult,
+  LineRange,
+} from "@oscharko-dev/keiko-contracts";
 
 type EntailmentVariant = "supported" | "unsupported-claim" | "unavailable";
 
@@ -248,12 +253,12 @@ export async function runGroundedEntailmentEval(): Promise<GroundedEntailmentSco
   };
 }
 
-export interface GroundedEntailmentBudget {
-  readonly minUnsupportedClaimDetectionRate: number;
-  readonly minClaimPrecision: number;
-  readonly minDegradationCorrectnessRate: number;
+type GroundedEntailmentBudgetMetric =
+  "minUnsupportedClaimDetectionRate" | "minClaimPrecision" | "minDegradationCorrectnessRate";
+
+export type GroundedEntailmentBudget = EvalBudget<GroundedEntailmentBudgetMetric> & {
   readonly requireNonTautology: boolean;
-}
+};
 
 // Entailment is a correctness invariant like faithfulness: an unsupported claim must ALWAYS be
 // flagged, a supported claim must NEVER be, and an undecidable claim must ALWAYS degrade to WARN.
@@ -267,7 +272,7 @@ export const DEFAULT_GROUNDED_ENTAILMENT_BUDGET: GroundedEntailmentBudget = {
 export function evaluateGroundedEntailmentBudget(
   scorecard: GroundedEntailmentScorecard,
   budget: GroundedEntailmentBudget = DEFAULT_GROUNDED_ENTAILMENT_BUDGET,
-): { readonly ok: boolean; readonly failures: readonly string[] } {
+): EvalFloorResult {
   const failures = [...scorecard.failures];
   if (scorecard.unsupportedClaimDetectionRate < budget.minUnsupportedClaimDetectionRate)
     failures.push("unsupportedClaimDetectionRate");
