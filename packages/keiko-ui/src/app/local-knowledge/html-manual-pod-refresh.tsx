@@ -76,27 +76,39 @@ function useJobPolling(
   t: Translate,
   intervalMs: number,
 ): void {
+  // Key the poll on the running job's id (stable across progress ticks) so the effect starts once
+  // per job and does not restart on every setState. A self-scheduling timeout (not an interval)
+  // means a new poll never fires until the previous one has resolved, so overlapping requests can
+  // never stack and `onComplete` fires exactly once when the job settles.
+  const pollJobId =
+    state.kind === "active" && state.job.state === "running" ? state.job.jobId : undefined;
   useEffect(() => {
-    if (state.kind !== "active" || state.job.state !== "running") {
+    if (pollJobId === undefined) {
       return undefined;
     }
     let cancelled = false;
-    const timer = window.setInterval(() => {
-      void getJob(state.job.jobId)
+    let timer: number | undefined;
+    const poll = (): void => {
+      void getJob(pollJobId)
         .then((job) => {
           if (cancelled) return;
           setState({ kind: "active", job });
-          if (job.state !== "running") onComplete?.();
+          if (job.state === "running") {
+            timer = window.setTimeout(poll, intervalMs);
+          } else {
+            onComplete?.();
+          }
         })
         .catch((error: unknown) => {
           if (!cancelled) setState({ kind: "error", message: formatError(error, t) });
         });
-    }, intervalMs);
+    };
+    timer = window.setTimeout(poll, intervalMs);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [state, getJob, setState, onComplete, t, intervalMs]);
+  }, [pollJobId, getJob, setState, onComplete, t, intervalMs]);
 }
 
 export function HtmlManualPodRefresh(props: HtmlManualPodRefreshProps): ReactNode {

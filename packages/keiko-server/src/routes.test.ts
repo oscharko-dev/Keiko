@@ -172,7 +172,23 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(19);
+    expect(localKnowledgeRoutes).toHaveLength(22);
+    // Issue #2063 — the live HTML manual-pod create/refresh/status trigger routes.
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/manual-pods/create",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/manual-pods/refresh",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/manual-pods/jobs/:jobId",
+      ),
+    ).toBeDefined();
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
