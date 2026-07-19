@@ -22,35 +22,39 @@ function fail(message) {
   process.exit(1);
 }
 
+// Declared-then-assigned rather than an all-`undefined` object literal: the literal pinned every
+// property's inferred type to `undefined`, which made later value comparisons (e.g.
+// `options.policy === "production"`) read as statically impossible (javascript:S3403).
 function parseArgs(argv) {
-  const options = { manifest: undefined, policy: undefined, verificationInput: undefined };
+  let manifest;
+  let policy;
+  let verificationInput;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const value = argv[index + 1];
     if (arg === "--manifest") {
-      options.manifest = requiredValue(value, arg);
+      manifest = requiredValue(value, arg);
       index += 1;
       continue;
     }
     if (arg === "--policy") {
-      options.policy = requiredValue(value, arg);
+      policy = requiredValue(value, arg);
       index += 1;
       continue;
     }
     if (arg === "--verification-input") {
-      options.verificationInput = requiredValue(value, arg);
+      verificationInput = requiredValue(value, arg);
       index += 1;
       continue;
     }
     fail(`unsupported argument: ${arg}`);
   }
-  if (options.manifest === undefined) fail("pass --manifest <path>");
-  if (options.policy === undefined)
-    fail("pass --policy <staging|development|pull-request|production>");
-  if (!PORTABLE_VERIFICATION_POLICIES.includes(options.policy)) {
-    fail(`unsupported verification policy: ${options.policy}`);
+  if (manifest === undefined) fail("pass --manifest <path>");
+  if (policy === undefined) fail("pass --policy <staging|development|pull-request|production>");
+  if (!PORTABLE_VERIFICATION_POLICIES.includes(policy)) {
+    fail(`unsupported verification policy: ${policy}`);
   }
-  return options;
+  return { manifest, policy, verificationInput };
 }
 
 function requiredValue(value, arg) {
