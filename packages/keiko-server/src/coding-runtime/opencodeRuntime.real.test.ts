@@ -23,6 +23,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -514,6 +515,18 @@ async function createGatewayHarness(
         providerCalls += 1;
         return script(request, callIndex);
       },
+    // The real v1.17.17 child issues streaming chats; without this scripted stream factory the
+    // gateway falls back to the default provider path and every post-handshake turn dies.
+    codingSidecarGatewayChatStreamFactory:
+      (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+      (request): AsyncIterable<GatewayStreamChunk> => ({
+        async *[Symbol.asyncIterator](): AsyncGenerator<GatewayStreamChunk> {
+          requests.push(request);
+          const callIndex = providerCalls;
+          providerCalls += 1;
+          yield { type: "done", response: await script(request, callIndex) };
+        },
+      }),
     runtimeCapabilityAuthenticator: {
       authenticate: (capability: string, audience: "model-gateway" | "tool-facade"): unknown =>
         capability === MODEL_CAPABILITY && audience === "model-gateway"
