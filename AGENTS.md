@@ -22,7 +22,8 @@ product.
 > ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
 > their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the direct app-bound required checks succeed on the exact current head. Direct pushes to
+> after the direct app-bound required checks succeed on the exact current head, the branch is
+> current with `dev`, and every review conversation is resolved. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -43,7 +44,7 @@ monotonic semantics fixed by
   or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
-  integrated automatically only after the direct required checks succeed.
+  integrated automatically only once the auto-merge preconditions in the invariant above hold.
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -331,9 +332,9 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
   history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
   native auto-merge on the PR, and the platform integrates automatically once the required checks
-  are green on the exact current head and every review conversation is resolved (ADR-0135). Green
-  gates plus settled review threads ARE the merge decision; there is no human review step and no
-  waiting for a person.
+  are green on the exact current head, the branch is current with `dev`, and every review
+  conversation is resolved (ADR-0135). Green gates on a current branch plus settled review threads
+  ARE the merge decision; there is no human review step and no waiting for a person.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
