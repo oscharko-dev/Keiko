@@ -22,8 +22,8 @@ product.
 > ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
 > their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the direct app-bound required checks succeed on the exact current head, the branch is
-> current with `dev`, and every review conversation is resolved. Direct pushes to
+> after the app-bound required checks succeed on the exact current head and every review
+> conversation is resolved. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -114,46 +114,24 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
-For PR-bound work, use the agent pre-PR gate instead of manually stitching a partial checklist
-together. This is the single, agent-agnostic quality gate every agent (Claude Code, Codex,
-Cursor, …) runs before a push or a PR update:
-
-```bash
-npm run agent:pre-pr
-```
-
-The gate is **diff-scoped by default** (ADR-0139 D4): it computes your change set versus the
-integration base (`origin/dev`; override with `-- --base <ref>`) and runs only the steps whose
-declared input scope that change set touches — a docs-only change runs the handful of steps that
-can see docs, a server change runs the full test/build chain. Steps that are skipped as out of
-scope are reported visibly with the reason, never silently. Steps without a declared scope always
-run. `npm run agent:pre-pr -- --full` runs the complete fixed sequence (typecheck, lint, format,
-shell-spawn guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping,
-architecture checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor
-bundle size, installable-package smoke, and smoke coverage). Every run writes a machine-readable
-report to `.agent/pre-pr-report.json` — including the scope decision — so the exact local outcome
-is inspectable.
-
-On top of the diff scope, the gate keeps a content-addressed step cache
-(`.agent/pre-pr-cache.json`, ADR-0139 D4): in-scope steps whose declared inputs are
-byte-identical to the last passing run report `cached` instead of re-executing. Pass `--no-cache`
-to bypass it; CI never uses the cache.
+For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
+`agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
+any touched-area gate from the table below, and let the required CI run on the pull request be
+the complete arbiter.
 
 ### Local-first gate policy
 
 Verify locally what your change can affect; required CI is the authoritative full matrix on every
-pull request. Never push a change whose scoped local gate is red, and never use CI to discover
-what your own diff obviously breaks. Concretely:
+pull request. Never use CI to discover what your own diff obviously breaks. Concretely:
 
-1. Run `npm run agent:pre-pr` (diff-scoped) before every push or PR update, plus any
-   touched-area gate from the table below that is not part of the gate.
-2. If a required CI gate goes red, reproduce that exact failure locally — targeted, or with
-   `-- --full` — before pushing another fix; after the fix, rerun the failed gate locally first.
-3. Push only after the scoped local gate is green or a documented platform-specific local skip is
-   unavoidable (the report records those skips).
-4. Report outcomes from the generated pre-PR report, not from memory.
-5. The full local matrix (`-- --full`) is for parity debugging, not for every iteration — the
-   required CI run on the pull request is the final, complete arbiter.
+1. Before a push or PR update, run the minimum-loop commands scoped to what your change touches,
+   plus any touched-area gate from the table below.
+2. If a required CI gate goes red, reproduce that exact failure locally with the targeted
+   command before pushing another fix; after the fix, rerun that command first.
+3. Push only when your targeted local runs are green or a documented platform-specific local
+   skip is unavoidable.
+4. Report outcomes from the runs you actually executed, not from memory.
+5. The required CI run on the pull request is the final, complete arbiter.
 
 If a required gate cannot be run locally, state that in the PR instead of guessing.
 
@@ -300,9 +278,10 @@ These cost real time when rediscovered. They are all real and current.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run build && npm run check:package-surface` and update the
   expected surface, or CI goes red on the release job.
-- **A new long-lived integration branch (`feat/…`) must be added to the trigger lists in
-  `.github/workflows/ci.yml`** (both `push:` and `pull_request:`), or CI silently never runs on
-  it and the branch protection gate rejects the merge.
+- **A new long-lived integration branch (`feat/…`) must be added in THREE places in
+  `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
+  the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
+  miss the third and CI runs but the gate still rejects the merge.
 - **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
   with per-file floors and a branch-metric floor. Lowering coverage fails the gate; if you add
   code, add tests.
@@ -332,9 +311,9 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
   history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
   native auto-merge on the PR, and the platform integrates automatically once the required checks
-  are green on the exact current head, the branch is current with `dev`, and every review
-  conversation is resolved (ADR-0135). Green gates on a current branch plus settled review threads
-  ARE the merge decision; there is no human review step and no waiting for a person.
+  are green on the exact current head and every review conversation is resolved (ADR-0135). Green
+  gates plus settled review threads ARE the merge decision; there is no human review step and no
+  waiting for a person.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -346,13 +325,15 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
   `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts`
+  `Socket Security: Pull Request Alerts` · `Keiko for Quality`
 
-  No human approving review is required for `dev`. Qodo and `Keiko for Quality` are advisory and
-  must not be added to branch protection until their availability, bounded settlement, and
-  non-self-deadlocking repair path pass the live probes in
-  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation and hosted-runner
-  performance evidence run outside the PR critical path.
+  No human approving review is required for `dev`. `Keiko for Quality` is required and app-bound
+  (App id `4290143`) since the ADR-0142 cutover (2026-07-19), after all six live probes in
+  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md) passed on live pull requests; it
+  bridges the comment-only Qodo review (which itself stays advisory) into the gate. If that check
+  sits `in_progress`, the usual cause is a Qodo review that has not yet settled on the exact
+  current head. Full mutation and hosted-runner performance evidence run outside the PR critical
+  path.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

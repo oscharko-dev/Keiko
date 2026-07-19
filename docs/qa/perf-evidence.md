@@ -10,7 +10,7 @@ The two committed editor evidence documents live in `docs/release/`:
 ## When evidence must be regenerated
 
 Almost never on a pull request (ADR-0139 D10). The pull-request gate
-(`check:perf-evidence:editor`, also an `agent:pre-pr` step) validates evidence **integrity** —
+(`check:perf-evidence:editor`) validates evidence **integrity** —
 canonical structure, budgets, stamps, the pinned-baseline anchor, and the D12
 measurement-toolchain digest — and deliberately does **not** require the recorded source tree,
 lockfile, or working tree to match HEAD. Per-PR performance protection comes from the
@@ -33,7 +33,7 @@ nightly cycle and corrects itself without agent involvement.
 npm run perf:evidence:regen
 ```
 
-On Linux this provisions two clean checkouts (pinned baseline `18750d07…`, candidate = your
+On Linux this provisions two clean checkouts (pinned baseline `18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your
 HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs,
 wall-clock budgets enforced via `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
@@ -42,7 +42,29 @@ subject paths, so committing them does not invalidate what they bind).
 
 On macOS/Windows the command fails closed and prints the pinned container invocation
 (`node:24.18.0-bookworm`, `--privileged` for Bubblewrap, Playwright Chromium). A bind mount
-installs Linux binaries into `node_modules`; re-run `npm install` on the host afterwards.
+installs Linux binaries into the mounted repo's `node_modules` — irrelevant with the recommended
+throwaway clone below; only after mounting your working checkout directly re-run `npm install`.
+
+**Container prerequisites (hard-won, all real):**
+
+- **Full, non-worktree checkout.** In a git worktree, `$PWD/.git` is a file pointing at the main
+  repository and the container cannot resolve it. Make a self-contained clone first —
+  `git clone --no-local . <dest>` — and mount that alone; the pinned baseline commit must be
+  present (`git merge-base --is-ancestor 18750d079e2a61c7d7044f3f6ec977a104b9884f HEAD`). Name the clone directory `*.noindex`
+  so Spotlight does not index-storm the host during the run.
+- **Single occupancy.** Measurement is exclusive: before starting, check
+  `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
+  not run builds/tests/gates on the host for the duration. A wall-clock budget failure on a
+  loaded host is an environment verdict, not a product regression — fix the load, not the code.
+- **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
+  cap budgets; the dev machine's VM is configured at 48 GiB / 14 CPUs
+  (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`).
+
+**Known lane status:** the scheduled `nightly-perf-evidence` run is expected RED on the absolute
+cap budgets on free hosted runners (measured 250.4 ms vs the 200 ms cap) until
+[#2587](https://github.com/oscharko-dev/Keiko/issues/2587) lands a reference-environment
+decision; the user-namespace provisioning fix removes the first of the two stacked
+failure causes. The PR lane is unaffected either way.
 
 ## Invariants
 

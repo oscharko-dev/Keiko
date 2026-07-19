@@ -161,6 +161,7 @@ function composeOpenCodeRun(
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
     supervisor: runtimeSupervisor(input, run.context.workspaceRoot),
+    diagnostics: input.diagnostics,
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
   });
