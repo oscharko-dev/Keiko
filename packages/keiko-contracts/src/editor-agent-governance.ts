@@ -19,12 +19,15 @@
 import {
   isContainedAgentPath,
   isEditorAgentActionOrigin,
+  isEditorAgentRootAttribution,
   resolveEditorAgentActionOrigin,
   type EditorAgentActionOrigin,
   type EditorAgentActionStatus,
   type EditorAgentActionType,
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
+  type EditorAgentRootAttribution,
+  type EditorAgentRootBinding,
 } from "./editor-agent.js";
 import {
   codingWorkbenchPolicyEffectFor,
@@ -168,6 +171,9 @@ export type EditorAgentActionDenyReason =
   | "secret-exfiltration"
   | "platform-restricted"
   | "workspace-restricted"
+  | "root-binding-required"
+  | "root-binding-invalid"
+  | "decompose-per-root"
   | "mode-policy-denied";
 
 export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyReason[] = [
@@ -184,6 +190,9 @@ export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyRea
   "secret-exfiltration",
   "platform-restricted",
   "workspace-restricted",
+  "root-binding-required",
+  "root-binding-invalid",
+  "decompose-per-root",
   "mode-policy-denied",
 ] as const;
 
@@ -234,6 +243,65 @@ export interface EditorAgentActionPolicyContext {
   readonly targetSensitive: boolean;
   // Optional for schema-v1 compatibility. Omission is the agent/harness producer.
   readonly origin?: EditorAgentActionOrigin | undefined;
+}
+
+function rootBindingsEqual(left: EditorAgentRootBinding, right: EditorAgentRootBinding): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.manifestRef === right.manifestRef &&
+    left.manifestRevision === right.manifestRevision &&
+    left.manifestDigest === right.manifestDigest &&
+    left.rootRef === right.rootRef &&
+    left.rootIdentityDigest === right.rootIdentityDigest
+  );
+}
+
+type RootBindingPresence =
+  | {
+      readonly sessionBinding: EditorAgentRootBinding;
+      readonly actionBinding: EditorAgentRootBinding;
+    }
+  | "root-binding-required"
+  | "root-binding-invalid"
+  | null;
+
+function rootBindingPresence(
+  sessionBinding: EditorAgentRootBinding | undefined,
+  actionBinding: EditorAgentRootBinding | undefined,
+  explicitBindingRequired: boolean,
+): RootBindingPresence {
+  if (sessionBinding === undefined && actionBinding === undefined) {
+    return explicitBindingRequired ? "root-binding-required" : null;
+  }
+  if (sessionBinding === undefined || actionBinding === undefined) {
+    return explicitBindingRequired ? "root-binding-required" : "root-binding-invalid";
+  }
+  return { sessionBinding, actionBinding };
+}
+
+/**
+ * Pure root-binding composition. Multi-root requests must name a root on both the session and the
+ * action; disagreement between roots is the typed instruction to decompose the intent per root.
+ */
+export function editorAgentRootBindingDenyReason(
+  sessionBinding: EditorAgentRootBinding | undefined,
+  actionBinding: EditorAgentRootBinding | undefined,
+  explicitBindingRequired: boolean,
+): Extract<
+  EditorAgentActionDenyReason,
+  "root-binding-required" | "root-binding-invalid" | "decompose-per-root"
+> | null {
+  const presence = rootBindingPresence(sessionBinding, actionBinding, explicitBindingRequired);
+  if (presence === null || typeof presence === "string") return presence;
+  if (presence.sessionBinding.rootRef !== presence.actionBinding.rootRef) {
+    return "decompose-per-root";
+  }
+  if (presence.sessionBinding.rootIdentityDigest !== presence.actionBinding.rootIdentityDigest) {
+    return "root-binding-invalid";
+  }
+  return rootBindingsEqual(presence.sessionBinding, presence.actionBinding)
+    ? null
+    : "root-binding-invalid";
 }
 
 export type EditorAgentAuthorityPolicy = Pick<
@@ -457,6 +525,7 @@ export interface EditorAgentActionAuditRecord {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly origin?: EditorAgentActionOrigin | undefined;
   readonly effectClass: EditorAgentActionEffectClass;
   readonly mutating: boolean;
@@ -488,6 +557,7 @@ export interface EditorAgentActionAuditInput {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly rootAttribution?: EditorAgentRootAttribution | undefined;
   readonly decision: EditorAgentActionPolicyDecision;
   readonly outcome: EditorAgentActionStatus;
   readonly conflictCode?: EditorAgentConflictCode | undefined;
@@ -610,6 +680,7 @@ export function buildEditorAgentActionAuditRecord(
     sessionId: input.sessionId,
     actionId: input.actionId,
     actionType: input.actionType,
+    ...(input.rootAttribution === undefined ? {} : { rootAttribution: input.rootAttribution }),
     origin: resolveEditorAgentActionOrigin(input.decision.origin),
     effectClass: input.decision.effectClass,
     mutating: isMutatingEditorAgentAction(input.actionType),
@@ -674,6 +745,7 @@ export function isEditorAgentActionAuditRecord(
     typeof value.occurredAt === "number" && Number.isFinite(value.occurredAt),
     typeof value.sessionId === "string" && value.sessionId.length > 0,
     typeof value.actionId === "string" && value.actionId.length > 0,
+    value.rootAttribution === undefined || isEditorAgentRootAttribution(value.rootAttribution),
     value.origin === undefined || isEditorAgentActionOrigin(value.origin),
     hasMatchingActionEffect(value.actionType, value.effectClass, value.mutating),
     isEditorAgentActionDisposition(value.disposition),

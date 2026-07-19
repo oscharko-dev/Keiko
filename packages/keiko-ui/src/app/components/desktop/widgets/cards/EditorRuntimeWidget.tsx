@@ -140,6 +140,7 @@ import {
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentDiagnosticsDetail,
+  type EditorAgentRootBinding,
   isEditorAgentActiveBufferActionType,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 import conflictStyles from "./EditorConflicts.module.css";
@@ -604,6 +605,7 @@ export interface EditorRuntimeWidgetProps {
   readonly activePaneId?: string | undefined;
   readonly layoutPanes?: readonly EditorAgentPaneSnapshot[] | undefined;
   readonly root?: string;
+  readonly agentRootBinding?: EditorAgentRootBinding | undefined;
   readonly file?: string;
   readonly openFiles?: readonly string[] | undefined;
   readonly revealLineStart?: number | undefined;
@@ -1443,6 +1445,14 @@ function agentReviewDecisionRequest(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
       sessionId: action.sessionId,
+      ...(action.rootBinding === undefined
+        ? {}
+        : {
+            rootAttribution: {
+              rootRef: action.rootBinding.rootRef,
+              rootIdentityDigest: action.rootBinding.rootIdentityDigest,
+            },
+          }),
       status,
       ...(message === undefined ? {} : { message }),
     },
@@ -1729,6 +1739,7 @@ function EditorRuntimeWidget({
   activePaneId,
   layoutPanes,
   root,
+  agentRootBinding,
   file,
   revealLineStart,
   revealLineEnd,
@@ -4378,6 +4389,7 @@ function EditorRuntimeWidget({
         sessionId: agentSessionId,
         windowId: windowId ?? "editor",
         workspaceRoot: root,
+        ...(agentRootBinding === undefined ? {} : { rootBinding: agentRootBinding }),
         activePaneId: effectiveAgentPaneId,
         panes: layoutPanes ?? [
           {
@@ -4440,6 +4452,7 @@ function EditorRuntimeWidget({
     },
     [
       activeContentHash,
+      agentRootBinding,
       agentSessionId,
       currentSelection,
       cursor,

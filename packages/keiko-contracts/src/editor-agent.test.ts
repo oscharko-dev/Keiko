@@ -715,6 +715,7 @@ describe("isEditorAgentConflictCode (Issue #1394)", () => {
     expect(isEditorAgentConflictCode("NO_ACTIVE_BRIDGE")).toBe(true);
     expect(isEditorAgentConflictCode("INVALID_EDITS")).toBe(true);
     expect(isEditorAgentConflictCode("OUT_OF_SCOPE")).toBe(true);
+    expect(isEditorAgentConflictCode("DECOMPOSE_PER_ROOT")).toBe(true);
     expect(isEditorAgentConflictCode("PRECONDITION_REQUIRED")).toBe(true);
   });
 
@@ -1818,7 +1819,8 @@ describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
-    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("DECOMPOSE_PER_ROOT");
+    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(11);
     for (const code of EDITOR_AGENT_CONFLICT_CODES) {
       expect(isEditorAgentConflictCode(code)).toBe(true);
     }

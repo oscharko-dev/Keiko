@@ -12,7 +12,9 @@
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
 import {
   EDITOR_AGENT_REFERENCE_ID_MAX_CHARS,
+  isEditorAgentRootBinding,
   type EditorAgentGovernedAuthorityReference,
+  type EditorAgentRootBinding,
 } from "./editor-agent.js";
 import {
   EDITOR_AGENT_ACTION_DENY_REASONS,
@@ -53,6 +55,7 @@ const TEXT_ENCODER = new TextEncoder();
 export interface EditorAgentVerificationRunRequest {
   readonly schemaVersion: typeof EDITOR_VERIFICATION_SCHEMA_VERSION;
   readonly sessionId: string;
+  readonly rootBinding?: EditorAgentRootBinding | undefined;
   readonly kind: VerificationKind;
   readonly targetPath?: string | undefined;
   readonly authorityRef: EditorAgentGovernedAuthorityReference;
@@ -216,6 +219,9 @@ function requestFieldErrors(input: Record<string, unknown>): string[] {
   if (!isAuthorityRef(input.authorityRef)) {
     errors.push("authorityRef must carry a bounded runId and envelopeDigest");
   }
+  if (input.rootBinding !== undefined && !isEditorAgentRootBinding(input.rootBinding)) {
+    errors.push("rootBinding must identify one bounded workspace root");
+  }
   return errors;
 }
 
@@ -252,6 +258,9 @@ function canonicalRequest(input: Record<string, unknown>): EditorAgentVerificati
   return {
     schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
     sessionId: input.sessionId as string,
+    ...(input.rootBinding === undefined
+      ? {}
+      : { rootBinding: input.rootBinding as EditorAgentRootBinding }),
     kind: input.kind as VerificationKind,
     ...(typeof input.targetPath === "string" ? { targetPath: input.targetPath } : {}),
     authorityRef: {

@@ -650,7 +650,8 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("DECOMPOSE_PER_ROOT");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(11);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
       "CANCELLED",
@@ -690,6 +691,10 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
     expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
     expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
+    expect(typeof mod.isEditorAgentRootAttribution).toBe("function");
+    expect(typeof mod.isEditorAgentRootBinding).toBe("function");
+    expect(typeof mod.isEditorAgentSessionsRequest).toBe("function");
+    expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
@@ -706,6 +711,9 @@ describe("keiko-contracts package surface", () => {
     type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    type _RootAttribution = import("./index.js").EditorAgentRootAttribution;
+    type _RootBinding = import("./index.js").EditorAgentRootBinding;
+    type _SessionsRequest = import("./index.js").EditorAgentSessionsRequest;
     // Issue #2114 (ADR-0125 D3): changeset / prepared-changeset / conflict / file-result types.
     type _Changeset = import("./index.js").EditorAgentChangeset;
     type _ChangesetFile = import("./index.js").EditorAgentChangesetFile;
@@ -726,6 +734,9 @@ describe("keiko-contracts package surface", () => {
     pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
+    pin<_RootAttribution>();
+    pin<_RootBinding>();
+    pin<_SessionsRequest>();
     pin<_Changeset>();
     pin<_ChangesetFile>();
     pin<_PreparedChangeset>();

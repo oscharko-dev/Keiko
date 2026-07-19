@@ -140,12 +140,12 @@ const RANGE = {
 };
 
 describe("EditorAgentToolHost route dispatch", () => {
-  it("lists sessions with one GET", async () => {
+  it("lists root-scoped sessions with one POST", async () => {
     const route = recordingRoute();
     const result = await execute(host(route), "editor_list_sessions", {});
     expect(parseOutput(result)).toMatchObject({ ok: true, kind: "sessions" });
     expect(route.requests).toHaveLength(1);
-    expect(route.requests[0]).toMatchObject({ method: "GET" });
+    expect(route.requests[0]).toMatchObject({ method: "POST" });
   });
 
   it("requests snapshots with textMode none by default", async () => {
@@ -155,6 +155,7 @@ describe("EditorAgentToolHost route dispatch", () => {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       sessionId: "session-1",
       textMode: "none",
+      authorityRef: { runId: "run-1", envelopeDigest: HASH },
     });
   });
 

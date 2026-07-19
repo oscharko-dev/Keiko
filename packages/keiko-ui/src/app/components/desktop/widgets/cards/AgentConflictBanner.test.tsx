@@ -214,6 +214,14 @@ describe("AgentConflictBanner — OUT_OF_SCOPE affordances", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it("renders typed root decomposition as a dismiss-only scope conflict", () => {
+    renderBanner("DECOMPOSE_PER_ROOT");
+    expect(screen.getByText("Action out of scope")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
 });
 
 // ─── NO_ACTIVE_SESSION: Dismiss only ─────────────────────────────────────────
@@ -313,6 +321,7 @@ describe("AgentConflictBanner — accessibility (jest-axe)", () => {
     "CONTENT_HASH_MISMATCH",
     "INVALID_EDITS",
     "OUT_OF_SCOPE",
+    "DECOMPOSE_PER_ROOT",
     "NO_ACTIVE_SESSION",
     "NO_ACTIVE_BRIDGE",
     "PRECONDITION_REQUIRED",
