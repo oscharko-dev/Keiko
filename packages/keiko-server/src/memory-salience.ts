@@ -16,6 +16,7 @@ import type {
   MemoryProposalId,
   MemoryRecord,
   MemoryScope,
+  MemorySourceKind,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -28,6 +29,7 @@ import {
   memoryTextSecretEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
+  type RejectionReason,
   type SalienceDiagnostic,
   type SalienceDeps,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -40,6 +42,12 @@ import {
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
+import {
+  buildMemoryCaptureDecisionAuditEvent,
+  type MemoryCaptureDecisionOutcome,
+  type MemoryCaptureDecisionReason,
+} from "./memory-capture-projection.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
@@ -219,6 +227,74 @@ interface PersistedCandidate {
   readonly disposition: CaptureDisposition;
 }
 
+interface CaptureDecisionEvidence {
+  readonly outcome: MemoryCaptureDecisionOutcome;
+  readonly scope: MemoryScope;
+  readonly sourceKind: MemorySourceKind;
+  readonly reason: MemoryCaptureDecisionReason;
+  readonly occurredAt: number;
+  readonly memoryId?: MemoryId;
+}
+
+function recordCaptureDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  decision: CaptureDecisionEvidence,
+): void {
+  const event = buildMemoryCaptureDecisionAuditEvent({
+    eventId: randomUUID(),
+    mode,
+    ...decision,
+  });
+  recordMemoryAudit(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: (input) => redact(input, currentRedactionSecrets(deps)),
+    },
+    event,
+  );
+}
+
+function proposedDecisionReason(
+  mode: CodingWorkbenchMode,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+): MemoryCaptureDecisionReason {
+  if (outcome.requiresApproval) return "sensitivity-requires-approval";
+  return mode === "governed-assist" ? "mode-requires-approval" : "governance-promotion-deferred";
+}
+
+function recordPersistedCandidateDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  inserted: MemoryRecord,
+): void {
+  const accepted = inserted.status === "accepted";
+  recordCaptureDecision(deps, mode, {
+    outcome: accepted ? "auto-accepted" : "proposed",
+    scope: inserted.scope,
+    sourceKind: inserted.provenance.sourceKind,
+    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(mode, outcome),
+    occurredAt: inserted.createdAt,
+    memoryId: inserted.id,
+  });
+}
+
+function recordRejectedCandidateDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  reason: RejectionReason,
+): void {
+  recordCaptureDecision(deps, mode, {
+    outcome: "rejected",
+    scope: outcome.proposal.scope,
+    sourceKind: outcome.proposal.provenance.sourceKind,
+    reason,
+    occurredAt: outcome.proposal.provenance.capturedAt,
+  });
+}
+
 // Auto-accept a freshly captured public record by routing it THROUGH the existing governance
 // promotion lever — no second promotion path. planMemoryMaintenance/shouldPromote keeps its own
 // gates (status proposed + sensitivity public + strength >= promoteStrength). The record's own
@@ -265,6 +341,7 @@ async function persistCandidate(
     return { action: null, disposition: "none" };
   }
   if (!isPersistableMemoryCandidate(outcome)) {
+    recordRejectedCandidateDecision(deps, mode, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
     return {
       action: { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON },
       disposition: "rejected",
@@ -276,6 +353,7 @@ async function persistCandidate(
     return { action: null, disposition: "none" };
   }
   if (isSuppressedByForgetTombstone(vault, record)) {
+    recordRejectedCandidateDecision(deps, mode, outcome, FORGOTTEN_MEMORY_SUPPRESSION_REASON);
     return {
       action: { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON },
       disposition: "rejected",
@@ -290,6 +368,7 @@ async function persistCandidate(
     // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
     return { action: null, disposition: "merged" };
   }
+  recordPersistedCandidateDecision(deps, mode, outcome, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
     disposition: inserted.status === "accepted" ? "accepted" : "proposed",
@@ -301,25 +380,32 @@ interface SalienceTurnRequest {
   readonly memory: { readonly enabled: boolean } | undefined;
 }
 
+type TurnSalienceExtraction =
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "refused"; readonly reason: RejectionReason }
+  | { readonly kind: "outcomes"; readonly outcomes: readonly CaptureOutcome[] };
+
 async function extractTurnSalienceOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
+  captureContext: CaptureContext,
   modelId: string,
   assistantText: string,
-): Promise<readonly CaptureOutcome[] | null> {
+): Promise<TurnSalienceExtraction> {
   const salienceModelId = configuredSalienceModelId(deps, modelId);
   const callModelMessages = buildCallModel(deps, salienceModelId);
-  if (callModelMessages === null) return null;
+  if (callModelMessages === null) return { kind: "unavailable" };
   const policy = memoryCapturePolicyForDeps(deps);
-  if (memoryTextSecretEgressRejectionReason(request.content, policy) !== null) return null;
-  return extractSalientMemories(
+  const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
+  if (refusalReason !== null) return { kind: "refused", reason: refusalReason };
+  const outcomes = await extractSalientMemories(
     {
       userText: request.content,
       assistantText,
       existingBodies: gatherExistingBodies(vault, context),
-      context: buildSalienceContext(context),
+      context: captureContext,
       policy,
     },
     {
@@ -329,14 +415,15 @@ async function extractTurnSalienceOutcomes(
           { role: "user", content: user },
         ]),
       callModelMessages,
-      now: () => Date.now(),
-      newMemoryId: () => randomUUID() as MemoryId,
-      newProposalId: () => randomUUID() as MemoryProposalId,
+      now: () => captureContext.nowMs,
+      newMemoryId: captureContext.newMemoryId,
+      newProposalId: captureContext.newProposalId,
       onDiagnostic: (diagnostic) => {
         logSalienceDiagnostic(diagnostic, deps, salienceModelId);
       },
     },
   );
+  return { kind: "outcomes", outcomes };
 }
 
 interface SalienceCaptureSummary {
@@ -406,6 +493,22 @@ async function persistSalienceActions(
   return { actions, summary };
 }
 
+function recordTurnCaptureRefusal(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  context: ConversationMemoryRuntimeContext,
+  occurredAt: number,
+  reason: RejectionReason,
+): void {
+  recordCaptureDecision(deps, mode, {
+    outcome: "rejected",
+    scope: { kind: "project", projectId: context.projectId },
+    sourceKind: "system-default",
+    reason,
+    occurredAt,
+  });
+}
+
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
 // vault error, malformed output) yields [] so the chat response is unaffected.
 export async function captureSalientFromTurn(
@@ -420,16 +523,23 @@ export async function captureSalientFromTurn(
     return [];
   }
   try {
-    const outcomes = await extractTurnSalienceOutcomes(
+    const mode = resolveMemoryCaptureAutonomyMode(deps);
+    const captureContext = buildSalienceContext(context);
+    const extraction = await extractTurnSalienceOutcomes(
       deps,
       vault,
       request,
       context,
+      captureContext,
       modelId,
       assistantText,
     );
-    if (outcomes === null) return [];
-    const mode = resolveMemoryCaptureAutonomyMode(deps);
+    if (extraction.kind === "unavailable") return [];
+    if (extraction.kind === "refused") {
+      recordTurnCaptureRefusal(deps, mode, context, captureContext.nowMs, extraction.reason);
+      return [];
+    }
+    const { outcomes } = extraction;
     const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode);
     if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary);
     return actions;
