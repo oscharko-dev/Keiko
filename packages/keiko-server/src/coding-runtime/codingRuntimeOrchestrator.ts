@@ -110,6 +110,7 @@ export class CodingRuntimeOrchestrator {
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
       this.deps.snapshots.releaseRecoveryForRetry(runId, this.now().toISOString());
+      this.deps.safeActivityProjection?.purge(runId, "stop");
       this.pruneSettled();
       this.activeRunId = undefined;
       return this.startFresh(input, runId);
@@ -394,15 +395,16 @@ export class CodingRuntimeOrchestrator {
         bindingDigest: snapshot.bindingDigest,
         provenanceDigest: snapshot.provenanceDigest,
       });
+      this.deps.safeActivityProjection?.markUnavailable(snapshot.runId);
     }
     this.pruneSettled();
     this.activeRunId = this.deps.snapshots.listRecentActive(1)[0]?.runId;
   }
   shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    return current
-      ? this.end("stop", current.runId, { requestId: current.runId })
-      : Promise.resolve({ ok: true, snapshot: this.projection.idle() });
+    if (current) return this.end("stop", current.runId, { requestId: current.runId });
+    this.deps.safeActivityProjection?.purgeAll("shutdown");
+    return Promise.resolve({ ok: true, snapshot: this.projection.idle() });
   }
 
   private async startFresh(
@@ -571,6 +573,7 @@ export class CodingRuntimeOrchestrator {
     if (!current) return { ok: true, snapshot: this.projection.idle() };
     if (current.runId !== runId) return this.fail("invalid-intent");
     if (current.state === "recovery-required") return this.fail("recovery-required");
+    this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping =
       kind === "stop"
         ? this.transition(current, "stopping")
@@ -628,6 +631,13 @@ export class CodingRuntimeOrchestrator {
       return this.transition(next, "recovery-required", "recovery-required");
     }
     if (terminal.has(state) || state === "recovery-required") {
+      if (state === "recovery-required")
+        this.deps.safeActivityProjection?.markUnavailable(next.runId);
+      else
+        this.deps.safeActivityProjection?.purge(
+          next.runId,
+          state === "taken-over" ? "takeover" : "stop",
+        );
       this.deps.evidence.settle({
         runId: next.runId,
         state,

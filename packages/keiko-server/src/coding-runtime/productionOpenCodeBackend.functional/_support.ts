@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
-import { EDITOR_AGENT_SCHEMA_VERSION, type WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  EDITOR_AGENT_SCHEMA_VERSION,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayStreamChunk,
@@ -18,7 +22,9 @@ import type {
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
+import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
+import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
@@ -34,12 +40,15 @@ import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRu
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
 
 const MAX_READ_BYTES = 65_536;
+export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
+export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
 
 export interface ScriptState {
   mode: "productive" | "out-of-scope" | "discovery";
   calls: number;
   readonly old: string;
   readonly next: string;
+  toolCallId?: string;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -56,6 +65,7 @@ export interface FunctionalRuntimeResolverInput {
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
+  readonly diagnostics?: ServerDiagnosticSink;
 }
 
 /**
@@ -83,6 +93,7 @@ export function createFunctionalRuntimeResolver(
       runtimeEvidence: input.runtimeEvidence,
       gatewayReadiness: readiness,
       createSupervisor: input.createSupervisor,
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     }),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot),
     editorAgentClient: functionalEditorAgentClient(activeRoot),
@@ -128,6 +139,7 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
     codingRuntimeResolver: input.codingRuntimeResolver,
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => "functional-operator",
+    sessionPairingPort: createFakeSessionPairingPort(),
   });
   return withScriptedModelSeams(deps, input.script);
 }
@@ -164,6 +176,7 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
     workspaceLifecycle: input.workspaceLifecycle,
     codingRuntimeServerPrincipal: () => "functional-operator",
+    sessionPairingPort: createFakeSessionPairingPort(),
   });
   return withScriptedModelSeams(deps, input.script);
 }
@@ -350,7 +363,8 @@ export function scriptedResponse(script: ScriptState): NormalizedResponse {
     if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
     return step === 1 ? tool("question", question()) : normal();
   }
-  if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
+  if (step === 0)
+    return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);
   if (step === 1) return tool("question", question());
   if (step === 2) return tool("keiko_changeset_edit", edit(script));
   return step === 3 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
@@ -384,7 +398,9 @@ function digest(value: string): string {
 function normal(): NormalizedResponse {
   return {
     modelId: "functional-model",
-    content: "",
+    content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
+      Math.floor(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS / 8),
+    )}${FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL}`,
     finishReason: "stop",
     toolCalls: [],
     structuredOutput: null,
@@ -403,12 +419,16 @@ let scriptedToolCallSequence = 0;
 function tool(
   name: "keiko_workspace_read" | "keiko_changeset_edit" | "keiko_verification" | "question",
   args: Record<string, unknown>,
+  callId?: string,
 ): NormalizedResponse {
   scriptedToolCallSequence += 1;
   return {
     ...normal(),
+    content: "",
     finishReason: "tool_calls",
-    toolCalls: [{ id: `tool-${name}-${String(scriptedToolCallSequence)}`, name, arguments: args }],
+    toolCalls: [
+      { id: callId ?? `tool-${name}-${String(scriptedToolCallSequence)}`, name, arguments: args },
+    ],
   };
 }
 

@@ -25,7 +25,12 @@ import {
   type OpenCodeLifecyclePrepareRequest,
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
-import { CODING_TOOL_MAX_BODY_BYTES, CODING_TOOL_MAX_IN_FLIGHT } from "./codingToolIpc.js";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_IN_FLIGHT,
+  parseCodingToolRequest,
+  type CodingToolResult,
+} from "./codingToolIpc.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import {
   createOpenCodeHttpClient,
@@ -42,6 +47,7 @@ import {
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
 import { classifyOpenCodeLiveControl, parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { normalizeOpenCodeSafeActivityHistory } from "./opencodeSafeActivity.js";
 import {
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
   projectOpenCodeProtocolSurface,
@@ -80,6 +86,21 @@ export interface OpenCodeRuntimeCompositionInput {
       event: OpenCodeReconciliationEvent,
     ) => Promise<OpenCodeGovernedSinkReceipt>;
   };
+  readonly safeActivity?:
+    | {
+        readonly arm: () => void;
+        readonly clear: () => void;
+        readonly ingest: (
+          signal: import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
+        ) => boolean;
+        readonly recordDrops: (count: number) => void;
+        readonly settleTool: (input: {
+          readonly actionId: string;
+          readonly state: "succeeded" | "failed" | "denied" | "cancelled";
+          readonly occurredAt: string;
+        }) => void;
+      }
+    | undefined;
   readonly gatewayReadiness: {
     readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly clear: (runId: string) => void;
@@ -95,6 +116,10 @@ export interface OpenCodeRuntimeCompositionInput {
     | "releaseRuntimeAfterReap"
   >;
 }
+
+type SafeToolSettlement = NonNullable<
+  OpenCodeRuntimeCompositionInput["safeActivity"]
+>["settleTool"];
 
 export interface OpenCodeToolBridge {
   readonly url: string;
@@ -152,6 +177,7 @@ export function createOpenCodeRuntimeComposition(
     input.capabilities.toolFacadeCapability,
     input.toolFacade,
     input.toolBridge,
+    input.safeActivity?.settleTool,
   );
   const runs = new Map<string, PreparedRun>();
   const lifecycle = lifecycleAdapter(input, bridge, runs);
@@ -295,6 +321,7 @@ function lifecycleAdapter(
           };
     },
     dispose: async (runId): Promise<boolean> => {
+      input.safeActivity?.clear();
       const run = runs.get(runId);
       if (run === undefined) return true;
       run.ready = false;
@@ -387,6 +414,14 @@ async function handshake(
     const adapter = createOpenCodeRuntimeAdapter({
       readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
       governedSink: input.governedEventSink,
+      ...(input.safeActivity
+        ? {
+            safeActivitySink: {
+              ingest: input.safeActivity.ingest,
+              recordDrops: input.safeActivity.recordDrops,
+            },
+          }
+        : {}),
       control: {
         status: async (sessionId, signal) => {
           const status = (await client.sessionStatuses({ signal }))[sessionId];
@@ -405,6 +440,7 @@ async function handshake(
       await adapter.close();
       return { ok: false, reason: result.phase };
     }
+    input.safeActivity?.arm();
     if (runs.get(request.runId) !== run) {
       await adapter.close();
       return { ok: false, reason: "preparation-missing" };
@@ -430,6 +466,10 @@ function readinessPorts(
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let startupRead = false;
   let fixedSessionId: string | undefined;
+  const safeActivity = new Map<
+    string,
+    import("./codingSafeActivityProjection.js").CodingSafeActivitySignal
+  >();
   return {
     verifiedTarget: {
       executable: join(input.portable.resourceRoot, run.verification.executablePath),
@@ -481,14 +521,51 @@ function readinessPorts(
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
       const combinedSignal =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      const parsed = parseOpenCodeHistory(
-        await client.history(checkpoints, { signal: combinedSignal }),
-      );
+      const rows = await client.history(checkpoints, { signal: combinedSignal });
+      const normalized = normalizeOpenCodeSafeActivityHistory(rows);
+      stageSafeActivity(normalized, safeActivity, input.safeActivity);
+      const parsed = parseOpenCodeHistory(rows);
       if (!parsed.ok) throw new Error("opencode-history-invalid");
       return parsed.value;
     },
+    takeSafeActivity: (
+      identityKey,
+    ): import("./codingSafeActivityProjection.js").CodingSafeActivitySignal | undefined => {
+      const signal = safeActivity.get(identityKey);
+      safeActivity.delete(identityKey);
+      return signal;
+    },
+    clearSafeActivity: (): void => {
+      safeActivity.clear();
+    },
     sessionEcho: (): Promise<string> => Promise.resolve(fixedSessionId ?? ""),
   };
+}
+
+const MAX_STAGED_SAFE_ACTIVITY_ITEMS = 2_048;
+const MAX_STAGED_SAFE_ACTIVITY_BYTES = 128 * 1_024;
+
+function stageSafeActivity(
+  normalized: ReturnType<typeof normalizeOpenCodeSafeActivityHistory>,
+  staged: Map<string, import("./codingSafeActivityProjection.js").CodingSafeActivitySignal>,
+  sink: OpenCodeRuntimeCompositionInput["safeActivity"],
+): void {
+  staged.clear();
+  let stagedBytes = 0;
+  let dropped = normalized.dropped;
+  for (const item of normalized.signals) {
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
+    if (
+      staged.size >= MAX_STAGED_SAFE_ACTIVITY_ITEMS ||
+      stagedBytes + itemBytes > MAX_STAGED_SAFE_ACTIVITY_BYTES
+    ) {
+      dropped += 1;
+      continue;
+    }
+    staged.set(item.identity, item.signal);
+    stagedBytes += itemBytes;
+  }
+  if (dropped > 0) sink?.recordDrops(dropped);
 }
 
 async function createAndEchoFixedSession(
@@ -729,6 +806,7 @@ function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
+  settleTool: SafeToolSettlement | undefined,
 ): ToolBridgeController {
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let server: Server | undefined;
@@ -737,7 +815,7 @@ function createToolBridge(
   const gate = createToolBridgeAdmissionGate(limits);
   const sockets = new Set<Socket>();
   const handle: OpenCodeToolBridge["handle"] = (request) =>
-    handleDirectToolRequest(listening, capability, facade, gate, request);
+    handleDirectToolRequest(listening, capability, facade, gate, request, settleTool);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
       return url;
@@ -757,6 +835,7 @@ function createToolBridge(
           capability,
           facade,
           gate.admit,
+          settleTool,
         );
       });
       url = await listenBridge(server);
@@ -780,12 +859,13 @@ function handleDirectToolRequest(
   facade: CodingToolFacade,
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
+  settleTool: SafeToolSettlement | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
   const rejection = preflightToolRequest(active, capability, input.headers, input.body);
   if (rejection !== undefined) return Promise.resolve(rejection);
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(facade, capability, input.headers, input.body, admission);
+  return executeToolRequest(facade, capability, input.headers, input.body, admission, settleTool);
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
@@ -913,18 +993,63 @@ async function executeToolRequest(
   headers: Headers,
   body: string,
   admission: AdmittedToolRequest,
+  settleTool: SafeToolSettlement | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
   if (!validJson(body)) {
     admission.release();
     return { status: 400, body: "" };
   }
-  const facadeWork = facade.execute({
-    body,
-    capability,
-    headers,
-    signal: admission.controller.signal,
-  });
-  void facadeWork.then(
+  const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
+  let facadeWork: Promise<CodingToolResult>;
+  try {
+    facadeWork = facade.execute({
+      body,
+      capability,
+      headers,
+      signal: admission.controller.signal,
+    });
+  } catch {
+    admission.release();
+    settleSafeTool(settleTool, actionId, "failed");
+    return { status: 502, body: "" };
+  }
+  releaseAdmissionWhenSettled(facadeWork, admission);
+  try {
+    const result = await raceAbort(facadeWork, admission.controller.signal);
+    const reason = abortReason(admission.controller.signal);
+    if (reason !== undefined) {
+      settleSafeTool(settleTool, actionId, "cancelled");
+      return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
+    }
+    return responseForToolResult(result, settleTool, actionId);
+  } catch {
+    const reason = abortReason(admission.controller.signal);
+    settleSafeTool(settleTool, actionId, reason === undefined ? "failed" : "cancelled");
+    return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
+  }
+}
+
+function responseForToolResult(
+  result: CodingToolResult,
+  settleTool: SafeToolSettlement | undefined,
+  actionId: string | undefined,
+): { readonly status: number; readonly body: string } {
+  if (result.status === "busy") {
+    settleSafeTool(settleTool, actionId, "failed");
+    return { status: 429, body: "" };
+  }
+  settleSafeTool(settleTool, actionId, safeToolState(result));
+  const responseBody = JSON.stringify(result);
+  return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
+    ? { status: 200, body: responseBody }
+    : { status: 502, body: "" };
+}
+
+function releaseAdmissionWhenSettled(
+  work: Promise<CodingToolResult>,
+  admission: AdmittedToolRequest,
+): void {
+  void work.then(
     () => {
       admission.release();
     },
@@ -932,21 +1057,22 @@ async function executeToolRequest(
       admission.release();
     },
   );
-  try {
-    const result = await raceAbort(facadeWork, admission.controller.signal);
-    if (abortReason(admission.controller.signal) === DEADLINE_ABORT) {
-      return { status: 408, body: "" };
-    }
-    if (result.status === "busy") return { status: 429, body: "" };
-    const responseBody = JSON.stringify(result);
-    return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
-      ? { status: 200, body: responseBody }
-      : { status: 502, body: "" };
-  } catch {
-    return abortReason(admission.controller.signal) === DEADLINE_ABORT
-      ? { status: 408, body: "" }
-      : { status: 502, body: "" };
-  }
+}
+
+function settleSafeTool(
+  settleTool: SafeToolSettlement | undefined,
+  actionId: string | undefined,
+  state: "succeeded" | "failed" | "denied" | "cancelled",
+): void {
+  if (actionId === undefined) return;
+  settleTool?.({ actionId, state, occurredAt: new Date().toISOString() });
+}
+
+function safeToolState(result: CodingToolResult): "succeeded" | "failed" | "denied" | "cancelled" {
+  if (result.status === "completed") return "succeeded";
+  if (result.status === "denied") return "denied";
+  if (result.status === "cancelled") return "cancelled";
+  return "failed";
 }
 
 function validJson(body: string): boolean {
@@ -995,6 +1121,7 @@ async function handleIncomingToolRequest(
   capability: string,
   facade: CodingToolFacade,
   admit: () => AdmittedToolRequest | undefined,
+  settleTool: SafeToolSettlement | undefined,
 ): Promise<void> {
   if (request.method !== "POST" || request.url !== "/tool") {
     response.writeHead(404).end();
@@ -1011,17 +1138,18 @@ async function handleIncomingToolRequest(
     response.writeHead(429).end();
     return;
   }
-  const abortDisconnect = (): void => {
-    admission.controller.abort(new Error(DISCONNECT_ABORT));
-  };
-  request.once("aborted", abortDisconnect);
-  response.once("close", () => {
-    if (!response.writableFinished) abortDisconnect();
-  });
+  const removeDisconnectListeners = bindToolDisconnect(request, response, admission);
   try {
     const bytes = await readBoundedBody(request, admission.controller.signal);
     const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(facade, capability, headers, body, admission);
+    const result = await executeToolRequest(
+      facade,
+      capability,
+      headers,
+      body,
+      admission,
+      settleTool,
+    );
     if (!response.destroyed) {
       response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
     }
@@ -1031,8 +1159,27 @@ async function handleIncomingToolRequest(
     const status = abortReason(admission.controller.signal) === DEADLINE_ABORT ? 408 : 400;
     response.writeHead(status).end();
   } finally {
-    request.removeListener("aborted", abortDisconnect);
+    removeDisconnectListeners();
   }
+}
+
+function bindToolDisconnect(
+  request: IncomingMessage,
+  response: ServerResponse,
+  admission: AdmittedToolRequest,
+): () => void {
+  const abortDisconnect = (): void => {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+  };
+  const responseClosed = (): void => {
+    if (!response.writableFinished) abortDisconnect();
+  };
+  request.once("aborted", abortDisconnect);
+  response.once("close", responseClosed);
+  return (): void => {
+    request.removeListener("aborted", abortDisconnect);
+    response.removeListener("close", responseClosed);
+  };
 }
 
 function incomingHeaders(values: IncomingHttpHeaders): Headers {

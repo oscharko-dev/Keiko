@@ -28,6 +28,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(OPENCODE_APPROVED_ENDPOINTS).toContain("POST /sync/history");
     expect(OPENCODE_APPROVED_ENDPOINTS).toContain("GET /session/status");
     expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("POST /sync/replay");
+    expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("GET /session/{sessionID}/message");
   });
 
   it("fails closed on health schema drift", () => {

@@ -1,0 +1,556 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import {
+  createCodingSafeActivityProjection,
+  type CodingSafeActivityContent,
+  type CodingSafeActivitySignal,
+} from "./codingSafeActivityProjection.js";
+
+const RUN_ID = "run-safe-activity";
+const WORKSPACE_ID = "workspace-safe-activity";
+
+function message(
+  messageId: string,
+  role: "user" | "assistant",
+  parentMessageId?: string,
+): CodingSafeActivitySignal {
+  return {
+    kind: "message",
+    messageId,
+    role,
+    occurredAt: "2026-07-18T17:00:00.000Z",
+    ...(parentMessageId === undefined ? {} : { parentMessageId }),
+  };
+}
+
+function text(messageId: string, value: string): CodingSafeActivitySignal {
+  return {
+    kind: "text",
+    messageId,
+    text: value,
+    occurredAt: "2026-07-18T17:00:00.001Z",
+  };
+}
+
+function populateBoundedTurns(
+  projection: ReturnType<typeof createCodingSafeActivityProjection>,
+): void {
+  for (let index = 0; index < 3; index += 1) {
+    const id = `msg_user_${String(index)}`;
+    projection.ingest(RUN_ID, message(id, "user"));
+    projection.ingest(RUN_ID, text(id, `message-${String(index)}-${"x".repeat(64)}`));
+  }
+}
+
+describe("bounded coding safe-activity projection", () => {
+  it("projects typed conversation and monotonic tool-state transitions without raw tool payloads", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    expect(projection.ingest(RUN_ID, message("msg_user", "user"))).toBe(true);
+    expect(projection.ingest(RUN_ID, text("msg_user", "Build the feed."))).toBe(true);
+    expect(projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"))).toBe(true);
+    expect(projection.ingest(RUN_ID, text("msg_assistant", "Working."))).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_1",
+        tool: "keiko_workspace_read",
+        state: "pending",
+        occurredAt: "2026-07-18T17:00:00.002Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_1",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_1",
+        state: "succeeded",
+        occurredAt: "2026-07-18T17:00:00.004Z",
+      }),
+    ).toBe(true);
+
+    expect(projection.currentContent()).toMatchObject({
+      kind: "safe-activity",
+      feed: {
+        availability: "available",
+        runId: RUN_ID,
+        turns: [
+          {
+            messages: [
+              { role: "user", segments: [{ text: "Build the feed." }] },
+              { role: "assistant", segments: [{ text: "Working." }] },
+            ],
+            tools: [{ callId: "call_1", tool: "keiko_workspace_read", state: "succeeded" }],
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(projection.currentContent())).not.toMatch(
+      /arguments|result|output|path/u,
+    );
+  });
+
+  it("marks over-limit text and evicted turns explicitly instead of silently clipping", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurns: 2, maxMessageBytes: 180, maxTurnBytes: 512, maxTotalBytes: 1_024 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    populateBoundedTurns(projection);
+    const content = projection.currentContent();
+    expect(content?.feed).toMatchObject({ availability: "available", truncated: true });
+    if (content?.feed.availability !== "available") return;
+    expect(content.feed.turns).toHaveLength(2);
+    expect(content.feed.turns[0]?.messages[0]?.segments[0]?.truncated).toBe(true);
+    expect(content.feed.turns[0]?.messages[0]?.truncated).toBe(true);
+    expect(content.feed.turns[0]?.truncated).toBe(true);
+  });
+
+  it("rejects hostile shapes and terminal-state regressions without changing retained content", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    const before = projection.currentContent();
+    const beforeTurns =
+      before?.feed.availability === "available" ? JSON.stringify(before.feed.turns) : "";
+    expect(
+      projection.ingest(RUN_ID, {
+        ...message("msg_hostile", "user"),
+        arguments: "RAW_TOOL_ARGUMENT_2479",
+      } as unknown as CodingSafeActivitySignal),
+    ).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_1",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(false);
+    const after = projection.currentContent();
+    expect(after?.feed.availability === "available" ? JSON.stringify(after.feed.turns) : "").toBe(
+      beforeTurns,
+    );
+  });
+
+  it("counts text that collapses under the shared Unicode display-safety redactor", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (record) => void records.push(record) },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    expect(projection.ingest(RUN_ID, text("msg_user", "\u202e\u200b"))).toBe(false);
+    expect(records[0]?.message).toContain("redactor-collapsed");
+    expect(projection.currentContent()).toMatchObject({ feed: { droppedEventCount: 1 } });
+  });
+
+  it("purges on stop, takeover, expiry, workspace switch, shutdown, and crash recovery", () => {
+    let now = 1_721_323_200_000;
+    let currentWorkspace = true;
+    const projection = createCodingSafeActivityProjection({ now: () => now, ttlMs: 100 });
+    const open = (): void => {
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => currentWorkspace,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, text("msg_user", "canary"));
+    };
+
+    for (const reason of ["stop", "takeover", "shutdown"] as const) {
+      open();
+      projection.purge(RUN_ID, reason);
+      expect(projection.currentContent()).toBeNull();
+    }
+
+    open();
+    currentWorkspace = false;
+    expect(projection.currentContent()).toBeNull();
+    currentWorkspace = true;
+    expect(projection.currentContent()).toBeNull();
+
+    open();
+    now += 101;
+    expect(projection.currentContent()).toBeNull();
+
+    open();
+    projection.markUnavailable(RUN_ID);
+    expect(projection.currentContent()).toMatchObject({
+      feed: { availability: "unavailable", runId: RUN_ID },
+    });
+    expect(JSON.stringify(projection.currentContent())).not.toContain("canary");
+  });
+
+  it("counts validation drops saturatingly and emits content-free operator diagnostics", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (record) => void records.push(record) },
+      maxDroppedEventCount: 2,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.recordDrop(RUN_ID, "validation-rejected");
+    projection.recordDrop(RUN_ID, "projection-rejected");
+    projection.recordDrop(RUN_ID, "validation-rejected");
+
+    expect(projection.currentContent()).toMatchObject({ feed: { droppedEventCount: 2 } });
+    expect(records).toHaveLength(2);
+    expect(records.at(-1)).toMatchObject({
+      operation: "coding-runtime.safe-activity",
+      source: "opencode.safe-activity",
+      code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
+      occurrenceCount: 2,
+    });
+    projection.open({
+      runId: "run-safe-activity-2",
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.recordDrop("run-safe-activity-2", "validation-rejected");
+    expect(records).toHaveLength(3);
+    expect(records.at(-1)).toMatchObject({ occurrenceCount: 1 });
+    expect(JSON.stringify(records)).not.toMatch(/raw|arguments|results|canary/u);
+  });
+
+  it("keeps a hostile raw canary out of the default operator log", () => {
+    const rawCanary = "RAW_DIAGNOSTIC_CANARY_2479";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, {
+        ...message("msg_hostile", "user"),
+        rawArguments: rawCanary,
+      } as unknown as CodingSafeActivitySignal);
+
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(rawCanary);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("aggregates hostile-page drops into one feed update and bounded milestone diagnostics", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (record) => void records.push(record) },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const listener = vi.fn();
+    projection.subscribeContent(listener);
+
+    projection.recordDrops(RUN_ID, "validation-rejected", 1_000);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(projection.currentContent()).toMatchObject({ feed: { droppedEventCount: 1_000 } });
+    expect(records.map(({ occurrenceCount }) => occurrenceCount)).toEqual([
+      1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+    ]);
+  });
+
+  it("notifies and detaches bounded live subscribers", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const listener = vi.fn();
+    const subscribed = projection.subscribeContent(listener);
+    expect(subscribed.admitted).toBe(true);
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    subscribed.detach();
+    projection.ingest(RUN_ID, text("msg_user", "after detach"));
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains live subscribers across unavailable recovery and removes throwing subscribers", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const recoveryListener = vi.fn((_content: CodingSafeActivityContent | null): void => undefined);
+    projection.subscribeContent(recoveryListener);
+
+    projection.markUnavailable(RUN_ID);
+    projection.open({
+      runId: "run-safe-activity-2",
+      workspaceId: "workspace-safe-activity-2",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+
+    expect(recoveryListener.mock.calls[0]?.[0]?.feed.availability).toBe("unavailable");
+    expect(recoveryListener.mock.calls[1]?.[0]?.feed.availability).toBe("available");
+
+    const throwing = vi.fn(() => {
+      throw new Error("subscriber-canary");
+    });
+    projection.subscribeContent(throwing);
+    expect(() => {
+      projection.purge("run-safe-activity-2", "workspace-switch");
+    }).not.toThrow();
+    projection.open({
+      runId: "run-safe-activity-3",
+      workspaceId: "workspace-safe-activity-3",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    expect(throwing).toHaveBeenCalledOnce();
+  });
+
+  it("physically expires retained activity without requiring a reader", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T17:00:00.000Z"));
+    try {
+      const projection = createCodingSafeActivityProjection({ ttlMs: 100 });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      const listener = vi.fn();
+      projection.subscribeContent(listener);
+
+      await vi.advanceTimersByTimeAsync(101);
+
+      expect(projection.currentContent()).toBeNull();
+      expect(listener).toHaveBeenCalledWith(null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("purges instead of republishing retained content when a bulk drop races expiry", () => {
+    let now = 1_721_323_200_000;
+    const projection = createCodingSafeActivityProjection({ now: () => now, ttlMs: 100 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, text("msg_user", "EXPIRY_RAW_CANARY_2479"));
+    const listener = vi.fn((_content: CodingSafeActivityContent | null): void => undefined);
+    projection.subscribeContent(listener);
+
+    now += 101;
+    projection.recordDrops(RUN_ID, "validation-rejected", 1_000);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(null);
+    expect(JSON.stringify(listener.mock.calls)).not.toContain("EXPIRY_RAW_CANARY_2479");
+    expect(projection.currentContent()).toBeNull();
+  });
+
+  it("enforces per-turn message, segment, tool, and subscriber capacities explicitly", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxMessagesPerTurn: 2, maxSegmentsPerMessage: 1, maxToolsPerTurn: 1 },
+      maxSubscribers: 1,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    expect(projection.ingest(RUN_ID, message("msg_extra", "assistant", "msg_user"))).toBe(true);
+    projection.ingest(RUN_ID, text("msg_assistant", "first"));
+    expect(projection.ingest(RUN_ID, text("msg_assistant", "second"))).toBe(true);
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_read",
+      state: "pending",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_2",
+        tool: "keiko_workspace_read",
+        state: "pending",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(true);
+    projection.subscribeContent(vi.fn());
+    const rejectedSubscriber = projection.subscribeContent(vi.fn());
+    rejectedSubscriber.detach();
+
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        droppedEventCount: 1,
+        turns: [
+          {
+            messages: [{}, { segments: [{ text: "first" }], truncated: true }],
+            tools: [{ callId: "call_1" }],
+            truncated: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it("fails closed for invalid opening authority, unmatched signals, and throwing workspace checks", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId: "unsafe run id",
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    expect(projection.currentContent()).toBeNull();
+
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    expect(projection.ingest("other-run", message("msg_user", "user"))).toBe(false);
+    expect(projection.ingest(RUN_ID, message("msg_assistant", "assistant", "missing"))).toBe(false);
+    expect(projection.ingest(RUN_ID, text("missing", "orphan"))).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_orphan",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        ...message("msg_invalid_time", "user"),
+        occurredAt: "invalid",
+      }),
+    ).toBe(false);
+
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => {
+        throw new Error("private workspace failure");
+      },
+    });
+    expect(projection.currentContent()).toBeNull();
+  });
+
+  it("deduplicates upstream signals and marks turn and feed byte eviction", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurnBytes: 260, maxTotalBytes: 520 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const first = { ...message("msg_user_1", "user"), signalId: "evt_1" } as const;
+    expect(projection.ingest(RUN_ID, first)).toBe(true);
+    expect(projection.ingest(RUN_ID, first)).toBe(true);
+    projection.ingest(RUN_ID, text("msg_user_1", `${"😀".repeat(100)}tail`));
+    for (let index = 2; index <= 4; index += 1) {
+      const id = `msg_user_${String(index)}`;
+      projection.ingest(RUN_ID, message(id, "user"));
+      projection.ingest(RUN_ID, text(id, "x".repeat(200)));
+    }
+
+    const content = projection.currentContent();
+    expect(content?.feed).toMatchObject({ availability: "available", truncated: true });
+    if (content?.feed.availability !== "available") return;
+    expect(content.feed.turns.length).toBeLessThan(4);
+    expect(JSON.stringify(content)).not.toContain("tail");
+  });
+
+  it("ignores mismatched purge requests and can purge an existing feed process-wide", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.purgeAll("shutdown");
+    projection.markUnavailable("other-run");
+    expect(projection.currentContent()).toMatchObject({ feed: { droppedEventCount: 0 } });
+    projection.purge(RUN_ID, "stop");
+    expect(projection.currentContent()).not.toBeNull();
+    projection.purgeAll("shutdown");
+    expect(projection.currentContent()).toBeNull();
+  });
+});

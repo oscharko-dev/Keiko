@@ -10,9 +10,15 @@ import {
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import type { DevLanePortableOpenCodeRuntime } from "./devLanePortableCodingRuntime.js";
+import {
+  createCodingSafeActivityProjection,
+  type CodingSafeActivityProjection,
+  type CodingSafeActivitySignal,
+} from "./codingSafeActivityProjection.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import {
@@ -60,6 +66,8 @@ export interface ProductionOpenCodeBackendInput {
     "waitForObservedRequest" | "clear"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
     | ((input: {
@@ -77,17 +85,55 @@ export interface ProductionOpenCodeBackendInput {
 export function createProductionOpenCodeBackend(
   input: ProductionOpenCodeBackendInput,
 ): ProductionRuntimeBackendResolver {
+  const safeActivityProjection =
+    input.safeActivityProjection ??
+    createCodingSafeActivityProjection({ diagnostics: input.diagnostics });
   return {
-    createRun: (run): QualifiedProductionRuntimeRun => createOpenCodeRun(input, run),
+    safeActivityProjection,
+    createRun: (run): QualifiedProductionRuntimeRun =>
+      createOpenCodeRun(input, run, safeActivityProjection),
   };
 }
 
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
+  safeActivityProjection: CodingSafeActivityProjection,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  const composition = createOpenCodeRuntimeComposition({
+  const safeActivity = safeActivityController(
+    run.minted.authorityRef.runId,
+    safeActivityProjection,
+  );
+  try {
+    const composition = composeOpenCodeRun(input, run, safeActivity);
+    const launch = openCodeLaunchMaterial(input, run);
+    const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
+    const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
+    openSafeActivity(run, safeActivityProjection);
+    return {
+      manager: composition.manager,
+      launch,
+      turnPort,
+      questionPort,
+      dispose: (): void => {
+        safeActivity.clear();
+        safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");
+      },
+    };
+  } catch (error) {
+    safeActivity.clear();
+    safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");
+    throw error;
+  }
+}
+
+function composeOpenCodeRun(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+  safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
+): ReturnType<typeof createOpenCodeRuntimeComposition> {
+  return createOpenCodeRuntimeComposition({
     portable: {
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
@@ -106,18 +152,178 @@ function createOpenCodeRun(
       input.runtimeEvidence,
       run.onRuntimeEvent,
     ),
+    safeActivity,
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
     supervisor: runtimeSupervisor(input, run.context.workspaceRoot),
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
   });
-  return {
-    manager: composition.manager,
-    launch: openCodeLaunchMaterial(input, run),
-    turnPort: createOpenCodeRuntimeTurnPort(composition.runPort),
-    questionPort: createOpenCodeRuntimeQuestionPort(composition.runPort),
+}
+
+const MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS = 2_048;
+const MAX_SAFE_ACTIVITY_TOOL_CORRELATION_BYTES = 128 * 1_024;
+const SAFE_ACTIVITY_CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+interface BoundedCorrelations<T> {
+  readonly values: Map<string, T>;
+  bytes: number;
+}
+
+function openSafeActivity(
+  run: ProductionRuntimeBackendInput,
+  projection: CodingSafeActivityProjection,
+): void {
+  projection.open({
+    runId: run.minted.authorityRef.runId,
+    workspaceId: run.context.workspaceId,
+    authorityExpiresAt: run.context.expiresAt,
+    workspaceIsCurrent: run.workspaceIsCurrent,
+  });
+}
+
+function safeActivityController(
+  runId: string,
+  projection: CodingSafeActivityProjection,
+): NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]> {
+  const terminal =
+    boundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>();
+  const knownCalls = boundedCorrelations<true>();
+  let armed = false;
+  const ingest = (signal: CodingSafeActivitySignal): boolean => {
+    if (!armed) return true;
+    const accepted = projection.ingest(runId, signal);
+    if (accepted && signal.kind === "tool") {
+      rememberKnownCall(runId, signal.callId, projection, knownCalls, terminal);
+      schedulePendingTerminal(runId, signal.callId, projection, terminal, knownCalls);
+    }
+    return accepted;
   };
+  return {
+    arm: (): void => {
+      armed = true;
+    },
+    clear: (): void => {
+      armed = false;
+      clearCorrelations(terminal);
+      clearCorrelations(knownCalls);
+    },
+    ingest,
+    recordDrops: (count): void => {
+      if (armed) projection.recordDrops(runId, "validation-rejected", count);
+    },
+    settleTool: ({ actionId, state, occurredAt }): void => {
+      if (!armed) return;
+      const callId = callIdFromAction(actionId);
+      if (callId === undefined) {
+        projection.recordDrop(runId, "validation-rejected");
+        return;
+      }
+      const signal = { kind: "tool", callId, state, occurredAt } as const;
+      rememberTerminal(runId, callId, signal, projection, terminal, knownCalls);
+      if (knownCalls.values.has(callId)) {
+        schedulePendingTerminal(runId, callId, projection, terminal, knownCalls);
+      }
+    },
+  };
+}
+
+function schedulePendingTerminal(
+  runId: string,
+  callId: string,
+  projection: CodingSafeActivityProjection,
+  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+  known: BoundedCorrelations<true>,
+): void {
+  queueMicrotask(() => {
+    applyPendingTerminal(runId, callId, projection, pending, known);
+  });
+}
+
+function applyPendingTerminal(
+  runId: string,
+  callId: string,
+  projection: CodingSafeActivityProjection,
+  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+  known: BoundedCorrelations<true>,
+): void {
+  const signal = pending.values.get(callId);
+  if (signal !== undefined && projection.ingest(runId, signal)) {
+    deleteCorrelation(pending, callId);
+    deleteCorrelation(known, callId);
+  }
+}
+
+function rememberKnownCall(
+  runId: string,
+  callId: string,
+  projection: CodingSafeActivityProjection,
+  known: BoundedCorrelations<true>,
+  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+): void {
+  const evicted = rememberBoundedCorrelation(known, callId, true);
+  for (const identity of evicted) deleteCorrelation(pending, identity);
+  projection.recordDrops(runId, "capacity-rejected", evicted.length);
+}
+
+function rememberTerminal(
+  runId: string,
+  callId: string,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+  projection: CodingSafeActivityProjection,
+  pending: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+  known: BoundedCorrelations<true>,
+): void {
+  const evicted = rememberBoundedCorrelation(pending, callId, signal);
+  for (const identity of evicted) deleteCorrelation(known, identity);
+  projection.recordDrops(runId, "capacity-rejected", evicted.length);
+}
+
+function rememberBoundedCorrelation<T>(
+  correlations: BoundedCorrelations<T>,
+  callId: string,
+  value: T,
+): readonly string[] {
+  deleteCorrelation(correlations, callId);
+  correlations.values.set(callId, value);
+  correlations.bytes += correlationBytes(callId, value);
+  const evicted: string[] = [];
+  while (
+    correlations.values.size > MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS ||
+    correlations.bytes > MAX_SAFE_ACTIVITY_TOOL_CORRELATION_BYTES
+  ) {
+    const oldest = correlations.values.keys().next().value;
+    if (oldest === undefined) break;
+    evicted.push(oldest);
+    deleteCorrelation(correlations, oldest);
+  }
+  return evicted;
+}
+
+function boundedCorrelations<T>(): BoundedCorrelations<T> {
+  return { values: new Map(), bytes: 0 };
+}
+
+function clearCorrelations<T>(correlations: BoundedCorrelations<T>): void {
+  correlations.values.clear();
+  correlations.bytes = 0;
+}
+
+function deleteCorrelation<T>(correlations: BoundedCorrelations<T>, callId: string): void {
+  const value = correlations.values.get(callId);
+  if (value === undefined) return;
+  correlations.values.delete(callId);
+  correlations.bytes = Math.max(0, correlations.bytes - correlationBytes(callId, value));
+}
+
+function correlationBytes(callId: string, value: unknown): number {
+  return Buffer.byteLength(callId, "utf8") + Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function callIdFromAction(actionId: string): string | undefined {
+  const separator = actionId.indexOf(":");
+  const callId = separator >= 0 ? actionId.slice(separator + 1) : "";
+  return SAFE_ACTIVITY_CALL_ID.test(callId) ? callId : undefined;
 }
 
 function openCodeLaunchMaterial(

@@ -46,6 +46,25 @@ describe("coding app-session channel contract", () => {
     ).toBe(false);
   });
 
+  it("accepts typed safe activity and rejects JSON smuggled through the generic body", () => {
+    const feed = {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-activity",
+      updatedAt: "2026-07-18T17:00:00.000Z",
+      turns: [],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+    expect(validateCodingAppSessionChannelContent({ kind: "safe-activity", feed }).ok).toBe(true);
+    expect(
+      validateCodingAppSessionChannelContent({
+        kind: "safe-activity",
+        body: JSON.stringify(feed),
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects snapshots with a wrong version, extra keys, or a breached aggregate budget", () => {
     expect(validateCodingAppSessionChannelSnapshot({ schemaVersion: "2", content: null }).ok).toBe(
       false,

@@ -13,6 +13,7 @@ import {
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -40,6 +41,7 @@ export interface CodingRuntimeHost {
         readonly clear: (runId: string) => void;
       }
     | undefined;
+  readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
 
 export interface CodingRuntimeControlPlaneInput {
@@ -59,6 +61,7 @@ export interface CodingRuntimeControlPlane {
   readonly cancellationRegistry?: CodingRuntimeHost["cancellationRegistry"];
   readonly runtimeCapabilityAuthenticator?: CodingRuntimeHost["runtimeCapabilityAuthenticator"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
+  readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
 
 interface RuntimeEventReceiver {
@@ -91,6 +94,9 @@ export function createCodingRuntimeControlPlane(
     launchResolver,
     taskDispatcher: input.runtimeHost?.taskDispatcher ?? unavailableTaskDispatcher(),
     questionPort: input.runtimeHost?.questionPort ?? unavailableQuestionPort(),
+    ...(input.runtimeHost?.safeActivityProjection
+      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
+      : {}),
     serverPrincipal: input.serverPrincipal,
   });
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
@@ -101,6 +107,9 @@ export function createCodingRuntimeControlPlane(
     orchestrator,
     eventHub,
     runtimeHostQualified: input.runtimeHost !== undefined,
+    ...(input.runtimeHost?.safeActivityProjection
+      ? { safeActivityProjection: input.runtimeHost.safeActivityProjection }
+      : {}),
     ...runtimeHostCapabilities(input.runtimeHost),
   };
 }
