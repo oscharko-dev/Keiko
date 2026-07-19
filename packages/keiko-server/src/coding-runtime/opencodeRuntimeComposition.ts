@@ -15,7 +15,11 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -1101,24 +1105,9 @@ function startFacadeExecution(
 }
 
 // Content-free by design (the tool bridge never logs request or error bodies): the record carries
-// the error class and a fixed machine message only, keyed to the action id for correlation.
-// `Error.name` is a mutable own property, so a thrown value could carry request-derived text
-// there; only names from this closed allowlist pass through, anything else degrades to "Error".
-const KNOWN_ERROR_CLASSES = new Set([
-  "Error",
-  "TypeError",
-  "RangeError",
-  "SyntaxError",
-  "ReferenceError",
-  "AbortError",
-  "TimeoutError",
-]);
-
-function contentFreeErrorClass(error: unknown): string {
-  if (!(error instanceof Error)) return typeof error;
-  return KNOWN_ERROR_CLASSES.has(error.name) ? error.name : "Error";
-}
-
+// the error class and a fixed machine message only, keyed to the action id for correlation. The
+// class label comes from the shared `contentFreeErrorClass` hardening in diagnostics-log, so the
+// mutable-`Error.name` defense lives in exactly one place.
 function emitFacadeStartDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
