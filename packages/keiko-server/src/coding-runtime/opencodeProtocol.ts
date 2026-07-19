@@ -71,6 +71,9 @@ const APPROVED_PRODUCTIVE_TOOLS = new Set<string>(
 );
 const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
   "question",
+  // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
+  // never reaches the productive tool facade.
+  "todowrite",
   ...APPROVED_PRODUCTIVE_TOOLS,
 ]);
 

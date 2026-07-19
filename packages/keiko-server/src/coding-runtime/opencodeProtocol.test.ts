@@ -29,6 +29,9 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(OPENCODE_APPROVED_ENDPOINTS).toContain("GET /session/status");
     expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("POST /sync/replay");
     expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("GET /session/{sessionID}/message");
+    // #2480 decision: the plan surface is admitted through the todowrite tool parts only.
+    expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("GET /session/{sessionID}/todo");
+    expect(OPENCODE_APPROVED_ENDPOINTS.some((endpoint) => endpoint.includes("todo"))).toBe(false);
   });
 
   it("fails closed on health schema drift", () => {
@@ -448,6 +451,41 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       }),
     ]) {
       expect(parseOpenCodeHistory([row])).toEqual({ ok: false, reason: "event-unknown" });
+    }
+  });
+
+  it("admits todowrite plan parts while the unchosen plan surfaces stay fail-closed", () => {
+    const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];
+    const planPart = {
+      id: "prt_plan",
+      sessionID: "ses_1",
+      messageID: "msg_assistant",
+      type: "tool",
+      callID: "call_plan",
+      tool: "todowrite",
+      state: {
+        status: "completed",
+        input: { todos },
+        output: JSON.stringify(todos, null, 2),
+        title: "1 todos",
+        metadata: { todos, truncated: false },
+        time: { start: 1, end: 2 },
+      },
+    };
+    expect(
+      parseOpenCodeHistory([
+        syncRow(27, "message.part.updated.1", { sessionID: "ses_1", part: planPart, time: 27 }),
+      ]),
+    ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+    for (const rejected of [
+      syncRow(27, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part: { ...planPart, tool: "todoread" },
+        time: 27,
+      }),
+      syncRow(27, "todo.updated", { sessionID: "ses_1", todos }),
+    ]) {
+      expect(parseOpenCodeHistory([rejected])).toEqual({ ok: false, reason: "event-unknown" });
     }
   });
 

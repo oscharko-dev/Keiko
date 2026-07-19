@@ -915,6 +915,7 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
+    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
@@ -975,6 +976,11 @@ class FakeOpenCodeChild {
     if (!response.ok) return '{"status":"failed"}';
     return await response.text();
   }
+}
+
+/** Mirrors the v1.17.17 built-in: full-replace todo state, no facade round-trip, no tool event. */
+function executeBuiltInTodoWrite(call: FakeToolCall): string {
+  return JSON.stringify(call.args.todos ?? [], null, 2);
 }
 
 function splitFunctionalText(value: string): readonly string[] {

@@ -2,17 +2,22 @@ import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_TURNS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   stripUnsafeFormatChars,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
   type CodingSafeActivityMessageRole,
+  type CodingSafeActivityPlanStepState,
   type CodingSafeActivityTextSegment,
   type CodingSafeActivityTool,
   type CodingSafeActivityToolState,
@@ -30,6 +35,12 @@ interface SignalBase {
   readonly occurredAt: string;
   /** Optional upstream identity used to make replayed history idempotent. */
   readonly signalId?: string | undefined;
+}
+
+/** Raw plan-step input; the projection strips, clips, and bounds it before publication. */
+export interface CodingSafeActivityPlanStepInput {
+  readonly text: string;
+  readonly state: CodingSafeActivityPlanStepState;
 }
 
 export type CodingSafeActivitySignal =
@@ -50,6 +61,11 @@ export type CodingSafeActivitySignal =
       readonly callId: string;
       readonly tool?: string | undefined;
       readonly state: CodingSafeActivityToolState;
+    })
+  | (SignalBase & {
+      readonly kind: "plan";
+      readonly anchorMessageId: string;
+      readonly steps: readonly CodingSafeActivityPlanStepInput[];
     });
 
 export type CodingSafeActivityPurgeReason =
@@ -74,6 +90,9 @@ export interface CodingSafeActivityProjectionLimits {
   readonly maxMessageBytes?: number | undefined;
   readonly maxTurnBytes?: number | undefined;
   readonly maxTotalBytes?: number | undefined;
+  readonly maxPlanSteps?: number | undefined;
+  readonly maxPlanStepChars?: number | undefined;
+  readonly maxPlanBytes?: number | undefined;
 }
 
 export interface CodingSafeActivityOpenInput {
@@ -131,12 +150,27 @@ interface MutableTurn {
   truncated: boolean;
 }
 
+interface MutablePlanStep {
+  text: string;
+  state: CodingSafeActivityPlanStepState;
+  truncated: boolean;
+}
+
+interface MutablePlan {
+  revision: number;
+  anchorMessageId: string;
+  updatedAt: string;
+  steps: MutablePlanStep[];
+  truncated: boolean;
+}
+
 interface MutableFeed {
   schemaVersion: "1";
   availability: "available";
   runId: string;
   updatedAt: string;
   turns: MutableTurn[];
+  plan?: MutablePlan;
   truncated: boolean;
   droppedEventCount: number;
 }
@@ -161,6 +195,9 @@ interface ResolvedLimits {
   readonly maxMessageBytes: number;
   readonly maxTurnBytes: number;
   readonly maxTotalBytes: number;
+  readonly maxPlanSteps: number;
+  readonly maxPlanStepChars: number;
+  readonly maxPlanBytes: number;
 }
 
 class SafeActivityProjection implements CodingSafeActivityProjection {
@@ -392,6 +429,9 @@ function resolvedLimits(input: CodingSafeActivityProjectionLimits = {}): Resolve
     maxMessageBytes: capped(input.maxMessageBytes, CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES),
     maxTurnBytes: capped(input.maxTurnBytes, CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES),
     maxTotalBytes: capped(input.maxTotalBytes, CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES),
+    maxPlanSteps: capped(input.maxPlanSteps, CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS),
+    maxPlanStepChars: capped(input.maxPlanStepChars, CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS),
+    maxPlanBytes: capped(input.maxPlanBytes, CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES),
   };
 }
 
@@ -415,6 +455,7 @@ function applySignal(
   if (entry.feed.availability !== "available") return false;
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
   if (signal.kind === "text") return applyText(entry, signal, limits);
+  if (signal.kind === "plan") return applyPlan(entry, signal, limits);
   return applyTool(entry, signal, limits);
 }
 
@@ -526,6 +567,46 @@ function applyTool(
     occurredAt: signal.occurredAt,
   });
   return true;
+}
+
+/** Replaces the whole snapshot; the upstream plan tool always writes the full step list. */
+function applyPlan(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "plan" }>,
+  limits: ResolvedLimits,
+): boolean {
+  if (entry.feed.availability !== "available") return false;
+  const plan: MutablePlan = {
+    revision: Math.min(Number.MAX_SAFE_INTEGER, (entry.feed.plan?.revision ?? 0) + 1),
+    anchorMessageId: signal.anchorMessageId,
+    updatedAt: signal.occurredAt,
+    steps: [],
+    truncated: false,
+  };
+  for (const step of signal.steps) {
+    if (plan.steps.length >= limits.maxPlanSteps) {
+      plan.truncated = true;
+      break;
+    }
+    const cleaned = stripUnsafeFormatChars(step.text);
+    if (cleaned.length === 0) {
+      plan.truncated = true;
+      continue;
+    }
+    const characters = boundedCharacters(cleaned, limits.maxPlanStepChars);
+    const text = characters.join("");
+    plan.steps.push({ text, state: step.state, truncated: text !== cleaned });
+  }
+  shrinkPlan(plan, limits.maxPlanBytes);
+  entry.feed.plan = plan;
+  return true;
+}
+
+function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
+  while (bytes(plan) > maxBytes && plan.steps.length > 0) {
+    plan.steps.pop();
+    plan.truncated = true;
+  }
 }
 
 function locateToolTurn(
@@ -648,6 +729,7 @@ function validSignal(signal: CodingSafeActivitySignal): boolean {
   if (!validSignalBase(signal)) return false;
   if (signal.kind === "message") return validMessageSignal(signal);
   if (signal.kind === "text") return validTextSignal(signal);
+  if (signal.kind === "plan") return validPlanSignal(signal);
   return validToolSignal(signal);
 }
 
@@ -684,13 +766,41 @@ function validToolSignal(
   );
 }
 
+function validPlanSignal(
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "plan" }>,
+): boolean {
+  return (
+    safeId(signal.anchorMessageId) &&
+    Array.isArray(signal.steps) &&
+    signal.steps.every((step) => validPlanStepInput(step))
+  );
+}
+
+function validPlanStepInput(step: unknown): boolean {
+  if (typeof step !== "object" || step === null || Array.isArray(step)) return false;
+  const candidate = step as Record<string, unknown>;
+  return (
+    Object.keys(candidate).every((key) => key === "text" || key === "state") &&
+    typeof candidate.text === "string" &&
+    candidate.text.length > 0 &&
+    (CODING_SAFE_ACTIVITY_PLAN_STEP_STATES as readonly unknown[]).includes(candidate.state)
+  );
+}
+
 function signalDropReason(
   signal: CodingSafeActivitySignal,
 ): CodingSafeActivityDropReason | undefined {
   if (!validSignal(signal)) return "validation-rejected";
-  return signal.kind === "text" && stripUnsafeFormatChars(signal.text).length === 0
+  if (signal.kind === "text" && stripUnsafeFormatChars(signal.text).length === 0) {
+    return "redactor-collapsed";
+  }
+  return signal.kind === "plan" && signal.steps.length > 0 && planCollapses(signal.steps)
     ? "redactor-collapsed"
     : undefined;
+}
+
+function planCollapses(steps: readonly CodingSafeActivityPlanStepInput[]): boolean {
+  return steps.every((step) => stripUnsafeFormatChars(step.text).length === 0);
 }
 
 function validOpenInput(
@@ -723,7 +833,9 @@ function exactSignalKeys(signal: CodingSafeActivitySignal): boolean {
       ? [...common, "messageId", "role", "parentMessageId"]
       : signal.kind === "text"
         ? [...common, "messageId", "text"]
-        : [...common, "messageId", "callId", "tool", "state"];
+        : signal.kind === "plan"
+          ? [...common, "anchorMessageId", "steps"]
+          : [...common, "messageId", "callId", "tool", "state"];
   return Object.keys(signal).every((key) => allowed.includes(key));
 }
 

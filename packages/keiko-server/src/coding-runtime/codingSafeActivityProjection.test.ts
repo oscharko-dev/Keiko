@@ -553,4 +553,118 @@ describe("bounded coding safe-activity projection", () => {
     projection.purgeAll("shutdown");
     expect(projection.currentContent()).toBeNull();
   });
+
+  it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {
+    const projection = openProjection();
+    expect(
+      projection.ingest(
+        RUN_ID,
+        planSignal([
+          { text: "Read the entry point", state: "active" },
+          { text: "Apply the bounded edit", state: "pending" },
+        ]),
+      ),
+    ).toBe(true);
+    expect(projection.currentContent()?.feed).toMatchObject({
+      plan: {
+        revision: 1,
+        anchorMessageId: "msg_assistant_plan",
+        steps: [
+          { text: "Read the entry point", state: "active", truncated: false },
+          { text: "Apply the bounded edit", state: "pending", truncated: false },
+        ],
+        truncated: false,
+      },
+    });
+    expect(
+      projection.ingest(RUN_ID, planSignal([{ text: "Verify the change", state: "active" }])),
+    ).toBe(true);
+    const replaced = projection.currentContent()?.feed;
+    expect(replaced).toMatchObject({
+      plan: { revision: 2, steps: [{ text: "Verify the change", state: "active" }] },
+    });
+    expect(JSON.stringify(replaced)).not.toContain("Read the entry point");
+    projection.purge(RUN_ID, "stop");
+    expect(projection.currentContent()).toBeNull();
+  });
+
+  it("bounds plan steps, clips step text, strips unsafe characters, and stays idempotent", () => {
+    const projection = openProjection();
+    const oversized = Array.from({ length: 70 }, (_, index) => ({
+      text: `step-${String(index)}-${"x".repeat(300)}`,
+      state: "pending" as const,
+    }));
+    expect(projection.ingest(RUN_ID, { ...planSignal(oversized), signalId: "plan-signal-1" })).toBe(
+      true,
+    );
+    const first = projection.currentContent()?.feed;
+    if (first?.availability !== "available" || first.plan === undefined) {
+      throw new Error("expected an available feed with a plan");
+    }
+    expect(first.plan.steps.length).toBeLessThanOrEqual(64);
+    expect(first.plan.truncated).toBe(true);
+    expect(first.plan.steps[0]?.truncated).toBe(true);
+    expect(first.plan.steps[0]?.text.length).toBeLessThanOrEqual(256);
+    expect(projection.ingest(RUN_ID, { ...planSignal(oversized), signalId: "plan-signal-1" })).toBe(
+      true,
+    );
+    expect(projection.currentContent()?.feed).toMatchObject({ plan: { revision: 1 } });
+    expect(projection.ingest(RUN_ID, planSignal([{ text: "\u200b", state: "pending" }]))).toBe(
+      false,
+    );
+    expect(projection.currentContent()?.feed).toMatchObject({
+      plan: { revision: 1 },
+      droppedEventCount: 1,
+    });
+  });
+
+  it("rejects malformed plan signals without mutating the published plan", () => {
+    const projection = openProjection();
+    expect(projection.ingest(RUN_ID, planSignal([{ text: "Keep", state: "completed" }]))).toBe(
+      true,
+    );
+    const malformed: CodingSafeActivitySignal[] = [
+      { ...planSignal([{ text: "x", state: "pending" }]), anchorMessageId: "not safe!" },
+      planSignal([{ text: "x", state: "in_progress" as never }]),
+      planSignal([{ text: 7 as never, state: "pending" }]),
+      planSignal([{ text: "x", state: "pending", extra: true } as never]),
+      { ...planSignal([]), steps: "none" as never },
+    ];
+    for (const signal of malformed) {
+      expect(projection.ingest(RUN_ID, signal)).toBe(false);
+    }
+    expect(projection.currentContent()?.feed).toMatchObject({
+      plan: { revision: 1, steps: [{ text: "Keep" }] },
+      droppedEventCount: malformed.length,
+    });
+    expect(projection.ingest(RUN_ID, planSignal([]))).toBe(true);
+    expect(projection.currentContent()?.feed).toMatchObject({
+      plan: { revision: 2, steps: [] },
+    });
+  });
 });
+
+function openProjection(): ReturnType<typeof createCodingSafeActivityProjection> {
+  const projection = createCodingSafeActivityProjection({
+    now: () => 1_721_323_200_000,
+    diagnostics: { record: (): void => undefined },
+  });
+  projection.open({
+    runId: RUN_ID,
+    workspaceId: WORKSPACE_ID,
+    authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+    workspaceIsCurrent: () => true,
+  });
+  return projection;
+}
+
+function planSignal(
+  steps: readonly { text: string; state: "pending" | "active" | "completed" | "cancelled" }[],
+): Extract<CodingSafeActivitySignal, { readonly kind: "plan" }> {
+  return {
+    kind: "plan",
+    anchorMessageId: "msg_assistant_plan",
+    steps,
+    occurredAt: "2026-07-18T17:00:00.005Z",
+  };
+}
