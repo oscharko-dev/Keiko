@@ -35,7 +35,7 @@ import {
   type EntailmentReconciliation,
 } from "./grounded-faithfulness.js";
 import { createGatewayEntailmentJudge } from "./grounded-entailment-judge.js";
-import type { ServerDiagnosticSink } from "./diagnostics-log.js";
+import { contentFreeErrorClass, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 export interface EntailmentStage {
@@ -120,11 +120,12 @@ async function evaluateEntailment(
     return markersFor(result, nowMs, observability);
   } catch (error) {
     // Fail-closed: the stage must never block or empty the answer. Surface a WARN + a body-free
-    // operator diagnostic and continue.
+    // operator diagnostic (bounded, content-free class — instance `name`/`constructor` are
+    // hostile-writable) and continue.
     recordDiagnostic(
       observability,
       nowMs,
-      error instanceof Error ? error.constructor.name : "EntailmentStageError",
+      contentFreeErrorClass(error),
       "entailment stage failed; degraded to WARN",
     );
     return [entailmentUnavailableMarker(nowMs)];

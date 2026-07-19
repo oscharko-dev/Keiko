@@ -15,6 +15,11 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -107,6 +112,7 @@ export interface OpenCodeRuntimeCompositionInput {
   };
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
@@ -178,6 +184,7 @@ export function createOpenCodeRuntimeComposition(
     input.toolFacade,
     input.toolBridge,
     input.safeActivity?.settleTool,
+    input.diagnostics,
   );
   const runs = new Map<string, PreparedRun>();
   const lifecycle = lifecycleAdapter(input, bridge, runs);
@@ -802,11 +809,21 @@ const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
 const CLOSE_ABORT = "tool-bridge-close";
 
+// The execution collaborators travel the whole bridge chain (listener → handler → executor) as
+// one unit; bundling them keeps every signature within the parameter budget (typescript:S107).
+interface ToolBridgeExecutionDeps {
+  readonly capability: string;
+  readonly facade: CodingToolFacade;
+  readonly settleTool: SafeToolSettlement | undefined;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+}
+
 function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
   settleTool: SafeToolSettlement | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): ToolBridgeController {
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let server: Server | undefined;
@@ -814,8 +831,10 @@ function createToolBridge(
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
   const sockets = new Set<Socket>();
+  const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
-    handleDirectToolRequest(listening, capability, facade, gate, request, settleTool);
+    handleDirectToolRequest(listening, deps, gate, request);
+  const listener = bridgeRequestListener(() => listening, deps, gate);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
       return url;
@@ -827,17 +846,7 @@ function createToolBridge(
     active: () => listening,
     start: async (): Promise<void> => {
       if (listening) return;
-      server = configuredBridgeServer(limits, sockets, (request, response): void => {
-        void handleIncomingToolRequest(
-          request,
-          response,
-          listening,
-          capability,
-          facade,
-          gate.admit,
-          settleTool,
-        );
-      });
+      server = configuredBridgeServer(limits, sockets, listener);
       url = await listenBridge(server);
       listening = true;
     },
@@ -853,19 +862,29 @@ function createToolBridge(
   };
 }
 
+// The listener reads `listening` through the accessor at request time, preserving the closure
+// semantics it replaces: a request that arrives after close() is rejected by the preflight.
+function bridgeRequestListener(
+  isListening: () => boolean,
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+): (request: IncomingMessage, response: ServerResponse) => void {
+  return (request, response): void => {
+    void handleIncomingToolRequest(request, response, isListening(), deps, gate.admit);
+  };
+}
+
 function handleDirectToolRequest(
   active: boolean,
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
-  settleTool: SafeToolSettlement | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
-  const rejection = preflightToolRequest(active, capability, input.headers, input.body);
+  const rejection = preflightToolRequest(active, deps.capability, input.headers, input.body);
   if (rejection !== undefined) return Promise.resolve(rejection);
   const admission = gate.admit();
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(facade, capability, input.headers, input.body, admission, settleTool);
+  return executeToolRequest(deps, input.headers, input.body, admission);
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
@@ -988,34 +1007,27 @@ function declaredBodyLength(value: string | null): number | "invalid" {
 }
 
 async function executeToolRequest(
-  facade: CodingToolFacade,
-  capability: string,
+  deps: ToolBridgeExecutionDeps,
   headers: Headers,
   body: string,
   admission: AdmittedToolRequest,
-  settleTool: SafeToolSettlement | undefined,
 ): Promise<{ readonly status: number; readonly body: string }> {
+  const { facade, capability, settleTool, diagnostics } = deps;
   if (!validJson(body)) {
     admission.release();
     return { status: 400, body: "" };
   }
   const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
-  let facadeWork: Promise<CodingToolResult>;
-  try {
-    facadeWork = facade.execute({
-      body,
-      capability,
-      headers,
-      signal: admission.controller.signal,
-    });
-  } catch {
+  const started = startFacadeExecution(facade, capability, headers, body, admission);
+  if (!started.ok) {
+    emitFacadeStartDiagnostic(diagnostics, actionId, started.error);
     admission.release();
     settleSafeTool(settleTool, actionId, "failed");
     return { status: 502, body: "" };
   }
-  releaseAdmissionWhenSettled(facadeWork, admission);
+  releaseAdmissionWhenSettled(started.work, admission);
   try {
-    const result = await raceAbort(facadeWork, admission.controller.signal);
+    const result = await raceAbort(started.work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
     if (reason !== undefined) {
       settleSafeTool(settleTool, actionId, "cancelled");
@@ -1043,6 +1055,58 @@ function responseForToolResult(
   return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
     ? { status: 200, body: responseBody }
     : { status: 502, body: "" };
+}
+
+// Start the facade call, containing only its SYNCHRONOUS throw (a facade that dies before
+// returning a promise). The thrown value is carried back to the caller — which surfaces it as an
+// operator diagnostic before failing the request — while the returned promise's rejection is
+// handled by the awaiting request path, so no promise ever lives inside a try (typescript:S4822).
+type FacadeStart =
+  | { readonly ok: true; readonly work: Promise<CodingToolResult> }
+  | { readonly ok: false; readonly error: unknown };
+
+function startFacadeExecution(
+  facade: CodingToolFacade,
+  capability: string,
+  headers: Headers,
+  body: string,
+  admission: AdmittedToolRequest,
+): FacadeStart {
+  try {
+    return {
+      ok: true,
+      work: facade.execute({ body, capability, headers, signal: admission.controller.signal }),
+    };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+// Content-free by design (the tool bridge never logs request or error bodies): the record carries
+// the error class and a fixed machine message only, keyed to the action id for correlation. The
+// class label comes from the shared `contentFreeErrorClass` hardening in diagnostics-log, so the
+// mutable-`Error.name` defense lives in exactly one place.
+// `actionId` is request content (parseCodingToolRequest bounds it to a non-empty string ≤512
+// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token:
+// the `tool:<callId>` production shape passes, prose/whitespace/overlength degrade to a marker.
+const SAFE_ACTION_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/;
+
+function emitFacadeStartDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  actionId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId:
+      actionId !== undefined && SAFE_ACTION_CORRELATION_ID.test(actionId)
+        ? actionId
+        : "tool-bridge-unparsed-action",
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.start-facade",
+    errorClass: contentFreeErrorClass(error),
+    message: "tool-facade-sync-throw",
+  });
 }
 
 function releaseAdmissionWhenSettled(
@@ -1118,17 +1182,15 @@ async function handleIncomingToolRequest(
   request: IncomingMessage,
   response: ServerResponse,
   active: boolean,
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   admit: () => AdmittedToolRequest | undefined,
-  settleTool: SafeToolSettlement | undefined,
 ): Promise<void> {
   if (request.method !== "POST" || request.url !== "/tool") {
     response.writeHead(404).end();
     return;
   }
   const headers = incomingHeaders(request.headers);
-  const rejection = preflightToolRequest(active, capability, headers);
+  const rejection = preflightToolRequest(active, deps.capability, headers);
   if (rejection !== undefined) {
     response.writeHead(rejection.status).end();
     return;
@@ -1142,14 +1204,7 @@ async function handleIncomingToolRequest(
   try {
     const bytes = await readBoundedBody(request, admission.controller.signal);
     const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(
-      facade,
-      capability,
-      headers,
-      body,
-      admission,
-      settleTool,
-    );
+    const result = await executeToolRequest(deps, headers, body, admission);
     if (!response.destroyed) {
       response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
     }
