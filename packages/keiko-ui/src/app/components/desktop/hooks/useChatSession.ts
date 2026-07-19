@@ -991,13 +991,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         // Fail closed to the existing default; MemoriaVivaWindow surfaces a visible error if the
         // user opens that window, this background hydration stays silent toward chat/voice by
         // design (a top-level session error would misrepresent an unrelated settings hiccup as a
-        // chat failure). Still surfaced as a bounded, body-free console warning so the failure is
-        // observable, matching useWorkspace.ts's sync-failure warning convention.
-        if (typeof console !== "undefined" && typeof console.warn === "function") {
-          console.warn(
-            "memory-mode: autonomy policy hydration failed; chat/voice requests use the default mode until this recovers",
-          );
-        }
+        // chat failure, and keiko-ui has no client-side diagnostic sink to route through instead
+        // of console.*, which product code must not call directly).
       });
     return () => {
       active = false;

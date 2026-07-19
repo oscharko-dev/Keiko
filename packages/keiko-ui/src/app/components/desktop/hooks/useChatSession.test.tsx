@@ -968,17 +968,20 @@ describe("useChatSession memory autonomy hydration", () => {
     expect(settings.result.current.memoryMode).toBe("autonomous-delivery");
   });
 
-  it("warns and keeps the default mode when hydration fails", async () => {
+  it("fails closed to the default mode without console output when hydration fails", async () => {
     mockMinimalBootstrap();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(loadMemoryAutonomyMode).mockRejectedValue(new Error("network unavailable"));
 
-    renderHook(() => useChatSession({ autoCreate: false }));
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     const settings = renderHook(() => useConversationMemorySettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
 
-    await waitFor(() => expect(warnSpy).toHaveBeenCalledTimes(1));
-    expect(warnSpy.mock.calls[0]?.[0]).not.toContain("network unavailable");
     expect(settings.result.current.memoryMode).toBe("governed-assist");
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });
