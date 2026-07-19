@@ -72,6 +72,21 @@ export function memoryCaptureCustomerMatchers(deps: UiHandlerDeps): readonly Reg
   return matchers;
 }
 
+// Layers deployment-specific denied categories ON TOP of the built-in defaults (health-data,
+// identifiable-third-party) by category name, so a deployment that adds one custom category never
+// silently drops the built-in protections it didn't mention. A deployment entry whose category
+// name matches a default replaces that default's matchers (an intentional, explicit override);
+// any other deployment entry is additive.
+function mergedDeniedCategoryMatchers(
+  deploymentMatchers: NonNullable<CapturePolicyOptions["deniedCategoryMatchers"]>,
+): NonNullable<CapturePolicyOptions["deniedCategoryMatchers"]> {
+  const deploymentCategories = new Set(deploymentMatchers.map((entry) => entry.category));
+  const retainedDefaults = DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS.filter(
+    (entry) => !deploymentCategories.has(entry.category),
+  );
+  return [...retainedDefaults, ...deploymentMatchers];
+}
+
 export function memoryCapturePolicyForDeps(
   deps: UiHandlerDeps,
   base: CapturePolicyOptions = {},
@@ -82,8 +97,9 @@ export function memoryCapturePolicyForDeps(
   ];
   const deniedCategoryMatchers =
     base.deniedCategoryMatchers ??
-    deps.memoryDeniedCategoryMatchers ??
-    DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS;
+    (deps.memoryDeniedCategoryMatchers === undefined
+      ? DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS
+      : mergedDeniedCategoryMatchers(deps.memoryDeniedCategoryMatchers));
   return {
     ...base,
     deniedCategoryMatchers,
