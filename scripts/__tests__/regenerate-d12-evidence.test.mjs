@@ -47,6 +47,11 @@ describe("D12 evidence regeneration plan", () => {
     ]);
   });
 
+  it("validates the regenerated evidence with the full source-freshness contract (ADR-0139 D10)", () => {
+    const check = plan.commands.find((step) => step.args[0] === "scripts/check-perf-evidence.mjs");
+    expect(check?.args).toContain("--enforce-source-freshness");
+  });
+
   it("writes the comparison into the candidate release document location", () => {
     const runner = plan.commands.find(
       (step) => step.args[0] === "scripts/run-d12-perf-comparison.mjs",

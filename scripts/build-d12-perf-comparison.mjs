@@ -1433,6 +1433,10 @@ function resolveCheckoutEvidence(options, dependencies) {
       computeLockfileSha256: () => getLockfileSha256(roots.candidate),
       computeSourceTreeSha256: () => computeDigest({ root: roots.candidate }),
       dirtySubjectPaths: listDirtyPaths(roots.candidate),
+      // ADR-0139 D10: the producer validates its own output against the FULL source-freshness
+      // contract — right here the candidate tree matches the evidence by construction, so any
+      // mismatch is a real defect, never integration churn. Only the pull-request lane is lenient.
+      enforceSourceFreshness: true,
       isAncestor: (sha) => isAncestor(roots.candidate, sha, expectedHeads.candidate),
     }),
   };
