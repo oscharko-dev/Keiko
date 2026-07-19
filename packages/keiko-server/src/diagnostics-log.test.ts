@@ -44,23 +44,23 @@ describe("describeError (RB-6)", () => {
   });
 });
 
-describe("contentFreeErrorClass (mutable Error.name hardening)", () => {
-  it("degrades an overridden name on a plain Error and never serializes it", () => {
+describe("contentFreeErrorClass (mutable Error.name hardening)", (): void => {
+  it("degrades an overridden name on a plain Error and never serializes it", (): void => {
     const hostile = new Error("boom");
-    hostile.name = "secret-token-abc123";
+    hostile.name = "hostile-injected-label";
     const record = serverDiagnosticFromError({
       correlationId: "cid-hostile",
       operation: "op",
       source: "unit",
       error: hostile,
       redact: identity,
-      now: () => 0,
+      now: (): number => 0,
     });
     expect(record.errorClass).toBe("Error");
-    expect(JSON.stringify(record)).not.toContain("secret-token-abc123");
+    expect(JSON.stringify(record)).not.toContain("hostile-injected-label");
   });
 
-  it("keeps a declared subclass distinguishable, even with a tampered name", () => {
+  it("keeps a declared subclass distinguishable, even with a tampered name", (): void => {
     class GatewayShapedError extends Error {
       constructor(message: string) {
         super(message);
@@ -75,19 +75,24 @@ describe("contentFreeErrorClass (mutable Error.name hardening)", () => {
     expect(describeError(tampered, identity).errorClass).toBe("GatewayShapedError");
   });
 
-  it("lets well-known built-in names ride on generic instances", () => {
+  it("recovers the declared class of a subclass that never assigns this.name", (): void => {
+    class QuietSubclassError extends Error {}
+    expect(contentFreeErrorClass(new QuietSubclassError("x"))).toBe("QuietSubclassError");
+  });
+
+  it("lets specific built-in names ride on generic instances", (): void => {
     const abort = new Error("aborted");
     abort.name = "AbortError";
     expect(describeError(abort, identity).errorClass).toBe("AbortError");
   });
 
-  it("degrades to the generic class when no declared class name exists", () => {
+  it("degrades to the generic class when no declared class name exists", (): void => {
     const anonymous = new (class extends Error {})("x");
-    anonymous.name = "zz secret zz";
+    anonymous.name = "zz hostile zz";
     expect(contentFreeErrorClass(anonymous)).toBe("Error");
   });
 
-  it("ignores an instance-level constructor planted by hostile data", () => {
+  it("ignores an instance-level constructor planted by hostile data", (): void => {
     const tampered = Object.assign(new Error("x"), {
       name: "still-hostile",
       constructor: { name: "LeakedText123" },
@@ -95,7 +100,7 @@ describe("contentFreeErrorClass (mutable Error.name hardening)", () => {
     expect(contentFreeErrorClass(tampered)).toBe("Error");
   });
 
-  it("degrades when the prototype exposes no callable constructor", () => {
+  it("degrades when the prototype exposes no callable constructor", (): void => {
     class Ctorless extends Error {}
     Object.defineProperty(Ctorless.prototype, "constructor", { value: undefined });
     const err = new Ctorless("x");
@@ -103,14 +108,30 @@ describe("contentFreeErrorClass (mutable Error.name hardening)", () => {
     expect(contentFreeErrorClass(err)).toBe("Error");
   });
 
-  it("labels non-Error throws by their typeof", () => {
+  it("never throws when reflection over a hostile value throws", (): void => {
+    const throwingName = new Error("x");
+    Object.defineProperty(throwingName, "name", {
+      get(): string {
+        throw new Error("hostile accessor");
+      },
+    });
+    expect(contentFreeErrorClass(throwingName)).toBe("Error");
+    const throwingProto = new Proxy(new Error("x"), {
+      getPrototypeOf(): object {
+        throw new Error("hostile trap");
+      },
+    });
+    expect(contentFreeErrorClass(throwingProto)).toBe("Error");
+  });
+
+  it("labels non-Error throws by their typeof", (): void => {
     expect(contentFreeErrorClass("plain string")).toBe("string");
     expect(contentFreeErrorClass(42)).toBe("number");
   });
 });
 
-describe("describeError machine-token bounds for code and requestId", () => {
-  it("drops prose-shaped code and requestId values instead of forwarding content", () => {
+describe("describeError machine-token bounds for code and requestId", (): void => {
+  it("drops prose-shaped code and requestId values instead of forwarding content", (): void => {
     const hostile = Object.assign(new Error("x"), {
       code: "customer email jane@example.com",
       requestId: "she said: hello world",
@@ -120,12 +141,15 @@ describe("describeError machine-token bounds for code and requestId", () => {
     expect(described.gatewayRequestId).toBeUndefined();
   });
 
-  it("drops a machine-shaped value the redactor would rewrite (known secret)", () => {
-    const leaky = Object.assign(new Error("x"), { code: "sk-live-abc123" });
-    const described = describeError(leaky, (message) =>
-      message.replaceAll("sk-live-abc123", "[redacted]"),
-    );
-    expect(described.code).toBeUndefined();
+  it("forwards machine tokens for producers that redact by constant message", (): void => {
+    const coded = Object.assign(new Error("x"), {
+      code: "GATEWAY_TIMEOUT",
+      requestId: "req-7",
+    });
+    const described = describeError(coded, (): string => "diagnostic suppressed");
+    expect(described.code).toBe("GATEWAY_TIMEOUT");
+    expect(described.gatewayRequestId).toBe("req-7");
+    expect(described.message).toBe("diagnostic suppressed");
   });
 });
 
