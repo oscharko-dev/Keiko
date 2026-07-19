@@ -36,6 +36,8 @@ import {
   type CodingWorkbenchPolicyEffect,
   type CodingWorkbenchPolicyResourceScope,
 } from "./coding-workbench.js";
+import { workspaceTrustLevelPolicyEffect } from "./workspace-trust.js";
+import type { WorkspaceTrustLevel, WorkspaceTrustOperationClass } from "./workspace-trust.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -165,6 +167,7 @@ export type EditorAgentActionDenyReason =
   | "unsupported-action"
   | "secret-exfiltration"
   | "platform-restricted"
+  | "workspace-restricted"
   | "mode-policy-denied";
 
 export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyReason[] = [
@@ -180,6 +183,7 @@ export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyRea
   "unsupported-action",
   "secret-exfiltration",
   "platform-restricted",
+  "workspace-restricted",
   "mode-policy-denied",
 ] as const;
 
@@ -188,6 +192,7 @@ export type EditorAgentActionReviewReason =
   | "external-effect-requires-review"
   | "mode-approval-required"
   | "deterministic-risk-approval-required"
+  | "workspace-restricted"
   | "delivery-human-approval-required";
 
 export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionReviewReason[] = [
@@ -195,6 +200,7 @@ export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionRevie
   "external-effect-requires-review",
   "mode-approval-required",
   "deterministic-risk-approval-required",
+  "workspace-restricted",
   "delivery-human-approval-required",
 ] as const;
 
@@ -363,37 +369,82 @@ function envelopeModeEffect(
   );
 }
 
+function workspaceTrustOperationForEffectClass(
+  effectClass: EditorAgentActionEffectClass,
+): WorkspaceTrustOperationClass {
+  switch (effectClass) {
+    case "navigation":
+    case "layout":
+    case "workspace-read":
+      return "read";
+    case "content-mutation":
+      return "mutate";
+    case "execution":
+    case "external-effect":
+      return "execute";
+  }
+}
+
+function authorityEffect(
+  decision: EditorAgentActionPolicyDecision,
+  authority: EditorAgentAuthorityPolicy,
+  risk: CodingWorkbenchApprovalRisk,
+): CodingWorkbenchPolicyEffect | undefined {
+  const actionClass = EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass];
+  const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
+  if (actionClass === null || resourceScope === null) return undefined;
+  const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
+  return strictestCodingWorkbenchPolicyEffect(
+    classEffect,
+    envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.deploymentCeiling, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.effectiveMode, actionClass, resourceScope, risk),
+  );
+}
+
+function decisionForComposedEffect(
+  decision: EditorAgentActionPolicyDecision,
+  risk: CodingWorkbenchApprovalRisk,
+  withoutTrust: CodingWorkbenchPolicyEffect,
+  trustEffect: CodingWorkbenchPolicyEffect,
+): EditorAgentActionPolicyDecision {
+  const effective = strictestCodingWorkbenchPolicyEffect(withoutTrust, trustEffect);
+  if (effective === EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition])
+    return decision;
+  const origin = decision.origin ?? "agent";
+  if (effective === "denied") {
+    const reason =
+      trustEffect === "denied" && withoutTrust !== "denied"
+        ? "workspace-restricted"
+        : "mode-policy-denied";
+    return denyDecision(decision.effectClass, reason, origin);
+  }
+  const reviewReason =
+    trustEffect === "approval-required" && withoutTrust === "allowed"
+      ? "workspace-restricted"
+      : reviewReasonForEnvelope(decision.effectClass, risk);
+  return reviewDecision(decision.effectClass, reviewReason, origin);
+}
+
 // Compose immutable editor security posture with the shared Authority Envelope mode ceiling. The
 // most restrictive effect always wins; an envelope can never loosen a boundary/sensitivity denial.
 export function composeEditorAgentActionPolicyDecision(
   decision: EditorAgentActionPolicyDecision,
   authority: EditorAgentAuthorityPolicy,
   risk: CodingWorkbenchApprovalRisk,
+  workspaceTrust?: WorkspaceTrustLevel,
 ): EditorAgentActionPolicyDecision {
-  const actionClass = EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass];
-  const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
-  if (actionClass === null || resourceScope === null) return decision;
-  const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
-  const envelopeEffect = strictestCodingWorkbenchPolicyEffect(
-    classEffect,
-    envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),
-    envelopeModeEffect(authority.deploymentCeiling, actionClass, resourceScope, risk),
-    envelopeModeEffect(authority.effectiveMode, actionClass, resourceScope, risk),
-  );
-  const effective = strictestCodingWorkbenchPolicyEffect(
+  const envelopeEffect = authorityEffect(decision, authority, risk);
+  if (envelopeEffect === undefined) return decision;
+  const withoutTrust = strictestCodingWorkbenchPolicyEffect(
     EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition],
     envelopeEffect,
   );
-  if (effective === EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition])
-    return decision;
-  if (effective === "denied") {
-    return denyDecision(decision.effectClass, "mode-policy-denied", decision.origin ?? "agent");
-  }
-  return reviewDecision(
-    decision.effectClass,
-    reviewReasonForEnvelope(decision.effectClass, risk),
-    decision.origin ?? "agent",
+  const trustEffect = workspaceTrustLevelPolicyEffect(
+    workspaceTrust,
+    workspaceTrustOperationForEffectClass(decision.effectClass),
   );
+  return decisionForComposedEffect(decision, risk, withoutTrust, trustEffect);
 }
 
 // ─── Bounded audit record (AC1, AC3) ──────────────────────────────────────────

@@ -12,7 +12,7 @@ import {
   EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE,
   buildEditorAgentActionAuditRecord,
   classifyEditorAgentAction,
-  composeEditorAgentActionPolicyDecision,
+  composeEditorAgentActionPolicyDecision as composeDecision,
   editorAgentDispositionForPolicyEffect,
   isEditorAgentActionAuditRecord,
   isEditorAgentActionDisposition,
@@ -24,7 +24,7 @@ import {
   type EditorAgentAuthorityPolicy,
 } from "./editor-agent-governance.js";
 import type { EditorAgentActionType } from "./editor-agent.js";
-import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
+import { CODING_WORKBENCH_MODES, resolveEffectiveCodingWorkbenchMode } from "./coding-workbench.js";
 
 const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "openFile",
@@ -79,6 +79,29 @@ function authority(
     ...over,
   };
 }
+
+function composeEditorAgentActionPolicyDecision(
+  decision: EditorAgentActionPolicyDecision,
+  policy: EditorAgentAuthorityPolicy,
+  risk: Parameters<typeof composeDecision>[2],
+  workspaceTrust: Parameters<typeof composeDecision>[3] = "trusted",
+): EditorAgentActionPolicyDecision {
+  return composeDecision(decision, policy, risk, workspaceTrust);
+}
+
+const DISPOSITION_RESTRICTION = {
+  allowed: 0,
+  "review-required": 1,
+  denied: 2,
+} as const;
+
+const MONOTONIC_BASELINES: readonly EditorAgentActionPolicyDecision[] = [
+  classifyEditorAgentAction("openFile", ctx()),
+  classifyEditorAgentAction("queryGit", ctx()),
+  classifyEditorAgentAction("save", ctx()),
+  classifyEditorAgentAction("requestVerification", ctx()),
+  { disposition: "allowed", effectClass: "external-effect", origin: "agent" },
+];
 
 describe("effect-class taxonomy (Issue #1395 D1)", () => {
   it("assigns an effect class to every action type", () => {
@@ -326,6 +349,78 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     );
     expect(decision.disposition).toBe("denied");
     expect(decision.denyReason).toBe("mode-policy-denied");
+  });
+
+  it("folds Restricted Mode into mutation and execution without widening reads", () => {
+    const mutation = classifyEditorAgentAction("save", ctx());
+    expect(
+      composeEditorAgentActionPolicyDecision(
+        mutation,
+        authority("autonomous-delivery"),
+        "low",
+        "restricted",
+      ),
+    ).toMatchObject({
+      disposition: "review-required",
+      reviewReason: "workspace-restricted",
+    });
+
+    const execution = classifyEditorAgentAction("requestVerification", ctx());
+    expect(
+      composeEditorAgentActionPolicyDecision(
+        execution,
+        authority("autonomous-delivery", { actionClasses: ["verification"] }),
+        "low",
+        "restricted",
+      ),
+    ).toMatchObject({ disposition: "denied", denyReason: "workspace-restricted" });
+    expect(
+      composeDecision(
+        execution,
+        authority("autonomous-delivery", { actionClasses: ["verification"] }),
+        "low",
+      ),
+    ).toMatchObject({ disposition: "denied", denyReason: "workspace-restricted" });
+
+    const read = classifyEditorAgentAction("queryGit", ctx());
+    expect(
+      composeEditorAgentActionPolicyDecision(
+        read,
+        authority("autonomous-delivery", { actionClasses: ["workspace-read"] }),
+        "low",
+        "restricted",
+      ),
+    ).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+  });
+
+  it("never widens any effect for every mode, ceiling, and trust-level triple", () => {
+    const trustLevels = ["trusted", "restricted", undefined] as const;
+    for (const requestedMode of CODING_WORKBENCH_MODES) {
+      for (const deploymentCeiling of CODING_WORKBENCH_MODES) {
+        const policy = authority(
+          resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
+          {
+            requestedMode,
+            deploymentCeiling,
+            actionClasses: [
+              "workspace-read",
+              "workspace-write",
+              "verification",
+              "delivery-substrate",
+            ],
+          },
+        );
+        for (const baseline of MONOTONIC_BASELINES) {
+          const trusted = composeDecision(baseline, policy, "low", "trusted");
+          for (const workspaceTrust of trustLevels) {
+            const actual = composeDecision(baseline, policy, "low", workspaceTrust);
+            expect(DISPOSITION_RESTRICTION[actual.disposition]).toBeGreaterThanOrEqual(
+              DISPOSITION_RESTRICTION[trusted.disposition],
+            );
+          }
+        }
+      }
+    }
   });
 
   it("gates low-risk queryGit reads through workspace-read authority without mutation or delivery", () => {

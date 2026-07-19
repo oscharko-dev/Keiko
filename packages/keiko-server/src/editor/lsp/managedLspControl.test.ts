@@ -48,6 +48,7 @@ function serviceOptions(
     readonly dispose?: (root: string, language: ManagedLspLanguage) => Promise<void>;
     readonly save?: (path: string, value: Record<string, unknown>) => void;
     readonly projectEvidence?: ManagedLspEvidenceProjector;
+    readonly workspaceTrust?: ManagedLspControlServiceOptions["workspaceTrust"];
   } = {},
 ): ManagedLspControlServiceOptions {
   const stateDir = overrides.stateDir ?? temporaryDirectory("managed-lsp-state");
@@ -57,6 +58,7 @@ function serviceOptions(
     provisioning: (_root: string, language: ManagedLspLanguage): boolean =>
       overrides.provisioned?.(language) ?? true,
     disposePoolEntry: overrides.dispose ?? ((): Promise<void> => Promise.resolve()),
+    workspaceTrust: overrides.workspaceTrust ?? ((): "trusted" => "trusted"),
     runtimeApproved: (_language: ManagedLspLanguage, runtimeId: string): boolean =>
       runtimeId.endsWith("-lsp"),
     configurationSafe: (): boolean => true,
@@ -100,6 +102,48 @@ function shellConfiguration(
 }
 
 describe("managed LSP activation control service", () => {
+  it("fails closed with the typed trust reason when trust is restricted, missing, or unreadable", async () => {
+    const root = temporaryDirectory("workspace-restricted");
+    const trustedOptions = serviceOptions();
+    const missingTrustOptions = { ...trustedOptions, workspaceTrust: undefined };
+    const services = [
+      createManagedLspControlService(
+        serviceOptions({ workspaceTrust: (): "restricted" => "restricted" }),
+      ),
+      createManagedLspControlService(missingTrustOptions),
+      createManagedLspControlService(
+        serviceOptions({
+          workspaceTrust: (): never => {
+            throw new Error("SENTINEL_SECRET_TRUST_FAILURE");
+          },
+        }),
+      ),
+    ];
+
+    for (const service of services) {
+      expect((await service.read(root)).languages[0]).toMatchObject({
+        ok: true,
+        state: "disabledByPolicy",
+        reasonCode: "WORKSPACE_UNTRUSTED",
+        policyResult: "denied",
+      });
+    }
+  });
+
+  it("stops every managed language for only the restricted workspace", async () => {
+    const root = temporaryDirectory("workspace-restrict-stop");
+    const otherRoot = temporaryDirectory("workspace-restrict-other");
+    const dispose = vi.fn(() => Promise.resolve());
+    const service = createManagedLspControlService(serviceOptions({ dispose }));
+
+    await service.restrict(root);
+
+    expect(dispose.mock.calls).toStrictEqual(
+      MANAGED_LSP_LANGUAGES.map((language) => [root, language]),
+    );
+    expect(dispose).not.toHaveBeenCalledWith(otherRoot, expect.any(String));
+  });
+
   it.each(["absent", "corrupt", "unknown-version"] as const)(
     "fails closed for %s persisted state and never disposes a process",
     async (variant) => {

@@ -274,6 +274,7 @@ describe("editor settings control service", () => {
         }),
       readConfiguration: () => Promise.resolve(undefined),
       mutate: () => Promise.resolve({ kind: "invalid", code: "INVALID_REQUEST" }),
+      restrict: () => Promise.resolve(),
     };
 
     const snapshot = await serviceWithManagedLanguages(managedLspControl).read(root);

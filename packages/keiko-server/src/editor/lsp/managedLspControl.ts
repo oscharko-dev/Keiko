@@ -21,6 +21,7 @@ import {
   type ManagedLspEvidenceOutcome,
   type ManagedLspLanguage,
   type ManagedLspRuntimeConfiguration,
+  type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
@@ -60,6 +61,7 @@ export interface ManagedLspControlService {
     language: ManagedLspLanguage,
   ) => Promise<ManagedLspRuntimeConfiguration | undefined>;
   readonly mutate: (mutation: ManagedLspControlMutation) => Promise<ManagedLspControlResult>;
+  readonly restrict: (realRoot: string) => Promise<void>;
 }
 
 export interface ManagedLspControlServiceOptions {
@@ -67,6 +69,7 @@ export interface ManagedLspControlServiceOptions {
   readonly processEnv: Readonly<Record<string, string | undefined>>;
   readonly provisioning: (realRoot: string, language: ManagedLspLanguage) => boolean;
   readonly disposePoolEntry: (realRoot: string, language: ManagedLspLanguage) => Promise<void>;
+  readonly workspaceTrust?: ((realRoot: string) => WorkspaceTrustLevel) | undefined;
   readonly runtimeApproved: (language: ManagedLspLanguage, runtimeId: string) => boolean;
   readonly configurationSafe: (
     root: string,
@@ -110,6 +113,17 @@ function legacyEnvironment(
   return "disabled";
 }
 
+function workspaceTrust(
+  realRoot: string,
+  options: ManagedLspControlServiceOptions,
+): WorkspaceTrustLevel {
+  try {
+    return options.workspaceTrust?.(realRoot) === "trusted" ? "trusted" : "restricted";
+  } catch {
+    return "restricted";
+  }
+}
+
 function unavailableActivation(
   language: ManagedLspLanguage,
   revision: number,
@@ -146,6 +160,7 @@ function activationFor(
       negotiation: "notStarted",
       runtimeHealth: "unknown",
       restartRequired: false,
+      workspaceTrust: workspaceTrust(realRoot, options),
     });
   }
   const entry = record.languages[language];
@@ -161,6 +176,7 @@ function activationFor(
     negotiation: "notStarted",
     runtimeHealth: "unknown",
     restartRequired: entry?.configuration?.restartRequired ?? false,
+    workspaceTrust: workspaceTrust(realRoot, options),
   });
 }
 
@@ -707,6 +723,11 @@ export function createManagedLspControlService(
         return Promise.resolve({ kind: "invalid", code: "INVALID_REQUEST" });
       const key = `managed-lsp:${managedLspWorkspaceFingerprint(mutation.root)}:${mutation.language}`;
       return options.mutex.runExclusive([key], () => mutateLocked(mutation, options));
+    },
+    restrict: async (realRoot): Promise<void> => {
+      await Promise.all(
+        MANAGED_LSP_LANGUAGES.map((language) => options.disposePoolEntry(realRoot, language)),
+      );
     },
   };
 }

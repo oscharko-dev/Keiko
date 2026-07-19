@@ -125,6 +125,7 @@ function runAuthorizedAt(
     signal: new AbortController().signal,
     spawn,
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
   });
 }
 
@@ -157,6 +158,7 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
       signal: new AbortController().signal,
       spawn,
       activationAuthorized: true,
+      activationStillAuthorized: (): boolean => true,
       protocolConfiguration: { revision: 7, settings: {} },
     });
 

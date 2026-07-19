@@ -77,6 +77,7 @@ const MANAGED_LANGUAGE_MESSAGE_KEYS = {
   guidanceUnavailable: "managedLanguage.guidanceUnavailable",
   reasonProductUnsupported: "managedLanguage.reasonProductUnsupported",
   reasonPolicyDenied: "managedLanguage.reasonPolicyDenied",
+  reasonWorkspaceUntrusted: "managedLanguage.reasonWorkspaceUntrusted",
   reasonLegacyDisabled: "managedLanguage.reasonLegacyDisabled",
   reasonNotProvisioned: "managedLanguage.reasonNotProvisioned",
   reasonWorkspaceDisabled: "managedLanguage.reasonWorkspaceDisabled",

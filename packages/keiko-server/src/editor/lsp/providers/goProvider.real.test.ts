@@ -57,6 +57,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
         overlayAbsolutePath: join(root, "main.go"),
         signal: new AbortController().signal,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: {
           revision: 1,
           settings: { gopls: { env: { GOPROXY: "off", GOTOOLCHAIN: "local" } } },

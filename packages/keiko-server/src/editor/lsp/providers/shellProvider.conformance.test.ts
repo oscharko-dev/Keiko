@@ -127,6 +127,7 @@ function options(
     signal,
     spawn,
     activationAuthorized: true,
+    activationStillAuthorized: (): boolean => true,
     protocolConfiguration: protocolConfiguration(),
   };
 }

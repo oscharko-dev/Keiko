@@ -173,6 +173,9 @@ function liveLanguage(
     negotiation: negotiationState(runtime),
     runtimeHealth: runtimeHealth(runtime),
     restartRequired,
+    // A projectable control status has already proven current server-owned trust. Restricted
+    // statuses return above and therefore cannot be widened by this live-health projection.
+    workspaceTrust: "trusted",
   });
 }
 

@@ -1204,6 +1204,8 @@ export const DE_MESSAGES = {
     "Diese Sprache wird von diesem Keiko-Build nicht unterstützt.",
   "managedLanguage.reasonPolicyDenied":
     "Die Bereitstellungsrichtlinie hat die Aktivierung abgelehnt.",
+  "managedLanguage.reasonWorkspaceUntrusted":
+    "Der eingeschränkte Modus verhindert, dass dieser Workspace verwaltete Sprachserver startet.",
   "managedLanguage.reasonLegacyDisabled":
     "Die Kompatibilitäts-Umgebungsrichtlinie hat diesen Provider deaktiviert.",
   "managedLanguage.reasonNotProvisioned": "Der freigegebene Sprachserver ist nicht bereitgestellt.",

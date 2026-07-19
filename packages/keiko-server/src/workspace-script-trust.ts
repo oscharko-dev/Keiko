@@ -77,11 +77,13 @@ export interface WorkspaceScriptTrustService {
   readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
+  readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
 }
 
 export interface WorkspaceScriptTrustServiceOptions {
   readonly store: UiStore;
   readonly fs?: WorkspaceFs | undefined;
+  readonly onRestricted?: ((canonicalRoot: string) => void) | undefined;
 }
 
 function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string {
@@ -90,6 +92,39 @@ function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string
   } catch {
     throw new WorkspaceScriptTrustError("PROJECT_NOT_FOUND", message);
   }
+}
+
+function realPathOrUndefined(fs: WorkspaceFs, path: string): string | undefined {
+  try {
+    return fs.realPath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function registeredProjectPathForRoot(
+  store: UiStore,
+  fs: WorkspaceFs,
+  root: string,
+): string | undefined {
+  const canonicalRoot = realPathOrUndefined(fs, root);
+  if (canonicalRoot === undefined) return undefined;
+  return store
+    .listProjects()
+    .find((project): boolean => realPathOrUndefined(fs, project.path) === canonicalRoot)?.path;
+}
+
+function workspaceInfoForRoot(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
@@ -250,10 +285,12 @@ function invalidatedTrustedRecord(
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
+  private readonly onRestricted: ((canonicalRoot: string) => void) | undefined;
 
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
+    this.onRestricted = options.onRestricted;
   }
 
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
@@ -287,6 +324,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       "human-revocation",
       nextRevision(this.store, binding.rootRef),
     );
+    this.onRestricted?.(canonicalRoot);
     return { trusted: false };
   };
 
@@ -306,10 +344,25 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
           invalidationReason(invalidated.binding, expected),
           invalidated.revision + 1,
         );
+        this.onRestricted?.(canonicalRoot);
       }
       return projectedTrusted;
     } catch {
       return false;
+    }
+  };
+
+  public readonly trustLevelForRoot = (root: string): WorkspaceTrustLevel => {
+    try {
+      const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+      if (projectPath === undefined) return "restricted";
+      const canonicalRoot = realPathOrUndefined(this.fs, root);
+      if (canonicalRoot === undefined) return "restricted";
+      return this.isTrusted(projectPath, workspaceInfoForRoot(canonicalRoot))
+        ? "trusted"
+        : "restricted";
+    } catch {
+      return "restricted";
     }
   };
 }
