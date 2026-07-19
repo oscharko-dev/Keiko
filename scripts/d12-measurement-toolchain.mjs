@@ -3,12 +3,12 @@ import { createHash } from "node:crypto";
 
 const D12_MEASUREMENT_TOOLCHAIN_DOMAIN = "keiko-d12-measurement-toolchain-v1\0";
 
+// ADR-0139 D10: the digest binds files that SHAPE produced measurements — producers, the checker
+// whose evaluators the producer self-check imports, the measuring specs, their configs, fixtures,
+// and support. Pure consumers of the harness (the unit tests under scripts/__tests__/ and static
+// spec-structure tests) cannot alter a measured number, so they are deliberately NOT part of the
+// digest: editing a test must never force a full Linux re-measurement.
 export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
-  "scripts/__tests__/build-d12-bundle-input.test.mjs",
-  "scripts/__tests__/build-d12-perf-comparison.test.mjs",
-  "scripts/__tests__/check-perf-evidence.test.mjs",
-  "scripts/__tests__/d12-measurement-toolchain.test.mjs",
-  "scripts/__tests__/run-d12-perf-comparison.test.mjs",
   "scripts/build-d12-bundle-input.mjs",
   "scripts/build-d12-perf-comparison.mjs",
   "scripts/check-perf-evidence.mjs",
@@ -19,7 +19,6 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/run-d12-perf-comparison.mjs",
   "tests/e2e/config/playwright.editor-performance.config.ts",
   "tests/e2e/config/playwright.issue-2348-editor-debugging.config.ts",
-  "tests/e2e/editor-debugging-2348.static.test.ts",
   "tests/e2e/editor-debugging-2348.spec.ts",
   "tests/e2e/editor-performance.spec.ts",
   "tests/e2e/fixtures/editor-debugging-2348/dap-socket-adapter.fixture",

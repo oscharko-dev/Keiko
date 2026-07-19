@@ -2752,7 +2752,7 @@ function evaluateMeasurementTimestamp(measuredAtIso) {
     : ["evidence missing a parseable `measuredAtIso`"];
 }
 
-function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256) {
+function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256, enforceSource) {
   const failures = [];
   if (
     evidence.d12Comparison !== undefined &&
@@ -2770,7 +2770,10 @@ function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256)
         "(stale/foreign-branch evidence)",
     );
   }
-  if (LOWERCASE_SHA_256.test(evidence.sourceTreeSha256 ?? "")) {
+  // ADR-0139 D10: exact-tree equality is a regeneration-lane property, not a pull-request one — on
+  // the PR lane every unrelated subject change (another PR's UI/contracts/lockfile churn) would
+  // force a full Linux re-measurement without changing what this PR ships.
+  if (enforceSource && LOWERCASE_SHA_256.test(evidence.sourceTreeSha256 ?? "")) {
     failures.push(
       ...evaluateCurrentSourceTreeDigest(evidence.sourceTreeSha256, computeSourceTreeSha256),
     );
@@ -2778,31 +2781,60 @@ function evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256)
   return failures;
 }
 
-export function evaluateFreshness(
-  evidence,
-  {
+// ADR-0139 D10 — two freshness modes:
+//   * Pull-request mode (default): validates evidence INTEGRITY — stamps, canonical structure, the
+//     pinned-baseline anchor, and the measurement-toolchain digest (changing the ruler always
+//     requires re-measuring). It does NOT require the recorded source tree, lockfile, or working
+//     tree to match HEAD: exact-source freshness is owned by the nightly regeneration lane, so
+//     unrelated merged churn no longer forces a ~35-minute Linux re-measurement on every PR.
+//     Real per-PR performance protection stays with the deterministic editor bundle gates
+//     (check:editor-release-evidence / check:editor-bundle-size), which rebuild the product on
+//     every PR and catch any change to what users actually load.
+//   * Enforcing mode (`enforceSourceFreshness` / --enforce-source-freshness): additionally requires
+//     exact source-tree equality, the current lockfile, and a clean subject working tree. Used by
+//     the regeneration wrapper right after producing evidence (where the tree matches by
+//     construction) and available to the nightly lane for drift diagnosis.
+// The always-on integrity set: stamps, binding shape, pinned-baseline anchor, toolchain digest.
+function integrityFreshnessFailures(evidence, options, enforceSourceFreshness) {
+  const {
     computeBaselineSourceTreeSha256 = defaultComputeBaselineSourceTreeSha256,
-    computeLockfileSha256 = defaultComputeLockfileSha256,
     computeMeasurementHarnessSha256 = defaultComputeMeasurementHarnessSha256,
     computeSourceTreeSha256 = computePerformanceSubjectDigest,
-    dirtySubjectPaths = [],
     isAncestor = defaultIsAncestor,
-  } = {},
-) {
-  const failures = [];
-  if (typeof evidence !== "object" || evidence === null) {
-    return { passed: false, failures: ["evidence is not an object"] };
-  }
-  failures.push(
-    ...evaluateDirtySubjectPaths(dirtySubjectPaths),
+  } = options;
+  return [
     ...evaluateCommitStamp(evidence.commit),
     ...evaluateSourceTreeStamp(evidence.sourceTreeSha256),
     ...evaluateMeasurementTimestamp(evidence.measuredAtIso),
-    ...evaluateFreshnessBinding(evidence, isAncestor, computeSourceTreeSha256),
+    ...evaluateFreshnessBinding(
+      evidence,
+      isAncestor,
+      computeSourceTreeSha256,
+      enforceSourceFreshness,
+    ),
     ...evaluateCurrentD12BaselineDigest(evidence, computeBaselineSourceTreeSha256),
-    ...evaluateCurrentD12LockfileDigest(evidence, computeLockfileSha256),
     ...evaluateCurrentD12ToolchainDigest(evidence, computeMeasurementHarnessSha256),
-  );
+  ];
+}
+
+// The regeneration-lane extras: a clean subject working tree and the exact current lockfile.
+function enforcedSourceFailures(evidence, options) {
+  const { computeLockfileSha256 = defaultComputeLockfileSha256, dirtySubjectPaths = [] } = options;
+  return [
+    ...evaluateDirtySubjectPaths(dirtySubjectPaths),
+    ...evaluateCurrentD12LockfileDigest(evidence, computeLockfileSha256),
+  ];
+}
+
+export function evaluateFreshness(evidence, options = {}) {
+  if (typeof evidence !== "object" || evidence === null) {
+    return { passed: false, failures: ["evidence is not an object"] };
+  }
+  const enforceSourceFreshness = options.enforceSourceFreshness === true;
+  const failures = [
+    ...integrityFreshnessFailures(evidence, options, enforceSourceFreshness),
+    ...(enforceSourceFreshness ? enforcedSourceFailures(evidence, options) : []),
+  ];
   return { passed: failures.length === 0, failures };
 }
 
@@ -2835,49 +2867,71 @@ function selectGateTargets(targetName) {
     : allTargets.filter((target) => target.name === targetName);
 }
 
-function runGate(targetName = "all") {
-  const allFailures = [];
-  const dirtySubjectPaths = listDirtyPerformanceSubjectPaths();
-  const targets = selectGateTargets(targetName);
-  for (const target of targets) {
-    const { evidence, error } = readEvidence(target.path);
-    if (error !== undefined) {
-      allFailures.push(`${target.name}: ${error}`);
-      continue;
-    }
-    const budget = target.evaluate(evidence);
-    for (const failure of budget.failures) allFailures.push(`${target.name} budget: ${failure}`);
-    const freshness = evaluateFreshness(evidence, { dirtySubjectPaths });
-    for (const failure of freshness.failures)
-      allFailures.push(`${target.name} freshness: ${failure}`);
-    if (budget.passed && freshness.passed) {
-      console.log(
-        `perf-evidence: ${target.name} OK (budgets within limits, evidence fresh @ ${evidence.commit})`,
-      );
-    }
+function gateModeLines(enforceSourceFreshness) {
+  if (enforceSourceFreshness) {
+    return {
+      ok: (name, commit) =>
+        `perf-evidence: ${name} OK (budgets within limits, evidence fresh @ ${commit})`,
+      pass: "perf-evidence: PASS - all committed performance evidence is within budget and fresh.",
+    };
   }
+  return {
+    ok: (name, commit) =>
+      `perf-evidence: ${name} OK (budgets within limits, evidence integrity verified ` +
+      `@ ${commit}; source freshness is owned by the nightly regeneration lane)`,
+    pass:
+      "perf-evidence: PASS - all committed performance evidence is within budget and " +
+      "internally sound.",
+  };
+}
+
+function evaluateGateTarget(target, freshnessOptions, okLine) {
+  const { evidence, error } = readEvidence(target.path);
+  if (error !== undefined) return [`${target.name}: ${error}`];
+  const failures = [];
+  const budget = target.evaluate(evidence);
+  for (const failure of budget.failures) failures.push(`${target.name} budget: ${failure}`);
+  const freshness = evaluateFreshness(evidence, freshnessOptions);
+  for (const failure of freshness.failures) failures.push(`${target.name} freshness: ${failure}`);
+  if (failures.length === 0) console.log(okLine(target.name, evidence.commit));
+  return failures;
+}
+
+function runGate(targetName = "all", enforceSourceFreshness = false) {
+  const lines = gateModeLines(enforceSourceFreshness);
+  const freshnessOptions = {
+    dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
+    enforceSourceFreshness,
+  };
+  const allFailures = selectGateTargets(targetName).flatMap((target) =>
+    evaluateGateTarget(target, freshnessOptions, lines.ok),
+  );
   if (allFailures.length > 0) {
     for (const failure of allFailures) console.error(`perf-evidence: FAIL - ${failure}`);
     process.exit(1);
   }
-  console.log(
-    "perf-evidence: PASS - all committed performance evidence is within budget and fresh.",
-  );
+  console.log(lines.pass);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  if (process.argv.length === 3 && process.argv[2] === "--print-source-tree-sha256") {
+  const cliArgs = process.argv.slice(2);
+  const enforceSourceFreshness = cliArgs.includes("--enforce-source-freshness");
+  const positional = cliArgs.filter((arg) => arg !== "--enforce-source-freshness");
+  if (positional.length === 1 && positional[0] === "--print-source-tree-sha256") {
     console.log(computePerformanceSubjectDigest());
   } else if (
-    process.argv.length === 4 &&
-    process.argv[2] === "--target" &&
-    process.argv[3] === "editor"
+    positional.length === 2 &&
+    positional[0] === "--target" &&
+    positional[1] === "editor"
   ) {
-    runGate("editor");
-  } else if (process.argv.length === 2) {
-    runGate();
+    runGate("editor", enforceSourceFreshness);
+  } else if (positional.length === 0) {
+    runGate("all", enforceSourceFreshness);
   } else {
-    console.error("usage: check-perf-evidence.mjs [--print-source-tree-sha256 | --target editor]");
+    console.error(
+      "usage: check-perf-evidence.mjs " +
+        "[--print-source-tree-sha256 | --target editor] [--enforce-source-freshness]",
+    );
     process.exitCode = 2;
   }
 }

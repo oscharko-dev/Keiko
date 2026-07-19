@@ -125,7 +125,18 @@ export function buildRegenerationPlan({ headCommit, workdir }) {
       bundleInputCommand(candidate, join(out, "candidate-bundle.json"), candidate),
       comparisonCommand(baseline, candidate, out),
       { args: ["scripts/editor-release-evidence.mjs", "--json"], cwd: candidate },
-      { args: ["scripts/check-perf-evidence.mjs", "--target", "editor"], cwd: candidate },
+      {
+        // Right after regeneration the candidate tree matches the freshly produced evidence by
+        // construction, so the wrapper asserts the FULL freshness contract (ADR-0139 D10); the
+        // pull-request lane validates integrity + budgets only.
+        args: [
+          "scripts/check-perf-evidence.mjs",
+          "--target",
+          "editor",
+          "--enforce-source-freshness",
+        ],
+        cwd: candidate,
+      },
       { args: ["scripts/editor-bundle-size.mjs"], cwd: candidate },
     ],
     out,

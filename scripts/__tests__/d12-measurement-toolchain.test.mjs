@@ -21,7 +21,7 @@ describe("D12 measurement toolchain binding", () => {
     expect(source).not.toContain("D12_COMMON_COMPARISON");
   });
 
-  it("contains the runner, producers, checker, configs, specs, fixtures, support, and direct tests", () => {
+  it("contains the runner, producers, checker, configs, specs, fixtures, and support", () => {
     expect(D12_MEASUREMENT_TOOLCHAIN_PATHS).toEqual(
       expect.arrayContaining([
         "scripts/run-d12-perf-comparison.mjs",
@@ -32,14 +32,8 @@ describe("D12 measurement toolchain binding", () => {
         "scripts/d12-runtime-environment.mjs",
         "scripts/editor-bundle-size.mjs",
         "scripts/editor-release-evidence.mjs",
-        "scripts/__tests__/run-d12-perf-comparison.test.mjs",
-        "scripts/__tests__/build-d12-perf-comparison.test.mjs",
-        "scripts/__tests__/build-d12-bundle-input.test.mjs",
-        "scripts/__tests__/check-perf-evidence.test.mjs",
-        "scripts/__tests__/d12-measurement-toolchain.test.mjs",
         "tests/e2e/config/playwright.editor-performance.config.ts",
         "tests/e2e/config/playwright.issue-2348-editor-debugging.config.ts",
-        "tests/e2e/editor-debugging-2348.static.test.ts",
         "tests/e2e/editor-performance.spec.ts",
         "tests/e2e/editor-debugging-2348.spec.ts",
         "tests/e2e/fixtures/editor-debugging-2348/dap-socket-adapter.fixture",
@@ -51,6 +45,16 @@ describe("D12 measurement toolchain binding", () => {
         "tests/e2e/support/editorWorkspace.ts",
       ]),
     );
+  });
+
+  it("never binds pure harness consumers — a test edit must not force a re-measurement (ADR-0139 D10)", () => {
+    // Unit tests and static spec-structure tests validate the harness; they cannot alter a
+    // produced number. Binding them into measurementHarnessSha256 turned every test edit into a
+    // full ~35-minute Linux re-measurement — the exact churn class ADR-0139 D10 removes.
+    for (const path of D12_MEASUREMENT_TOOLCHAIN_PATHS) {
+      expect(path).not.toMatch(/__tests__\//u);
+      expect(path).not.toMatch(/\.test\.[cm]?[jt]s$/u);
+    }
   });
 
   it("produces an order-independent, path- and byte-sensitive lowercase SHA-256 digest", () => {
