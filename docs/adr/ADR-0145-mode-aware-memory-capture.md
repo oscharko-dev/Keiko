@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #2546, Epic #2537, Memory M1.1, 2026-07-19).
+Accepted (Issue #2546, Epic #2537, Memory M1.1, 2026-07-19). Amended by Issue #2549
+(Memory M1.4, 2026-07-19) to add the user-selected requested-mode surface described in D1.
 
 ## Amends
 
@@ -39,23 +40,26 @@ relative to the content-based hard denials that already exist.
 
 ## Decision
 
-### D1 — Memory capture reuses the canonical mode vocabulary; no memory-local autonomy model
+### D1 — Memory capture reuses the canonical vocabulary and bounds a requested mode
 
 Memory capture consumes `CodingWorkbenchMode` from `@oscharko-dev/keiko-contracts`
-(`coding-workbench.ts`) via a type-only import, exactly as ADR-0129 D5 requires of a non-coding
-surface borrowing the coding-flavored contract home. No memory-local mode type, approval
-vocabulary, or parallel authority stack is introduced.
+(`coding-workbench.ts`), exactly as ADR-0129 D5 requires of a non-coding surface borrowing the
+coding-flavored contract home. No memory-local mode union, approval vocabulary, ordering, or
+parallel authority evaluator is introduced.
 
-The effective mode for a captured turn is the caller's validated, server-owned coding-runtime
-deployment ceiling: `deps.codingRuntimeDeploymentCeiling`. This is the same posture signal
-`keiko-server` already threads through the coding-runtime routes (established read pattern:
-`deps.codingRuntimeDeploymentCeiling ?? "governed-assist"`, `codingRuntimeRoutes.ts:182`); memory
-capture reads it rather than inventing a second one. Consistent with ADR-0124 D2's fail-closed
-effective-mode rule and ADR-0138's fail-closed restatement, an unknown, missing, or malformed
-ceiling resolves to `governed-assist` — the strictest posture — never to a permissive default. A
-chat turn carries no mode of its own; the resolution happens once per turn, server-side, from the
-already-threaded `deps`, so both the desktop and voice call sites inherit it consistently without a
-new wire field.
+The MemoriaViva settings surface stores one user-selected **requested mode** in the existing local
+UI SQLite store and projects it through `GET`/`PUT /api/memory/autonomy-policy`. Desktop chat adds
+that canonical value to the existing `ConversationMemoryRequestWire.mode?` field. The field is
+optional: an absent field preserves the pre-amendment request shape and behavior.
+
+The effective mode remains server-owned. For a request that carries a mode, the server resolves
+`min(requested mode, deps.codingRuntimeDeploymentCeiling)` through the canonical
+`resolveEffectiveCodingWorkbenchMode` helper. A client therefore cannot widen authority beyond the
+configured deployment ceiling. An unknown or malformed value is rejected at the BFF boundary; a
+missing or malformed ceiling fails closed to `governed-assist`. For legacy callers that omit
+`mode`, capture keeps the original #2546 behavior and uses the validated deployment ceiling. This
+preserves existing integrations byte-for-byte while letting the local human choose a narrower
+memory posture or request a higher posture that remains capped by server policy.
 
 ### D2 — Per-mode target-status mapping for persistable candidates
 
@@ -117,12 +121,13 @@ a parallel policy or memory subsystem when an existing one can be shaped for the
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 
-Mode resolution cannot throw (it is a `??` fallback over an already-validated field) and
+Mode resolution cannot throw (it delegates to the total canonical clamp helper) and
 `planMemoryMaintenance` is a pure function; if either path ever throws, it is caught by
 `captureSalientFromTurn`'s existing try/catch boundary, which yields `[]` and leaves the chat
 response unaffected — capture failure never breaks a turn, mode-aware or not. Where mode
 resolution cannot determine an effective mode (D1's fail-closed fallback), the outcome is
-byte-identical to today's pre-mode-aware behavior: `proposed`.
+`governed-assist`. A failed UI hydration also explicitly restores `governed-assist`, while a failed
+persist leaves the previously persisted selection unchanged and surfaces a content-free error.
 
 Diagnostics emitted for a captured turn stay strictly content-free, per the evidence-redaction
 invariant in `AGENTS.md` §1/§7: mode plus per-status counts and hashes only, never candidate
@@ -137,13 +142,11 @@ bodies or user text.
   same confidence gate the maintenance sweep already enforces.
 - The Memory Journal (#2547, M1.2) has a real `proposed` vs. `accepted` distinction to render,
   driven by mode, instead of a distinction that was previously a fixed function of content alone.
-- Legacy callers that never provisioned `codingRuntimeDeploymentCeiling` are byte-identical to
-  pre-change behavior (fail-closed to `governed-assist`, i.e. always `proposed` for routine
-  candidates) — no silent behavior change for existing integrations.
-- No new capture path, policy module, promotion mechanism, or memory-local autonomy model is
-  introduced; the wire/contracts surface for chat and memory is unchanged, so this lands as a
-  server-only change with no `keiko-contracts`/`keiko-ui` edit and no measured-surface (D12)
-  regeneration.
+- Legacy callers that omit `ConversationMemoryRequestWire.mode` are byte-identical to the original
+  #2546 behavior: the server-owned deployment ceiling remains the effective capture mode.
+- No new capture path, promotion mechanism, mode ordering, or memory-local autonomy model is
+  introduced. The additive wire field and policy route reuse the existing request, store, and
+  canonical clamp seams.
 
 ### Negative
 
@@ -151,10 +154,10 @@ bodies or user text.
   without a review step they may not have anticipated from capture alone; this is the intended
   product meaning of those modes (routine work proceeds unattended) but is a real behavior change
   for existing users who select a higher mode without reading its memory implications.
-- The effective mode for capture is inferred from the coding-runtime deployment ceiling, a
-  Coding-Workbench-flavored signal (ADR-0129 D5's accepted "coding-flavored contract names serve
-  non-coding surfaces" cost) rather than a memory-specific posture; if a future product decision
-  splits per-surface mode selection from the coding ceiling, this ADR's D1 mapping needs revisiting.
+- The requested mode is surface-selected, but the effective mode is still capped by the
+  coding-runtime deployment ceiling. A user can therefore persist Full access while the effective
+  mode remains narrower; the policy response exposes both values so this is observable rather than
+  a silent widening.
 - Routing `accepted` through `planMemoryMaintenance` means a mode-eligible candidate can still land
   as `proposed` if its confidence is below `promoteStrength`; this is correct per D4 but is a subtler
   outcome than "mode decides status," and must be documented for support/triage.

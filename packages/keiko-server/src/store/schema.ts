@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 interface Migration {
   readonly version: number;
@@ -335,6 +335,20 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V11 (issue #2549) — singleton requested mode for the MemoriaViva capture surface. The value is
+// content-free and reuses the canonical product autonomy vocabulary; effective authority remains
+// server-owned and is clamped against the configured deployment ceiling at request time.
+const V11_SQL = `
+CREATE TABLE memory_autonomy_policy (
+  id TEXT NOT NULL PRIMARY KEY,
+  requested_mode TEXT NOT NULL,
+  CHECK (
+    id = 'capture'
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+  )
+) STRICT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -346,6 +360,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 8, sql: V8_SQL },
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
+  { version: 11, sql: V11_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

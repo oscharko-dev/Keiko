@@ -303,7 +303,7 @@ describe("API route contract", () => {
 
   it("keeps recent captures on the existing GET /api/memory route", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(21);
+    expect(memoryRoutes).toHaveLength(23);
     expect(API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory")).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/forget"),
@@ -316,6 +316,12 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory/health-scan"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory/autonomy-policy"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "PUT" && r.pattern === "/api/memory/autonomy-policy"),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),

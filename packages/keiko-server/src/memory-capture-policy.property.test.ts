@@ -17,9 +17,29 @@ import {
   enforcePersistableMemoryOutcome,
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
+  resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 
 const SENSITIVITIES: readonly MemorySensitivity[] = ["public", "confidential", "restricted"];
+
+describe("requested memory mode authority clamp", () => {
+  it("never exceeds the deployment ceiling and preserves legacy ceiling behavior when absent", () => {
+    const deploymentCeilings = CODING_WORKBENCH_MODES;
+    for (const ceiling of deploymentCeilings) {
+      expect(resolveMemoryCaptureAutonomyMode({ codingRuntimeDeploymentCeiling: ceiling })).toBe(
+        ceiling,
+      );
+      for (const requested of CODING_WORKBENCH_MODES) {
+        const effective = resolveMemoryCaptureAutonomyMode(
+          { codingRuntimeDeploymentCeiling: ceiling },
+          requested,
+        );
+        expect(authorityRank(effective)).toBeLessThanOrEqual(authorityRank(ceiling));
+        expect(authorityRank(effective)).toBeLessThanOrEqual(authorityRank(requested));
+      }
+    }
+  });
+});
 
 // CODING_WORKBENCH_MODES is the authority-ordered array (governed-assist < supervised-coding <
 // autonomous-delivery); its index is the monotonic authority rank the eligibility set is

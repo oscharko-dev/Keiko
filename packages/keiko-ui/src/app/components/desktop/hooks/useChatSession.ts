@@ -954,7 +954,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
-  const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens } =
+  const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens, memoryMode } =
     useConversationMemorySettings();
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
@@ -1111,6 +1111,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     (chat: Chat, project: { readonly path: string }): ConversationMemoryRequestWire => ({
       enabled: memoryEnabled,
       budgetTokens: memoryBudgetTokens,
+      mode: memoryMode,
       context: {
         userId: DEFAULT_CONVERSATION_MEMORY_USER_ID,
         workspaceId: project.path,
@@ -1118,7 +1119,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         conversationId: chat.id,
       },
     }),
-    [memoryBudgetTokens, memoryEnabled],
+    [memoryBudgetTokens, memoryEnabled, memoryMode],
   );
 
   const acceptMemoryCandidate = useCallback(async (proposalId: string): Promise<void> => {

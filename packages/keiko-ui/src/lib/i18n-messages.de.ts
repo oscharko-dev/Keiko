@@ -395,10 +395,6 @@ export const DE_MESSAGES = {
   "memoria.memoryList": "Erinnerungsliste",
   "memoria.memoriesFound": "{count} Erinnerungen gefunden",
   "memoria.loadingMemories": "Erinnerungen werden geladen…",
-  "memoria.policyLabel": "MemoriaViva-Policy aktivieren",
-  "memoria.policyState": "Policy {state}",
-  "memoria.policyOn": "an",
-  "memoria.policyOff": "aus",
   "memoria.backToWorkspace": "Zurück zum Workspace",
   "memoria.consolidation": "Konsolidierung",
   "memoria.journal.open": "Journal",
@@ -472,6 +468,22 @@ export const DE_MESSAGES = {
   "memoria.settings.budgetUnit": "Token",
   "memoria.settings.budgetHelp":
     "Begrenzt den MemoriaViva-Erinnerungskontext für die nächste Chat-Anfrage.",
+  "memoria.settings.mode.label": "Erinnerungsautonomie",
+  "memoria.settings.mode.help": "Lege fest, wie Keiko neue Erinnerungen erfasst.",
+  "memoria.settings.mode.group": "Erinnerungsautonomiemodus",
+  "memoria.settings.mode.governedAssist.label": "Um Freigabe bitten",
+  "memoria.settings.mode.governedAssist.description":
+    "Neue Erfassungen bleiben Vorschläge, bis du sie freigibst.",
+  "memoria.settings.mode.supervisedCoding.label": "Überwachter Workspace",
+  "memoria.settings.mode.supervisedCoding.description":
+    "Öffentliche Routineerfassungen werden automatisch akzeptiert; sensible Erfassungen bleiben prüfpflichtig.",
+  "memoria.settings.mode.autonomousDelivery.label": "Vollzugriff",
+  "memoria.settings.mode.autonomousDelivery.description":
+    "Öffentliche Routineerfassungen werden innerhalb der Deployment-Grenze automatisch akzeptiert.",
+  "memoria.settings.mode.hydrateError":
+    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Um Freigabe bitten bleibt aktiv.",
+  "memoria.settings.mode.persistError":
+    "Der Erinnerungsautonomiemodus konnte nicht gespeichert werden. Der vorherige Modus bleibt aktiv.",
   "memoria.consolidation.title": "MemoriaViva-Konsolidierung",
   "memoria.consolidation.description":
     "Starte einen begrenzten Konsolidierungsjob, prüfe seine Ausgabe und brich ihn ab, solange er wartet oder läuft.",

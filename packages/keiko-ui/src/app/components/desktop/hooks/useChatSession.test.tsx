@@ -24,6 +24,10 @@ import {
   resolveSelectedModelId,
   useChatSession,
 } from "./useChatSession";
+import {
+  resetConversationMemorySettingsForTests,
+  useConversationMemorySettings,
+} from "./memorySettings";
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -66,6 +70,7 @@ vi.mock("@/lib/memory-api", () => ({
 afterEach(() => {
   vi.clearAllMocks();
   clearChatSessionBootstrapCacheForTests();
+  resetConversationMemorySettingsForTests();
 });
 
 function model(patch: Partial<ModelCapability> = {}): ModelCapability {
@@ -705,6 +710,10 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
 
   it("sends image and document attachment descriptors on the ungrounded path", async () => {
     const { result } = await setupUngroundedAttachmentSession();
+    const memorySettings = renderHook(() => useConversationMemorySettings());
+    act(() => {
+      memorySettings.result.current.setMemoryMode("autonomous-delivery");
+    });
 
     await act(async () => {
       expect(
@@ -750,6 +759,7 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
           text: "hello",
         },
       ],
+      memory: { mode: "autonomous-delivery" },
     });
     expect(result.current.pendingAttachments).toHaveLength(0);
   });

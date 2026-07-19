@@ -80,6 +80,10 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGetMemoryHealthScan } from "./memory-health-scan-handlers.js";
+import {
+  handleGetMemoryAutonomyPolicy,
+  handlePutMemoryAutonomyPolicy,
+} from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleRealtimeMemoryVoiceTool } from "./voice-realtime-memory-tool.js";
@@ -1114,6 +1118,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
+  {
+    method: "GET",
+    pattern: "/api/memory/autonomy-policy",
+    handler: handleGetMemoryAutonomyPolicy,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/memory/autonomy-policy",
+    handler: handlePutMemoryAutonomyPolicy,
+  },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
   { method: "GET", pattern: "/api/memory/health-scan", handler: handleGetMemoryHealthScan },
   { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
