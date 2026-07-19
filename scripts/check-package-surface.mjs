@@ -3,7 +3,6 @@
 // no workspace `packages/keiko-ui/` source, and no absolute local paths. Run from `prepack`/`prepublishOnly`
 // after the build steps.
 
-import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,12 +11,12 @@ import ts from "typescript";
 // (@oscharko-dev/keiko-server) — the BFF folds the hashes into script-src at request time, and
 // this script audits the packed UI bundle against the same set.
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
-import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { findForbiddenPaths } from "./package-surface-rules.mjs";
 // Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). The editor package is bundle-excluded
 // from this published tarball (see EXPECTED_BUNDLE_EXCLUSIONS below), so its footprint is enforced
 // against its built `dist/` directly here — the prepack chain has already run `npm run build`.
 import { runEditorBundleSizeCheck } from "./editor-bundle-size.mjs";
+import { packFiles } from "./package-surface-pack.mjs";
 
 const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
   [
@@ -31,31 +30,6 @@ const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
   ],
 ]);
 const WRITE_CONTRACT = process.argv.includes("--write");
-
-function packFiles() {
-  const env = { ...process.env };
-  delete env.npm_command;
-  delete env.npm_lifecycle_event;
-  delete env.npm_lifecycle_script;
-  delete env.npm_package_json;
-  // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
-  // prepack on `npm pack`); the build steps already ran before this check in the prepack chain.
-  // SECURITY-SHELL-OK: on Windows npm is npm.cmd, which spawnSync only launches through a shell.
-  // Node requires a quoted command when that trusted absolute path contains spaces; argv remains
-  // entirely static literals (no user/network input), so there is no injection surface.
-  const npmExecutable = shellCommandForTrustedExecutable(resolveHostExecutable("npm"));
-  const result = spawnSync(npmExecutable, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-    encoding: "utf8",
-    env,
-    shell: process.platform === "win32",
-  });
-  if (result.status !== 0) {
-    throw new Error(`npm pack --dry-run failed: ${result.stderr}`);
-  }
-  const parsed = JSON.parse(result.stdout);
-  const entry = Array.isArray(parsed) ? parsed[0] : parsed;
-  return entry?.files ?? [];
-}
 
 function fail(message) {
   console.error(`package-surface check failed: ${message}`);
