@@ -309,10 +309,7 @@ describe("chunkParsedUnit — pure", () => {
     const start = Date.now();
     const chunks = chunkParsedUnit(unit, text, { maxTokens: 2048, minTokens: 1, overlapTokens: 0 });
     const elapsedMs = Date.now() - start;
-    // Budget widened 1_000 -> 3_000: the 1s ceiling flaked on a loaded box (observed 1.1s-1.8s on
-    // an unmodified tree). The guard is unaffected — the quadratic form this pins costs orders of
-    // magnitude more than 3s over a 300k-character whitespace run, so the two remain far apart.
-    expect(elapsedMs).toBeLessThan(3_000);
+    expect(elapsedMs).toBeLessThan(1_000);
     expect(chunks.length).toBeGreaterThan(1);
   });
 

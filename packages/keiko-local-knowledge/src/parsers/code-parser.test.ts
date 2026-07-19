@@ -96,6 +96,22 @@ describe("codeParser", () => {
     expect(codeSymbolLabel(line)).toBeUndefined();
   });
 
+  // Precision must not be bought with recall. Requiring a `{`/`;` terminator immediately after the
+  // parameter list excluded the dominant TypeScript method form — a return-type annotation sits
+  // between them — which would have silently stopped anchoring most methods in this very codebase.
+  it.each([
+    ["an async method with a generic return type", "  public async generate(i: I): Promise<S> {"],
+    ["a method with a plain return type", "  public toIndexingError(): IndexingJobError {"],
+    ["a getter with a return type", "  get pageCount(): number {"],
+    [
+      "a static method with a union return type",
+      "  private static resolve(id: string): F | undefined {",
+    ],
+    ["an exported function with a return type", "export function withRet(a: string): number {"],
+  ])("anchors %s", (_case, line) => {
+    expect(codeSymbolLabel(line)).toBeDefined();
+  });
+
   it("does not mine type members of an unterminated import block", () => {
     const text = [
       "import {",

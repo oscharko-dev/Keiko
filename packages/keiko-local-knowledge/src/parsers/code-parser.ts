@@ -114,8 +114,16 @@ const METHOD_DECLARATION_PATTERN = new RegExp(
     "(?:<[^<>]{1,200}>\\s+)?",
     `${NOT_RESERVED}[A-Za-z_$][\\w$.]{0,200}(?:<[^<>]{0,200}>)?\\??(?:\\[\\]){0,8}\\s+`,
     "([A-Za-z_$][\\w$]*)\\s*",
-    "\\([^()]{0,400}\\)\\s*",
-    "(?:throws\\s[\\w\\s,.$]{0,200})?[{;]\\s*$",
+    "\\([^()]{0,400}\\)",
+    // Everything between the parameter list and the declaration terminator: the space before `{`,
+    // a TypeScript return-type annotation (`): Promise<string> {` — the dominant method form, and
+    // a recall hole if excluded), and a Java `throws` clause. One bounded class covers all three.
+    // It excludes `;{()`, so it can neither swallow the terminator nor let a call site through,
+    // and NOTHING whitespace-matching follows it — a class that can match spaces sitting in front
+    // of `\s+`/`\s*` is precisely the ambiguity that made the previous table backtrack
+    // quadratically, so the terminator is a disjoint single-character class instead.
+    "[^;{()]{0,200}",
+    "[{;]\\s*$",
   ].join(""),
   "u",
 );
