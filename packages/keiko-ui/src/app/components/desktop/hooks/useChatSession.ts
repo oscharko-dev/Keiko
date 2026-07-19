@@ -36,7 +36,12 @@ import {
   type RealtimeMemoryToolOutput,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
-import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
+import {
+  acceptMemoryProposal,
+  forgetMemory,
+  loadMemoryAutonomyMode,
+  rejectMemoryProposal,
+} from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { secureRandomId } from "@/lib/secure-random";
 import {
@@ -926,10 +931,12 @@ function handleStreamUngroundedTransportFailure(
 
 export interface UseChatSessionOptions {
   readonly autoCreate?: boolean;
+  readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
 }
 
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   const autoCreate = options.autoCreate ?? true;
+  const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
@@ -954,8 +961,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
-  const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens, memoryMode } =
-    useConversationMemorySettings();
+  const {
+    memoryEnabled,
+    setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
+    memoryMode,
+    setMemoryMode,
+  } = useConversationMemorySettings();
+  // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
+  // the user's actual selection even if the MemoriaViva window (the only other hydration site,
+  // MemoriaVivaWindow.tsx's useMemoryModePolicy) is never opened this session. The settings store
+  // is a module-level singleton, so redundant hydration across multiple mounted sessions is a
+  // harmless no-op (publish() skips an identical value); a failure leaves the safe
+  // "governed-assist" default untouched, matching the window's own hydrate-failure fallback.
+  useEffect(() => {
+    let active = true;
+    void loadMemoryAutonomyModeImpl()
+      .then((policy) => {
+        if (active) setMemoryMode(policy.requestedMode);
+      })
+      .catch(() => {
+        // Fail closed to the existing default; MemoriaVivaWindow surfaces a visible error if the
+        // user opens that window, this background hydration stays silent by design.
+      });
+    return () => {
+      active = false;
+    };
+  }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the

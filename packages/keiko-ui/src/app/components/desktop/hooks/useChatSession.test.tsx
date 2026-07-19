@@ -65,6 +65,11 @@ vi.mock("@/lib/memory-api", () => ({
   acceptMemoryProposal: vi.fn(),
   forgetMemory: vi.fn(),
   rejectMemoryProposal: vi.fn(),
+  loadMemoryAutonomyMode: vi.fn().mockResolvedValue({
+    requestedMode: "governed-assist",
+    effectiveMode: "governed-assist",
+    deploymentCeiling: "governed-assist",
+  }),
 }));
 
 afterEach(() => {
