@@ -2132,6 +2132,8 @@ export type {
   ConversationDocumentContextWire,
   ConversationAttachmentDescriptorWire,
   ConversationMemoryRequestWire,
+  MemoryAutonomyPolicyWire,
+  UpdateMemoryAutonomyPolicyWire,
   ConversationMemoryResultWire,
   DesktopChatSendRequestWire,
   DesktopChatSendResponse,

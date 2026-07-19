@@ -227,6 +227,7 @@ describe("MemoryList — populated state", () => {
   });
 
   it("uses internal navigation buttons for secondary views in workspace-window mode", async () => {
+    const onOpenJournal = vi.fn();
     const onOpenConsolidation = vi.fn();
     const onOpenReviewQueue = vi.fn();
     const onOpenHealthScan = vi.fn();
@@ -236,61 +237,22 @@ describe("MemoryList — populated state", () => {
         filters={emptyFilters}
         onFilterChange={vi.fn()}
         fetchMemoriesImpl={fetchWith([makeRecord()])}
+        onOpenJournal={onOpenJournal}
         onOpenConsolidation={onOpenConsolidation}
         onOpenReviewQueue={onOpenReviewQueue}
         onOpenHealthScan={onOpenHealthScan}
         showWorkspaceBackLink={false}
       />,
     );
+    await user.click(await screen.findByRole("button", { name: /^journal$/i }));
     await user.click(await screen.findByRole("button", { name: /consolidation/i }));
     await user.click(screen.getByRole("button", { name: /review queue/i }));
     await user.click(screen.getByRole("button", { name: /health scan/i }));
+    expect(onOpenJournal).toHaveBeenCalledTimes(1);
     expect(onOpenConsolidation).toHaveBeenCalledTimes(1);
     expect(onOpenReviewQueue).toHaveBeenCalledTimes(1);
     expect(onOpenHealthScan).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("link", { name: /back to workspace/i })).not.toBeInTheDocument();
-  });
-
-  it("renders a default-on policy switch in the header and toggles it", async () => {
-    const user = userEvent.setup();
-    render(
-      <MemoryListContent
-        filters={emptyFilters}
-        onFilterChange={vi.fn()}
-        fetchMemoriesImpl={fetchWith([makeRecord()])}
-        showWorkspaceBackLink={false}
-      />,
-    );
-
-    const policySwitch = await screen.findByRole("switch", {
-      name: "Enable MemoriaViva policy",
-    });
-    expect(policySwitch).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByText("Policy on")).toBeInTheDocument();
-
-    await user.click(policySwitch);
-
-    expect(policySwitch).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("Policy off")).toBeInTheDocument();
-  });
-
-  it("routes the policy switch through controlled workspace-window state", async () => {
-    const onPolicyEnabledChange = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <MemoryListContent
-        filters={emptyFilters}
-        onFilterChange={vi.fn()}
-        fetchMemoriesImpl={fetchWith([makeRecord()])}
-        policyEnabled
-        onPolicyEnabledChange={onPolicyEnabledChange}
-        showWorkspaceBackLink={false}
-      />,
-    );
-
-    await user.click(await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }));
-
-    expect(onPolicyEnabledChange).toHaveBeenCalledWith(false);
   });
 
   it("shows the consolidation entry point in the header", async () => {
@@ -299,6 +261,16 @@ describe("MemoryList — populated state", () => {
       expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
         "href",
         "/memoriaviva/consolidation",
+      );
+    });
+  });
+
+  it("shows the Journal entry point in the header", async () => {
+    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /^journal$/i })).toHaveAttribute(
+        "href",
+        "/memoriaviva/journal",
       );
     });
   });

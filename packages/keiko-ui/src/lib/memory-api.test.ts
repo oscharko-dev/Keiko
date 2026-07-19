@@ -11,10 +11,13 @@ import {
   fetchMemory,
   fetchMemoryConsolidationJob,
   fetchMemoryReviewQueue,
+  fetchRecentCaptures,
+  loadMemoryAutonomyMode,
   forgetMemory,
   forgetMemories,
   pinMemory,
   rejectMemoryProposal,
+  persistMemoryAutonomyMode,
   resolveMemoryConflict,
   startMemoryConsolidation,
   unpinMemory,
@@ -221,6 +224,7 @@ describe("memory BFF boundary helpers", () => {
       limit: 25,
       offset: 50,
     });
+    await fetchRecentCaptures({ since: 123, scope: ["project", "workspace"], limit: 10 });
     await fetchMemoryReviewQueue();
     await fetchMemory("mem 1" as MemoryId);
     await editMemory("mem 1" as MemoryId, {
@@ -238,6 +242,10 @@ describe("memory BFF boundary helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory?q=atlas+rust&scope=global%2Cworkspace&type=preference%2Csemantic-fact&status=accepted&sensitivity=public%2Cconfidential&limit=25&offset=50",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/memory?since=123&order=desc&scope=project%2Cworkspace&limit=10",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
@@ -332,5 +340,42 @@ describe("memory BFF boundary helpers", () => {
   it("resolves undefined when a mutation route returns 204 No Content", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
     await expect(deleteMemory("mem 1" as MemoryId)).resolves.toBeUndefined();
+  });
+});
+
+describe("memory autonomy policy API helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("loads and persists the canonical requested mode on the dedicated policy route", async () => {
+    const response = {
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+    } as const;
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(response)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadMemoryAutonomyMode();
+    await persistMemoryAutonomyMode("autonomous-delivery");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/memory/autonomy-policy",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/memory/autonomy-policy",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ requestedMode: "autonomous-delivery" }),
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
   });
 });

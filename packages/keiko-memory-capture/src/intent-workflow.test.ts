@@ -113,6 +113,17 @@ describe("extractWorkflowOutcomeCandidates", () => {
     expect(results[0]).toEqual({ kind: "rejected", reason: "raw-log-content" });
   });
 
+  it("rejects a configured category in a structured workflow report", () => {
+    const results = extractWorkflowOutcomeCandidates(
+      outcome({ structuredReport: "The medical record changed." }),
+      ctx(),
+      {
+        deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
+      },
+    );
+    expect(results[0]).toEqual({ kind: "rejected", reason: "denied-category" });
+  });
+
   it("rejects an empty structuredReport with empty-content", () => {
     const results = extractWorkflowOutcomeCandidates(outcome({ structuredReport: "   " }), ctx());
     expect(results[0]).toEqual({ kind: "rejected", reason: "empty-content" });

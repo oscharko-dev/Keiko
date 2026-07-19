@@ -1,4 +1,5 @@
 import type { RejectionReason } from "./errors.js";
+import { classifyDeniedCategory } from "./classify-denied-category.js";
 import { classifySensitivity } from "./policy.js";
 import { scanForSecrets } from "./secret-patterns.js";
 import type { CapturePolicyOptions } from "./types.js";
@@ -11,9 +12,9 @@ export function memoryTextEgressRejectionReason(
   if (trimmed.length === 0) {
     return null;
   }
-  const secretReason = scanForSecrets(trimmed, policy.customerIdentifierMatchers ?? []);
-  if (secretReason !== null) {
-    return secretReason;
+  const hardDenial = memoryTextSecretEgressRejectionReason(trimmed, policy);
+  if (hardDenial !== null) {
+    return hardDenial;
   }
   if (policy.defaultSensitivity === "restricted") {
     return "restricted-sensitivity";
@@ -30,5 +31,9 @@ export function memoryTextSecretEgressRejectionReason(
   if (trimmed.length === 0) {
     return null;
   }
-  return scanForSecrets(trimmed, policy.customerIdentifierMatchers ?? []);
+  const secretReason = scanForSecrets(trimmed, policy.customerIdentifierMatchers ?? []);
+  if (secretReason !== null) {
+    return secretReason;
+  }
+  return classifyDeniedCategory(trimmed, policy.deniedCategoryMatchers ?? []);
 }

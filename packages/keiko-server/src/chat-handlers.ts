@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   isDiscussionMode,
+  isCodingWorkbenchMode,
   stripUnsafeFormatChars,
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
@@ -90,7 +91,7 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { captureSalientFromTurn } from "./memory-salience.js";
+import { scheduleMemorySalienceCapture } from "./memory-salience.js";
 import {
   assertUsableAssistantContent,
   isLegacyEmptyAssistantPlaceholder,
@@ -123,9 +124,7 @@ const CHAT_SIDEBAR_LIST_LIMIT = 100;
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
-const MAX_PENDING_SALIENCE_CAPTURES = 32;
 const MAX_PENDING_COMPACTION_SUMMARIES = 4;
-let pendingSalienceCaptures = 0;
 let pendingCompactionSummaries = 0;
 
 class BodyTooLargeError extends Error {
@@ -394,6 +393,15 @@ function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult |
   };
 }
 
+function parseMemoryMode(
+  raw: Record<string, unknown>,
+): ConversationMemoryRequestWire["mode"] | RouteResult {
+  if (raw.mode === undefined) return undefined;
+  return isCodingWorkbenchMode(raw.mode)
+    ? raw.mode
+    : { status: 400, body: errorBody("BAD_REQUEST", "memory.mode must be a valid autonomy mode.") };
+}
+
 export function parseMemoryRequest(
   value: unknown,
 ): ParsedConversationMemoryRequest | RouteResult | undefined {
@@ -407,9 +415,12 @@ export function parseMemoryRequest(
   if (isRouteResult(enabled)) return enabled;
   const budgetTokens = parseMemoryBudget(value);
   if (isRouteResult(budgetTokens)) return budgetTokens;
+  const mode = parseMemoryMode(value);
+  if (isRouteResult(mode)) return mode;
   return {
     enabled,
     ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+    ...(mode !== undefined ? { mode } : {}),
     context,
   };
 }
@@ -916,48 +927,6 @@ async function captureMemoryActions(
     if (action !== null) actions.push(action);
   }
   return actions;
-}
-
-function logSalienceCaptureFailure(surface: string, error: unknown, deps: UiHandlerDeps): void {
-  const raw = error instanceof Error ? error.message : String(error);
-  // eslint-disable-next-line no-console
-  console.error(`${surface} salience capture failed`, redact(raw, currentRedactionSecrets(deps)));
-}
-
-function logSalienceCaptureDropped(surface: string): void {
-  // eslint-disable-next-line no-console
-  console.error(
-    `${surface} salience capture skipped: background queue full (${String(
-      pendingSalienceCaptures,
-    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
-  );
-}
-
-function scheduleMemorySalienceCapture(
-  deps: UiHandlerDeps,
-  request: { readonly content: string; readonly memory: { readonly enabled: boolean } | undefined },
-  context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
-  assistantText: string,
-  surface: string,
-): void {
-  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
-    return;
-  }
-  if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
-    logSalienceCaptureDropped(surface);
-    return;
-  }
-  pendingSalienceCaptures += 1;
-  setImmediate(() => {
-    void captureSalientFromTurn(deps, request, context, modelId, assistantText)
-      .catch((error: unknown) => {
-        logSalienceCaptureFailure(surface, error, deps);
-      })
-      .finally(() => {
-        pendingSalienceCaptures -= 1;
-      });
-  });
 }
 
 // Returns deterministic local/regex captures immediately and schedules model-assisted salience
