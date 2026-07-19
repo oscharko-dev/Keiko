@@ -286,11 +286,18 @@ export const MEMORY_UPDATE_FIELDS: readonly MemoryUpdateField[] = [
 // (encoded as the stable `memory-center` literal) from an automated consolidation pass without
 // re-deriving from the action kind.
 export type MemoryAuditInitiatorSurface =
-  "memory-center" | "conversation-center" | "workflow" | "consolidation" | "retention" | "system";
+  | "memory-center"
+  | "conversation-center"
+  | "voice"
+  | "workflow"
+  | "consolidation"
+  | "retention"
+  | "system";
 
 export const MEMORY_AUDIT_INITIATOR_SURFACES: readonly MemoryAuditInitiatorSurface[] = [
   "memory-center",
   "conversation-center",
+  "voice",
   "workflow",
   "consolidation",
   "retention",

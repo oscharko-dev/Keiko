@@ -38,6 +38,7 @@ import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
+import type { CodingWorkbenchMode } from "./coding-workbench.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -339,7 +340,18 @@ export interface ConversationMemoryScopeContextWire {
 export interface ConversationMemoryRequestWire {
   readonly enabled?: boolean | undefined;
   readonly budgetTokens?: number | undefined;
+  readonly mode?: CodingWorkbenchMode | undefined;
   readonly context: ConversationMemoryScopeContextWire;
+}
+
+export interface MemoryAutonomyPolicyWire {
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+}
+
+export interface UpdateMemoryAutonomyPolicyWire {
+  readonly requestedMode: CodingWorkbenchMode;
 }
 
 export interface ConversationMemoryContextEntryWire {

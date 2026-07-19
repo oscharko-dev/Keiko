@@ -375,6 +375,28 @@ describe("extractSalientMemories", () => {
     expect(result).toEqual([]);
   });
 
+  it("drops a model candidate that matches a configured denied category", async () => {
+    const model = JSON.stringify([
+      {
+        body: "The user's medical record changed.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "user",
+        source: "user",
+        tags: [],
+      },
+    ]);
+    const result = await extractSalientMemories(
+      input({
+        policy: {
+          deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
+        },
+      }),
+      deps(model),
+    );
+    expect(result).toEqual([]);
+  });
+
   it("strips markdown code fences before parsing", async () => {
     const fenced = "```json\n" + ATLAS_FACTS + "\n```";
     const result = await extractSalientMemories(input(), deps(fenced));

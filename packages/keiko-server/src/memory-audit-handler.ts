@@ -67,7 +67,7 @@ export type MemoryAuditHandler = (event: MemoryEvent) => void;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const RUNID_PREFIX = "memory-audit-";
+export const RUNID_PREFIX = "memory-audit-";
 const AUDIT_HASH_CHAIN_VERSION = "sha256-v1";
 const AUDIT_HASH_GENESIS = "0".repeat(64);
 

@@ -235,10 +235,11 @@ describe("frozen-constant arrays", () => {
     ]);
   });
 
-  it("MEMORY_AUDIT_INITIATOR_SURFACES enumerates the six initiator surfaces", () => {
+  it("MEMORY_AUDIT_INITIATOR_SURFACES enumerates the seven initiator surfaces", () => {
     expect(MEMORY_AUDIT_INITIATOR_SURFACES).toEqual([
       "memory-center",
       "conversation-center",
+      "voice",
       "workflow",
       "consolidation",
       "retention",

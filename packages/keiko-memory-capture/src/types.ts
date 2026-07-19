@@ -53,8 +53,20 @@ export interface CaptureContext {
 // route that owns the resolver may resolve the lookup synchronously from a pre-loaded scope view.
 export type CaptureMemoryResolver = (target: string, scope: MemoryScope) => readonly MemoryId[];
 
+// A deployment-defined, named content class that must never become a memory. Category names and
+// matched substrings stay inside the policy boundary; callers receive only `denied-category`.
+// Matchers follow the same ReDoS-safety responsibility as customerIdentifierMatchers below.
+interface DeniedCategoryMatcher {
+  readonly category: string;
+  readonly matchers: readonly RegExp[];
+}
+
 // Caller policy knobs. All optional with conservative defaults; the type pins the shape.
 export interface CapturePolicyOptions {
+  // Mode-independent hard denials layered after the fixed secret scanner and before sensitivity.
+  // Each entry is named for deployment governance, but neither the name nor matched content is
+  // emitted from the rejection path.
+  readonly deniedCategoryMatchers?: readonly DeniedCategoryMatcher[];
   // Additional rejection patterns the deployment knows about (e.g. customer names that must never
   // be memorised). Each matcher is a RegExp — the caller is responsible for ReDoS safety per the
   // security package conventions. Matched candidates reject with `customer-identifier`.

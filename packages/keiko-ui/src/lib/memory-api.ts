@@ -5,10 +5,12 @@
 
 import { bffFetchJson } from "./http";
 import type {
+  CodingWorkbenchMode,
   MemoryId,
   MemoryRecord,
   MemoryScope,
   MemoryScopeKind,
+  MemorySourceKind,
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
@@ -28,6 +30,7 @@ import type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
   MemoryHealthScanResultWire,
+  MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -97,6 +100,37 @@ export interface MemoryListFilters {
   readonly sensitivity?: readonly MemorySensitivity[];
   readonly limit?: number;
   readonly offset?: number;
+}
+
+export type MemoryRecentCaptureOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
+
+export interface MemoryRecentCapture {
+  readonly eventId: string;
+  readonly outcome: MemoryRecentCaptureOutcome;
+  readonly scope: MemoryScope;
+  readonly mode?: CodingWorkbenchMode;
+  readonly provenance: {
+    readonly initiatorSurface: string;
+    readonly sourceKind: MemorySourceKind;
+  };
+  readonly occurredAt: number;
+  readonly reason: string;
+  readonly memoryId?: MemoryId;
+  readonly bodyExcerpt?: string;
+}
+
+export interface MemoryRecentCapturesResponse {
+  readonly captures: readonly MemoryRecentCapture[];
+  readonly total: number;
+  readonly limit: number;
+  readonly since: number;
+  readonly order: "asc" | "desc";
+}
+
+export interface MemoryRecentCaptureFilters {
+  readonly since?: number;
+  readonly scope?: readonly MemoryScopeKind[];
+  readonly limit?: number;
 }
 
 export interface StartMemoryConsolidationInput {
@@ -187,10 +221,41 @@ export async function fetchMemories(
   return fetchImpl(`/api/memory${qs.length > 0 ? `?${qs}` : ""}` as string);
 }
 
+export async function fetchRecentCaptures(
+  filters: MemoryRecentCaptureFilters = {},
+  fetchImpl = fetchJson<MemoryRecentCapturesResponse>,
+): Promise<MemoryRecentCapturesResponse> {
+  const params = new URLSearchParams({
+    since: String(filters.since ?? 0),
+    order: "desc",
+  });
+  if (filters.scope !== undefined && filters.scope.length > 0) {
+    params.set("scope", filters.scope.join(","));
+  }
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+  return fetchImpl(`/api/memory?${params.toString()}`);
+}
+
 export async function fetchMemoryReviewQueue(
   fetchImpl = fetchJson<MemoryReviewQueueResponse>,
 ): Promise<MemoryReviewQueueResponse> {
   return fetchImpl("/api/memory/review-queue");
+}
+
+export async function loadMemoryAutonomyMode(
+  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
+): Promise<MemoryAutonomyPolicyWire> {
+  return fetchImpl("/api/memory/autonomy-policy");
+}
+
+export async function persistMemoryAutonomyMode(
+  requestedMode: CodingWorkbenchMode,
+  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
+): Promise<MemoryAutonomyPolicyWire> {
+  return fetchImpl("/api/memory/autonomy-policy", {
+    method: "PUT",
+    body: JSON.stringify({ requestedMode }),
+  });
 }
 
 // ---------------------------------------------------------------------------
