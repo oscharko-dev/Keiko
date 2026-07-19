@@ -538,6 +538,7 @@ describe("managed LSP same-origin control routes", () => {
       processEnv: {},
       provisioning: () => true,
       disposePoolEntry: () => Promise.resolve(),
+      workspaceTrust: () => "trusted",
       runtimeApproved: () => true,
       configurationSafe: () => true,
       projectEvidence: () => "projected",

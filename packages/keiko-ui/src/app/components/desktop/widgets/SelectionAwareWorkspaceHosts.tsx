@@ -363,6 +363,9 @@ export function EditorWindowSessionHost({
     onOpenProblems: (projectPath) => {
       ctx.openWindow("problems", { projectPath });
     },
+    onOpenWorkspaceTrust: () => {
+      ctx.openWindow("workspaceTrust");
+    },
     onOpenDebugPanel: () => {
       if (root !== undefined) {
         ctx.openWindow("debug", {

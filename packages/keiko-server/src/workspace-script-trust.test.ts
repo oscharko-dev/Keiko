@@ -115,6 +115,29 @@ describe("WorkspaceScriptTrustService", () => {
     ).toBe("approval-required");
   });
 
+  it("projects server-owned status and preserves an honest digest-invalidation reason", () => {
+    const trust = createWorkspaceScriptTrustService({ store });
+    expect(trust.status(root)).toMatchObject({
+      projectId: root,
+      trust: "restricted",
+      decidedBy: "server",
+      reason: "state-unavailable",
+      revision: null,
+    });
+    trust.grant(root);
+    expect(trust.status(root)).toMatchObject({
+      trust: "trusted",
+      reason: "human-grant",
+      revision: 0,
+    });
+    writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+    expect(trust.status(root)).toMatchObject({
+      trust: "restricted",
+      reason: "trust-basis-changed",
+      revision: 1,
+    });
+  });
+
   it("drives command and verification catalogs from the same trust source", async () => {
     const trust = createWorkspaceScriptTrustService({ store });
     const evidenceStore = createInMemoryEvidenceStore();

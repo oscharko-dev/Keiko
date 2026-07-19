@@ -161,6 +161,14 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user",
     persistence: "durable.config",
   },
+  // Issue #2523 — read-only server trust projection plus explicit local-human grant/revoke
+  // requests. The canonical record and every digest remain in the BFF/store boundary.
+  workspaceTrust: {
+    lifecycle: ["viewing", "blocked", "saved", "error"],
+    trustBoundary: ["ui", "fs", "tool"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
   // Issue #1696 — browser surface for governed package update readiness and user-confirmed
   // update/remediation actions. Runtime session state lives in the BFF/local update state.
   updates: {

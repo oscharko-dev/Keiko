@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+  type WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_PALETTE_COMMANDS,
   availablePaletteCommands,
@@ -8,6 +12,18 @@ import {
   type EditorPaletteCommand,
   type EditorPaletteHost,
 } from "./editorCommands";
+
+function trustStatus(trust: "trusted" | "restricted"): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId: "/repo",
+    trust,
+    decidedBy: "server",
+    reason: trust === "trusted" ? "human-grant" : "state-unavailable",
+    revision: trust === "trusted" ? 1 : null,
+  };
+}
 
 function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost {
   return {
@@ -22,6 +38,7 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",
+      workspaceTrust: trustStatus("trusted"),
       kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
         kind: kind as "test" | "targeted-test" | "typecheck" | "lint" | "build",
         available: true,
@@ -169,6 +186,7 @@ describe("run affordances (Issue #2212, ADR-0126)", () => {
       verificationCatalog: {
         schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
         projectId: "/repo",
+        workspaceTrust: trustStatus("restricted"),
         kinds: [
           { kind: "targeted-test", available: true, trustState: "trusted" },
           { kind: "typecheck", available: true, trustState: "approval-required" },

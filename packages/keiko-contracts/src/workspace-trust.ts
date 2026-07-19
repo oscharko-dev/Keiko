@@ -77,6 +77,19 @@ export interface WorkspaceTrustRecord {
 export type WorkspaceTrustAssessment = WorkspaceFact<WorkspaceTrustRecord>;
 export type WorkspaceTrustOperationClass = "read" | "mutate" | "execute";
 
+// Redacted browser projection for one registered root. The server echoes only the user-selected
+// project id plus closed trust metadata; canonical root identities, manifest digests, and trust-basis
+// digests stay server-side. `revision: null` means no validated durable record is available.
+export interface WorkspaceTrustStatus {
+  readonly kind: "workspace-trust-status";
+  readonly schemaVersion: typeof WORKSPACE_TRUST_SCHEMA_VERSION;
+  readonly projectId: string;
+  readonly trust: WorkspaceTrustLevel;
+  readonly decidedBy: "server";
+  readonly reason: WorkspaceTrustReason;
+  readonly revision: number | null;
+}
+
 const BINDING_KEYS = [
   "manifestRef",
   "manifestRevision",
@@ -95,7 +108,17 @@ const RECORD_KEYS = [
   "revision",
   "policyVersion",
 ] as const;
+const STATUS_KEYS = [
+  "kind",
+  "schemaVersion",
+  "projectId",
+  "trust",
+  "decidedBy",
+  "reason",
+  "revision",
+] as const;
 const POLICY_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
+const PROJECT_ID_MAX_CHARS = 4_096;
 
 function isRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
@@ -170,6 +193,38 @@ export function validateWorkspaceTrustRecord(value: unknown): WorkspaceContractV
       : workspaceContractInvalid("workspace trust record invalid");
   } catch {
     return workspaceContractInvalid("workspace trust record invalid");
+  }
+}
+
+function isWorkspaceTrustStatusValue(value: unknown): value is WorkspaceTrustStatus {
+  if (!isWorkspaceRecord(value) || !hasOnlyWorkspaceKeys(value, STATUS_KEYS)) return false;
+  const projectIdValid =
+    typeof value.projectId === "string" &&
+    value.projectId.length > 0 &&
+    value.projectId.length <= PROJECT_ID_MAX_CHARS &&
+    !value.projectId.includes("\u0000");
+  const fieldsValid = [
+    value.kind === "workspace-trust-status",
+    value.schemaVersion === WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectIdValid,
+    isWorkspaceTrustLevel(value.trust),
+    value.decidedBy === "server",
+    isWorkspaceTrustReason(value.reason),
+    value.revision === null || isRevision(value.revision),
+  ].every(Boolean);
+  return (
+    fieldsValid &&
+    isWorkspaceTrustLevel(value.trust) &&
+    isWorkspaceTrustReason(value.reason) &&
+    trustReasonMatchesLevel(value.trust, value.reason)
+  );
+}
+
+export function isWorkspaceTrustStatus(value: unknown): value is WorkspaceTrustStatus {
+  try {
+    return isWorkspaceTrustStatusValue(value);
+  } catch {
+    return false;
   }
 }
 

@@ -27,6 +27,7 @@ import type {
   WorkspaceTrustLevel,
   WorkspaceTrustReason,
   WorkspaceTrustRecord,
+  WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import {
   detectWorkspaceAt,
@@ -76,6 +77,7 @@ export interface WorkspaceScriptTrustSnapshot {
 export interface WorkspaceScriptTrustService {
   readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
 }
@@ -328,6 +330,24 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     return { trusted: false };
   };
 
+  public readonly status = (projectId: string): WorkspaceTrustStatus => {
+    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const workspace = workspaceInfoForRoot(canonicalRoot);
+    const trusted = this.isTrusted(projectId, workspace);
+    const binding = deriveWorkspaceTrustBinding(
+      canonicalRoot,
+      resolveTrustBasisFact(this.fs, canonicalRoot),
+    );
+    const assessment = readAssessment(this.store, binding.rootRef);
+    if (assessment.outcome === "known" && assessment.value.trust === "restricted") {
+      return statusProjection(projectId, assessment.value);
+    }
+    if (trusted && assessment.outcome === "known") {
+      return statusProjection(projectId, assessment.value);
+    }
+    return unavailableStatus(projectId);
+  };
+
   public readonly isTrusted = (projectId: string, workspace: WorkspaceInfo): boolean => {
     try {
       const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
@@ -364,6 +384,30 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     } catch {
       return "restricted";
     }
+  };
+}
+
+function statusProjection(projectId: string, record: WorkspaceTrustRecord): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId,
+    trust: record.trust,
+    decidedBy: "server",
+    reason: record.reason,
+    revision: record.revision,
+  };
+}
+
+function unavailableStatus(projectId: string): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId,
+    trust: "restricted",
+    decidedBy: "server",
+    reason: "state-unavailable",
+    revision: null,
   };
 }
 

@@ -3909,6 +3909,7 @@ export type {
   WorkspaceTrustRecord,
   WorkspaceTrustAssessment,
   WorkspaceTrustOperationClass,
+  WorkspaceTrustStatus,
 } from "./workspace-trust.js";
 export {
   WORKSPACE_TRUST_SCHEMA_VERSION,
@@ -3916,6 +3917,7 @@ export {
   WORKSPACE_TRUST_REASONS,
   validateWorkspaceTrustBinding,
   validateWorkspaceTrustRecord,
+  isWorkspaceTrustStatus,
   isWorkspaceRestrictedModeActive,
   projectCommandTaskTrustState,
   workspaceTrustPolicyEffect,

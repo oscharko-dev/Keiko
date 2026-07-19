@@ -32,6 +32,7 @@ export const QUICK_ACCESS_TOOL_TYPES: readonly WindowType[] = [
   "chatHistory",
   "memoria",
   "settings",
+  "workspaceTrust",
   "automations",
   "mobile",
   "inspector",

@@ -13,6 +13,7 @@ import {
   isWorkspaceTrustBasisDigest,
 } from "./workspace-contract-primitives.js";
 import {
+  isWorkspaceTrustStatus,
   isWorkspaceRestrictedModeActive,
   projectCommandTaskTrustState,
   strictestWorkspaceTrustPolicyEffect,
@@ -26,6 +27,7 @@ import type {
   WorkspaceTrustAssessment,
   WorkspaceTrustBinding,
   WorkspaceTrustRecord,
+  WorkspaceTrustStatus,
 } from "./workspace-trust.js";
 
 function checked<Value>(value: string, guard: (input: unknown) => input is Value): Value {
@@ -70,6 +72,18 @@ function trustedRecord(): WorkspaceTrustRecord {
 
 function trustedAssessment(): WorkspaceTrustAssessment {
   return { outcome: "known", value: trustedRecord() };
+}
+
+function trustedStatus(): WorkspaceTrustStatus {
+  return {
+    kind: "workspace-trust-status",
+    schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+    projectId: "/registered/workspace",
+    trust: "trusted",
+    decidedBy: "server",
+    reason: "human-grant",
+    revision: 3,
+  };
 }
 
 describe("canonical workspace trust", () => {
@@ -196,5 +210,23 @@ describe("canonical workspace trust", () => {
     });
     expect(() => validateWorkspaceTrustRecord(hostile)).not.toThrow();
     expect(validateWorkspaceTrustRecord(hostile).ok).toBe(false);
+  });
+
+  it("accepts only exact, server-owned redacted browser status", () => {
+    expect(isWorkspaceTrustStatus(trustedStatus())).toBe(true);
+    expect(isWorkspaceTrustStatus({ ...trustedStatus(), decidedBy: "browser" })).toBe(false);
+    expect(
+      isWorkspaceTrustStatus({ ...trustedStatus(), trust: "restricted", reason: "human-grant" }),
+    ).toBe(false);
+    expect(isWorkspaceTrustStatus({ ...trustedStatus(), manifestDigest: "secret" })).toBe(false);
+    expect(isWorkspaceTrustStatus({ ...trustedStatus(), projectId: "bad\u0000root" })).toBe(false);
+    expect(
+      isWorkspaceTrustStatus({
+        ...trustedStatus(),
+        trust: "restricted",
+        reason: "manifest-changed",
+        revision: 4,
+      }),
+    ).toBe(true);
   });
 });

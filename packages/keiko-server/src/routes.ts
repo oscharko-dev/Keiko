@@ -127,6 +127,7 @@ import {
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGetWorkspaceScriptTrust,
   handleGrantWorkspaceScriptTrust,
   handleRevokeWorkspaceScriptTrust,
   handleVerificationCatalog,
@@ -434,6 +435,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
     handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/trust",
+    handler: handleGetWorkspaceScriptTrust,
   },
   {
     method: "POST",

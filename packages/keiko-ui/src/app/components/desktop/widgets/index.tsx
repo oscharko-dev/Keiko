@@ -129,6 +129,10 @@ const CodingWorkbenchWindow = dynamic(
   () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
   { ssr: false, loading: windowChunkFallback },
 );
+const WorkspaceTrustPanel = dynamic(
+  () => import("../workspace-trust/WorkspaceTrustPanel").then((mod) => mod.WorkspaceTrustPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
 const GitClientWindow = dynamic(
   () => import("./cards/git-client/GitClientWindow").then((mod) => mod.GitClientWindow),
   { ssr: false, loading: windowChunkFallback },
@@ -322,11 +326,13 @@ function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }
     <SettingsPanel
       root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
       openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })}
+      openWorkspaceTrust={() => ctx.openWindow("workspaceTrust")}
     />
   );
 }
 
 registerWindowRender("settings", (_cfg, ctx) => <SettingsPanelSessionHost ctx={ctx} />);
+registerWindowRender("workspaceTrust", () => <WorkspaceTrustPanel />);
 registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 // Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel; jump-to-line via ctx.openEditorFile.
@@ -482,7 +488,11 @@ registerWindowRender("terminal", (cfg, ctx) => {
 });
 registerWindowRender("commands", (cfg, ctx) => {
   const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
-  const props: { projectPath?: string } = {};
+  const props: { projectPath?: string; onOpenWorkspaceTrust: () => void } = {
+    onOpenWorkspaceTrust: () => {
+      ctx.openWindow("workspaceTrust");
+    },
+  };
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <CommandsWidget {...props} />;
 });

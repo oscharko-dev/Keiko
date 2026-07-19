@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
   type EditorVerificationCatalog,
   type EditorVerificationEvent,
   type EditorVerificationRun,
@@ -20,12 +21,15 @@ import type { UiHandlerDeps } from "../deps.js";
 import {
   handleCreateVerificationRun,
   handleDeleteVerificationRun,
+  handleGetWorkspaceScriptTrust,
   handleGrantWorkspaceScriptTrust,
+  handleRevokeWorkspaceScriptTrust,
   handleVerificationCatalog,
   openVerificationSseStream,
 } from "./verificationRoutes.js";
 import type {
   VerificationRunInput,
+  EditorVerificationCatalogDiscovery,
   VerificationRunnerEventEmitter,
   VerificationRunnerManager,
 } from "./verificationRunner.js";
@@ -37,7 +41,7 @@ class FakeManager implements VerificationRunnerManager {
   public abortReturns = true;
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
-  public readonly discover = (projectId: string): EditorVerificationCatalog => ({
+  public readonly discover = (projectId: string): EditorVerificationCatalogDiscovery => ({
     schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
     projectId,
     kinds: [{ kind: "typecheck", available: true, trustState: "approval-required" }],
@@ -78,8 +82,23 @@ class FakeManager implements VerificationRunnerManager {
 function deps(manager?: VerificationRunnerManager): UiHandlerDeps {
   return {
     verificationRunner: manager,
+    workspaceScriptTrust: {
+      grant: () => ({ trusted: true }),
+      revoke: () => ({ trusted: false }),
+      status: (projectId: string) => ({
+        kind: "workspace-trust-status",
+        schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+        projectId,
+        trust: "restricted",
+        decidedBy: "server",
+        reason: "state-unavailable",
+        revision: null,
+      }),
+      isTrusted: () => false,
+      trustLevelForRoot: () => "restricted",
+    },
     redactor: (value: string): string => value,
-  } as UiHandlerDeps;
+  } as unknown as UiHandlerDeps;
 }
 
 function fakeReq(body?: string): IncomingMessage {
@@ -223,7 +242,52 @@ describe("workspace script trust routes", () => {
         ctx({ body: JSON.stringify({ projectId: root }) }),
         routeDeps,
       );
-      expect(granted).toMatchObject({ status: 200, body: { trusted: true } });
+      expect(granted).toMatchObject({ status: 200, body: { trust: "trusted" } });
+      const read = await handleGetWorkspaceScriptTrust(
+        ctx({
+          url: `http://127.0.0.1:1983/api/editor/verification/trust?projectId=${encodeURIComponent(root)}`,
+        }),
+        routeDeps,
+      );
+      expect(read).toMatchObject({
+        status: 200,
+        body: { projectId: root, trust: "trusted", decidedBy: "server" },
+      });
+      const revoked = await handleRevokeWorkspaceScriptTrust(
+        ctx({ body: JSON.stringify({ projectId: root }) }),
+        routeDeps,
+      );
+      expect(revoked).toMatchObject({
+        status: 200,
+        body: { projectId: root, trust: "restricted", reason: "human-revocation" },
+      });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects missing and unknown status roots without leaking server identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-trust-route-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture" }), "utf8");
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    const routeDeps = {
+      ...deps(new FakeManager()),
+      workspaceScriptTrust: createWorkspaceScriptTrustService({ store }),
+    };
+    try {
+      await expect(handleGetWorkspaceScriptTrust(ctx({}), routeDeps)).resolves.toMatchObject({
+        status: 400,
+      });
+      const unknown = await handleGetWorkspaceScriptTrust(
+        ctx({
+          url: `http://127.0.0.1:1983/api/editor/verification/trust?projectId=${encodeURIComponent(join(root, "unknown"))}`,
+        }),
+        routeDeps,
+      );
+      expect(unknown.status).toBe(404);
+      expect(JSON.stringify(unknown.body)).not.toContain(root);
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });

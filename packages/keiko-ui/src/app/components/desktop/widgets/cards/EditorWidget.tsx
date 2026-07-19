@@ -57,6 +57,12 @@ import { type EditorPaletteHost } from "./editorCommands";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import { useEditorSettings } from "./useEditorSettings";
 import {
+  WorkspaceTrustBanner,
+  WorkspaceTrustDecisionDialog,
+  type WorkspaceTrustDecision,
+} from "../../workspace-trust/WorkspaceTrustSurfaces";
+import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
+import {
   bindingFromKeyboardEvent,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
@@ -111,6 +117,7 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
+  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -381,6 +388,7 @@ export function EditorWidget({
   layoutJson,
   onWorkspaceChange,
   onOpenProblems,
+  onOpenWorkspaceTrust,
   onOpenDebugPanel,
   windowId,
   ...props
@@ -423,6 +431,13 @@ export function EditorWidget({
   layoutRef.current = layout;
   const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
+  const [trustDecision, setTrustDecision] = useState<{
+    readonly action: WorkspaceTrustDecision;
+    readonly initialPrompt: boolean;
+  } | null>(null);
+  const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
+  const [trustMutationPending, setTrustMutationPending] = useState(false);
+  const promptedTrustRootRef = useRef<string | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
   // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
@@ -1353,6 +1368,37 @@ export function EditorWidget({
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
 
+  useEffect(() => {
+    const status = verification.catalog?.workspaceTrust;
+    if (
+      workspaceRoot.length > 0 &&
+      status?.trust === "restricted" &&
+      promptedTrustRootRef.current !== workspaceRoot
+    ) {
+      promptedTrustRootRef.current = workspaceRoot;
+      setTrustDecision({ action: "grant", initialPrompt: true });
+    }
+  }, [verification.catalog?.workspaceTrust, workspaceRoot]);
+
+  const confirmTrustDecision = useCallback(async (): Promise<boolean> => {
+    if (trustDecision === null || trustMutationPending) return false;
+    setTrustMutationPending(true);
+    try {
+      const confirmed = await (trustDecision.action === "grant"
+        ? verification.trustWorkspaceScripts()
+        : verification.revokeWorkspaceScriptTrust());
+      if (confirmed) {
+        setTrustDecision(null);
+        setTrustMutationIssue(undefined);
+      } else {
+        setTrustMutationIssue("update");
+      }
+      return confirmed;
+    } finally {
+      setTrustMutationPending(false);
+    }
+  }, [trustDecision, trustMutationPending, verification]);
+
   // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
   // palette does not receive a new object on unrelated editor chrome renders.
   const commandHost: EditorPaletteHost = useMemo(
@@ -1376,8 +1422,9 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: verification.trustWorkspaceScripts,
-      revokeWorkspaceScriptTrust: verification.revokeWorkspaceScriptTrust,
+      trustWorkspaceScripts: () => setTrustDecision({ action: "grant", initialPrompt: false }),
+      revokeWorkspaceScriptTrust: () =>
+        setTrustDecision({ action: "revoke", initialPrompt: false }),
       openProblems: () => onOpenProblems?.(workspaceRoot),
       openDebugPanel: () => onOpenDebugPanel?.(),
     }),
@@ -1396,10 +1443,8 @@ export function EditorWidget({
       splitActivePane,
       verification.cancelVerification,
       verification.catalog,
-      verification.revokeWorkspaceScriptTrust,
       verification.runFileTests,
       verification.runWorkspaceVerification,
-      verification.trustWorkspaceScripts,
       verification.verifiableTarget,
       verification.verificationRunning,
       workspaceRoot,
@@ -1724,8 +1769,19 @@ export function EditorWidget({
           />
         </>
       )}
-      <div className="ed-main">
-        <div className={`ed-panes ed-panes-root${singlePane ? " single" : ""}`}>
+      <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
+        <WorkspaceTrustBanner
+          status={verification.catalog?.workspaceTrust}
+          issue={trustMutationIssue ?? (verification.catalog === null ? "load" : undefined)}
+          surface="editor"
+          onManage={onOpenWorkspaceTrust}
+          editor
+        />
+        <div
+          className={`ed-panes ed-panes-root ${trustStyles.cmpEditorPanes}${
+            singlePane ? " single" : ""
+          }`}
+        >
           {renderNode(layout.tree)}
         </div>
       </div>
@@ -1755,6 +1811,15 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
+        />
+      ) : null}
+      {trustDecision !== null && pendingClose === null ? (
+        <WorkspaceTrustDecisionDialog
+          action={trustDecision.action}
+          initialPrompt={trustDecision.initialPrompt}
+          mutating={trustMutationPending}
+          onCancel={() => setTrustDecision(null)}
+          onConfirm={confirmTrustDecision}
         />
       ) : null}
     </div>

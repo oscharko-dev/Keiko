@@ -27,9 +27,12 @@ import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 import styles from "./TerminalWidget.module.css";
+import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
+import { WorkspaceTrustBanner } from "../../workspace-trust/WorkspaceTrustSurfaces";
 
 interface CommandsWidgetProps {
   readonly projectPath?: string;
+  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
 }
 
 interface ErrorState {
@@ -182,6 +185,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const [result, setResult] = useState<CommandTaskRunResult | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [events, setEvents] = useState<readonly CommandRunnerEvent[]>([]);
+  const trust = useWorkspaceTrust(projectInput.length > 0 ? projectInput : undefined);
   const runningRef = useRef(false);
   const pendingRequestIdRef = useRef<string | null>(null);
   const runBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -214,7 +218,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
     return (): void => {
       cancelled = true;
     };
-  }, [projectInput, t]);
+  }, [projectInput, t, trust.status?.revision, trust.status?.trust]);
 
   // Subscribe to the global command event channel. Cancel is only armed for the run that echoes the
   // current requestId, so a foreign run-started on the shared channel can never hijack ownership.
@@ -287,6 +291,14 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
 
   return (
     <div className={`terminal commands ${styles.lazyWidgetScope}`}>
+      {projectInput.length > 0 ? (
+        <WorkspaceTrustBanner
+          status={trust.status}
+          issue={trust.issue}
+          surface="commands"
+          onManage={props.onOpenWorkspaceTrust}
+        />
+      ) : null}
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
         <label className="tm-field">
           <span>{t("commandsWidget.field.projectPath")}</span>

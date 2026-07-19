@@ -8,7 +8,10 @@ import {
 } from "./quickAccessRegistry";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
-import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  WORKSPACE_TRUST_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 
 function appCommand(id: string): Command {
   return {
@@ -33,6 +36,15 @@ function host(): EditorPaletteHost {
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",
+      workspaceTrust: {
+        kind: "workspace-trust-status",
+        schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+        projectId: "/repo",
+        trust: "trusted",
+        decidedBy: "server",
+        reason: "human-grant",
+        revision: 1,
+      },
       kinds: [{ kind: "targeted-test", available: true, trustState: "trusted" }],
     },
     splitActive: vi.fn(),

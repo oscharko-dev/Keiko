@@ -32,6 +32,54 @@ export const EN_MESSAGES = {
   "editor.command.cancelVerification": "Cancel Verification",
   "editor.command.trustWorkspaceScripts": "Trust Workspace Scripts",
   "editor.command.revokeWorkspaceScriptTrust": "Revoke Workspace Script Trust",
+  "workspaceTrust.title": "Workspace Trust",
+  "workspaceTrust.restrictedMode": "Restricted Mode",
+  "workspaceTrust.trustedMode": "Trusted workspace",
+  "workspaceTrust.manage": "Manage Workspace Trust",
+  "workspaceTrust.loading": "Loading server-owned trust state…",
+  "workspaceTrust.retry": "Retry",
+  "workspaceTrust.loadFailed":
+    "Workspace Trust could not be read safely. This workspace remains restricted.",
+  "workspaceTrust.updateFailed":
+    "The server did not confirm the trust change. This workspace remains restricted.",
+  "workspaceTrust.banner.editor":
+    "Workspace scripts, language servers, and agent execution remain unavailable for this root.",
+  "workspaceTrust.banner.commands":
+    "Repository-authored commands remain disabled until this root is trusted.",
+  "workspaceTrust.banner.languages":
+    "Managed language servers remain disabled until this root is trusted.",
+  "workspaceTrust.reason.humanGrant": "Trust was granted explicitly for the current workspace.",
+  "workspaceTrust.reason.humanRevocation": "Trust was revoked explicitly for this workspace.",
+  "workspaceTrust.reason.identityChanged": "Trust expired because the workspace identity changed.",
+  "workspaceTrust.reason.manifestChanged": "Trust expired because the workspace manifest changed.",
+  "workspaceTrust.reason.trustBasisChanged":
+    "Trust expired because the workspace manifest changed.",
+  "workspaceTrust.reason.policy": "Deployment policy requires this workspace to stay restricted.",
+  "workspaceTrust.reason.stateUnavailable":
+    "No current server-validated trust grant is available for this workspace.",
+  "workspaceTrust.dialog.grantTitle": "Trust this workspace?",
+  "workspaceTrust.dialog.grantBody":
+    "Trusting allows workspace scripts, language servers, and agent execution for this root. Repository-authored code may run with the authority allowed by policy.",
+  "workspaceTrust.dialog.revokeTitle": "Revoke trust for this workspace?",
+  "workspaceTrust.dialog.revokeBody":
+    "Revoking trust stops or disables workspace scripts, language servers, and agent execution for this root.",
+  "workspaceTrust.dialog.serverConfirmed":
+    "Keiko changes capabilities only after the server confirms the decision.",
+  "workspaceTrust.dialog.stayRestricted": "Stay restricted",
+  "workspaceTrust.dialog.cancel": "Cancel",
+  "workspaceTrust.dialog.trust": "Trust workspace",
+  "workspaceTrust.dialog.revoke": "Revoke trust",
+  "workspaceTrust.dialog.waiting": "Waiting for server…",
+  "workspaceTrust.action.trust": "Trust",
+  "workspaceTrust.action.revoke": "Revoke",
+  "workspaceTrust.management.description":
+    "Review every registered root and make an explicit trust decision. Trust decisions are stored and enforced by the local server.",
+  "workspaceTrust.management.digestHelp":
+    "A grant is bound to the current workspace identity and manifest. Keiko returns to Restricted Mode when either changes.",
+  "workspaceTrust.management.empty": "No registered workspace roots are available.",
+  "workspaceTrust.settings.description":
+    "Review or revoke the execution trust assigned to registered workspace roots.",
+  "workspaceTrust.settings.open": "Open Workspace Trust",
   "rail.figma": "Figma Snapshot",
   "rail.lightMode": "Light mode",
   "rail.darkMode": "Dark mode",

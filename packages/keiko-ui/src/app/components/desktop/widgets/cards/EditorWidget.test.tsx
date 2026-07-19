@@ -4304,6 +4304,15 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
             Promise.resolve({
               schemaVersion: "1",
               projectId: "/repo",
+              workspaceTrust: {
+                kind: "workspace-trust-status",
+                schemaVersion: 1,
+                projectId: "/repo",
+                trust: "trusted",
+                decidedBy: "server",
+                reason: "human-grant",
+                revision: 1,
+              },
               kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
                 kind,
                 available: true,

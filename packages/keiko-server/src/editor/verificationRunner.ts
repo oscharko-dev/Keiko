@@ -78,6 +78,8 @@ export interface VerificationRunStart {
   readonly run: EditorVerificationRun;
 }
 
+export type EditorVerificationCatalogDiscovery = Omit<EditorVerificationCatalog, "workspaceTrust">;
+
 export type VerificationRunnerEventEmitter = (event: EditorVerificationEvent) => void;
 export type VerificationRunnerWorkspaceTrustDecider = (
   projectId: string,
@@ -88,7 +90,7 @@ export type VerificationExecutePort = (
 ) => Promise<ExecuteVerificationResult>;
 
 export interface VerificationRunnerManager {
-  readonly discover: (projectId: string) => EditorVerificationCatalog;
+  readonly discover: (projectId: string) => EditorVerificationCatalogDiscovery;
   readonly execute: (input: VerificationRunInput) => VerificationRunStart;
   // Issue #2214 — synchronous, single-shot run for the agent verification route. Reuses the SAME
   // workspace resolution, plan building (incl. the workspace-trust gate), and enforce-or-fail-closed
@@ -180,7 +182,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     return true;
   };
 
-  public readonly discover = (projectId: string): EditorVerificationCatalog => {
+  public readonly discover = (projectId: string): EditorVerificationCatalogDiscovery => {
     const workspace = this.resolveWorkspace(projectId);
     const catalog = detectScripts(workspace, this.fs);
     const trusted = this.trustedForScripts(projectId, workspace);

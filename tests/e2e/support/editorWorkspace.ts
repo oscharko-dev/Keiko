@@ -323,9 +323,20 @@ export async function seedEditorWindow(
 }
 
 /** Wait for the workspace and its tablist, then return the workspace locator. */
-export async function openEditorWorkspace(page: Page): Promise<Locator> {
+export async function openEditorWorkspace(
+  page: Page,
+  options: { readonly dismissTrustPrompt?: boolean } = {},
+): Promise<Locator> {
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
   await expect(workspace.locator(EDITOR_SELECTORS.tablist).first()).toBeVisible();
+  if (options.dismissTrustPrompt ?? true) {
+    const safeChoice = page.getByRole("button", { name: "Stay restricted" });
+    const promptAppeared = await safeChoice
+      .waitFor({ state: "visible", timeout: 1_500 })
+      .then(() => true)
+      .catch(() => false);
+    if (promptAppeared) await safeChoice.click();
+  }
   return workspace;
 }
 

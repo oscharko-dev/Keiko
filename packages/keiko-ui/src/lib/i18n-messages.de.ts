@@ -34,6 +34,59 @@ export const DE_MESSAGES = {
   "editor.command.cancelVerification": "Verifizierung abbrechen",
   "editor.command.trustWorkspaceScripts": "Arbeitsbereichsskripten vertrauen",
   "editor.command.revokeWorkspaceScriptTrust": "Vertrauen in Arbeitsbereichsskripte widerrufen",
+  "workspaceTrust.title": "Arbeitsbereichsvertrauen",
+  "workspaceTrust.restrictedMode": "Eingeschränkter Modus",
+  "workspaceTrust.trustedMode": "Vertrauenswürdiger Arbeitsbereich",
+  "workspaceTrust.manage": "Arbeitsbereichsvertrauen verwalten",
+  "workspaceTrust.loading": "Serverseitigen Vertrauensstatus laden…",
+  "workspaceTrust.retry": "Erneut versuchen",
+  "workspaceTrust.loadFailed":
+    "Das Arbeitsbereichsvertrauen konnte nicht sicher gelesen werden. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.updateFailed":
+    "Der Server hat die Vertrauensänderung nicht bestätigt. Dieser Arbeitsbereich bleibt eingeschränkt.",
+  "workspaceTrust.banner.editor":
+    "Arbeitsbereichsskripte, Sprachserver und Agentenausführung bleiben für diese Wurzel nicht verfügbar.",
+  "workspaceTrust.banner.commands":
+    "Vom Repository definierte Befehle bleiben deaktiviert, bis dieser Wurzel vertraut wird.",
+  "workspaceTrust.banner.languages":
+    "Verwaltete Sprachserver bleiben deaktiviert, bis dieser Wurzel vertraut wird.",
+  "workspaceTrust.reason.humanGrant":
+    "Das Vertrauen wurde ausdrücklich für den aktuellen Arbeitsbereich erteilt.",
+  "workspaceTrust.reason.humanRevocation":
+    "Das Vertrauen wurde ausdrücklich für diesen Arbeitsbereich widerrufen.",
+  "workspaceTrust.reason.identityChanged":
+    "Das Vertrauen ist abgelaufen, weil sich die Arbeitsbereichsidentität geändert hat.",
+  "workspaceTrust.reason.manifestChanged":
+    "Das Vertrauen ist abgelaufen, weil sich das Arbeitsbereichsmanifest geändert hat.",
+  "workspaceTrust.reason.trustBasisChanged":
+    "Das Vertrauen ist abgelaufen, weil sich das Arbeitsbereichsmanifest geändert hat.",
+  "workspaceTrust.reason.policy":
+    "Die Bereitstellungsrichtlinie verlangt, dass dieser Arbeitsbereich eingeschränkt bleibt.",
+  "workspaceTrust.reason.stateUnavailable":
+    "Für diesen Arbeitsbereich ist keine aktuelle servervalidierte Vertrauensfreigabe verfügbar.",
+  "workspaceTrust.dialog.grantTitle": "Diesem Arbeitsbereich vertrauen?",
+  "workspaceTrust.dialog.grantBody":
+    "Vertrauen erlaubt Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel. Vom Repository definierter Code kann mit der von der Richtlinie erlaubten Berechtigung ausgeführt werden.",
+  "workspaceTrust.dialog.revokeTitle": "Vertrauen für diesen Arbeitsbereich widerrufen?",
+  "workspaceTrust.dialog.revokeBody":
+    "Der Widerruf stoppt oder deaktiviert Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel.",
+  "workspaceTrust.dialog.serverConfirmed":
+    "Keiko ändert Funktionen erst, nachdem der Server die Entscheidung bestätigt hat.",
+  "workspaceTrust.dialog.stayRestricted": "Eingeschränkt bleiben",
+  "workspaceTrust.dialog.cancel": "Abbrechen",
+  "workspaceTrust.dialog.trust": "Arbeitsbereich vertrauen",
+  "workspaceTrust.dialog.revoke": "Vertrauen widerrufen",
+  "workspaceTrust.dialog.waiting": "Auf Server warten…",
+  "workspaceTrust.action.trust": "Vertrauen",
+  "workspaceTrust.action.revoke": "Widerrufen",
+  "workspaceTrust.management.description":
+    "Prüfen Sie jede registrierte Wurzel und treffen Sie eine ausdrückliche Vertrauensentscheidung. Vertrauensentscheidungen werden vom lokalen Server gespeichert und durchgesetzt.",
+  "workspaceTrust.management.digestHelp":
+    "Eine Freigabe ist an die aktuelle Arbeitsbereichsidentität und das Manifest gebunden. Keiko kehrt in den eingeschränkten Modus zurück, wenn sich eines davon ändert.",
+  "workspaceTrust.management.empty": "Keine registrierten Arbeitsbereichswurzeln verfügbar.",
+  "workspaceTrust.settings.description":
+    "Prüfen oder widerrufen Sie das Ausführungsvertrauen registrierter Arbeitsbereichswurzeln.",
+  "workspaceTrust.settings.open": "Arbeitsbereichsvertrauen öffnen",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",

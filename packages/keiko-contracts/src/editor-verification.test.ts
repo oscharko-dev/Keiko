@@ -15,6 +15,7 @@ import {
 } from "./editor-verification.js";
 import type { EditorVerificationCatalog, EditorVerificationEvent } from "./editor-verification.js";
 import type { VerificationReport, VerificationResult } from "./verification.js";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "./workspace-trust.js";
 
 const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
 
@@ -364,6 +365,15 @@ describe("isEditorVerificationCatalog", () => {
     return {
       schemaVersion: V,
       projectId: "proj-1",
+      workspaceTrust: {
+        kind: "workspace-trust-status",
+        schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+        projectId: "proj-1",
+        trust: "restricted",
+        decidedBy: "server",
+        reason: "state-unavailable",
+        revision: null,
+      },
       kinds: EDITOR_VERIFICATION_KINDS.map((kind) => ({
         kind,
         available: kind === "test",

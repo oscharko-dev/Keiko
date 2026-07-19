@@ -31,6 +31,29 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
+vi.mock("../../workspace-trust/useWorkspaceTrust", () => ({
+  useWorkspaceTrust: (projectId: string | undefined) => ({
+    status:
+      projectId === undefined
+        ? undefined
+        : {
+            kind: "workspace-trust-status",
+            schemaVersion: 1,
+            projectId,
+            trust: "trusted",
+            decidedBy: "server",
+            reason: "human-grant",
+            revision: 1,
+          },
+    loading: false,
+    mutating: false,
+    issue: undefined,
+    refresh: async () => undefined,
+    grant: async () => true,
+    revoke: async () => true,
+  }),
+}));
+
 function status(
   state: ManagedLspEffectiveState,
   reasonCode: ManagedLspActivationReasonCode,

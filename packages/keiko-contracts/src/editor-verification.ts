@@ -18,6 +18,7 @@ import {
   type VerificationReport,
   type VerificationStatus,
 } from "./verification.js";
+import { isWorkspaceTrustStatus, type WorkspaceTrustStatus } from "./workspace-trust.js";
 
 export const EDITOR_VERIFICATION_SCHEMA_VERSION = "1" as const;
 
@@ -106,6 +107,7 @@ export interface EditorVerificationCatalogEntry {
 export interface EditorVerificationCatalog {
   readonly schemaVersion: typeof EDITOR_VERIFICATION_SCHEMA_VERSION;
   readonly projectId: string;
+  readonly workspaceTrust: WorkspaceTrustStatus;
   readonly kinds: readonly EditorVerificationCatalogEntry[];
 }
 
@@ -395,9 +397,11 @@ function isCompleteCatalogKinds(
 export function isEditorVerificationCatalog(value: unknown): value is EditorVerificationCatalog {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["schemaVersion", "projectId", "kinds"]) &&
+    hasOnlyKeys(value, ["schemaVersion", "projectId", "workspaceTrust", "kinds"]) &&
     value.schemaVersion === EDITOR_VERIFICATION_SCHEMA_VERSION &&
     isBoundedIdentifier(value.projectId) &&
+    isWorkspaceTrustStatus(value.workspaceTrust) &&
+    value.workspaceTrust.projectId === value.projectId &&
     isCompleteCatalogKinds(value.kinds)
   );
 }
