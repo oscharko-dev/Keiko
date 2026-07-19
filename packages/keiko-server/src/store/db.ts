@@ -30,6 +30,8 @@ import type {
   UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,
+  WorkspaceTrustRecordRow,
+  WorkspaceTrustRecordRowInput,
 } from "./types.js";
 import { runMigrations } from "./schema.js";
 import {
@@ -60,6 +62,11 @@ import {
   replaceAssistantMessageContent as sqlReplaceAssistantMessageContent,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
+import {
+  pruneWorkspaceTrustRecords as sqlPruneWorkspaceTrustRecords,
+  readWorkspaceTrustRecord as sqlReadWorkspaceTrustRecord,
+  writeWorkspaceTrustRecord as sqlWriteWorkspaceTrustRecord,
+} from "./workspaceTrust.js";
 import { validateProjectPath } from "./validation.js";
 import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
@@ -223,6 +230,14 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
       sqlReplaceAssistantMessageContent(db, id, content, timestamp),
+    readWorkspaceTrustRecord: (rootRef: string): WorkspaceTrustRecordRow | undefined =>
+      sqlReadWorkspaceTrustRecord(db, rootRef),
+    writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput): void => {
+      sqlWriteWorkspaceTrustRecord(db, row, options.now());
+    },
+    pruneWorkspaceTrustRecords: (max: number): void => {
+      sqlPruneWorkspaceTrustRecords(db, max);
+    },
     close: (): void => {
       db.close();
     },

@@ -17,6 +17,8 @@ export type {
   UpdateChatPatch,
   UpdateProjectPatch,
   WorkflowStatus,
+  WorkspaceTrustRecordRow,
+  WorkspaceTrustRecordRowInput,
 } from "./types.js";
 export {
   UiStoreError,
