@@ -33,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-git";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { FilesError, resolveRoot, runFilesHandler } from "./files.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
@@ -145,6 +146,15 @@ export function optionsWithDefaults(
   };
 }
 
+async function isResolvedManagedRoot(
+  managedRoot: string | undefined,
+  resolvedTarget: string,
+): Promise<boolean> {
+  if (managedRoot === undefined) return false;
+  const resolvedManagedRoot = await realpath(managedRoot).catch(() => resolve(managedRoot));
+  return containsPath(resolvedManagedRoot, resolvedTarget);
+}
+
 export async function resolveRepository(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -155,6 +165,18 @@ export async function resolveRepository(
     ctx.url.searchParams.get("root"),
     deps.redactor,
   );
+  // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
+  // managed task-worktree root requires the launcher-attested app session. Classifying after
+  // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed
+  // worktree. An unpaired, forged, revoked, or expired session receives the same schema-valid,
+  // content-free unavailable projection as an unavailable repository; ordinary roots retain the
+  // existing generic Git behavior. This is uniform content posture, not an OS read-authority claim.
+  if (
+    (await isResolvedManagedRoot(deps.managedTaskWorkspaceRoot, selectedRoot.realRoot)) &&
+    resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+  ) {
+    return genericUnavailable(selectedRoot.root, "unknown");
+  }
   const membership = await resolveGitMembership(selectedRoot.realRoot, options.runner, {
     timeoutMs: options.timeoutMs,
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),

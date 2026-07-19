@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
 import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
+import { CodingWorkbenchChanges } from "./CodingWorkbenchChanges";
 import { activeRunState, cx, lifecycleAnnouncement, visibleAlert } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -40,6 +42,14 @@ const EMPTY_WORKSPACE = {
   error: null,
   refresh: (): Promise<void> => Promise.resolve(),
 } as const;
+
+function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
+  }
+  return null;
+}
 
 export function CodingWorkbenchWindow(): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
@@ -204,6 +214,16 @@ function WorkbenchColumns({
         <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
         <RuntimeControls state={state} actions={actions} />
         <Timeline events={state.events} activity={activity} questions={questions} />
+        <CodingWorkbenchChanges
+          root={
+            activeWorkspace.error === null
+              ? (activeWorkspace.activeBinding?.activeRoot ?? null)
+              : null
+          }
+          runId={state.run.value?.runId}
+          changeSignal={latestChangesSignal(state.events)}
+          bindingPending={activeWorkspace.loading || activeWorkspace.switching}
+        />
       </div>
     </div>
   );

@@ -94,6 +94,50 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.timeline.listLabel": "Coding run event timeline",
+  "codingWorkbench.changes.eyebrow": "Authenticated changes",
+  "codingWorkbench.changes.title": "Run changes",
+  "codingWorkbench.changes.help":
+    "Read-only diffs come from this run's bound task workspace and are never stored as durable evidence.",
+  "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
+  "codingWorkbench.changes.loading": "Loading the latest bounded changes…",
+  "codingWorkbench.changes.bindingLost":
+    "The run's task-workspace binding is no longer available. No diff is shown.",
+  "codingWorkbench.changes.unavailable":
+    "Changes are unavailable. The app session may need to be paired again; no stale diff is shown.",
+  "codingWorkbench.changes.error": "Changes could not be refreshed. No stale diff is shown.",
+  "codingWorkbench.changes.retry": "Refresh changes",
+  "codingWorkbench.changes.asOf": "As of {head}",
+  "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
+  "codingWorkbench.changes.changedFiles": "Changed files ({count})",
+  "codingWorkbench.changes.virtualInstructions":
+    "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
+  "codingWorkbench.changes.filesTruncated":
+    "The changed-file list reached its server limit. Only the bounded prefix is shown.",
+  "codingWorkbench.changes.fileState.conflicted": "Conflicted",
+  "codingWorkbench.changes.fileState.untracked": "Untracked",
+  "codingWorkbench.changes.fileState.stagedAndUnstaged": "Staged and unstaged",
+  "codingWorkbench.changes.fileState.staged": "Staged",
+  "codingWorkbench.changes.fileState.unstaged": "Unstaged",
+  "codingWorkbench.changes.diff.title": "Selected file diff",
+  "codingWorkbench.changes.diff.region": "Run-scoped file diff",
+  "codingWorkbench.changes.diff.loading": "Loading the selected file diff…",
+  "codingWorkbench.changes.diff.empty": "No text diff is available for this changed file.",
+  "codingWorkbench.changes.diff.error":
+    "The selected file diff is unavailable. No stale diff is shown.",
+  "codingWorkbench.changes.diff.truncated":
+    "This bounded file diff is incomplete because it reached the server limit.",
+  "codingWorkbench.changes.diff.addedLine": "Added line",
+  "codingWorkbench.changes.diff.deletedLine": "Deleted line",
+  "codingWorkbench.changes.diff.contextLine": "Context line",
+  "codingWorkbench.changes.diff.metadataLine": "Diff metadata",
+  "codingWorkbench.changes.diff.hunkHeader": "Hunk header",
+  "codingWorkbench.changes.diff.hunkTruncated":
+    "This hunk is incomplete because the bounded diff was truncated.",
+  "codingWorkbench.changes.diff.fileTruncated":
+    "This file diff is incomplete because the bounded diff was truncated.",
+  "codingWorkbench.changes.diff.binaryFile": "Binary file — no text diff to display.",
+  "codingWorkbench.changes.diff.previousPath": " (previously {path})",
+  "codingWorkbench.changes.diff.elevatedReview": "Elevated review",
   "codingWorkbench.activity.reasoningBoundary":
     "This timeline shows observable conversation and work activity. It never exposes private reasoning.",
   "codingWorkbench.activity.status.idle": "Start a run to watch its activity here.",

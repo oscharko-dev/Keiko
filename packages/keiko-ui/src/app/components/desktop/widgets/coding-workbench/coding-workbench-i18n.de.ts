@@ -97,6 +97,52 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
+  "codingWorkbench.changes.eyebrow": "Authentifizierte Änderungen",
+  "codingWorkbench.changes.title": "Änderungen des Laufs",
+  "codingWorkbench.changes.help":
+    "Schreibgeschützte Diffs stammen aus dem gebundenen Aufgaben-Workspace dieses Laufs und werden niemals als dauerhafte Evidenz gespeichert.",
+  "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
+  "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
+  "codingWorkbench.changes.bindingLost":
+    "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
+  "codingWorkbench.changes.unavailable":
+    "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.error":
+    "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.retry": "Änderungen aktualisieren",
+  "codingWorkbench.changes.asOf": "Stand {head}",
+  "codingWorkbench.changes.empty":
+    "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
+  "codingWorkbench.changes.changedFiles": "Geänderte Dateien ({count})",
+  "codingWorkbench.changes.virtualInstructions":
+    "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
+  "codingWorkbench.changes.filesTruncated":
+    "Die Liste der geänderten Dateien hat das Serverlimit erreicht. Nur das begrenzte Präfix wird angezeigt.",
+  "codingWorkbench.changes.fileState.conflicted": "Mit Konflikt",
+  "codingWorkbench.changes.fileState.untracked": "Nicht versioniert",
+  "codingWorkbench.changes.fileState.stagedAndUnstaged": "Vorgemerkt und nicht vorgemerkt",
+  "codingWorkbench.changes.fileState.staged": "Vorgemerkt",
+  "codingWorkbench.changes.fileState.unstaged": "Nicht vorgemerkt",
+  "codingWorkbench.changes.diff.title": "Diff der ausgewählten Datei",
+  "codingWorkbench.changes.diff.region": "Laufbezogenes Datei-Diff",
+  "codingWorkbench.changes.diff.loading": "Diff der ausgewählten Datei wird geladen…",
+  "codingWorkbench.changes.diff.empty": "Für diese geänderte Datei ist kein Text-Diff verfügbar.",
+  "codingWorkbench.changes.diff.error":
+    "Das Diff der ausgewählten Datei ist nicht verfügbar. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.diff.truncated":
+    "Dieses begrenzte Datei-Diff ist unvollständig, weil es das Serverlimit erreicht hat.",
+  "codingWorkbench.changes.diff.addedLine": "Hinzugefügte Zeile",
+  "codingWorkbench.changes.diff.deletedLine": "Gelöschte Zeile",
+  "codingWorkbench.changes.diff.contextLine": "Kontextzeile",
+  "codingWorkbench.changes.diff.metadataLine": "Diff-Metadaten",
+  "codingWorkbench.changes.diff.hunkHeader": "Hunk-Kopfzeile",
+  "codingWorkbench.changes.diff.hunkTruncated":
+    "Dieser Hunk ist unvollständig, weil das begrenzte Diff gekürzt wurde.",
+  "codingWorkbench.changes.diff.fileTruncated":
+    "Dieses Datei-Diff ist unvollständig, weil das begrenzte Diff gekürzt wurde.",
+  "codingWorkbench.changes.diff.binaryFile": "Binärdatei — kein Text-Diff verfügbar.",
+  "codingWorkbench.changes.diff.previousPath": " (zuvor {path})",
+  "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
   "codingWorkbench.activity.status.idle":
