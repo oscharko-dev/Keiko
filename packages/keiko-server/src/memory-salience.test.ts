@@ -1,7 +1,7 @@
 // Server-side salience capture tests. Exercises captureSalientFromTurn against an in-process
 // vault and a fake ModelPort — no network, no real model.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { captureSalientFromTurn } from "./memory-salience.js";
+import { captureSalientFromTurn, scheduleMemorySalienceCapture } from "./memory-salience.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
@@ -71,6 +71,52 @@ function fakeModel(content: string | (() => never)): ModelPort {
       });
     },
   };
+}
+
+interface DeferredModel {
+  readonly port: ModelPort;
+  readonly callCount: () => number;
+  readonly resolveAll: () => void;
+}
+
+function deferredModel(): DeferredModel {
+  const resolvers: (() => void)[] = [];
+  let callCount = 0;
+  return {
+    port: {
+      call(request): Promise<NormalizedResponse> {
+        callCount += 1;
+        return new Promise<NormalizedResponse>((resolve) => {
+          resolvers.push(() => {
+            resolve({
+              modelId: request.modelId,
+              content: "[]",
+              finishReason: "stop",
+              toolCalls: [],
+              structuredOutput: null,
+              usage: {
+                requestId: "salience-scheduler-test",
+                promptTokens: 7,
+                completionTokens: 3,
+                latencyMs: 11,
+                costClass: "high",
+              },
+            });
+          });
+        });
+      },
+    },
+    callCount: () => callCount,
+    resolveAll: (): void => {
+      for (const resolve of resolvers.splice(0)) resolve();
+    },
+  };
+}
+
+function yieldToImmediate(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 let activeVaults: MemoryVaultStore[] = [];
@@ -188,6 +234,40 @@ function readMemories(
 }
 
 describe("captureSalientFromTurn", () => {
+  it("keeps the shared desktop and voice scheduler off-path, bounded, and reusable", async () => {
+    const vault = makeVault();
+    const model = deferredModel();
+    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => model.port });
+    const ctx = context();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const request = { content: USER_TEXT, memory: { enabled: true } };
+    try {
+      for (let index = 0; index < 32; index += 1) {
+        scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "desktop");
+      }
+      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+
+      expect(model.callCount()).toBe(0);
+      await vi.waitFor(() => {
+        expect(model.callCount()).toBe(32);
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        "voice salience capture skipped: background queue full (32/32)",
+      );
+
+      model.resolveAll();
+      await yieldToImmediate();
+      scheduleMemorySalienceCapture(deps, request, ctx, "gpt-test", "ok", "voice");
+      await vi.waitFor(() => {
+        expect(model.callCount()).toBe(33);
+      });
+    } finally {
+      model.resolveAll();
+      await yieldToImmediate();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("persists salient candidates and surfaces them as wire actions", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
