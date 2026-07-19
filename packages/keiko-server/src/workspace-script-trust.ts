@@ -1,5 +1,5 @@
 // Server-owned approval for repository-authored package scripts, now persisted (issue #2521,
-// ADR-0144 D3/D8). A grant is bound to the registered project's canonical root, the resolved
+// ADR-0145 D3/D8). A grant is bound to the registered project's canonical root, the resolved
 // workspace root, and the exact package.json digest observed when the human approved it, and is
 // stored as a canonical, revisioned WorkspaceTrustRecord in the uiDb (one transaction domain). Any
 // manifest or root change invalidates the grant — persisting a restricted record at a newer revision
@@ -16,11 +16,13 @@ import {
   CodedHttpError,
   httpStatusFor,
   projectCommandTaskTrustState,
+  validateWorkspaceManifest,
   validateWorkspaceTrustRecord,
   WORKSPACE_TRUST_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   WorkspaceFact,
+  WorkspaceManifest,
   WorkspaceTrustAssessment,
   WorkspaceTrustBasisDigest,
   WorkspaceTrustBinding,
@@ -40,7 +42,10 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
-import { deriveWorkspaceTrustBinding } from "./workspaceTrust/canonicalTrustIdentity.js";
+import {
+  deriveWorkspaceRootRef,
+  deriveWorkspaceTrustBinding,
+} from "./workspaceTrust/canonicalTrustIdentity.js";
 
 const PACKAGE_MANIFEST_MAX_BYTES = 262_144;
 const TRUST_POLICY_VERSION = "m11.trust.1";
@@ -80,6 +85,7 @@ export interface WorkspaceScriptTrustService {
   readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
+  readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
 }
 
 export interface WorkspaceScriptTrustServiceOptions {
@@ -129,6 +135,40 @@ function workspaceInfoForRoot(root: string): WorkspaceInfo {
   };
 }
 
+function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): WorkspaceManifest {
+  const rootRef = deriveWorkspaceRootRef(canonicalRoot);
+  const row = store.findWorkspaceManifestRecordByRoot(rootRef);
+  if (row === undefined) throw new Error("WORKSPACE_ROOT_NOT_MEMBER");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.recordJson);
+  } catch {
+    throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+  }
+  if (!validateWorkspaceManifest(parsed).ok) throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+  const manifest = parsed as WorkspaceManifest;
+  if (
+    manifest.workspaceId !== row.workspaceId ||
+    manifest.revision !== row.revision ||
+    manifest.manifestDigest !== row.manifestDigest
+  ) {
+    throw new Error("WORKSPACE_MANIFEST_UNAVAILABLE");
+  }
+  return manifest;
+}
+
+function currentTrustBinding(
+  store: UiStore,
+  canonicalRoot: string,
+  basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
+): WorkspaceTrustBinding {
+  return deriveWorkspaceTrustBinding(
+    canonicalRoot,
+    basis,
+    manifestForCanonicalRoot(store, canonicalRoot),
+  );
+}
+
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
 // registered, both the project root and the resolved workspace root are realpath-canonicalized, and
 // the workspace root must equal the project root. Richer multi-root resolution lands additively with
@@ -160,7 +200,7 @@ function resolveCanonicalRoot(
   return canonicalProjectRoot;
 }
 
-// The capability-specific trust basis (ADR-0144 D3): the exact package.json digest. This is the old
+// The capability-specific trust basis (ADR-0145 D3): the exact package.json digest. This is the old
 // manifest-digest computation, now a non-throwing tagged fact so `isTrusted` fails closed to
 // restricted rather than throwing on an absent or unreadable manifest.
 function resolveTrustBasisFact(
@@ -272,7 +312,7 @@ function invalidationReason(
 
 // A previously trusted record is durably demoted only when it is contradicted by KNOWN live facts —
 // a genuine digest or root change. A transient or unreadable manifest keeps the current call
-// fail-closed (untrusted) but must never permanently revoke a valid grant (ADR-0144 D3 speaks of a
+// fail-closed (untrusted) but must never permanently revoke a valid grant (ADR-0145 D3 speaks of a
 // "digest/root mismatch", not an unreadable basis). Returns the trusted record to invalidate, if any.
 function invalidatedTrustedRecord(
   assessment: WorkspaceTrustAssessment,
@@ -304,7 +344,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
         "The project package manifest is unavailable for script trust.",
       );
     }
-    const binding = deriveWorkspaceTrustBinding(canonicalRoot, basis);
+    const binding = currentTrustBinding(this.store, canonicalRoot, basis);
     persistRecord(
       this.store,
       binding,
@@ -318,7 +358,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   public readonly revoke = (projectId: string): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-    const binding = deriveWorkspaceTrustBinding(canonicalRoot, basis);
+    const binding = currentTrustBinding(this.store, canonicalRoot, basis);
     persistRecord(
       this.store,
       binding,
@@ -334,7 +374,8 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const workspace = workspaceInfoForRoot(canonicalRoot);
     const trusted = this.isTrusted(projectId, workspace);
-    const binding = deriveWorkspaceTrustBinding(
+    const binding = currentTrustBinding(
+      this.store,
       canonicalRoot,
       resolveTrustBasisFact(this.fs, canonicalRoot),
     );
@@ -352,7 +393,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     try {
       const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-      const expected = deriveWorkspaceTrustBinding(canonicalRoot, basis);
+      const expected = currentTrustBinding(this.store, canonicalRoot, basis);
       const assessment = readAssessment(this.store, expected.rootRef);
       const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
       const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
@@ -385,6 +426,13 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       return "restricted";
     }
   };
+
+  public readonly recomputeForRoots = (roots: readonly string[]): readonly WorkspaceTrustLevel[] =>
+    roots.map((root): WorkspaceTrustLevel => {
+      const level = this.trustLevelForRoot(root);
+      if (level === "restricted") this.onRestricted?.(root);
+      return level;
+    });
 }
 
 function statusProjection(projectId: string, record: WorkspaceTrustRecord): WorkspaceTrustStatus {

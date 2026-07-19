@@ -45,6 +45,7 @@ import {
   handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
+import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
   handleAppendDesktopVoiceTurn,
   handleCreateDesktopChat,
@@ -416,6 +417,7 @@ function health(): RouteResult {
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
+  ...WORKSPACE_MANIFEST_ROUTE_GROUP,
   ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },

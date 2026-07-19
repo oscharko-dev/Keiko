@@ -24,7 +24,10 @@ import type {
   NewChatMessage,
   UpdateChatMessagePatch,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import type {
+  StoredPdfCitationPreviewCitation,
+  WorkspaceManifest,
+} from "@oscharko-dev/keiko-contracts";
 export type {
   Project,
   Chat,
@@ -80,11 +83,25 @@ export interface UiStore {
     timestamp: number,
   ) => ChatMessage;
 
-  // Canonical workspace-trust persistence (issue #2521, ADR-0144 D3/D8). The store persists opaque,
+  // Canonical workspace-trust persistence (issue #2521, ADR-0145 D3/D8). The store persists opaque,
   // content-free rows; all trust semantics (derivation, validation, projection) live above the port.
   readonly readWorkspaceTrustRecord: (rootRef: string) => WorkspaceTrustRecordRow | undefined;
   readonly writeWorkspaceTrustRecord: (row: WorkspaceTrustRecordRowInput) => void;
   readonly pruneWorkspaceTrustRecords: (max: number) => void;
+
+  // M11 multi-root workspace manifests (issue #2524, ADR-0145 D1/D8). The projects table remains
+  // the root registry; these methods persist ordered membership and atomically invalidate trust.
+  readonly listWorkspaceManifestRecords: () => readonly WorkspaceManifestRecordRow[];
+  readonly readWorkspaceManifestRecord: (
+    workspaceId: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly findWorkspaceManifestRecordByRoot: (
+    rootRef: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly findWorkspaceManifestRecordByProject: (
+    projectPath: string,
+  ) => WorkspaceManifestRecordRow | undefined;
+  readonly replaceWorkspaceManifest: (input: WorkspaceManifestMutationInput) => boolean;
 
   readonly close: () => void;
 }
@@ -106,6 +123,29 @@ export interface WorkspaceTrustRecordRowInput {
   readonly revision: number;
   readonly trust: "trusted" | "restricted";
   readonly recordJson: string;
+}
+
+export interface WorkspaceManifestRecordRow {
+  readonly workspaceId: string;
+  readonly schemaVersion: number;
+  readonly manifestRef: string;
+  readonly revision: number;
+  readonly manifestDigest: string;
+  readonly recordJson: string;
+  readonly updatedAt: number;
+  readonly rootProjects: readonly WorkspaceManifestRootProject[];
+}
+
+export interface WorkspaceManifestMutationInput {
+  readonly manifest: WorkspaceManifest;
+  readonly expectedRevision: number;
+  readonly absorbedWorkspaceIds: readonly string[];
+  readonly rootProjects: readonly WorkspaceManifestRootProject[];
+}
+
+export interface WorkspaceManifestRootProject {
+  readonly rootRef: string;
+  readonly projectPath: string;
 }
 
 export interface UpdateChatOptions {
