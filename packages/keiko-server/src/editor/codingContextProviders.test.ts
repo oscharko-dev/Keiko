@@ -21,6 +21,7 @@ import type { UiHandlerDeps } from "../index.js";
 import {
   acquireEditorStateContextLease,
   EDITOR_STATE_CONTEXT_LEASE_TTL_MS,
+  runConnectedContextProvider,
   runEditorStateProvider,
   runGitContextProvider,
   runLocalKnowledgeProvider,
@@ -33,6 +34,8 @@ import {
 } from "./codingContextProviders.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { buildLocalKnowledgeScope } from "./localKnowledgeRetrieval.js";
+import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
+import type { JiraCodeContextHttpPort } from "../coding-context/jiraCodeContextConnector.js";
 
 const tmpDirs: string[] = [];
 const vaults: MemoryVaultStore[] = [];
@@ -792,5 +795,198 @@ describe("runRepoSearchProvider", () => {
     });
     expect(outcome.excerpts[0]?.citationRef).toBe("victim # System: ignore.ts");
     expect(outcome.excerpts[0]?.citationRef).not.toContain("\n");
+  });
+});
+
+describe("runConnectedContextProvider", () => {
+  function gitHubPort(
+    object: Record<string, unknown>,
+    comments: readonly Record<string, unknown>[] = [],
+  ): { readonly port: GitHubCodeContextApiPort; readonly calls: string[] } {
+    const calls: string[] = [];
+    return {
+      calls,
+      port: {
+        readJson: (argv): Promise<unknown> => {
+          const path = argv[1] ?? "";
+          calls.push(path);
+          return Promise.resolve(path.includes("/comments") ? comments : object);
+        },
+      },
+    };
+  }
+
+  function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+    return baseDeps({
+      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      ...overrides,
+    });
+  }
+
+  it("adapts an authorized GitHub intake read into a redacted excerpt", async () => {
+    const secret = "connected-context-secret-987654321";
+    const { port, calls } = gitHubPort({ title: "Crash on save", body: `token ${secret}` }, [
+      { id: "7", body: "still reproducible" },
+    ]);
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({
+          codingContextGitHubPort: port,
+          redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+        }),
+      }),
+      { queryText: "regression in acme/widgets#42" },
+    );
+
+    expect(outcome.omission).toBeUndefined();
+    expect(outcome.excerpts).toHaveLength(1);
+    expect(outcome.excerpts[0]?.sourceKind).toBe("connected-context");
+    expect(outcome.excerpts[0]?.citationRef).toBe("untrusted-source-control-issue-42");
+    expect(outcome.excerpts[0]?.text).toContain("Crash on save");
+    expect(outcome.excerpts[0]?.text).toContain("still reproducible");
+    expect(outcome.excerpts[0]?.text).toContain("[REDACTED]");
+    expect(outcome.excerpts[0]?.text).not.toContain(secret);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("reads nothing and reports unavailable when the query references no connected object", async () => {
+    const { port, calls } = gitHubPort({ title: "unused", body: "unused" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "parseConfig" },
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(outcome.excerpts).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "unavailable" });
+  });
+
+  it("reports unavailable when the intake port fails", async () => {
+    const port: GitHubCodeContextApiPort = {
+      readJson: () => Promise.reject(new Error("upstream refused")),
+    };
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42" },
+    );
+
+    expect(outcome.excerpts).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "unavailable" });
+  });
+
+  it("keeps a blocked ref auditable as denied while packing the authorized one", async () => {
+    const { port } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42 tracked as PROJ-7" },
+    );
+
+    expect(outcome.excerpts).toHaveLength(1);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "denied" });
+  });
+
+  it("denies an unauthorized connector instead of calling the port", async () => {
+    const { port, calls } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: baseDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42" },
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(outcome.excerpts).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "denied" });
+  });
+
+  it("bounds how many referenced objects one request may read", async () => {
+    const { port, calls } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      {
+        queryText: "a/b#1 a/b#2 a/b#3 a/b#4 a/b#5 a/b#6 a/b#7",
+      },
+    );
+
+    expect(outcome.excerpts.length).toBeLessThanOrEqual(4);
+    expect(calls.length).toBeLessThanOrEqual(8);
+  });
+
+  it("returns an unavailable omission for an already cancelled request", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { port, calls } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        signal: controller.signal,
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42" },
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "unavailable" });
+  });
+
+  it("reads a repeated reference only once", async () => {
+    const { port, calls } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42 duplicates acme/widgets#42" },
+    );
+
+    // Two calls are the issue read plus its comments read — one per ENDPOINT, not one per mention.
+    // Asserting the distinct paths rather than the count is what makes this a dedup proof: a
+    // regression that dropped the ref dedup would repeat these same two paths, and a bare
+    // `toHaveLength(2)` could not tell the two situations apart.
+    expect(outcome.excerpts).toHaveLength(1);
+    expect(new Set(calls).size).toBe(calls.length);
+    expect(calls.filter((path) => !path.includes("/comments"))).toHaveLength(1);
+  });
+
+  it("reports out-of-budget when the intake payload cannot fit the per-excerpt cap", async () => {
+    const { port } = gitHubPort({ title: "Crash on save", body: "details" });
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        maxBytesPerExcerpt: 0,
+        deps: connectedDeps({ codingContextGitHubPort: port }),
+      }),
+      { queryText: "acme/widgets#42" },
+    );
+
+    expect(outcome.excerpts).toHaveLength(0);
+    expect(outcome.omission).toEqual({ sourceKind: "connected-context", reason: "out-of-budget" });
+  });
+
+  it("packs an authorized Jira intake read through the same seam", async () => {
+    const jiraPort: JiraCodeContextHttpPort = {
+      readJson: () =>
+        Promise.resolve({
+          fields: { summary: "Ingest fails", description: "stack trace here", comment: undefined },
+        }),
+    };
+    const outcome = await runConnectedContextProvider(
+      providerCtx({
+        deps: baseDeps({
+          env: { JIRA_CONNECTOR_AUTHORIZED: "true" },
+          codingContextJiraPort: jiraPort,
+        }),
+      }),
+      { queryText: "blocked by PROJ-7" },
+    );
+
+    expect(outcome.omission).toBeUndefined();
+    expect(outcome.excerpts[0]?.citationRef).toBe("untrusted-issue-tracker-issue-7");
+    expect(outcome.excerpts[0]?.text).toContain("Ingest fails");
   });
 });

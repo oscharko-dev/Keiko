@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
+import type { GitHubCodeContextApiPort } from "../coding-context/githubCodeContextConnector.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { assembleCodingContext, type AssembleCodingContextDeps } from "./codingContext.js";
 import { EDITOR_STATE_CONTEXT_LEASE_TTL_MS } from "./codingContextProviders.js";
@@ -21,6 +22,30 @@ let root: string;
 
 function deps(): UiHandlerDeps {
   return { redactor: buildRedactor({}) } as unknown as UiHandlerDeps;
+}
+
+const CONNECTED_ISSUE_TITLE = "Widget crash on save";
+const CONNECTED_ISSUE_BODY = "Crashes when the buffer is empty.";
+const CONNECTED_QUERY = "why does acme/widgets#42 still fail?";
+
+function fakeGitHubPort(): GitHubCodeContextApiPort {
+  return {
+    readJson: (argv) =>
+      Promise.resolve(
+        (argv[1] ?? "").includes("/comments")
+          ? [{ id: "9001", body: "Repro attached." }]
+          : { title: CONNECTED_ISSUE_TITLE, body: CONNECTED_ISSUE_BODY, comments: 1 },
+      ),
+  };
+}
+
+function connectedDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
+  return {
+    redactor: buildRedactor({}),
+    env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+    codingContextGitHubPort: fakeGitHubPort(),
+    ...overrides,
+  } as unknown as UiHandlerDeps;
 }
 
 function request(overrides: Partial<CodingContextRequest> = {}): CodingContextRequest {
@@ -138,6 +163,76 @@ describe("assembleCodingContext", () => {
     const pack = await assembleCodingContext(request(), ctx(new AbortController().signal));
     const reasonsByKind = new Map(pack.omissions.map((o) => [o.sourceKind, o.reason]));
     expect(reasonsByKind.get("connected-context")).toBe("unavailable");
+    expect(reasonsByKind.get("quality-intelligence")).toBe("unavailable");
+    expect(reasonsByKind.get("workflow-context")).toBe("unavailable");
+  });
+
+  it("packs a connected-context excerpt from the injected #1989 intake", async () => {
+    const pack = await assembleCodingContext(
+      request({ queryText: CONNECTED_QUERY }),
+      ctx(new AbortController().signal, { deps: connectedDeps() }),
+    );
+    const connected = pack.excerpts.find((e) => e.citation.sourceKind === "connected-context");
+
+    expect(connected).toBeDefined();
+    expect(connected?.citation.sourceTier).toBe("first-party-workspace");
+    expect(connected?.citation.citationRef).toBe("untrusted-source-control-issue-42");
+    expect(connected?.text).toContain(CONNECTED_ISSUE_TITLE);
+    expect(connected?.text).toContain("Repro attached.");
+    expect(pack.omissions.some((o) => o.sourceKind === "connected-context")).toBe(false);
+
+    // The intake payload is untrusted model input: it may sit in the server-internal excerpt
+    // text, but never in the content-free wire projection.
+    const wire = toCodingContextWirePack(pack);
+    expect(JSON.stringify(wire)).not.toContain(CONNECTED_ISSUE_TITLE);
+    expect(JSON.stringify(wire)).not.toContain(CONNECTED_ISSUE_BODY);
+  });
+
+  it("records an unavailable omission when the connected-context intake is not configured", async () => {
+    const pack = await assembleCodingContext(
+      request({ queryText: CONNECTED_QUERY }),
+      ctx(new AbortController().signal),
+    );
+
+    expect(pack.omissions).toContainEqual({
+      sourceKind: "connected-context",
+      reason: "unavailable",
+    });
+    expect(pack.excerpts.some((e) => e.citation.sourceKind === "connected-context")).toBe(false);
+  });
+
+  it("records a denied omission when the connected-context connector is not authorized", async () => {
+    const pack = await assembleCodingContext(
+      request({ queryText: CONNECTED_QUERY }),
+      ctx(new AbortController().signal, { deps: connectedDeps({ env: {} }) }),
+    );
+
+    expect(pack.omissions).toContainEqual({ sourceKind: "connected-context", reason: "denied" });
+    expect(pack.excerpts.some((e) => e.citation.sourceKind === "connected-context")).toBe(false);
+  });
+
+  it("excludes the network-bound connected-context provider for keystroke-sensitive purposes", async () => {
+    for (const purpose of ["inline", "diagnostic"] as const) {
+      const pack = await assembleCodingContext(
+        request({ purpose, queryText: CONNECTED_QUERY }),
+        ctx(new AbortController().signal, { deps: connectedDeps() }),
+      );
+
+      expect(pack.omissions).toContainEqual({
+        sourceKind: "connected-context",
+        reason: "too-expensive",
+      });
+      expect(pack.excerpts.some((e) => e.citation.sourceKind === "connected-context")).toBe(false);
+    }
+  });
+
+  it("keeps quality-intelligence and workflow-context deferred as unavailable omissions", async () => {
+    const pack = await assembleCodingContext(
+      request({ queryText: CONNECTED_QUERY }),
+      ctx(new AbortController().signal, { deps: connectedDeps() }),
+    );
+    const reasonsByKind = new Map(pack.omissions.map((o) => [o.sourceKind, o.reason]));
+
     expect(reasonsByKind.get("quality-intelligence")).toBe("unavailable");
     expect(reasonsByKind.get("workflow-context")).toBe("unavailable");
   });

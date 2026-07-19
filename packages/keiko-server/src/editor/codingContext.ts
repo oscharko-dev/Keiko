@@ -18,6 +18,7 @@ import {
 } from "../retrieval/contextAssembly.js";
 import {
   acquireEditorStateContextLease,
+  runConnectedContextProvider,
   runEditorStateProvider,
   runGitContextProvider,
   runLocalKnowledgeProvider,
@@ -28,11 +29,14 @@ import {
   type ProviderContext,
 } from "./codingContextProviders.js";
 
+// Connected context is wired (Epic #2556 Target Outcome 6); quality intelligence and workflow
+// context stay deferred and are recorded as auditable `unavailable` omissions.
 const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextSourceKind[] = [
-  "connected-context",
   "quality-intelligence",
   "workflow-context",
 ];
+const CONNECTED_CONTEXT_ORDER = 5;
+const DEFERRED_CONTEXT_ORDER_BASE = 6;
 
 export interface AssembleCodingContextDeps {
   readonly deps: UiHandlerDeps;
@@ -130,10 +134,24 @@ function embeddingProviders(
   ];
 }
 
+// The intake performs outbound connector reads, so it carries the same cost gate as the embedding
+// providers: excluded purposes record `too-expensive` instead of being silently skipped.
+function connectedContextProvider(
+  request: CodingContextRequest,
+  providerContext: ProviderContext,
+): RetrievalContextProvider<CodingContextSourceKind> {
+  return {
+    sourceKind: "connected-context",
+    order: CONNECTED_CONTEXT_ORDER,
+    requiresEmbedding: true,
+    run: () => runConnectedContextProvider(providerContext, { queryText: request.queryText }),
+  };
+}
+
 function deferredProviders(): readonly RetrievalContextProvider<CodingContextSourceKind>[] {
   return DEFERRED_CONTEXT_PROVIDERS.map((sourceKind, index) => ({
     sourceKind,
-    order: 5 + index,
+    order: DEFERRED_CONTEXT_ORDER_BASE + index,
     requiresEmbedding: false,
   }));
 }
@@ -147,6 +165,7 @@ function codingProviders(
     repositoryProvider(request, providerContext),
     ...sessionProviders(request, providerContext, lease),
     ...embeddingProviders(request, providerContext),
+    connectedContextProvider(request, providerContext),
     ...deferredProviders(),
   ];
 }

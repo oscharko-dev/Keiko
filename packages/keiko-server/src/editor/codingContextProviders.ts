@@ -40,7 +40,22 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import type {
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  buildCodeContextPack,
+  type CodeContextConnector,
+  type CodeContextConnectorConfig,
+  type CodeContextPackItem,
+  type CodeContextPackResult,
+  type CodeContextRef,
+  type CodeContextSource,
+} from "../coding-context/codeContextConnector.js";
+import { createGitHubCodeContextConnector } from "../coding-context/githubCodeContextConnector.js";
+import { createJiraCodeContextConnector } from "../coding-context/jiraCodeContextConnector.js";
 import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { vaultAsQueryPort } from "../memory-conv-handlers.js";
@@ -918,4 +933,199 @@ export async function runMemoryProvider(
     return { excerpts: [], omission: omission("memory", "unavailable") };
   }
   return { excerpts: memoryExcerpts(ctx, result), omission: undefined };
+}
+
+// ─── connected-context provider (Issue #1989 intake, Epic #2556 Target Outcome 6) ────
+// Reuses the existing coding-context intake (buildCodeContextPack + the GitHub/Jira connectors)
+// through the `codingContextGitHubPort` / `codingContextJiraPort` seam on UiHandlerDeps. No second
+// connector, pack, or registration path: this provider only ADAPTS the intake result into excerpt
+// candidates. The read is outbound network work, so the orchestrator gates it exactly like the
+// embedding-cost providers (`requiresEmbedding`), which keeps it off the keystroke-sensitive
+// purposes with a `too-expensive` omission instead of a silent skip.
+//
+// The referenced objects come from the request's own query text — an editor request has no
+// connector-scope grant of its own, so authority is server-owned: the deployment ceiling supplies
+// the effective mode and the default-false connector authorization supplies the scope. Anything
+// unauthorized is blocked by the intake before an outbound call and surfaces as `denied`.
+const CONNECTED_CONTEXT_MAX_REFS = 4;
+const CONNECTED_CONTEXT_RUN_ID = "editor-coding-context";
+const CONNECTED_CONTEXT_SCORE = 0.75;
+// `owner/repo#123`; GitHub serves pull requests from the issues endpoint, so "issue" reads both.
+const GITHUB_REF_PATTERN =
+  /([A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,9})/gu;
+const JIRA_REF_PATTERN = /\b([A-Z][A-Z0-9_]{1,20})-([1-9][0-9]{0,9})\b/gu;
+
+interface ConnectedContextIntake {
+  readonly connectors: Readonly<Record<CodeContextSource, CodeContextConnector>>;
+  readonly connectorConfig: CodeContextConnectorConfig;
+  readonly connectorScopes: readonly CodingWorkbenchConnectorScope[];
+  readonly effectiveMode: CodingWorkbenchMode;
+}
+
+const CONNECTED_CONTEXT_UNCONFIGURED: CodeContextConnector = {
+  read: () => Promise.reject(new Error("coding context connector is not configured")),
+};
+
+function githubContextRefs(queryText: string): CodeContextRef[] {
+  const refs: CodeContextRef[] = [];
+  for (const [, ownerAndRepo, objectId] of queryText.matchAll(GITHUB_REF_PATTERN)) {
+    if (ownerAndRepo !== undefined && objectId !== undefined) {
+      refs.push({ source: "github", objectKind: "issue", ownerAndRepo, objectId });
+    }
+  }
+  return refs;
+}
+
+function jiraContextRefs(queryText: string): CodeContextRef[] {
+  const refs: CodeContextRef[] = [];
+  for (const [, projectKey, objectId] of queryText.matchAll(JIRA_REF_PATTERN)) {
+    if (projectKey !== undefined && objectId !== undefined) {
+      refs.push({ source: "jira", objectKind: "issue", projectKey, objectId });
+    }
+  }
+  return refs;
+}
+
+function connectedContextRefKey(ref: CodeContextRef): string {
+  return ref.source === "github"
+    ? `github:${ref.ownerAndRepo}#${ref.objectId}`
+    : `jira:${ref.projectKey}-${ref.objectId}`;
+}
+
+// Bounded and de-duplicated: one query text may name the same object several times, and each ref
+// costs outbound connector calls.
+function connectedContextRefs(queryText: string | undefined): readonly CodeContextRef[] {
+  if (queryText === undefined || queryText.trim().length === 0) return [];
+  const seen = new Set<string>();
+  const refs: CodeContextRef[] = [];
+  for (const ref of [...githubContextRefs(queryText), ...jiraContextRefs(queryText)]) {
+    const key = connectedContextRefKey(ref);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(ref);
+    if (refs.length === CONNECTED_CONTEXT_MAX_REFS) break;
+  }
+  return refs;
+}
+
+// Connector authorization is default-false and server-owned: an editor request can never widen it.
+function connectorAuthorizedInEnv(deps: UiHandlerDeps, key: string): boolean {
+  return deps.env[key] === "true";
+}
+
+function connectedContextScopes(
+  deps: UiHandlerDeps,
+  config: CodeContextConnectorConfig,
+): readonly CodingWorkbenchConnectorScope[] {
+  const scopes: CodingWorkbenchConnectorScope[] = [];
+  if (deps.codingContextGitHubPort !== undefined && config.github_connector_authorized === true) {
+    scopes.push("source-control.read");
+  }
+  if (deps.codingContextJiraPort !== undefined && config.jira_connector_authorized === true) {
+    scopes.push("issue-tracker.read");
+  }
+  return scopes;
+}
+
+function connectedContextIntake(deps: UiHandlerDeps): ConnectedContextIntake | undefined {
+  const githubPort = deps.codingContextGitHubPort;
+  const jiraPort = deps.codingContextJiraPort;
+  if (githubPort === undefined && jiraPort === undefined) return undefined;
+  const connectorConfig: CodeContextConnectorConfig = {
+    github_connector_authorized: connectorAuthorizedInEnv(deps, "GITHUB_CONNECTOR_AUTHORIZED"),
+    jira_connector_authorized: connectorAuthorizedInEnv(deps, "JIRA_CONNECTOR_AUTHORIZED"),
+  };
+  return {
+    connectors: {
+      github:
+        githubPort === undefined
+          ? CONNECTED_CONTEXT_UNCONFIGURED
+          : createGitHubCodeContextConnector(githubPort),
+      jira:
+        jiraPort === undefined
+          ? CONNECTED_CONTEXT_UNCONFIGURED
+          : createJiraCodeContextConnector(jiraPort),
+    },
+    connectorConfig,
+    connectorScopes: connectedContextScopes(deps, connectorConfig),
+    effectiveMode: deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+  };
+}
+
+function connectedContextItemText(item: CodeContextPackItem): string {
+  return JSON.stringify({
+    untrusted: item.untrusted,
+    label: item.label,
+    title: item.title,
+    body: item.body,
+    comments: item.comments.map((comment) => ({ id: comment.id, body: comment.body })),
+  });
+}
+
+function connectedContextExcerpts(
+  ctx: ProviderContext,
+  items: readonly CodeContextPackItem[],
+): RawExcerpt[] {
+  return items.flatMap((item, index) => {
+    const prepared = prepareExcerpt(ctx, {
+      sourceKind: "connected-context",
+      id: `connected-context-${String(index)}`,
+      score: CONNECTED_CONTEXT_SCORE,
+      citationRef: item.label,
+      text: connectedContextItemText(item),
+      truncated: item.bodyTruncated || item.comments.some((comment) => comment.bodyTruncated),
+    });
+    return prepared === undefined ? [] : [prepared];
+  });
+}
+
+function connectedContextOmission(
+  result: CodeContextPackResult,
+  excerptCount: number,
+): CodingContextOmission | undefined {
+  if (result.blocked.length > 0) return omission("connected-context", "denied");
+  if (excerptCount > 0) return undefined;
+  return omission("connected-context", result.items.length > 0 ? "out-of-budget" : "unavailable");
+}
+
+async function readConnectedContextPack(
+  ctx: ProviderContext,
+  intake: ConnectedContextIntake,
+  refs: readonly CodeContextRef[],
+): Promise<CodeContextPackResult | undefined> {
+  try {
+    return await buildCodeContextPack(
+      {
+        runId: CONNECTED_CONTEXT_RUN_ID,
+        effectiveMode: intake.effectiveMode,
+        connectorScopes: intake.connectorScopes,
+        refs,
+        maxBodyBytes: ctx.maxBytesPerExcerpt,
+      },
+      {
+        connectors: intake.connectors,
+        connectorConfig: intake.connectorConfig,
+        nowIso: () => new Date(ctx.currentTimeMs()).toISOString(),
+      },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export async function runConnectedContextProvider(
+  ctx: ProviderContext,
+  input: { readonly queryText: string | undefined },
+): Promise<ProviderOutcome> {
+  const refs = connectedContextRefs(input.queryText);
+  const intake = connectedContextIntake(ctx.deps);
+  if (isAborted(ctx.signal) || refs.length === 0 || intake === undefined) {
+    return { excerpts: [], omission: omission("connected-context", "unavailable") };
+  }
+  const result = await readConnectedContextPack(ctx, intake, refs);
+  if (result === undefined || isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("connected-context", "unavailable") };
+  }
+  const excerpts = connectedContextExcerpts(ctx, result.items);
+  return { excerpts, omission: connectedContextOmission(result, excerpts.length) };
 }
