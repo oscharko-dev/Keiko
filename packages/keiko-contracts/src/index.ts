@@ -2520,6 +2520,21 @@ export {
   toRetrievalContextWirePack,
 } from "./retrieval-context.js";
 
+// ─── The one vector-index port (Issue #2556, ADR-0152 D1) ────────────────────
+export type {
+  VectorIndexNamespace,
+  VectorIndexQuery,
+  VectorIndexCandidateRef,
+  VectorIndexDiagnostics,
+  VectorIndexResult,
+  VectorIndexPort,
+} from "./vector-index-port.js";
+export {
+  VECTOR_INDEX_NAMESPACES,
+  embeddingIdentityKey,
+  isValidVectorIndexQuery,
+} from "./vector-index-port.js";
+
 // ─── Shared evaluation-gate shapes (Issue #2570, ADR-0152 D5) ────────────────
 export type { EvalBudget, EvalFloorResult, RegressionProbeResult } from "./evaluation-gates.js";
 

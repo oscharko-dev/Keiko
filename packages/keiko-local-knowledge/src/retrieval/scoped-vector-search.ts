@@ -22,6 +22,10 @@ import type {
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
+// One canonical identity key, owned by contracts (ADR-0152 D1). This module used to carry its own
+// byte-equivalent copy; a third copy is forbidden, because a drifting key silently compares vectors
+// from incompatible embedding spaces as if they were comparable.
+import { embeddingIdentityKey as identityKey } from "@oscharko-dev/keiko-contracts";
 import {
   assertCompatibleEmbeddingIdentity,
   l2NormalizeVector,
@@ -889,23 +893,6 @@ function scoreFor(
 interface EmbeddedQuery {
   readonly vector: Float32Array;
   readonly dimensions: number;
-}
-
-function identityKey(identity: EmbeddingModelIdentity): string {
-  // modelRevision intentionally excluded — two capsules sharing structural identity
-  // tuple share an embedding even if one has been re-validated with a new revision.
-  // Hardening fields are included because normalization, instruction shaping, and
-  // embedding-space fingerprint define whether vectors can be compared safely.
-  return [
-    identity.provider,
-    identity.modelId,
-    String(identity.vectorDimensions),
-    identity.vectorMetric,
-    identity.normalization ?? "legacy",
-    identity.instructionVersion ?? "legacy",
-    identity.embeddingSpaceFingerprint ?? "unverified",
-    String(identity.dimensionsParam ?? ""),
-  ].join("|");
 }
 
 function embeddingLaneId(identity: EmbeddingModelIdentity): string {

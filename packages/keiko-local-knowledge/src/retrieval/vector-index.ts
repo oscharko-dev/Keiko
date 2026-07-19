@@ -1,3 +1,4 @@
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts";
 import type {
   EmbeddingModelIdentity,
   EmbeddingVectorMetric,
@@ -670,15 +671,7 @@ function identityFromSqliteVecRow(row: SqliteVecIndexRow): EmbeddingModelIdentit
   };
 }
 
-export function embeddingIdentityKey(identity: EmbeddingModelIdentity): string {
-  return [
-    identity.provider,
-    identity.modelId,
-    String(identity.vectorDimensions),
-    identity.vectorMetric,
-    identity.normalization ?? "legacy",
-    identity.instructionVersion ?? "legacy",
-    identity.embeddingSpaceFingerprint ?? "unverified",
-    String(identity.dimensionsParam ?? ""),
-  ].join("|");
-}
+// The identity key now lives in keiko-contracts (ADR-0152 D1). It was one of two byte-equivalent
+// copies in this package; a drifting copy is a silent fail-open, because vectors from incompatible
+// embedding spaces would compare as if they were comparable.
+export { embeddingIdentityKey };
