@@ -329,8 +329,10 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history, signed squash merges, no direct agent merge, and platform-native auto-merge only after
-  the direct required checks validate the exact current head.
+  history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
+  native auto-merge on the PR, and the platform integrates automatically the moment the required
+  checks are green on the exact current head (ADR-0135). Green gates ARE the merge decision; there
+  is no human review step and no waiting for a person.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,

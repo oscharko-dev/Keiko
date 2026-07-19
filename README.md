@@ -37,7 +37,13 @@
 
 Keiko starts with local developer-assist workflows for regulated engineering teams. It helps inspect a repository, chat with configured language models, generate reviewable unit tests, investigate bugs, run verification, and keep redacted evidence for human review.
 
-Keiko is human-controlled by design. It does not commit, push, open pull requests, merge code, or apply changes without an explicit local action. The manifest-producing surfaces emit redacted evidence for audit.
+Keiko is human-controlled by design: a local human selects or accepts the task, autonomy mode, and
+authority envelope. Inside that accepted authority, delivery is autonomous — agents commit, push
+their feature branch, and maintain the pull request, and GitHub native auto-merge integrates into
+`dev` automatically once the required quality gates are green on the current head. No human review
+or manual merge action is part of the loop; the gates are the control (ADR-0135). Direct pushes to
+`dev`, force pushes, and gate bypasses stay denied, and the manifest-producing surfaces emit
+redacted evidence for audit.
 
 ## Vision
 
