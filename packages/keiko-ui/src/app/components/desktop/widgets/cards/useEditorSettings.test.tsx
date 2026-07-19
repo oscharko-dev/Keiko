@@ -5,14 +5,14 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
-  type EditorM7SettingsSnapshot,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { useEditorSettings } from "./useEditorSettings";
 
 const api = vi.hoisted(() => ({
-  currentSnapshot: undefined as EditorM7SettingsSnapshot | undefined,
+  currentSnapshot: undefined as EditorM11SettingsSnapshot | undefined,
   fetchEditorSettings: vi.fn(),
   mutateEditorSettings: vi.fn(),
   ApiError: class ApiError extends Error {
@@ -60,14 +60,15 @@ class FakeEventSource {
   }
 }
 
-function snapshot(revision: number, fontSize: number): EditorM7SettingsSnapshot {
+function snapshot(revision: number, fontSize: number): EditorM11SettingsSnapshot {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     storeState: "ready",
     userRevision: 0,
     workspaceRevision: revision,
+    rootRevision: 0,
     revision,
-    etag: `"edm7-0-${revision.toString()}-test"`,
+    etag: `"edm7-0-${revision.toString()}-0-test"`,
     root: "/repo",
     definitions: EDITOR_M7_SETTING_REGISTRY,
     settings: resolveEditorM7Settings({
@@ -157,7 +158,31 @@ describe("useEditorSettings M7 cross-window integration", () => {
         expectedRevision: 0,
         values: { fontSize: 19 },
       }),
-      '"edm7-0-0-test"',
+      '"edm7-0-0-0-test"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("uses the root revision for root-scoped mutations", async () => {
+    api.currentSnapshot = {
+      ...snapshot(0, 13),
+      rootRevision: 3,
+      etag: '"edm7-0-0-3-test"',
+    };
+    api.mutateEditorSettings.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => {
+      expect(result.current.snapshot?.rootRevision).toBe(3);
+    });
+    await act(async () => {
+      await result.current.setValue("root", "fontSize", 17);
+    });
+
+    expect(api.mutateEditorSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "root", expectedRevision: 3 }),
+      '"edm7-0-0-3-test"',
       expect.any(String),
       expect.any(AbortSignal),
     );

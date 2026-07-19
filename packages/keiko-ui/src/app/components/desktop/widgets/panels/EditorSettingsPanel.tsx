@@ -4,11 +4,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type {
   EditorM7AiActivationStatus,
-  EditorM7ResolvedSetting,
   EditorM7SettingDefinition,
   EditorM7SettingId,
-  EditorM7SettingScope,
   EditorM7SettingValue,
+  EditorM11ResolvedSetting,
+  EditorM11SettingScope,
 } from "@oscharko-dev/keiko-contracts";
 import { useEditorSettings } from "../cards/useEditorSettings";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
@@ -21,7 +21,7 @@ import styles from "./EditorSettingsPanel.module.css";
 export function EditorSettingsPanel({ root }: { readonly root?: string | undefined }): ReactNode {
   const t = useTranslate();
   const view = useEditorSettings(root);
-  const [scope, setScope] = useState<EditorM7SettingScope>("user");
+  const [scope, setScope] = useState<EditorM11SettingScope>("user");
   const [query, setQuery] = useState("");
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [pendingAiConfirm, setPendingAiConfirm] = useState<EditorM7SettingId | null>(null);
@@ -68,11 +68,14 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           <select
             className={styles.select}
             value={scope}
-            onChange={(event) => setScope(event.target.value as EditorM7SettingScope)}
+            onChange={(event) => setScope(event.target.value as EditorM11SettingScope)}
           >
             <option value="user">{t("settings.editor.scopeUser")}</option>
             <option value="workspace" disabled={root === undefined}>
               {t("settings.editor.scopeWorkspace")}
+            </option>
+            <option value="root" disabled={root === undefined}>
+              {t("settings.editor.scopeRoot")}
             </option>
           </select>
         </label>
@@ -94,7 +97,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           {t("settings.editor.resetAll")}
         </button>
       </div>
-      {scope === "workspace" && root === undefined ? (
+      {scope !== "user" && root === undefined ? (
         <p className={styles.empty}>{t("settings.editor.noWorkspace")}</p>
       ) : null}
       {view.issue !== undefined ? (
@@ -165,7 +168,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
 
 interface Row {
   readonly definition: EditorM7SettingDefinition;
-  readonly setting: EditorM7ResolvedSetting;
+  readonly setting: EditorM11ResolvedSetting;
 }
 
 function aiStatusForSetting(
@@ -183,7 +186,7 @@ function aiStatusForSetting(
 
 function filteredRows(
   definitions: readonly EditorM7SettingDefinition[],
-  settings: readonly EditorM7ResolvedSetting[],
+  settings: readonly EditorM11ResolvedSetting[],
   query: string,
   modifiedOnly: boolean,
   t: I18nTranslate,
@@ -216,8 +219,8 @@ function EditorSettingCard({
   readonly definition: EditorM7SettingDefinition;
   readonly disabled: boolean;
   readonly root: string | undefined;
-  readonly scope: EditorM7SettingScope;
-  readonly setting: EditorM7ResolvedSetting;
+  readonly scope: EditorM11SettingScope;
+  readonly setting: EditorM11ResolvedSetting;
   readonly t: I18nTranslate;
   readonly onReset: (id: EditorM7SettingId) => void;
   readonly onSet: (id: EditorM7SettingId, value: EditorM7SettingValue) => void;
@@ -262,7 +265,7 @@ function EditorSettingCard({
         <button
           type="button"
           className={styles.button}
-          disabled={disabled || !definition.scopes.includes(scope)}
+          disabled={disabled || !settingSupportsScope(definition, scope)}
           onClick={() => onReset(definition.id)}
         >
           {t("settings.editor.reset")}
@@ -287,7 +290,7 @@ function SettingControl({
 }: {
   readonly definition: EditorM7SettingDefinition;
   readonly disabled: boolean;
-  readonly setting: EditorM7ResolvedSetting;
+  readonly setting: EditorM11ResolvedSetting;
   readonly t: I18nTranslate;
   readonly onSet: (id: EditorM7SettingId, value: EditorM7SettingValue) => void;
 }): ReactNode {
@@ -435,13 +438,13 @@ function AiActivationConfirmDialog({
 
 function unavailable(
   definition: EditorM7SettingDefinition,
-  setting: EditorM7ResolvedSetting,
-  scope: EditorM7SettingScope,
+  setting: EditorM11ResolvedSetting,
+  scope: EditorM11SettingScope,
   root: string | undefined,
   t: I18nTranslate,
 ): string | undefined {
-  if (scope === "workspace" && root === undefined) return t("settings.editor.noWorkspace");
-  if (!definition.scopes.includes(scope)) return t("settings.editor.scopeUnavailable");
+  if (scope !== "user" && root === undefined) return t("settings.editor.noWorkspace");
+  if (!settingSupportsScope(definition, scope)) return t("settings.editor.scopeUnavailable");
   if (setting.policyLocked) {
     return t("settings.editor.policyLocked", { reason: setting.reasonCode ?? "policy" });
   }
@@ -474,13 +477,22 @@ function settingLabel(id: EditorM7SettingId, t: I18nTranslate): string {
   return t("settings.editor.setting.keybindingOverrides");
 }
 
-function sourceLabel(source: EditorM7ResolvedSetting["source"], t: I18nTranslate): string {
+function settingSupportsScope(
+  definition: EditorM7SettingDefinition,
+  scope: EditorM11SettingScope,
+): boolean {
+  return definition.scopes.includes(scope === "root" ? "workspace" : scope);
+}
+
+function sourceLabel(source: EditorM11ResolvedSetting["source"], t: I18nTranslate): string {
+  if (source === "root") return t("settings.editor.sourceRoot");
   if (source === "workspace") return t("settings.editor.sourceWorkspace");
   if (source === "user") return t("settings.editor.sourceUser");
+  if (source === "profile") return t("settings.editor.sourceProfile");
   return t("settings.editor.sourceBuiltInDefault");
 }
 
-function effectLabel(effect: EditorM7ResolvedSetting["effect"], t: I18nTranslate): string {
+function effectLabel(effect: EditorM11ResolvedSetting["effect"], t: I18nTranslate): string {
   return effect === "restart"
     ? t("settings.editor.effectRestart")
     : t("settings.editor.effectLive");

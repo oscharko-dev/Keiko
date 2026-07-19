@@ -5,8 +5,8 @@ import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "r
 import type {
   EditorM7CommandDefinition,
   EditorM7ReasonCode,
-  EditorM7SettingScope,
   EditorM7SettingValue,
+  EditorM11SettingScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
   bindingFromKeyboardEvent,
@@ -32,7 +32,7 @@ export function KeyboardShortcutsPanel({
   view,
 }: {
   readonly root?: string | undefined;
-  readonly scope: EditorM7SettingScope;
+  readonly scope: EditorM11SettingScope;
   readonly view: EditorSettingsView;
 }): ReactNode {
   const t = useTranslate();
@@ -47,7 +47,7 @@ export function KeyboardShortcutsPanel({
     () => filteredShortcutRows(registry.commands, query, modifiedOnly, t),
     [modifiedOnly, query, registry.commands, t],
   );
-  const disabled = view.mutating || (scope === "workspace" && root === undefined);
+  const disabled = view.mutating || (scope !== "user" && root === undefined);
   const restoreFocus = (commandId: string): void => {
     requestAnimationFrame(() => buttonRefs.current.get(commandId)?.focus());
   };
@@ -352,7 +352,7 @@ function handleCapture(args: {
   readonly commandId: string;
   readonly current: EditorM7SettingValue | undefined;
   readonly event: KeyboardEvent<HTMLButtonElement>;
-  readonly scope: EditorM7SettingScope;
+  readonly scope: EditorM11SettingScope;
   readonly setIssue: (issue: EditorM7ReasonCode | undefined) => void;
   readonly setRecordingId: (id: string | null) => void;
   readonly view: EditorSettingsView;

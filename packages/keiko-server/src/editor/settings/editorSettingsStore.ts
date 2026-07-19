@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   parseEditorM7SettingPatch,
+  type EditorM11SettingScope,
   type EditorM7ReasonCode,
   type EditorM7SettingId,
   type EditorM7SettingScope,
@@ -32,7 +33,7 @@ export interface EditorSettingsIdempotencyRecord {
 export interface EditorSettingsChangeEvent {
   readonly schemaVersion: typeof EDITOR_M7_SCHEMA_VERSION;
   readonly sequence: number;
-  readonly scope: EditorM7SettingScope;
+  readonly scope: EditorM11SettingScope;
   readonly action: "set" | "reset";
   readonly settingIds: readonly EditorM7SettingId[];
   readonly outcome: "accepted" | "noOp" | "rejected";
@@ -56,6 +57,11 @@ export interface EditorSettingsWorkspaceRecord extends EditorSettingsRecordBase 
   readonly workspaceFingerprint: string;
 }
 
+export interface EditorSettingsRootRecord extends EditorSettingsRecordBase {
+  readonly kind: "root";
+  readonly rootFingerprint: string;
+}
+
 interface EditorSettingsLoadResult<T extends EditorSettingsRecordBase> {
   readonly state: EditorSettingsStoreState;
   readonly record: T;
@@ -67,8 +73,10 @@ export interface EditorSettingsStore {
   readonly loadWorkspace: (
     realRoot: string,
   ) => EditorSettingsLoadResult<EditorSettingsWorkspaceRecord>;
+  readonly loadRoot: (realRoot: string) => EditorSettingsLoadResult<EditorSettingsRootRecord>;
   readonly commitUser: (record: EditorSettingsUserRecord) => void;
   readonly commitWorkspace: (realRoot: string, record: EditorSettingsWorkspaceRecord) => void;
+  readonly commitRoot: (realRoot: string, record: EditorSettingsRootRecord) => void;
 }
 
 export interface EditorSettingsStoreOptions {
@@ -100,6 +108,13 @@ export function editorSettingsWorkspaceRecordPath(stateDir: string, realRoot: st
   return join(stateDir, `editor-settings-${editorSettingsWorkspaceFingerprint(realRoot)}.json`);
 }
 
+export function editorSettingsRootRecordPath(stateDir: string, realRoot: string): string {
+  return join(
+    stateDir,
+    `editor-settings-root-${editorSettingsWorkspaceFingerprint(realRoot)}.json`,
+  );
+}
+
 export function emptyEditorSettingsUserRecord(): EditorSettingsUserRecord {
   return {
     kind: "user",
@@ -118,6 +133,18 @@ export function emptyEditorSettingsWorkspaceRecord(
     kind: "workspace",
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     workspaceFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
+    revision: 0,
+    values: {},
+    idempotency: [],
+    events: [],
+  };
+}
+
+export function emptyEditorSettingsRootRecord(realRoot: string): EditorSettingsRootRecord {
+  return {
+    kind: "root",
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    rootFingerprint: editorSettingsWorkspaceFingerprint(realRoot),
     revision: 0,
     values: {},
     idempotency: [],
@@ -192,7 +219,7 @@ function validEventRecord(value: UnknownRecord): boolean {
 }
 
 function validEventScope(value: unknown): boolean {
-  return value === "user" || value === "workspace";
+  return value === "user" || value === "workspace" || value === "root";
 }
 
 function validEventAction(value: unknown): boolean {
@@ -250,9 +277,20 @@ function parseWorkspaceRecord(
     : { kind: "workspace", workspaceFingerprint: fingerprint, ...base };
 }
 
-function recordKeys(kind: "user" | "workspace"): readonly string[] {
+function parseRootRecord(
+  value: unknown,
+  fingerprint: string,
+): EditorSettingsRootRecord | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, recordKeys("root"))) return undefined;
+  if (value.kind !== "root" || value.rootFingerprint !== fingerprint) return undefined;
+  const base = parseBase(value, "workspace");
+  return base === undefined ? undefined : { kind: "root", rootFingerprint: fingerprint, ...base };
+}
+
+function recordKeys(kind: "user" | "workspace" | "root"): readonly string[] {
   const keys = ["kind", "schemaVersion", "revision", "values", "idempotency", "events"];
-  return kind === "workspace" ? [...keys, "workspaceFingerprint"] : keys;
+  if (kind === "workspace") return [...keys, "workspaceFingerprint"];
+  return kind === "root" ? [...keys, "rootFingerprint"] : keys;
 }
 
 function safeUserRecordPath(path: string): boolean {
@@ -320,8 +358,30 @@ function loadWorkspaceRecord(
   }
 }
 
+function loadRootRecord(
+  realRoot: string,
+  options: EditorSettingsStoreOptions,
+): EditorSettingsLoadResult<EditorSettingsRootRecord> {
+  const empty = emptyEditorSettingsRootRecord(realRoot);
+  const path = editorSettingsRootRecordPath(options.stateDir, realRoot);
+  if (!safeWorkspaceRecordPath(path, options.stateDir, realRoot)) {
+    return { state: "unavailable", record: empty };
+  }
+  try {
+    const raw = loadJson(path, options);
+    if (raw.kind === "missing") return { state: "absent", record: empty };
+    if (raw.kind === "oversized") return { state: "unavailable", record: empty };
+    const record = parseRootRecord(raw.value, empty.rootFingerprint);
+    return record === undefined
+      ? { state: "unavailable", record: empty }
+      : { state: "ready", record };
+  } catch {
+    return { state: "unavailable", record: empty };
+  }
+}
+
 function recordForWrite(
-  record: EditorSettingsUserRecord | EditorSettingsWorkspaceRecord,
+  record: EditorSettingsUserRecord | EditorSettingsWorkspaceRecord | EditorSettingsRootRecord,
 ): Record<string, unknown> {
   return {
     kind: record.kind,
@@ -331,6 +391,7 @@ function recordForWrite(
     idempotency: record.idempotency,
     events: record.events,
     ...(record.kind === "workspace" ? { workspaceFingerprint: record.workspaceFingerprint } : {}),
+    ...(record.kind === "root" ? { rootFingerprint: record.rootFingerprint } : {}),
   };
 }
 
@@ -343,6 +404,8 @@ export function createEditorSettingsStore(
     loadUser: (): EditorSettingsLoadResult<EditorSettingsUserRecord> => loadUserRecord(options),
     loadWorkspace: (realRoot): EditorSettingsLoadResult<EditorSettingsWorkspaceRecord> =>
       loadWorkspaceRecord(realRoot, options),
+    loadRoot: (realRoot): EditorSettingsLoadResult<EditorSettingsRootRecord> =>
+      loadRootRecord(realRoot, options),
     commitUser: (record): void => {
       save(editorSettingsUserRecordPath(options.stateDir), recordForWrite(record));
     },
@@ -354,6 +417,15 @@ export function createEditorSettingsStore(
         throw new Error("editor settings state directory must remain outside the workspace");
       }
       save(editorSettingsWorkspaceRecordPath(options.stateDir, realRoot), recordForWrite(record));
+    },
+    commitRoot: (realRoot, record): void => {
+      if (record.rootFingerprint !== editorSettingsWorkspaceFingerprint(realRoot)) {
+        throw new Error("editor settings root identity mismatch");
+      }
+      if (containsPath(realRoot, options.stateDir)) {
+        throw new Error("editor settings state directory must remain outside the workspace");
+      }
+      save(editorSettingsRootRecordPath(options.stateDir, realRoot), recordForWrite(record));
     },
   };
 }

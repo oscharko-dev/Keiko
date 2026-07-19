@@ -4,8 +4,11 @@ import {
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
 } from "./workspace-contract-primitives.js";
+import { EDITOR_M7_SETTING_REGISTRY } from "./editor-m7.js";
 import {
   resolveEditorM11Settings,
+  editorM11RootSettingIsMonotonic,
+  parseEditorM11SettingsEvent,
   validateEditorM11ProfileSettingsLayer,
   validateEditorM11RootSettingsLayer,
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
@@ -149,5 +152,47 @@ describe("M11 editor settings", () => {
     expect(() => validateEditorM11RootSettingsLayer(hostile)).not.toThrow();
     expect(validateEditorM11ProfileSettingsLayer(hostile).ok).toBe(false);
     expect(validateEditorM11RootSettingsLayer(hostile).ok).toBe(false);
+  });
+
+  it("keeps every policy-ceiling root override monotonic", () => {
+    for (const definition of EDITOR_M7_SETTING_REGISTRY) {
+      if (definition.security !== "policyCeiling") continue;
+      expect(definition.type).toBe("boolean");
+      expect(editorM11RootSettingIsMonotonic(definition.id, false, true)).toBe(false);
+      expect(editorM11RootSettingIsMonotonic(definition.id, true, false)).toBe(true);
+      expect(editorM11RootSettingIsMonotonic(definition.id, false, false)).toBe(true);
+      expect(editorM11RootSettingIsMonotonic(definition.id, true, true)).toBe(true);
+    }
+    expect(editorM11RootSettingIsMonotonic("fontSize", 12, 32)).toBe(true);
+    expect(
+      resolveEditorM11Settings({
+        root: { ...rootLayer(), values: { patchApply: true } },
+      }).find((setting) => setting.id === "patchApply"),
+    ).toMatchObject({ value: false, source: "builtInDefault" });
+    expect(
+      resolveEditorM11Settings({
+        workspace: { scope: "workspace", values: { patchApply: true } },
+        root: { ...rootLayer(), values: { patchApply: false } },
+      }).find((setting) => setting.id === "patchApply"),
+    ).toMatchObject({ value: false, source: "root" });
+  });
+
+  it("parses root-scoped settings events and rejects duplicate setting ids", () => {
+    const event = {
+      schemaVersion: "1",
+      sequence: 4,
+      kind: "changed",
+      revision: 1,
+      userRevision: 0,
+      workspaceRevision: 0,
+      rootRevision: 1,
+      scope: "root",
+      settingIds: ["fontSize"],
+      storeState: "ready",
+    };
+    expect(parseEditorM11SettingsEvent(event)).toEqual({ ok: true, value: event });
+    expect(parseEditorM11SettingsEvent({ ...event, settingIds: ["fontSize", "fontSize"] })).toEqual(
+      { ok: false },
+    );
   });
 });

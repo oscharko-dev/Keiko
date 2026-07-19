@@ -6,11 +6,14 @@ import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
+  resolveEditorM11Settings,
   type EditorM7AiActivationStatus,
   type EditorM7AiState,
   type EditorM7SettingsSnapshot,
   type EditorM7SettingId,
   type EditorM7SettingValue,
+  type EditorM11RootSettingsLayer,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { I18nProvider } from "@/lib/i18n";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
@@ -22,7 +25,7 @@ const editorSettingsView = vi.hoisted(() => ({
 
 vi.mock("../cards/useEditorSettings", () => ({
   useEditorSettings: (): EditorSettingsView => editorSettingsView.current,
-  settingById: (snapshotArg: EditorM7SettingsSnapshot | undefined, id: string) =>
+  settingById: (snapshotArg: EditorM11SettingsSnapshot | undefined, id: string) =>
     snapshotArg?.settings.find((setting) => setting.id === id),
 }));
 
@@ -117,6 +120,35 @@ describe("EditorSettingsPanel", () => {
 
     expect(editorSettingsView.current.setValue).toHaveBeenCalledWith("user", "fontSize", 17);
     expect(editorSettingsView.current.reset).toHaveBeenCalledWith("user", ["fontSize"]);
+  });
+
+  it("selects root scope and explains a root-owned effective value", () => {
+    const rootLayer: EditorM11RootSettingsLayer = {
+      kind: "editor-root-settings",
+      schemaVersion: 1,
+      rootRef: "root-primary" as EditorM11RootSettingsLayer["rootRef"],
+      rootIdentityDigest: "a".repeat(64) as EditorM11RootSettingsLayer["rootIdentityDigest"],
+      revision: 1,
+      values: { fontSize: 19 },
+    };
+    editorSettingsView.current = view({
+      snapshot: {
+        ...snapshot(),
+        rootRevision: 1,
+        settings: resolveEditorM11Settings({ root: rootLayer }),
+      },
+    });
+    renderPanel();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Scope" }), {
+      target: { value: "root" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Font size" }), {
+      target: { value: "20" },
+    });
+
+    expect(screen.getAllByText("Source: root").length).toBeGreaterThan(0);
+    expect(editorSettingsView.current.setValue).toHaveBeenCalledWith("root", "fontSize", 20);
   });
 
   it("keeps policy-locked and follow-up-owned controls unavailable", () => {

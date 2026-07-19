@@ -141,10 +141,10 @@ import type {
   ManagedLspControlResponse,
   ManagedLspControlSuccessResult,
   ManagedLspSemanticTokenResponse,
-  EditorM7SettingsMutation,
-  EditorM7SettingsMutationOk,
-  EditorM7SettingsMutationResult,
-  EditorM7SettingsSnapshot,
+  EditorM11SettingsMutation,
+  EditorM11SettingsMutationOk,
+  EditorM11SettingsMutationResult,
+  EditorM11SettingsSnapshot,
   EditorM7WorkspaceSnippetMutation,
   EditorM7WorkspaceSnippetMutationResult,
   EditorM7WorkspaceSnippetSnapshot,
@@ -2030,7 +2030,7 @@ export async function mutateManagedLspSettings(
 export function fetchEditorSettings(
   root?: string | undefined,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsSnapshot> {
+): Promise<EditorM11SettingsSnapshot> {
   const query = root === undefined || root.length === 0 ? "" : `?root=${encodeURIComponent(root)}`;
   return fetchJson(`/api/editor/settings${query}`, {
     ...(signal === undefined ? {} : { signal }),
@@ -2038,11 +2038,11 @@ export function fetchEditorSettings(
 }
 
 export function mutateEditorSettings(
-  input: EditorM7SettingsMutation,
+  input: EditorM11SettingsMutation,
   etag: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsMutationResult> {
+): Promise<EditorM11SettingsMutationResult> {
   return fetchJson("/api/editor/settings", {
     method: "PATCH",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
@@ -2064,7 +2064,7 @@ export function mutateDebugActivation(
   etag: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<EditorM7SettingsMutationOk> {
+): Promise<EditorM11SettingsMutationOk> {
   return fetchJson(`/api/editor/settings/debug/${action}`, {
     method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
