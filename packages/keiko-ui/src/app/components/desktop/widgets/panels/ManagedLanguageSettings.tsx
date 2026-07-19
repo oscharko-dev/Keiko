@@ -825,6 +825,7 @@ function reasonLabel(reason: ManagedLspActivationReasonCode, t: ManagedLanguageT
   const keys: Readonly<Record<ManagedLspActivationReasonCode, Parameters<typeof t>[0]>> = {
     PRODUCT_UNSUPPORTED: "reasonProductUnsupported",
     POLICY_DENIED: "reasonPolicyDenied",
+    WORKSPACE_UNTRUSTED: "reasonWorkspaceUntrusted",
     LEGACY_ENV_DISABLED: "reasonLegacyDisabled",
     NOT_PROVISIONED: "reasonNotProvisioned",
     WORKSPACE_DISABLED: "reasonWorkspaceDisabled",

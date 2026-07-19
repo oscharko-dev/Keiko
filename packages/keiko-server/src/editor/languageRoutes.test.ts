@@ -124,7 +124,12 @@ function deps(
   redactor: UiHandlerDeps["redactor"] = buildRedactor({}),
   env: UiHandlerDeps["env"] = {},
 ): UiHandlerDeps {
-  return { store, redactor, env } as unknown as UiHandlerDeps;
+  return {
+    store,
+    redactor,
+    env,
+    workspaceScriptTrust: { trustLevelForRoot: () => "trusted" },
+  } as unknown as UiHandlerDeps;
 }
 
 function redactEveryString(value: unknown): unknown {
@@ -386,6 +391,7 @@ describe("GET /api/editor/language/capabilities", () => {
         processEnv: {},
         provisioning: () => true,
         disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
         runtimeApproved: () => true,
         configurationSafe: () => true,
         projectEvidence: () => "projected",
@@ -492,6 +498,7 @@ describe("POST /api/editor/language", () => {
         processEnv: {},
         provisioning: () => true,
         disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
         runtimeApproved: () => true,
         configurationSafe: () => true,
         projectEvidence: () => "projected",
@@ -518,6 +525,62 @@ describe("POST /api/editor/language", () => {
 
       expect(result.status).toBe(422);
       expect(spawned).toBe(false);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks live trust immediately before pool acquisition and closes the snapshot race", async () => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-trust-race-bin-")));
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-trust-race-state-")));
+    try {
+      const pyright = join(bin, "pyright-langserver");
+      await writeFile(pyright, "#!/bin/sh\n", "utf8");
+      await chmod(pyright, 0o755);
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      await managedLspControl.mutate({
+        action: "activate",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        idempotencyKey: "activate-before-trust-race",
+        language: "python",
+        root,
+      });
+      const spawn = vi.fn((): never => {
+        throw new Error("spawn must remain unreachable");
+      });
+      const restrictedDeps = {
+        ...deps(buildRedactor({}), { PATH: bin }),
+        managedLspControl,
+        workspaceScriptTrust: { trustLevelForRoot: () => "restricted" as const },
+      } as unknown as UiHandlerDeps;
+
+      const result = await handleEditorLanguage(
+        postContext({
+          operation: "diagnostics",
+          root,
+          document: { path: "src/a.py", languageId: "python", text: "value = 1\n" },
+        }),
+        restrictedDeps,
+        {
+          hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+          hostLanguageSpawn: spawn,
+        },
+      );
+
+      expect(result.status).toBe(422);
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       await rm(bin, { recursive: true, force: true });
       await rm(stateDir, { recursive: true, force: true });
@@ -895,6 +958,7 @@ describe("managedActivationAuthorization", () => {
         processEnv: {},
         provisioning: () => true,
         disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
         runtimeApproved: () => true,
         configurationSafe: () => true,
         projectEvidence: () => "projected",
@@ -949,6 +1013,7 @@ describe("managedActivationAuthorization", () => {
         processEnv: {},
         provisioning: () => true,
         disposePoolEntry: () => Promise.resolve(),
+        workspaceTrust: () => "trusted",
         runtimeApproved: () => true,
         configurationSafe: () => true,
         projectEvidence: () => "projected",

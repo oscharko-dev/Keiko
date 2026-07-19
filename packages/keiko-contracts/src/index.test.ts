@@ -966,7 +966,8 @@ describe("keiko-contracts package surface", () => {
     expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.MANAGED_LSP_EFFECTIVE_STATES).toHaveLength(9);
-    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(16);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(17);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toContain("WORKSPACE_UNTRUSTED");
     expect(typeof m.parseManagedLspActivationInput).toBe("function");
     expect(typeof m.parseManagedLspActivationStatus).toBe("function");
     expect(typeof m.resolveManagedLspActivation).toBe("function");

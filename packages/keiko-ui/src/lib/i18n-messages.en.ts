@@ -1178,6 +1178,8 @@ export const EN_MESSAGES = {
     "Language settings are temporarily unavailable and remain disabled.",
   "managedLanguage.reasonProductUnsupported": "This language is not supported by this Keiko build.",
   "managedLanguage.reasonPolicyDenied": "Deployment policy denied activation.",
+  "managedLanguage.reasonWorkspaceUntrusted":
+    "Restricted Mode prevents this workspace from starting managed language servers.",
   "managedLanguage.reasonLegacyDisabled":
     "The compatibility environment policy disabled this provider.",
   "managedLanguage.reasonNotProvisioned": "The approved language server is not provisioned.",

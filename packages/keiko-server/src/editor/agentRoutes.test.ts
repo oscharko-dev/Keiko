@@ -76,6 +76,7 @@ function handleEditorAgentActions(
     redactor: buildRedactor({}),
     env: {},
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    workspaceScriptTrust: { trustLevelForRoot: (): "trusted" => "trusted" },
   };
   return handleEditorAgentActionsRoute(routeContext, { ...base, ...deps } as unknown as Parameters<
     typeof handleEditorAgentActionsRoute
@@ -4483,6 +4484,29 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       disposition: "review-required",
       effectClass: "content-mutation",
       reviewReason: "deterministic-risk-approval-required",
+    });
+  });
+
+  it("rechecks canonical workspace trust and routes a mutation through review", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    const restrictedTrust = {
+      trustLevelForRoot: (): "restricted" => "restricted",
+    };
+
+    const result = await handleEditorAgentActions(context(arranged.action), {
+      workspaceScriptTrust: restrictedTrust,
+    } as unknown as UiHandlerDeps);
+
+    expect(result.status).toBe(202);
+    expect(lastEmittedAction(bridge.frames()).requiresReview).toBe(true);
+    expect(auditRecords()[0]).toMatchObject({
+      disposition: "review-required",
+      effectClass: "content-mutation",
+      reviewReason: "workspace-restricted",
     });
   });
 });

@@ -82,6 +82,7 @@ describe("Pyright provider fake-protocol conformance", () => {
         signal: new AbortController().signal,
         spawn: fake.spawn,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
       });
       expect(outcome, request.operation).toMatchObject({ kind: request.operation });
@@ -131,6 +132,7 @@ describe("Pyright provider fake-protocol conformance", () => {
       signal: new AbortController().signal,
       spawn,
       activationAuthorized: true,
+      activationStillAuthorized: (): boolean => true,
     };
     await runHostLanguageOperation(python, options);
     await runHostLanguageOperation(go, { ...options, overlayAbsolutePath: join(root, "main.go") });

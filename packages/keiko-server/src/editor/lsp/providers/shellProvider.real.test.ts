@@ -59,6 +59,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
         overlayAbsolutePath: join(root, "main.sh"),
         signal: new AbortController().signal,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: {
           revision: 1,
           settings: {

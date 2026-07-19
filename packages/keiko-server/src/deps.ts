@@ -50,7 +50,11 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "n
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
-import type { ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -1296,6 +1300,30 @@ function buildVerificationRunner(options: {
   });
 }
 
+function propagateManagedLspRestriction(
+  control: ManagedLspControlService | undefined,
+  canonicalRoot: string,
+  redact: Redactor,
+): void {
+  const pending = control?.restrict(canonicalRoot);
+  if (pending === undefined) return;
+  void pending.catch((error: unknown): void => {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: "managed-lsp-trust-restriction",
+        operation: "managed-lsp.trust.restrict",
+        source: "managed-lsp-control",
+        error,
+        redact: (message): string => {
+          const redacted = redact(message);
+          return typeof redacted === "string" ? redacted : "[REDACTED]";
+        },
+      }),
+    );
+  });
+}
+
 function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
@@ -2193,16 +2221,23 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
+  let managedLspControl = args.options.managedLspControl;
   const workspaceScriptTrust =
-    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
-  const managedLspControl =
-    args.options.managedLspControl ??
-    createNodeManagedLspControl({
-      stateDir: args.runtimeStateDir,
-      processEnv: args.options.env,
-      redact: args.liveRedactor,
-      evidenceStore: args.evidenceStore,
+    args.options.workspaceScriptTrust ??
+    createWorkspaceScriptTrustService({
+      store: args.uiStore,
+      onRestricted: (canonicalRoot): void => {
+        propagateManagedLspRestriction(managedLspControl, canonicalRoot, args.liveRedactor);
+      },
     });
+  managedLspControl ??= createNodeManagedLspControl({
+    stateDir: args.runtimeStateDir,
+    processEnv: args.options.env,
+    redact: args.liveRedactor,
+    evidenceStore: args.evidenceStore,
+    workspaceTrust: (realRoot): "trusted" | "restricted" =>
+      workspaceScriptTrust.trustLevelForRoot(realRoot),
+  });
   const debugActivationControl = buildDebugActivationControl(args);
   return {
     terminal: buildTerminalManager({

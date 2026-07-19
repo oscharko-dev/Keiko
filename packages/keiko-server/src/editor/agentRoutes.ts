@@ -78,6 +78,7 @@ import {
   type EditorAgentSnapshotTextMode,
   type CodingWorkbenchMode,
   type LanguageRange,
+  type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import {
   PatchApplyError,
@@ -132,7 +133,10 @@ import {
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
-  "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling" | "runtimeMutationLease"
+  | "autonomousDeliveryApprovalStore"
+  | "autonomousDeliveryDeploymentCeiling"
+  | "runtimeMutationLease"
+  | "workspaceScriptTrust"
 >;
 
 type EditorAgentActionRouteDeps = UiHandlerDeps;
@@ -1397,6 +1401,19 @@ function authorityDenyReason(
     : "authority-invalid";
 }
 
+function editorWorkspaceTrust(
+  deps: EditorAgentRouteDeps | undefined,
+  workspaceRoot: string,
+): WorkspaceTrustLevel {
+  try {
+    return deps?.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+      ? "trusted"
+      : "restricted";
+  } catch {
+    return "restricted";
+  }
+}
+
 // Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
 // the always-on workspace deny-list (a keiko-workspace concern the leaf classifier cannot reach, so
 // the boolean is resolved here). Pure browser navigation/layout remains exempt; server-resolved
@@ -1433,6 +1450,7 @@ function decideActionPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK[action.type],
+    editorWorkspaceTrust(deps, snapshot.workspaceRoot),
   );
 }
 

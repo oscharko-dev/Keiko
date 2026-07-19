@@ -23,6 +23,7 @@ function activeInput(): ManagedLspActivationInput {
     negotiation: "negotiated",
     runtimeHealth: "healthy",
     restartRequired: false,
+    workspaceTrust: "trusted",
   };
 }
 
@@ -47,6 +48,7 @@ describe("managed LSP activation vocabulary", () => {
     ]);
     expect(MANAGED_LSP_ACTIVATION_REASON_CODES).toContain("INVALID_INPUT");
     expect(MANAGED_LSP_ACTIVATION_REASON_CODES).toContain("STATE_UNAVAILABLE");
+    expect(MANAGED_LSP_ACTIVATION_REASON_CODES).toContain("WORKSPACE_UNTRUSTED");
     expect(Object.isFrozen(MANAGED_LSP_LANGUAGES)).toBe(true);
     expect(Object.isFrozen(MANAGED_LSP_EFFECTIVE_STATES)).toBe(true);
     expect(Object.isFrozen(MANAGED_LSP_ACTIVATION_REASON_CODES)).toBe(true);
@@ -64,6 +66,20 @@ describe("resolveManagedLspActivation", () => {
       reasonCode: "ACTIVE",
       policyResult: "allowed",
     });
+  });
+
+  it("fails closed with a typed reason when workspace trust is restricted or absent", () => {
+    for (const input of [
+      { ...activeInput(), workspaceTrust: "restricted" as const },
+      Object.fromEntries(Object.entries(activeInput()).filter(([key]) => key !== "workspaceTrust")),
+    ]) {
+      expect(resolveManagedLspActivation(input)).toMatchObject({
+        ok: true,
+        state: "disabledByPolicy",
+        reasonCode: "WORKSPACE_UNTRUSTED",
+        policyResult: "denied",
+      });
+    }
   });
 
   it.each([
@@ -166,6 +182,7 @@ describe("resolveManagedLspActivation", () => {
     {},
     { ...activeInput(), schemaVersion: "2" },
     { ...activeInput(), deploymentPolicy: "admin-override" },
+    { ...activeInput(), workspaceTrust: "operator-approved" },
     { ...activeInput(), workspaceActivation: "enabled", extra: true },
     { ...activeInput(), canonicalState: "missing" },
   ])("fails closed for malformed, unknown, or schema-skewed input", (input) => {

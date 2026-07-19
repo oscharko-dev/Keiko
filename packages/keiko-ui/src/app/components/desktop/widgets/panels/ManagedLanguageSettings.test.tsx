@@ -230,6 +230,18 @@ describe("ManagedLanguageSettings", () => {
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
+  it("explains Restricted Mode without offering an activation bypass", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot("disabledByPolicy", "WORKSPACE_UNTRUSTED"));
+    renderSettings();
+    expect(
+      await screen.findByText(
+        "Restricted Mode prevents this workspace from starting managed language servers.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
   it("does not send activation for not-provisioned providers", async () => {
     fetchSettingsMock.mockResolvedValue(snapshot("notProvisioned", "NOT_PROVISIONED"));
     renderSettings();

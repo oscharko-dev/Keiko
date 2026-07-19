@@ -286,6 +286,7 @@ async function createFixture(): Promise<Fixture> {
     },
     gitRouteOptions: { timeoutMs: 5_000 },
     verificationRunner,
+    workspaceScriptTrust: { trustLevelForRoot: (): "trusted" => "trusted" },
   } as unknown as UiHandlerDeps;
   // Two-phase bootstrap (mirrors tests/editor-agent-managed-lsp.integration.test.ts): the server
   // validates the request Host header against its OWN configured `port`, so the port must be known

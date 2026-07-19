@@ -193,11 +193,15 @@ class FakeManager implements VerificationRunnerManager {
   };
 }
 
-function deps(manager: VerificationRunnerManager | undefined): UiHandlerDeps {
+function deps(
+  manager: VerificationRunnerManager | undefined,
+  workspaceTrust: "trusted" | "restricted" = "trusted",
+): UiHandlerDeps {
   return {
     verificationRunner: manager,
     autonomousDeliveryDeploymentCeiling: CEILING,
-  } as UiHandlerDeps;
+    workspaceScriptTrust: { trustLevelForRoot: () => workspaceTrust },
+  } as unknown as UiHandlerDeps;
 }
 
 function fakeReq(body: Record<string, unknown>): IncomingMessage {
@@ -352,6 +356,26 @@ describe("handleEditorAgentVerificationRun governance (AC2–AC4)", () => {
     );
     expect(manager.calls).toBe(0);
     expect(resultBody(result)).toMatchObject({ outcome: "not-run", disposition: "denied" });
+  });
+
+  it("rechecks canonical workspace trust and denies execution before dispatch", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority();
+    const request = ctx({
+      schemaVersion: "1",
+      sessionId: SESSION_ID,
+      kind: "typecheck",
+      authorityRef,
+    });
+
+    const result = await handleEditorAgentVerificationRun(request, deps(manager, "restricted"));
+
+    expect(manager.calls).toBe(0);
+    expect(resultBody(result)).toEqual({
+      outcome: "not-run",
+      disposition: "denied",
+      reason: "workspace-restricted",
+    });
   });
 
   it("does not dispatch a review-required request", async () => {

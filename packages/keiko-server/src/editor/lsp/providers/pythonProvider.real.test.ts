@@ -60,6 +60,7 @@ describe.skipIf(!provisioned)(suiteName, () => {
         overlayAbsolutePath: join(root, "main.py"),
         signal: new AbortController().signal,
         activationAuthorized: true,
+        activationStillAuthorized: (): boolean => true,
         protocolConfiguration: { revision: 1, settings: {}, initializationOptions: {} },
       });
       expect(outcome, request.operation).toMatchObject({ kind: request.operation });
