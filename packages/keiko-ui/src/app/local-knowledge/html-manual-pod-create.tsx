@@ -8,7 +8,7 @@
 // #1300). Progress rendering + polling are shared with the refresh control. Every API call is an
 // injectable seam so the flow is tested without a real network.
 
-import { useCallback, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import type { HtmlManualPodCreateRequest, HtmlManualPodJob } from "@oscharko-dev/keiko-contracts";
 import { getHtmlManualPodJob, startHtmlManualPodCreate } from "@/lib/local-knowledge-api";
 import { useTranslate } from "@/lib/i18n";
@@ -152,7 +152,7 @@ function CreateForm({
   const [invalid, setInvalid] = useState(false);
   const errorId = useId();
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
+  const handleSubmit = (event: SubmitEvent<HTMLFormElement>): void => {
     event.preventDefault();
     if (!hasValidCreateInput(displayName, origin)) {
       setInvalid(true);
