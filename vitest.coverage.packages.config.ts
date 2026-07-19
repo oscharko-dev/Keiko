@@ -13,12 +13,7 @@ export default defineConfig({
       "packages/keiko-editor/src/**/*.test.tsx",
       "scripts/__tests__/**/*.test.mjs",
     ],
-    exclude: [
-      "**/node_modules/**",
-      "tests/fixtures/**",
-      "packages/keiko-ui/**",
-      "scripts/__tests__/check-package-surface.test.mjs",
-    ],
+    exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     // GEN-TEST-FLAKE-002: coverage instrumentation is substantially more CPU-intensive than the
     // root suite. Keep the same bounded worker count so performance guardrails and subprocess-heavy

@@ -133,4 +133,24 @@ describe("package-surface npm pack helper", () => {
     );
     expect(exitError.message).not.toContain(sensitiveOutput);
   });
+
+  it("reports signal termination without exposing subprocess output", () => {
+    const sensitiveOutput = "fixture-sensitive-signal-output";
+    const signalError = capturedError(() =>
+      packFiles({
+        spawnSyncImpl: () => ({
+          status: null,
+          signal: "SIGTERM",
+          stdout: sensitiveOutput,
+          stderr: sensitiveOutput,
+        }),
+        resolveHostExecutableImpl: () => "/usr/bin/npm",
+      }),
+    );
+
+    expect(signalError.message).toBe(
+      `npm pack --dry-run failed (signal SIGTERM; stdout bytes: ${sensitiveOutput.length}; stderr bytes: ${sensitiveOutput.length})`,
+    );
+    expect(signalError.message).not.toContain(sensitiveOutput);
+  });
 });

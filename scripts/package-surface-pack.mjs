@@ -44,9 +44,11 @@ function capturedBytes(value) {
 
 function subprocessFailureMessage(result) {
   const status =
-    result.status === null || result.status === undefined
-      ? "unknown status"
-      : `exit ${String(result.status)}`;
+    typeof result.signal === "string" && /^SIG[A-Z0-9]+$/u.test(result.signal)
+      ? `signal ${result.signal}`
+      : result.status === null || result.status === undefined
+        ? "unknown status"
+        : `exit ${String(result.status)}`;
   return (
     `npm pack --dry-run failed (${status}; stdout bytes: ${String(capturedBytes(result.stdout))}; ` +
     `stderr bytes: ${String(capturedBytes(result.stderr))})`
