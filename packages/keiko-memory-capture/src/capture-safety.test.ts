@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts";
 
 import {
   memoryTextEgressRejectionReason,
@@ -46,14 +45,21 @@ describe("memoryTextEgressRejectionReason", () => {
     ).toBe("credential-shape");
   });
 
-  it("returns the same category denial for every product mode", () => {
+  it("never accepts a mode parameter, so a denial cannot be relaxed by mode", () => {
     const policy = {
       deniedCategoryMatchers: [{ category: "third-party", matchers: [/\bmy colleague is\b/iu] }],
     };
-    const outcomes = CODING_WORKBENCH_MODES.map(() =>
-      memoryTextSecretEgressRejectionReason("My colleague is moving teams.", policy),
+    // memoryTextSecretEgressRejectionReason's signature is (text, policy) with no third "mode"
+    // argument anywhere, so no caller — at any layer, in any of the CODING_WORKBENCH_MODES — can
+    // pass a mode that special-cases this denial; calling it in a loop over modes would only call
+    // the identical (text, policy) pair repeatedly and prove nothing beyond this arity check. The
+    // full end-to-end mode-independence property (every product mode routes through this same
+    // unmodified call) is proven by memory-capture-autonomy.test.ts's server-side clamp test and
+    // by tests/e2e/memoriaviva-m1-certification.spec.ts's live certifyModeIndependentDenials.
+    expect(memoryTextSecretEgressRejectionReason.length).toBe(1);
+    expect(memoryTextSecretEgressRejectionReason("My colleague is moving teams.", policy)).toBe(
+      "denied-category",
     );
-    expect(outcomes).toEqual(CODING_WORKBENCH_MODES.map(() => "denied-category"));
   });
 
   it("blocks non-public sensitivity before secondary model egress", () => {
