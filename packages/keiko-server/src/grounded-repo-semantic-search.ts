@@ -844,6 +844,23 @@ function prepareSemanticSearch(
   };
 }
 
+// A pod that is unreadable or fails mid-query stays fail-closed on results: it must NOT drop back
+// to the whole-file path, because that path embeds every candidate document's content and would
+// turn an index fault into an unplanned model-gateway egress and cost burst (pinned by the
+// "soft-fails a pod query error without escaping or embedding documents" regression test). What the
+// fault must not be is *silent*: an empty result would otherwise be indistinguishable from a
+// genuinely unmatched query. The degradation is therefore recorded content-free through the
+// existing pod retrieval observation seam — a mode label and counts, never paths or bodies.
+function observePodDegradation(ctx: EmbeddingContext, mode: string): void {
+  ctx.observePodRetrieval?.({
+    mode,
+    referenceCount: 0,
+    denseCandidateCount: 0,
+    lexicalCandidateCount: 0,
+    lexicalOrFallbackUsed: true,
+  });
+}
+
 async function semanticSearch(
   ctx: EmbeddingContext,
   request: SemanticSearchInput,
@@ -851,7 +868,10 @@ async function semanticSearch(
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
   const { documents, maxResults, queryTerms, queryText, signal } = prepared;
-  if (ctx.repositoryPod.kind === "failed") return [];
+  if (ctx.repositoryPod.kind === "failed") {
+    observePodDegradation(ctx, "pod-unavailable");
+    return [];
+  }
   if (ctx.repositoryPod.kind === "absent") {
     return legacyRankedHits(ctx, documents, queryText, queryTerms, signal, maxResults);
   }
@@ -882,6 +902,7 @@ async function semanticSearch(
     );
     return rankHits([...indexedHits, ...fallbackHits], documents, maxResults);
   } catch {
+    if (!isAborted(signal)) observePodDegradation(ctx, "pod-query-failed");
     return [];
   }
 }

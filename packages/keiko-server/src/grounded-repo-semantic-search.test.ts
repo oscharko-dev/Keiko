@@ -39,6 +39,7 @@ import {
   localizeMatchLine,
   SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION,
   semanticVectorCacheKeyFor,
+  type RepositoryPodRetrievalObservation,
 } from "./grounded-repo-semantic-search.js";
 
 const ROOT = "/repo";
@@ -563,6 +564,56 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     expect(embeddingRequest.mock.calls.some(([request]) => request.input.startsWith("Path:"))).toBe(
       false,
     );
+    deps.store.close();
+  });
+
+  it("records a content-free observation when a pod query error soft-fails", async () => {
+    // Fail-closed on results is deliberate (see the soft-fail test above: the whole-file path would
+    // embed document bodies). Fail-SILENT is not: an empty result must stay distinguishable from a
+    // genuinely unmatched query, so the degradation is reported through the pod observation seam.
+    const files: Record<string, string> = {
+      "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
+    };
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: vectorFor(request.input), modelId: request.modelId },
+        }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const fs = testFs(files);
+    const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
+    const observations: RepositoryPodRetrievalObservation[] = [];
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs,
+      maxCandidates: 8,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+      observePodRetrieval: (observation) => observations.push(observation),
+    });
+    if (provider === undefined) throw new Error("expected semantic provider");
+    pod.store.close();
+    observations.length = 0;
+
+    await expect(
+      provider.search({
+        query: QUERY,
+        documents: [{ scopePath: "src/auth.ts", text: files["src/auth.ts"] ?? "" }],
+      }),
+    ).resolves.toEqual([]);
+
+    expect(observations).toEqual([
+      {
+        mode: "pod-query-failed",
+        referenceCount: 0,
+        denseCandidateCount: 0,
+        lexicalCandidateCount: 0,
+        lexicalOrFallbackUsed: true,
+      },
+    ]);
+    // The observation carries counts and a mode label only — no path, body, or query text.
+    expect(JSON.stringify(observations)).not.toContain("src/auth.ts");
+    expect(JSON.stringify(observations)).not.toContain(QUERY.text);
     deps.store.close();
   });
 
