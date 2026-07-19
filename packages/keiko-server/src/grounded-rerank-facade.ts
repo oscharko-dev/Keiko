@@ -1,6 +1,7 @@
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   requestLiteLLMRerank,
+  type GatewayConfig,
   type LiteLLMRerankRequest,
   type OutboundHttpEgressConfig,
   type RerankErrorKind,
@@ -36,6 +37,14 @@ export interface RerankSelectionInput<T> {
   readonly policy?: RerankSelectionPolicy | undefined;
   readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
   readonly fallbackMode: RerankFallbackMode;
+  /**
+   * Pins the gateway-config generation this call reports against. `currentGatewayConfig` is a live
+   * accessor whose backing closure is replaced by the gateway-setup save route, so a caller that
+   * already captured a config snapshot (the readiness probe, which runs its probes concurrently
+   * against one selection) must pass it here. Omitted by request-scoped callers, which correctly
+   * want the current generation.
+   */
+  readonly gatewayConfig?: GatewayConfig | undefined;
 }
 
 export interface RerankSelection<T> {
@@ -50,6 +59,7 @@ interface MaterializedRerankInput {
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
+  readonly gatewayConfig?: GatewayConfig | undefined;
 }
 
 interface SafeRerankTransportResult {
@@ -194,13 +204,22 @@ function thrownRerankKind(input: MaterializedRerankInput): RerankErrorKind {
   return input.signal?.aborted === true ? "cancelled" : "transport";
 }
 
+// Egress resolution follows the pinned config generation first when the caller supplied one, so a
+// pinned call cannot pick up a concurrently saved gateway config through the live accessor.
+function rerankEgress(
+  input: MaterializedRerankInput,
+  reranker: RerankerConfig,
+): OutboundHttpEgressConfig | undefined {
+  return reranker.egress ?? input.gatewayConfig?.egress ?? currentGatewayEgressConfig(input.deps);
+}
+
 async function requestRerankTransport(
   input: MaterializedRerankInput,
   reranker: RerankerConfig,
 ): Promise<SafeRerankTransportResult> {
   const startedAt = Date.now();
   const request = input.deps.rerankRequest ?? requestLiteLLMRerank;
-  const egress = reranker.egress ?? currentGatewayEgressConfig(input.deps);
+  const egress = rerankEgress(input, reranker);
   try {
     return {
       outcome: await request(buildRerankRequest(input, reranker, egress)),
@@ -246,6 +265,7 @@ async function configuredSelection<T>(
     topN: input.topN,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
+    ...(input.gatewayConfig === undefined ? {} : { gatewayConfig: input.gatewayConfig }),
   };
   const transport = await requestRerankTransport(requestInput, reranker);
   if (transport.outcome?.ok !== true) {
@@ -277,7 +297,7 @@ export async function rerankSelection<T>(
       diagnostics: policyDeniedDiagnostics(input.candidates.length, fallback.length),
     };
   }
-  const reranker = currentGatewayConfig(input.deps)?.reranker;
+  const reranker = (input.gatewayConfig ?? currentGatewayConfig(input.deps))?.reranker;
   if (reranker === undefined) {
     return {
       selected: fallback,

@@ -303,17 +303,24 @@ async function probeEmbedding(
   }
 }
 
+// The config is threaded in from the readiness run's single `chooseProvider` snapshot rather than
+// re-read live: probes execute concurrently, `currentGatewayConfig` is backed by a mutable closure
+// the gateway-setup save route replaces, and one readiness report must describe one config
+// generation across every probe in it.
 // eslint-disable-next-line complexity
-async function probeReranker(deps: UiHandlerDeps): Promise<GatewayReadinessProbeResult> {
+async function probeReranker(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
-  const reranker = currentGatewayConfig(deps)?.reranker;
-  if (reranker === undefined) {
+  if (config.reranker === undefined) {
     return skipped("reranker", "No reranker is configured.");
   }
   try {
     const documents = ["alpha readiness match", "unrelated beta"] as const;
     const selection = await rerankSelection({
       deps,
+      gatewayConfig: config,
       query: "alpha readiness match",
       candidates: documents,
       documentFor: (document) => document,
@@ -950,7 +957,7 @@ async function runProbe(
   if (name === "tool_calling") return probeToolCalling(deps, selection.config, selection.provider);
   if (name === "json_schema") return probeJsonSchema(deps, selection.config, selection.provider);
   if (name === "embedding") return probeEmbedding(deps, selection.config);
-  if (name === "reranker") return probeReranker(deps);
+  if (name === "reranker") return probeReranker(deps, selection.config);
   if (name === "reasoning") return probeReasoning(deps, selection.config, selection.provider);
   if (name === "image_input") return probeImageInput(deps, selection.config, selection.provider);
   if (name === "document_input")

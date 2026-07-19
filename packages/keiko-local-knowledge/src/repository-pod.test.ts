@@ -320,9 +320,7 @@ describe("repository pod executable journey", () => {
       appLinesBeforeCancel,
     );
     expect(vectorIds("src/app.ts")).toEqual(appVectors);
-    expect(
-      listRepositoryPodRuns({ store, capsuleId: CAPSULE_ID, sourceId: SOURCE_ID }).at(-1),
-    ).toMatchObject({
+    expect(listRepositoryPodRuns(store, CAPSULE_ID, SOURCE_ID).at(-1)).toMatchObject({
       runId: "repository-cancelled",
       applied: false,
     });

@@ -402,8 +402,16 @@ export async function refreshRepositoryPod(
   return { run, indexing: drained.result, summary: buildSummary(deps.store, deps.capsuleId) };
 }
 
-export function listRepositoryPodRuns(deps: RepositoryPodDeps): readonly RepositoryPodRunRecord[] {
-  ensureRunStorage(deps.store._internal.db);
+// Scope args stay positional to match the package's `list*` reader convention
+// (`listConnectorSourceMetadata(store, capsuleId)`), which the barrel-surface gate in
+// `index.test.ts` enforces as the Foundry-IQ no-global-pool proxy: every `list*` export other than
+// the top-level capsule/set enumerations must take its scope explicitly.
+export function listRepositoryPodRuns(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+): readonly RepositoryPodRunRecord[] {
+  ensureRunStorage(store._internal.db);
   interface Row {
     readonly run_id: string;
     readonly outcome: RepositoryPodRunRecord["outcome"];
@@ -417,7 +425,7 @@ export function listRepositoryPodRuns(deps: RepositoryPodDeps): readonly Reposit
     readonly fingerprint_set_digest: string;
     readonly completed_at: number;
   }
-  const rows = deps.store._internal.db
+  const rows = store._internal.db
     .prepare(
       `SELECT run_id, outcome, applied, added_files, changed_files, removed_files,
               unchanged_files, failed_documents, rejected_entries, fingerprint_set_digest,
@@ -426,7 +434,7 @@ export function listRepositoryPodRuns(deps: RepositoryPodDeps): readonly Reposit
        WHERE capsule_id = :capsule_id AND source_id = :source_id
        ORDER BY completed_at ASC, run_id ASC`,
     )
-    .all({ capsule_id: deps.capsuleId, source_id: deps.sourceId }) as unknown as readonly Row[];
+    .all({ capsule_id: capsuleId, source_id: sourceId }) as unknown as readonly Row[];
   return rows.map((row) => ({
     runId: row.run_id,
     outcome: row.outcome,
