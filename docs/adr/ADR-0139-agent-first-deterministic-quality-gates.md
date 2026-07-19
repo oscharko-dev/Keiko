@@ -94,6 +94,15 @@ a step re-runs only when the content hash of its inputs changes. Cache entries r
 digest and the step's last verdict; `--no-cache` forces a full run, and CI never uses the cache.
 This turns the fix-iteration loop from ~65 minutes into minutes without removing any check.
 
+The gate is additionally diff-scoped by default: it computes the change set versus the
+integration base and runs only the steps whose declared input scope that change set intersects,
+reporting every out-of-scope step visibly with its reason (steps without a declared scope always
+run, and a cache group runs as one unit). Agents iterate in fresh worktrees where the step cache
+starts cold, so content addressing alone still paid the full matrix once per session; scoping
+makes the first run proportional to the change as well. `--full` restores the complete sequence,
+and the required CI run on the pull request remains the authoritative full matrix — scoping moves
+local verification effort, never the enforcement bar.
+
 ### D5 — Static guards prefer precision to suppression
 
 Guardrail scanners must not require suppression markers for provably safe constructs. The
@@ -154,7 +163,11 @@ digest (changing the ruler still requires re-measuring, on the pull request that
 no longer requires the recorded source tree, the current lockfile, or a clean subject working tree
 to match HEAD. The regeneration lane (`--enforce-source-freshness`, asserted by
 `perf:evidence:regen` immediately after producing evidence, where the tree matches by
-construction) enforces the full exact-tree contract unchanged.
+construction) enforces the full exact-tree contract unchanged. The measurement-toolchain digest
+itself binds only files that shape produced measurements — producers, the checker the producer
+self-check imports, the measuring specs, their configs, fixtures, and support; pure harness
+consumers (unit tests, static spec-structure tests) are not part of the digest, so editing a test
+never forces a re-measurement.
 
 Per-pull-request performance protection does not regress: the deterministic bundle gates
 (`check:editor-release-evidence`, `check:editor-bundle-size`) rebuild the shipped editor on every
