@@ -1101,9 +1101,13 @@ async function applyHybridEntailment(
   connectors: readonly RetrievedConnector[],
 ): Promise<HybridGroundedAnswer> {
   const capsules = connectors.flatMap((src) => src.selected.capsules);
-  const stage = createEntailmentStage(ctx.deps, capsules, ctx.modelId, {
-    diagnostics: ctx.deps.diagnostics,
-  });
+  const stage = createEntailmentStage(
+    ctx.deps,
+    capsules,
+    ctx.modelId,
+    { diagnostics: ctx.deps.diagnostics },
+    ctx.signal,
+  );
   if (stage === undefined) {
     return answer;
   }

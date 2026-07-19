@@ -860,9 +860,13 @@ function defaultRunner(
   // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
   // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
   // deny). Undefined ⇒ the stage is inert and the assembled pack is byte-identical to today.
-  const entailmentStage = createEntailmentStage(deps, [], modelId, {
-    diagnostics: deps.diagnostics,
-  });
+  const entailmentStage = createEntailmentStage(
+    deps,
+    [],
+    modelId,
+    { diagnostics: deps.diagnostics },
+    signal,
+  );
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
     const budgetedInput =

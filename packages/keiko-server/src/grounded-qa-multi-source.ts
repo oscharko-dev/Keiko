@@ -890,9 +890,13 @@ async function applyMultiSourceEntailment(
   if (abstained) {
     return assembled;
   }
-  const stage = createEntailmentStage(ctx.deps, [], ctx.modelId, {
-    diagnostics: ctx.deps.diagnostics,
-  });
+  const stage = createEntailmentStage(
+    ctx.deps,
+    [],
+    ctx.modelId,
+    { diagnostics: ctx.deps.diagnostics },
+    ctx.signal,
+  );
   if (stage === undefined) {
     return assembled;
   }

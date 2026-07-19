@@ -104,6 +104,7 @@ async function evaluateEntailment(
   judge: EntailmentJudge,
   options: EntailmentOptions,
   observability: EntailmentStageObservability,
+  signal: AbortSignal | undefined,
 ): Promise<readonly UncertaintyMarker[]> {
   try {
     const membership = reconcileInlineCitations(answerText, buildPackCitationIndex(packs));
@@ -114,6 +115,7 @@ async function evaluateEntailment(
       resolveExcerptText,
       judge,
       options,
+      signal,
     );
     return markersFor(result, nowMs, observability);
   } catch (error) {
@@ -140,6 +142,7 @@ export function createEntailmentStage(
   capsules: readonly KnowledgeCapsule[],
   modelId: string,
   observability: EntailmentStageObservability = {},
+  signal?: AbortSignal,
   options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
 ): EntailmentStage | undefined {
   if (capsules.length > 0 && !isScopeModelUseOperationAllowed(capsules, "answerSynthesis")) {
@@ -149,12 +152,15 @@ export function createEntailmentStage(
   if (judge === undefined) {
     return undefined;
   }
+  // The request signal is baked in here (the stage's lifetime is the grounded ask's): a client
+  // cancellation stops the remaining sequential judge calls early, and the per-answer wall-clock
+  // budget in reconcileClaimEntailment bounds the worst case even when the request never cancels.
   return {
     evaluate: (
       answerText: string,
       packs: readonly ConnectedContextPack[],
       nowMs: number,
     ): Promise<readonly UncertaintyMarker[]> =>
-      evaluateEntailment(answerText, packs, nowMs, judge, options, observability),
+      evaluateEntailment(answerText, packs, nowMs, judge, options, observability, signal),
   };
 }

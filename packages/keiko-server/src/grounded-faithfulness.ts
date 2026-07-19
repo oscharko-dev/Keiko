@@ -310,13 +310,22 @@ export interface CitedClaim {
 
 /** Per-answer bounds so the judge is never invoked unboundedly. */
 export interface EntailmentOptions {
+  // Upper bound on claims submitted to the judge for one answer.
   readonly maxClaims: number;
   readonly maxExcerptChars: number;
+  // Stage-wide wall-clock budget for the whole entailment pass. Once it (or the caller signal) is
+  // exhausted, no further judge calls are made and any remaining claims are counted `unavailable`
+  // (surfaced as the entailment-unavailable marker) — so a slow model degrades the answer instead of
+  // stacking `maxClaims` sequential judge timeouts into minutes of tail latency.
+  readonly maxTotalMs: number;
 }
 
 export const DEFAULT_ENTAILMENT_OPTIONS: EntailmentOptions = {
-  maxClaims: 24,
+  // Lowered from 24: bounds the sequential judge fan-out per answer while still covering the cited
+  // claims of a typical grounded answer.
+  maxClaims: 8,
   maxExcerptChars: 900,
+  maxTotalMs: 20_000,
 };
 
 function isSentenceBoundary(ch: string): boolean {
@@ -427,6 +436,19 @@ async function verdictForClaim(
  * re-reported as entailment failures). Bounded by `options`. The judge port decides each verdict;
  * `unavailable` verdicts are counted, never treated as supported.
  */
+// Combine the stage-wide deadline with any caller signal into one budget signal. Returns the caller
+// signal unchanged when there is no positive time budget (opt-out), preserving unbounded behavior.
+function entailmentBudgetSignal(
+  maxTotalMs: number,
+  signal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (maxTotalMs <= 0) {
+    return signal;
+  }
+  const deadline = AbortSignal.timeout(maxTotalMs);
+  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+}
+
 export async function reconcileClaimEntailment(
   answerText: string,
   membership: CitationReconciliation,
@@ -436,6 +458,7 @@ export async function reconcileClaimEntailment(
   signal?: AbortSignal,
 ): Promise<EntailmentReconciliation> {
   const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
+  const budget = entailmentBudgetSignal(options.maxTotalMs, signal);
   const unentailed: UnentailedClaim[] = [];
   let judgedClaims = 0;
   let unavailableClaims = 0;
@@ -447,13 +470,19 @@ export async function reconcileClaimEntailment(
     if (valid.length === 0) {
       continue;
     }
+    if (budget?.aborted === true) {
+      // Budget exhausted (deadline hit or caller cancelled): stop calling the judge and count the
+      // claim as unavailable rather than dropping it silently or assuming support.
+      unavailableClaims += 1;
+      continue;
+    }
     const verdict = await verdictForClaim(
       claim,
       valid,
       resolveExcerptText,
       judge,
       options.maxExcerptChars,
-      signal,
+      budget,
     );
     judgedClaims += 1;
     if (verdict === "unsupported") {

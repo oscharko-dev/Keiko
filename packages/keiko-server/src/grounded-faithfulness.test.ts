@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { ConnectedContextPack, ContextExcerpt } from "@oscharko-dev/keiko-contracts";
 import {
+  DEFAULT_ENTAILMENT_OPTIONS,
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
@@ -416,9 +417,81 @@ describe("reconcileClaimEntailment", () => {
       { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
       resolve,
       scriptedJudge(),
-      { maxClaims: 2, maxExcerptChars: 900 },
+      { maxClaims: 2, maxExcerptChars: 900, maxTotalMs: 20_000 },
     );
     expect(result.judgedClaims).toBe(2);
+  });
+
+  it("stops calling the judge and marks remaining claims unavailable when the signal is aborted", async () => {
+    // Finding #2063/#2555 review: an already-cancelled request must not run the sequential judge
+    // calls. With the caller signal aborted, no judge call is made and every cited claim is counted
+    // unavailable (degraded/entailment-unavailable) rather than silently dropped or assumed supported.
+    let judgeCalls = 0;
+    const countingJudge: EntailmentJudge = {
+      judge: (): Promise<EntailmentVerdict> => {
+        judgeCalls += 1;
+        return Promise.resolve("supported");
+      },
+    };
+    const resolve = judgeFixturePack("retention period: 30 days");
+    const result = await reconcileClaimEntailment(
+      "A [src/a.ts:1-20]. B [src/a.ts:1-20]. C [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      countingJudge,
+      DEFAULT_ENTAILMENT_OPTIONS,
+      AbortSignal.abort(),
+    );
+    expect(judgeCalls).toBe(0);
+    expect(result.judgedClaims).toBe(0);
+    expect(result.unavailableClaims).toBe(3);
+    expect(result.unentailed).toHaveLength(0);
+  });
+
+  it("leaves the pass unbounded (judge runs per claim) when maxTotalMs is non-positive", async () => {
+    // maxTotalMs <= 0 opts out of the stage-wide deadline: every claim is judged, bounded only by
+    // maxClaims. Pins that the budget is additive, never a behavior change for a zero budget.
+    let judgeCalls = 0;
+    const countingJudge: EntailmentJudge = {
+      judge: (): Promise<EntailmentVerdict> => {
+        judgeCalls += 1;
+        return Promise.resolve("supported");
+      },
+    };
+    const resolve = judgeFixturePack("retention period: 30 days");
+    const result = await reconcileClaimEntailment(
+      "A [src/a.ts:1-20]. B [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      countingJudge,
+      { maxClaims: 8, maxExcerptChars: 900, maxTotalMs: 0 },
+    );
+    expect(judgeCalls).toBe(2);
+    expect(result.judgedClaims).toBe(2);
+  });
+
+  it("caps the total wall-clock via maxTotalMs when the judge stalls past the budget", async () => {
+    // A judge that never resolves on its own: the stage-wide deadline aborts the in-flight call,
+    // the judge fails closed to unavailable on abort, and the remaining claims are counted unavailable
+    // — so the whole pass is bounded by maxTotalMs instead of maxClaims sequential 30s timeouts.
+    const stallingJudge: EntailmentJudge = {
+      judge: (_input, signal): Promise<EntailmentVerdict> =>
+        new Promise((resolveVerdict) => {
+          signal?.addEventListener("abort", () => {
+            resolveVerdict("unavailable");
+          });
+        }),
+    };
+    const resolve = judgeFixturePack("retention period: 30 days");
+    const result = await reconcileClaimEntailment(
+      "A [src/a.ts:1-20]. B [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      resolve,
+      stallingJudge,
+      { maxClaims: 8, maxExcerptChars: 900, maxTotalMs: 10 },
+    );
+    expect(result.unavailableClaims).toBeGreaterThan(0);
+    expect(result.unentailed).toHaveLength(0);
   });
 });
 
