@@ -115,43 +115,46 @@ npm run conversation:release-check
 
 For PR-bound work, use the agent pre-PR gate instead of manually stitching a partial checklist
 together. This is the single, agent-agnostic quality gate every agent (Claude Code, Codex,
-Cursor, …) runs before a push, a PR update, or a merge:
+Cursor, …) runs before a push or a PR update:
 
 ```bash
 npm run agent:pre-pr
 ```
 
-This gate runs the local-first sequence in a fixed order: typecheck, lint, format, shell-spawn
-guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping, architecture
-checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor bundle size,
-installable-package smoke, and smoke coverage. It writes a machine-readable report to
-`.agent/pre-pr-report.json` so the exact local outcome is inspectable before the first push, a PR
-update, or a merge.
+The gate is **diff-scoped by default** (ADR-0139 D4): it computes your change set versus the
+integration base (`origin/dev`; override with `-- --base <ref>`) and runs only the steps whose
+declared input scope that change set touches — a docs-only change runs the handful of steps that
+can see docs, a server change runs the full test/build chain. Steps that are skipped as out of
+scope are reported visibly with the reason, never silently. Steps without a declared scope always
+run. `npm run agent:pre-pr -- --full` runs the complete fixed sequence (typecheck, lint, format,
+shell-spawn guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping,
+architecture checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor
+bundle size, installable-package smoke, and smoke coverage). Every run writes a machine-readable
+report to `.agent/pre-pr-report.json` — including the scope decision — so the exact local outcome
+is inspectable.
 
-The gate keeps a content-addressed step cache (`.agent/pre-pr-cache.json`, ADR-0139 D4): steps
-whose declared inputs are byte-identical to the last passing run report `cached` instead of
-re-executing, so a fix-iteration re-runs only what the fix can affect. Pass `--no-cache` to force
-a complete run; CI never uses the cache.
+On top of the diff scope, the gate keeps a content-addressed step cache
+(`.agent/pre-pr-cache.json`, ADR-0139 D4): in-scope steps whose declared inputs are
+byte-identical to the last passing run report `cached` instead of re-executing. Pass `--no-cache`
+to bypass it; CI never uses the cache.
 
 ### Local-first gate policy
 
-Never use GitHub Actions as the first test environment for a change. Before pushing,
-force-pushing, updating a pull request, or merging:
+Verify locally what your change can affect; required CI is the authoritative full matrix on every
+pull request. Never push a change whose scoped local gate is red, and never use CI to discover
+what your own diff obviously breaks. Concretely:
 
-1. Identify every GitHub quality gate that the change can affect.
-2. Run `npm run agent:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
-   already covered by that command.
-3. If a GitHub gate is already red, reproduce that exact failure locally, or reduce it to the
-   nearest deterministic local gate, before pushing another fix.
-4. Fix every local finding before pushing; after any fix, rerun the failed targeted gate and then
-   rerun the full `npm run agent:pre-pr` gate before the next push.
-5. Push only after the relevant local gate is green or a documented platform-specific local skip is
-   unavoidable.
-6. Report the exact local commands and outcomes from the generated pre-PR report.
+1. Run `npm run agent:pre-pr` (diff-scoped) before every push or PR update, plus any
+   touched-area gate from the table below that is not part of the gate.
+2. If a required CI gate goes red, reproduce that exact failure locally — targeted, or with
+   `-- --full` — before pushing another fix; after the fix, rerun the failed gate locally first.
+3. Push only after the scoped local gate is green or a documented platform-specific local skip is
+   unavoidable (the report records those skips).
+4. Report outcomes from the generated pre-PR report, not from memory.
+5. The full local matrix (`-- --full`) is for parity debugging, not for every iteration — the
+   required CI run on the pull request is the final, complete arbiter.
 
-If a required gate cannot be run locally, stop and state that before any push. Do not let the
-remote pull request be the first place where format, lint, typecheck, package-surface,
-release-evidence, coverage, architecture, smoke, or UI tests see the change.
+If a required gate cannot be run locally, state that in the PR instead of guessing.
 
 For UI smoke failures, run the targeted Playwright repro first, then the full affected smoke gate.
 For package export or runtime surface changes, run the package build and package-surface smoke

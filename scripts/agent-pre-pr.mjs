@@ -187,6 +187,122 @@ function hashWorkingFile(cwd, path) {
   }
 }
 
+// ── Diff-scoped execution (ADR-0139 D4) ─────────────────────────────────────
+// Agents iterate in fresh worktrees where the step cache starts cold, so without scoping every
+// run pays the full matrix regardless of what changed. The gate therefore defaults to running
+// only the steps whose declared input scope intersects the change set versus the integration
+// base — plus every step without a declared scope (conservative) — and reports the rest as
+// skipped with an explicit reason. `--full` restores the complete run; required CI remains the
+// authoritative full matrix on every pull request.
+
+function resolveDiffBase(cwd, baseRef) {
+  const candidates = baseRef === undefined ? ["origin/dev", "dev"] : [baseRef];
+  for (const candidate of candidates) {
+    try {
+      execFileSync(resolveHostExecutable("git"), ["merge-base", candidate, "HEAD"], {
+        cwd,
+        stdio: "ignore",
+      });
+      return candidate;
+    } catch {
+      // Try the next candidate; an unresolvable base falls back to the full gate.
+    }
+  }
+  return undefined;
+}
+
+function gitPathList(cwd, args) {
+  const output = execFileSync(resolveHostExecutable("git"), args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return output.split("\0").filter((path) => path.length > 0);
+}
+
+// Committed changes vs the merge base, plus tracked working-tree modifications, plus untracked
+// files — the complete set of content this gate run could be the first to verify.
+function listChangedPaths(cwd, base) {
+  return new Set(
+    [
+      ...gitPathList(cwd, ["diff", "--name-only", "-z", `${base}...HEAD`, "--"]),
+      ...gitPathList(cwd, ["diff", "--name-only", "-z", "HEAD", "--"]),
+      ...gitPathList(cwd, ["ls-files", "--others", "--exclude-standard", "-z", "--"]),
+    ].map((path) => path.replaceAll("\\", "/")),
+  );
+}
+
+function pathMatchesScopeEntry(path, scopeEntry) {
+  return scopeEntry.endsWith("/") ? path.startsWith(scopeEntry) : path === scopeEntry;
+}
+
+function stepTouchesChanges(step, changedPaths) {
+  if (step.cacheScope === undefined) return true;
+  for (const path of changedPaths) {
+    if (step.cacheScope.some((entry) => pathMatchesScopeEntry(path, entry))) return true;
+  }
+  return false;
+}
+
+// A step is in scope when its declared inputs intersect the change set (or it declares none).
+// Group widening mirrors the cache: when any member of a cache group is in scope, every member
+// runs, so artifact producers and their consumers can never diverge.
+export function selectDiffScopedStepIds(steps, changedPaths) {
+  const inScope = new Set();
+  const touchedGroups = new Set();
+  for (const step of steps) {
+    if (step.skipReason !== undefined) continue;
+    if (stepTouchesChanges(step, changedPaths)) {
+      inScope.add(step.id);
+      if (step.cacheGroup !== undefined) touchedGroups.add(step.cacheGroup);
+    }
+  }
+  for (const step of steps) {
+    if (step.cacheGroup !== undefined && touchedGroups.has(step.cacheGroup)) {
+      inScope.add(step.id);
+    }
+  }
+  return inScope;
+}
+
+// Programmatic callers default to the full gate (backward compatible); the CLI defaults to
+// "diff" so agent iteration pays only for what changed.
+function resolveDiffScope(options, cwd) {
+  if (options.scope !== "diff") return { mode: "full" };
+  const base = resolveDiffBase(cwd, options.baseRef);
+  if (base === undefined) {
+    console.log("[agent:pre-pr] no integration base resolvable - running the full gate");
+    return { mode: "full" };
+  }
+  try {
+    return { base, changedPaths: listChangedPaths(cwd, base), mode: "diff" };
+  } catch {
+    // Failing toward MORE verification, never less: an uncomputable diff runs the full gate.
+    console.log("[agent:pre-pr] diff computation failed - running the full gate");
+    return { mode: "full" };
+  }
+}
+
+function scopedOutStepIds(steps, scope) {
+  if (scope.mode !== "diff") return new Set();
+  const inScope = selectDiffScopedStepIds(steps, scope.changedPaths);
+  return new Set(
+    steps
+      .filter((step) => step.skipReason === undefined && !inScope.has(step.id))
+      .map((step) => step.id),
+  );
+}
+
+function resultForOutOfScope(step, scope) {
+  return {
+    command: commandText(step),
+    id: step.id,
+    required: step.required,
+    skipReason: `out of diff scope vs ${scope.base} (no changed file matches the step's inputs)`,
+    status: "skipped",
+  };
+}
+
 export function computeStepInputDigest(step, { cwd = repoRoot, fileDigest } = {}) {
   const digest = createHash("sha256");
   digest.update(`schema:${String(CACHE_SCHEMA_VERSION)}\0`);
@@ -423,7 +539,15 @@ async function runStep(step, options) {
 async function runLiveSteps(steps, options) {
   const results = [];
   const cachePlan = options.cachePlan ?? { cached: new Set(), digests: new Map() };
+  const scopedOut = options.scopedOut ?? new Set();
   for (const step of steps) {
+    if (scopedOut.has(step.id)) {
+      console.log(
+        `\n[agent:pre-pr] ${step.id}: skipped (out of diff scope vs ${options.scope.base})`,
+      );
+      results.push(resultForOutOfScope(step, options.scope));
+      continue;
+    }
     if (cachePlan.cached.has(step.id)) {
       console.log(`\n[agent:pre-pr] ${step.id}: cached (inputs unchanged)`);
       results.push(resultForCached(step));
@@ -476,15 +600,35 @@ async function resolveCachePlan(steps, options, cwd, env, dryRun) {
   }
 }
 
+function reportScope(scope, scopedOut) {
+  if (scope.mode !== "diff") return { mode: "full" };
+  return {
+    base: scope.base,
+    changedFiles: scope.changedPaths.size,
+    mode: "diff",
+    scopedOutSteps: scopedOut.size,
+  };
+}
+
 export async function runPrePrGate(options = {}) {
   const steps = createPrePrSteps(options);
   const dryRun = options.dryRun ?? false;
   const cwd = options.cwd ?? repoRoot;
   const env = options.env ?? process.env;
-  const cachePlan = await resolveCachePlan(steps, options, cwd, env, dryRun);
+  const scope = resolveDiffScope(options, cwd);
+  const scopedOut = scopedOutStepIds(steps, scope);
+  const cachePlan = await resolveCachePlan(
+    steps.filter((step) => !scopedOut.has(step.id)),
+    options,
+    cwd,
+    env,
+    dryRun,
+  );
   const results = dryRun
-    ? steps.map((step) => resultForPlanned(step))
-    : await runLiveSteps(steps, { cachePlan, cwd, env });
+    ? steps.map((step) =>
+        scopedOut.has(step.id) ? resultForOutOfScope(step, scope) : resultForPlanned(step),
+      )
+    : await runLiveSteps(steps, { cachePlan, cwd, env, scope, scopedOut });
   if (cachePlan.active) {
     await writeStepCache(
       options.cachePath ?? join(cwd, defaultCacheFileName),
@@ -497,6 +641,7 @@ export async function runPrePrGate(options = {}) {
     node: process.version,
     platform: options.platform ?? process.platform,
     results,
+    scope: reportScope(scope, scopedOut),
     summary: summarize(results),
   };
   await writePrePrReport(report, options.reportPath);
@@ -505,6 +650,13 @@ export async function runPrePrGate(options = {}) {
 
 function printReport(report, reportPath = defaultReportPath) {
   console.log("\n[agent:pre-pr] Local gate report");
+  const scope = report.scope ?? { mode: "full" };
+  console.log(
+    scope.mode === "diff"
+      ? `[agent:pre-pr] scope: diff vs ${scope.base} — ${String(scope.changedFiles)} changed ` +
+          `file(s), ${String(scope.scopedOutSteps)} step(s) out of scope (--full for the complete run)`
+      : "[agent:pre-pr] scope: full",
+  );
   for (const result of report.results) {
     const suffix = result.durationMs === undefined ? "" : ` (${formatDuration(result.durationMs)})`;
     const reason = result.skipReason === undefined ? "" : ` - ${result.skipReason}`;
@@ -516,10 +668,15 @@ function printReport(report, reportPath = defaultReportPath) {
 function parseArgs(argv) {
   const dryRun = argv.includes("--dry-run");
   const noCache = argv.includes("--no-cache");
+  const baseIndex = argv.indexOf("--base");
   const reportIndex = argv.indexOf("--report");
   return {
+    ...(baseIndex !== -1 && argv[baseIndex + 1] !== undefined
+      ? { baseRef: argv[baseIndex + 1] }
+      : {}),
     dryRun,
     noCache,
+    scope: argv.includes("--full") ? "full" : "diff",
     reportPath:
       reportIndex === -1 || argv[reportIndex + 1] === undefined
         ? defaultReportPath

@@ -9,6 +9,7 @@ import {
   computeStepInputDigest,
   createPrePrSteps,
   runPrePrGate,
+  selectDiffScopedStepIds,
 } from "../agent-pre-pr.mjs";
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "agent-pre-pr.mjs");
@@ -433,6 +434,79 @@ describe("agent pre-PR gate failure modes", () => {
       expect(failed?.status).toBe("failed");
       expect(failed?.durationMs).toBeTypeOf("number");
       expect(failed?.exitCode).toBe(23);
+    } finally {
+      await rm(tempDir, { force: true, recursive: true });
+    }
+  });
+});
+
+// ADR-0139 D4: diff-scoped execution — the CLI default. Only steps whose declared input scope
+// intersects the change set run; steps without a declared scope always run (conservative), and a
+// cache group runs as one unit. The full matrix stays one flag away (--full) and remains the
+// authoritative required gate in CI.
+describe("agent pre-PR gate diff scoping", () => {
+  const steps = [
+    { cacheScope: ["packages/", "src/"], id: "typecheck" },
+    { cacheScope: ["docs/adr/"], id: "adr-index" },
+    { cacheScope: ["package.json"], id: "root-manifest" },
+    { id: "format" },
+    { cacheGroup: "product", cacheScope: ["packages/"], id: "build" },
+    { cacheGroup: "product", cacheScope: ["tests/e2e/"], id: "e2e-smoke" },
+    { id: "linux-only", skipReason: "platform" },
+  ];
+
+  it("runs only the steps whose declared inputs intersect the change set", () => {
+    const inScope = selectDiffScopedStepIds(steps, new Set(["docs/adr/ADR-0001.md"]));
+    expect(inScope.has("adr-index")).toBe(true);
+    expect(inScope.has("typecheck")).toBe(false);
+    expect(inScope.has("root-manifest")).toBe(false);
+  });
+
+  it("always runs steps without a declared scope (conservative default)", () => {
+    const inScope = selectDiffScopedStepIds(steps, new Set(["README.md"]));
+    expect(inScope.has("format")).toBe(true);
+    expect(inScope.has("typecheck")).toBe(false);
+  });
+
+  it("matches exact-file scope entries without treating them as prefixes", () => {
+    expect(selectDiffScopedStepIds(steps, new Set(["package.json"])).has("root-manifest")).toBe(
+      true,
+    );
+    expect(selectDiffScopedStepIds(steps, new Set(["package.json.bak"])).has("root-manifest")).toBe(
+      false,
+    );
+  });
+
+  it("widens scope hits to the whole cache group so producers and consumers never diverge", () => {
+    const inScope = selectDiffScopedStepIds(steps, new Set(["tests/e2e/smoke.spec.ts"]));
+    expect(inScope.has("e2e-smoke")).toBe(true);
+    expect(inScope.has("build")).toBe(true);
+  });
+
+  it("never scopes platform-skipped steps in (they self-report their skip)", () => {
+    const inScope = selectDiffScopedStepIds(steps, new Set(["packages/a.ts"]));
+    expect(inScope.has("linux-only")).toBe(false);
+  });
+
+  it("reports the diff scope in the persisted report and skips out-of-scope steps visibly", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-agent-pre-pr-"));
+    const reportPath = join(tempDir, "scoped-dry-run.json");
+    try {
+      // --base HEAD: committed content is out of scope by construction; only working-tree
+      // changes and scope-less steps stay planned. The report must say WHY the rest is skipped.
+      const report = await runPrePrGate({
+        dryRun: true,
+        reportPath,
+        scope: "diff",
+      });
+      expect(report.scope.mode).toBe("diff");
+      expect(typeof report.scope.changedFiles).toBe("number");
+      const persisted = JSON.parse(await readFile(reportPath, "utf8"));
+      expect(persisted.scope.mode).toBe("diff");
+      const outOfScope = persisted.results.filter((result) =>
+        result.skipReason?.startsWith("out of diff scope"),
+      );
+      for (const result of outOfScope) expect(result.status).toBe("skipped");
     } finally {
       await rm(tempDir, { force: true, recursive: true });
     }
