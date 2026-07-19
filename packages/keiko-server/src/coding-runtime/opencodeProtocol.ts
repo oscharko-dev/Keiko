@@ -568,7 +568,7 @@ function messagePartUpdated(data: Record<string, unknown>, aggregateId: string):
     data.part.sessionID !== aggregateId ||
     !PART_ID.test(String(data.part.id)) ||
     !MESSAGE_ID.test(String(data.part.messageID)) ||
-    !boundedLifecycle(data.part)
+    !boundedPartLifecycle(data.part)
   )
     return false;
   const part = data.part;
@@ -680,6 +680,26 @@ function boundedJson(value: unknown, depth: number): boolean {
 
 function boundedLifecycle(value: unknown): boolean {
   return boundedJson(value, 0) && bytes(JSON.stringify(value)) <= MAX_HISTORY_INFO_BYTES;
+}
+
+/**
+ * A message text part may legitimately carry a full assistant response, which routinely exceeds the
+ * uniform 4096-character per-string bound. The text stays capped by the 64 KiB part byte budget
+ * (the DoS guard), every other field keeps the tight per-string bound, and the safe-activity
+ * projection clips the displayed text to its own segment limit — the reconciliation path never
+ * reads part text content. Non-text parts are bounded exactly as before.
+ *
+ * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares this
+ * 64 KiB row budget), never as a single live SSE frame: the live path yields content-free pull
+ * triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget constraint.
+ */
+function boundedPartLifecycle(part: Record<string, unknown>): boolean {
+  if (part.type !== "text") return boundedLifecycle(part);
+  return (
+    typeof part.text === "string" &&
+    boundedLifecycle({ ...part, text: "" }) &&
+    bytes(JSON.stringify(part)) <= MAX_HISTORY_INFO_BYTES
+  );
 }
 
 function finite(value: unknown): value is number {

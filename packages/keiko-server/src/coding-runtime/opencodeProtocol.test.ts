@@ -320,6 +320,45 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     ).toEqual({ ok: false, reason: "event-unknown" });
   });
 
+  // A full assistant response routinely exceeds the uniform 4096-character per-string bound. The
+  // real v1.17.17 persists it as ONE durable text part; rejecting it would throw the whole history
+  // pull (opencode-history-invalid) and collapse the session's reconciliation. Text stays capped by
+  // the 64 KiB part byte budget; every other field keeps the tight bound.
+  it("admits a long assistant text part while keeping the byte cap and the tight non-text bound", () => {
+    const textRow = (length: number): Record<string, unknown> =>
+      syncRow(3, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part: { ...textPart("x".repeat(length)), messageID: "msg_assistant" },
+        time: 3,
+      });
+    expect(parseOpenCodeHistory([textRow(4097)])).toMatchObject({
+      ok: true,
+      value: [{ sequence: 3, kind: "observation" }],
+    });
+    expect(parseOpenCodeHistory([textRow(60_000)])).toMatchObject({ ok: true });
+    // Over the 64 KiB part byte budget still fails closed (the DoS guard).
+    expect(parseOpenCodeHistory([textRow(66_000)])).toEqual({ ok: false, reason: "event-unknown" });
+    // The relaxation is text-only: a non-text field over the per-string bound is still rejected.
+    expect(
+      parseOpenCodeHistory([
+        syncRow(3, "message.part.updated.1", {
+          sessionID: "ses_1",
+          part: {
+            id: "prt_text",
+            sessionID: "ses_1",
+            messageID: "msg_assistant",
+            type: "text",
+            text: "ok",
+            metadata: { note: "n".repeat(4097) },
+          },
+          time: 3,
+        }),
+      ]),
+    ).toEqual({ ok: false, reason: "event-unknown" });
+    // No admitted body content survives into the reconciliation projection.
+    expect(JSON.stringify(parseOpenCodeHistory([textRow(5000)]))).not.toContain("xxxxx");
+  });
+
   it("keeps productive tool-loop lifecycle events content-free and non-terminal", () => {
     const sentinel = "SENTINEL_PRIVATE_TOOL_INPUT_AND_OUTPUT";
     const parsed = parseOpenCodeHistory([
