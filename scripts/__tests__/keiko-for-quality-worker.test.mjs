@@ -14,7 +14,9 @@ import worker, {
   constantTimeEqual,
   dashboardComment,
   discoverOpenPullRequests,
+  durationLabel,
   evidence,
+  evidenceUpdatedAt,
   github,
   hardFailure,
   importAppKey,
@@ -37,6 +39,7 @@ import worker, {
   reserveDelivery,
   targetForRepository,
   targetRepositories,
+  timestampLabel,
   trackedPullRequests,
   verifyWebhookSignature,
 } from "../keiko-for-quality-worker.mjs";
@@ -615,6 +618,7 @@ describe("Keiko for Quality worker trust boundary", () => {
       pull: { auto_merge: { enabled_at: "2026-07-13T18:00:00.000Z" } },
       result: {
         evaluatedAt: Date.parse("2026-07-13T18:00:00.000Z"),
+        evidenceUpdatedAt: Date.parse("2026-07-13T17:00:00.000Z"),
         failures: [],
         passed: true,
       },
@@ -626,7 +630,11 @@ describe("Keiko for Quality worker trust boundary", () => {
         "",
         "✅ **Ready for auto-merge**",
         "",
-        "`head aaaaaaaaaaaa`",
+        "| Evaluation | Value |",
+        "| --- | --- |",
+        "| Last evaluated head | `head aaaaaaaaaaaa` |",
+        "| Last evaluated | `2026-07-13T18:00:00.000Z` |",
+        "| Current-head evidence age | `1h` |",
         "",
         "| Gate group | Evidence |",
         "| --- | --- |",
@@ -693,6 +701,45 @@ describe("Keiko for Quality worker trust boundary", () => {
       result: { failures: [], passed: false },
     });
     expect(missingAutoMerge).toContain("| GitHub Auto-Merge | not armed |");
+  });
+
+  it("renders bounded timing labels without making malformed evidence look current", () => {
+    expect(durationLabel(0)).toBe("0s");
+    expect(durationLabel(59_999)).toBe("59s");
+    expect(durationLabel(60_000)).toBe("1m");
+    expect(durationLabel(3_600_000)).toBe("1h");
+    expect(durationLabel(86_400_000)).toBe("1d");
+    expect(durationLabel(-1)).toBeUndefined();
+    expect(durationLabel(Number.NaN)).toBeUndefined();
+    expect(timestampLabel(Number.MAX_VALUE)).toBe("unavailable");
+    expect(timestampLabel(undefined)).toBe("unavailable");
+
+    const invalidAge = dashboardComment({
+      headSha: "a".repeat(40),
+      pull: { auto_merge: null },
+      result: {
+        evaluatedAt: Date.parse("2026-07-13T18:00:00.000Z"),
+        evidenceUpdatedAt: Date.parse("2026-07-13T18:00:01.000Z"),
+        failures: [],
+        passed: true,
+      },
+    });
+    expect(invalidAge).toContain("| Current-head evidence age | unavailable (invalid) |");
+  });
+
+  it("derives age only from app-verified evidence bound to the evaluated head", () => {
+    const headSha = "a".repeat(40);
+    const updatedAt = "2026-07-13T17:00:00.000Z";
+    const current = {
+      appId: 484649,
+      authorId: 151058649,
+      authorType: "Bot",
+      body: qodoReviewComment(headSha).body,
+      updatedAt,
+    };
+    expect(evidenceUpdatedAt([current], headSha)).toBe(Date.parse(updatedAt));
+    expect(evidenceUpdatedAt([current], "b".repeat(40))).toBeUndefined();
+    expect(evidenceUpdatedAt([{ ...current, appId: 1 }], headSha)).toBeUndefined();
   });
 
   it("creates one dashboard comment and subsequently updates the app-owned marker", async () => {
@@ -1087,6 +1134,7 @@ describe("Keiko for Quality worker trust boundary", () => {
   it("reads Qodo evidence on a merge-commit head via its parent SHA", async () => {
     const headSha = "a".repeat(40);
     const parent = "f".repeat(40);
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-11T10:00:00.000Z"));
     // Merge-commit head (2 parents); Qodo pinned its review to the feature parent with 2 findings.
     const fetchMock = githubMock(headSha, {
       parents: [{ sha: parent }, { sha: "e".repeat(40) }],
@@ -1115,6 +1163,14 @@ describe("Keiko for Quality worker trust boundary", () => {
     const body = JSON.parse(publish[1].body);
     expect(body.conclusion).toBe("failure");
     expect(body.output.summary).toContain("Qodo has 2 unresolved finding(s).");
+    const dashboardPublish = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        /\/issues\/\d+\/comments$/u.test(new URL(String(url)).pathname) && init?.method === "POST",
+    );
+    const dashboard = JSON.parse(dashboardPublish[1].body).body;
+    expect(dashboard).toContain("| Last evaluated head | `head aaaaaaaaaaaa` |");
+    expect(dashboard).toContain("| Last evaluated | `2026-07-11T10:00:00.000Z` |");
+    expect(dashboard).toContain("| Current-head evidence age | `1h` |");
     // The head commit was fetched precisely because no Qodo review bound the exact head.
     expect(
       fetchMock.mock.calls.some(([url]) =>
@@ -1161,6 +1217,7 @@ describe("Keiko for Quality worker trust boundary", () => {
   it("blocks a merge-commit head whose only Qodo review predates the merge", async () => {
     const headSha = "a".repeat(40);
     const parent = "f".repeat(40);
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-11T10:00:00.000Z"));
     // The merge commit (09:30) was created AFTER Qodo's parent-pinned review (09:00), so that review
     // is stale for the merged result and must not satisfy currency.
     const fetchMock = githubMock(headSha, {
@@ -1192,6 +1249,12 @@ describe("Keiko for Quality worker trust boundary", () => {
     // A pre-merge review is not accepted, so currency reads as missing → blocks (never success).
     expect(body.conclusion).not.toBe("success");
     expect(body.output.summary).toContain("Qodo finding evidence is missing");
+    const dashboardPublish = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        /\/issues\/\d+\/comments$/u.test(new URL(String(url)).pathname) && init?.method === "POST",
+    );
+    const dashboard = JSON.parse(dashboardPublish[1].body).body;
+    expect(dashboard).toContain("| Current-head evidence age | unavailable (missing) |");
   });
 
   it("skips the head-commit fetch when a Qodo review binds the exact head", async () => {

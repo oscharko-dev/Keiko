@@ -168,6 +168,14 @@ function checkPost(fetchMock) {
   return call === undefined ? undefined : JSON.parse(call[1].body);
 }
 
+function dashboardPost(fetchMock) {
+  const call = fetchMock.mock.calls.find(
+    ([url, init]) =>
+      /\/issues\/\d+\/comments$/u.test(new URL(String(url)).pathname) && init?.method === "POST",
+  );
+  return call === undefined ? undefined : JSON.parse(call[1].body).body;
+}
+
 function requestPaths(fetchMock) {
   return fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname);
 }
@@ -213,6 +221,28 @@ describe("Keiko for Quality Action execution shell", () => {
     expect(body.status).toBe("in_progress");
     expect(body).not.toHaveProperty("conclusion");
     expect(body.output.summary).toContain("Qodo finding evidence is missing");
+  });
+
+  it("makes current-head evidence age and evaluation currency diagnosable in the dashboard", async () => {
+    const headSha = "a".repeat(40);
+    const fetchMock = githubMock(headSha);
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+    const commentBody = dashboardPost(fetchMock);
+
+    expect(commentBody).toContain(`| Last evaluated head | \`head ${headSha.slice(0, 12)}\` |`);
+    expect(commentBody).toContain("| Last evaluated | `2026-07-12T00:00:00.000Z` |");
+    expect(commentBody).toContain("| Current-head evidence age | `15h` |");
+  });
+
+  it("marks absent current-head evidence as unavailable while retaining the evaluated head", async () => {
+    const headSha = "b".repeat(40);
+    const fetchMock = githubMock(headSha, { comments: [] });
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+    const commentBody = dashboardPost(fetchMock);
+
+    expect(commentBody).toContain(`| Last evaluated head | \`head ${headSha.slice(0, 12)}\` |`);
+    expect(commentBody).toContain("| Last evaluated | `2026-07-12T00:00:00.000Z` |");
+    expect(commentBody).toContain("| Current-head evidence age | unavailable (missing) |");
   });
 
   it("blocks with a failure conclusion on an unresolved Qodo finding", async () => {

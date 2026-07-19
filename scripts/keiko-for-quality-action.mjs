@@ -20,6 +20,7 @@ import {
   pullRequestNumbers,
   reconciliationErrorKind,
   repositoryInstallation,
+  resultWithEvidenceUpdatedAt,
   targetForRepository,
 } from "./keiko-for-quality-worker.mjs";
 
@@ -223,7 +224,11 @@ async function evaluateHeadOnce(context, headSha, evaluationTime) {
     now: evaluationTime,
     stabilityMs: config.stabilityMs,
   });
-  return { currentEvidence, decisionResult, merge };
+  return {
+    currentEvidence,
+    decisionResult,
+    merge,
+  };
 }
 
 // The in-window stability wait is the one pending state with a known, bounded settlement time —
@@ -279,11 +284,17 @@ async function evaluatePull(context) {
   }
   const headSha = pull.head?.sha;
   if (!isValidHeadSha(headSha)) throw new Error("Pull request head SHA is invalid.");
-  const { currentEvidence, decisionResult, evaluatedAt } = await settledEvaluation(
+  const { currentEvidence, decisionResult, evaluatedAt, merge } = await settledEvaluation(
     context,
     headSha,
   );
-  const result = { ...decisionResult, evaluatedAt };
+  const result = resultWithEvidenceUpdatedAt(
+    decisionResult,
+    currentEvidence,
+    headSha,
+    merge,
+    evaluatedAt,
+  );
   logVerdict(pullNumber, headSha, result, dryRun);
   if (dryRun) return;
   await publishResult({

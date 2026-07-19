@@ -751,6 +751,7 @@ live Jira read, or performing a governed write action are documented separately.
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.
+- [Recover Keiko for Quality liveness](./keiko-for-quality-liveness.md) — required-check evidence age, event recovery, and the bounded owner escape.
 - [Local UI guide](../ui-runbook.md) — UI start and stop semantics, supported project paths.
 - [Security boundaries](../security-and-audit-boundaries.md) — trust boundaries that constrain resolutions in this guide.
 - [Local runtime state contract](../local-runtime-state-contract.md) — files written under `.keiko/` and `~/.keiko/`.

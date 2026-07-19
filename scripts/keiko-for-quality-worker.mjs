@@ -284,6 +284,59 @@ function evidenceState(failures, pattern, cleanLabel) {
   return `${hardFailure([failure]) ? "❌" : "⏳"} ${failure}`;
 }
 
+// A dashboard exposes only a normalized timestamp and elapsed duration, never the review body or
+// its source URL. Invalid values remain unavailable so malformed evidence cannot look current.
+export function evidenceUpdatedAt(
+  comments,
+  headSha,
+  mergeParents = [],
+  mergeCommitTime = undefined,
+) {
+  const review = latestQodoReview(comments, headSha, mergeParents, mergeCommitTime);
+  const updatedAt = Date.parse(review?.updatedAt ?? "");
+  return Number.isFinite(updatedAt) ? updatedAt : undefined;
+}
+
+export function timestampLabel(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "unavailable";
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : "unavailable";
+}
+
+export function durationLabel(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  const seconds = Math.floor(value / 1_000);
+  if (seconds >= 86_400) return `${String(Math.floor(seconds / 86_400))}d`;
+  if (seconds >= 3_600) return `${String(Math.floor(seconds / 3_600))}h`;
+  if (seconds >= 60) return `${String(Math.floor(seconds / 60))}m`;
+  return `${String(seconds)}s`;
+}
+
+export function resultWithEvidenceUpdatedAt(
+  decisionResult,
+  currentEvidence,
+  headSha,
+  merge,
+  evaluatedAt,
+) {
+  return {
+    ...decisionResult,
+    evaluatedAt,
+    evidenceUpdatedAt: evidenceUpdatedAt(
+      currentEvidence.comments,
+      headSha,
+      merge.parents,
+      merge.commitTime,
+    ),
+  };
+}
+
+function evidenceAgeLabel(result) {
+  if (typeof result.evidenceUpdatedAt !== "number") return "unavailable (missing)";
+  const age = durationLabel(result.evaluatedAt - result.evidenceUpdatedAt);
+  return age === undefined ? "unavailable (invalid)" : `\`${age}\``;
+}
+
 export function dashboardComment({
   headSha,
   marker = dashboardMarker,
@@ -305,7 +358,11 @@ export function dashboardComment({
     "",
     `${state.icon} **${state.label}**`,
     "",
-    `\`head ${headSha.slice(0, 12)}\``,
+    "| Evaluation | Value |",
+    "| --- | --- |",
+    `| Last evaluated head | \`head ${headSha.slice(0, 12)}\` |`,
+    `| Last evaluated | \`${timestampLabel(result.evaluatedAt)}\` |`,
+    `| Current-head evidence age | ${evidenceAgeLabel(result)} |`,
     "",
     "| Gate group | Evidence |",
     "| --- | --- |",
@@ -444,7 +501,13 @@ async function evaluatePullRequest(owner, repository, pullNumber, installationId
     now: evaluatedAt,
     stabilityMs: parseStabilityMs(env.STABILITY_WINDOW_MS),
   });
-  const result = { ...decisionResult, evaluatedAt };
+  const result = resultWithEvidenceUpdatedAt(
+    decisionResult,
+    currentEvidence,
+    headSha,
+    merge,
+    evaluatedAt,
+  );
   await publishCheck(owner, repository, headSha, result, token, env);
   await publishDashboardComment({
     owner,
