@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { URL, fileURLToPath } from "node:url";
@@ -42,6 +42,7 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const EVIDENCE_PATH = join(ROOT, "docs/qa/knowledge-m2-substrate-evidence.md");
+const WAVE_RECORD_PATH = join(ROOT, "docs/qa/knowledge-m2-wave.md");
 const FACADE_PATH = "packages/keiko-server/src/grounded-rerank-facade.ts";
 const VECTOR_ROWS = 20_001;
 const EXACT_SCAN_CAP = 20_000;
@@ -100,7 +101,6 @@ export function evaluateFacadeProof(input) {
   if (input.importers.length !== 1 || input.importers[0] !== FACADE_PATH) {
     failures.push(`transport-importers:${input.importers.join(",")}`);
   }
-  if (input.configuredBypassCallers.length > 0) failures.push("configured-rerank-bypass");
   if (input.missingDiagnosticFields.length > 0) failures.push("diagnostics-contract-incomplete");
   return proof("reranker-facade", failures, input);
 }
@@ -131,9 +131,9 @@ export function evaluateRepositoryPodProof(input) {
   if (input.fingerprintCount !== input.caseCount) failures.push("repository-fingerprint-coverage");
   if (input.indexedPathCount !== input.caseCount) failures.push("repository-index-coverage");
   if (input.alignedVectorCount !== input.caseCount) failures.push("repository-vector-alignment");
-  if (!new Set(["pod-backed", "lexical-only"]).has(input.editorProviderStatus)) {
-    failures.push("editor-provider-status");
-  }
+  // `editorProviderStatus` is deliberately NOT a verdict input: the editor repo-search provider runs
+  // on the keystroke-sensitive path where embedding-cost providers are excluded by design, so both
+  // of its producer's two values are legitimate. It is carried as informational characterization.
   return proof("repository-pod", failures, input);
 }
 
@@ -148,6 +148,40 @@ export function evaluateBookkeepingProof(input) {
     missing.map((id) => `not-ready:${id}`),
     input,
   );
+}
+
+// docs/qa/knowledge-m2-wave.md is the wave's coordination state. The bookkeeping proof reads the
+// real `- [x]` / `- [ ]` state out of it rather than asserting a constant: an unsettled HS-6
+// single-writer block or an open M2.8 wave-closeout row must keep the closeout gate red.
+export const HS6_SINGLE_WRITER_FILE_COUNT = 11;
+const HS6_SECTION_HEADING = "## HS-6 single-writer files";
+const WAVE_CLOSEOUT_ROW = /^- \[([ x])\] M2\.8 owns wave closeout evidence/mu;
+
+function sectionBody(markdown, heading) {
+  const start = markdown.indexOf(heading);
+  if (start < 0) return "";
+  const rest = markdown.slice(start + heading.length);
+  const next = rest.indexOf("\n## ");
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+function checkboxStates(body) {
+  return [...body.matchAll(/^- \[([ x])\]/gmu)].map((match) => match[1] === "x");
+}
+
+export function parseWaveBookkeepingItems(markdown) {
+  const hs6 = checkboxStates(sectionBody(markdown, HS6_SECTION_HEADING));
+  // An emptied block must not read as settled, so the file count is asserted alongside the state.
+  const hs6Ready = hs6.length === HS6_SINGLE_WRITER_FILE_COUNT && hs6.every(Boolean);
+  const closeout = WAVE_CLOSEOUT_ROW.exec(markdown);
+  return [
+    { id: "hs6-window-closure", status: hs6Ready ? "ready" : "pending" },
+    { id: "matrix-a-substrate-delta", status: closeout?.[1] === "x" ? "ready" : "pending" },
+  ];
+}
+
+export function readWaveBookkeepingItems() {
+  return parseWaveBookkeepingItems(readFileSync(WAVE_RECORD_PATH, "utf8"));
 }
 
 export function evaluateProofSet(results) {
@@ -439,13 +473,37 @@ export function rerankerImportProofFromEntries(entries) {
     .filter((entry) => transportImport.test(entry.source))
     .map((entry) => entry.path)
     .sort();
-  const configuredBypassCallers = entries
-    .filter(
-      (entry) => entry.path !== FACADE_PATH && /\brequestConfiguredRerank\s*\(/u.test(entry.source),
-    )
-    .map((entry) => entry.path)
-    .sort();
-  return { importers, configuredBypassCallers };
+  return { importers };
+}
+
+// The reranker orchestration deleted by 46323c4d must not return through a second call site. The
+// structural guard is the importer set itself: exactly one file under packages/keiko-server/src may
+// import the LiteLLM rerank transport, and it must be the facade.
+export const REQUIRED_RERANKER_DIAGNOSTIC_FIELDS = [
+  "status",
+  "mode",
+  "candidateCount",
+  "documentCount",
+  "keptCount",
+  "failureKind",
+  "latencyMs",
+];
+
+function namedInterfaceBody(source, name) {
+  const opening = `export interface ${name} {`;
+  const start = source.indexOf(opening);
+  if (start < 0) return undefined;
+  const bodyStart = start + opening.length;
+  const end = source.indexOf("\n}", bodyStart);
+  return end < 0 ? undefined : source.slice(bodyStart, end);
+}
+
+export function missingRerankerDiagnosticFields(source) {
+  const body = namedInterfaceBody(source, "GroundedRerankerDiagnostics");
+  if (body === undefined) return [...REQUIRED_RERANKER_DIAGNOSTIC_FIELDS];
+  return REQUIRED_RERANKER_DIAGNOSTIC_FIELDS.filter(
+    (field) => !new RegExp(`readonly\\s+${field}[?:]`, "u").test(body),
+  );
 }
 
 export function runFacadeProof() {
@@ -456,13 +514,9 @@ export function runFacadeProof() {
   }));
   const importProof = rerankerImportProofFromEntries(entries);
   const contract = readFileSync(join(ROOT, "packages/keiko-contracts/src/bff-wire.ts"), "utf8");
-  const required = ["status", "mode", "candidateCount", "documentCount", "keptCount", "latencyMs"];
-  const missingDiagnosticFields = required.filter(
-    (field) => !new RegExp(`readonly\\s+${field}[?:]`, "u").test(contract),
-  );
   return evaluateFacadeProof({
     ...importProof,
-    missingDiagnosticFields,
+    missingDiagnosticFields: missingRerankerDiagnosticFields(contract),
     importerHash: sha256(stableStringify(importProof.importers)),
   });
 }
@@ -603,13 +657,8 @@ async function runRepositoryPodProof() {
   });
 }
 
-function runBookkeepingProof() {
-  return evaluateBookkeepingProof({
-    items: [
-      { id: "hs6-window-closure", status: "ready" },
-      { id: "matrix-a-substrate-delta", status: "ready" },
-    ],
-  });
+export function runBookkeepingProof() {
+  return evaluateBookkeepingProof({ items: readWaveBookkeepingItems() });
 }
 
 function evidenceRows(results) {
@@ -625,10 +674,6 @@ function evidenceRows(results) {
     ["ANN", "vector rows", String(ann.vectorRows)],
     ["ANN", "exact scan cap", String(ann.exactScanCap)],
     ["ANN", `minimum recall@${String(TOP_K)}`, Math.min(...ann.recalls).toFixed(3)],
-    ["ANN", "median latency bucket", ann.annMedianLatency],
-    ["ANN", "p95 latency bucket", ann.annP95Latency],
-    ["Exact", "median latency bucket", ann.exactMedianLatency],
-    ["Exact", "p95 latency bucket", ann.exactP95Latency],
     ["ANN", "encrypted diagnostic", ann.encryptedStatus],
     ["ANN", "load diagnostic", ann.loadFailureReason],
     ["ANN", "partition violations", String(ann.partitionViolations)],
@@ -649,8 +694,12 @@ function evidenceRows(results) {
       "ask-time document embedding count",
       String(pod.askTimeDocumentEmbeddingCount),
     ],
-    ["Repository pod", "editor provider status", pod.editorProviderStatus],
-    ["Bookkeeping", "ready item count", String(bookkeeping.items.length)],
+    ["Repository pod", "editor provider status (informational)", pod.editorProviderStatus],
+    [
+      "Bookkeeping",
+      "ready item count",
+      String(bookkeeping.items.filter((item) => item.status === "ready").length),
+    ],
   ];
 }
 
@@ -658,11 +707,16 @@ function evidenceLines(results) {
   return [
     "# Knowledge M2 unified-substrate evidence",
     "",
-    "This record is body-free and deterministic. It contains only counts, rates, hashes, bounded latency buckets, statuses, and proof identifiers.",
+    "This record is body-free and deterministic. It contains only counts, rates, hashes, statuses, and proof identifiers.",
+    "",
+    "Wall-clock latency buckets are characterization, not a deterministic fact — the closeout run",
+    "reports them on stdout and deliberately keeps them out of this document.",
     "",
     ...markdownTable(evidenceRows(results)),
     "",
-    "Reproduce with `npm run check:knowledge-m2-closeout`.",
+    "Verify with `npm run check:knowledge-m2-closeout`, which compares this committed artifact",
+    "against a freshly rendered one and fails closed on drift. Regenerate with",
+    "`npm run check:knowledge-m2-closeout -- --write`.",
     "",
   ];
 }
@@ -725,35 +779,67 @@ async function collectProofResults(proofRunners, onLog) {
   return results;
 }
 
-function evidenceValidationFailure(first, second) {
-  if (first !== second) return "evidence-not-deterministic";
-  const redactionFailures = evidenceRedactionFailures(first);
+function evidenceValidationFailure(evidence) {
+  const redactionFailures = evidenceRedactionFailures(evidence);
   return redactionFailures.length === 0 ? undefined : redactionFailures.join(", ");
+}
+
+// House pattern from scripts/check-package-surface.mjs: the committed artifact is READ and compared
+// by default, so a reviewer running the gate validates the evidence instead of silently rewriting
+// it into a PASS. Regeneration happens only behind the explicit `--write` flag.
+export function evidenceSettlementFailure(evidence, { write, readCommitted, writeCommitted }) {
+  if (write) {
+    writeCommitted(evidence);
+    return undefined;
+  }
+  const committed = readCommitted();
+  if (committed === undefined) return "evidence-missing";
+  return committed === evidence ? undefined : "evidence-drift";
+}
+
+function defaultEvidenceSettlement(evidence) {
+  return evidenceSettlementFailure(evidence, {
+    write: process.argv.includes("--write"),
+    readCommitted: () =>
+      existsSync(EVIDENCE_PATH) ? readFileSync(EVIDENCE_PATH, "utf8") : undefined,
+    writeCommitted: (value) => {
+      writeFileSync(EVIDENCE_PATH, value, "utf8");
+    },
+  });
+}
+
+function logLatencyCharacterization(onLog, results) {
+  const ann = results.find((result) => result.id === "ann-active")?.metrics;
+  if (ann?.annMedianLatency === undefined) return;
+  onLog(
+    `knowledge-m2-closeout: latency-characterization ann-median=${ann.annMedianLatency} ` +
+      `ann-p95=${ann.annP95Latency} exact-median=${ann.exactMedianLatency} ` +
+      `exact-p95=${ann.exactP95Latency}`,
+  );
 }
 
 export async function runKnowledgeM2CloseoutGate({
   log,
   fail,
   proofRunners = DEFAULT_PROOF_RUNNERS,
-  writeEvidence = (evidence) => writeFileSync(EVIDENCE_PATH, evidence, "utf8"),
+  settleEvidence = defaultEvidenceSettlement,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail = fail ?? ((message) => console.error(`knowledge-m2-closeout failed: ${message}`));
   const results = await collectProofResults(proofRunners, onLog);
+  logLatencyCharacterization(onLog, results);
   const verdict = evaluateProofSet(results);
   if (!verdict.ok) {
     onFail(verdict.failedProofs.join(", "));
     return { ok: false, results, evidenceHash: undefined };
   }
-  const first = renderKnowledgeM2Evidence(results);
-  const second = renderKnowledgeM2Evidence(results);
-  const validationFailure = evidenceValidationFailure(first, second);
-  if (validationFailure !== undefined) {
-    onFail(validationFailure);
+  const evidence = renderKnowledgeM2Evidence(results);
+  const failure = evidenceValidationFailure(evidence) ?? settleEvidence(evidence);
+  if (failure !== undefined) {
+    onFail(failure);
     return { ok: false, results, evidenceHash: undefined };
   }
-  writeEvidence(first);
-  const evidenceHash = sha256(first);
+  const evidenceHash = sha256(evidence);
   onLog(`knowledge-m2-closeout: PASS evidence-sha256=${evidenceHash}`);
   return { ok: true, results, evidenceHash };
 }

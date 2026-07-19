@@ -146,6 +146,13 @@ jobs:
         # claim is falsely flagged, an unavailable judge stops degrading to WARN, or a pass-through
         # judge still "detects" (the checker must be load-bearing — non-tautology proven in CI).
         run: npm run check:grounded-entailment
+      - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
+        # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
+        # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
+        # the repository pod, and the wave bookkeeping state read out of docs/qa/knowledge-m2-wave.md)
+        # and compares the committed docs/qa/knowledge-m2-substrate-evidence.md against a freshly
+        # rendered one, failing closed on drift. Uses the compiled dist built by `npm run typecheck`.
+        run: npm run check:knowledge-m2-closeout
       - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
         # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
         # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the

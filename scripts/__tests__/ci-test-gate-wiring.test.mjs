@@ -86,6 +86,10 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:grounded-retrieval-quality",
   "npm run check:grounded-faithfulness",
   "npm run check:grounded-entailment",
+  // Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556): the wave's anti-false-green artifact.
+  // It shipped defined in package.json but wired into NO workflow — exactly the meta-finding this
+  // guard exists for. Pin it so it cannot silently unwire again.
+  "npm run check:knowledge-m2-closeout",
   "npm run check:context-quality",
   // Server error observability gate (Step 11, RB-6 / GEN-OBS-DIAGNOSTICS-901): the top-level 500 must
   // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`.

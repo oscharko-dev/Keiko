@@ -4,6 +4,17 @@ This note operationalizes [ADR-0152](../adr/ADR-0152-substrate-ownership-and-uni
 for Knowledge M2 (Epic #2556, program Epic #2554). It is a checklist, not a second architecture
 decision. ADR-0152 is authoritative when wording differs.
 
+## Status: wave closed
+
+The Knowledge M2 wave has shipped. M2.2 through M2.8 are integrated on this branch, and the HS-6
+single-writer window closed at merge commit `f90fa2f3`.
+
+**The single-writer freeze below is no longer binding.** A concurrent Editor or OpenCode branch may
+edit the HS-6 files under the repository's normal review rules; it does not need an ordering
+assignment from the M2.6 writer. The checked boxes are the historical settlement record of the
+window, kept because `check:knowledge-m2-closeout` reads this file as the wave's bookkeeping proof —
+an unchecked required box keeps that gate red.
+
 ## Activation record
 
 - [x] Maintainer early-activation decision recorded: 2026-07-18.
@@ -11,11 +22,11 @@ decision. ADR-0152 is authoritative when wording differs.
 - [x] Authority unchanged: the accepted issue scope, selected mode, Authority Envelope, deployment
       ceiling, required checks, redaction rules, and trust boundaries remain controlling.
 - [x] Phase A entry gate assigned to M2.1 / Issue #2565.
-- [ ] M2.2, M2.3, M2.4, and M2.5 may start only after M2.1 integrates.
-- [ ] Phase B starts after the relevant Phase A outputs settle.
-- [ ] M2.6 owns the shared contract batch and the single D12 regeneration.
-- [ ] M2.7 owns repository-pod consumption.
-- [ ] M2.8 owns wave closeout evidence.
+- [x] M2.2, M2.3, M2.4, and M2.5 may start only after M2.1 integrates.
+- [x] Phase B starts after the relevant Phase A outputs settle.
+- [x] M2.6 owns the shared contract batch and the single D12 regeneration.
+- [x] M2.7 owns repository-pod consumption.
+- [x] M2.8 owns wave closeout evidence.
 
 ## Phase ownership
 
@@ -35,23 +46,24 @@ named owner rather than added opportunistically.
 
 ## HS-6 single-writer files
 
-From M2.1 integration through M2.6 integration, only the designated M2.6 writer may edit these
-files for the retrieval-context generalization:
+From M2.1 integration through M2.6 integration, only the designated M2.6 writer could edit these
+files for the retrieval-context generalization. That window is closed (see the status section):
 
-- [ ] `packages/keiko-contracts/src/coding-context.ts`
-- [ ] `packages/keiko-contracts/src/index.ts` — coding-context export block only
-- [ ] `packages/keiko-contracts/src/harness.ts`
-- [ ] `packages/keiko-server/src/editor/codingContext.ts`
-- [ ] `packages/keiko-server/src/editor/codingContextProviders.ts`
-- [ ] `packages/keiko-server/src/editor/codingContextEvidence.ts`
-- [ ] `packages/keiko-server/src/editor/localKnowledgeRetrieval.ts`
-- [ ] `packages/keiko-server/src/editor/contextRoutes.ts`
-- [ ] `packages/keiko-server/src/editor/testGenerationEvidence.ts`
-- [ ] `packages/keiko-harness/src/tasks/renderRetrievedContext.ts`
-- [ ] `packages/keiko-workspace/src/contextPack.ts`
+- [x] `packages/keiko-contracts/src/coding-context.ts`
+- [x] `packages/keiko-contracts/src/index.ts` — coding-context export block only
+- [x] `packages/keiko-contracts/src/harness.ts`
+- [x] `packages/keiko-server/src/editor/codingContext.ts`
+- [x] `packages/keiko-server/src/editor/codingContextProviders.ts`
+- [x] `packages/keiko-server/src/editor/codingContextEvidence.ts`
+- [x] `packages/keiko-server/src/editor/localKnowledgeRetrieval.ts`
+- [x] `packages/keiko-server/src/editor/contextRoutes.ts`
+- [x] `packages/keiko-server/src/editor/testGenerationEvidence.ts`
+- [x] `packages/keiko-harness/src/tasks/renderRetrievedContext.ts`
+- [x] `packages/keiko-workspace/src/contextPack.ts`
 
-The checkboxes are coordination state. They are checked by the M2.6 owner as each file is settled;
-they do not authorize a second writer.
+The checkboxes are coordination state. They were checked by the M2.6 owner as each file settled;
+all eleven are settled and the window closed at merge commit `f90fa2f3`. They never authorized a
+second writer while the window was open.
 
 Explicitly outside the freeze: `packages/keiko-server/src/coding-context/*`. That connected-context
 intake shares a name but not the coding-context contract family.
@@ -78,8 +90,9 @@ sites unless the M2.6 owner schedules the change:
 - [ ] Git-context eligibility ceiling:
       the collector/provider seam in `codingContext.ts` and `codingContextProviders.ts`
 
-If an active Editor or OpenCode branch needs any single-writer file, stop and ask the maintainer to
-assign ordering. Do not merge overlapping edits and call the result coordinated.
+While the window was open, an active Editor or OpenCode branch needing any single-writer file had to
+stop and ask the maintainer to assign ordering, rather than merge overlapping edits and call the
+result coordinated. The window is now closed and that ordering requirement has lapsed.
 
 ## Compatibility checklist
 

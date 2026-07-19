@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  HS6_SINGLE_WRITER_FILE_COUNT,
   PROOF_IDS,
+  REQUIRED_RERANKER_DIAGNOSTIC_FIELDS,
   evaluateAnnProof,
   evaluateBookkeepingProof,
   evaluateEvalProof,
@@ -10,8 +12,13 @@ import {
   evaluateRepositoryPodProof,
   evaluateWireProof,
   evidenceRedactionFailures,
+  evidenceSettlementFailure,
+  missingRerankerDiagnosticFields,
+  parseWaveBookkeepingItems,
+  readWaveBookkeepingItems,
   renderKnowledgeM2Evidence,
   rerankerImportProofFromEntries,
+  runBookkeepingProof,
   runKnowledgeM2CloseoutGate,
   sha256,
   stableStringify,
@@ -40,7 +47,6 @@ function annInput(overrides = {}) {
 function facadeInput(overrides = {}) {
   return {
     importers: [FACADE],
-    configuredBypassCallers: [],
     missingDiagnosticFields: [],
     importerHash: "a".repeat(64),
     ...overrides,
@@ -96,6 +102,31 @@ function bookkeepingInput(overrides = {}) {
   };
 }
 
+// Minimal stand-in for docs/qa/knowledge-m2-wave.md: the parser must read the real `- [x]` / `- [ ]`
+// state out of the HS-6 single-writer block and the M2.8 wave-closeout row, and nothing else.
+function waveFixture({ hs6States = "x".repeat(11), closeoutState = "x" } = {}) {
+  const hs6Lines = [...hs6States].map(
+    (state, index) => `- [${state}] \`packages/keiko-contracts/src/file-${String(index)}.ts\``,
+  );
+  return [
+    "# Knowledge M2 wave activation and HS-6 coordination",
+    "",
+    "## Activation record",
+    "",
+    "- [x] Phase A entry gate assigned to M2.1 / Issue #2565.",
+    `- [${closeoutState}] M2.8 owns wave closeout evidence.`,
+    "",
+    "## HS-6 single-writer files",
+    "",
+    ...hs6Lines,
+    "",
+    "## M2.1 verification record",
+    "",
+    "- [ ] `npm run check:adr-index`",
+    "",
+  ].join("\n");
+}
+
 function passingResults() {
   return [
     evaluateAnnProof(annInput()),
@@ -139,13 +170,55 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       },
     ];
     const scanned = rerankerImportProofFromEntries(entries);
+    expect(scanned.importers).toEqual([FACADE, "packages/keiko-server/src/bypass.ts"].sort());
     expect(evaluateFacadeProof({ ...facadeInput(), ...scanned }).ok).toBe(false);
-    expect(evaluateFacadeProof(facadeInput({ configuredBypassCallers: ["bypass.ts"] })).ok).toBe(
-      false,
-    );
     expect(evaluateFacadeProof(facadeInput({ missingDiagnosticFields: ["status"] })).ok).toBe(
       false,
     );
+  });
+
+  it("counts only real transport importers, never a prose mention", () => {
+    const entries = [
+      {
+        path: FACADE,
+        source: 'import { requestLiteLLMRerank } from "@oscharko-dev/keiko-model-gateway";',
+      },
+      {
+        path: "packages/keiko-server/src/deps.ts",
+        source: "// Production leaves this undefined and uses requestLiteLLMRerank with config.",
+      },
+    ];
+    const scanned = rerankerImportProofFromEntries(entries);
+    expect(Object.keys(scanned)).toEqual(["importers"]);
+    expect(scanned.importers).toEqual([FACADE]);
+    expect(evaluateFacadeProof({ ...facadeInput(), ...scanned }).ok).toBe(true);
+  });
+
+  it("scopes the diagnostics-completeness scan to the named interface body", () => {
+    const contract = [
+      "export interface UnrelatedDiagnostics {",
+      "  readonly status: string;",
+      "  readonly latencyMs?: number | undefined;",
+      "}",
+      "",
+      "export interface GroundedRerankerDiagnostics {",
+      "  readonly mode?: string | undefined;",
+      "  readonly candidateCount: number;",
+      "  readonly documentCount: number;",
+      "  readonly keptCount: number;",
+      "  readonly failureKind?: string | undefined;",
+      "  readonly latencyMs?: number | undefined;",
+      "}",
+      "",
+    ].join("\n");
+    expect(missingRerankerDiagnosticFields(contract)).toEqual(["status"]);
+  });
+
+  it("requires the failure-kind diagnostic and fails closed on a missing interface", () => {
+    expect(REQUIRED_RERANKER_DIAGNOSTIC_FIELDS).toContain("failureKind");
+    expect(missingRerankerDiagnosticFields("export interface Other {}")).toEqual([
+      ...REQUIRED_RERANKER_DIAGNOSTIC_FIELDS,
+    ]);
   });
 
   it("fails every evaluation-harness negative control closed", () => {
@@ -172,9 +245,19 @@ describe("Knowledge M2 closeout proof evaluators", () => {
       { fingerprintCount: 9 },
       { indexedPathCount: 9 },
       { alignedVectorCount: 9 },
-      { editorProviderStatus: "unknown" },
     ];
     expect(failures.every((override) => !evaluateRepositoryPodProof(podInput(override)).ok)).toBe(
+      true,
+    );
+  });
+
+  // The editor repo-search provider runs on the keystroke-sensitive path where embedding-cost
+  // providers are excluded by design, so its status is characterization, not a verdict input.
+  it("keeps the editor provider status out of the repository-pod verdict", () => {
+    expect(evaluateRepositoryPodProof(podInput({ editorProviderStatus: "pod-backed" })).ok).toBe(
+      true,
+    );
+    expect(evaluateRepositoryPodProof(podInput({ editorProviderStatus: "lexical-only" })).ok).toBe(
       true,
     );
   });
@@ -201,16 +284,87 @@ describe("Knowledge M2 closeout proof evaluators", () => {
   });
 });
 
+describe("Knowledge M2 wave bookkeeping parser", () => {
+  it("reads a fully settled wave record as ready", () => {
+    expect(parseWaveBookkeepingItems(waveFixture())).toEqual([
+      { id: "hs6-window-closure", status: "ready" },
+      { id: "matrix-a-substrate-delta", status: "ready" },
+    ]);
+  });
+
+  it("fails closed while any HS-6 single-writer box is unchecked", () => {
+    const items = parseWaveBookkeepingItems(waveFixture({ hs6States: "xxxxxxxxxx " }));
+    expect(items).toContainEqual({ id: "hs6-window-closure", status: "pending" });
+    expect(evaluateBookkeepingProof({ items }).ok).toBe(false);
+  });
+
+  it("fails closed while the M2.8 wave-closeout row is unchecked", () => {
+    const items = parseWaveBookkeepingItems(waveFixture({ closeoutState: " " }));
+    expect(items).toContainEqual({ id: "matrix-a-substrate-delta", status: "pending" });
+    expect(evaluateBookkeepingProof({ items }).ok).toBe(false);
+  });
+
+  it("fails closed when the HS-6 block is emptied instead of settled", () => {
+    const items = parseWaveBookkeepingItems(waveFixture({ hs6States: "" }));
+    expect(items).toContainEqual({ id: "hs6-window-closure", status: "pending" });
+    expect(HS6_SINGLE_WRITER_FILE_COUNT).toBe(11);
+  });
+
+  it("ignores checkbox state outside the two required blocks", () => {
+    const withUncheckedVerification = waveFixture();
+    expect(withUncheckedVerification).toContain("- [ ] `npm run check:adr-index`");
+    expect(
+      parseWaveBookkeepingItems(withUncheckedVerification).every((item) => item.status === "ready"),
+    ).toBe(true);
+  });
+
+  it("reads the committed wave record and certifies the shipped wave", () => {
+    expect(readWaveBookkeepingItems()).toEqual([
+      { id: "hs6-window-closure", status: "ready" },
+      { id: "matrix-a-substrate-delta", status: "ready" },
+    ]);
+    expect(runBookkeepingProof().ok).toBe(true);
+  });
+});
+
 describe("Knowledge M2 evidence", () => {
-  it("is byte-identical, hashable, and structurally body-free", () => {
-    const first = renderKnowledgeM2Evidence(passingResults());
-    const second = renderKnowledgeM2Evidence(passingResults());
-    expect(first).toBe(second);
-    expect(sha256(first)).toMatch(/^[a-f0-9]{64}$/u);
-    expect(evidenceRedactionFailures(first)).toEqual([]);
-    expect(evidenceRedactionFailures(`${first}\nhttps://forbidden.invalid`)).toContain("endpoint");
-    expect(evidenceRedactionFailures(`${first}\nsecret`)).toContain("credential-label");
-    expect(evidenceRedactionFailures(`${first}\nexcerpt`)).toContain("body-material");
+  it("is hashable and structurally body-free", () => {
+    const evidence = renderKnowledgeM2Evidence(passingResults());
+    expect(sha256(evidence)).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidenceRedactionFailures(evidence)).toEqual([]);
+    expect(evidenceRedactionFailures(`${evidence}\nhttps://forbidden.invalid`)).toContain(
+      "endpoint",
+    );
+    expect(evidenceRedactionFailures(`${evidence}\nsecret`)).toContain("credential-label");
+    expect(evidenceRedactionFailures(`${evidence}\nexcerpt`)).toContain("body-material");
+  });
+
+  // Wall-clock latency buckets are a characterization number, not a deterministic fact: at a bucket
+  // boundary the same tree renders a different document. The published record keeps its determinism
+  // claim; the buckets stay on stdout only.
+  it("keeps wall-clock latency buckets out of the published document", () => {
+    const evidence = renderKnowledgeM2Evidence(passingResults());
+    expect(evidence).not.toMatch(/\|\s*(?:median|p95) latency bucket\s*\|/u);
+    expect(evidence).not.toContain("<=100ms");
+    expect(evidence).not.toContain("<=25ms");
+    expect(evidence).toContain("deterministic");
+  });
+
+  it("reports the ready item count, not the total item count", () => {
+    const items = [
+      { id: "hs6-window-closure", status: "ready" },
+      { id: "matrix-a-substrate-delta", status: "pending" },
+    ];
+    const results = passingResults().map((result) =>
+      result.id === "program-bookkeeping" ? { ...result, metrics: { items } } : result,
+    );
+    expect(renderKnowledgeM2Evidence(results)).toMatch(/ready item count\s*\|\s*1 \|/u);
+  });
+
+  it("labels the editor provider status as informational", () => {
+    expect(renderKnowledgeM2Evidence(passingResults())).toContain(
+      "editor provider status (informational)",
+    );
   });
 
   it("sorts object keys for deterministic scorecard hashing", () => {
@@ -218,47 +372,125 @@ describe("Knowledge M2 evidence", () => {
   });
 });
 
+describe("evidenceSettlementFailure", () => {
+  it("fails closed when the committed artifact drifted from the rendered evidence", () => {
+    expect(
+      evidenceSettlementFailure("rendered", {
+        write: false,
+        readCommitted: () => "stale",
+        writeCommitted: () => undefined,
+      }),
+    ).toBe("evidence-drift");
+  });
+
+  it("fails closed when the committed artifact is missing", () => {
+    expect(
+      evidenceSettlementFailure("rendered", {
+        write: false,
+        readCommitted: () => undefined,
+        writeCommitted: () => undefined,
+      }),
+    ).toBe("evidence-missing");
+  });
+
+  it("accepts a matching committed artifact without writing it", () => {
+    const writeCommitted = vi.fn();
+    expect(
+      evidenceSettlementFailure("rendered", {
+        write: false,
+        readCommitted: () => "rendered",
+        writeCommitted,
+      }),
+    ).toBeUndefined();
+    expect(writeCommitted).not.toHaveBeenCalled();
+  });
+
+  it("regenerates the artifact only under the explicit write flag", () => {
+    const writeCommitted = vi.fn();
+    expect(
+      evidenceSettlementFailure("rendered", {
+        write: true,
+        readCommitted: () => "stale",
+        writeCommitted,
+      }),
+    ).toBeUndefined();
+    expect(writeCommitted).toHaveBeenCalledWith("rendered");
+  });
+});
+
 describe("runKnowledgeM2CloseoutGate", () => {
+  // Drives the six REAL proofs: a 20 001-row ANN corpus plus the retrieval, grounded-retrieval, and
+  // faithfulness gates. That work does not fit the 15s repository default.
   it("executes all six real proof functions through the exported gate", async () => {
-    const written = vi.fn();
+    const settleEvidence = vi.fn();
     const outcome = await runKnowledgeM2CloseoutGate({
       log: () => undefined,
       fail: vi.fn(),
-      writeEvidence: written,
+      settleEvidence,
     });
     expect(outcome.ok).toBe(true);
     expect(outcome.results.map((result) => result.id)).toEqual(PROOF_IDS);
-    expect(written).toHaveBeenCalledOnce();
-  });
+    expect(settleEvidence).toHaveBeenCalledOnce();
+  }, 300_000);
 
-  it("writes evidence only after every injected proof passes", async () => {
+  it("settles evidence only after every injected proof passes", async () => {
     const results = passingResults();
-    const written = vi.fn();
+    const settleEvidence = vi.fn();
     const outcome = await runKnowledgeM2CloseoutGate({
       log: () => undefined,
       fail: vi.fn(),
       proofRunners: results.map((result) => () => Promise.resolve(result)),
-      writeEvidence: written,
+      settleEvidence,
     });
     expect(outcome.ok).toBe(true);
-    expect(written).toHaveBeenCalledOnce();
+    expect(settleEvidence).toHaveBeenCalledOnce();
   });
 
-  it("enumerates every failed proof and does not write evidence", async () => {
+  it("enumerates every failed proof and does not settle evidence", async () => {
     const results = passingResults().map((result, index) =>
       index % 2 === 0 ? { ...result, ok: false, failures: ["synthetic"] } : result,
     );
     const fail = vi.fn();
-    const written = vi.fn();
+    const settleEvidence = vi.fn();
     const outcome = await runKnowledgeM2CloseoutGate({
       log: () => undefined,
       fail,
       proofRunners: results.map((result) => () => Promise.resolve(result)),
-      writeEvidence: written,
+      settleEvidence,
     });
     expect(outcome.ok).toBe(false);
     expect(fail).toHaveBeenCalledWith("ann-active, eval-harness, repository-pod");
-    expect(written).not.toHaveBeenCalled();
+    expect(settleEvidence).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a not-ready bookkeeping item read from the wave record", async () => {
+    const pending = evaluateBookkeepingProof({
+      items: parseWaveBookkeepingItems(waveFixture({ closeoutState: " " })),
+    });
+    const fail = vi.fn();
+    const settleEvidence = vi.fn();
+    const outcome = await runKnowledgeM2CloseoutGate({
+      log: () => undefined,
+      fail,
+      proofRunners: [() => Promise.resolve(pending)],
+      settleEvidence,
+    });
+    expect(outcome.ok).toBe(false);
+    expect(fail).toHaveBeenCalledWith("program-bookkeeping");
+    expect(settleEvidence).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the committed evidence artifact drifted", async () => {
+    const results = passingResults();
+    const fail = vi.fn();
+    const outcome = await runKnowledgeM2CloseoutGate({
+      log: () => undefined,
+      fail,
+      proofRunners: results.map((result) => () => Promise.resolve(result)),
+      settleEvidence: () => "evidence-drift",
+    });
+    expect(outcome.ok).toBe(false);
+    expect(fail).toHaveBeenCalledWith("evidence-drift");
   });
 
   it("fails closed on proof execution and evidence redaction errors", async () => {
@@ -267,7 +499,7 @@ describe("runKnowledgeM2CloseoutGate", () => {
       log: () => undefined,
       fail: executionFail,
       proofRunners: [() => Promise.reject(new Error("synthetic"))],
-      writeEvidence: vi.fn(),
+      settleEvidence: vi.fn(),
     });
     expect(execution.ok).toBe(false);
     expect(executionFail).toHaveBeenCalledWith("ann-active");
@@ -280,7 +512,7 @@ describe("runKnowledgeM2CloseoutGate", () => {
       log: () => undefined,
       fail: redactionFail,
       proofRunners: results.map((result) => () => Promise.resolve(result)),
-      writeEvidence: vi.fn(),
+      settleEvidence: vi.fn(),
     });
     expect(redaction.ok).toBe(false);
     expect(redactionFail).toHaveBeenCalledWith("credential-label");
