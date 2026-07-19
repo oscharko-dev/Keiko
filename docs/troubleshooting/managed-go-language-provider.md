@@ -48,7 +48,8 @@ external documentation links, and unimported-package indexing are disabled.
 
 1. Provision the approved Go and gopls binaries and all dependencies offline.
 2. Select the governed build tags, module mode, target, and optional contained `go.work` file.
-3. Activate Go, then use the targeted Go restart when requested.
+3. Activate Go, accept or edit the server-owned typed default, save it, and use the targeted Go
+   restart when requested.
 4. For rollback, restore the previous settings revision and restart only Go, or deactivate Go.
 
 Do not enable a proxy, automatic toolchain selection, checksum network access, VCS access, or

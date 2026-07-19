@@ -82,8 +82,8 @@ safe standalone analysis without a complete build-derived project model.
    Keep the typed source/target levels and `safeOffline` import posture.
 3. If cleanup failed, deactivate Java and let the governed lifecycle remove the private runtime
    state. Do not manually point Java at another workspace's `-configuration` or `-data` directory.
-4. Activate Java, then use the targeted Java restart when requested. Unrelated providers remain
-   warm.
+4. Activate Java, accept or edit the server-owned typed default, save it, and use the targeted Java
+   restart when requested. Unrelated providers remain warm.
 5. For rollback, restore the previous governed settings revision and restart only Java, or
    deactivate Java. A restart creates fresh private runtime-state directories.
 

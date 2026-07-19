@@ -56,7 +56,8 @@ Keiko never executes shell documents to repair or improve analysis.
    the configured dialect (for example `#!/bin/sh` under `dialect: bash`) is still analyzed under
    the configured dialect, not the shebang. The `shfmt.languageDialect` forwarding only matters for
    shfmt-driven formatting, which Keiko keeps unavailable by design (see Root Cause above).
-4. Activate Shell, then use the targeted Shell restart when requested.
+4. Activate Shell, accept or edit the server-owned typed default, save it, and use the targeted
+   Shell restart when requested.
 5. For rollback, restore the previous settings revision and restart only Shell, or deactivate it.
 
 Do not enable external sources, explainshell, shfmt, startup profiles, arbitrary ShellCheck arguments,

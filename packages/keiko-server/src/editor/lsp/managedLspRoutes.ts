@@ -13,6 +13,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
 import { listHostLspHealthSnapshotsForRoot } from "./hostLanguageOperation.js";
+import { managedLspConfigurationDefaults } from "./managedLspConfigurationDefaults.js";
 import {
   detectPythonConfigurationPrecedence,
   resolvePythonRuntimeIdentitySource,
@@ -119,6 +120,7 @@ export async function handleGetManagedLspControl(
     const response = {
       ...snapshot,
       languages: projectManagedLspLiveLanguages(snapshot, health),
+      configurationDefaults: managedLspConfigurationDefaults(snapshot.revision, snapshot.etag),
       health,
       providerMetadata: [
         {
@@ -161,6 +163,7 @@ function liveLanguage(
   const runtime = health.find((entry) => entry.language === current.language);
   const settings = snapshot.settings.find((entry) => entry.language === current.language);
   const restartRequired = settings?.restartRequired ?? false;
+  const restartAfterDisposal = restartRequired && runtime === undefined;
   return resolveManagedLspActivation({
     schemaVersion: "1",
     language: current.language,
@@ -170,8 +173,11 @@ function liveLanguage(
     provisioning: "provisioned",
     workspaceActivation: settings?.workspaceActivation === "enabled" ? "enabled" : "unset",
     legacyEnvironment: "unset",
-    negotiation: negotiationState(runtime),
-    runtimeHealth: runtimeHealth(runtime),
+    // An accepted configuration update intentionally disposes this pool entry. With no health
+    // sample, preserve the persisted desired-state transition without fabricating capabilities;
+    // the response's health array remains empty until the explicit restart starts a new process.
+    negotiation: restartAfterDisposal ? "negotiated" : negotiationState(runtime),
+    runtimeHealth: restartAfterDisposal ? "healthy" : runtimeHealth(runtime),
     restartRequired,
   });
 }

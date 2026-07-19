@@ -80,6 +80,10 @@ import {
   ApiError,
   type StreamHandlers,
 } from "./api";
+import {
+  MANAGED_LSP_TEST_LANGUAGES,
+  managedLspTestConfigurationDefaults,
+} from "@/test-utils/managed-lsp-settings-fixture";
 
 const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
 const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
@@ -194,8 +198,6 @@ describe("managed language settings API", () => {
   });
 });
 
-const MANAGED_LSP_TEST_LANGUAGES = ["python", "go", "shell", "java", "rust"] as const;
-
 function managedLspStatus(
   revision: number,
   language: (typeof MANAGED_LSP_TEST_LANGUAGES)[number] = "python",
@@ -233,6 +235,7 @@ function managedLspSettingsResponse(): Record<string, unknown> {
     languages: MANAGED_LSP_TEST_LANGUAGES.map((language) => managedLspStatus(0, language)),
     settings: MANAGED_LSP_TEST_LANGUAGES.map(managedLspSetting),
     configurations: [],
+    configurationDefaults: managedLspTestConfigurationDefaults(0, '"lspcfg-0-abcdefghijklmnop"'),
     health: [],
     providerMetadata: [],
   };
