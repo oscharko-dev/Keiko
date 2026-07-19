@@ -26,7 +26,7 @@ function capturedError(run) {
   throw new Error("expected function to throw");
 }
 
-describe("package-surface npm pack helper", () => {
+describe("package-surface npm pack capture", () => {
   it("captures and parses npm-pack output with the explicit bounded buffer", () => {
     let observed;
 
