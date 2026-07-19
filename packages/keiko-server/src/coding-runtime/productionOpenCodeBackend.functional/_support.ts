@@ -368,6 +368,10 @@ export function scriptedResponse(script: ScriptState): NormalizedResponse {
     if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
     return step === 1 ? tool("question", question()) : normal();
   }
+  return productiveResponse(step, script);
+}
+
+function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
   if (step === 0) return tool("todowrite", planUpdate(1));
   if (step === 1)
     return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);

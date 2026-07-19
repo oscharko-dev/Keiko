@@ -46,10 +46,7 @@ function planToolPart(state: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** Mirrors the v1.17.17 completed part: todos appear in input, output, and metadata. */
-function completedPlanState(
-  todos: readonly Record<string, unknown>[] | unknown,
-  metadataCanary = "",
-): Record<string, unknown> {
+function completedPlanState(todos: unknown, metadataCanary = ""): Record<string, unknown> {
   return {
     status: "completed",
     input: { todos },
