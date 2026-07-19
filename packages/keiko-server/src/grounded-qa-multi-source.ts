@@ -53,7 +53,7 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
@@ -519,8 +519,10 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
-    const repoSemanticSearchProvider =
-      deps === undefined ? undefined : configuredRepoSemanticSearchProviderFor(deps, signal);
+    const semanticLease =
+      deps === undefined
+        ? { provider: undefined, close: (): void => undefined }
+        : configuredRepoSemanticSearchProviderLeaseFor(deps, signal, input.workspaceRoot);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
@@ -529,7 +531,11 @@ export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): Gro
       ...(deps?.workspaceIndexForRoot === undefined
         ? {}
         : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
-      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
+      ...(semanticLease.provider === undefined
+        ? {}
+        : { repoSemanticSearchProvider: semanticLease.provider }),
+    }).finally(() => {
+      semanticLease.close();
     });
   };
 }
