@@ -59,6 +59,10 @@ import {
   productionDiscoveryBffDeps,
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
+  FUNCTIONAL_PLAN_DROPPED_CANARY,
+  FUNCTIONAL_PLAN_STEP_EDIT,
+  FUNCTIONAL_PLAN_STEP_READ,
+  FUNCTIONAL_PLAN_STEP_VERIFY,
   type ScriptState,
 } from "./productionOpenCodeBackend.functional/_support.js";
 
@@ -484,6 +488,14 @@ async function runProductiveScenario(
   expect(activity).not.toContain(NEW);
   expect(activity).toContain('"state":"succeeded"');
   expect(activity).toContain('"truncated":true');
+  // #2480: the plan snapshot updated live — revision 2 carries the added verify step and the
+  // state flips, while unprojected todo fields and the plan tool never surface as tool activity.
+  expect(activity).toContain('"revision":2');
+  expect(activity).toContain(FUNCTIONAL_PLAN_STEP_READ);
+  expect(activity).toContain(FUNCTIONAL_PLAN_STEP_VERIFY);
+  expect(activity).toContain('"state":"active"');
+  expect(activity).not.toContain(FUNCTIONAL_PLAN_DROPPED_CANARY);
+  expect(activity).not.toContain('"todowrite"');
   const unpaired = await codingAppSessionSnapshot(pipeline.baseUrl);
   expect(unpaired).toEqual({ schemaVersion: "1", content: null });
   const unauthenticatedTimeline = JSON.stringify(pipeline.timeline);
@@ -678,6 +690,10 @@ function rawActivityCanaries(): readonly string[] {
     FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
     FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
     OVERSIZED_CALL_ID,
+    FUNCTIONAL_PLAN_STEP_READ,
+    FUNCTIONAL_PLAN_STEP_EDIT,
+    FUNCTIONAL_PLAN_STEP_VERIFY,
+    FUNCTIONAL_PLAN_DROPPED_CANARY,
   ];
 }
 

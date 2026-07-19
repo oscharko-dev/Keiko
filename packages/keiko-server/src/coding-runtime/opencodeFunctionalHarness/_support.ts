@@ -23,7 +23,10 @@ import type {
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
 import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
-import { projectOpenCodeProtocolSurface } from "../opencodeProtocolSurface.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeProtocolSurface,
+} from "../opencodeProtocolSurface.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -255,7 +258,12 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   if (digest(resolve(stagedBinary)) !== digest(binary)) {
     throw new Error("functional-opencode-binary-copy-mismatch");
   }
-  const sidecar = verification(installRoot, target);
+  // The staged artifact IS the pinned binary: its live /doc re-projects onto the product
+  // surface pin, not onto the scripted harness surface digest.
+  const sidecar = {
+    ...verification(installRoot, target),
+    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  };
   return {
     evidenceClass: "functional-not-platform-qualified",
     installRoot,
@@ -915,24 +923,26 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
+    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
-  /** A rejected (or aborted) question fails the tool and ends the turn, like the real binary. */
+  /**
+   * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
+   * The real v1.17.17 publishes its question lifecycle live-only over /global/event — question
+   * rows never reach the durable history — so the fake mirrors exactly that.
+   */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     this.questionSequence += 1;
     const id = `que_functional${String(this.questionSequence)}`;
     const row = { id, sessionID: FAKE_SESSION_ID, questions: call.args.questions };
-    this.appendHistory("question.asked", { id, sessionID: FAKE_SESSION_ID, questions: [] });
     return new Promise<string>((resolveQuestion, rejectQuestion) => {
       const settled = (outcome: FakeQuestionOutcome): void => {
         signal.removeEventListener("abort", onAbort);
-        this.appendHistory(
-          outcome.kind === "answered" ? "question.replied" : "question.rejected",
-          outcome.kind === "answered"
-            ? { sessionID: FAKE_SESSION_ID, requestID: id, answers: [] }
-            : { sessionID: FAKE_SESSION_ID, requestID: id },
-        );
+        this.broadcast(outcome.kind === "answered" ? "question.replied" : "question.rejected", {
+          sessionID: FAKE_SESSION_ID,
+          requestID: id,
+        });
         if (outcome.kind === "answered") resolveQuestion(JSON.stringify(outcome));
         else rejectQuestion(new Error("functional-question-rejected"));
       };
@@ -942,7 +952,7 @@ class FakeOpenCodeChild {
       };
       this.questions.set(id, { row, settle: settled });
       signal.addEventListener("abort", onAbort, { once: true });
-      this.broadcast("question.nudge", {});
+      this.broadcast("question.asked", { id, sessionID: FAKE_SESSION_ID });
     });
   }
 
@@ -975,6 +985,11 @@ class FakeOpenCodeChild {
     if (!response.ok) return '{"status":"failed"}';
     return await response.text();
   }
+}
+
+/** Mirrors the v1.17.17 built-in: full-replace todo state, no facade round-trip, no tool event. */
+function executeBuiltInTodoWrite(call: FakeToolCall): string {
+  return JSON.stringify(call.args.todos ?? [], null, 2);
 }
 
 function splitFunctionalText(value: string): readonly string[] {

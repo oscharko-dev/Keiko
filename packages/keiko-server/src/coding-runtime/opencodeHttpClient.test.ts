@@ -364,6 +364,12 @@ describe("OpenCode HTTP client", () => {
       ok: false,
       reason: "request-denied",
     });
+    // #2480: the plan endpoint stays outside the client allowlist; only todowrite parts are
+    // admitted.
+    await expect(client.request("GET", "/session/ses_1/todo")).resolves.toEqual({
+      ok: false,
+      reason: "request-denied",
+    });
   });
 
   it("accepts exactly one literal loopback startup endpoint", () => {

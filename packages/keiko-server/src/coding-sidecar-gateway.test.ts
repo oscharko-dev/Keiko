@@ -243,11 +243,40 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId"],
 } as const;
 
+// The built-in todowrite projection is byte-identical to its source schema (#2480).
+const TODO_WRITE_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    todos: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "Brief description of the task" },
+          status: {
+            type: "string",
+            description: "Current status of the task: pending, in_progress, completed, cancelled",
+          },
+          priority: {
+            type: "string",
+            description: "Priority level of the task: high, medium, low",
+          },
+        },
+        required: ["content", "status", "priority"],
+      },
+      description: "The updated todo list",
+    },
+  },
+  required: ["todos"],
+} as const;
+
 const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
+  { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
 function stableJson(value: unknown): string {
@@ -360,6 +389,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_workspace_read", "a5d6f6b96c5e0c5906ce1c9bad5b7f13fc4763b762f4aa5d019d6fc2d194ada3"],
       ["keiko_changeset_edit", "720fa492da7b2ff3cb0f6c3c19e1cf68d714d850207d1c614c37c8b6499c0089"],
       ["keiko_verification", "4cd58eaead9fef3c41ef7faaacd2feb5440755e052ed67efa6b9c4860e18e988"],
+      ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -560,6 +590,15 @@ describe("coding-sidecar gateway", () => {
               required: ["verifierId"],
               properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
               type: "object",
+            },
+          },
+          {
+            name: "todowrite",
+            parameters: {
+              required: ["todos"],
+              properties: { ...TODO_WRITE_SCHEMA.properties },
+              type: "object",
+              $schema: "https://json-schema.org/draft/2020-12/schema",
             },
           },
         ]),

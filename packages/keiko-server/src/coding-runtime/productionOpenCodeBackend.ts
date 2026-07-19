@@ -150,6 +150,11 @@ function composeOpenCodeRun(
       run.minted.authorityRef.runId,
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
+    ),
+    onQuestionObserved: liveQuestionSignal(
+      run.minted.authorityRef.runId,
+      run.minted.authorityRef.envelopeDigest,
+      input.runtimeEvidence,
       run.onRuntimeEvent,
     ),
     safeActivity,
@@ -405,10 +410,8 @@ function idempotentEventSink(
   runId: string,
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
   const identities = new Set<string>();
-  let questionSignalSequence = 0;
   return {
     execute: (identity, event): Promise<"duplicate" | "applied"> => {
       const duplicate = identities.has(identity);
@@ -419,15 +422,35 @@ function idempotentEventSink(
           state: "running",
           authorityDigest,
         });
-        // A question raised (or settled) inside the managed child is invisible to pull-based
-        // clients until they re-list; publish a content-free observation so the workbench event
-        // stream signals "question state changed" without retaining any question content (#2386).
-        if (event.kind === "question") {
-          emitQuestionSignal(runId, ++questionSignalSequence, onRuntimeEvent);
-        }
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
+  };
+}
+
+/**
+ * A question raised (or settled) inside the managed child is invisible to pull-based clients
+ * until they re-list. OpenCode publishes its question lifecycle live-only — never as durable
+ * history rows — so the content-free re-list signal originates from the composition's live
+ * observation, idempotent per observed frame identity (#2386).
+ */
+function liveQuestionSignal(
+  runId: string,
+  authorityDigest: string,
+  evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): (identity: string) => void {
+  const identities = new Set<string>();
+  let questionSignalSequence = 0;
+  return (identity): void => {
+    if (identities.has(identity)) return;
+    identities.add(identity);
+    evidence.observe(runId, {
+      kind: "model-request",
+      state: "running",
+      authorityDigest,
+    });
+    emitQuestionSignal(runId, ++questionSignalSequence, onRuntimeEvent);
   };
 }
 

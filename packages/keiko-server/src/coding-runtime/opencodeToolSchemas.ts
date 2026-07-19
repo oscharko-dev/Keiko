@@ -89,11 +89,44 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId"],
 } as const;
 
+/**
+ * Exact v1.17.17 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
+ * strings upstream; Keiko enforces the closed status vocabulary at the safe-activity normalizer,
+ * never here, or the gateway digest comparison would reject the child's declared contract.
+ */
+const TODO_WRITE_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    todos: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "Brief description of the task" },
+          status: {
+            type: "string",
+            description: "Current status of the task: pending, in_progress, completed, cancelled",
+          },
+          priority: {
+            type: "string",
+            description: "Priority level of the task: high, medium, low",
+          },
+        },
+        required: ["content", "status", "priority"],
+      },
+      description: "The updated todo list",
+    },
+  },
+  required: ["todos"],
+} as const;
+
 export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "question", parameters: QUESTION_SCHEMA },
   { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
+  { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
 export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.map(
@@ -121,6 +154,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   },
 ] as const;
 
+// `todowrite` left this deny list for OPENCODE_MODEL_VISIBLE_TOOLS (#2480 plan projection).
 export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "invalid",
   "bash",
@@ -131,7 +165,6 @@ export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "write",
   "task",
   "webfetch",
-  "todowrite",
   "websearch",
   "skill",
   "apply_patch",

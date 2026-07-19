@@ -42,6 +42,11 @@ import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js"
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
 export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
+export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
+export const FUNCTIONAL_PLAN_STEP_EDIT = "PLAN_STEP_EDIT_2480";
+export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
+/** Rides an unprojected todo field; it must never appear in any sink, including the feed. */
+export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
   mode: "productive" | "out-of-scope" | "discovery";
@@ -363,11 +368,45 @@ export function scriptedResponse(script: ScriptState): NormalizedResponse {
     if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
     return step === 1 ? tool("question", question()) : normal();
   }
-  if (step === 0)
+  return productiveResponse(step, script);
+}
+
+function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
+  if (step === 0) return tool("todowrite", planUpdate(1));
+  if (step === 1)
     return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);
-  if (step === 1) return tool("question", question());
-  if (step === 2) return tool("keiko_changeset_edit", edit(script));
-  return step === 3 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+  if (step === 2) return tool("question", question());
+  if (step === 3) return tool("keiko_changeset_edit", edit(script));
+  if (step === 4) return tool("todowrite", planUpdate(2));
+  return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+}
+
+/** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
+function planUpdate(revision: 1 | 2): Record<string, unknown> {
+  const opened = [
+    {
+      content: FUNCTIONAL_PLAN_STEP_READ,
+      status: revision === 1 ? "in_progress" : "completed",
+      priority: "high",
+    },
+    {
+      content: FUNCTIONAL_PLAN_STEP_EDIT,
+      status: revision === 1 ? "pending" : "in_progress",
+      priority: "medium",
+    },
+  ];
+  if (revision === 1) return { todos: opened };
+  return {
+    todos: [
+      ...opened,
+      {
+        content: FUNCTIONAL_PLAN_STEP_VERIFY,
+        status: "pending",
+        priority: "low",
+        notes: FUNCTIONAL_PLAN_DROPPED_CANARY,
+      },
+    ],
+  };
 }
 
 function question(): Record<string, unknown> {
@@ -417,7 +456,12 @@ function normal(): NormalizedResponse {
 let scriptedToolCallSequence = 0;
 
 function tool(
-  name: "keiko_workspace_read" | "keiko_changeset_edit" | "keiko_verification" | "question",
+  name:
+    | "keiko_workspace_read"
+    | "keiko_changeset_edit"
+    | "keiko_verification"
+    | "question"
+    | "todowrite",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {
