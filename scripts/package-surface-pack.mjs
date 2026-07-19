@@ -42,13 +42,18 @@ function capturedBytes(value) {
   return typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0;
 }
 
+function subprocessStatus(result) {
+  if (typeof result.signal === "string" && /^SIG[A-Z0-9]+$/u.test(result.signal)) {
+    return `signal ${result.signal}`;
+  }
+  if (result.status === null || result.status === undefined) {
+    return "unknown status";
+  }
+  return `exit ${String(result.status)}`;
+}
+
 function subprocessFailureMessage(result) {
-  const status =
-    typeof result.signal === "string" && /^SIG[A-Z0-9]+$/u.test(result.signal)
-      ? `signal ${result.signal}`
-      : result.status === null || result.status === undefined
-        ? "unknown status"
-        : `exit ${String(result.status)}`;
+  const status = subprocessStatus(result);
   return (
     `npm pack --dry-run failed (${status}; stdout bytes: ${String(capturedBytes(result.stdout))}; ` +
     `stderr bytes: ${String(capturedBytes(result.stderr))})`
