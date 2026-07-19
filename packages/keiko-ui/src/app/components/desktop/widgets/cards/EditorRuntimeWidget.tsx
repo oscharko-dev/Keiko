@@ -592,6 +592,8 @@ interface EditorTabInsertTarget {
 
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
+  /** Keeps runtime state while omitting the inactive root's Monaco surface. */
+  readonly sessionActive?: boolean | undefined;
   readonly paneId?: string | undefined;
   readonly activePaneId?: string | undefined;
   readonly layoutPanes?: readonly EditorAgentPaneSnapshot[] | undefined;
@@ -1714,6 +1716,7 @@ function editorLoadErrorMessage(hasTarget: boolean, state: KeikoEditorLoadState)
 
 function EditorRuntimeWidget({
   windowId,
+  sessionActive = true,
   paneId,
   activePaneId,
   layoutPanes,
@@ -1791,7 +1794,12 @@ function EditorRuntimeWidget({
     return () => {
       liveEditorRuntimeInstances -= 1;
       if (liveEditorRuntimeInstances === 0) {
-        disposeAllUnattachedEditorModels("shutdown");
+        // A multi-root focus switch unmounts the inactive Monaco child and mounts the next root in
+        // one React commit. Defer final-window cleanup until after that commit's effects so the
+        // transient zero does not destroy retained dirty models between sibling root sessions.
+        queueMicrotask(() => {
+          if (liveEditorRuntimeInstances === 0) disposeAllUnattachedEditorModels("shutdown");
+        });
       }
     };
   }, []);
@@ -6262,7 +6270,7 @@ function EditorRuntimeWidget({
     </div>
   );
 
-  return renderEditorChrome();
+  return sessionActive ? renderEditorChrome() : null;
 }
 
 /**

@@ -102,6 +102,18 @@ class FakeEditor implements RetainedEditorModelEditor {
   }
 }
 
+class CancelingDetachEditor extends FakeEditor {
+  override setModel(model: RetainedEditorModel | null): void {
+    if (model === null) {
+      this.model = null;
+      const error = new Error("Canceled");
+      error.name = "Canceled";
+      throw error;
+    }
+    super.setModel(model);
+  }
+}
+
 function uri(path: string): RetainedEditorUri {
   return new FakeUri(`keiko-editor://workspace/${path}`);
 }
@@ -145,6 +157,30 @@ describe("EditorModelRegistry", () => {
     first.attachment.detach();
     expect(namespace.created[0]?.dispose).not.toHaveBeenCalled();
     second.attachment.detach();
+    expect(registry.diagnostics().entries[0]).toMatchObject({ attachmentCount: 0 });
+  });
+
+  it("completes registry detach when Monaco reports its expected disposal cancellation", () => {
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const editor = new CancelingDetachEditor();
+    const attachment = registry.attach({
+      key: "scope:/repo:src/app.ts",
+      rootKey: "scope:/repo",
+      uri: uri("src/app.ts"),
+      language: "typescript",
+      text: "const value = 1;\n",
+      sizeBytes: 17,
+      degraded: false,
+      viewStateKey: "pane:src/app.ts",
+      namespace,
+      editor,
+      protection: UNPROTECTED_EDITOR_MODEL,
+    });
+
+    expect(() => {
+      attachment.detach();
+    }).not.toThrow();
     expect(registry.diagnostics().entries[0]).toMatchObject({ attachmentCount: 0 });
   });
 
@@ -207,6 +243,39 @@ describe("EditorModelRegistry", () => {
 
     expect(registry.diagnostics()).toMatchObject({ liveModelCount: 2, pressure: "degraded" });
     expect(namespace.created.every((model) => model.dispose.mock.calls.length === 0)).toBe(true);
+  });
+
+  it("enforces one shared model budget across workspace roots", () => {
+    const registry = new EditorModelRegistry({ countBudget: 2, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const rootA = attach(registry, namespace, "a.ts", "scope:/repo-a");
+    rootA.attachment.detach();
+    const rootB = attach(registry, namespace, "b.ts", "scope:/repo-b");
+    rootB.attachment.detach();
+    const rootC = attach(registry, namespace, "c.ts", "scope:/repo-c");
+    rootC.attachment.detach();
+
+    expect(registry.diagnostics()).toMatchObject({ liveModelCount: 2, pressure: "healthy" });
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
+    expect(namespace.created[1]?.dispose).not.toHaveBeenCalled();
+    expect(namespace.created[2]?.dispose).not.toHaveBeenCalled();
+  });
+
+  it("forcibly disposes protected models only when a workspace root is removed", () => {
+    const registry = new EditorModelRegistry({ countBudget: 4, byteBudget: 1_000_000 });
+    const namespace = new FakeNamespace();
+    const retained = attach(registry, namespace, "dirty.ts", "scope:/removed");
+    registry.updateProtection(retained.attachment.key, {
+      ...UNPROTECTED_EDITOR_MODEL,
+      dirty: true,
+    });
+    retained.attachment.detach();
+
+    registry.disposeRoot("scope:/removed");
+    expect(registry.diagnostics().liveModelCount).toBe(1);
+    registry.disposeRoot("scope:/removed", "root-disposed", true);
+    expect(registry.diagnostics().liveModelCount).toBe(0);
+    expect(namespace.created[0]?.dispose).toHaveBeenCalledOnce();
   });
 
   it("uses conservative large-file byte estimates so degraded files cannot hide pressure", () => {

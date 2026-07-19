@@ -46,6 +46,7 @@ interface FilesWidgetProps {
   root?: string;
   activeFilePath?: string | undefined;
   openFilesDirectly?: boolean | undefined;
+  watchActive?: boolean | undefined;
   onActiveFileChange?: (
     path: string | null,
     root: string | null,
@@ -538,6 +539,7 @@ export function FilesWidget({
   root,
   activeFilePath,
   openFilesDirectly = false,
+  watchActive = true,
   onActiveFileChange,
   onRootChange,
   onOpenFile,
@@ -874,7 +876,7 @@ export function FilesWidget({
 
   const watchRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : undefined);
   useWorkspaceWatch(
-    watchRoot,
+    watchActive ? watchRoot : undefined,
     useCallback(
       (event): void => {
         invalidateGitStatus();

@@ -30,6 +30,22 @@ export function workspaceTrustReasonKey(reason: WorkspaceTrustReason): MessageKe
   return REASON_KEYS[reason];
 }
 
+export function WorkspaceTrustBadge({
+  status,
+}: {
+  readonly status: WorkspaceTrustStatus | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const trust = status?.trust ?? "restricted";
+  const label =
+    trust === "trusted" ? t("workspaceTrust.trustedMode") : t("workspaceTrust.restrictedMode");
+  return (
+    <span className={styles.cmpBadge} data-trust={trust} aria-label={label}>
+      {label}
+    </span>
+  );
+}
+
 export function WorkspaceTrustBanner({
   status,
   issue,

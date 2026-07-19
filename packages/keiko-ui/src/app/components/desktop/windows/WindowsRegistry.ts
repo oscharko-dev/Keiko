@@ -112,6 +112,7 @@ interface EditorWindowCfg extends WindowCfgRecord {
   readonly file?: string;
   readonly openFiles?: readonly string[];
   readonly layoutJson?: string;
+  readonly rootSessionsJson?: string;
 }
 
 interface FigmaSourceWindowCfg extends WindowCfgRecord {

@@ -226,6 +226,38 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(savedLayout)).not.toContain("../.ssh");
   });
 
+  it("persists bounded per-root editor layouts through one sanitized scalar cfg field", () => {
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo-a",
+      activePaneId: "pane-1",
+      tree: { type: "pane", paneId: "pane-1" },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/app.ts",
+          openFiles: ["src/app.ts", "../secret"],
+          tabOrder: ["src/app.ts", "../secret"],
+        },
+      },
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+    });
+    const rootSessionsJson = JSON.stringify({
+      schemaVersion: 1,
+      sessions: [{ rootRef: "root-a", root: "/repo-a", layoutJson }],
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { rootSessionsJson } }),
+    ]);
+
+    const envelope = JSON.parse(String(persisted[0]?.cfg.rootSessionsJson));
+    const savedLayout = JSON.parse(String(envelope.sessions[0].layoutJson));
+    expect(savedLayout.panes["pane-1"].openFiles).toEqual(["src/app.ts"]);
+    expect(JSON.stringify(envelope)).not.toContain("../secret");
+  });
+
   it("migrates legacy scoped Figma windows to repeatable Figma View cards", () => {
     const persisted = sanitizePersistedWindows([
       win({

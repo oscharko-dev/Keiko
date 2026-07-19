@@ -7,10 +7,36 @@
 
 .cmpBanner,
 .cmpButton,
+.cmpBadge,
 .cmpPanel,
 .cmpCard,
 .cmpDialog {
   box-sizing: border-box;
+}
+
+.cmpBadge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  background: var(--card-2, var(--card));
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cmpBadge[data-trust="trusted"] {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--line));
+  color: var(--fg);
+}
+
+.cmpBadge[data-trust="restricted"] {
+  border-color: color-mix(in oklch, var(--warning, #d88919) 55%, var(--line));
 }
 
 .cmpBanner,

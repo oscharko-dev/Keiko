@@ -1138,7 +1138,9 @@ describe("EditorWidget — edit and save", () => {
 
     view.unmount();
 
-    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    await waitFor(() => {
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    });
   });
 
   it("releases only the previous root's inactive models while a sibling pane stays mounted", async () => {
@@ -1200,7 +1202,9 @@ describe("EditorWidget — edit and save", () => {
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     second.unmount();
-    expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    await waitFor(() => {
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+    });
   });
 
   it("compares a dirty external disk edit and keeps the local buffer without overwriting it", async () => {
