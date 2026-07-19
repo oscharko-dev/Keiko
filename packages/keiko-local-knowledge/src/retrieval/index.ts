@@ -14,10 +14,12 @@ export {
 } from "./scoped-vector-search.js";
 
 export {
+  resolveVectorIndexOptions,
   searchVectorIndex,
   type VectorIndexAdapter,
   type VectorIndexCandidate,
   type VectorIndexMode,
+  type VectorIndexEnvironment,
   type VectorIndexOptions,
   type VectorIndexSearchRequest,
   type VectorIndexSearchResult,

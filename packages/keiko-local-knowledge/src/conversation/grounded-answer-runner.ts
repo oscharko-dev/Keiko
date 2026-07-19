@@ -81,6 +81,9 @@ function buildRetrievalDependencies(deps: GroundedAnswerDependencies): Retrieval
     ...(deps.retrieval.queryTransformer !== undefined
       ? { queryTransformer: deps.retrieval.queryTransformer }
       : {}),
+    ...(deps.retrieval.vectorIndex !== undefined
+      ? { vectorIndex: deps.retrieval.vectorIndex }
+      : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   };
 }

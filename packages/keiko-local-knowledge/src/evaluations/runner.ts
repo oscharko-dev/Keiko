@@ -28,7 +28,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { embedChunkBatch } from "../indexing/embedding-batcher.js";
-import { runLocalKnowledgeRetrieval } from "../retrieval/index.js";
+import {
+  resolveVectorIndexOptions,
+  runLocalKnowledgeRetrieval,
+  type VectorIndexOptions,
+} from "../retrieval/index.js";
 import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
 
 import {
@@ -71,6 +75,7 @@ export interface RunRetrievalEvalDeps {
   // Optional hook for non-CI model-judged evaluation. The offline deterministic harness
   // does not enable this by default; callers must opt in explicitly.
   readonly modelJudge?: ModelJudgedRetrievalEvalJudge;
+  readonly vectorIndex?: VectorIndexOptions;
 }
 
 // ─── Vector embedding (post-seed) ────────────────────────────────────────────
@@ -209,6 +214,7 @@ async function runOneQuery(
   query: RetrievalEvalQuery,
   seeded: SeededFixture,
   now: () => number,
+  vectorIndex: VectorIndexOptions,
 ): Promise<QueryEvaluation> {
   // Route the query embedding toward the declared topic WITHOUT putting the marker into the
   // searchable query text: production queries never contain harness markers, so the lexical
@@ -224,7 +230,7 @@ async function runOneQuery(
   const retrievalQuery = buildRetrievalQuery(query, query.text);
   const start = now();
   const result = await runLocalKnowledgeRetrieval(
-    { store, embeddingAdapter: adapter },
+    { store, embeddingAdapter: adapter, vectorIndex },
     retrievalQuery,
   );
   const end = now();
@@ -388,13 +394,14 @@ async function runFixture(
   const now = deps.now ?? defaultClock();
   const runId = deps.runId ?? `eval-${fixture.id}`;
   const dir = mkdtempSync(join(tmpdir(), "keiko-eval-"));
-  const store = openKnowledgeStore({ dbPath: join(dir, "eval.db") });
+  const vectorIndex = resolveVectorIndexOptions(deps.vectorIndex);
+  const store = openKnowledgeStore({ dbPath: join(dir, "eval.db"), vectorIndex });
   try {
     const seeded = seedFixture(store, fixture);
     await embedAllChunks(store, fixture, seeded, now);
     const perQuery: QueryEvaluation[] = [];
     for (const query of fixture.queries) {
-      perQuery.push(await runOneQuery(store, query, seeded, now));
+      perQuery.push(await runOneQuery(store, query, seeded, now, vectorIndex));
     }
     const modelJudged = await runModelJudge(deps.modelJudge, fixture, perQuery);
     return { scorecard: buildScorecard(fixture, runId, perQuery, modelJudged), perQuery };

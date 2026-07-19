@@ -17,6 +17,7 @@ import {
   type ReferenceReranker,
   type ReferenceRerankerResult,
   type RetrievalEmbeddingLaneStatus,
+  type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
@@ -144,6 +145,7 @@ function internalError(message: string): RouteResult {
 
 export function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: KnowledgeStore;
+  readonly vectorIndex: VectorIndexOptions;
   close(): void;
 } {
   // Hot read path: no abandoned-job recovery, so an actively-running indexing job in another
@@ -153,6 +155,7 @@ export function openStoreForDeps(deps: UiHandlerDeps): {
   const session = openKnowledgeStoreForDeps(deps, { recover: false });
   return {
     store: session.store,
+    vectorIndex: session.vectorIndex,
     close: (): void => {
       session.close();
     },
@@ -2242,7 +2245,7 @@ async function runScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
   deps: UiHandlerDeps,
-  env: { readonly store: KnowledgeStore },
+  env: Pick<ReturnType<typeof openStoreForDeps>, "store" | "vectorIndex">,
   selected: SelectedLocalKnowledgeScope,
   signal: AbortSignal,
 ): Promise<GroundedAnswer | RouteResult> {
@@ -2260,6 +2263,7 @@ async function runScopedGroundedAnswer(
         store: env.store,
         embeddingAdapter,
         queryTransformer: createBroadQueryTransformer(model, modelId),
+        vectorIndex: env.vectorIndex,
       },
       answerGenerator: generator,
       referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),

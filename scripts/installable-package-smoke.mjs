@@ -21,6 +21,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
@@ -307,6 +308,39 @@ function assertInstalledRootTypeSurface(tmp) {
       "installed root declaration contract drifted " +
         `(missing ${String(diff.missing.length)}, unexpected ${String(diff.unexpected.length)}).`,
     );
+  }
+}
+
+async function assertInstalledSqliteVecRuntime(tmp, options) {
+  const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
+  const candidates = [
+    join(packageRoot, "node_modules", "sqlite-vec", "index.mjs"),
+    join(tmp, "node_modules", "sqlite-vec", "index.mjs"),
+  ];
+  const loaderPath = candidates.find((candidate) => existsSync(candidate));
+  if (loaderPath === undefined) {
+    fail("installed tarball did not resolve the sqlite-vec runtime loader");
+  }
+  if (!options.includeOptional) return;
+  const expectedVersion = `v${String(rootPackageJson.dependencies?.["sqlite-vec"] ?? "")}`;
+  const db = new DatabaseSync(":memory:", { allowExtension: true });
+  try {
+    const sqliteVec = await import(pathToFileURL(loaderPath).href);
+    sqliteVec.load(db);
+    db.enableLoadExtension(false);
+    const row = db.prepare("SELECT vec_version() AS version").get();
+    if (row?.version !== expectedVersion) {
+      fail(
+        `installed sqlite-vec runtime version was ${String(row?.version)}; ` +
+          `expected ${expectedVersion}`,
+      );
+    }
+  } finally {
+    try {
+      db.enableLoadExtension(false);
+    } finally {
+      db.close();
+    }
   }
 }
 
@@ -681,10 +715,11 @@ async function main() {
     assertCliVersionAndHelp(tmp);
     await assertInstalledRootRuntimeSurface(tmp);
     assertInstalledRootTypeSurface(tmp);
+    await assertInstalledSqliteVecRuntime(tmp, options);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
     console.log(
-      `installable-smoke ok: tarball installed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
+      `installable-smoke ok: tarball installed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(bundled.length)} bundled packages present, root runtime/types + sqlite-vec + CLI + UI/lifecycle reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

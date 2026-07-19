@@ -42,8 +42,8 @@ authority envelope. Inside that accepted authority, delivery is autonomous — a
 their feature branch, and maintain the pull request, and GitHub native auto-merge integrates into
 `dev` automatically once the required quality gates are green on the current head. No human review
 or manual merge action is part of the loop; the gates are the control (ADR-0135). Direct pushes to
-`dev`, force pushes, and gate bypasses stay denied, and the manifest-producing surfaces emit
-redacted evidence for audit.
+`dev`, force pushes, and gate bypasses stay denied.
+The manifest-producing surfaces emit redacted evidence for audit.
 
 ## Vision
 

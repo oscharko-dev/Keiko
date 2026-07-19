@@ -36,6 +36,10 @@ function chunkId(value: string): ChunkId {
 }
 
 vi.mock("../retrieval/index.js", () => ({
+  resolveVectorIndexOptions: (): { readonly mode: "disabled"; readonly now: typeof Date.now } => ({
+    mode: "disabled",
+    now: Date.now,
+  }),
   runLocalKnowledgeRetrieval: (
     _deps: unknown,
     query: RetrievalQuery,

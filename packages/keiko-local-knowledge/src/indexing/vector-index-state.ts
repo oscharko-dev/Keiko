@@ -35,8 +35,11 @@ interface VectorIndexStateRow {
   readonly updated_at: number;
 }
 
-const DELETE_VECTOR_INDEX_STATE_FOR_CAPSULE_SQL =
-  "DELETE FROM vector_index_state WHERE capsule_id = :capsule_id";
+const DIRTY_VECTOR_INDEX_STATE_FOR_CAPSULE_SQL = [
+  "UPDATE vector_index_state",
+  "SET status = 'dirty', reason = NULL",
+  "WHERE capsule_id = :capsule_id",
+].join(" ");
 
 const SELECT_VECTOR_INDEX_STATE_SQL = [
   "SELECT capsule_id, provider, index_name, vector_dimensions, vector_metric,",
@@ -72,7 +75,7 @@ export function invalidateVectorIndexStateForCapsule(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
 ): void {
-  db.prepare(DELETE_VECTOR_INDEX_STATE_FOR_CAPSULE_SQL).run({
+  db.prepare(DIRTY_VECTOR_INDEX_STATE_FOR_CAPSULE_SQL).run({
     capsule_id: String(capsuleId),
   });
 }

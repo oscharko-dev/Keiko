@@ -18,6 +18,7 @@ import {
   runLocalKnowledgeRetrieval,
   type KnowledgeStore,
   type RetrievalResult,
+  type VectorIndexOptions,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   KnowledgeCapsule,
@@ -619,6 +620,7 @@ type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 function defaultConnectorRetrieve(
   ctx: HybridGroundedAskCtx,
   connectorScopeCount: number,
+  vectorIndex: VectorIndexOptions,
 ): ConnectorRetrieve {
   return async (store, scope, _selected): Promise<RetrievalResult> => {
     const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
@@ -626,7 +628,7 @@ function defaultConnectorRetrieve(
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
     return runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter, signal: ctx.signal },
+      { store, embeddingAdapter, signal: ctx.signal, vectorIndex },
       connectorQuery(scope, ctx.content, connectorScopeCount),
     );
   };
@@ -697,10 +699,12 @@ async function retrieveConnectorIntoSlot(
 async function retrieveConnectors(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
   connectorScopes: readonly ChatLocalKnowledgeScope[],
   resolved: readonly SelectedLocalKnowledgeScope[],
 ): Promise<ConnectorRetrieval | RouteResult> {
-  const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length);
+  const retrieve =
+    ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length, vectorIndex);
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
   // Index-addressed slots keep the emitted order identical to the scope order regardless of
   // which worker finishes first — evidence and labels stay deterministic.
@@ -1502,7 +1506,7 @@ function assembleHybridNoEvidenceRoute(
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
   const env = openStoreForDeps(ctx.deps);
   try {
-    return await runHybridWithStore(ctx, env.store);
+    return await runHybridWithStore(ctx, env.store, env.vectorIndex);
   } catch (error) {
     return mapHybridError(error, ctx.deps);
   } finally {
@@ -1658,6 +1662,7 @@ function capSourcesToLimits(
 async function runHybridWithStore(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const capped = capSourcesToLimits(ctx, limits);
@@ -1671,7 +1676,7 @@ async function runHybridWithStore(
       query,
       ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps),
     ),
-    retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
+    retrieveConnectors(ctx, store, vectorIndex, capped.connectorScopes, resolved),
   ]);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.

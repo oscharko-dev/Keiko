@@ -127,7 +127,7 @@ function assertEmbeddingShape(row: VectorInsertRow): void {
 export interface InsertVectorRowOptions {
   // When false, the caller is responsible for invalidating the capsule's vector-index state ONCE at
   // the batch/transaction boundary (see invalidateVectorIndexStateForCapsules). This avoids an O(rows)
-  // sequence of DELETEs that is a no-op after the first row of a document/capsule (GEN-PERF-PERSISTENCE-013).
+  // sequence of redundant dirty-state updates for a document/capsule (GEN-PERF-PERSISTENCE-013).
   readonly invalidateIndexState?: boolean;
 }
 
@@ -159,8 +159,8 @@ export function insertVectorRow(
     storage_reference: row.storageReference,
     created_at: row.createdAt,
   });
-  // Default preserves the original per-row invalidation for any single-row caller; batch callers pass
-  // invalidateIndexState:false and invalidate once per distinct capsule after the loop.
+  // Default preserves per-row invalidation for any single-row caller; batch callers pass
+  // invalidateIndexState:false and mark each distinct capsule dirty after the loop.
   if (options.invalidateIndexState !== false) {
     invalidateVectorIndexStateForCapsule(db, row.capsuleId);
   }
