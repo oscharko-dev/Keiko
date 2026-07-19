@@ -81,7 +81,14 @@ jobs:
             [{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"},
             {"repository":"oscharko-dev/Keiko-Native","baseBranch":"dev","profile":"keiko-native"}]
           STABILITY_WINDOW_MS: "60000"
-          KFQ_ACTION_LABEL: kfq-action-poc
+          # ADR-0142 cutover (2026-07-19): the Action is the canonical producer. The empty label
+          # disables the proof-of-concept opt-in gate (every pull is evaluated), and the canonical
+          # check name + dashboard marker replace the "(Action)" PoC identity. The Worker is
+          # retired in the same change set; rollback is `wrangler deploy` from
+          # infrastructure/keiko-for-quality/ plus reverting this block to the PoC identity.
+          KFQ_ACTION_LABEL: ""
+          KFQ_CHECK_NAME: Keiko for Quality
+          KFQ_DASHBOARD_MARKER: "<!-- keiko-for-quality-dashboard:v1 -->"
         run: node scripts/keiko-for-quality-action.mjs
 
   # Untrusted path: pull_request runs the pull's own workflow/script copy. Read-only, no secrets, and
