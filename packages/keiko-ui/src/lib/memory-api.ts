@@ -114,7 +114,7 @@ export interface MemoryRecentCapture {
   };
   readonly occurredAt: number;
   readonly reason: string;
-  readonly memoryId?: string;
+  readonly memoryId?: MemoryId;
   readonly bodyExcerpt?: string;
 }
 

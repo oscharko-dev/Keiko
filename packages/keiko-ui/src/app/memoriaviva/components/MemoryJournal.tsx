@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Dispatch, MutableRefObject, ReactNode, RefObject, SetStateAction } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
@@ -16,7 +16,7 @@ import styles from "./MemoryJournal.module.css";
 
 interface PersistedJournalCapture extends MemoryRecentCapture {
   readonly outcome: Exclude<MemoryRecentCapture["outcome"], "rejected">;
-  readonly memoryId: string;
+  readonly memoryId: MemoryId;
 }
 
 type RefusedJournalCapture = MemoryRecentCapture & { readonly outcome: "rejected" };
@@ -110,6 +110,12 @@ interface JournalActionsProps {
   readonly t: I18nTranslate;
 }
 
+function journalIndicatorLabel(acknowledged: boolean, proposed: boolean, t: I18nTranslate): string {
+  if (acknowledged) return t("memoria.journal.indicator.kept");
+  if (proposed) return t("memoria.journal.indicator.proposed");
+  return t("memoria.journal.indicator.auto");
+}
+
 function JournalActions({
   capture,
   acknowledged,
@@ -120,11 +126,7 @@ function JournalActions({
 }: JournalActionsProps): ReactNode {
   const proposed = capture.outcome === "proposed";
   const busy = busyAction !== null;
-  const indicator = acknowledged
-    ? t("memoria.journal.indicator.kept")
-    : proposed
-      ? t("memoria.journal.indicator.proposed")
-      : t("memoria.journal.indicator.auto");
+  const indicator = journalIndicatorLabel(acknowledged, proposed, t);
   return (
     <div className={styles.mvJournalTrailing}>
       <StatusBadge status={statusForCapture(capture)} t={t} />
@@ -265,6 +267,18 @@ function JournalBody(props: JournalBodyProps): ReactNode {
   );
 }
 
+function busyActionFor(
+  memoryId: string,
+  keepBusyId: string | null,
+  forgetBusyId: string | null,
+): "keep" | "forget" | null {
+  if (keepBusyId === memoryId) return "keep";
+  if (forgetBusyId === memoryId) return "forget";
+  return null;
+}
+
+type JournalRowsProps = Omit<JournalBodyProps, "onRetry">;
+
 function JournalRows({
   state,
   keepBusyId,
@@ -273,7 +287,7 @@ function JournalRows({
   onForget,
   registerRow,
   t,
-}: JournalBodyProps): ReactNode {
+}: JournalRowsProps): ReactNode {
   return (
     <ul className={styles.mvJournalList} aria-label={t("memoria.journal.list")}>
       {state.rows.map((row) =>
@@ -289,13 +303,7 @@ function JournalRows({
             key={row.capture.memoryId}
             capture={row.capture}
             acknowledged={row.acknowledged}
-            busyAction={
-              keepBusyId === row.capture.memoryId
-                ? "keep"
-                : forgetBusyId === row.capture.memoryId
-                  ? "forget"
-                  : null
-            }
+            busyAction={busyActionFor(row.capture.memoryId, keepBusyId, forgetBusyId)}
             onKeep={onKeep}
             onForget={onForget}
             registerRow={registerRow}
@@ -386,9 +394,16 @@ function acknowledgeJournalRow(row: JournalRowState, memoryId: string): JournalR
   };
 }
 
+function acknowledgeRows(
+  rows: readonly JournalRowState[],
+  memoryId: string,
+): readonly JournalRowState[] {
+  return rows.map((row) => acknowledgeJournalRow(row, memoryId));
+}
+
 function useKeepAction(
   options: ActionHookOptions,
-  keptIds: MutableRefObject<Set<string>>,
+  keptIds: RefObject<Set<string>>,
   acceptImpl: typeof acceptMemoryProposal,
 ): readonly [string | null, (capture: PersistedJournalCapture) => void] {
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -403,9 +418,7 @@ function useKeepAction(
       void accept
         .then(() => {
           keptIds.current.add(capture.memoryId);
-          options.setRows((rows) =>
-            rows.map((row) => acknowledgeJournalRow(row, capture.memoryId)),
-          );
+          options.setRows((rows) => acknowledgeRows(rows, capture.memoryId));
           options.setAnnouncement(options.t("memoria.journal.kept"));
         })
         .catch(() => options.setActionError(options.t("memoria.journal.keepError")))
@@ -427,9 +440,13 @@ function focusTargetAfterRemoval(
   return target === undefined ? null : journalCaptureKey(target);
 }
 
+function removeRow(rows: readonly JournalRowState[], memoryId: string): readonly JournalRowState[] {
+  return rows.filter((row) => row.capture.memoryId !== memoryId);
+}
+
 function useForgetAction(
   options: ActionHookOptions,
-  forgottenIds: MutableRefObject<Set<string>>,
+  forgottenIds: RefObject<Set<string>>,
   forgetImpl: typeof forgetMemory,
   requestFocus: (targetId: string | null) => void,
 ): readonly [string | null, (capture: PersistedJournalCapture) => void] {
@@ -439,14 +456,12 @@ function useForgetAction(
       if (busyId !== null || forgottenIds.current.has(capture.memoryId)) return;
       setBusyId(capture.memoryId);
       options.setActionError(null);
-      void forgetImpl(capture.memoryId as MemoryId, "forgotten from the Memory Journal")
+      void forgetImpl(capture.memoryId, "forgotten from the Memory Journal")
         .then(() => {
           const target = focusTargetAfterRemoval(options.rows, capture.memoryId);
           forgottenIds.current.add(capture.memoryId);
           requestFocus(target);
-          options.setRows((rows) =>
-            rows.filter((row) => row.capture.memoryId !== capture.memoryId),
-          );
+          options.setRows((rows) => removeRow(rows, capture.memoryId));
           options.setAnnouncement(options.t("memoria.journal.forgotten"));
         })
         .catch(() => options.setActionError(options.t("memoria.journal.forgetError")))

@@ -2,11 +2,16 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import type { MemoryRecentCapture, MemoryRecentCapturesResponse } from "@/lib/memory-api";
 import { MemoryJournal, orderJournalCaptures } from "./MemoryJournal";
 
+function memoryId(value: string): MemoryId {
+  return value as MemoryId;
+}
+
 function makeCapture(
-  memoryId: string,
+  id: string,
   occurredAt: number,
   overrides: Partial<MemoryRecentCapture> = {},
 ): MemoryRecentCapture {
@@ -20,8 +25,8 @@ function makeCapture(
     },
     occurredAt,
     reason: "governance-auto-accepted",
-    memoryId,
-    bodyExcerpt: `Memory ${memoryId}`,
+    memoryId: memoryId(id),
+    bodyExcerpt: `Memory ${id}`,
     ...overrides,
   };
 }
@@ -117,7 +122,7 @@ describe("MemoryJournal loading and ordering", () => {
       },
       occurredAt: 100,
       reason: "captured-by-policy",
-      memoryId: "legacy",
+      memoryId: memoryId("legacy"),
     };
     renderJournal([legacy]);
     const row = await screen.findByTestId("memory-journal-row");
