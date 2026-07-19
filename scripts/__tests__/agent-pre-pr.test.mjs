@@ -540,7 +540,7 @@ describe("agent pre-PR gate CLI entrypoint", () => {
 
     try {
       await installFakeNpm(binDir);
-      const result = await runCli(["--no-cache", "--report", reportPath], {
+      const result = await runCli(["--full", "--no-cache", "--report", reportPath], {
         cwd: tempDir,
         env: {
           KEIKO_FAKE_NPM_FAIL_COMMAND: "run typecheck",
