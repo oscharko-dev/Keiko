@@ -55,6 +55,12 @@
   min-width: 0;
 }
 
+.clamped {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 0.78rem;
+}
+
 .error {
   margin: 0;
   color: var(--danger, #c0392b);

@@ -65,6 +65,10 @@ function ModeOption({
 
 interface MemoryAutonomyControlProps {
   readonly mode: CodingWorkbenchMode;
+  // The mode actually enforced server-side (resolveEffectiveCodingWorkbenchMode), which can be
+  // lower than `mode` when the deployment ceiling clamps the requested selection. null before the
+  // first hydrate/persist response lands.
+  readonly effectiveMode: CodingWorkbenchMode | null;
   readonly disabled: boolean;
   readonly error: "hydrate" | "persist" | null;
   readonly onChange: (mode: CodingWorkbenchMode) => void;
@@ -72,12 +76,14 @@ interface MemoryAutonomyControlProps {
 
 export function MemoryAutonomyControl({
   mode,
+  effectiveMode,
   disabled,
   error,
   onChange,
 }: MemoryAutonomyControlProps): ReactNode {
   const t = useTranslate();
   const groupId = `${useId()}-memory-autonomy-mode`;
+  const clamped = effectiveMode !== null && effectiveMode !== mode;
   return (
     <div className={styles.root}>
       <div className={styles.heading}>
@@ -97,6 +103,11 @@ export function MemoryAutonomyControl({
           />
         ))}
       </div>
+      {!clamped || effectiveMode === null ? null : (
+        <p className={styles.clamped} role="status">
+          {t("memoria.settings.mode.clamped", { effectiveMode: t(MODE_KEYS[effectiveMode].label) })}
+        </p>
+      )}
       {error === null ? null : (
         <p className={styles.error} role="alert">
           {t(`memoria.settings.mode.${error}Error`)}

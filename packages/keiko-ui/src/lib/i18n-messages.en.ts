@@ -476,6 +476,8 @@ export const EN_MESSAGES = {
     "The memory autonomy mode could not be loaded. Ask for approval remains active.",
   "memoria.settings.mode.persistError":
     "The memory autonomy mode could not be saved. The previous mode remains active.",
+  "memoria.settings.mode.clamped":
+    "The deployment ceiling currently enforces {effectiveMode} for captures.",
   "memoria.consolidation.title": "MemoriaViva Consolidation",
   "memoria.consolidation.description":
     "Start a bounded consolidation job, inspect its output, and cancel it while it is still queued or running.",

@@ -49,6 +49,10 @@ interface MemoriaVivaRequestSettingsProps {
 interface MemoryModePolicyState {
   readonly pending: boolean;
   readonly error: "hydrate" | "persist" | null;
+  // The server-enforced mode for this deployment, which may be lower than the requested mode
+  // (settings.memoryMode) when the deployment ceiling clamps it (resolveEffectiveCodingWorkbenchMode
+  // server-side). null until the first successful hydrate/persist response.
+  readonly effectiveMode: CodingWorkbenchMode | null;
   readonly change: (mode: CodingWorkbenchMode) => void;
 }
 
@@ -61,12 +65,14 @@ function useMemoryModePolicy({
 }): MemoryModePolicyState {
   const [modePending, setModePending] = useState(true);
   const [modeError, setModeError] = useState<"hydrate" | "persist" | null>(null);
+  const [effectiveMode, setEffectiveMode] = useState<CodingWorkbenchMode | null>(null);
   useEffect(() => {
     let active = true;
     void loadMemoryAutonomyModeImpl()
       .then((policy) => {
         if (!active) return;
         setMemoryMode(policy.requestedMode);
+        setEffectiveMode(policy.effectiveMode);
         setModeError(null);
       })
       .catch(() => {
@@ -89,6 +95,7 @@ function useMemoryModePolicy({
       void persistMemoryAutonomyModeImpl(next)
         .then((policy) => {
           setMemoryMode(policy.requestedMode);
+          setEffectiveMode(policy.effectiveMode);
         })
         .catch(() => {
           setModeError("persist");
@@ -99,7 +106,7 @@ function useMemoryModePolicy({
     },
     [persistMemoryAutonomyModeImpl, setMemoryMode],
   );
-  return { pending: modePending, error: modeError, change: handleModeChange };
+  return { pending: modePending, error: modeError, effectiveMode, change: handleModeChange };
 }
 
 function MemoryEnabledSetting({
@@ -220,6 +227,7 @@ function MemoriaVivaRequestSettings({
         />
         <MemoryAutonomyControl
           mode={settings.memoryMode}
+          effectiveMode={policy.effectiveMode}
           disabled={policy.pending}
           error={policy.error}
           onChange={policy.change}
@@ -236,6 +244,73 @@ interface MemoriaVivaWindowProps {
   readonly acceptMemoryProposalImpl?: typeof acceptMemoryProposal;
   readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
   readonly persistMemoryAutonomyModeImpl?: typeof persistMemoryAutonomyMode;
+}
+
+interface MemoriaVivaViewRenderProps extends MemoriaVivaWindowProps {
+  readonly view: MemoriaVivaWindowView;
+  readonly filters: MemoryFilterState;
+  readonly setFilters: (next: MemoryFilterState) => void;
+  readonly openList: () => void;
+  readonly openDetail: (id: string) => void;
+  readonly openConsolidation: () => void;
+  readonly openReviewQueue: () => void;
+  readonly openHealthScan: () => void;
+  readonly openJournal: () => void;
+  readonly loadMemoryAutonomyModeImpl: typeof loadMemoryAutonomyMode;
+  readonly persistMemoryAutonomyModeImpl: typeof persistMemoryAutonomyMode;
+}
+
+// Extracted from MemoriaVivaWindow to keep the component's own cognitive complexity low and to
+// avoid a deeply nested ternary chain for a discriminated-union render switch (a switch statement
+// reads and lints better than N-way ternary chaining for this shape).
+function renderMemoriaVivaView(props: MemoriaVivaViewRenderProps): ReactNode {
+  switch (props.view.kind) {
+    case "list":
+      return (
+        <MemoryListContent
+          filters={props.filters}
+          onFilterChange={props.setFilters}
+          onOpenDetail={props.openDetail}
+          onOpenConsolidation={props.openConsolidation}
+          onOpenReviewQueue={props.openReviewQueue}
+          onOpenHealthScan={props.openHealthScan}
+          onOpenJournal={props.openJournal}
+          showWorkspaceBackLink={false}
+          {...(props.fetchMemoriesImpl === undefined
+            ? {}
+            : { fetchMemoriesImpl: props.fetchMemoriesImpl })}
+          settingsSlot={
+            <MemoriaVivaRequestSettings
+              loadMemoryAutonomyModeImpl={props.loadMemoryAutonomyModeImpl}
+              persistMemoryAutonomyModeImpl={props.persistMemoryAutonomyModeImpl}
+            />
+          }
+        />
+      );
+    case "detail":
+      return <MemoryDetail id={props.view.id} onBack={props.openList} />;
+    case "journal":
+      return (
+        <MemoryJournal
+          onBack={props.openList}
+          {...(props.fetchRecentCapturesImpl === undefined
+            ? {}
+            : { fetchRecentCapturesImpl: props.fetchRecentCapturesImpl })}
+          {...(props.forgetMemoryImpl === undefined
+            ? {}
+            : { forgetMemoryImpl: props.forgetMemoryImpl })}
+          {...(props.acceptMemoryProposalImpl === undefined
+            ? {}
+            : { acceptMemoryProposalImpl: props.acceptMemoryProposalImpl })}
+        />
+      );
+    case "consolidation":
+      return <MemoryConsolidation onBack={props.openList} onOpenDetail={props.openDetail} />;
+    case "reviewQueue":
+      return <ReviewQueue onBack={props.openList} onOpenDetail={props.openDetail} />;
+    case "healthScan":
+      return <HealthScanFindings onBack={props.openList} onOpenDetail={props.openDetail} />;
+  }
 }
 
 export function MemoriaVivaWindow({
@@ -256,43 +331,30 @@ export function MemoriaVivaWindow({
   const openDetail = useCallback((id: string): void => {
     setView({ kind: "detail", id });
   }, []);
+  const openConsolidation = useCallback((): void => setView({ kind: "consolidation" }), []);
+  const openReviewQueue = useCallback((): void => setView({ kind: "reviewQueue" }), []);
+  const openHealthScan = useCallback((): void => setView({ kind: "healthScan" }), []);
+  const openJournal = useCallback((): void => setView({ kind: "journal" }), []);
 
   return (
     <div className="memoria-window">
-      {view.kind === "list" ? (
-        <MemoryListContent
-          filters={filters}
-          onFilterChange={setFilters}
-          onOpenDetail={openDetail}
-          onOpenConsolidation={() => setView({ kind: "consolidation" })}
-          onOpenReviewQueue={() => setView({ kind: "reviewQueue" })}
-          onOpenHealthScan={() => setView({ kind: "healthScan" })}
-          onOpenJournal={() => setView({ kind: "journal" })}
-          showWorkspaceBackLink={false}
-          {...(fetchMemoriesImpl === undefined ? {} : { fetchMemoriesImpl })}
-          settingsSlot={
-            <MemoriaVivaRequestSettings
-              loadMemoryAutonomyModeImpl={loadMemoryAutonomyModeImpl}
-              persistMemoryAutonomyModeImpl={persistMemoryAutonomyModeImpl}
-            />
-          }
-        />
-      ) : view.kind === "detail" ? (
-        <MemoryDetail id={view.id} onBack={openList} />
-      ) : view.kind === "journal" ? (
-        <MemoryJournal
-          onBack={openList}
-          {...(fetchRecentCapturesImpl === undefined ? {} : { fetchRecentCapturesImpl })}
-          {...(forgetMemoryImpl === undefined ? {} : { forgetMemoryImpl })}
-          {...(acceptMemoryProposalImpl === undefined ? {} : { acceptMemoryProposalImpl })}
-        />
-      ) : view.kind === "consolidation" ? (
-        <MemoryConsolidation onBack={openList} onOpenDetail={openDetail} />
-      ) : view.kind === "reviewQueue" ? (
-        <ReviewQueue onBack={openList} onOpenDetail={openDetail} />
-      ) : (
-        <HealthScanFindings onBack={openList} onOpenDetail={openDetail} />
-      )}
+      {renderMemoriaVivaView({
+        view,
+        filters,
+        setFilters,
+        openList,
+        openDetail,
+        openConsolidation,
+        openReviewQueue,
+        openHealthScan,
+        openJournal,
+        loadMemoryAutonomyModeImpl,
+        persistMemoryAutonomyModeImpl,
+        ...(fetchMemoriesImpl === undefined ? {} : { fetchMemoriesImpl }),
+        ...(fetchRecentCapturesImpl === undefined ? {} : { fetchRecentCapturesImpl }),
+        ...(forgetMemoryImpl === undefined ? {} : { forgetMemoryImpl }),
+        ...(acceptMemoryProposalImpl === undefined ? {} : { acceptMemoryProposalImpl }),
+      })}
     </div>
   );
 }
