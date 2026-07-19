@@ -58,6 +58,7 @@ function captureEvent(
     outcome,
     scope: OWN_SCOPE,
     mode: outcome === "proposed" ? "governed-assist" : "autonomous-delivery",
+    initiatorSurface: "conversation-center",
     sourceKind: "system-default",
     reason: outcome === "proposed" ? "mode-requires-approval" : "governance-auto-accepted",
     memoryId: memoryId(id),
@@ -151,6 +152,7 @@ describe("memory capture projection", () => {
       outcome: "rejected",
       scope: OWN_SCOPE,
       mode: "autonomous-delivery",
+      initiatorSurface: "conversation-center",
       sourceKind: "system-default",
       reason: "credential-shape",
     });
@@ -182,6 +184,7 @@ describe("memory capture projection", () => {
       outcome: "auto-accepted",
       scope: foreignScope,
       mode: "supervised-coding",
+      initiatorSurface: "conversation-center",
       sourceKind: "system-default",
       reason: "governance-auto-accepted",
       memoryId: memoryId("foreign"),

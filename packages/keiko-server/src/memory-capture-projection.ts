@@ -13,11 +13,19 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RejectionReason } from "@oscharko-dev/keiko-memory-capture";
-import { auditRunIdFor, verifyMemoryAuditHashChain } from "./memory-audit-handler.js";
+import { auditRunIdFor, RUNID_PREFIX, verifyMemoryAuditHashChain } from "./memory-audit-handler.js";
 import { memoryScopeKey, sanitizeMemoryScope } from "./memory-scope-sanitizer.js";
 
 const CAPTURE_DECISION_SUMMARY_PREFIX = "capture-decision:v1";
-const MEMORY_AUDIT_RUNID_PREFIX = "memory-audit-";
+
+// Turn-capture decisions originate from exactly these two initiator surfaces (desktop chat and
+// realtime voice, per #2550) -- every other MemoryAuditInitiatorSurface value (memory-center,
+// workflow, consolidation, retention, system) belongs to a different audit-event family and must
+// stay excluded from this projection.
+const TURN_CAPTURE_INITIATOR_SURFACES: readonly MemoryAuditInitiatorSurface[] = [
+  "conversation-center",
+  "voice",
+];
 
 export type MemoryCaptureDecisionOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
 
@@ -82,6 +90,7 @@ export interface BuildMemoryCaptureDecisionAuditEventInput {
   readonly outcome: MemoryCaptureDecisionOutcome;
   readonly scope: MemoryScope;
   readonly mode: CodingWorkbenchMode;
+  readonly initiatorSurface: MemoryAuditInitiatorSurface;
   readonly sourceKind: MemorySourceKind;
   readonly reason: MemoryCaptureDecisionReason;
   readonly memoryId?: MemoryId;
@@ -155,7 +164,7 @@ export function buildMemoryCaptureDecisionAuditEvent(
     schemaVersion: "1" as const,
     eventId: input.eventId,
     occurredAt: input.occurredAt,
-    initiatorSurface: "conversation-center" as const,
+    initiatorSurface: input.initiatorSurface,
     summary: captureDecisionSummary(input),
     memoryId: input.memoryId ?? (input.eventId as MemoryId),
     scope: input.scope,
@@ -254,7 +263,10 @@ function projectEvent(
   liveById: ReadonlyMap<MemoryId, MemoryRecord>,
   forgotten: ReadonlySet<MemoryId>,
 ): IndexedDecision | null {
-  if (event.occurredAt < options.since || event.initiatorSurface !== "conversation-center") {
+  if (
+    event.occurredAt < options.since ||
+    !TURN_CAPTURE_INITIATOR_SURFACES.includes(event.initiatorSurface)
+  ) {
     return null;
   }
   if (!isCaptureAuditEvent(event)) return null;
@@ -372,7 +384,7 @@ function relevantAuditRunIds(store: EvidenceStore, since: number): readonly stri
   const firstRunId = auditRunIdFor(since);
   return store
     .list()
-    .filter((runId) => runId.startsWith(MEMORY_AUDIT_RUNID_PREFIX) && runId >= firstRunId)
+    .filter((runId) => runId.startsWith(RUNID_PREFIX) && runId >= firstRunId)
     .sort();
 }
 

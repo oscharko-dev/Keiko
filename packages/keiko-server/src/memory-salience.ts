@@ -9,7 +9,10 @@
 // vault hiccup, or any other failure can NEVER throw into the chat path — it logs and returns [].
 
 import { randomUUID } from "node:crypto";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchMode,
+  MemoryAuditInitiatorSurface,
+} from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryId,
@@ -241,11 +244,13 @@ interface CaptureDecisionEvidence {
 function recordCaptureDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
   decision: CaptureDecisionEvidence,
 ): void {
   const event = buildMemoryCaptureDecisionAuditEvent({
     eventId: randomUUID(),
     mode,
+    initiatorSurface: captureAuditInitiatorSurface(surface),
     ...decision,
   });
   recordMemoryAudit(
@@ -268,11 +273,12 @@ function proposedDecisionReason(
 function recordPersistedCandidateDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   inserted: MemoryRecord,
 ): void {
   const accepted = inserted.status === "accepted";
-  recordCaptureDecision(deps, mode, {
+  recordCaptureDecision(deps, mode, surface, {
     outcome: accepted ? "auto-accepted" : "proposed",
     scope: inserted.scope,
     sourceKind: inserted.provenance.sourceKind,
@@ -285,10 +291,11 @@ function recordPersistedCandidateDecision(
 function recordRejectedCandidateDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   reason: RejectionReason,
 ): void {
-  recordCaptureDecision(deps, mode, {
+  recordCaptureDecision(deps, mode, surface, {
     outcome: "rejected",
     scope: outcome.proposal.scope,
     sourceKind: outcome.proposal.provenance.sourceKind,
@@ -326,6 +333,19 @@ function candidateWireAction(
   };
 }
 
+// Records a candidate rejection and returns the standard rejected PersistedCandidate shape shared
+// by both rejection branches of persistCandidate.
+function rejectedCandidate(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  reason: RejectionReason,
+): PersistedCandidate {
+  recordRejectedCandidateDecision(deps, mode, surface, outcome, reason);
+  return { action: { kind: "rejected", reason }, disposition: "rejected" };
+}
+
 // Persists one salience candidate and returns its wire action plus how it settled. Returns a null
 // action when the outcome is not a candidate, no record could be built, or the candidate was merged
 // into an existing semantic near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens
@@ -338,16 +358,13 @@ async function persistCandidate(
   outcome: CaptureOutcome,
   vault: MemoryVaultStore,
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
 ): Promise<PersistedCandidate> {
   if (outcome.kind !== "candidate") {
     return { action: null, disposition: "none" };
   }
   if (!isPersistableMemoryCandidate(outcome)) {
-    recordRejectedCandidateDecision(deps, mode, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
-    return {
-      action: { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON },
-      disposition: "rejected",
-    };
+    return rejectedCandidate(deps, mode, surface, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
@@ -355,11 +372,7 @@ async function persistCandidate(
     return { action: null, disposition: "none" };
   }
   if (isSuppressedByForgetTombstone(vault, record)) {
-    recordRejectedCandidateDecision(deps, mode, outcome, FORGOTTEN_MEMORY_SUPPRESSION_REASON);
-    return {
-      action: { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON },
-      disposition: "rejected",
-    };
+    return rejectedCandidate(deps, mode, surface, outcome, FORGOTTEN_MEMORY_SUPPRESSION_REASON);
   }
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleRecord(record)
@@ -370,7 +383,7 @@ async function persistCandidate(
     // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
     return { action: null, disposition: "merged" };
   }
-  recordPersistedCandidateDecision(deps, mode, outcome, inserted);
+  recordPersistedCandidateDecision(deps, mode, surface, outcome, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
     disposition: inserted.status === "accepted" ? "accepted" : "proposed",
@@ -384,6 +397,14 @@ interface SalienceTurnRequest {
 }
 
 type SalienceCaptureSurface = "desktop" | "voice";
+
+// Maps the scheduler's capture surface to the audit envelope's initiatorSurface vocabulary so the
+// Memory Journal projection (#2547) can distinguish a voice-originated capture from desktop chat.
+function captureAuditInitiatorSurface(
+  surface: SalienceCaptureSurface,
+): MemoryAuditInitiatorSurface {
+  return surface === "voice" ? "voice" : "conversation-center";
+}
 
 function logSalienceCaptureFailure(
   surface: SalienceCaptureSurface,
@@ -420,7 +441,7 @@ export function scheduleMemorySalienceCapture(
   }
   pendingSalienceCaptures += 1;
   setImmediate(() => {
-    void captureSalientFromTurn(deps, request, context, modelId, assistantText)
+    void captureSalientFromTurn(deps, request, context, modelId, assistantText, surface)
       .catch((error: unknown) => {
         logSalienceCaptureFailure(surface, error, deps);
       })
@@ -532,11 +553,12 @@ async function persistSalienceActions(
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
 ): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
   const summary = emptySalienceCaptureSummary();
   for (const outcome of outcomes) {
-    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode);
+    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode, surface);
     if (action !== null) actions.push(action);
     tallyDisposition(summary, disposition);
   }
@@ -546,11 +568,12 @@ async function persistSalienceActions(
 function recordTurnCaptureRefusal(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: SalienceCaptureSurface,
   context: ConversationMemoryRuntimeContext,
   occurredAt: number,
   reason: RejectionReason,
 ): void {
-  recordCaptureDecision(deps, mode, {
+  recordCaptureDecision(deps, mode, surface, {
     outcome: "rejected",
     scope: { kind: "project", projectId: context.projectId },
     sourceKind: "system-default",
@@ -560,13 +583,16 @@ function recordTurnCaptureRefusal(
 }
 
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
-// vault error, malformed output) yields [] so the chat response is unaffected.
+// vault error, malformed output) yields [] so the chat response is unaffected. `surface` defaults
+// to "desktop" so every pre-existing caller (direct test invocations included) is byte-identical;
+// the scheduler is the only caller that passes an explicit "voice" surface.
 export async function captureSalientFromTurn(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   modelId: string,
   assistantText: string,
+  surface: SalienceCaptureSurface = "desktop",
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = deps.memoryVault;
   if (request.memory === undefined || !request.memory.enabled || vault === undefined) {
@@ -586,11 +612,18 @@ export async function captureSalientFromTurn(
     );
     if (extraction.kind === "unavailable") return [];
     if (extraction.kind === "refused") {
-      recordTurnCaptureRefusal(deps, mode, context, captureContext.nowMs, extraction.reason);
+      recordTurnCaptureRefusal(
+        deps,
+        mode,
+        surface,
+        context,
+        captureContext.nowMs,
+        extraction.reason,
+      );
       return [];
     }
     const { outcomes } = extraction;
-    const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode);
+    const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
     if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary);
     return actions;
   } catch (error) {

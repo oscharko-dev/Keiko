@@ -294,6 +294,7 @@ describe("memory handlers", () => {
           outcome: "auto-accepted",
           scope: record.scope,
           mode: "supervised-coding",
+          initiatorSurface: "conversation-center",
           sourceKind: record.provenance.sourceKind,
           reason: "governance-auto-accepted",
           memoryId: record.id,

@@ -245,3 +245,104 @@ describe("recent memory capture journey", () => {
     expect(recentCaptures(autonomous, since)).toEqual(afterForget);
   });
 });
+
+// #2550: the realtime-voice turn learns exactly as the desktop text turn does — same mode
+// branching, same hard denials, same novelty gate — but is distinguishable in the Journal via the
+// "voice" initiatorSurface tag. This is the voice-passive-capture journey the AC demands.
+describe("voice-passive-capture journey", () => {
+  it("attributes a voice turn to the voice surface, mode-branches, refuses secrets, and absorbs a repeat", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const ctx = context();
+    const since = Date.now() - 1_000;
+    const governed = depsFor(
+      vault,
+      evidenceStore,
+      "governed-assist",
+      modelFact("The user prefers stand-ups at 9am."),
+    );
+    const supervised = depsFor(
+      vault,
+      evidenceStore,
+      "supervised-coding",
+      modelFact("This output must not be reached for a refused turn."),
+    );
+    const autonomous = depsFor(
+      vault,
+      evidenceStore,
+      "autonomous-delivery",
+      modelFact("The user's timezone is UTC+1."),
+    );
+
+    await captureSalientFromTurn(
+      governed,
+      makeRequest("Let's keep doing morning stand-ups."),
+      ctx,
+      "gpt-test",
+      "ok",
+      "voice",
+    );
+    await captureSalientFromTurn(
+      autonomous,
+      makeRequest("I'm on UTC+1 this week."),
+      ctx,
+      "gpt-test",
+      "ok",
+      "voice",
+    );
+    await captureSalientFromTurn(
+      supervised,
+      makeRequest(SECRET_TURN),
+      ctx,
+      "gpt-test",
+      "ok",
+      "voice",
+    );
+
+    const captured = recentCaptures(autonomous, since);
+    expect(captured.map(({ outcome, mode }) => [outcome, mode])).toEqual([
+      ["rejected", "supervised-coding"],
+      ["auto-accepted", "autonomous-delivery"],
+      ["proposed", "governed-assist"],
+    ]);
+    // Every voice-originated decision (captured or refused) carries the "voice" surface tag —
+    // never the desktop "conversation-center" tag — so the Journal can tell them apart.
+    expect(captured.every((capture) => capture.provenance.initiatorSurface === "voice")).toBe(true);
+    expect(JSON.stringify(captured)).not.toContain(SECRET_MARKER);
+
+    // A second, identical voice turn is absorbed by the novelty gate: the Journal count for the
+    // autonomous-delivery fact does not double.
+    await captureSalientFromTurn(
+      autonomous,
+      makeRequest("I'm on UTC+1 this week."),
+      ctx,
+      "gpt-test",
+      "ok",
+      "voice",
+    );
+    const afterRepeat = recentCaptures(autonomous, since);
+    expect(afterRepeat).toHaveLength(captured.length);
+    expect(afterRepeat.filter((capture) => capture.outcome === "auto-accepted")).toHaveLength(1);
+
+    // The pre-existing desktop path is unaffected: an equivalent desktop-surface turn still tags
+    // "conversation-center", proving the two surfaces stay distinguishable in both directions.
+    const autonomousDesktop = depsFor(
+      vault,
+      evidenceStore,
+      "autonomous-delivery",
+      modelFact("The desktop client shows a status bar."),
+    );
+    await captureSalientFromTurn(
+      autonomousDesktop,
+      makeRequest("The desktop client shows a status bar."),
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    const withDesktop = recentCaptures(autonomous, since);
+    const desktopDecision = withDesktop.find(
+      (capture) => capture.provenance.initiatorSurface === "conversation-center",
+    );
+    expect(desktopDecision).toBeDefined();
+  });
+});
