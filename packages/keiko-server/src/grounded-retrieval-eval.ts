@@ -5,9 +5,9 @@
 // harness covers the production semantic + reranker + RRF path by driving the REAL functions
 // end-to-end over a distractor-dense corpus:
 //
-//   1. `configuredRepoSemanticSearchProviderFor` (grounded-repo-semantic-search) with a scripted but
-//      SEMANTIC embedding port (topic vectors, not lexical overlap), so a paraphrased query matches
-//      the right file WITHOUT sharing its words.
+//   1. A real repository pod seeded through `refreshRepositoryPod`, then consumed through
+//      `configuredRepoSemanticSearchProviderFor` with a scripted SEMANTIC embedding port (topic
+//      vectors, not lexical overlap), so a paraphrased query matches the right persisted chunk.
 //   2. `rerankAndSelect` (grounded-rerank) — the real RRF fusion of the lexical + semantic engines.
 //   3. `rerankSelection` (grounded-rerank-facade) — the real model-reranker gate with a scripted
 //      rerank port.
@@ -16,15 +16,34 @@
 // regression (`reranker-reversed`, `embedding-flat`) provably drops the metrics BELOW the floors —
 // so the gate turns red on a real regression in this grounded-answer path.
 
-import type {
-  GatewayConfig,
-  OpenAIEmbeddingOutcome,
-  OpenAIEmbeddingRequest,
-  RerankOutcome,
-  LiteLLMRerankRequest,
+import {
+  EMBEDDING_INSTRUCTION_VERSION,
+  verifyEmbeddingCapability,
+  type GatewayConfig,
+  type LiteLLMRerankRequest,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
+  type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { EvalBudget, EvalFloorResult } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceFs, WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace";
+import type {
+  EvalBudget,
+  EvalFloorResult,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  createDefaultParserRegistry,
+  createRepositoryPodShell,
+  openKnowledgeStore,
+  refreshRepositoryPod,
+  type KnowledgeStore,
+} from "@oscharko-dev/keiko-local-knowledge";
+import type {
+  SemanticSearchProvider,
+  WorkspaceDirEntry,
+  WorkspaceFs,
+  WorkspaceStat,
+} from "@oscharko-dev/keiko-workspace";
 
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor } from "./deps.js";
@@ -39,11 +58,15 @@ import {
   type SelectedCandidate,
 } from "./grounded-rerank.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
+import { localKnowledgeEmbeddingAdapterForProvider } from "./local-knowledge-handlers.js";
 
 const EMBEDDING_MODEL = "eval-embedding";
 const RERANK_MODEL = "eval-reranker";
 const EVAL_K = 3;
 const TOP_N = 4;
+const EVAL_REPOSITORY_ROOT = "/eval-repository";
+const EVAL_CAPSULE_ID = "grounded-retrieval-eval" as KnowledgeCapsuleId;
+const EVAL_SOURCE_ID = "grounded-retrieval-eval-source" as KnowledgeSourceId;
 
 export type GroundedRetrievalEvalMode =
   "baseline" | "reranker-off" | "reranker-reversed" | "embedding-flat";
@@ -206,12 +229,18 @@ function scriptedEmbeddingPort(
   return (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
     // `embedding-flat`: a broken embedding that maps everything to the same vector. Semantic ranking
     // collapses to arbitrary tie-breaks, so retrieval can no longer surface the relevant document.
-    const vector =
-      mode === "embedding-flat"
-        ? new Float32Array(NUM_DIMS).fill(1 / Math.sqrt(NUM_DIMS))
-        : conceptVector(request.input);
+    const vector = scriptedVector(mode, request.input);
     return Promise.resolve({ ok: true, value: { vector, modelId: request.modelId } });
   };
+}
+
+function scriptedVector(mode: GroundedRetrievalEvalMode, input: string): Float32Array {
+  if (mode === "embedding-flat") {
+    return new Float32Array(NUM_DIMS).fill(1 / Math.sqrt(NUM_DIMS));
+  }
+  const vector = conceptVector(input);
+  if (vector.every((value) => value === 0)) vector[SYSTEM_DIM] = 1;
+  return vector;
 }
 
 function scriptedRerankPort(
@@ -240,16 +269,71 @@ function scriptedRerankPort(
 
 // ─── Deps construction (in-memory) ────────────────────────────────────────────
 
-function inMemoryFs(): WorkspaceFs {
-  const empty = new Uint8Array(0);
-  const dir = (): WorkspaceDirEntry[] => [];
+function evalFileMap(): Readonly<Record<string, string>> {
+  return Object.fromEntries(CORPUS.map((document) => [document.scopePath, document.text]));
+}
+
+function evalRelativePath(absolutePath: string): string {
+  return absolutePath.startsWith(`${EVAL_REPOSITORY_ROOT}/`)
+    ? absolutePath.slice(EVAL_REPOSITORY_ROOT.length + 1)
+    : absolutePath;
+}
+
+function evalDirectoryEntries(
+  files: Readonly<Record<string, string>>,
+  absolutePath: string,
+): readonly WorkspaceDirEntry[] {
+  const prefix = evalRelativePath(absolutePath);
+  const childPrefix = prefix.length === 0 ? "" : `${prefix}/`;
+  const directories = new Set<string>();
+  const leaves = new Set<string>();
+  for (const path of Object.keys(files)) {
+    if (!path.startsWith(childPrefix)) continue;
+    const remainder = path.slice(childPrefix.length);
+    const separator = remainder.indexOf("/");
+    if (separator < 0) leaves.add(remainder);
+    else directories.add(remainder.slice(0, separator));
+  }
+  return [
+    ...[...directories].map((name) => ({
+      name,
+      isDirectory: true,
+      isFile: false,
+      isSymbolicLink: false,
+    })),
+    ...[...leaves].map((name) => ({
+      name,
+      isDirectory: false,
+      isFile: true,
+      isSymbolicLink: false,
+    })),
+  ];
+}
+
+function evalWorkspaceFs(): WorkspaceFs {
+  const files = evalFileMap();
   return {
-    readFileUtf8: () => "",
-    stat: () => ({ size: 0, isFile: false, isDirectory: true, isSymbolicLink: false }),
-    readDir: dir,
-    realPath: (abs: string): string => abs,
-    exists: (): boolean => true,
-    readFileBytes: (): Promise<Uint8Array> => Promise.resolve(empty),
+    readFileUtf8: (absolutePath): string => files[evalRelativePath(absolutePath)] ?? "",
+    stat: (absolutePath): WorkspaceStat => {
+      const text = files[evalRelativePath(absolutePath)];
+      return text === undefined
+        ? { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false }
+        : {
+            size: Buffer.byteLength(text, "utf8"),
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+          };
+    },
+    readDir: (absolutePath): readonly WorkspaceDirEntry[] =>
+      evalDirectoryEntries(files, absolutePath),
+    realPath: (absolutePath): string => absolutePath,
+    exists: (absolutePath): boolean =>
+      absolutePath === EVAL_REPOSITORY_ROOT || files[evalRelativePath(absolutePath)] !== undefined,
+    readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+      const bytes = new TextEncoder().encode(files[evalRelativePath(absolutePath)] ?? "");
+      return Promise.resolve(bytes.subarray(0, Math.min(bytes.byteLength, maxBytes)));
+    },
   };
 }
 
@@ -312,6 +396,50 @@ function evalDeps(mode: GroundedRetrievalEvalMode): UiHandlerDeps {
   };
 }
 
+interface EvalRepositoryPod {
+  readonly store: KnowledgeStore;
+  readonly fs: WorkspaceFs;
+}
+
+async function seedEvalRepositoryPod(deps: UiHandlerDeps): Promise<EvalRepositoryPod> {
+  const provider = evalGatewayConfig().providers[0];
+  if (provider === undefined) throw new Error("expected eval embedding provider");
+  const store = openKnowledgeStore({ dbPath: ":memory:" });
+  const fs = evalWorkspaceFs();
+  const embeddingAdapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
+  const verified = await verifyEmbeddingCapability(embeddingAdapter, {
+    modelId: EMBEDDING_MODEL,
+    provider: "openai",
+    vectorMetric: "cosine",
+    expectedDimensions: NUM_DIMS,
+    normalization: "l2",
+    instructionVersion: EMBEDDING_INSTRUCTION_VERSION,
+    includeSpaceFingerprint: true,
+  });
+  if (!verified.ok) throw new Error(`eval embedding verification failed: ${verified.reason}`);
+  createRepositoryPodShell(
+    { store, capsuleId: EVAL_CAPSULE_ID, sourceId: EVAL_SOURCE_ID },
+    {
+      displayName: "Grounded retrieval evaluation",
+      repositoryRoot: EVAL_REPOSITORY_ROOT,
+      embeddingModelIdentity: verified.identity,
+    },
+  );
+  await refreshRepositoryPod(
+    {
+      store,
+      capsuleId: EVAL_CAPSULE_ID,
+      sourceId: EVAL_SOURCE_ID,
+      parserRegistry: createDefaultParserRegistry(),
+      embeddingAdapter,
+      workspaceFs: fs,
+      trackedPaths: new Set(CORPUS.map((document) => document.scopePath)),
+    },
+    { runId: "grounded-retrieval-eval-index" },
+  );
+  return { store, fs };
+}
+
 // ─── Pipeline drive: semantic → RRF → model rerank ────────────────────────────
 
 interface CasePayload {
@@ -331,15 +459,9 @@ function lexicalScore(query: string, text: string): number {
 
 async function rankCase(
   deps: UiHandlerDeps,
+  provider: SemanticSearchProvider,
   evalCase: EvalCase,
 ): Promise<readonly SelectedCandidate<CasePayload>[]> {
-  const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
-    fs: inMemoryFs(),
-    maxCandidates: CORPUS.length,
-  });
-  if (provider === undefined) {
-    throw new Error("expected a configured semantic search provider");
-  }
   const matches = await provider.search({
     query: {
       kind: "natural-language",
@@ -432,29 +554,55 @@ export async function runGroundedRetrievalQualityEval(
   mode: GroundedRetrievalEvalMode = "baseline",
 ): Promise<GroundedRetrievalScorecard> {
   const deps = evalDeps(mode);
-  const perCase = await Promise.all(
-    CASES.map(async (evalCase) => {
-      const paths = rankedPaths(await rankCase(deps, evalCase));
-      const top1 = paths[0] === evalCase.relevantPath ? 1 : 0;
-      const recall = paths.slice(0, EVAL_K).includes(evalCase.relevantPath) ? 1 : 0;
-      return {
-        id: evalCase.id,
-        top1,
-        recall,
-        ndcg: ndcgAtK(paths, evalCase.relevantPath, EVAL_K),
-        // Citation-support: the answer would cite the top-ranked evidence, so support == top1 here.
-        citationSupport: top1,
-      };
-    }),
-  );
+  const pod = await seedEvalRepositoryPod(deps);
+  try {
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs: pod.fs,
+      maxCandidates: CORPUS.length,
+      repositoryPod: { store: pod.store, repositoryRoot: EVAL_REPOSITORY_ROOT },
+    });
+    if (provider === undefined) throw new Error("expected a configured semantic search provider");
+    const perCase = await Promise.all(
+      CASES.map(async (evalCase) => {
+        const paths = rankedPaths(await rankCase(deps, provider, evalCase));
+        const top1 = paths[0] === evalCase.relevantPath ? 1 : 0;
+        const recall = paths.slice(0, EVAL_K).includes(evalCase.relevantPath) ? 1 : 0;
+        return {
+          id: evalCase.id,
+          top1,
+          recall,
+          ndcg: ndcgAtK(paths, evalCase.relevantPath, EVAL_K),
+          citationSupport: top1,
+        };
+      }),
+    );
+    return scorecardFor(mode, perCase);
+  } finally {
+    pod.store.close();
+    deps.store.close();
+  }
+}
+
+interface EvalCaseScore {
+  readonly id: string;
+  readonly top1: number;
+  readonly recall: number;
+  readonly ndcg: number;
+  readonly citationSupport: number;
+}
+
+function scorecardFor(
+  mode: GroundedRetrievalEvalMode,
+  perCase: readonly EvalCaseScore[],
+): GroundedRetrievalScorecard {
   return {
     mode,
     cases: perCase.length,
-    top1Rate: average(perCase.map((c) => c.top1)),
-    recallAtK: average(perCase.map((c) => c.recall)),
-    ndcgAtK: average(perCase.map((c) => c.ndcg)),
-    citationSupport: average(perCase.map((c) => c.citationSupport)),
-    failedCases: perCase.filter((c) => c.top1 === 0).map((c) => c.id),
+    top1Rate: average(perCase.map((item) => item.top1)),
+    recallAtK: average(perCase.map((item) => item.recall)),
+    ndcgAtK: average(perCase.map((item) => item.ndcg)),
+    citationSupport: average(perCase.map((item) => item.citationSupport)),
+    failedCases: perCase.filter((item) => item.top1 === 0).map((item) => item.id),
   };
 }
 
