@@ -190,12 +190,78 @@ describe("rerankSelection", () => {
     });
 
     expect(result.selected).toEqual(["a"]);
-    expect(result.diagnostics).toMatchObject({
+    expect(result.diagnostics).toEqual({
       status: "disabled",
-      failureKind: "not-configured",
+      mode: "none",
+      candidateCount: 1,
       documentCount: 0,
+      keptCount: 1,
+      failureKind: "not-configured",
+      latencyMs: 0,
     });
     expect(documentCalls).toBe(0);
+    deps.store.close();
+  });
+
+  // Guard-order pin for issue #2567 D5. The configuration check runs BEFORE the empty-pool check, so
+  // an unconfigured reranker reports "not-configured" even with nothing to rerank; only a CONFIGURED
+  // reranker handed an empty pool reports the bare "disabled". See the rationale comment on
+  // `rerankSelection` — the two pre-facade implementations disagreed here and this is the pinned
+  // resolution, not an accident.
+  it("reports not-configured ahead of an empty provider pool", async () => {
+    const deps = depsWith({ ...gatewayConfig(), reranker: undefined }, () =>
+      Promise.resolve(successfulOutcome([{ index: 0 }])),
+    );
+
+    const result = await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: [],
+      documentFor: (candidate: string) => candidate,
+      topN: 4,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(result.selected).toEqual([]);
+    expect(result.diagnostics).toEqual({
+      status: "disabled",
+      mode: "none",
+      candidateCount: 0,
+      documentCount: 0,
+      keptCount: 0,
+      failureKind: "not-configured",
+      latencyMs: 0,
+    });
+    deps.store.close();
+  });
+
+  it("reports a bare disabled for an empty provider pool when a reranker IS configured", async () => {
+    let transportCalls = 0;
+    const deps = depsWith(gatewayConfig(), () => {
+      transportCalls += 1;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+
+    const result = await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["a", "b"],
+      providerCandidates: [],
+      documentFor: (candidate) => candidate,
+      topN: 2,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(result.selected).toEqual(["a", "b"]);
+    expect(result.diagnostics).toEqual({
+      status: "disabled",
+      mode: "none",
+      candidateCount: 0,
+      documentCount: 0,
+      keptCount: 2,
+      latencyMs: 0,
+    });
+    expect(transportCalls).toBe(0);
     deps.store.close();
   });
 
@@ -415,10 +481,92 @@ describe("rerank facade selection properties", () => {
     }
   });
 
-  it("makes both fallback modes monotonic", () => {
+  it("slices to topN in slice-topN mode and returns the input identity in identity mode", () => {
     const candidates = ["a", "b", "c"] as const;
 
     expect(fallbackRerankSelection(candidates, 2, "slice-topN")).toEqual(["a", "b"]);
     expect(fallbackRerankSelection(candidates, 1, "identity")).toBe(candidates);
+    // Pins the documented exception to the AC3 invariant below: slice-topN with a non-positive topN
+    // yields an EMPTY selection from a non-empty pool. No caller can reach it (every call site passes
+    // a positive `maxPromptReferences`), so the behavior is pinned rather than changed.
+    expect(fallbackRerankSelection(candidates, 0, "slice-topN")).toEqual([]);
+    expect(fallbackRerankSelection(candidates, -1, "slice-topN")).toEqual([]);
+  });
+
+  // Seeded 32-bit LCG (Numerical Recipes constants): the generated provider responses below must be
+  // reproducible from the seed alone, so this gate test carries no wall-clock or Math.random entropy.
+  function createSeededRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return (): number => {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      return state / 0x1_0000_0000;
+    };
+  }
+
+  // Mixed-shape indices: mostly in-range (which also produces natural DUPLICATES), plus out-of-range,
+  // NaN and non-integer corruptions — the four rejection classes `mappedCandidateFor` guards.
+  function generateRerankIndices(next: () => number, size: number): readonly number[] {
+    const count = 1 + Math.floor(next() * size);
+    return Array.from({ length: count }, () => {
+      const roll = next();
+      if (roll < 0.7) return Math.floor(next() * size);
+      if (roll < 0.8) return size + Math.floor(next() * 4);
+      if (roll < 0.9) return Number.NaN;
+      return Math.floor(next() * size) + 0.5;
+    });
+  }
+
+  function isValidRerankMapping(indices: readonly number[], size: number): boolean {
+    const seen = new Set<number>();
+    for (const index of indices) {
+      if (!Number.isInteger(index) || index < 0 || index >= size || seen.has(index)) return false;
+      seen.add(index);
+    }
+    return true;
+  }
+
+  function expectMappingInvariant(
+    candidates: readonly string[],
+    indices: readonly number[],
+    topN: number,
+  ): boolean {
+    const results = indices.map((index) => ({ index }));
+    const selected = applyRerankMapping(candidates, results, topN);
+    const valid = isValidRerankMapping(indices, candidates.length);
+
+    if (!valid) {
+      expect(selected).toBeUndefined();
+    } else {
+      if (selected === undefined) throw new Error("valid generated mapping was rejected");
+      expect(selected).toHaveLength(Math.min(indices.length, topN));
+      expect(new Set(selected).size).toBe(selected.length);
+      expect(selected.every((candidate) => candidates.includes(candidate))).toBe(true);
+    }
+    // AC3's invariant, restated with the precondition it actually needs: given a NON-EMPTY candidate
+    // pool AND topN > 0, the effective selection (mapping when usable, fallback otherwise) is never
+    // empty. Without the `topN > 0` clause the claim is false — see the slice-topN pin above.
+    const effective = selected ?? fallbackRerankSelection(candidates, topN, "slice-topN");
+    expect(effective.length).toBeGreaterThan(0);
+    return valid;
+  }
+
+  it("upholds the mapping and fallback invariants over seeded mixed-validity responses", () => {
+    const next = createSeededRandom(0x5eed_2567);
+    let mappedCount = 0;
+    let rejectedCount = 0;
+
+    for (let iteration = 0; iteration < 400; iteration += 1) {
+      const size = 1 + Math.floor(next() * 12);
+      const candidates = Array.from({ length: size }, (_, index) => `candidate-${String(index)}`);
+      const topN = 1 + Math.floor(next() * size);
+      const indices = generateRerankIndices(next, size);
+
+      if (expectMappingInvariant(candidates, indices, topN)) mappedCount += 1;
+      else rejectedCount += 1;
+    }
+
+    // Both branches must actually be exercised, otherwise the loop above proves only one of them.
+    expect(mappedCount).toBeGreaterThan(0);
+    expect(rejectedCount).toBeGreaterThan(0);
   });
 });

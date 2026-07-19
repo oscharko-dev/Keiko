@@ -297,6 +297,15 @@ export async function rerankSelection<T>(
       diagnostics: policyDeniedDiagnostics(input.candidates.length, fallback.length),
     };
   }
+  // Guard order is deliberate and load-bearing (issue #2567 D5). The two pre-facade implementations
+  // this consolidates DISAGREED on the empty-pool-and-unconfigured intersection: the hybrid path
+  // (`requestConfiguredRerank`) guarded the empty pool first and reported a bare "disabled", while
+  // the single-scope path decided the unconfigured case upstream (`createNotConfiguredReranker`) and
+  // always reported "disabled" + "not-configured" regardless of pool size. One shared facade cannot
+  // reproduce both, so the configuration check runs FIRST: "the reranker was never configured" is the
+  // stable, true reason, whereas an empty pool is incidental to it. This also keeps the default
+  // install suppressible by `rerankerForRetrievalActivity`, which recognises the default state only
+  // by the "disabled" + "not-configured" pair — a bare "disabled" would leak into the activity row.
   const reranker = (input.gatewayConfig ?? currentGatewayConfig(input.deps))?.reranker;
   if (reranker === undefined) {
     return {
