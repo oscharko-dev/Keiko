@@ -779,6 +779,9 @@ describe("WorkspaceBinding V2", () => {
     const first = validBindingV2().roots[0];
     const second = validBindingV2().roots[1];
     const nestedPath = "/repos/keiko/packages/nested";
+    const repeatedSeparatorPath = "/repos//keiko/packages/nested";
+    const windowsPath = "C:\\work";
+    const mixedWindowsPath = "C:\\work/child";
     expect(
       validateWorkspaceBindingV2({
         ...validBindingV2(),
@@ -789,6 +792,39 @@ describe("WorkspaceBinding V2", () => {
             rootPath: nestedPath,
             gitDeliveryRoot: nestedPath,
             editorProjectRoot: nestedPath,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateWorkspaceBindingV2({
+        ...validBindingV2(),
+        roots: [
+          first,
+          {
+            ...second,
+            rootPath: repeatedSeparatorPath,
+            gitDeliveryRoot: repeatedSeparatorPath,
+            editorProjectRoot: repeatedSeparatorPath,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateWorkspaceBindingV2({
+        ...validBindingV2(),
+        roots: [
+          {
+            ...first,
+            rootPath: windowsPath,
+            gitDeliveryRoot: windowsPath,
+            editorProjectRoot: windowsPath,
+          },
+          {
+            ...second,
+            rootPath: mixedWindowsPath,
+            gitDeliveryRoot: mixedWindowsPath,
+            editorProjectRoot: mixedWindowsPath,
           },
         ],
       }).ok,

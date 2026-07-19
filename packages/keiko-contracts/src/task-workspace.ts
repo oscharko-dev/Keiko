@@ -841,14 +841,16 @@ function boundRootsAreValid(input: unknown): input is readonly WorkspaceBoundRoo
   ) {
     return false;
   }
-  const refs = new Set(input.map((root) => root.rootRef));
-  const digests = new Set(input.map((root) => root.rootIdentityDigest));
-  const paths = new Set(input.map((root) => root.rootPath));
+  const refs = new Set(input.map((root): WorkspaceRootRef => root.rootRef));
+  const digests = new Set(
+    input.map((root): WorkspaceRootIdentityDigest => root.rootIdentityDigest),
+  );
+  const paths = new Set(input.map((root): string => root.rootPath));
   return (
     refs.size === input.length &&
     digests.size === input.length &&
     paths.size === input.length &&
-    workspaceCanonicalRootsDoNotOverlap(input.map((root) => root.rootPath))
+    workspaceCanonicalRootsDoNotOverlap(input.map((root): string => root.rootPath))
   );
 }
 
@@ -886,7 +888,7 @@ function isWorkspaceBindingV2(input: unknown): input is WorkspaceBindingV2 {
   ) {
     return false;
   }
-  return input.roots.some((root) => root.rootRef === input.focusedRootRef);
+  return input.roots.some((root): boolean => root.rootRef === input.focusedRootRef);
 }
 
 export function validateWorkspaceBindingV2(input: unknown): TaskWorkspaceValidation {

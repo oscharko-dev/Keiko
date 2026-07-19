@@ -1254,7 +1254,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodCreateRequest>();
   });
 
-  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async () => {
+  it("M11 workspace foundation contracts are reachable through the barrel (#2520)", async (): Promise<void> => {
     const m = await import("./index.js");
     expect(m.WORKSPACE_CONTRACT_SCHEMA_VERSION).toBe(1);
     expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");

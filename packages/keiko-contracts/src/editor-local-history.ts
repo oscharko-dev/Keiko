@@ -148,7 +148,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isHistoryOrigin(value: unknown): value is EditorLocalHistoryOrigin {
-  return EDITOR_LOCAL_HISTORY_ORIGINS.some((origin) => origin === value);
+  return EDITOR_LOCAL_HISTORY_ORIGINS.some((origin): boolean => origin === value);
 }
 
 function isEncryptedContentRef(value: unknown): value is EditorLocalHistoryEncryptedContentRef {
@@ -218,10 +218,12 @@ export function validateEditorLocalHistoryEntry(value: unknown): WorkspaceContra
 }
 
 function entriesHaveUniqueIdentity(entries: readonly EditorLocalHistoryEntry[]): boolean {
-  const entryRefs = new Set(entries.map((entry) => entry.entryRef));
-  const vaultRefs = new Set(entries.map((entry) => entry.encryptedContent.vaultEntryRef));
+  const entryRefs = new Set(entries.map((entry): WorkspaceHistoryEntryRef => entry.entryRef));
+  const vaultRefs = new Set(
+    entries.map((entry): WorkspaceVaultEntryRef => entry.encryptedContent.vaultEntryRef),
+  );
   const checkpointIdentities = new Set(
-    entries.map((entry) =>
+    entries.map((entry): string =>
       JSON.stringify([
         entry.rootRef,
         entry.rootIdentityDigest,
@@ -253,12 +255,12 @@ function versionsPerFileAreBounded(entries: readonly EditorLocalHistoryEntry[]):
 }
 
 function sumEntryBytes(entries: readonly EditorLocalHistoryEntry[]): number {
-  return entries.reduce((total, entry) => total + entry.plaintextByteLength, 0);
+  return entries.reduce((total, entry): number => total + entry.plaintextByteLength, 0);
 }
 
 function sumPinnedBytes(entries: readonly EditorLocalHistoryEntry[]): number {
   return entries.reduce(
-    (total, entry) => total + (entry.pinned ? entry.plaintextByteLength : 0),
+    (total, entry): number => total + (entry.pinned ? entry.plaintextByteLength : 0),
     0,
   );
 }
@@ -280,7 +282,9 @@ function historyIndexEntriesAreValid(value: UnknownRecord): boolean {
   return [
     entries.length <= EDITOR_LOCAL_HISTORY_MAX_ENTRIES,
     entries.every(isHistoryEntry),
-    entries.every((entry) => isWorkspaceRecord(entry) && entry.workspaceId === value.workspaceId),
+    entries.every(
+      (entry): boolean => isWorkspaceRecord(entry) && entry.workspaceId === value.workspaceId,
+    ),
     entries.every(isHistoryEntry) && entriesHaveUniqueIdentity(entries),
     entries.every(isHistoryEntry) && versionsPerFileAreBounded(entries),
   ].every(Boolean);
@@ -343,7 +347,7 @@ export function planEditorLocalHistoryRetention(
   if (!requirementIsValid(requirement)) {
     return { ok: false, entryRefs: [], reason: "INVALID_REQUIREMENT" };
   }
-  const candidates = entries.filter((entry) => !entry.pinned).sort(compareRetentionOrder);
+  const candidates = entries.filter((entry): boolean => !entry.pinned).sort(compareRetentionOrder);
   const selected: WorkspaceHistoryEntryRef[] = [];
   let selectedBytes = 0;
   for (const entry of candidates) {
