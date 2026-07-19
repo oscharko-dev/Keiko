@@ -2,8 +2,10 @@
 
 > **Retired on the ADR-0142 cutover (2026-07-19).** The canonical producer is the GitHub Action
 > (`.github/workflows/keiko-for-quality-action.yml`); the Worker cron, webhook, and D1 database are
-> decommissioned. This directory is retained solely as the documented rollback path:
-> `wrangler deploy` from here plus reverting the workflow identity block restores the Worker.
+> decommissioned. This directory is retained solely as the documented rollback TEMPLATE: restoring
+> the Worker requires full re-provisioning — `wrangler deploy` from here, a fresh D1 database and
+> its bindings, a new webhook plus secret, the cron schedule, and Worker credentials — plus
+> reverting the workflow identity block. `wrangler deploy` alone is not sufficient.
 
 This directory contains the deployment template for the independent GitHub App described in
 [`../../docs/qa/keiko-for-quality.md`](../../docs/qa/keiko-for-quality.md). The runtime is
@@ -13,10 +15,13 @@ mint the required aggregate check.
 > **Note (Issue #2506):** "outside GitHub Actions" is a property of the `pull_request` trigger, not
 > of GitHub Actions as such. A workflow triggered on `check_run` / `issue_comment` runs its
 > definition from the default branch (`dev`), which pull-request code cannot alter, and therefore
-> preserves this tamper-resistance. Epic #2504 evaluates replacing this Worker with such an Action;
-> see [`../../docs/qa/keiko-for-quality-action-evaluation.md`](../../docs/qa/keiko-for-quality-action-evaluation.md)
-> and [ADR-0142](../../docs/adr/ADR-0142-keiko-for-quality-github-action-execution-shell.md). Until
-> that cutover completes, this Worker remains the canonical producer.
+> preserves this tamper-resistance. Epic #2504 executed exactly that replacement: the ADR-0142
+> cutover completed on 2026-07-19, the Action is the canonical producer, and this Worker (with its
+> cron, webhook secret, and D1 database) was decommissioned. This directory is retained solely as
+> the rollback template — `wrangler deploy` from here plus reverting the Action workflow's
+> identity block restores the Worker. See
+> [`../../docs/qa/keiko-for-quality-action-evaluation.md`](../../docs/qa/keiko-for-quality-action-evaluation.md)
+> and [ADR-0142](../../docs/adr/ADR-0142-keiko-for-quality-github-action-execution-shell.md).
 
 ## One-time setup
 
@@ -34,7 +39,10 @@ mint the required aggregate check.
 4. Create the D1 database, apply `schema.sql`, copy `wrangler.toml.example` to an untracked
    deployment config, and replace the D1 identifier.
 5. Store `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_PKCS8`, and `GITHUB_WEBHOOK_SECRET` with
-   `wrangler secret put`. They must never be committed or stored in repository Actions secrets.
+   `wrangler secret put`. For this Worker shell they live in Cloudflare secret storage and are
+   never committed. (The canonical Action path is different by design: ADR-0142 D4 stores
+   `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` as repository Actions secrets, exposed only to the
+   privileged base-branch `evaluate` job.)
 6. Deploy `scripts/keiko-for-quality-worker.mjs` with Wrangler and set the GitHub App webhook
    URL to the resulting HTTPS endpoint.
 7. Enable Workers Observability with redacted application logs. Verify a fresh webhook delivery,
