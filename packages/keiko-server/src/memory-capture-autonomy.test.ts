@@ -59,8 +59,8 @@ const CONFIDENTIAL_FACT = JSON.stringify([
   },
 ]);
 
-const SECRET_BODY = "The staging login uses password=hunter2secretvalue.";
-const SECRET_TOKEN = "hunter2secretvalue";
+const SECRET_BODY = "The staging login uses password=FAKE-TEST-PLACEHOLDER-VALUE.";
+const SECRET_TOKEN = "FAKE-TEST-PLACEHOLDER-VALUE";
 
 // A single credential-shaped item. The secret net drops it inside candidateBody before any mode
 // logic, so nothing is persisted in any mode.
