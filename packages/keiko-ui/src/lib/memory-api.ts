@@ -30,6 +30,7 @@ import type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
   MemoryHealthScanResultWire,
+  MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -238,6 +239,22 @@ export async function fetchMemoryReviewQueue(
   fetchImpl = fetchJson<MemoryReviewQueueResponse>,
 ): Promise<MemoryReviewQueueResponse> {
   return fetchImpl("/api/memory/review-queue");
+}
+
+export async function loadMemoryAutonomyMode(
+  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
+): Promise<MemoryAutonomyPolicyWire> {
+  return fetchImpl("/api/memory/autonomy-policy");
+}
+
+export async function persistMemoryAutonomyMode(
+  requestedMode: CodingWorkbenchMode,
+  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
+): Promise<MemoryAutonomyPolicyWire> {
+  return fetchImpl("/api/memory/autonomy-policy", {
+    method: "PUT",
+    body: JSON.stringify({ requestedMode }),
+  });
 }
 
 // ---------------------------------------------------------------------------

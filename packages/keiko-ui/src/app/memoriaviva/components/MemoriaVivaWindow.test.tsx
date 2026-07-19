@@ -24,6 +24,14 @@ function fetchEmptyCaptures() {
   return vi.fn().mockResolvedValue(result);
 }
 
+function loadDefaultMode() {
+  return vi.fn().mockResolvedValue({
+    requestedMode: "governed-assist",
+    effectiveMode: "governed-assist",
+    deploymentCeiling: "autonomous-delivery",
+  });
+}
+
 beforeEach(() => {
   resetConversationMemorySettingsForTests();
 });
@@ -31,7 +39,12 @@ beforeEach(() => {
 describe("MemoriaVivaWindow request settings", () => {
   it("owns the chat memory request switch and context budget controls", async () => {
     const user = userEvent.setup();
-    render(<MemoriaVivaWindow fetchMemoriesImpl={fetchEmptyMemories()} />);
+    render(
+      <MemoriaVivaWindow
+        fetchMemoriesImpl={fetchEmptyMemories()}
+        loadMemoryAutonomyModeImpl={loadDefaultMode()}
+      />,
+    );
 
     const memorySwitch = screen.getByRole("switch", {
       name: "Use MemoriaViva in chat requests",
@@ -63,6 +76,7 @@ describe("MemoriaVivaWindow request settings", () => {
       <MemoriaVivaWindow
         fetchMemoriesImpl={fetchEmptyMemories()}
         fetchRecentCapturesImpl={fetchEmptyCaptures()}
+        loadMemoryAutonomyModeImpl={loadDefaultMode()}
       />,
     );
 

@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   isDiscussionMode,
+  isCodingWorkbenchMode,
   stripUnsafeFormatChars,
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
@@ -394,6 +395,15 @@ function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult |
   };
 }
 
+function parseMemoryMode(
+  raw: Record<string, unknown>,
+): ConversationMemoryRequestWire["mode"] | RouteResult {
+  if (raw.mode === undefined) return undefined;
+  return isCodingWorkbenchMode(raw.mode)
+    ? raw.mode
+    : { status: 400, body: errorBody("BAD_REQUEST", "memory.mode must be a valid autonomy mode.") };
+}
+
 export function parseMemoryRequest(
   value: unknown,
 ): ParsedConversationMemoryRequest | RouteResult | undefined {
@@ -407,9 +417,12 @@ export function parseMemoryRequest(
   if (isRouteResult(enabled)) return enabled;
   const budgetTokens = parseMemoryBudget(value);
   if (isRouteResult(budgetTokens)) return budgetTokens;
+  const mode = parseMemoryMode(value);
+  if (isRouteResult(mode)) return mode;
   return {
     enabled,
     ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+    ...(mode !== undefined ? { mode } : {}),
     context,
   };
 }
@@ -935,7 +948,12 @@ function logSalienceCaptureDropped(surface: string): void {
 
 function scheduleMemorySalienceCapture(
   deps: UiHandlerDeps,
-  request: { readonly content: string; readonly memory: { readonly enabled: boolean } | undefined },
+  request: {
+    readonly content: string;
+    readonly memory:
+      | { readonly enabled: boolean; readonly mode?: ConversationMemoryRequestWire["mode"] }
+      | undefined;
+  },
   context: ConversationMemoryRuntimeContext | undefined,
   modelId: string,
   assistantText: string,

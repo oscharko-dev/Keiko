@@ -1,4 +1,7 @@
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   CaptureOutcome,
   CapturePolicyOptions,
@@ -64,12 +67,18 @@ export function enforcePersistableMemoryOutcome(outcome: CaptureOutcome): Captur
 }
 
 // The effective autonomy mode for memory capture on this turn. Memory capture is an
-// autonomy-capable surface under ADR-0129; the mode is the validated, server-owned coding-runtime
-// deployment ceiling, and an unset ceiling fails closed to the most restrictive mode (ADR-0124 D2 /
-// ADR-0138). No memory-local autonomy type is introduced — the canonical CodingWorkbenchMode is
-// reused directly.
-export function resolveMemoryCaptureAutonomyMode(deps: UiHandlerDeps): CodingWorkbenchMode {
-  return deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
+// autonomy-capable surface under ADR-0129; a canonical requested mode is bounded by the validated,
+// server-owned coding-runtime deployment ceiling. An unset ceiling fails closed to the most
+// restrictive mode (ADR-0124 D2 / ADR-0138). Legacy calls without a requested mode retain #2546's
+// ceiling-derived behavior. No memory-local autonomy type or ordering is introduced.
+export function resolveMemoryCaptureAutonomyMode(
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling">,
+  requestedMode?: CodingWorkbenchMode,
+): CodingWorkbenchMode {
+  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
+  return requestedMode === undefined
+    ? deploymentCeiling
+    : resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
 }
 
 // Whether a capture outcome may be auto-accepted (promoted at capture time) under the given mode.

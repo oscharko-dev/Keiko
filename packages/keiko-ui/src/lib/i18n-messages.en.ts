@@ -388,10 +388,6 @@ export const EN_MESSAGES = {
   "memoria.memoryList": "Memory list",
   "memoria.memoriesFound": "{count} memories found",
   "memoria.loadingMemories": "Loading memories…",
-  "memoria.policyLabel": "Enable MemoriaViva policy",
-  "memoria.policyState": "Policy {state}",
-  "memoria.policyOn": "on",
-  "memoria.policyOff": "off",
   "memoria.backToWorkspace": "Back to Workspace",
   "memoria.consolidation": "Consolidation",
   "memoria.journal.open": "Journal",
@@ -462,6 +458,22 @@ export const EN_MESSAGES = {
   "memoria.settings.budgetUnit": "tokens",
   "memoria.settings.budgetHelp":
     "Limits the MemoriaViva memory context attached to the next chat request.",
+  "memoria.settings.mode.label": "Memory autonomy",
+  "memoria.settings.mode.help": "Choose how Keiko handles new memory captures.",
+  "memoria.settings.mode.group": "Memory autonomy mode",
+  "memoria.settings.mode.governedAssist.label": "Ask for approval",
+  "memoria.settings.mode.governedAssist.description":
+    "New captures remain proposals until you approve them.",
+  "memoria.settings.mode.supervisedCoding.label": "Supervised workspace",
+  "memoria.settings.mode.supervisedCoding.description":
+    "Routine public captures are accepted automatically; sensitive captures still require review.",
+  "memoria.settings.mode.autonomousDelivery.label": "Full access",
+  "memoria.settings.mode.autonomousDelivery.description":
+    "Routine public captures are accepted automatically within the deployment ceiling.",
+  "memoria.settings.mode.hydrateError":
+    "The memory autonomy mode could not be loaded. Ask for approval remains active.",
+  "memoria.settings.mode.persistError":
+    "The memory autonomy mode could not be saved. The previous mode remains active.",
   "memoria.consolidation.title": "MemoriaViva Consolidation",
   "memoria.consolidation.description":
     "Start a bounded consolidation job, inspect its output, and cancel it while it is still queued or running.",

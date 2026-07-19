@@ -3,7 +3,7 @@
 // no network, no real model — and asserts ONLY content-free facts: statuses, counts, scopes,
 // review-queue membership (through the exported handleMemoryReviewQueue projection), next-turn
 // retrieval visibility (through the real accepted-only gatherExistingBodies dedup read), and the
-// content-free secret-drop diagnostic. The effective autonomy mode is the validated, server-owned
+// content-free secret-drop diagnostic. Requested modes are bounded by the validated, server-owned
 // deps.codingRuntimeDeploymentCeiling (undefined fails closed to governed-assist).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -229,11 +229,14 @@ function reviewQueueProjection(deps: UiHandlerDeps): {
 
 // A one-turn salience request. Driving captureSalientFromTurn directly (vs the background
 // collectMemoryActions path) makes multi-turn retrieval sequencing deterministic and awaitable.
-function salienceRequest(): {
+function salienceRequest(mode?: CodingWorkbenchMode): {
   readonly content: string;
-  readonly memory: { readonly enabled: boolean };
+  readonly memory: { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode };
 } {
-  return { content: USER_TEXT, memory: { enabled: true } };
+  return {
+    content: USER_TEXT,
+    memory: { enabled: true, ...(mode === undefined ? {} : { mode }) },
+  };
 }
 
 interface SalienceDiagnosticPayload {
@@ -322,6 +325,36 @@ describe("mode-aware memory capture journey", () => {
     expect(record?.status).toBe("accepted");
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(1);
     expect(readByStatus(vault, ctx, "proposed")).toHaveLength(0);
+  });
+
+  it("uses the request mode without allowing it to exceed the server deployment ceiling", async () => {
+    const allowedVault = makeVault();
+    const allowedDeps = makeDeps({
+      vault: allowedVault,
+      model: publicFact(0.7),
+      mode: "autonomous-delivery",
+    });
+    const allowedContext = context();
+    await captureSalientFromTurn(
+      allowedDeps,
+      salienceRequest("supervised-coding"),
+      allowedContext,
+      "gpt-test",
+      "ok",
+    );
+    expect(readMemories(allowedVault, allowedContext)[0]?.status).toBe("accepted");
+
+    const cappedVault = makeVault();
+    const cappedDeps = makeDeps({ vault: cappedVault, model: publicFact(0.7) });
+    const cappedContext = context();
+    await captureSalientFromTurn(
+      cappedDeps,
+      salienceRequest("autonomous-delivery"),
+      cappedContext,
+      "gpt-test",
+      "ok",
+    );
+    expect(readMemories(cappedVault, cappedContext)[0]?.status).toBe("proposed");
   });
 
   it("keeps a low-confidence public fact proposed under supervised-coding (shouldPromote gate holds)", async () => {

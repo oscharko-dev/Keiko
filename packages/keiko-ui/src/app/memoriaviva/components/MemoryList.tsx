@@ -15,7 +15,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
-import { Toggle } from "../../components/desktop/widgets/shared/Toggle";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import {
@@ -344,7 +343,6 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
   const searchParams = useSearchParams();
   const router = useRouter();
   const [, startTransition] = useTransition();
-  const [policyEnabled, setPolicyEnabled] = useState(true);
   const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
 
   const handleFilterChange = useCallback(
@@ -362,8 +360,6 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
       filters={filters}
       onFilterChange={handleFilterChange}
       fetchMemoriesImpl={fetchMemoriesImpl}
-      policyEnabled={policyEnabled}
-      onPolicyEnabledChange={setPolicyEnabled}
       showWorkspaceBackLink
     />
   );
@@ -378,8 +374,6 @@ export interface MemoryListContentProps {
   readonly onOpenReviewQueue?: (() => void) | undefined;
   readonly onOpenHealthScan?: (() => void) | undefined;
   readonly onOpenJournal?: (() => void) | undefined;
-  readonly policyEnabled?: boolean | undefined;
-  readonly onPolicyEnabledChange?: ((next: boolean) => void) | undefined;
   readonly showWorkspaceBackLink?: boolean;
   readonly settingsSlot?: ReactNode;
 }
@@ -393,8 +387,6 @@ export function MemoryListContent({
   onOpenReviewQueue,
   onOpenHealthScan,
   onOpenJournal,
-  policyEnabled,
-  onPolicyEnabledChange,
   showWorkspaceBackLink = true,
   settingsSlot,
 }: MemoryListContentProps): ReactNode {
@@ -402,9 +394,6 @@ export function MemoryListContent({
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [uncontrolledPolicyEnabled, setUncontrolledPolicyEnabled] = useState(true);
-  const effectivePolicyEnabled = policyEnabled ?? uncontrolledPolicyEnabled;
-  const setEffectivePolicyEnabled = onPolicyEnabledChange ?? setUncontrolledPolicyEnabled;
 
   const hasFilters =
     filters.query.trim().length > 0 ||
@@ -445,18 +434,6 @@ export function MemoryListContent({
       <header className="lk-header">
         <h1 className="lk-title">MemoriaViva</h1>
         <div className="mc-view-actions">
-          <div className="mc-policy-switch">
-            <Toggle
-              on={effectivePolicyEnabled}
-              onChange={setEffectivePolicyEnabled}
-              label={t("memoria.policyLabel")}
-            />
-            <span>
-              {t("memoria.policyState", {
-                state: effectivePolicyEnabled ? t("memoria.policyOn") : t("memoria.policyOff"),
-              })}
-            </span>
-          </div>
           {/* Declared exit back to the desktop shell — the memoriaviva routes
               live outside the workspace and had no way back (uiux-fix F035). */}
           {showWorkspaceBackLink ? (

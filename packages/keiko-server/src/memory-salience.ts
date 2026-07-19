@@ -377,7 +377,8 @@ async function persistCandidate(
 
 interface SalienceTurnRequest {
   readonly content: string;
-  readonly memory: { readonly enabled: boolean } | undefined;
+  readonly memory:
+    { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode | undefined } | undefined;
 }
 
 type TurnSalienceExtraction =
@@ -523,7 +524,7 @@ export async function captureSalientFromTurn(
     return [];
   }
   try {
-    const mode = resolveMemoryCaptureAutonomyMode(deps);
+    const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
     const captureContext = buildSalienceContext(context);
     const extraction = await extractTurnSalienceOutcomes(
       deps,

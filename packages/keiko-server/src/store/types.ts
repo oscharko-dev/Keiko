@@ -25,6 +25,7 @@ import type {
   UpdateChatMessagePatch,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 export type {
   Project,
   Chat,
@@ -79,6 +80,9 @@ export interface UiStore {
     content: string,
     timestamp: number,
   ) => ChatMessage;
+
+  readonly getMemoryAutonomyMode: () => CodingWorkbenchMode | undefined;
+  readonly setMemoryAutonomyMode: (mode: CodingWorkbenchMode) => void;
 
   readonly close: () => void;
 }

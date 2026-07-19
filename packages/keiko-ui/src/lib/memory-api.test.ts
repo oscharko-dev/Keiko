@@ -12,10 +12,12 @@ import {
   fetchMemoryConsolidationJob,
   fetchMemoryReviewQueue,
   fetchRecentCaptures,
+  loadMemoryAutonomyMode,
   forgetMemory,
   forgetMemories,
   pinMemory,
   rejectMemoryProposal,
+  persistMemoryAutonomyMode,
   resolveMemoryConflict,
   startMemoryConsolidation,
   unpinMemory,
@@ -338,5 +340,42 @@ describe("memory BFF boundary helpers", () => {
   it("resolves undefined when a mutation route returns 204 No Content", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
     await expect(deleteMemory("mem 1" as MemoryId)).resolves.toBeUndefined();
+  });
+});
+
+describe("memory autonomy policy API helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("loads and persists the canonical requested mode on the dedicated policy route", async () => {
+    const response = {
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+    } as const;
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(response)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadMemoryAutonomyMode();
+    await persistMemoryAutonomyMode("autonomous-delivery");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/memory/autonomy-policy",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/memory/autonomy-policy",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ requestedMode: "autonomous-delivery" }),
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
   });
 });
