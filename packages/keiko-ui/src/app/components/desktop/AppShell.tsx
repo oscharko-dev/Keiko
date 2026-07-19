@@ -28,6 +28,7 @@ import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useWorkspaceManifest } from "./hooks/useWorkspaceManifest";
 import {
   appendConnectorScope,
   appendConnectedScope,
@@ -76,6 +77,7 @@ import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
+import { workspaceRootTargets } from "./workspaceRootTargets";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
@@ -921,6 +923,13 @@ function AppShellInner(): ReactNode {
     [activeEditorHost, commands, shellShortcutState.labels, t],
   );
   const quickAccessRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  const quickAccessWorkspace = useWorkspaceManifest(
+    quickAccessMode === null ? undefined : quickAccessRoot,
+  );
+  const quickAccessRoots = useMemo(
+    () => workspaceRootTargets(quickAccessRoot, quickAccessWorkspace.manifest),
+    [quickAccessRoot, quickAccessWorkspace.manifest],
+  );
   const needsGatewaySetup =
     !session.loading && session.error === undefined && session.models.length === 0;
   const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
@@ -1070,6 +1079,7 @@ function AppShellInner(): ReactNode {
                       <UnifiedQuickAccessPalette
                         initialMode={quickAccessMode}
                         root={quickAccessRoot}
+                        roots={quickAccessRoots}
                         commands={quickAccessCommands}
                         openEditorFile={ws.api.openEditorFile}
                         onClose={closeQuickAccess}
