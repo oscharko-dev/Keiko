@@ -26,6 +26,7 @@ import { charsForTokenBudget } from "./token-estimator.js";
 import type {
   ChunkingOptions,
   ChunkingResult,
+  ChunkingUnitContext,
   LocalKnowledgeTokenizer,
   ResolvedChunkingOptions,
   TokenEstimator,
@@ -44,6 +45,7 @@ import {
   CHUNKING_STRATEGY_VERSION,
 } from "./types.js";
 import { conservativeTokenEstimatorTokenizer } from "./token-estimator.js";
+import { CODE_PARSER_ID, isCodeSymbolDefinitionLine } from "../parsers/code-parser.js";
 
 const WHITESPACE_PATTERN = /\s+/gu;
 const SINGLE_WHITESPACE_PATTERN = /\s/u;
@@ -302,11 +304,52 @@ function adjustedHardEnd(sourceText: string, minEnd: number, maxEnd: number): nu
   return lastWhitespaceBoundary(sourceText, minEnd, maxEnd) ?? maxEnd;
 }
 
+function codeSymbolBoundaries(
+  sourceText: string,
+  start: number,
+  maxEnd: number,
+): readonly number[] {
+  const boundaries: number[] = [];
+  for (let newline = sourceText.indexOf("\n", start); newline >= 0 && newline < maxEnd;) {
+    const lineStart = newline + 1;
+    const nextNewline = sourceText.indexOf("\n", lineStart);
+    const lineEnd = nextNewline === -1 ? sourceText.length : nextNewline;
+    if (lineStart <= maxEnd && isCodeSymbolDefinitionLine(sourceText.slice(lineStart, lineEnd))) {
+      boundaries.push(lineStart);
+    }
+    newline = nextNewline;
+  }
+  return boundaries;
+}
+
+function headingBoundary(
+  sourceText: string,
+  start: number,
+  minEnd: number,
+  maxEnd: number,
+): number | undefined {
+  return lastBoundaryAtOrAfter(
+    [
+      ...collectBoundaryMatches(
+        sourceText,
+        start,
+        maxEnd,
+        MARKDOWN_HEADING_PATTERN,
+        "before-match",
+      ),
+      ...collectBoundaryMatches(sourceText, start, maxEnd, HTML_HEADING_PATTERN, "before-match"),
+    ].sort((a, b) => a - b),
+    minEnd,
+    maxEnd,
+  );
+}
+
 function chooseChunkEnd(
   sourceText: string,
   start: number,
   spanEnd: number,
   resolved: ResolvedChunkingOptions,
+  codeUnit: boolean,
 ): number {
   const maxEnd = tokenBudgetEnd(sourceText, start, spanEnd, resolved);
   if (maxEnd >= spanEnd) return spanEnd;
@@ -320,21 +363,16 @@ function chooseChunkEnd(
     maxEnd,
   );
   if (paragraph !== undefined) return paragraph;
-  const heading = lastBoundaryAtOrAfter(
-    [
-      ...collectBoundaryMatches(
-        sourceText,
-        start,
-        maxEnd,
-        MARKDOWN_HEADING_PATTERN,
-        "before-match",
-      ),
-      ...collectBoundaryMatches(sourceText, start, maxEnd, HTML_HEADING_PATTERN, "before-match"),
-    ].sort((a, b) => a - b),
-    minBoundaryEnd,
-    maxEnd,
-  );
+  const heading = headingBoundary(sourceText, start, minBoundaryEnd, maxEnd);
   if (heading !== undefined && heading > start) return heading;
+  if (codeUnit) {
+    const symbol = lastBoundaryAtOrAfter(
+      codeSymbolBoundaries(sourceText, start, maxEnd),
+      minBoundaryEnd,
+      maxEnd,
+    );
+    if (symbol !== undefined && symbol > start) return symbol;
+  }
   // Prefer a line/row start over a mid-line sentence boundary so preserved code lines and
   // serialized table/definition rows are not sliced apart. A line boundary is a stronger
   // structural signal than mid-line sentence-shaped punctuation: technical content (decimal
@@ -389,6 +427,7 @@ export function chunkParsedUnit(
   unit: ParsedUnit,
   sourceText: string,
   options?: ChunkingOptions,
+  context?: ChunkingUnitContext,
 ): readonly ChunkingResult[] {
   const resolved = resolveChunkingOptions(options);
   const span = spanForUnit(unit, sourceText.length);
@@ -401,9 +440,10 @@ export function chunkParsedUnit(
   }
 
   const chunks: ChunkingResult[] = [];
+  const codeUnit = context?.parserId === CODE_PARSER_ID;
   let cursor = span.start;
   while (cursor < span.end) {
-    const end = chooseChunkEnd(sourceText, cursor, span.end, resolved);
+    const end = chooseChunkEnd(sourceText, cursor, span.end, resolved, codeUnit);
     pushChunk(
       chunks,
       buildChunk(sourceText, cursor, end, resolved.tokenEstimator),

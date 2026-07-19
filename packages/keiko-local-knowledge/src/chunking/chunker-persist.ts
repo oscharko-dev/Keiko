@@ -136,6 +136,21 @@ interface DocumentSourceRow {
   readonly source_id: string;
 }
 
+interface DocumentParserRow {
+  readonly parser_id: string;
+}
+
+export function selectDocumentParserId(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): string | undefined {
+  const row = db
+    .prepare("SELECT parser_id FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: capsuleId, d: documentId }) as DocumentParserRow | undefined;
+  return row?.parser_id;
+}
+
 export function selectDocumentSourceId(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,

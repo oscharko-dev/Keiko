@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { DocumentId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
 import { chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
+import { CODE_PARSER_ID } from "../parsers/code-parser.js";
 import {
   CONSERVATIVE_TOKENIZER_ID,
   QWEN3_SENTENCEPIECE_TOKENIZER_ID,
@@ -35,6 +36,35 @@ function sha256Hex(text: string): string {
 }
 
 describe("chunkParsedUnit — pure", () => {
+  it("prefers symbol boundaries only for units produced by the code parser", () => {
+    const text = [
+      "function alpha() { return 1; }",
+      "// padding between symbols",
+      "function beta() { return 2; }",
+      "// later non-symbol line",
+      "// latest non-symbol line",
+    ].join("\n");
+    const options = {
+      maxTokens: 115,
+      minTokens: 0,
+      overlapTokens: 0,
+      tokenEstimator: (value: string): number => value.length,
+    };
+    const unit = pageUnit(0, text.length);
+    const codeChunks = chunkParsedUnit(unit, text, options, { parserId: CODE_PARSER_ID });
+    const proseChunks = chunkParsedUnit(unit, text, options, { parserId: "text" });
+    expect(codeChunks[0]?.characterEnd).toBe(text.indexOf("function beta"));
+    expect(proseChunks[0]?.characterEnd).toBeGreaterThan(codeChunks[0]?.characterEnd ?? 0);
+  });
+
+  it("keeps prose chunk boundaries byte-identical without code-parser provenance", () => {
+    const text = "First sentence. Second sentence.\nThird line.\nFourth line.";
+    const options = { maxTokens: 8, minTokens: 0, overlapTokens: 0 };
+    expect(chunkParsedUnit(pageUnit(0, text.length), text, options)).toEqual(
+      chunkParsedUnit(pageUnit(0, text.length), text, options, { parserId: "text" }),
+    );
+  });
+
   it("includes the active tokenizer identity in the strategy key", () => {
     const qwenTokenizer: LocalKnowledgeTokenizer = {
       identity: QWEN3_SENTENCEPIECE_TOKENIZER_ID,
