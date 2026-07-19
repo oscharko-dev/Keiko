@@ -39,6 +39,12 @@ jobs:
           node-version: "24.18.0"
       - name: Install Bubblewrap for the DAP cap runs
         run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - name: Allow unprivileged user namespaces for the Bubblewrap DAP sandbox
+        # Ubuntu 24.04 runners restrict unprivileged user namespaces via AppArmor, so bwrap fails
+        # and the debug capability reports notProvisioned — every nightly run since the lane was
+        # created failed on exactly this assertion. Relaxing the restriction for the measurement
+        # job restores the sandbox the D12 cap runs require.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm ci --ignore-scripts
       - name: Install Playwright browser
         run: node node_modules/playwright/cli.js install --with-deps chromium
