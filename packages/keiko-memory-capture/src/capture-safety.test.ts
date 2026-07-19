@@ -24,8 +24,13 @@ describe("memoryTextEgressRejectionReason", () => {
   });
 
   it("blocks configured categories after secrets and before sensitivity", () => {
+    // defaultSensitivity: "restricted" means a sensitivity-first check would ALSO reject this
+    // body (with "restricted-sensitivity"), so asserting "denied-category" here genuinely locks
+    // the documented precedence instead of passing vacuously because the input happens to be
+    // sensitivity-public.
     const policy = {
       deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
+      defaultSensitivity: "restricted" as const,
     };
     expect(memoryTextEgressRejectionReason("The medical record changed.", policy)).toBe(
       "denied-category",
@@ -56,7 +61,7 @@ describe("memoryTextEgressRejectionReason", () => {
     // full end-to-end mode-independence property (every product mode routes through this same
     // unmodified call) is proven by memory-capture-autonomy.test.ts's server-side clamp test and
     // by tests/e2e/memoriaviva-m1-certification.spec.ts's live certifyModeIndependentDenials.
-    expect(memoryTextSecretEgressRejectionReason.length).toBe(1);
+    expect(memoryTextSecretEgressRejectionReason).toHaveLength(1);
     expect(memoryTextSecretEgressRejectionReason("My colleague is moving teams.", policy)).toBe(
       "denied-category",
     );
