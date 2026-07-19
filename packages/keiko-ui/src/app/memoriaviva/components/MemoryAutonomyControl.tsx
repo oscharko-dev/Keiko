@@ -104,9 +104,9 @@ export function MemoryAutonomyControl({
         ))}
       </div>
       {!clamped || effectiveMode === null ? null : (
-        <p className={styles.clamped} role="status">
+        <output className={styles.clamped}>
           {t("memoria.settings.mode.clamped", { effectiveMode: t(MODE_KEYS[effectiveMode].label) })}
-        </p>
+        </output>
       )}
       {error === null ? null : (
         <p className={styles.error} role="alert">
