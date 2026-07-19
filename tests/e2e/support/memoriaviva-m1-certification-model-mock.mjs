@@ -116,7 +116,7 @@ const server = createServer((req, res) => {
     return;
   }
   void readBody(req).then((raw) => {
-    let stream = false;
+    let stream;
     try {
       stream = JSON.parse(raw || "{}").stream === true;
     } catch {

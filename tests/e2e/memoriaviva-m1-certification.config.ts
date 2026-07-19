@@ -13,7 +13,13 @@ const stateDir =
   process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
-const modelMock = join(root, "tests", "e2e", "memoriaviva-m1-certification-model-mock.mjs");
+const modelMock = join(
+  root,
+  "tests",
+  "e2e",
+  "support",
+  "memoriaviva-m1-certification-model-mock.mjs",
+);
 const modelBaseUrl = `http://127.0.0.1:${String(modelPort)}/v1`;
 const prepareRuntimeConfig = [
   "const fs = require('node:fs');",
