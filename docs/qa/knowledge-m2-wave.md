@@ -166,12 +166,18 @@ Stop the wave and ask the maintainer when:
 ## M2.1 verification record
 
 The M2.1 author records actual results in the delivery report; this checklist names the required
-commands without pre-claiming success:
+commands without pre-claiming success. It listed `npm run agent:pre-pr` when it was written; ADR-0145
+has since retired that aggregate wrapper by owner decision, so the individual minimum-loop commands
+it used to chain are named directly, per AGENTS.md section 3:
 
 - [ ] `npm run check:adr-index`
-- [ ] `npm run agent:pre-pr`
+- [ ] `npm run typecheck`
+- [ ] `npm run lint`
+- [ ] `npm run format:check`
 - [ ] `npm test`
 - [ ] `npm run arch:check`
+- [ ] `npm run arch:check:negative`
+- [ ] `npm run check:knowledge-m2-closeout`
 - [ ] `npm run check:retrieval-quality`
 - [ ] `npm run check:grounded-retrieval-quality`
 - [ ] `npm run check:grounded-faithfulness`

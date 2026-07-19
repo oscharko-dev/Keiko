@@ -18,8 +18,12 @@ program Epic #2554).
   [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md) own
   authority and repository delivery. The activation record below is a scheduling deviation only.
 - [ADR-0139](ADR-0139-agent-first-deterministic-quality-gates.md) D2 excludes documentation from
-  the editor performance-evidence subject. D4 keeps the local pre-PR gate deterministic and
-  diff-scoped.
+  the editor performance-evidence subject. D4 kept the local pre-PR gate deterministic and
+  diff-scoped — but D4 has since been superseded:
+  [ADR-0145](ADR-0145-retire-the-agent-pre-pr-aggregate-gate.md) retired the `agent:pre-pr` aggregate
+  wrapper by owner decision. The reference above was accurate when this record was written and is
+  annotated rather than rewritten; local verification now names the AGENTS.md §3 minimum-loop
+  commands directly.
 - [ADR-0137](ADR-0137-server-owned-coding-runtime-contracts.md) keeps coding-runtime contracts and
   authority separate from the retrieval contract generalization in this record.
 
@@ -100,7 +104,38 @@ are consumed.
 ([`.dependency-cruiser.cjs:508-542`](../../.dependency-cruiser.cjs#L508-L542)). It continues to
 receive only `semanticById`; the shared port never becomes a dependency of that package.
 
+> **Implementation status (2026-07-20).** D1 was recorded as decided in this file but was not built
+> by the children it was assigned to; a post-wave audit found `VectorIndexPort` existed only in this
+> record's own prose while the wave certified a "unified substrate". What now exists in
+> `keiko-contracts/src/vector-index-port.ts`: the port interface, the closed namespace union, the
+> mandatory partition key, the candidate-only result with `ok: false` as a normal fail-closed answer,
+> and the canonical `embeddingIdentityKey`. The two former copies in `keiko-local-knowledge` import
+> it, and a repository-wide architecture test asserts the identity tuple is defined exactly once so
+> the convergence cannot silently decay again.
+>
+> Deliberately NOT built, and deferred rather than left implied: the D3 namespace composition. No
+> adapter binds `knowledge`, `memory` or `repo` to the port yet — in particular the linear loop in
+> `memory-retrieval-signals.ts` `semanticScoresFrom` is untouched. Composing namespaces onto a port
+> with no ANN backend behind them would be ceremony, not capability. The binding half of D1 — one
+> interface so no pillar can add a second, one identity key so none can drift — is in force now; the
+> wiring follows when a namespace has something to wire to.
+
 ### D2 — sqlite-vec remains dormant until its runtime is explicitly and safely configured
+
+> **Activation record (2026-07-20).** Locks 2 and 3 below describe the PRE-activation state and are
+> no longer true at the head of this wave. M2.2 discharged the activation obligation this decision
+> pre-authorized: `sqlite-vec@0.1.9` is now a root runtime dependency and a peer dependency of
+> `keiko-local-knowledge`, and `openKnowledgeStore` passes `allowExtension: true` when — and only
+> when — a vector-index runtime is configured. Binary provenance and platform qualification are
+> recorded in [`docs/qa/sqlite-vec-ann-evidence.md`](../qa/sqlite-vec-ann-evidence.md). Lock 1 still
+> holds exactly as written: the mode defaults to `disabled` and no production composition sets
+> either environment variable, so the path stays opt-in.
+>
+> The constraint that survives activation is unchanged and remains binding: encrypted stores return
+> `fallback-encrypted-store` and use brute force by design. Because keiko-server injects a key
+> provider, production capsule stores ARE encrypted, so ANN is inert in the shipped default
+> configuration. Encrypted-store ANN is outside M2 and needs its own ADR; it may not be inferred
+> from this one.
 
 The current sqlite-vec path is shipped but dormant behind three independent locks:
 
