@@ -13,6 +13,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
@@ -27,6 +28,7 @@ on:
       - feat/keiko-isolated-task-workspaces
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
