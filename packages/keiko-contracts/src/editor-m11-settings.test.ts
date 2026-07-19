@@ -115,6 +115,25 @@ describe("M11 editor settings", () => {
     });
   });
 
+  it("keeps every narrower user value invariant when a profile value is added or removed", () => {
+    for (const definition of EDITOR_M7_SETTING_REGISTRY) {
+      const user = { scope: "user" as const, values: { [definition.id]: definition.defaultValue } };
+      const withoutProfile = resolveEditorM11Settings({ user }).find(
+        (setting) => setting.id === definition.id,
+      );
+      const withProfile = resolveEditorM11Settings({
+        profile: {
+          ...profileLayer(),
+          values: { [definition.id]: definition.defaultValue },
+        },
+        user,
+      }).find((setting) => setting.id === definition.id);
+
+      expect(withProfile, definition.id).toEqual(withoutProfile);
+      expect(withProfile?.source, definition.id).toBe("user");
+    }
+  });
+
   it("reuses M7 scope and value validation", () => {
     expect(validateEditorM11ProfileSettingsLayer(profileLayer())).toEqual({ ok: true });
     expect(validateEditorM11RootSettingsLayer(rootLayer())).toEqual({ ok: true });

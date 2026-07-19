@@ -73,6 +73,7 @@
     "test:e2e:multi-root-editor-2525": "playwright test --config tests/e2e/config/playwright.issue-2525-multi-root-editor.config.ts --project=chromium",
     "test:e2e:multi-root-search-2526": "playwright test --config tests/e2e/config/playwright.issue-2526-multi-root-search.config.ts --project=chromium",
     "test:e2e:per-root-settings-2527": "playwright test --config tests/e2e/config/playwright.issue-2527-per-root-settings.config.ts --project=chromium",
+    "test:e2e:editor-profiles-2528": "playwright test --config tests/e2e/config/playwright.issue-2528-editor-profiles.config.ts --project=chromium",
     "test:e2e:editor-source-control-2235": "playwright test --config tests/e2e/config/playwright.issue-2235-editor-source-control.config.ts --project=chromium",
     "test:e2e:editor-governance-1395": "playwright test --config tests/e2e/config/playwright.issue-1395-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-layout-1375": "playwright test --config tests/e2e/config/playwright.issue-1375-editor-layout.config.ts --project=chromium",

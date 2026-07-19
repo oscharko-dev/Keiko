@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   resolveEditorM7Settings,
+  resolveEditorM11Settings,
+  type EditorM11ProfileSettingsLayer,
   type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -15,6 +18,7 @@ const api = vi.hoisted(() => ({
   currentSnapshot: undefined as EditorM11SettingsSnapshot | undefined,
   fetchEditorSettings: vi.fn(),
   mutateEditorSettings: vi.fn(),
+  mutateEditorProfile: vi.fn(),
   ApiError: class ApiError extends Error {
     constructor(
       readonly code: string,
@@ -31,6 +35,7 @@ vi.mock("../../../../../lib/api", () => {
   return {
     ApiError: api.ApiError,
     fetchEditorSettings: api.fetchEditorSettings,
+    mutateEditorProfile: api.mutateEditorProfile,
     mutateEditorSettings: api.mutateEditorSettings,
   };
 });
@@ -92,12 +97,48 @@ function settingsEvent(sequence: number, settingIds = ["fontSize"]): Record<stri
   };
 }
 
+function withFocusProfile(
+  base: EditorM11SettingsSnapshot,
+  active = true,
+): EditorM11SettingsSnapshot {
+  const profileRef = "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"];
+  const profile: EditorM11ProfileSettingsLayer = {
+    kind: "editor-profile-settings",
+    schemaVersion: 1,
+    profileRef,
+    revision: 1,
+    values: { fontSize: 18 },
+  };
+  return {
+    ...base,
+    settings: active ? resolveEditorM11Settings({ profile }) : base.settings,
+    profiles: {
+      schemaVersion: 1,
+      storeState: "ready",
+      revision: 2,
+      etag: '"edp-2"',
+      activeProfileRef: active ? profileRef : EDITOR_M11_DEFAULT_PROFILE_REF,
+      profiles: [
+        {
+          profileRef: EDITOR_M11_DEFAULT_PROFILE_REF,
+          displayName: "Default",
+          revision: 0,
+          settingCount: 0,
+          builtIn: true,
+        },
+        { profileRef, displayName: "Focus", revision: 1, settingCount: 1, builtIn: false },
+      ],
+    },
+  };
+}
+
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
   api.currentSnapshot = snapshot(0, 13);
   api.fetchEditorSettings.mockImplementation(() => Promise.resolve(api.currentSnapshot));
   api.mutateEditorSettings.mockReset();
+  api.mutateEditorProfile.mockReset();
 });
 
 afterEach(() => {
@@ -204,5 +245,55 @@ describe("useEditorSettings M7 cross-window integration", () => {
       expect(result.current.applied.modelRetentionCount).toBe(5);
       expect(result.current.applied.modelRetentionBytes).toBe(8 * 1024 * 1024);
     });
+  });
+
+  it("writes active-profile settings through the profile etag", async () => {
+    api.currentSnapshot = withFocusProfile(snapshot(0, 13));
+    api.mutateEditorProfile.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => expect(result.current.snapshot?.profiles?.revision).toBe(2));
+    await act(async () => {
+      await result.current.setValue("profile", "fontSize", 19);
+    });
+
+    expect(api.mutateEditorProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "set",
+        expectedRevision: 2,
+        profileRef: "profile-focus",
+        values: { fontSize: 19 },
+      }),
+      '"edp-2"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("installs a switched profile snapshot without reloading the page", async () => {
+    const inactive = withFocusProfile(snapshot(0, 13), false);
+    const active = withFocusProfile(snapshot(0, 13));
+    api.currentSnapshot = inactive;
+    api.mutateEditorProfile.mockResolvedValue({
+      kind: "ok",
+      changed: true,
+      profileRef: "profile-focus",
+      revision: 2,
+      etag: '"edp-2"',
+      profiles: active.profiles,
+      settings: active,
+    });
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => expect(result.current.applied.fontSize).toBe(13));
+    await act(async () => {
+      await result.current.switchProfile(
+        "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"],
+      );
+    });
+
+    expect(result.current.applied.fontSize).toBe(18);
+    expect(result.current.snapshot?.profiles?.activeProfileRef).toBe("profile-focus");
+    expect(api.fetchEditorSettings).toHaveBeenCalledTimes(1);
   });
 });

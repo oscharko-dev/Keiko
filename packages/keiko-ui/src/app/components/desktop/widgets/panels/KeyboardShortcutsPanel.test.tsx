@@ -58,6 +58,11 @@ function view(overrides: Partial<EditorSettingsView> = {}): EditorSettingsView {
     refresh: vi.fn(),
     setValue: vi.fn(),
     reset: vi.fn(),
+    createProfile: vi.fn(),
+    renameProfile: vi.fn(),
+    duplicateProfile: vi.fn(),
+    deleteProfile: vi.fn(),
+    switchProfile: vi.fn(),
     ...overrides,
   };
 }

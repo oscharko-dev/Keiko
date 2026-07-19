@@ -204,6 +204,10 @@ import {
   handlePatchEditorSettings,
 } from "./editor/settings/editorSettingsRoutes.js";
 import {
+  handleGetEditorProfiles,
+  handlePatchEditorProfiles,
+} from "./editor/settings/editorProfilesRoutes.js";
+import {
   handleGetWorkspaceSnippets,
   handleMutateWorkspaceSnippets,
   handlePreviewWorkspaceSnippet,
@@ -922,6 +926,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "PATCH",
     pattern: "/api/editor/settings",
     handler: handlePatchEditorSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/profiles",
+    handler: handleGetEditorProfiles,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/settings/profiles",
+    handler: handlePatchEditorProfiles,
   },
   // ADR-0136 D7 — the only dedicated activation routes. They mutate the canonical M7
   // debuggingEnabled setting and synchronously revoke a live session when it narrows.

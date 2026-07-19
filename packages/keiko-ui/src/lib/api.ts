@@ -145,6 +145,9 @@ import type {
   EditorM11SettingsMutationOk,
   EditorM11SettingsMutationResult,
   EditorM11SettingsSnapshot,
+  EditorM11ProfileMutation,
+  EditorM11ProfileMutationResult,
+  EditorM11ProfilesSnapshot,
   EditorM7WorkspaceSnippetMutation,
   EditorM7WorkspaceSnippetMutationResult,
   EditorM7WorkspaceSnippetSnapshot,
@@ -2044,6 +2047,26 @@ export function mutateEditorSettings(
   signal?: AbortSignal,
 ): Promise<EditorM11SettingsMutationResult> {
   return fetchJson("/api/editor/settings", {
+    method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchEditorProfiles(signal?: AbortSignal): Promise<EditorM11ProfilesSnapshot> {
+  return fetchJson("/api/editor/settings/profiles", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateEditorProfile(
+  input: EditorM11ProfileMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM11ProfileMutationResult> {
+  return fetchJson("/api/editor/settings/profiles", {
     method: "PATCH",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),

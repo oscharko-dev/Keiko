@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveEditorM7Settings } from "@oscharko-dev/keiko-contracts";
+import {
+  isWorkspaceProfileRef,
+  resolveEditorM7Settings,
+  type WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
@@ -16,6 +20,7 @@ import {
   createEditorSettingsControlService,
   type EditorSettingsControlService,
 } from "./editorSettingsControl.js";
+import type { EditorProfilesControlMutation } from "./editorSettingsControl.js";
 import {
   createEditorSettingsStore,
   editorSettingsUserRecordPath,
@@ -28,6 +33,11 @@ function temporaryDirectory(label: string): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), `keiko-${label}-`)));
   roots.push(path);
   return path;
+}
+
+function profileRef(value: string): WorkspaceProfileRef {
+  if (!isWorkspaceProfileRef(value)) throw new Error(`invalid profile fixture: ${value}`);
+  return value;
 }
 
 afterEach(() => {
@@ -51,6 +61,21 @@ function serviceWithManagedLanguages(
     mutex: createWorkspaceMutexRegistry(),
     managedLspControl,
   });
+}
+
+async function mutateProfile(
+  control: EditorSettingsControlService,
+  mutation: EditorProfilesControlMutation,
+): Promise<Awaited<ReturnType<NonNullable<EditorSettingsControlService["mutateProfile"]>>>> {
+  if (control.mutateProfile === undefined) throw new Error("profile control unavailable");
+  return control.mutateProfile(mutation);
+}
+
+async function readProfiles(
+  control: EditorSettingsControlService,
+): Promise<Awaited<ReturnType<NonNullable<EditorSettingsControlService["readProfiles"]>>>> {
+  if (control.readProfiles === undefined) throw new Error("profile control unavailable");
+  return control.readProfiles();
 }
 
 describe("editor settings control service", () => {
@@ -115,6 +140,137 @@ describe("editor settings control service", () => {
       value: 4,
       source: "user",
     });
+  });
+
+  it("creates, renames, duplicates, and switches named profiles", async () => {
+    const refs = ["profile-focus", "profile-focus-copy"];
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir: temporaryDirectory("editor-profile-crud") }),
+      mutex: createWorkspaceMutexRegistry(),
+      profileRefFactory: () => profileRef(refs.shift() ?? "missing"),
+    });
+    const created = await mutateProfile(control, {
+      action: "create",
+      displayName: "Focus",
+      expectedRevision: 0,
+      idempotencyKey: "create-focus",
+    });
+    const renamed = await mutateProfile(control, {
+      action: "rename",
+      displayName: "Deep Focus",
+      expectedRevision: 1,
+      idempotencyKey: "rename-focus",
+      profileRef: profileRef("profile-focus"),
+    });
+    const duplicated = await mutateProfile(control, {
+      action: "duplicate",
+      displayName: "Focus Copy",
+      expectedRevision: 2,
+      idempotencyKey: "duplicate-focus",
+      profileRef: profileRef("profile-focus"),
+    });
+    const switched = await mutateProfile(control, {
+      action: "switch",
+      expectedRevision: 3,
+      idempotencyKey: "switch-focus-copy",
+      profileRef: profileRef("profile-focus-copy"),
+    });
+
+    expect(created).toMatchObject({ kind: "ok", profileRef: "profile-focus" });
+    expect(renamed).toMatchObject({ kind: "ok", profiles: { revision: 2 } });
+    expect(duplicated).toMatchObject({ kind: "ok", profileRef: "profile-focus-copy" });
+    expect(switched).toMatchObject({
+      kind: "ok",
+      profiles: { activeProfileRef: "profile-focus-copy" },
+    });
+  });
+
+  it("composes active profile settings below user overrides and persists switching", async () => {
+    const stateDir = temporaryDirectory("editor-profile-precedence");
+    const root = temporaryDirectory("editor-profile-precedence-root");
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir }),
+      mutex: createWorkspaceMutexRegistry(),
+      profileRefFactory: () => profileRef("profile-focus"),
+    });
+    await mutateProfile(control, {
+      action: "create",
+      displayName: "Focus",
+      expectedRevision: 0,
+      idempotencyKey: "create-focus",
+    });
+    await mutateProfile(control, {
+      action: "set",
+      expectedRevision: 1,
+      idempotencyKey: "configure-focus",
+      profileRef: profileRef("profile-focus"),
+      values: { fontSize: 18, keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+    });
+    await mutateProfile(control, {
+      action: "switch",
+      expectedRevision: 2,
+      idempotencyKey: "activate-focus",
+      profileRef: profileRef("profile-focus"),
+    });
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "user-font-wins",
+      scope: "user",
+      values: { fontSize: 20 },
+    });
+    const restarted = service(stateDir);
+    const snapshot = await restarted.read(root);
+
+    expect(snapshot.profiles?.activeProfileRef).toBe("profile-focus");
+    expect(snapshot.settings.find((setting) => setting.id === "fontSize")).toMatchObject({
+      value: 20,
+      source: "user",
+    });
+    expect(snapshot.settings.find((setting) => setting.id === "keybindingOverrides")).toMatchObject(
+      {
+        source: "profile",
+      },
+    );
+  });
+
+  it("deleting the active profile atomically falls back to immutable Default", async () => {
+    const control = createEditorSettingsControlService({
+      store: createEditorSettingsStore({ stateDir: temporaryDirectory("editor-profile-delete") }),
+      mutex: createWorkspaceMutexRegistry(),
+      profileRefFactory: () => profileRef("profile-focus"),
+    });
+    await mutateProfile(control, {
+      action: "create",
+      displayName: "Focus",
+      expectedRevision: 0,
+      idempotencyKey: "create-focus",
+    });
+    await mutateProfile(control, {
+      action: "switch",
+      expectedRevision: 1,
+      idempotencyKey: "activate-focus",
+      profileRef: profileRef("profile-focus"),
+    });
+    const deleted = await mutateProfile(control, {
+      action: "delete",
+      expectedRevision: 2,
+      idempotencyKey: "delete-focus",
+      profileRef: profileRef("profile-focus"),
+    });
+    const rejected = await mutateProfile(control, {
+      action: "delete",
+      expectedRevision: 3,
+      idempotencyKey: "delete-default",
+      profileRef: profileRef("profile-default"),
+    });
+
+    expect(deleted).toMatchObject({
+      kind: "ok",
+      profiles: { activeProfileRef: "profile-default" },
+    });
+    expect(rejected).toEqual({ kind: "invalid", code: "DEFAULT_PROFILE_IMMUTABLE" });
+    expect((await readProfiles(control)).profiles).toHaveLength(1);
   });
 
   it("resolves independent root layers and falls back through workspace then user", async () => {

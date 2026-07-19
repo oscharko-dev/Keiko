@@ -6,7 +6,6 @@ import type {
   EditorM7CommandDefinition,
   EditorM7ReasonCode,
   EditorM7SettingValue,
-  EditorM11SettingScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
   bindingFromKeyboardEvent,
@@ -17,7 +16,11 @@ import {
   updateKeyboardShortcutOverride,
   type EffectiveKeyboardShortcut,
 } from "../../keyboardShortcutsRegistry";
-import { settingById, type EditorSettingsView } from "../cards/useEditorSettings";
+import {
+  settingById,
+  type EditorSettingsEditScope,
+  type EditorSettingsView,
+} from "../cards/useEditorSettings";
 import {
   useSettingsTranslate as useTranslate,
   type I18nTranslate,
@@ -32,7 +35,7 @@ export function KeyboardShortcutsPanel({
   view,
 }: {
   readonly root?: string | undefined;
-  readonly scope: EditorM11SettingScope;
+  readonly scope: EditorSettingsEditScope;
   readonly view: EditorSettingsView;
 }): ReactNode {
   const t = useTranslate();
@@ -47,7 +50,8 @@ export function KeyboardShortcutsPanel({
     () => filteredShortcutRows(registry.commands, query, modifiedOnly, t),
     [modifiedOnly, query, registry.commands, t],
   );
-  const disabled = view.mutating || (scope !== "user" && root === undefined);
+  const disabled =
+    view.mutating || ((scope === "workspace" || scope === "root") && root === undefined);
   const restoreFocus = (commandId: string): void => {
     requestAnimationFrame(() => buttonRefs.current.get(commandId)?.focus());
   };
@@ -352,7 +356,7 @@ function handleCapture(args: {
   readonly commandId: string;
   readonly current: EditorM7SettingValue | undefined;
   readonly event: KeyboardEvent<HTMLButtonElement>;
-  readonly scope: EditorM11SettingScope;
+  readonly scope: EditorSettingsEditScope;
   readonly setIssue: (issue: EditorM7ReasonCode | undefined) => void;
   readonly setRecordingId: (id: string | null) => void;
   readonly view: EditorSettingsView;

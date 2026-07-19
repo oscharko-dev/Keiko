@@ -3936,9 +3936,17 @@ export type {
   EditorM11SettingsMutationOk,
   EditorM11SettingsMutationResult,
   EditorM11SettingsEvent,
+  EditorM11ProfileSummary,
+  EditorM11ProfilesSnapshot,
+  EditorM11ProfileMutationAction,
+  EditorM11ProfileMutation,
+  EditorM11ProfileReasonCode,
+  EditorM11ProfileMutationOk,
+  EditorM11ProfileMutationResult,
 } from "./editor-m11-settings.js";
 export {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   isEditorM11ProfileSettingsLayer,
   isEditorM11RootSettingsLayer,
   validateEditorM11ProfileSettingsLayer,
@@ -3951,6 +3959,7 @@ export type { WorkspaceProfileManifest } from "./workspace-profile.js";
 export {
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
+  isWorkspaceProfileDisplayName,
   validateWorkspaceProfileManifest,
   redactWorkspaceProfileForExport,
 } from "./workspace-profile.js";

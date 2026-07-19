@@ -1,7 +1,11 @@
 // M11 extension adapter over the existing M7 registry. The legacy M7 resolver and scope types remain
 // unchanged; this module adds profile/root layers and preserves policy-last semantics.
 
-import { EDITOR_M7_SETTING_REGISTRY, parseEditorM7SettingPatch } from "./editor-m7.js";
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  parseEditorM7SettingPatch,
+} from "./editor-m7.js";
 import type {
   EditorM7PolicyCeiling,
   EditorM7ReasonCode,
@@ -89,7 +93,69 @@ export interface EditorM11SettingsSnapshot extends Omit<
   readonly rootIdentityDigest?: WorkspaceRootIdentityDigest | undefined;
   readonly settings: readonly EditorM11ResolvedSetting[];
   readonly managedLanguages?: EditorM11ManagedLanguageComposition | undefined;
+  readonly profiles?: EditorM11ProfilesSnapshot | undefined;
 }
+
+export const EDITOR_M11_DEFAULT_PROFILE_REF = "profile-default" as WorkspaceProfileRef;
+
+export interface EditorM11ProfileSummary {
+  readonly profileRef: WorkspaceProfileRef;
+  readonly displayName: string;
+  readonly revision: number;
+  readonly settingCount: number;
+  readonly builtIn: boolean;
+}
+
+export interface EditorM11ProfilesSnapshot {
+  readonly schemaVersion: typeof EDITOR_M11_SETTINGS_SCHEMA_VERSION;
+  readonly storeState: EditorM7SettingsSnapshot["storeState"];
+  readonly revision: number;
+  readonly etag: string;
+  readonly activeProfileRef: WorkspaceProfileRef;
+  readonly profiles: readonly EditorM11ProfileSummary[];
+}
+
+export type EditorM11ProfileMutationAction =
+  "create" | "rename" | "duplicate" | "delete" | "switch" | "set" | "reset";
+
+export interface EditorM11ProfileMutation {
+  readonly schemaVersion: typeof EDITOR_M7_SCHEMA_VERSION;
+  readonly action: EditorM11ProfileMutationAction;
+  readonly expectedRevision: number;
+  readonly root?: string | undefined;
+  readonly profileRef?: WorkspaceProfileRef | undefined;
+  readonly displayName?: string | undefined;
+  readonly values?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+  readonly settingIds?: readonly EditorM7SettingId[] | undefined;
+}
+
+export type EditorM11ProfileReasonCode =
+  | EditorM7ReasonCode
+  | "DEFAULT_PROFILE_IMMUTABLE"
+  | "PROFILE_LIMIT_REACHED"
+  | "PROFILE_NAME_CONFLICT"
+  | "PROFILE_NOT_FOUND";
+
+export interface EditorM11ProfileMutationOk {
+  readonly kind: "ok";
+  readonly changed: boolean;
+  readonly profileRef: WorkspaceProfileRef;
+  readonly revision: number;
+  readonly etag: string;
+  readonly profiles: EditorM11ProfilesSnapshot;
+  readonly settings: EditorM11SettingsSnapshot;
+}
+
+export type EditorM11ProfileMutationResult =
+  | EditorM11ProfileMutationOk
+  | { readonly kind: "conflict"; readonly code: "STALE_REVISION"; readonly etag: string }
+  | {
+      readonly kind: "idempotencyConflict";
+      readonly code: "IDEMPOTENCY_KEY_REUSED";
+      readonly etag: string;
+    }
+  | { readonly kind: "invalid"; readonly code: EditorM11ProfileReasonCode }
+  | { readonly kind: "unavailable"; readonly code: "STATE_UNAVAILABLE" };
 
 export type EditorM11SettingsMutation = Omit<EditorM7SettingsMutation, "scope"> & {
   readonly scope: EditorM11SettingScope;
