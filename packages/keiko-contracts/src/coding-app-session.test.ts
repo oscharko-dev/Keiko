@@ -57,6 +57,19 @@ describe("coding app-session channel contract", () => {
       droppedEventCount: 0,
     };
     expect(validateCodingAppSessionChannelContent({ kind: "safe-activity", feed }).ok).toBe(true);
+    const planFeed = {
+      ...feed,
+      plan: {
+        revision: 2,
+        anchorMessageId: "msg_assistant_plan",
+        updatedAt: "2026-07-18T17:00:00.001Z",
+        steps: [{ text: "Verify the change", state: "active", truncated: false }],
+        truncated: false,
+      },
+    };
+    expect(
+      validateCodingAppSessionChannelContent({ kind: "safe-activity", feed: planFeed }).ok,
+    ).toBe(true);
     expect(
       validateCodingAppSessionChannelContent({
         kind: "safe-activity",

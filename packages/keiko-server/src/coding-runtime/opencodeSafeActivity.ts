@@ -1,7 +1,22 @@
-import type { CodingSafeActivityToolState } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingSafeActivityPlanStepState,
+  CodingSafeActivityToolState,
+} from "@oscharko-dev/keiko-contracts";
 
-import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import type {
+  CodingSafeActivityPlanStepInput,
+  CodingSafeActivitySignal,
+} from "./codingSafeActivityProjection.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+
+const PLAN_TOOL = "todowrite";
+/** Closed upstream-status vocabulary (#2480); anything else fails the whole plan update closed. */
+const PLAN_STEP_STATES: Readonly<Record<string, CodingSafeActivityPlanStepState>> = {
+  pending: "pending",
+  in_progress: "active",
+  completed: "completed",
+  cancelled: "cancelled",
+};
 
 export interface NormalizedOpenCodeSafeActivitySignal {
   readonly identity: string;
@@ -131,8 +146,44 @@ function partSignal(
   const occurredAt = instantFrom(data.time);
   if (part === undefined || occurredAt === undefined) return "dropped";
   if (part.type === "text") return textSignal(part, occurredAt);
+  if (part.type === "tool" && part.tool === PLAN_TOOL) return planSignal(part, occurredAt);
   if (part.type === "tool") return toolPartSignal(part, occurredAt);
   return undefined;
+}
+
+/** The plan tool projects as a plan snapshot, never as productive tool activity (#2480). */
+function planSignal(
+  part: Record<string, unknown>,
+  occurredAt: string,
+): CodingSafeActivitySignal | "dropped" | undefined {
+  const state = record(part.state);
+  // Only the completed part carries the final argument list; earlier states may stream partials.
+  if (state?.status !== "completed") return undefined;
+  const messageId = string(part.messageID);
+  const todos = record(state.input)?.todos;
+  if (messageId === undefined || !Array.isArray(todos)) return "dropped";
+  const steps: CodingSafeActivityPlanStepInput[] = [];
+  for (const todo of todos) {
+    const step = planStep(todo);
+    if (step === undefined) return "dropped";
+    steps.push(step);
+  }
+  return { kind: "plan", anchorMessageId: messageId, steps, occurredAt };
+}
+
+function planStep(value: unknown): CodingSafeActivityPlanStepInput | undefined {
+  const todo = record(value);
+  const content = string(todo?.content);
+  const status = string(todo?.status);
+  const state = status === undefined ? undefined : PLAN_STEP_STATES[status];
+  // priority is required upstream, shape-checked here, and deliberately never projected.
+  return todo === undefined ||
+    content === undefined ||
+    content.length === 0 ||
+    state === undefined ||
+    string(todo.priority) === undefined
+    ? undefined
+    : { text: content, state };
 }
 
 function textSignal(

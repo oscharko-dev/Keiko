@@ -29,6 +29,9 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     expect(OPENCODE_APPROVED_ENDPOINTS).toContain("GET /session/status");
     expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("POST /sync/replay");
     expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("GET /session/{sessionID}/message");
+    // #2480 decision: the plan surface is admitted through the todowrite tool parts only.
+    expect(OPENCODE_APPROVED_ENDPOINTS).not.toContain("GET /session/{sessionID}/todo");
+    expect(OPENCODE_APPROVED_ENDPOINTS.some((endpoint) => endpoint.includes("todo"))).toBe(false);
   });
 
   it("fails closed on health schema drift", () => {
@@ -140,7 +143,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     });
   });
 
-  it("normalizes only the reviewed exact session.created.1 sync bridge event", () => {
+  it("normalizes reviewed sync bridge envelopes as content-free pull triggers", () => {
     const syncEvent = {
       type: "session.created.1",
       id: "evt_created",
@@ -149,24 +152,42 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       data: { sessionID: "ses_1", info: { id: "ses_1", title: "private title" } },
     };
     const frame = (payload: unknown): string => `data: ${JSON.stringify({ payload })}\n\n`;
-
-    expect(parseOpenCodeSse(frame({ type: "sync", id: "evt_created", syncEvent }))).toEqual({
+    const trigger = (id: string): unknown => ({
       ok: true,
-      value: [
-        {
-          event: "message",
-          data: { id: "evt_created", type: "sync", properties: {} },
-        },
-      ],
+      value: [{ event: "message", data: { id, type: "sync", properties: {} } }],
     });
+
+    expect(parseOpenCodeSse(frame({ type: "sync", id: "evt_created", syncEvent }))).toEqual(
+      trigger("evt_created"),
+    );
+    // Every other durable sync envelope stays a data-blind pull trigger — the private payload
+    // never survives normalization; row admission happens behind POST /sync/history.
+    const updated = {
+      type: "sync",
+      id: "evt_updated",
+      syncEvent: {
+        ...syncEvent,
+        id: "evt_updated",
+        type: "message.updated.1",
+        seq: 7,
+        data: { secret: "PRIVATE_SYNC_BODY" },
+      },
+    };
+    expect(parseOpenCodeSse(frame(updated))).toEqual(trigger("evt_updated"));
+    // The real v1.17.17 wraps session-scoped frames with routing keys.
+    expect(
+      parseOpenCodeSse(
+        `data: ${JSON.stringify({ directory: "/w", project: "global", payload: updated })}\n\n`,
+      ),
+    ).toEqual(trigger("evt_updated"));
+    expect(JSON.stringify(parseOpenCodeSse(frame(updated)))).not.toContain("PRIVATE_SYNC_BODY");
     for (const payload of [
       { type: "sync", id: "evt_mismatch", syncEvent },
       { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, extra: true } },
-      {
-        type: "sync",
-        id: "evt_created",
-        syncEvent: { ...syncEvent, type: "session.updated.1" },
-      },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, type: "" } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, seq: -1 } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, aggregateID: "prj_1" } },
+      { type: "sync", id: "evt_created", syncEvent: { ...syncEvent, seq: 1 } },
       { type: "sync", id: "evt_created", syncEvent, extra: true },
     ]) {
       expect(parseOpenCodeSse(frame(payload)).ok).toBe(false);
@@ -448,6 +469,41 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       }),
     ]) {
       expect(parseOpenCodeHistory([row])).toEqual({ ok: false, reason: "event-unknown" });
+    }
+  });
+
+  it("admits todowrite plan parts while the unchosen plan surfaces stay fail-closed", () => {
+    const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];
+    const planPart = {
+      id: "prt_plan",
+      sessionID: "ses_1",
+      messageID: "msg_assistant",
+      type: "tool",
+      callID: "call_plan",
+      tool: "todowrite",
+      state: {
+        status: "completed",
+        input: { todos },
+        output: JSON.stringify(todos, null, 2),
+        title: "1 todos",
+        metadata: { todos, truncated: false },
+        time: { start: 1, end: 2 },
+      },
+    };
+    expect(
+      parseOpenCodeHistory([
+        syncRow(27, "message.part.updated.1", { sessionID: "ses_1", part: planPart, time: 27 }),
+      ]),
+    ).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+    for (const rejected of [
+      syncRow(27, "message.part.updated.1", {
+        sessionID: "ses_1",
+        part: { ...planPart, tool: "todoread" },
+        time: 27,
+      }),
+      syncRow(27, "todo.updated", { sessionID: "ses_1", todos }),
+    ]) {
+      expect(parseOpenCodeHistory([rejected])).toEqual({ ok: false, reason: "event-unknown" });
     }
   });
 
