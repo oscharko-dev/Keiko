@@ -14,7 +14,7 @@ export interface ServerDiagnosticRecord {
   readonly operation: string;
   // Where the failure was observed, e.g. `server.top-level-catch` or `chat.stream`.
   readonly source: string;
-  // The error constructor name (never the raw message), e.g. `Error`, `GatewayTransportError`.
+  // The content-free error class (never the raw message), e.g. `Error`, `TransportError`.
   readonly errorClass: string;
   // The REDACTED error message. Known secrets are already scrubbed by the caller's redactor.
   readonly message: string;
@@ -47,8 +47,11 @@ export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
 };
 
 // Extracts the diagnosable, redaction-safe shape of an unknown thrown value. `redact` is the caller's
-// message redactor (known secrets scrubbed); it is applied to the human message only. The class name
-// and any machine code are inherently safe (no user content) and pass through unredacted.
+// message redactor (known secrets scrubbed); it is applied to the human message. The remaining fields
+// are NOT trusted to be content-free by themselves: the class comes from `contentFreeErrorClass`
+// (closed built-in allowlist, else the code-declared class name), and `code`/`requestId` are
+// forwarded only as bounded machine tokens the redactor leaves unchanged — anything else is dropped
+// rather than smuggled into an otherwise-redacted record.
 export function describeError(
   error: unknown,
   redact: (message: string) => string,
@@ -67,14 +70,67 @@ export function describeError(
       partialUsage?: unknown;
     };
     return {
-      errorClass: error.name || error.constructor.name || "Error",
+      errorClass: contentFreeErrorClass(error),
       message: redact(error.message),
-      code: typeof withExtras.code === "string" ? withExtras.code : undefined,
-      gatewayRequestId: typeof withExtras.requestId === "string" ? withExtras.requestId : undefined,
+      code: machineToken(withExtras.code, redact),
+      gatewayRequestId: machineToken(withExtras.requestId, redact),
       partialUsage: partialUsageCounts(withExtras.partialUsage),
     };
   }
   return { errorClass: typeof error, message: redact(String(error)) };
+}
+
+// `Error.name` and the instance's `constructor` are plain mutable own properties: a hostile thrown
+// value — or a buggy merge of request data onto an error — can load them with request-derived text.
+// A name passes only when it is one of these well-known built-ins, which legitimately ride on
+// generic `Error`/`DOMException` instances (e.g. an abort reason named "AbortError") where the
+// declared class name would erase the useful distinction.
+const BUILT_IN_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "EvalError",
+  "URIError",
+  "AggregateError",
+  "AbortError",
+  "TimeoutError",
+]);
+
+// Class names come from code (class declarations), never from request data, so a bounded,
+// identifier-shaped constructor name is safe to surface. Machine tokens (`code`, `requestId`)
+// reuse the correlation-id alphabet: no whitespace, no prose, bounded length.
+const DECLARED_ERROR_CLASS_SHAPE = /^[A-Z][A-Za-z0-9]{0,63}$/;
+const MACHINE_TOKEN_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
+
+// Resolves the content-free class of an unknown thrown value: a built-in error name, else the
+// class name declared in code, else the generic "Error" (or `typeof` for non-Error throws).
+// Shared by every diagnostics producer that labels an error, so the mutable-`name` hardening
+// lives in exactly one place.
+export function contentFreeErrorClass(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  if (BUILT_IN_ERROR_NAMES.has(error.name)) return error.name;
+  return declaredErrorClassName(error) ?? "Error";
+}
+
+// Reads the constructor name off the PROTOTYPE (not the instance) so an own-property
+// `constructor` planted by hostile data cannot shadow the code-declared class.
+function declaredErrorClassName(error: Error): string | undefined {
+  const proto = Reflect.getPrototypeOf(error) as { constructor?: unknown } | null;
+  const ctor = proto?.constructor;
+  if (typeof ctor !== "function" || !DECLARED_ERROR_CLASS_SHAPE.test(ctor.name)) {
+    return undefined;
+  }
+  return ctor.name;
+}
+
+// Forwards a `code`/`requestId` style value only when it is a bounded machine token that the
+// caller's redactor leaves unchanged; a known secret or any prose-shaped value is dropped, never
+// rewritten, so the field stays machine-parseable or absent.
+function machineToken(value: unknown, redact: (message: string) => string): string | undefined {
+  if (typeof value !== "string" || !MACHINE_TOKEN_SHAPE.test(value)) return undefined;
+  return redact(value) === value ? value : undefined;
 }
 
 // Accepts only the numeric counts (GatewayError.partialUsage shape) — anything

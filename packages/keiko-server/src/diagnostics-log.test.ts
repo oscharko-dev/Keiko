@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import {
+  contentFreeErrorClass,
   describeError,
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -39,6 +40,91 @@ describe("describeError (RB-6)", () => {
     const described = describeError("just a string", identity);
     expect(described.errorClass).toBe("string");
     expect(described.message).toBe("just a string");
+    expect(described.code).toBeUndefined();
+  });
+});
+
+describe("contentFreeErrorClass (mutable Error.name hardening)", () => {
+  it("degrades an overridden name on a plain Error and never serializes it", () => {
+    const hostile = new Error("boom");
+    hostile.name = "secret-token-abc123";
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-hostile",
+      operation: "op",
+      source: "unit",
+      error: hostile,
+      redact: identity,
+      now: () => 0,
+    });
+    expect(record.errorClass).toBe("Error");
+    expect(JSON.stringify(record)).not.toContain("secret-token-abc123");
+  });
+
+  it("keeps a declared subclass distinguishable, even with a tampered name", () => {
+    class GatewayShapedError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = new.target.name;
+      }
+    }
+    expect(describeError(new GatewayShapedError("x"), identity).errorClass).toBe(
+      "GatewayShapedError",
+    );
+    const tampered = new GatewayShapedError("x");
+    tampered.name = "leaked request text";
+    expect(describeError(tampered, identity).errorClass).toBe("GatewayShapedError");
+  });
+
+  it("lets well-known built-in names ride on generic instances", () => {
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    expect(describeError(abort, identity).errorClass).toBe("AbortError");
+  });
+
+  it("degrades to the generic class when no declared class name exists", () => {
+    const anonymous = new (class extends Error {})("x");
+    anonymous.name = "zz secret zz";
+    expect(contentFreeErrorClass(anonymous)).toBe("Error");
+  });
+
+  it("ignores an instance-level constructor planted by hostile data", () => {
+    const tampered = Object.assign(new Error("x"), {
+      name: "still-hostile",
+      constructor: { name: "LeakedText123" },
+    });
+    expect(contentFreeErrorClass(tampered)).toBe("Error");
+  });
+
+  it("degrades when the prototype exposes no callable constructor", () => {
+    class Ctorless extends Error {}
+    Object.defineProperty(Ctorless.prototype, "constructor", { value: undefined });
+    const err = new Ctorless("x");
+    err.name = "tampered-name";
+    expect(contentFreeErrorClass(err)).toBe("Error");
+  });
+
+  it("labels non-Error throws by their typeof", () => {
+    expect(contentFreeErrorClass("plain string")).toBe("string");
+    expect(contentFreeErrorClass(42)).toBe("number");
+  });
+});
+
+describe("describeError machine-token bounds for code and requestId", () => {
+  it("drops prose-shaped code and requestId values instead of forwarding content", () => {
+    const hostile = Object.assign(new Error("x"), {
+      code: "customer email jane@example.com",
+      requestId: "she said: hello world",
+    });
+    const described = describeError(hostile, identity);
+    expect(described.code).toBeUndefined();
+    expect(described.gatewayRequestId).toBeUndefined();
+  });
+
+  it("drops a machine-shaped value the redactor would rewrite (known secret)", () => {
+    const leaky = Object.assign(new Error("x"), { code: "sk-live-abc123" });
+    const described = describeError(leaky, (message) =>
+      message.replaceAll("sk-live-abc123", "[redacted]"),
+    );
     expect(described.code).toBeUndefined();
   });
 });
