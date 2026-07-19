@@ -39,6 +39,39 @@ Platform and dashboard configuration mirrors the binding rules in `AGENTS.md`, t
 repository Qodo config. Repository files are the durable, reviewable source; dashboard text must not
 diverge from the checked-in policy.
 
+### Platform-scoped capability inventory (Issue #2510)
+
+Exactly two configuration surfaces live outside the repository, and both are mirrors, never
+sources:
+
+1. **Repository-scope compliance rules** (`app.qodo.ai/rules`) — mirror the standards in
+   `best_practices.md`. Any dashboard rule without a repository counterpart is non-binding by
+   definition and must either be added to `best_practices.md` through review or removed.
+2. **Organization/repository toggles** (the settings table above) — each row's authoritative
+   value is recorded here; the dashboard only reflects it.
+
+The review standard is therefore reconstructable from the repository alone: `.pr_agent.toml`
+(methodology + no-authority invariant) plus `best_practices.md` (code standards) re-seed a fresh
+Qodo installation — or any replacement reviewer — without dashboard access.
+
+## Dependency risk and fallback
+
+Qodo is a hosted third-party service on a free tier; its plan, quotas, or availability can change
+without notice. The posture if it does:
+
+- **Merges never deadlock on Qodo.** Qodo is comment-only and emits no required check. `Keiko for
+Quality` (which bridges Qodo findings) is advisory and non-required until the ADR-0135 live
+  probes pass, and its evaluator treats absent review evidence as fail-closed _within the
+  advisory aggregate only_ — the direct required checks and branch protection gate integration
+  natively and are Qodo-independent.
+- **Static analysis does not regress.** SonarCloud (OSS tier) and the direct required checks
+  carry the deterministic quality bar with or without Qodo.
+- **The review standard survives the vendor.** `best_practices.md` and `.pr_agent.toml` are the
+  complete, versioned standard; pointing a replacement reviewer (or a future self-hosted one) at
+  them restores equivalent review coverage without reconstruction from memory.
+- **Exit is a config change, not a migration.** Uninstalling the app and disabling the KFQ Qodo
+  bridge changes no required check and requires no code beyond removing the bridge wiring.
+
 ## Version-controlled configuration
 
 - `.pr_agent.toml` (repo root) pins the review methodology (`[pr_reviewer]` / `[pr_code_suggestions]`

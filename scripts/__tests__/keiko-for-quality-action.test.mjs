@@ -439,6 +439,13 @@ describe("Keiko for Quality Action execution shell", () => {
     });
   });
 
+  it("treats an explicitly empty label as gate-off, and only an absent variable as the PoC default", () => {
+    // ADR-0142 cutover: the workflow sets KFQ_ACTION_LABEL to "" so every pull is evaluated.
+    expect(actionIdentity({ KFQ_ACTION_LABEL: "" }).label).toBe("");
+    expect(actionIdentity({ KFQ_ACTION_LABEL: "  " }).label).toBe("");
+    expect(actionIdentity({}).label).toBe("kfq-action-poc");
+  });
+
   it("targets only aggregated check completions and non-own comments", () => {
     expect(
       affectedPullNumbers(
@@ -491,6 +498,12 @@ describe("Keiko for Quality Action execution shell", () => {
     expect(pullIsOptedIn({ labels: [] }, "kfq-action-poc", "pull_request", false)).toBe(false);
     expect(pullIsOptedIn({}, "kfq-action-poc", "workflow_dispatch", false)).toBe(true);
     expect(pullIsOptedIn({ labels: [] }, "kfq-action-poc", "pull_request", true)).toBe(true);
+  });
+
+  it("evaluates every pull when the label gate is disabled (ADR-0142 cutover)", () => {
+    expect(pullIsOptedIn({ labels: [] }, "", "pull_request", false)).toBe(true);
+    expect(pullIsOptedIn({ labels: [] }, "", "check_run", false)).toBe(true);
+    expect(pullIsOptedIn(undefined, "", "issue_comment", false)).toBe(true);
   });
 
   it("reads the event name and payload from the runner event file", () => {
