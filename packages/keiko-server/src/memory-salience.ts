@@ -78,8 +78,10 @@ function scopeLabel(scope: MemoryScope): string {
 
 // Bounds the dedup corpus so the Jaccard loop stays cheap even for a large vault.
 const MAX_EXISTING_BODIES = 200;
+const MAX_PENDING_SALIENCE_CAPTURES = 32;
 const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
+let pendingSalienceCaptures = 0;
 
 const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   type: "json_schema",
@@ -379,6 +381,53 @@ interface SalienceTurnRequest {
   readonly content: string;
   readonly memory:
     { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode | undefined } | undefined;
+}
+
+type SalienceCaptureSurface = "desktop" | "voice";
+
+function logSalienceCaptureFailure(
+  surface: SalienceCaptureSurface,
+  error: unknown,
+  deps: UiHandlerDeps,
+): void {
+  // eslint-disable-next-line no-console
+  console.error(`${surface} salience capture failed`, redactedErrorMessage(error, deps));
+}
+
+function logSalienceCaptureDropped(surface: SalienceCaptureSurface): void {
+  // eslint-disable-next-line no-console
+  console.error(
+    `${surface} salience capture skipped: background queue full (${String(
+      pendingSalienceCaptures,
+    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
+  );
+}
+
+export function scheduleMemorySalienceCapture(
+  deps: UiHandlerDeps,
+  request: SalienceTurnRequest,
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+  assistantText: string,
+  surface: SalienceCaptureSurface,
+): void {
+  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
+    return;
+  }
+  if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
+    logSalienceCaptureDropped(surface);
+    return;
+  }
+  pendingSalienceCaptures += 1;
+  setImmediate(() => {
+    void captureSalientFromTurn(deps, request, context, modelId, assistantText)
+      .catch((error: unknown) => {
+        logSalienceCaptureFailure(surface, error, deps);
+      })
+      .finally(() => {
+        pendingSalienceCaptures -= 1;
+      });
+  });
 }
 
 type TurnSalienceExtraction =
