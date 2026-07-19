@@ -154,6 +154,17 @@ describe("MemoryJournal Keep and Forget", () => {
     expect(acceptImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the original outcome when Keep acknowledges an already-decided capture", async () => {
+    const user = userEvent.setup();
+    renderJournal([makeCapture("captured", 100, { outcome: "captured" })]);
+    const row = await screen.findByTestId("memory-journal-row");
+
+    await user.click(within(row).getByRole("button", { name: "Keep" }));
+
+    await waitFor(() => expect(within(row).getByText("Kept")).toBeInTheDocument());
+    expect(row).toHaveAttribute("data-outcome", "captured");
+  });
+
   it("forgets once, never resurrects the row, and focuses the next row", async () => {
     const user = userEvent.setup();
     const forgetImpl = vi

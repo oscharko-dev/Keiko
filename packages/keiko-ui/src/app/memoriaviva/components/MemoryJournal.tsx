@@ -33,6 +33,11 @@ interface JournalLoadState {
   readonly error: string | null;
 }
 
+// Mirrors memory-consolidation-handlers.ts's DEFAULT_MAX_AGE_MS: bounding the query keeps the
+// server's audit-ledger replay (memory-capture-projection.ts) from growing with total ledger size
+// on every Journal load instead of with the visible history window.
+const JOURNAL_HISTORY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
 interface MemoryJournalProps {
   readonly onBack: () => void;
   readonly fetchRecentCapturesImpl?: typeof fetchRecentCaptures;
@@ -324,10 +329,11 @@ function useJournalRows(
 ): readonly [JournalLoadState, () => void, Dispatch<SetStateAction<readonly JournalRowState[]>>] {
   const [state, setState] = useState<JournalLoadState>({ rows: [], loading: true, error: null });
   const requestSeqRef = useRef(0);
+  const sinceRef = useRef(Date.now() - JOURNAL_HISTORY_WINDOW_MS);
   const load = useCallback((): void => {
     const seq = (requestSeqRef.current += 1);
     setState((current) => ({ ...current, loading: true, error: null }));
-    void fetchImpl()
+    void fetchImpl({ since: sinceRef.current })
       .then((response) => {
         if (seq !== requestSeqRef.current) return;
         const rows = orderJournalCaptures(response.captures)
@@ -388,6 +394,7 @@ interface ActionHookOptions {
 function acknowledgeJournalRow(row: JournalRowState, memoryId: string): JournalRowState {
   const capture = row.capture;
   if (capture.outcome === "rejected" || capture.memoryId !== memoryId) return row;
+  if (capture.outcome !== "proposed") return { capture, acknowledged: true };
   return {
     capture: { ...capture, outcome: "auto-accepted" },
     acknowledged: true,
