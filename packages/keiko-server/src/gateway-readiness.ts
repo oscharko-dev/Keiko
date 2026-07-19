@@ -307,7 +307,6 @@ async function probeEmbedding(
 // re-read live: probes execute concurrently, `currentGatewayConfig` is backed by a mutable closure
 // the gateway-setup save route replaces, and one readiness report must describe one config
 // generation across every probe in it.
-// eslint-disable-next-line complexity
 async function probeReranker(
   deps: UiHandlerDeps,
   config: GatewayConfig,
