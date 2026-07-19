@@ -24,12 +24,18 @@ than being reported as successful. The dashboard binds an evaluation to a head S
 redacted timing metadata. A delayed or lost webhook, an unavailable evaluator, or missing
 current-head review evidence can therefore leave the check pending.
 
-The Worker recovers delivery liveness without treating stale evidence as current. Its two-minute
-sweep re-evaluates never-evaluated, pending, and head-changed pull requests. It also re-evaluates a
-settled, unchanged pull request when its last evaluation reaches `RECONCILE_BACKSTOP_MS` (15
-minutes by default). A webhook normally carries same-head evidence changes; the sweep is the
-backstop for lost or rejected events. The Action proof of concept is diagnostic only until its
-documented cutover: it is not the canonical recovery path before then.
+Since the ADR-0142 cutover (2026-07-19) the canonical producer is the GitHub Action: recovery is
+event-driven. Every completion of a direct required check (`check_run`) and every pull-request
+comment (`issue_comment`) re-evaluates the affected pull on the exact current head; per-pull
+concurrency serialises overlapping evaluations. There is no cron and no webhook — the canonical
+explicit recovery for a stuck check is an owner- or agent-run dispatch:
+
+```bash
+gh workflow run keiko-for-quality-action.yml --ref dev -f pr=<number>
+```
+
+(The retired Worker's two-minute sweep and `RECONCILE_BACKSTOP_MS` backstop applied to the
+Worker era only; the rollback template in `infrastructure/keiko-for-quality/` retains them.)
 
 ## Diagnostic Steps
 

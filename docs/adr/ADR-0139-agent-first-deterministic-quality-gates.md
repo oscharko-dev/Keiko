@@ -79,7 +79,8 @@ A scheduled workflow (`nightly-perf-evidence`) re-runs the official D12 producer
 pinned baseline on a clean Linux environment. If the refreshed document differs from the committed
 one, the workflow opens a bot pull request through the normal required-check path (API-signed
 commits, no gate bypass). Pull-request agents regenerate evidence only when their own change
-touches a measured surface (D2) — a causally justified cost — using the repository-provided
+touches a measured surface (D2; superseded by D10 — since 2026-07-19 only a measurement-toolchain
+edit regenerates in-flight) — using the repository-provided
 one-command producer wrapper (`npm run perf:evidence:regen`), which encodes the container
 orchestration (pinned Node/npm image, bubblewrap, Playwright provisioning, baseline checkout,
 independent re-validation) so the procedure is reproducible and not session folklore.
@@ -91,7 +92,8 @@ the packaging shell-spawn guardrail and the installable-package smoke (platform-
 authoritative platform is Linux, with the container path documented). The pre-PR gate maintains a
 content-addressed step cache (`.agent/pre-pr-cache.json`): each step declares its input scope, and
 a step re-runs only when the content hash of its inputs changes. Cache entries record the input
-digest and the step's last verdict; `--no-cache` forces a full run, and CI never uses the cache.
+digest and the step's last verdict; `--no-cache` bypasses the cache (diff scoping still applies —
+combine with `--full` to force complete re-execution), and CI never uses the cache.
 This turns the fix-iteration loop from ~65 minutes into minutes without removing any check.
 
 The gate is additionally diff-scoped by default: it computes the change set versus the
@@ -187,8 +189,9 @@ execute; it does not lower any threshold.
 
 ## Consequences
 
-- Unrelated `dev` movement no longer invalidates performance evidence; the regenerate/merge race
-  disappears for non-editor work and becomes a single causal regeneration for editor work.
+- Unrelated `dev` movement no longer invalidates performance evidence; since D10 the
+  regenerate/merge race is gone entirely — editor and non-editor work alike trigger no per-PR
+  regeneration, and only a measurement-toolchain edit re-measures in-flight.
 - Required checks become reproducible for agents: a red required check implies a real defect in
   the change (or a gate defect to be fixed at the gate), never runner weather.
 - The scheduled workflow adds one nightly Linux run and occasional bot pull requests.

@@ -22,8 +22,8 @@ product.
 > ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
 > when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
 > their feature branch, and maintain the pull request; GitHub native auto-merge may integrate only
-> after the direct app-bound required checks succeed on the exact current head, the branch is
-> current with `dev`, and every review conversation is resolved. Direct pushes to
+> after the app-bound required checks succeed on the exact current head and every review
+> conversation is resolved. Direct pushes to
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
@@ -127,10 +127,10 @@ integration base (`origin/dev`; override with `-- --base <ref>`) and runs only t
 declared input scope that change set touches — a docs-only change runs the handful of steps that
 can see docs, a server change runs the full test/build chain. Steps that are skipped as out of
 scope are reported visibly with the reason, never silently. Steps without a declared scope always
-run. `npm run agent:pre-pr -- --full` runs the complete fixed sequence (typecheck, lint, format,
-shell-spawn guardrails, UI package checks, unit tests, coverage quality, LCOV source mapping,
-architecture checks, ADR/dependency hygiene, clean build, UI build, package-surface, editor
-bundle size, installable-package smoke, and smoke coverage). Every run writes a machine-readable
+run. `npm run agent:pre-pr -- --full` runs the complete fixed sequence (static quality including
+i18n/sonar-scope/qodo-config/native checks, unit tests plus the coverage chain,
+architecture/ADR/dependency/knip hygiene, and the clean build-through-e2e-smoke product chain —
+the exact step list lives in `scripts/agent-pre-pr.mjs`). Every run writes a machine-readable
 report to `.agent/pre-pr-report.json` — including the scope decision — so the exact local outcome
 is inspectable.
 
@@ -300,9 +300,10 @@ These cost real time when rediscovered. They are all real and current.
 - **New package exports drift `check:package-surface`.** Adding a public export changes the
   packaged surface contract; run `npm run build && npm run check:package-surface` and update the
   expected surface, or CI goes red on the release job.
-- **A new long-lived integration branch (`feat/…`) must be added to the trigger lists in
-  `.github/workflows/ci.yml`** (both `push:` and `pull_request:`), or CI silently never runs on
-  it and the branch protection gate rejects the merge.
+- **A new long-lived integration branch (`feat/…`) must be added in THREE places in
+  `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
+  the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
+  miss the third and CI runs but the gate still rejects the merge.
 - **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
   with per-file floors and a branch-metric floor. Lowering coverage fails the gate; if you add
   code, add tests.
@@ -332,9 +333,9 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
   history and signed squash merges. Nobody — agent or human — clicks merge: the agent arms GitHub
   native auto-merge on the PR, and the platform integrates automatically once the required checks
-  are green on the exact current head, the branch is current with `dev`, and every review
-  conversation is resolved (ADR-0135). Green gates on a current branch plus settled review threads
-  ARE the merge decision; there is no human review step and no waiting for a person.
+  are green on the exact current head and every review conversation is resolved (ADR-0135). Green
+  gates plus settled review threads ARE the merge decision; there is no human review step and no
+  waiting for a person.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -346,13 +347,15 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
   `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts`
+  `Socket Security: Pull Request Alerts` · `Keiko for Quality`
 
-  No human approving review is required for `dev`. Qodo and `Keiko for Quality` are advisory and
-  must not be added to branch protection until their availability, bounded settlement, and
-  non-self-deadlocking repair path pass the live probes in
-  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation and hosted-runner
-  performance evidence run outside the PR critical path.
+  No human approving review is required for `dev`. `Keiko for Quality` is required and app-bound
+  (App id `4290143`) since the ADR-0142 cutover (2026-07-19), after all six live probes in
+  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md) passed on live pull requests; it
+  bridges the comment-only Qodo review (which itself stays advisory) into the gate. If that check
+  sits `in_progress`, the usual cause is a Qodo review that has not yet settled on the exact
+  current head. Full mutation and hosted-runner performance evidence run outside the PR critical
+  path.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

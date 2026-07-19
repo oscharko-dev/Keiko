@@ -2,8 +2,7 @@
 
 ## Current enforcement
 
-Pull requests targeting `dev` are protected by 13 direct, app-bound checks on the exact current
-head:
+Pull requests targeting `dev` are protected by 14 app-bound checks on the exact current head:
 
 1. `ci`
 2. `actionlint`
@@ -18,14 +17,16 @@ head:
 11. `SonarCloud Code Analysis`
 12. `Socket Security: Project Report`
 13. `Socket Security: Pull Request Alerts`
+14. `Keiko for Quality`
 
-Branch protection uses strict current-branch checks and administrator enforcement. GitHub Actions
-contexts are pinned to App ID `15368`, SonarQube Cloud to App ID `12526`, and both Socket contexts
-to App ID `156372`. A same-named check from another producer does not satisfy protection.
+Branch protection requires linear history, signed commits, and resolved review conversations.
+GitHub Actions contexts are pinned to App ID `15368`, SonarQube Cloud to App ID `12526`, both
+Socket contexts to App ID `156372`, and `Keiko for Quality` to App ID `4290143`. A same-named
+check from another producer does not satisfy protection.
 
 GitHub invalidates prior evidence on every new commit. Native auto-merge may integrate only after
-all direct required checks succeed, the branch is current with `dev`, and every review conversation
-is resolved. No approving human review is required.
+all required checks succeed on the exact current head and every review conversation is resolved.
+No approving human review is required.
 
 ## Critical-path boundary
 
@@ -36,8 +37,12 @@ The following analysis remains valuable but is not merge-critical:
 - `Qodo` review is comment-only; its summary comment may be absent when automatic processing is
   paused. The comment remains advisory, and evidence currency is the head SHA embedded in it rather
   than a check-run emission SLO.
-- `Keiko for Quality` is advisory and non-required. The external aggregate cannot safely control
-  the same protection path needed to repair its own evaluator.
+- `Keiko for Quality` is required and app-bound since the ADR-0142 cutover (2026-07-19): the six
+  live-probe conditions below were proven on live pull requests (ledger in
+  [`keiko-for-quality-action-evaluation.md`](keiko-for-quality-action-evaluation.md)) and the
+  maintainer promoted the check. Its own repair path stays gate-independent: the Action's
+  workflow/script fixes merge through the 13 direct checks, and the aggregate never re-checks
+  them.
 - Full Stryker mutation analysis runs daily and through `workflow_dispatch`; focused local mutation
   remains required engineering evidence for tractable trust-boundary changes.
 - The per-pull aggregate is the Qodo bridge only (Issue #2508,
@@ -77,7 +82,12 @@ direct required checks and Socket's comment alerts are no longer re-checked — 
 the organisation-level Socket policy own those decisions directly — which removes the
 per-evaluation check-runs listing and the `SOCKET_RISK_*` configuration surface.
 
-The scheduled reconciliation sweep retains a merged pull request for up to one hour. This bounded
+**Worker era (retired 2026-07-19; kept for the rollback template only).** The following two
+paragraphs describe the retired Cloudflare Worker's reconciliation model. The canonical Action is
+event-driven instead: `check_run`/`issue_comment`/`workflow_dispatch` triggers with per-pull
+concurrency, no cron, no D1 (see the execution-shell section below).
+
+The scheduled reconciliation sweep retained a merged pull request for up to one hour. This bounded
 post-merge lane lets the 60-second review-product stability window finish and updates the exact-head
 advisory check before deleting persisted tracking. Closed, unmerged, wrong-base, expired, and
 successfully reconciled pull requests are removed from tracking.
@@ -101,8 +111,10 @@ The aggregate may be reconsidered only after live probes prove all of the follow
    unparseable summary all block the aggregate — while a failed direct required check still blocks
    the merge through branch protection natively — followed by a complete positive probe.
 
-Until every condition is met and branch protection is changed through a reviewed maintainer
-decision, `Keiko for Quality` remains advisory and non-required.
+All six conditions were proven on live pull requests on 2026-07-19 (probe ledger in
+[`keiko-for-quality-action-evaluation.md`](keiko-for-quality-action-evaluation.md)), and the
+maintainer promoted `Keiko for Quality` to a required, app-bound branch-protection check the same
+day.
 
 ## GitHub Action execution shell (canonical since 2026-07-19)
 

@@ -40,8 +40,8 @@ Keiko starts with local developer-assist workflows for regulated engineering tea
 Keiko is human-controlled by design: a local human selects or accepts the task, autonomy mode, and
 authority envelope. Inside that accepted authority, delivery is autonomous — agents commit, push
 their feature branch, and maintain the pull request, and GitHub native auto-merge integrates into
-`dev` automatically once the required quality gates are green on the exact current head, the
-branch is current with `dev`, and every review conversation is resolved. No human review or manual merge action is part of the loop; the
+`dev` automatically once the required quality gates are green on the exact current head and every
+review conversation is resolved. No human review or manual merge action is part of the loop; the
 gates are the control (ADR-0135). Direct pushes to
 `dev`, force pushes, and gate bypasses stay denied, and the manifest-producing surfaces emit
 redacted evidence for audit.
@@ -99,13 +99,11 @@ npm install
 
 ### Run the repository checks
 
-These are the baseline commands called out by the contributing guide and expected before opening a pull request:
+The pre-PR expectation is the diff-scoped agent gate — it runs exactly the steps your change set
+can affect and reports skipped steps visibly (see `AGENTS.md` section 3 for the full loop):
 
 ```bash
-npm run build
-npm test
-npm run lint
-npm run typecheck
+npm run agent:pre-pr
 ```
 
 ### Start the repository in development mode
@@ -273,7 +271,7 @@ The UI runs on loopback only. The `--host` option can validate a loopback host v
 
 1. Add a local project path.
 2. Select one of the configured chat models.
-3. For coding agents, select **Ask for approval**, **Approve for me**, or **Full access** and confirm
+3. For coding agents, select **Ask for approval**, **Supervised workspace**, or **Full access** and confirm
    the bounded task and Authority Envelope.
 4. Use chat or a workflow: Generate Tests, Investigate Bug, Explain Plan, or Verify.
 5. Review policy-required or workflow-presented diffs before accepting them; inspect directly applied
