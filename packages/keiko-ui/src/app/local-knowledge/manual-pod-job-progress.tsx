@@ -14,8 +14,8 @@ import { formatError } from "./format-error";
 type ManualPodMessageKey = Parameters<I18nTranslate>[0];
 
 // A getter for the body-free job projection (mirrors `getHtmlManualPodJob`); named locally so the
-// shared module does not depend on the API module's identifier.
-export type ManualPodJobGetter = (jobId: string) => Promise<HtmlManualPodJob>;
+// shared module does not depend on the API module's identifier. Internal to this module.
+type ManualPodJobGetter = (jobId: string) => Promise<HtmlManualPodJob>;
 
 // The per-operation state labels (create vs refresh); crawl/index progress lines are shared.
 export interface ManualPodStateLabelKeys {
@@ -24,7 +24,7 @@ export interface ManualPodStateLabelKeys {
   readonly failed: ManualPodMessageKey;
 }
 
-export function manualPodStateLabel(
+function manualPodStateLabel(
   job: HtmlManualPodJob,
   t: I18nTranslate,
   keys: ManualPodStateLabelKeys,
