@@ -5,7 +5,7 @@ import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 
-export interface ConversationMemorySettingsSnapshot {
+interface ConversationMemorySettingsSnapshot {
   readonly enabled: boolean;
   readonly budgetTokens: number;
   readonly mode: CodingWorkbenchMode;
