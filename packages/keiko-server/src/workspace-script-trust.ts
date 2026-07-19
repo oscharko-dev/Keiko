@@ -77,11 +77,13 @@ export interface WorkspaceScriptTrustService {
   readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
+  readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
 }
 
 export interface WorkspaceScriptTrustServiceOptions {
   readonly store: UiStore;
   readonly fs?: WorkspaceFs | undefined;
+  readonly onRestricted?: ((canonicalRoot: string) => void) | undefined;
 }
 
 function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string {
@@ -250,10 +252,12 @@ function invalidatedTrustedRecord(
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
+  private readonly onRestricted: ((canonicalRoot: string) => void) | undefined;
 
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
+    this.onRestricted = options.onRestricted;
   }
 
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
@@ -287,6 +291,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       "human-revocation",
       nextRevision(this.store, binding.rootRef),
     );
+    this.onRestricted?.(canonicalRoot);
     return { trusted: false };
   };
 
@@ -306,12 +311,27 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
           invalidationReason(invalidated.binding, expected),
           invalidated.revision + 1,
         );
+        this.onRestricted?.(canonicalRoot);
       }
       return projectedTrusted;
     } catch {
       return false;
     }
   };
+
+  public readonly trustLevelForRoot = (root: string): WorkspaceTrustLevel =>
+    this.isTrusted(root, {
+      root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    })
+      ? "trusted"
+      : "restricted";
 }
 
 export function createWorkspaceScriptTrustService(

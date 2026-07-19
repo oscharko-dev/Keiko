@@ -19,6 +19,7 @@ function input(overrides: Partial<ManagedLspActivationInput> = {}): ManagedLspAc
     negotiation: "negotiated",
     runtimeHealth: "healthy",
     restartRequired: false,
+    workspaceTrust: "trusted",
     ...overrides,
   };
 }

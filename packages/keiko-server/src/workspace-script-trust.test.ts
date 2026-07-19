@@ -59,6 +59,22 @@ function successfulSpawn(): SpawnFn {
 }
 
 describe("WorkspaceScriptTrustService", () => {
+  it("projects trust by canonical root and synchronously signals every persisted restriction", () => {
+    const onRestricted = vi.fn();
+    const trust = createWorkspaceScriptTrustService({ store, onRestricted });
+
+    expect(trust.trustLevelForRoot(root)).toBe("restricted");
+    expect(trust.grant(root)).toEqual({ trusted: true });
+    expect(trust.trustLevelForRoot(root)).toBe("trusted");
+    expect(trust.revoke(root)).toEqual({ trusted: false });
+    expect(onRestricted).toHaveBeenLastCalledWith(nodeWorkspaceFs.realPath(root));
+
+    trust.grant(root);
+    writeFileSync(join(root, "package.json"), `${MANIFEST}\n`, "utf8");
+    expect(trust.trustLevelForRoot(root)).toBe("restricted");
+    expect(onRestricted).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed, grants explicitly, and invalidates the grant after a manifest change", () => {
     const trust = createWorkspaceScriptTrustService({ store });
     const verification = createVerificationRunnerManager({

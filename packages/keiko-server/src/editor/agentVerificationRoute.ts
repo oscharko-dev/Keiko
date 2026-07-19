@@ -29,6 +29,7 @@ import {
   type EditorAgentActionStatus,
   type EditorAgentSessionSnapshot,
   type EditorAgentVerificationRunRequest,
+  type WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { recordEditorAgentActionAudit } from "./agentActionAudit.js";
@@ -107,6 +108,19 @@ function denyByAuthority(
   };
 }
 
+function verificationWorkspaceTrust(
+  deps: UiHandlerDeps,
+  workspaceRoot: string,
+): WorkspaceTrustLevel {
+  try {
+    return deps.workspaceScriptTrust?.trustLevelForRoot(workspaceRoot) === "trusted"
+      ? "trusted"
+      : "restricted";
+  } catch {
+    return "restricted";
+  }
+}
+
 // classify → (resolve envelope) → compose, in the exact order decideActionPolicy uses. "execution" is
 // non-null in EDITOR_AGENT_WORKBENCH_ACTION_CLASS, so a verification request is ALWAYS envelope-gated
 // (never short-circuited like navigation/layout) — the composed result can only be as-or-more
@@ -144,6 +158,7 @@ function decideVerificationPolicy(
     baseline,
     resolution.envelope,
     EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification,
+    verificationWorkspaceTrust(deps, snapshot.workspaceRoot),
   );
 }
 

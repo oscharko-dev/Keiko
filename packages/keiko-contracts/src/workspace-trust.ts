@@ -225,7 +225,17 @@ export function workspaceTrustPolicyEffect(
   expectedBinding: WorkspaceTrustBinding,
   operation: WorkspaceTrustOperationClass,
 ): CodingWorkbenchPolicyEffect {
-  if (resolvesTrusted(assessment, expectedBinding) || operation === "read") return "allowed";
+  const level = resolvesTrusted(assessment, expectedBinding) ? "trusted" : "restricted";
+  return workspaceTrustLevelPolicyEffect(level, operation);
+}
+
+// Projection adapter for server consumers that have already resolved the canonical effective level.
+// Exact `trusted` is the only widening value; omission and malformed runtime values stay restricted.
+export function workspaceTrustLevelPolicyEffect(
+  level: WorkspaceTrustLevel | undefined,
+  operation: WorkspaceTrustOperationClass,
+): CodingWorkbenchPolicyEffect {
+  if (level === "trusted" || operation === "read") return "allowed";
   return operation === "execute" ? "denied" : "approval-required";
 }
 

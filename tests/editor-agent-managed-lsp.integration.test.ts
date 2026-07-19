@@ -55,13 +55,17 @@ import {
 } from "../packages/keiko-server/src/editor/agentAuthorityRegistry.js";
 import { createManagedLspActivationStore } from "../packages/keiko-server/src/editor/lsp/managedLspActivationStore.js";
 import { createManagedLspControlService } from "../packages/keiko-server/src/editor/lsp/managedLspControl.js";
-import { shutdownHostLspPool } from "../packages/keiko-server/src/editor/lsp/hostLanguageOperation.js";
+import {
+  disposeHostLspPoolEntry,
+  shutdownHostLspPool,
+} from "../packages/keiko-server/src/editor/lsp/hostLanguageOperation.js";
 import type { LspSpawnFn } from "../packages/keiko-server/src/editor/lsp/lspNodeAdapter.js";
 import {
   createFakeLspProcess,
   type FakeLspBehavior,
 } from "../packages/keiko-server/src/editor/lsp/testing/fakeLspProcess.js";
 import { createWorkspaceMutexRegistry } from "../packages/keiko-server/src/task-workspace/mutex.js";
+import { createWorkspaceScriptTrustService } from "../packages/keiko-server/src/workspace-script-trust.js";
 
 const SESSION_ID = "session-2281";
 const HASH = "a".repeat(64);
@@ -82,6 +86,7 @@ interface Fixture {
   readonly spawnedMethods: readonly (readonly string[])[];
   readonly extraRoots: string[];
   readonly queuedRequests: readonly EditorAgentHttpTransportRequest[];
+  readonly waitForRestrictions: () => Promise<void>;
 }
 
 const activeFixtures: Fixture[] = [];
@@ -337,18 +342,34 @@ async function createFixture(
   executable(binDir, "gopls");
   writeFileSync(join(root, "main.py"), "value = missing\n", "utf8");
   writeFileSync(join(root, "main.go"), "package main\nfunc main() {}\n", "utf8");
+  writeFileSync(join(root, "package.json"), '{"name":"restricted-mode-fixture"}\n', "utf8");
   writeFileSync(join(staticRoot, "index.html"), "<html></html>", "utf8");
   const spawnedMethods: string[][] = [];
+  const store = createInMemoryUiStore();
+  store.createProject(root, "fixture");
+  let restrictionCompletion = Promise.resolve();
+  let restrictManagedLsp = (_canonicalRoot: string): void => undefined;
+  const workspaceScriptTrust = createWorkspaceScriptTrustService({
+    store,
+    onRestricted: (canonicalRoot): void => {
+      restrictManagedLsp(canonicalRoot);
+    },
+  });
   const managedLspControl = createManagedLspControlService({
     store: createManagedLspActivationStore({ stateDir }),
     processEnv: controlEnv,
     provisioning: (): boolean => true,
-    disposePoolEntry: (): Promise<void> => Promise.resolve(),
+    disposePoolEntry: disposeHostLspPoolEntry,
+    workspaceTrust: (canonicalRoot) => workspaceScriptTrust.trustLevelForRoot(canonicalRoot),
     runtimeApproved: (): boolean => true,
     configurationSafe: (): boolean => true,
     projectEvidence: (): "projected" => "projected",
     mutex: createWorkspaceMutexRegistry(),
   });
+  restrictManagedLsp = (canonicalRoot): void => {
+    restrictionCompletion = managedLspControl.restrict(canonicalRoot);
+  };
+  workspaceScriptTrust.grant(root);
   const deps = {
     config: undefined,
     configPresent: false,
@@ -365,7 +386,8 @@ async function createFixture(
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
-    store: createInMemoryUiStore(),
+    store,
+    workspaceScriptTrust,
     managedLspControl,
     editorLanguageRouteOptions: {
       hostLanguageCommandRules: [{ executable: "pyright-langserver" }, { executable: "gopls" }],
@@ -417,6 +439,7 @@ async function createFixture(
     spawnedMethods,
     extraRoots: [],
     queuedRequests,
+    waitForRestrictions: (): Promise<void> => restrictionCompletion,
   };
   activeFixtures.push(fixture);
   return fixture;
@@ -521,6 +544,46 @@ afterEach(async () => {
 });
 
 describe("docked-agent managed-LSP integration (#2281)", () => {
+  it("runs the Restricted Mode deny, grant, revoke, stop, and re-deny journey (#2522)", async () => {
+    const fixture = await createFixture();
+    const trust = fixture.deps.workspaceScriptTrust;
+    if (trust === undefined) throw new Error("workspace trust fixture unavailable");
+    trust.revoke(fixture.root);
+    await fixture.waitForRestrictions();
+
+    const deniedActivation = await fixture.deps.managedLspControl?.mutate({
+      action: "activate",
+      actorClass: "localHuman",
+      expectedRevision: 0,
+      idempotencyKey: "activate-python-restricted-2522",
+      language: "python",
+      root: fixture.root,
+    });
+    expect(deniedActivation).toMatchObject({
+      kind: "denied",
+      status: { reasonCode: "WORKSPACE_UNTRUSTED", policyResult: "denied" },
+    });
+
+    trust.grant(fixture.root);
+    await activate(fixture, "python", 0);
+    await registerSnapshot(fixture, fixture.root);
+    expect(
+      output(await call(fixture, "diagnostics", "main.py", "python", "trusted")),
+    ).toMatchObject({ ok: true, result: { status: "succeeded" } });
+    expect(fixture.spawnedMethods).toHaveLength(1);
+
+    trust.revoke(fixture.root);
+    await fixture.waitForRestrictions();
+    expect(fixture.spawnedMethods[0]).toContain("shutdown");
+    expect(
+      output(await call(fixture, "diagnostics", "main.py", "python", "revoked")),
+    ).toMatchObject({
+      ok: true,
+      result: { status: "failed", failure: { code: "PROVIDER_UNAVAILABLE" } },
+    });
+    expect(fixture.spawnedMethods).toHaveLength(1);
+  });
+
   it("resolves Python diagnostics and Go navigation through the real BFF and tool host", async () => {
     const fixture = await createFixture();
     await activate(fixture, "python", 0);
@@ -650,7 +713,10 @@ describe("docked-agent managed-LSP integration (#2281)", () => {
       ok: true,
       result: { status: "failed", failure: { code: "PROVIDER_UNAVAILABLE" } },
     });
-    expect(fixture.spawnedMethods.map((methods) => [...methods])).toEqual(advertisedMethods);
+    expect(fixture.spawnedMethods).toHaveLength(advertisedMethods.length);
+    expect(fixture.spawnedMethods[0]).toEqual(
+      expect.arrayContaining(["initialize", "shutdown", "exit"]),
+    );
     expect(fixture.spawnedMethods.flat()).not.toContain("textDocument/diagnostic");
     expect(listEditorAgentActionAudit(SESSION_ID).at(-1)).toMatchObject({
       outcome: "failed",

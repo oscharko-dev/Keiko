@@ -35,6 +35,7 @@ describe("node managed LSP control wiring", () => {
       stateDir: temporaryDirectory(),
       processEnv: {},
       evidenceStore,
+      workspaceTrust: (): "trusted" => "trusted",
       redact: (value): unknown =>
         typeof value === "string" ? value.replace(secret, "[REDACTED]") : value,
       diagnosticSink: {
