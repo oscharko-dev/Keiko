@@ -97,10 +97,10 @@ const UpdateWindow = dynamic(
   () => import("../update/UpdateWindow").then((mod) => mod.UpdateWindow),
   { ssr: false, loading: windowChunkFallback },
 );
-const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
-  ssr: false,
-  loading: windowChunkFallback,
-});
+const FilesWindowSessionHost = dynamic(
+  () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.FilesWindowSessionHost),
+  { ssr: false, loading: windowChunkFallback },
+);
 const EditorWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.EditorWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },
@@ -406,58 +406,11 @@ registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
   const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  const onActiveFileChange = (
-    path: string | null,
-    resolvedRoot: string | null,
-    activeDirectoryPath?: string | null,
-  ): void => {
-    const patch: Record<string, string | undefined> = {
-      activeFilePath: path ?? undefined,
-      resolvedRoot: resolvedRoot ?? undefined,
-    };
-    if (activeDirectoryPath !== undefined) {
-      patch.activeDirectoryPath = activeDirectoryPath ?? undefined;
-    }
-    ctx.updateCfg(patch);
-  };
-  // Persist the new root into cfg so opening a different machine path survives reload, and so a
-  // connected Chat re-binds to the new folder on the next scope update.
-  const onRootChange = (nextRoot: string): void => {
-    ctx.updateCfg({
-      root: nextRoot,
-      activeFilePath: undefined,
-      activeDirectoryPath: undefined,
-      resolvedRoot: undefined,
-    });
-  };
-  const onOpenFile = (fileRoot: string, path: string): void => {
-    ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
-  };
-  const onOpenGitDelivery = (projectRoot: string): void => {
-    ctx.openWindow("governedGit", { projectPath: projectRoot });
-  };
-  return root !== undefined ? (
-    <FilesWidget
-      root={root}
-      onActiveFileChange={onActiveFileChange}
-      onRootChange={onRootChange}
-      onOpenFile={onOpenFile}
-      onOpenGitDelivery={onOpenGitDelivery}
-    />
-  ) : (
-    <FilesWidget
-      onActiveFileChange={onActiveFileChange}
-      onRootChange={onRootChange}
-      onOpenFile={onOpenFile}
-      onOpenGitDelivery={onOpenGitDelivery}
-    />
-  );
+  return <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
 });
 registerWindowRender("editor", (cfg, ctx) => {
   const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  return (
-    <EditorWindowSessionHost key={ctx.activeRoot ?? "unbound"} cfg={cfg} ctx={ctx} root={root} />
-  );
+  return <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");

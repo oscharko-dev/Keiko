@@ -1248,10 +1248,10 @@ function useUnmountDisposal(refs: EditorRefs): void {
       if (editorRef.current !== null) {
         viewStateRef.current = captureViewState(editorRef.current);
       }
-      disposeRef.current?.();
-      disposeRef.current = null;
       modelAttachmentRef.current?.detach();
       modelAttachmentRef.current = null;
+      disposeRef.current?.();
+      disposeRef.current = null;
       editorRef.current = null;
     };
   }, [editorRef, viewStateRef, disposeRef, modelAttachmentRef]);

@@ -390,6 +390,7 @@ export function EditorWidget({
   onOpenProblems,
   onOpenWorkspaceTrust,
   onOpenDebugPanel,
+  sessionActive = true,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
@@ -1576,6 +1577,7 @@ export function EditorWidget({
     if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
+      sessionActive,
       root: workspaceRoot,
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,

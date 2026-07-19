@@ -7,7 +7,11 @@ import {
   type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { I18nProvider } from "@/lib/i18n";
-import { WorkspaceTrustBanner, WorkspaceTrustDecisionDialog } from "./WorkspaceTrustSurfaces";
+import {
+  WorkspaceTrustBadge,
+  WorkspaceTrustBanner,
+  WorkspaceTrustDecisionDialog,
+} from "./WorkspaceTrustSurfaces";
 
 function restrictedStatus(reason: WorkspaceTrustStatus["reason"]): WorkspaceTrustStatus {
   return {
@@ -22,6 +26,22 @@ function restrictedStatus(reason: WorkspaceTrustStatus["reason"]): WorkspaceTrus
 }
 
 describe("Workspace Trust governance surfaces", () => {
+  it("projects unavailable trust as restricted and renders a trusted badge explicitly", () => {
+    const view = render(
+      <I18nProvider>
+        <WorkspaceTrustBadge status={undefined} />
+      </I18nProvider>,
+    );
+    expect(screen.getByLabelText("Restricted Mode")).toHaveAttribute("data-trust", "restricted");
+
+    view.rerender(
+      <I18nProvider>
+        <WorkspaceTrustBadge status={{ ...restrictedStatus("human-grant"), trust: "trusted" }} />
+      </I18nProvider>,
+    );
+    expect(screen.getByLabelText("Trusted workspace")).toHaveAttribute("data-trust", "trusted");
+  });
+
   it("renders the honest digest-invalidation reason and an accessible management path", async () => {
     const onManage = vi.fn();
     const user = userEvent.setup();

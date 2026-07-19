@@ -6,9 +6,12 @@ import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
+import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
-import type { EditorWidgetProps } from "./cards/EditorWidget";
+import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
+import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
 import { gitObjectId } from "./gitObjectId";
+import { MultiRootEditorHost } from "./MultiRootEditorHost";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import {
   composeEditorSelectionPrompt,
@@ -33,7 +36,10 @@ const EditorWidget = dynamic<EditorWidgetProps>(
   () => import("./cards/EditorWidget").then((mod) => mod.EditorWidget),
   { ssr: false, loading: windowChunkFallback },
 );
-
+const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
@@ -326,32 +332,76 @@ export function EditorWindowSessionHost({
   readonly ctx: WindowRenderContext;
   readonly root: string | undefined;
 }): ReactNode {
+  const configuredRoot = str(cfg, "root");
+  const workspace = useWorkspaceManifest(root ?? configuredRoot);
   const file = str(cfg, "file");
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
-  const revealLineStart = num(cfg, "revealLineStart");
-  const revealLineEnd = num(cfg, "revealLineEnd");
-  const revealRequestId = str(cfg, "revealRequestId");
+  const buildBaseProps = useCallback(
+    (targetRoot: string): EditorSessionBaseProps => editorSessionBaseProps(targetRoot, cfg, ctx),
+    [cfg, ctx],
+  );
+  if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
+    return (
+      <MultiRootEditorHost
+        manifest={workspace.manifest}
+        workspace={workspace}
+        configuredRoot={configuredRoot}
+        cfg={cfg}
+        buildBaseProps={buildBaseProps}
+        updateCfg={ctx.updateCfg}
+      />
+    );
+  }
   const props: EditorWidgetProps = {
+    ...editorSessionBaseProps(root, cfg, ctx),
     ...(root === undefined ? {} : { root }),
     ...(file === undefined ? {} : { file }),
     ...(openFiles === undefined ? {} : { openFiles }),
     ...(layoutJson === undefined ? {} : { layoutJson }),
-    ...(revealLineStart === undefined ? {} : { revealLineStart }),
-    ...(revealLineEnd === undefined ? {} : { revealLineEnd }),
-    ...(revealRequestId === undefined ? {} : { revealRequestId }),
+    onWorkspaceChange: (patch) => updateEditorCfg(ctx, patch),
+  };
+
+  // V1/unbound roots keep the ADR-0090 remount guarantee. V2 manifests instead keep one keyed
+  // EditorWidget state container per root inside MultiRootEditorHost.
+  return <EditorWidget key={root ?? "unbound"} {...props} />;
+}
+
+type EditorSessionBaseProps = Omit<
+  EditorWidgetProps,
+  "file" | "layoutJson" | "onWorkspaceChange" | "openFiles" | "root" | "sessionActive"
+>;
+
+function updateEditorCfg(ctx: WindowRenderContext, patch: EditorWidgetWorkspacePatch): void {
+  ctx.updateCfg({
+    root: patch.root,
+    file: patch.file,
+    openFiles: patch.openFiles,
+    layoutJson: patch.layoutJson,
+  });
+}
+
+function editorSessionBaseProps(
+  targetRoot: string | undefined,
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+): EditorSessionBaseProps {
+  const file = str(cfg, "file");
+  return {
+    ...(num(cfg, "revealLineStart") === undefined
+      ? {}
+      : { revealLineStart: num(cfg, "revealLineStart") }),
+    ...(num(cfg, "revealLineEnd") === undefined
+      ? {}
+      : { revealLineEnd: num(cfg, "revealLineEnd") }),
+    ...(str(cfg, "revealRequestId") === undefined
+      ? {}
+      : { revealRequestId: str(cfg, "revealRequestId") }),
     linkedRoot: ctx.linkedRoot,
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,
     linkedCapsuleSetIds: ctx.linkedCapsuleSetIds,
     windowId: ctx.windowId,
-    onWorkspaceChange: (patch) =>
-      ctx.updateCfg({
-        root: patch.root,
-        file: patch.file,
-        openFiles: patch.openFiles,
-        layoutJson: patch.layoutJson,
-      }),
     openEditorFile: ctx.openEditorFile,
     onOpenGitCommit: (projectPath, commit) => {
       const target = gitObjectId(commit);
@@ -367,16 +417,16 @@ export function EditorWindowSessionHost({
       ctx.openWindow("workspaceTrust");
     },
     onOpenDebugPanel: () => {
-      if (root !== undefined) {
+      if (targetRoot !== undefined) {
         ctx.openWindow("debug", {
-          projectPath: root,
+          projectPath: targetRoot,
           ...(file === undefined ? {} : { activeFile: file }),
         });
       }
     },
     onAskSelection: (handoff) => {
-      if (root === undefined) return false;
-      const selectionHandoffId = registerEditorSelectionHandoff(root, handoff);
+      if (targetRoot === undefined) return false;
+      const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
       if (selectionHandoffId === null) return false;
       const chatWindowId = ctx.openWindow("chat", { selectionHandoffId });
       if (chatWindowId !== null) return true;
@@ -384,7 +434,78 @@ export function EditorWindowSessionHost({
       return false;
     },
   };
+}
 
-  // A workspace switch remounts Monaco so models from the previous root cannot survive it.
-  return <EditorWidget key={ctx.activeRoot ?? "unbound"} {...props} />;
+export function FilesWindowSessionHost({
+  cfg,
+  ctx,
+  root,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+  readonly root: string | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const workspace = useWorkspaceManifest(root);
+  const onActiveFileChange = (
+    path: string | null,
+    resolvedRoot: string | null,
+    activeDirectoryPath?: string | null,
+  ): void => {
+    ctx.updateCfg({
+      activeFilePath: path ?? undefined,
+      resolvedRoot: resolvedRoot ?? undefined,
+      ...(activeDirectoryPath === undefined
+        ? {}
+        : { activeDirectoryPath: activeDirectoryPath ?? undefined }),
+    });
+  };
+  const onOpenFile = (fileRoot: string, path: string): void => {
+    ctx.openEditorFile({ root: fileRoot, path });
+  };
+  const onOpenGitDelivery = (projectRoot: string): void => {
+    ctx.openWindow("governedGit", { projectPath: projectRoot });
+  };
+  if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
+    return (
+      <MultiRootFilesWidget
+        manifest={workspace.manifest}
+        workspace={workspace}
+        onActiveFileChange={onActiveFileChange}
+        onOpenFile={onOpenFile}
+        onOpenGitDelivery={onOpenGitDelivery}
+      />
+    );
+  }
+  const onRootChange = (nextRoot: string): void => {
+    const actor = workspace.manifest?.roots.find((candidate) => candidate.canonicalRoot === root);
+    if (actor !== undefined) {
+      void workspace.addRoot(actor.rootRef, nextRoot);
+      return;
+    }
+    ctx.updateCfg({
+      root: nextRoot,
+      activeFilePath: undefined,
+      activeDirectoryPath: undefined,
+      resolvedRoot: undefined,
+    });
+  };
+  return (
+    <>
+      {workspace.issue === "mutation" ? (
+        <p className="files-error" role="alert">
+          {t("filesWidget.multiRoot.error")}
+        </p>
+      ) : null}
+      <FilesWidget
+        {...(root === undefined ? {} : { root })}
+        onActiveFileChange={onActiveFileChange}
+        onRootChange={onRootChange}
+        onOpenFile={(fileRoot: string, path: string) =>
+          ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
+        }
+        onOpenGitDelivery={onOpenGitDelivery}
+      />
+    </>
+  );
 }
