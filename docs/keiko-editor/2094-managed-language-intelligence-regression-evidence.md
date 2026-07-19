@@ -1,24 +1,24 @@
 # Epic 2094 managed language intelligence regression evidence
 
-Evidence refreshed: 2026-07-18. The final Epic #2094 audit is based on
+Evidence refreshed: 2026-07-19. The final Epic #2094 audit is based on
 `dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` with Node 24.18.0 and npm 11.16.0.
-The focused closeout, real-browser, controlled orchestration, Linux-authoritative editor-evidence,
-and complete no-cache local aggregate lanes are green. Exact-head protected-check receipts remain
-mandatory before closure.
+The focused closeout, real-browser, controlled orchestration, and Linux-authoritative
+editor-evidence lanes are green. The final no-cache aggregate runs on the refreshed evidence commit;
+exact-head protected-check receipts remain mandatory before closure.
 
 ## Current closeout status
 
 | Evidence                         | Current disposition                                                                                                                                                    |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Failure-first guard              | **PASS** — the new guard failed 4/4 before implementation: incomplete suite collection, missing browser proof, missing matrix/p50 evidence, and stale setup/M5 claims. |
-| Focused closeout                 | **PASS** — 53 files and 655 tests passed; 5 optional real-provider files/tests skipped. UI continuation: 2 files and 114 tests passed.                                 |
+| Focused closeout                 | **PASS** — 53 files and 656 tests passed; 5 optional real-provider files/tests skipped. UI continuation: 2 files and 115 tests passed.                                 |
 | Provider-operation-state matrix  | **PASS** — 5 tests, including all 675 cells and fail-closed disposition invariants.                                                                                    |
 | Measurement harness unit tests   | **PASS** — 5 tests cover percentiles, recursive disk bytes and error paths, all budget dispositions, controlled enforcement, and five provider profiles.               |
 | Controlled orchestration         | **PASS** — `linux-arm64`, enforced wall-clock/RSS budgets, five isolated provider profiles, and zero residual disk bytes.                                              |
-| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 1.3 min through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                     |
+| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 26.8 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
 | Linux editor release evidence    | **PASS** — fresh production export: 309 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
-| D12 paired editor evidence       | **PASS** — six orchestrated runs independently validate every budget at candidate `724fd56b37735caa2c97ab70061e18e5dc422bad`.                                          |
-| Aggregate gate                   | **PASS** — `npm run agent:pre-pr -- --no-cache` completed with 28 passed steps, zero failures, and 3 documented non-Linux platform skips.                              |
+| D12 paired editor evidence       | **PASS** — six orchestrated runs independently validate every budget at candidate `ba9b69bb95881c673c6791f13e7f7362f324eb7e`.                                          |
+| Aggregate gate                   | **PENDING** — the final no-cache aggregate runs after this refreshed evidence is committed; the preceding complete run passed 28 steps with 3 platform skips.          |
 
 The local receipt does not replace the required protected checks on the pushed exact head.
 
@@ -35,6 +35,18 @@ Tests       4 failed (4)
 The failures independently proved the four closeout gaps. The retained test now requires complete
 LSP directory collection, the Issue #2282 Playwright config/spec, 675-cell and dual-percentile
 documentation, Node/npm lockfile setup, and a current M5 disposition.
+
+Pull-request review then exposed two additional regressions with failure-first tests:
+
+```text
+managedLspControl.test.ts: expected an identical configuration to return ok; received invalid
+ManagedLanguageSettings.test.tsx: expected server default "standard"; received stale draft "strict"
+```
+
+The control layer now records an identical configuration as an idempotent no-op without revision or
+pool churn, while preserving the existing restart state. The Settings editor now gives a newly
+server-owned initial default precedence over any module-cached configured draft. The focused
+regressions pass 27/27 server tests and 38/38 UI tests after the fixes.
 
 ## Provider-operation-state matrix
 
@@ -100,7 +112,7 @@ The spec covers:
 - populated-state real-browser axe and attached visual evidence;
 - deactivation and typed no-fallback operation failure.
 
-The exact Playwright command passed 1/1 in 1.3 minutes. axe reported no serious or critical
+The exact Playwright command passed 1/1 in 26.8 seconds. axe reported no serious or critical
 violations. The preserved `managed-language-closeout-active.png` attachment has SHA-256
 `11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5` and shows Python and Go
 active/ready with their rolled-back and changed configuration values.

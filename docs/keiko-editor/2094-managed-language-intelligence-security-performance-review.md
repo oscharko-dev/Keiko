@@ -1,6 +1,6 @@
 # Epic 2094 managed language intelligence security and performance review
 
-Review refreshed: 2026-07-18 against `dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` plus
+Review refreshed: 2026-07-19 against `dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` plus
 the local final Epic #2094 audit diff. Scope: Python, Go, Shell, Java, and Rust activation,
 configuration, process supervision, language operations, semantic tokens, Settings UI, docked-agent
 projection, evidence, performance, rollback, and release gates.
@@ -11,11 +11,13 @@ No unresolved critical or high security defect was found in the reviewed product
 closeout harness. The final audit corrected two non-security product gaps: Settings now persists a
 strict server-owned typed default as the first configuration after activation (#2534), and the live
 projection preserves the required targeted-restart action while the changed pool entry has no health
-sample (#2535).
+sample (#2535). Pull-request review also proved and corrected two consistency gaps: an identical
+configuration now records a no-op instead of failing validation, and a server-owned initial default
+now replaces any stale configured Settings draft for the same root and language.
 
-The real-browser axe/visual lane, controlled orchestration run, fresh Linux-authoritative editor
-evidence, and complete no-cache local aggregate are green. This conclusion remains provisional until
-the exact-head protected checks are green.
+The real-browser axe/visual lane, controlled orchestration run, and fresh Linux-authoritative editor
+evidence are green. The final no-cache local aggregate runs after the refreshed evidence commit. This
+conclusion remains provisional until that receipt and the exact-head protected checks are green.
 
 ## Trust-boundary review
 
@@ -31,7 +33,7 @@ the exact-head protected checks are green.
 | Docked agent           | Existing governed action/language routes are reused; review-only results grant no write/delivery authority.                                  | Real-loopback integration covers Python/Go operations, cancellation, workspace switch, stale activation, redacted audit, and byte-identical files for review-only edits. **PASS**.            |
 | UI                     | Settings reflects server state, remains keyboard/focus safe, and does not install providers or expose secrets/paths.                         | Component axe/i18n/state coverage and the composed real-browser axe/visual lane pass, including the complete activate → accept default → restart path. **PASS**.                              |
 | Evidence               | Diagnostics/manifests contain statuses, counts, hashes, reason codes, and relative paths only.                                               | Redaction tests exclude roots, source/diagnostic bodies, executable paths, environment, stderr, configuration bodies, endpoints, and credentials. **PASS**.                                   |
-| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | The no-cache local aggregate and Linux-authoritative evidence pass; exact-head protected checks remain required. **LOCAL PASS; REMOTE PENDING**.                                              |
+| Delivery               | No check, budget, coverage floor, approval, or branch protection may be bypassed.                                                            | Linux-authoritative evidence passes; the exact evidence-commit aggregate and protected checks remain required. **FINAL LOCAL AGGREGATE PENDING; REMOTE PENDING**.                             |
 
 ## Provider-operation-state closure
 
@@ -100,9 +102,9 @@ for:
 Optional real-provider lanes supplement this inventory. They may skip only when exact approved
 offline binaries are absent; no test is authorized to install or download them.
 
-The refreshed focused command passed 53 files and 655 tests. Five real-provider files (five tests)
+The refreshed focused command passed 53 files and 656 tests. Five real-provider files (five tests)
 skipped because no approved offline provider directories were configured. The focused UI
-continuation passed 2 files and 114 tests.
+continuation passed 2 files and 115 tests.
 
 ## Performance and resource review
 
@@ -156,7 +158,7 @@ keyboard paths.
 The Playwright proof covers the real composed Settings window, real BFF state, server-owned initial
 typed configuration, live negotiated capability/health text, keyboard activation/deactivation,
 visible restart impact, guarded real-route restart/rollback, real-browser axe, and a visual
-attachment. It passed 1/1 in 1.3 minutes with zero
+attachment. It passed 1/1 in 26.8 seconds with zero
 serious/critical axe violations. The populated-state PNG SHA-256 is
 `11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5`.
 
