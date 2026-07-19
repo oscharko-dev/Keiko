@@ -24,12 +24,18 @@ than being reported as successful. The dashboard binds an evaluation to a head S
 redacted timing metadata. A delayed or lost webhook, an unavailable evaluator, or missing
 current-head review evidence can therefore leave the check pending.
 
-The Worker recovers delivery liveness without treating stale evidence as current. Its two-minute
-sweep re-evaluates never-evaluated, pending, and head-changed pull requests. It also re-evaluates a
-settled, unchanged pull request when its last evaluation reaches `RECONCILE_BACKSTOP_MS` (15
-minutes by default). A webhook normally carries same-head evidence changes; the sweep is the
-backstop for lost or rejected events. The Action proof of concept is diagnostic only until its
-documented cutover: it is not the canonical recovery path before then.
+Since the ADR-0142 cutover (2026-07-19) the canonical producer is the GitHub Action: recovery is
+event-driven. Every completion of a direct required check (`check_run`) and every pull-request
+comment (`issue_comment`) re-evaluates the affected pull on the exact current head; per-pull
+concurrency serialises overlapping evaluations. There is no cron and no webhook — the canonical
+explicit recovery for a stuck check is an owner- or agent-run dispatch:
+
+```bash
+gh workflow run keiko-for-quality-action.yml --ref dev -f pr=<number>
+```
+
+(The retired Worker's two-minute sweep and `RECONCILE_BACKSTOP_MS` backstop applied to the
+Worker era only; the rollback template in `infrastructure/keiko-for-quality/` retains them.)
 
 ## Diagnostic Steps
 
@@ -54,22 +60,20 @@ documented cutover: it is not the canonical recovery path before then.
    evaluator or evidence-lane problem rather than a successful verdict.
 4. Confirm that the 13 direct checks remain present and inspect their own checks UI separately.
    KFQ bridges Qodo evidence; it is not evidence that those direct checks passed.
-5. Wait for one two-minute reconciliation sweep after a pending or changed-head state. For a
-   settled unchanged head, allow the 15-minute default backstop. A Qodo comment or an eligible
-   check event should re-evaluate sooner; its absence after the sweep indicates webhook/event
-   recovery is not completing.
-6. If the Action proof of concept is enabled for diagnosis, an owner can request an explicit
-   evaluation of the pull request:
-
-   ```bash
-   gh workflow run <kfq-diagnostic-workflow> \
-     --ref <protected-branch> \
-     -f pr=<pull-request-number>
-   ```
-
-   Inspect the resulting run and compare its redacted dashboard/check output with the canonical
-   producer. Before cutover, this dispatch neither repairs nor replaces the canonical Worker check.
-   It must not be used to claim that the required check is healthy.
+5. Evaluation is event-driven with no scheduled sweep: a new head, a completed direct required
+   check, or a pull-request comment should each produce a fresh evaluation within minutes (a
+   just-updated Qodo review additionally waits out a short stability window before the verdict
+   turns green). If none of those events yields an advancing evaluation, event delivery or the
+   workflow itself is failing — inspect the `keiko-for-quality-action.yml` run list for the pull
+   request's events before assuming an evaluator defect.
+6. Request an explicit evaluation with the canonical recovery dispatch shown above
+   (`gh workflow run keiko-for-quality-action.yml --ref dev -f pr=<number>`; safe to repeat,
+   serialised per pull request). Inspect the resulting run: it must publish the `Keiko for
+Quality` check on the pull request's exact current head under the KFQ GitHub App identity.
+   A run that publishes under the GitHub Actions fallback identity indicates the App credentials
+   (`KFQ_APP_ID` / `KFQ_PRIVATE_KEY_PKCS8` repository secrets) are missing or invalid — the
+   pinned protection context will not accept that check, so repair the secrets rather than
+   re-dispatching.
 
 Do not copy review bodies, source URLs, tokens, webhook payloads, or private run logs into an
 incident record. Record pull-request number, head SHA, normalized timestamps, check state, event
@@ -77,11 +81,11 @@ type, and redacted error category only.
 
 ## Resolution
 
-1. Preserve the failed state while the automatic path recovers. Trigger or await the relevant
-   Qodo/comment or check event, then allow the two-minute sweep and, where applicable, the
-   15-minute settled-head backstop. Repair webhook delivery or evaluator configuration at the
-   owning runtime, then verify that the dashboard's evaluated head matches the pull request's
-   current head and that its timestamp advances.
+1. Preserve the failed state while the event-driven path recovers. Trigger or await an eligible
+   event (a new head, a completed direct required check, a pull-request comment) or run the
+   explicit dispatch, then verify that the dashboard's evaluated head matches the pull request's
+   current head and that its timestamp advances. Repair event delivery, workflow, or
+   App-credential configuration at the owning surface.
 2. If recovery does not occur and an owner determines that KFQ is unavailable, unbounded, or
    self-deadlocked, the owner may explicitly authorize the narrow ADR-0135 D7 escape. Before use,
    re-check repository administrators and custom roles with `bypass branch protections`; GitHub's

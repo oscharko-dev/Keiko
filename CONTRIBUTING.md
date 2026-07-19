@@ -16,7 +16,7 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All 13 app-bound required status checks must pass on the current pull-request head before a change
+All 14 app-bound required status checks must pass on the current pull-request head before a change
 can merge into `dev`:
 
 1. `ci`
@@ -32,12 +32,17 @@ can merge into `dev`:
 11. `SonarCloud Code Analysis`
 12. `Socket Security: Project Report`
 13. `Socket Security: Pull Request Alerts`
+14. `Keiko for Quality`
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
-after the direct required checks succeed on the exact current head and every review conversation
-is resolved. Qodo and `Keiko for Quality` remain advisory until they independently satisfy the
-availability and liveness requirements in
-[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md). Full mutation testing runs daily and
+after the required checks succeed on the exact current head and every review conversation is
+resolved. `Keiko for Quality` is a required, app-bound check (App id `4290143`) since the
+ADR-0142 cutover on 2026-07-19: all six live-probe conditions in
+[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md) were proven on live pull requests
+(ledger in
+[`docs/qa/keiko-for-quality-action-evaluation.md`](docs/qa/keiko-for-quality-action-evaluation.md))
+before the maintainer promoted it. Qodo itself remains advisory and comment-only; the KFQ check
+is the gateable bridge for its findings. Full mutation testing runs daily and
 on explicit dispatch; shared-runner performance evidence runs after merge and for releases. Neither
 unbounded workload is part of the pull-request critical path. Qodo configuration, large-PR
 acceptance, safe commands, and boundaries are governed by

@@ -1,18 +1,12 @@
-# Keiko for Quality — GitHub Action execution shell (proof of concept, issue #2506).
+# Keiko for Quality — the CANONICAL execution shell since the ADR-0142 cutover (2026-07-19).
+# The Cloudflare Worker (cron, webhook secret, D1) is retired; rollback = `wrangler deploy` from
+# infrastructure/keiko-for-quality/ plus reverting the identity env block below.
 #
-# Prototype that reuses the pure evaluator (scripts/keiko-for-quality-core.mjs) and the shared
-# GitHub helpers from the Cloudflare Worker shell to reproduce the KFQ verdict without any external
-# infrastructure. It coexists with the live Worker under a distinct check name and dashboard marker
-# and only publishes for pulls that carry the opt-in label (see the env below), so the real gate is
-# untouched while the two run side by side.
-#
-# Trust split (issue #2506, Qodo review): the `check_run` and `issue_comment` triggers run the
-# workflow definition from the repository default branch (`dev`), not from pull-request code, so a
-# pull cannot alter the evaluator that judges it. That authoritative path (the `evaluate` job) holds
-# write permissions and the App private key. The `pull_request` trigger runs the pull's own copy and
-# is therefore untrusted: the `preview` job is read-only, dry-run, and holds no secrets, so
-# pull-request-controlled code can neither exfiltrate credentials nor publish under a privileged
-# identity. See docs/qa/keiko-for-quality-action-evaluation.md.
+# Trust split (ADR-0142 D3): the authoritative `evaluate` job runs only on default-branch-defined
+# triggers (check_run / issue_comment / workflow_dispatch), whose definition pull-request code
+# cannot alter, so it is safe to hold write permissions there. The `pull_request`-triggered
+# `preview` job runs the pull's own copy and is therefore untrusted: read-only, dry-run, no
+# secrets, so pull-controlled code can neither exfiltrate credentials nor publish any identity.
 name: Keiko for Quality (Action)
 
 on:
