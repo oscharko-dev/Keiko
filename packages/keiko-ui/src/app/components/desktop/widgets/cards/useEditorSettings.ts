@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 
 import {
   EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M11_DEFAULT_PROFILE_REF,
   defaultEditorM7Settings,
   parseEditorM11SettingsEvent,
@@ -71,6 +72,7 @@ export interface EditorSettingsView {
   ) => Promise<void>;
   readonly deleteProfile: (profileRef: WorkspaceProfileRef) => Promise<void>;
   readonly switchProfile: (profileRef: WorkspaceProfileRef) => Promise<void>;
+  readonly resetProfile: (profileRef: WorkspaceProfileRef) => Promise<void>;
 }
 
 const defaults = defaultEditorM7Settings();
@@ -224,6 +226,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
       action: EditorM11ProfileMutationAction,
       profileRef?: WorkspaceProfileRef,
       displayName?: string,
+      settingIds?: readonly EditorM7SettingId[],
     ): Promise<void> => {
       await executeProfileMutation({
         action,
@@ -236,6 +239,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
         setSnapshot,
         signalRef: mutationAbort,
         snapshot,
+        settingIds,
       });
     },
     [root, snapshot],
@@ -258,6 +262,15 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
       mutateProfile("duplicate", profileRef, displayName),
     deleteProfile: (profileRef): Promise<void> => mutateProfile("delete", profileRef),
     switchProfile: (profileRef): Promise<void> => mutateProfile("switch", profileRef),
+    resetProfile: (profileRef): Promise<void> =>
+      mutateProfile(
+        "reset",
+        profileRef,
+        undefined,
+        EDITOR_M7_SETTING_REGISTRY.filter((definition) => definition.scopes.includes("user")).map(
+          (definition) => definition.id,
+        ),
+      ),
   };
 }
 
@@ -406,6 +419,7 @@ interface ProfileEntityMutationArgs {
   readonly setAnnouncement: (announcement: string) => void;
   readonly profileRef?: WorkspaceProfileRef | undefined;
   readonly displayName?: string | undefined;
+  readonly settingIds?: readonly EditorM7SettingId[] | undefined;
 }
 
 async function executeProfileMutation(args: ProfileEntityMutationArgs): Promise<void> {
@@ -445,6 +459,7 @@ function profileEntityMutationBody(
     ...(args.root === undefined ? {} : { root: args.root }),
     ...(args.profileRef === undefined ? {} : { profileRef: args.profileRef }),
     ...(args.displayName === undefined ? {} : { displayName: args.displayName }),
+    ...(args.settingIds === undefined ? {} : { settingIds: args.settingIds }),
   };
 }
 

@@ -6,8 +6,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  EDITOR_M11_DEFAULT_PROFILE_REF,
   isWorkspaceProfileRef,
   type EditorM11ProfilesSnapshot,
+  type WorkspaceProfileExportResult,
+  type WorkspaceProfileImportPreview,
   type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -128,6 +131,57 @@ async function mutate(body: Record<string, unknown>, etag: string, key: string):
   });
 }
 
+async function exportProfile(ref: WorkspaceProfileRef): Promise<WorkspaceProfileExportResult> {
+  const response = await fetch(
+    `${baseUrl()}/api/editor/settings/profiles/export?profileRef=${encodeURIComponent(ref)}`,
+  );
+  const body = (await response.json()) as WorkspaceProfileExportResult;
+  expect(response.status, JSON.stringify(body)).toBe(200);
+  return body;
+}
+
+async function previewImport(
+  manifest: unknown,
+  etag: string,
+): Promise<WorkspaceProfileImportPreview> {
+  const response = await fetch(`${baseUrl()}/api/editor/settings/profiles/import/preview`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+      "If-Match": etag,
+    },
+    body: JSON.stringify(manifest),
+  });
+  const body = (await response.json()) as WorkspaceProfileImportPreview;
+  expect(response.status, JSON.stringify(body)).toBe(200);
+  return body;
+}
+
+async function applyImport(
+  manifest: unknown,
+  preview: WorkspaceProfileImportPreview,
+  root: string,
+): Promise<Response> {
+  return fetch(`${baseUrl()}/api/editor/settings/profiles/import/apply`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+      "If-Match": `"edp-${String(preview.expectedRevision)}"`,
+      "Idempotency-Key": "apply-profile-import",
+    },
+    body: JSON.stringify({
+      schemaVersion: "1",
+      expectedRevision: preview.expectedRevision,
+      manifest,
+      previewDigest: preview.previewDigest,
+      switchAfterImport: true,
+      root,
+    }),
+  });
+}
+
 describe("editor profile routes", () => {
   it("creates, configures, and live-switches a profile", async () => {
     const initial = await profiles();
@@ -198,5 +252,102 @@ describe("editor profile routes", () => {
     expect(await response.json()).toMatchObject({
       error: { code: "DEFAULT_PROFILE_IMMUTABLE" },
     });
+  });
+
+  it("exports deterministically and imports only the explicitly previewed valid subset", async () => {
+    const initial = await profiles();
+    const created = await mutate(
+      { action: "create", displayName: "Focus", expectedRevision: 0 },
+      initial.body.etag,
+      "create-export-focus",
+    );
+    const createBody = (await created.json()) as { readonly etag: string };
+    const configured = await mutate(
+      {
+        action: "set",
+        expectedRevision: 1,
+        profileRef: "profile-focus",
+        values: { fontSize: 18, tabSize: 4 },
+      },
+      createBody.etag,
+      "configure-export-focus",
+    );
+    const configuredBody = (await configured.json()) as { readonly etag: string };
+    const exported = await exportProfile(profileRef("profile-focus"));
+    const corrupted = {
+      ...exported.manifest,
+      settings: {
+        ...exported.manifest.settings,
+        values: {
+          ...exported.manifest.settings.values,
+          fontSize: 1000,
+          watcherExclusions: ["/private/customer/**"],
+          unknownSetting: true,
+        },
+      },
+    };
+    const preview = await previewImport(corrupted, configuredBody.etag);
+    const forged = await applyImport(
+      corrupted,
+      { ...preview, previewDigest: "0".repeat(64) },
+      workspaceRoot,
+    );
+    const response = await applyImport(corrupted, preview, workspaceRoot);
+    const body = (await response.json()) as {
+      readonly profileRef: string;
+      readonly profiles: EditorM11ProfilesSnapshot;
+      readonly settings: {
+        readonly settings: readonly { readonly id: string; readonly value: unknown }[];
+      };
+    };
+
+    expect(exported.serializedManifest).toContain('"displayName": "Focus"');
+    expect(preview.proposedDisplayName).toBe("Focus (Imported)");
+    expect(preview.rows).toMatchObject([
+      { settingId: "fontSize", disposition: "rejected" },
+      { settingId: "tabSize", disposition: "add", value: 4 },
+      { settingId: "watcherExclusions", disposition: "rejected" },
+      { settingId: "unknownSetting", disposition: "rejected" },
+    ]);
+    expect(forged.status).toBe(400);
+    expect(await forged.json()).toMatchObject({ error: { code: "PREVIEW_MISMATCH" } });
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.profileRef).toBe("profile-copy");
+    expect(body.profiles.activeProfileRef).toBe("profile-copy");
+    expect(body.profiles.profiles).toMatchObject([
+      { displayName: "Default" },
+      { displayName: "Focus", settingCount: 2 },
+      { displayName: "Focus (Imported)", settingCount: 1 },
+    ]);
+    expect(body.settings.settings.find((setting) => setting.id === "fontSize")?.value).toBe(13);
+    expect(body.settings.settings.find((setting) => setting.id === "tabSize")?.value).toBe(4);
+  });
+
+  it("refuses future manifests and stale apply attempts without creating a profile", async () => {
+    const initial = await profiles();
+    const future = await fetch(`${baseUrl()}/api/editor/settings/profiles/import/preview`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        "If-Match": initial.body.etag,
+      },
+      body: JSON.stringify({ schemaVersion: 2 }),
+    });
+
+    expect(future.status).toBe(400);
+    expect(await future.json()).toMatchObject({ error: { code: "FUTURE_SCHEMA_VERSION" } });
+    const exported = await exportProfile(EDITOR_M11_DEFAULT_PROFILE_REF);
+    const preview = await previewImport(exported.manifest, initial.body.etag);
+    await mutate(
+      { action: "create", displayName: "Other", expectedRevision: 0 },
+      initial.body.etag,
+      "advance-before-import",
+    );
+    const stale = await applyImport(exported.manifest, preview, workspaceRoot);
+
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: { code: "STALE_REVISION" } });
+    expect((await profiles()).body.profiles).toHaveLength(2);
   });
 });

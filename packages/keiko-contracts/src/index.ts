@@ -3955,7 +3955,17 @@ export {
   editorM11RootSettingIsMonotonic,
   parseEditorM11SettingsEvent,
 } from "./editor-m11-settings.js";
-export type { WorkspaceProfileManifest } from "./workspace-profile.js";
+export type {
+  WorkspaceProfileManifest,
+  WorkspaceProfilePortabilityReasonCode,
+  WorkspaceProfileExportRedaction,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportDisposition,
+  WorkspaceProfileImportPreviewRow,
+  WorkspaceProfileImportPreview,
+  WorkspaceProfileImportFailureCode,
+  WorkspaceProfileImportApply,
+} from "./workspace-profile.js";
 export {
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,

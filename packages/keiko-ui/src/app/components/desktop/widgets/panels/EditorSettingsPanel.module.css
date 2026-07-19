@@ -43,6 +43,42 @@
   gap: 6px;
 }
 
+.portability {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-inset);
+  padding: 12px;
+}
+
+.preview {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.previewTable {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-primary);
+  font-size: 10px;
+}
+
+.previewTable th,
+.previewTable td {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.previewTable code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 .field {
   display: grid;
   gap: 4px;

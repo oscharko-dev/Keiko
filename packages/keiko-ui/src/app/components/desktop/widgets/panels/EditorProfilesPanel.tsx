@@ -9,10 +9,17 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import { EditorProfilePortability } from "./EditorProfilePortability";
 
 import styles from "./EditorSettingsPanel.module.css";
 
-export function EditorProfilesPanel({ view }: { readonly view: EditorSettingsView }): ReactNode {
+export function EditorProfilesPanel({
+  root,
+  view,
+}: {
+  readonly root: string | undefined;
+  readonly view: EditorSettingsView;
+}): ReactNode {
   const t = useTranslate();
   const snapshot = view.snapshot?.profiles;
   const [selectedRef, setSelectedRef] = useState<WorkspaceProfileRef>(
@@ -95,6 +102,7 @@ export function EditorProfilesPanel({ view }: { readonly view: EditorSettingsVie
           view={view}
         />
       </div>
+      <EditorProfilePortability root={root} selected={selected} view={view} />
     </section>
   );
 }
@@ -155,6 +163,16 @@ function ProfileActions({
         }}
       >
         {t("settings.profiles.switch")}
+      </button>
+      <button
+        type="button"
+        className={styles.button}
+        disabled={disabled || selected?.builtIn !== false}
+        onClick={() => {
+          if (selected !== undefined) void view.resetProfile(selected.profileRef);
+        }}
+      >
+        {t("settings.profiles.reset")}
       </button>
       <button
         type="button"

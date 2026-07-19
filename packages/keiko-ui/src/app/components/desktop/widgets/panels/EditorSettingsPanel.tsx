@@ -160,7 +160,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
           />
         ))}
       </div>
-      <EditorProfilesPanel view={view} />
+      <EditorProfilesPanel root={root} view={view} />
       <KeyboardShortcutsPanel root={root} scope={scope} view={view} />
       <WorkspaceSnippetsPanel root={root} />
       {pendingAiConfirm === null ? null : (

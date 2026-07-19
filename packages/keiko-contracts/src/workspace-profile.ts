@@ -6,6 +6,7 @@ import {
   isEditorM11ProfileSettingsLayer,
 } from "./editor-m11-settings.js";
 import type { EditorM11ProfileSettingsLayer } from "./editor-m11-settings.js";
+import type { EditorM7ReasonCode, EditorM7SettingId, EditorM7SettingValue } from "./editor-m7.js";
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   hasOnlyWorkspaceKeys,
@@ -29,6 +30,59 @@ export interface WorkspaceProfileManifest {
   readonly displayName: string;
   readonly revision: number;
   readonly settings: EditorM11ProfileSettingsLayer;
+}
+
+export type WorkspaceProfilePortabilityReasonCode =
+  EditorM7ReasonCode | "NON_PORTABLE_PATH" | "SECRET_LIKE";
+
+export interface WorkspaceProfileExportRedaction {
+  readonly settingId: EditorM7SettingId;
+  readonly reasonCode: "INVALID_VALUE" | "NON_PORTABLE_PATH" | "SECRET_LIKE";
+  readonly rejectedCount: number;
+}
+
+export interface WorkspaceProfileExportResult {
+  readonly kind: "ok";
+  readonly schemaVersion: typeof WORKSPACE_PROFILE_SCHEMA_VERSION;
+  readonly manifest: WorkspaceProfileManifest;
+  readonly serializedManifest: string;
+  readonly redactions: readonly WorkspaceProfileExportRedaction[];
+}
+
+export type WorkspaceProfileImportDisposition = "add" | "change" | "noOp" | "rejected";
+
+export interface WorkspaceProfileImportPreviewRow {
+  readonly settingId: string;
+  readonly disposition: WorkspaceProfileImportDisposition;
+  readonly value?: EditorM7SettingValue | undefined;
+  readonly reasonCode?: WorkspaceProfilePortabilityReasonCode | undefined;
+}
+
+export interface WorkspaceProfileImportPreview {
+  readonly kind: "ok";
+  readonly schemaVersion: typeof WORKSPACE_PROFILE_SCHEMA_VERSION;
+  readonly expectedRevision: number;
+  readonly sourceDisplayName: string;
+  readonly proposedDisplayName: string;
+  readonly collisionRenamed: boolean;
+  readonly rows: readonly WorkspaceProfileImportPreviewRow[];
+  readonly previewDigest: string;
+}
+
+export type WorkspaceProfileImportFailureCode =
+  | "FUTURE_SCHEMA_VERSION"
+  | "IMPORT_TOO_DEEP"
+  | "INVALID_MANIFEST"
+  | "PREVIEW_MISMATCH"
+  | "UNSUPPORTED_SCHEMA_VERSION";
+
+export interface WorkspaceProfileImportApply {
+  readonly schemaVersion: "1";
+  readonly expectedRevision: number;
+  readonly manifest: unknown;
+  readonly previewDigest: string;
+  readonly switchAfterImport: boolean;
+  readonly root?: string | undefined;
 }
 
 const PROFILE_KEYS = [

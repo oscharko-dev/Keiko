@@ -331,6 +331,90 @@
     "en": "Delete",
     "de": "Löschen"
   },
+  "settings.profiles.reset": {
+    "en": "Reset to Default",
+    "de": "Auf Standard zurücksetzen"
+  },
+  "settings.profiles.portabilityTitle": {
+    "en": "Profile portability",
+    "de": "Profilübertragung"
+  },
+  "settings.profiles.portabilityDescription": {
+    "en": "Export a server-redacted profile or preview every setting before importing it as a new profile.",
+    "de": "Exportiere ein serverseitig bereinigtes Profil oder prüfe jede Einstellung vor dem Import als neues Profil."
+  },
+  "settings.profiles.export": {
+    "en": "Export selected profile",
+    "de": "Ausgewähltes Profil exportieren"
+  },
+  "settings.profiles.importFile": {
+    "en": "Import profile file",
+    "de": "Profildatei importieren"
+  },
+  "settings.profiles.switchAfterImport": {
+    "en": "Switch after import",
+    "de": "Nach Import wechseln"
+  },
+  "settings.profiles.proposedName": {
+    "en": "New profile: {name}",
+    "de": "Neues Profil: {name}"
+  },
+  "settings.profiles.setting": {
+    "en": "Setting",
+    "de": "Einstellung"
+  },
+  "settings.profiles.disposition": {
+    "en": "Change",
+    "de": "Änderung"
+  },
+  "settings.profiles.value": {
+    "en": "Value or reason",
+    "de": "Wert oder Grund"
+  },
+  "settings.profiles.disposition.add": {
+    "en": "Add",
+    "de": "Hinzufügen"
+  },
+  "settings.profiles.disposition.change": {
+    "en": "Change",
+    "de": "Ändern"
+  },
+  "settings.profiles.disposition.noOp": {
+    "en": "No change",
+    "de": "Keine Änderung"
+  },
+  "settings.profiles.disposition.rejected": {
+    "en": "Rejected",
+    "de": "Abgelehnt"
+  },
+  "settings.profiles.applyImport": {
+    "en": "Apply import",
+    "de": "Import anwenden"
+  },
+  "settings.profiles.exported": {
+    "en": "Profile exported.",
+    "de": "Profil exportiert."
+  },
+  "settings.profiles.exportedRedacted": {
+    "en": "Profile exported with {count} unsafe value(s) removed.",
+    "de": "Profil mit {count} entfernten unsicheren Werten exportiert."
+  },
+  "settings.profiles.imported": {
+    "en": "Profile imported as a new profile.",
+    "de": "Profil als neues Profil importiert."
+  },
+  "settings.profiles.fileTooLarge": {
+    "en": "The profile file exceeds the 64 KiB import limit.",
+    "de": "Die Profildatei überschreitet das Importlimit von 64 KiB."
+  },
+  "settings.profiles.invalid": {
+    "en": "The profile import could not be validated or applied.",
+    "de": "Der Profilimport konnte nicht validiert oder angewendet werden."
+  },
+  "settings.profiles.stale": {
+    "en": "Profiles changed after the preview. Preview the file again.",
+    "de": "Profile wurden nach der Vorschau geändert. Prüfe die Datei erneut."
+  },
   "settings.editor.title": {
     "en": "Editor settings",
     "de": "Editor-Einstellungen"

@@ -8,12 +8,18 @@ import {
   type EditorM11ProfileMutationAction,
   type EditorM11ProfileMutationResult,
   type EditorM7SettingId,
+  type WorkspaceProfileImportApply,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../../routes.js";
-import type { EditorProfilesControlMutation } from "./editorSettingsControl.js";
+import type {
+  EditorProfileImportApplyResult,
+  EditorProfileImportControlMutation,
+  EditorProfileImportPreviewControlResult,
+  EditorProfilesControlMutation,
+} from "./editorSettingsControl.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -21,6 +27,9 @@ const MAX_IDEMPOTENCY_KEY_CHARS = 128;
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 type ParsedProfileMutation = Omit<EditorM11ProfileMutation, "schemaVersion">;
+type ParsedImportApply = Omit<WorkspaceProfileImportApply, "schemaVersion" | "root"> & {
+  readonly root?: string | undefined;
+};
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -213,7 +222,9 @@ function invalidRequest(): RouteResult {
   };
 }
 
-function resultToRoute(result: EditorM11ProfileMutationResult): RouteResult {
+function resultToRoute(
+  result: EditorM11ProfileMutationResult | EditorProfileImportApplyResult,
+): RouteResult {
   if (result.kind === "ok") {
     return {
       status: 200,
@@ -235,6 +246,67 @@ function resultToRoute(result: EditorM11ProfileMutationResult): RouteResult {
     status: 503,
     body: errorBody(result.code, "Editor profiles are temporarily unavailable."),
   };
+}
+
+function previewResultToRoute(result: EditorProfileImportPreviewControlResult): RouteResult {
+  if (result.kind === "ok") {
+    return { status: 200, body: result, headers: { "Cache-Control": "no-store" } };
+  }
+  if (result.kind === "conflict") {
+    return {
+      status: 409,
+      body: errorBody(result.code, "The editor profile revision is stale."),
+      headers: { ETag: result.etag },
+    };
+  }
+  if (result.kind === "invalid") {
+    return { status: 400, body: errorBody(result.code, "The profile manifest is invalid.") };
+  }
+  return {
+    status: 503,
+    body: errorBody(result.code, "Editor profiles are temporarily unavailable."),
+  };
+}
+
+function validImportApplyEnvelope(value: UnknownRecord): value is UnknownRecord & {
+  readonly expectedRevision: number;
+  readonly manifest: UnknownRecord;
+  readonly previewDigest: string;
+  readonly switchAfterImport: boolean;
+} {
+  return [
+    value.schemaVersion === EDITOR_M7_SCHEMA_VERSION,
+    validRevision(value.expectedRevision),
+    isRecord(value.manifest),
+    typeof value.switchAfterImport === "boolean",
+    typeof value.previewDigest === "string",
+    typeof value.previewDigest === "string" && /^[a-f0-9]{64}$/u.test(value.previewDigest),
+  ].every(Boolean);
+}
+
+function parseImportApply(value: unknown): ParsedImportApply | undefined {
+  if (!isRecord(value) || !hasOnlyKeys(value, importApplyKeys())) return undefined;
+  if (!validImportApplyEnvelope(value)) return undefined;
+  const root = profileRoot(value.root);
+  if (root === null) return undefined;
+  return {
+    expectedRevision: value.expectedRevision,
+    manifest: value.manifest,
+    previewDigest: value.previewDigest,
+    switchAfterImport: value.switchAfterImport,
+    ...(root === undefined ? {} : { root }),
+  };
+}
+
+function importApplyKeys(): readonly string[] {
+  return [
+    "schemaVersion",
+    "expectedRevision",
+    "manifest",
+    "previewDigest",
+    "switchAfterImport",
+    "root",
+  ];
 }
 
 function affectedSettingIds(body: ParsedProfileMutation): readonly EditorM7SettingId[] {
@@ -283,6 +355,97 @@ export async function handlePatchEditorProfiles(
     return invalidRequest();
   }
   return runFilesHandler(async () => mutateResolvedProfile(ctx, deps, body, key));
+}
+
+export async function handleExportEditorProfile(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const rawRef = ctx.url.searchParams.get("profileRef");
+  const selectedRef = rawRef === null ? undefined : profileRef(rawRef);
+  if (rawRef !== null && selectedRef === undefined) return invalidRequest();
+  const result = await deps.editorSettingsControl?.exportProfile?.(selectedRef);
+  if (result === undefined || result.kind === "unavailable") {
+    return {
+      status: 503,
+      body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable."),
+    };
+  }
+  if (result.kind === "invalid") {
+    return { status: 404, body: errorBody(result.code, "The editor profile was not found.") };
+  }
+  return {
+    status: 200,
+    body: result,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Disposition": `attachment; filename="keiko-${result.manifest.profileRef}.json"`,
+    },
+  };
+}
+
+export async function handlePreviewEditorProfileImport(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const expectedRevision = profilePrecondition(ctx);
+  if (expectedRevision === undefined) return invalidRequest();
+  const manifest = await readJsonObject(ctx.req, MAX_BODY_BYTES);
+  if (isRouteResult(manifest)) return manifest;
+  const result = await deps.editorSettingsControl?.previewProfileImport?.(
+    manifest,
+    expectedRevision,
+  );
+  return result === undefined
+    ? {
+        status: 503,
+        body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable."),
+      }
+    : previewResultToRoute(result);
+}
+
+export async function handleApplyEditorProfileImport(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const raw = await readJsonObject(ctx.req, MAX_BODY_BYTES);
+  if (isRouteResult(raw)) return raw;
+  const body = parseImportApply(raw);
+  const key = idempotencyKey(ctx);
+  const precondition = profilePrecondition(ctx);
+  if (body === undefined || key === undefined || precondition !== body.expectedRevision) {
+    return invalidRequest();
+  }
+  return runFilesHandler(async () => applyResolvedImport(deps, body, key));
+}
+
+async function applyResolvedImport(
+  deps: UiHandlerDeps,
+  body: ParsedImportApply,
+  idempotency: string,
+): Promise<RouteResult> {
+  const resolved =
+    body.root === undefined ? undefined : await resolveRoot(deps.store, body.root, deps.redactor);
+  const mutation: EditorProfileImportControlMutation = {
+    ...body,
+    idempotencyKey: idempotency,
+    realRoot: resolved?.realRoot,
+  };
+  const result = await deps.editorSettingsControl?.applyProfileImport?.(mutation);
+  if (result === undefined) {
+    return {
+      status: 503,
+      body: errorBody("STATE_UNAVAILABLE", "Editor profiles are unavailable."),
+    };
+  }
+  if (result.kind === "ok" && body.switchAfterImport) {
+    deps.editorSettingsEvents?.publish({
+      snapshot: result.settings,
+      scope: "user",
+      settingIds: EDITOR_M7_SETTING_REGISTRY.map((definition) => definition.id),
+    });
+  }
+  return resultToRoute(result);
 }
 
 async function mutateResolvedProfile(

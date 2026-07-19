@@ -296,4 +296,31 @@ describe("useEditorSettings M7 cross-window integration", () => {
     expect(result.current.snapshot?.profiles?.activeProfileRef).toBe("profile-focus");
     expect(api.fetchEditorSettings).toHaveBeenCalledTimes(1);
   });
+
+  it("resets every profile-admissible setting without sending workspace-only ids", async () => {
+    api.currentSnapshot = withFocusProfile(snapshot(0, 13));
+    api.mutateEditorProfile.mockRejectedValue(new Error("sentinel"));
+    const { result } = renderHook(() => useEditorSettings("/repo"));
+
+    await waitFor(() => expect(result.current.snapshot?.profiles?.revision).toBe(2));
+    await act(async () => {
+      await result.current.resetProfile(
+        "profile-focus" as EditorM11ProfileSettingsLayer["profileRef"],
+      );
+    });
+
+    expect(api.mutateEditorProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "reset",
+        expectedRevision: 2,
+        profileRef: "profile-focus",
+        settingIds: expect.arrayContaining(["fontSize", "keybindingOverrides"]),
+      }),
+      '"edp-2"',
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+    const body = api.mutateEditorProfile.mock.calls[0]?.[0];
+    expect(body?.settingIds).not.toContain("debuggingEnabled");
+  });
 });

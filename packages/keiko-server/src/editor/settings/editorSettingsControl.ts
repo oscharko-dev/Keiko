@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
   EDITOR_M7_SCHEMA_VERSION,
@@ -29,6 +29,9 @@ import {
   type EditorM11SettingsMutationResult,
   type EditorM11SettingsSnapshot,
   type WorkspaceProfileManifest,
+  type WorkspaceProfileExportResult,
+  type WorkspaceProfileImportFailureCode,
+  type WorkspaceProfileImportPreview,
   type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -59,6 +62,11 @@ import {
   type EditorProfilesStore,
   type EditorProfilesStoreState,
 } from "./editorProfilesStore.js";
+import {
+  assembleEditorProfileExport,
+  previewEditorProfileImport,
+  type PreparedEditorProfileImport,
+} from "./editorProfilePortability.js";
 
 const MAX_IDEMPOTENCY_KEY_CHARS = 128;
 const MAX_IDEMPOTENCY_RECORDS = 64;
@@ -84,6 +92,17 @@ export interface EditorSettingsControlService {
   readonly mutateProfile?:
     | ((mutation: EditorProfilesControlMutation) => Promise<EditorM11ProfileMutationResult>)
     | undefined;
+  readonly exportProfile?:
+    ((profileRef?: WorkspaceProfileRef) => Promise<EditorProfileExportControlResult>) | undefined;
+  readonly previewProfileImport?:
+    | ((
+        value: unknown,
+        expectedRevision: number,
+      ) => Promise<EditorProfileImportPreviewControlResult>)
+    | undefined;
+  readonly applyProfileImport?:
+    | ((mutation: EditorProfileImportControlMutation) => Promise<EditorProfileImportApplyResult>)
+    | undefined;
 }
 
 export type EditorProfilesControlMutation = Omit<
@@ -93,6 +112,33 @@ export type EditorProfilesControlMutation = Omit<
   readonly idempotencyKey: string;
   readonly realRoot?: string | undefined;
 };
+
+export interface EditorProfileImportControlMutation {
+  readonly expectedRevision: number;
+  readonly idempotencyKey: string;
+  readonly manifest: unknown;
+  readonly previewDigest: string;
+  readonly switchAfterImport: boolean;
+  readonly realRoot?: string | undefined;
+}
+
+export type EditorProfileExportControlResult =
+  | WorkspaceProfileExportResult
+  | { readonly kind: "invalid"; readonly code: "PROFILE_NOT_FOUND" }
+  | { readonly kind: "unavailable"; readonly code: "STATE_UNAVAILABLE" };
+
+export type EditorProfileImportPreviewControlResult =
+  | WorkspaceProfileImportPreview
+  | { readonly kind: "conflict"; readonly code: "STALE_REVISION"; readonly etag: string }
+  | { readonly kind: "invalid"; readonly code: WorkspaceProfileImportFailureCode }
+  | { readonly kind: "unavailable"; readonly code: "STATE_UNAVAILABLE" };
+
+export type EditorProfileImportApplyResult =
+  | Exclude<EditorM11ProfileMutationResult, { readonly kind: "invalid" }>
+  | {
+      readonly kind: "invalid";
+      readonly code: EditorM11ProfileReasonCode | WorkspaceProfileImportFailureCode;
+    };
 
 export interface EditorSettingsControlOptions {
   readonly store: EditorSettingsStore;
@@ -1057,14 +1103,21 @@ function sourceProfile(
 ):
   | {
       readonly displayName: string;
+      readonly revision: number;
       readonly values: WorkspaceProfileManifest["settings"]["values"];
     }
   | undefined {
-  if (profileRef === EDITOR_M11_DEFAULT_PROFILE_REF) return { displayName: "Default", values: {} };
+  if (profileRef === EDITOR_M11_DEFAULT_PROFILE_REF) {
+    return { displayName: "Default", revision: 0, values: {} };
+  }
   const profile = profileByRef(record.profiles, profileRef);
   return profile === undefined
     ? undefined
-    : { displayName: profile.displayName, values: profile.settings.values };
+    : {
+        displayName: profile.displayName,
+        revision: profile.revision,
+        values: profile.settings.values,
+      };
 }
 
 function applyDuplicateProfile(
@@ -1225,8 +1278,169 @@ function defaultProfileRefFactory(): WorkspaceProfileRef {
   return value;
 }
 
+function importPreview(
+  record: EditorProfilesRecord,
+  manifest: unknown,
+): PreparedEditorProfileImport {
+  const active = sourceProfile(record, record.activeProfileRef);
+  return previewEditorProfileImport(manifest, {
+    activeValues: active?.values ?? {},
+    existingNames: record.profiles.map((profile) => profile.displayName),
+    expectedRevision: record.revision,
+  });
+}
+
+function signedImportPreviewDigest(signingKey: Uint8Array, digest: string): string {
+  return createHmac("sha256", signingKey).update(digest, "utf8").digest("hex");
+}
+
+function importPreviewDigestMatches(
+  signingKey: Uint8Array,
+  digest: string,
+  provided: string,
+): boolean {
+  const expected = Buffer.from(signedImportPreviewDigest(signingKey, digest), "hex");
+  const candidate = Buffer.from(provided, "hex");
+  return expected.length === candidate.length && timingSafeEqual(expected, candidate);
+}
+
+function exportProfileLocked(
+  profileRef: WorkspaceProfileRef | undefined,
+  options: EditorSettingsControlOptions,
+): EditorProfileExportControlResult {
+  const loaded = profilesStoreFor(options).load();
+  if (loaded.state === "unavailable") {
+    return { kind: "unavailable", code: "STATE_UNAVAILABLE" };
+  }
+  const selectedRef = profileRef ?? loaded.record.activeProfileRef;
+  const selected = sourceProfile(loaded.record, selectedRef);
+  return selected === undefined
+    ? { kind: "invalid", code: "PROFILE_NOT_FOUND" }
+    : assembleEditorProfileExport(
+        profileManifest(selectedRef, selected.displayName, selected.values, selected.revision),
+      );
+}
+
+function previewProfileImportLocked(
+  manifest: unknown,
+  expectedRevision: number,
+  options: EditorSettingsControlOptions,
+  signingKey: Uint8Array,
+): EditorProfileImportPreviewControlResult {
+  const loaded = profilesStoreFor(options).load();
+  if (loaded.state === "unavailable") {
+    return { kind: "unavailable", code: "STATE_UNAVAILABLE" };
+  }
+  if (loaded.record.revision !== expectedRevision) {
+    return { kind: "conflict", code: "STALE_REVISION", etag: profileEtag(loaded.record.revision) };
+  }
+  const prepared = importPreview(loaded.record, manifest);
+  return prepared.kind === "ok"
+    ? {
+        ...prepared.preview,
+        previewDigest: signedImportPreviewDigest(signingKey, prepared.preview.previewDigest),
+      }
+    : prepared;
+}
+
+function importRequestHash(mutation: EditorProfileImportControlMutation): string {
+  return hash(
+    JSON.stringify({
+      expectedRevision: mutation.expectedRevision,
+      manifest: mutation.manifest,
+      previewDigest: mutation.previewDigest,
+      switchAfterImport: mutation.switchAfterImport,
+    }),
+  );
+}
+
+function importIdempotencyResult(
+  record: EditorProfilesRecord,
+  mutation: EditorProfileImportControlMutation,
+): EditorProfilesIdempotencyRecord | "conflict" | undefined {
+  const prior = record.idempotency.find((entry) => entry.keyHash === hash(mutation.idempotencyKey));
+  if (prior === undefined) return undefined;
+  return prior.requestHash === importRequestHash(mutation) ? prior : "conflict";
+}
+
+function validImportMutation(mutation: EditorProfileImportControlMutation): boolean {
+  return (
+    Number.isSafeInteger(mutation.expectedRevision) &&
+    mutation.expectedRevision >= 0 &&
+    mutation.idempotencyKey.length > 0 &&
+    mutation.idempotencyKey.length <= MAX_IDEMPOTENCY_KEY_CHARS &&
+    !mutation.idempotencyKey.includes("\0") &&
+    /^[a-f0-9]{64}$/u.test(mutation.previewDigest)
+  );
+}
+
+function importedProfilesRecord(
+  record: EditorProfilesRecord,
+  mutation: EditorProfileImportControlMutation,
+  prepared: Extract<PreparedEditorProfileImport, { readonly kind: "ok" }>,
+  profileRef: WorkspaceProfileRef,
+): EditorProfilesRecord {
+  const revision = record.revision + 1;
+  const idempotency: EditorProfilesIdempotencyRecord = {
+    keyHash: hash(mutation.idempotencyKey),
+    requestHash: importRequestHash(mutation),
+    changed: true,
+    revision,
+    profileRef,
+  };
+  const event: EditorProfilesChangeEvent = {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    sequence: (record.events.at(-1)?.sequence ?? 0) + 1,
+    action: "create",
+    profileRef,
+    outcome: "accepted",
+  };
+  return {
+    ...record,
+    revision,
+    activeProfileRef: mutation.switchAfterImport ? profileRef : record.activeProfileRef,
+    profiles: [
+      ...record.profiles,
+      profileManifest(profileRef, prepared.preview.proposedDisplayName, prepared.values),
+    ],
+    idempotency: appendBounded(record.idempotency, idempotency, MAX_IDEMPOTENCY_RECORDS),
+    events: appendBounded(record.events, event, MAX_EVENTS),
+  };
+}
+
+type ApplicableProfileImport =
+  | {
+      readonly kind: "ok";
+      readonly prepared: Extract<PreparedEditorProfileImport, { readonly kind: "ok" }>;
+      readonly profileRef: WorkspaceProfileRef;
+    }
+  | {
+      readonly kind: "invalid";
+      readonly code: EditorM11ProfileReasonCode | WorkspaceProfileImportFailureCode;
+    };
+
+function applicableProfileImport(
+  record: EditorProfilesRecord,
+  mutation: EditorProfileImportControlMutation,
+  options: EditorSettingsControlOptions,
+  signingKey: Uint8Array,
+): ApplicableProfileImport {
+  if (record.profiles.length >= 31) return { kind: "invalid", code: "PROFILE_LIMIT_REACHED" };
+  const prepared = importPreview(record, mutation.manifest);
+  if (prepared.kind === "invalid") return prepared;
+  if (
+    !importPreviewDigestMatches(signingKey, prepared.preview.previewDigest, mutation.previewDigest)
+  ) {
+    return { kind: "invalid", code: "PREVIEW_MISMATCH" };
+  }
+  const profileRef = nextProfileRef(record, options.profileRefFactory ?? defaultProfileRefFactory);
+  return profileRef === undefined
+    ? { kind: "invalid", code: "INVALID_INPUT" }
+    : { kind: "ok", prepared, profileRef };
+}
+
 async function profileMutationOk(
-  mutation: EditorProfilesControlMutation,
+  mutation: { readonly realRoot?: string | undefined },
   record: EditorProfilesRecord,
   idempotency: EditorProfilesIdempotencyRecord,
   options: EditorSettingsControlOptions,
@@ -1242,6 +1456,43 @@ async function profileMutationOk(
     profiles,
     settings,
   };
+}
+
+async function applyProfileImportLocked(
+  mutation: EditorProfileImportControlMutation,
+  options: EditorSettingsControlOptions,
+  signingKey: Uint8Array,
+): Promise<EditorProfileImportApplyResult> {
+  if (!validImportMutation(mutation)) return { kind: "invalid", code: "INVALID_MANIFEST" };
+  const store = profilesStoreFor(options);
+  const loaded = store.load();
+  if (loaded.state === "unavailable") {
+    return { kind: "unavailable", code: "STATE_UNAVAILABLE" };
+  }
+  const prior = importIdempotencyResult(loaded.record, mutation);
+  if (prior === "conflict") {
+    return {
+      kind: "idempotencyConflict",
+      code: "IDEMPOTENCY_KEY_REUSED",
+      etag: profileEtag(loaded.record.revision),
+    };
+  }
+  if (prior !== undefined) return profileMutationOk(mutation, loaded.record, prior, options);
+  if (loaded.record.revision !== mutation.expectedRevision) {
+    return { kind: "conflict", code: "STALE_REVISION", etag: profileEtag(loaded.record.revision) };
+  }
+  const applicable = applicableProfileImport(loaded.record, mutation, options, signingKey);
+  if (applicable.kind === "invalid") return applicable;
+  const record = importedProfilesRecord(
+    loaded.record,
+    mutation,
+    applicable.prepared,
+    applicable.profileRef,
+  );
+  store.commit(record);
+  const idempotency = record.idempotency.at(-1);
+  if (idempotency === undefined) throw new Error("editor profile idempotency record missing");
+  return profileMutationOk(mutation, record, idempotency, options);
 }
 
 async function mutateProfileLocked(
@@ -1287,6 +1538,7 @@ async function mutateProfileLocked(
 export function createEditorSettingsControlService(
   options: EditorSettingsControlOptions,
 ): EditorSettingsControlService {
+  const profileImportSigningKey = randomBytes(32);
   return {
     stateDir: options.store.stateDir,
     read: (realRoot): Promise<EditorM11SettingsSnapshot> => loadSnapshot(realRoot, options),
@@ -1304,6 +1556,23 @@ export function createEditorSettingsControlService(
     mutateProfile: (mutation): Promise<EditorM11ProfileMutationResult> =>
       options.mutex.runExclusive(["editor-settings:user:global"], () =>
         mutateProfileLocked(mutation, options),
+      ),
+    exportProfile: (profileRef): Promise<EditorProfileExportControlResult> =>
+      options.mutex.runExclusive(["editor-settings:user:global"], () =>
+        Promise.resolve(exportProfileLocked(profileRef, options)),
+      ),
+    previewProfileImport: (
+      value,
+      expectedRevision,
+    ): Promise<EditorProfileImportPreviewControlResult> =>
+      options.mutex.runExclusive(["editor-settings:user:global"], () =>
+        Promise.resolve(
+          previewProfileImportLocked(value, expectedRevision, options, profileImportSigningKey),
+        ),
+      ),
+    applyProfileImport: (mutation): Promise<EditorProfileImportApplyResult> =>
+      options.mutex.runExclusive(["editor-settings:user:global"], () =>
+        applyProfileImportLocked(mutation, options, profileImportSigningKey),
       ),
   };
 }

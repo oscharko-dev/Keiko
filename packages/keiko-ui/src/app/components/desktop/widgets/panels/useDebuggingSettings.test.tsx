@@ -100,6 +100,7 @@ function view(snapshot: EditorM7SettingsSnapshot | undefined): EditorSettingsVie
     duplicateProfile: vi.fn(),
     deleteProfile: vi.fn(),
     switchProfile: vi.fn(),
+    resetProfile: vi.fn(),
   };
 }
 

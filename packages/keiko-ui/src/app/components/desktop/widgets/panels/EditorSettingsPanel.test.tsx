@@ -85,6 +85,7 @@ function view(overrides: Partial<EditorSettingsView> = {}): EditorSettingsView {
     duplicateProfile: vi.fn(),
     deleteProfile: vi.fn(),
     switchProfile: vi.fn(),
+    resetProfile: vi.fn(),
     ...overrides,
   };
 }
@@ -210,9 +211,11 @@ describe("EditorSettingsPanel", () => {
       target: { value: "Focused" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset to Default" }));
 
     expect(editorSettingsView.current.setValue).toHaveBeenCalledWith("profile", "fontSize", 19);
     expect(editorSettingsView.current.renameProfile).toHaveBeenCalledWith(profileRef, "Focused");
+    expect(editorSettingsView.current.resetProfile).toHaveBeenCalledWith(profileRef);
   });
 
   it("keeps policy-locked and follow-up-owned controls unavailable", () => {

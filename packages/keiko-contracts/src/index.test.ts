@@ -1284,6 +1284,9 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM11ProfileMutation>();
     pin<import("./index.js").EditorM11ProfileMutationResult>();
     pin<import("./index.js").WorkspaceProfileManifest>();
+    pin<import("./index.js").WorkspaceProfileExportResult>();
+    pin<import("./index.js").WorkspaceProfileImportPreview>();
+    pin<import("./index.js").WorkspaceProfileImportApply>();
     pin<import("./index.js").EditorLocalHistoryEntry>();
     pin<import("./index.js").EditorLocalHistoryIndex>();
     pin<import("./index.js").WorkspaceBindingV1>();

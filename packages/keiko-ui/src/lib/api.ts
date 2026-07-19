@@ -148,6 +148,9 @@ import type {
   EditorM11ProfileMutation,
   EditorM11ProfileMutationResult,
   EditorM11ProfilesSnapshot,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportApply,
+  WorkspaceProfileImportPreview,
   EditorM7WorkspaceSnippetMutation,
   EditorM7WorkspaceSnippetMutationResult,
   EditorM7WorkspaceSnippetSnapshot,
@@ -2068,6 +2071,43 @@ export function mutateEditorProfile(
 ): Promise<EditorM11ProfileMutationResult> {
   return fetchJson("/api/editor/settings/profiles", {
     method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function exportEditorProfile(
+  profileRef: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceProfileExportResult> {
+  return fetchJson(
+    `/api/editor/settings/profiles/export?profileRef=${encodeURIComponent(profileRef)}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export function previewEditorProfileImport(
+  serializedManifest: string,
+  etag: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceProfileImportPreview> {
+  return fetchJson("/api/editor/settings/profiles/import/preview", {
+    method: "POST",
+    headers: { "If-Match": etag },
+    body: serializedManifest,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function applyEditorProfileImport(
+  input: WorkspaceProfileImportApply,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM11ProfileMutationResult> {
+  return fetchJson("/api/editor/settings/profiles/import/apply", {
+    method: "POST",
     headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
