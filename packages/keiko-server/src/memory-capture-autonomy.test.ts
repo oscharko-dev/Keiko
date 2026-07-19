@@ -31,6 +31,7 @@ import {
 } from "./memory-conversation-context.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 // A single durable public fact. Body carries no regex-capture trigger (no remember/forget/update/
 // correction/identity phrasing) so the deterministic regex path stays empty and the salience path
@@ -139,6 +140,7 @@ interface DepsOptions {
   readonly vault: MemoryVaultStore;
   readonly model: string;
   readonly mode?: CodingWorkbenchMode;
+  readonly diagnostics?: UiHandlerDeps["diagnostics"];
 }
 
 function makeDeps(options: DepsOptions): UiHandlerDeps {
@@ -153,6 +155,7 @@ function makeDeps(options: DepsOptions): UiHandlerDeps {
     store: createInMemoryUiStore(),
     memoryVault: options.vault,
     ...(options.mode !== undefined ? { codingRuntimeDeploymentCeiling: options.mode } : {}),
+    ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   };
 }
 
@@ -244,16 +247,30 @@ interface SalienceDiagnosticPayload {
   readonly rawItemCount?: number;
 }
 
-// Extracts the content-free "salience capture diagnostic" payloads a console.warn spy captured.
-// The logger (logSalienceDiagnostic) emits counts/kind only — never bodies — so reading kind and
-// rawItemCount keeps the assertion content-free.
+function recordingDiagnosticsSink(): ServerDiagnosticSink & {
+  readonly record: ReturnType<typeof vi.fn<(record: ServerDiagnosticRecord) => void>>;
+} {
+  return { record: vi.fn() };
+}
+
+// Extracts the content-free "SalienceExtractionDiagnostic" records a spy diagnostics sink
+// captured. logSalienceDiagnostic emits counts/kind only — never bodies — as a plain
+// "model=... kind=<kind> rawItemCount=<n>" message, so a regex read keeps the assertion
+// content-free without depending on the message's exact wording.
 function capturedSalienceDiagnostics(
   calls: readonly (readonly unknown[])[],
 ): readonly SalienceDiagnosticPayload[] {
   const payloads: SalienceDiagnosticPayload[] = [];
   for (const args of calls) {
-    if (args[0] !== "salience capture diagnostic") continue;
-    payloads.push(args[1] as SalienceDiagnosticPayload);
+    const record = args[0] as { readonly errorClass?: string; readonly message?: string };
+    if (record.errorClass !== "SalienceExtractionDiagnostic") continue;
+    const message = record.message ?? "";
+    const kind = /kind=(\S+)/u.exec(message)?.[1];
+    const rawItemCountMatch = /rawItemCount=(\d+)/u.exec(message)?.[1];
+    payloads.push({
+      ...(kind === undefined ? {} : { kind }),
+      ...(rawItemCountMatch === undefined ? {} : { rawItemCount: Number(rawItemCountMatch) }),
+    });
   }
   return payloads;
 }
@@ -385,37 +402,27 @@ describe("mode-aware memory capture journey", () => {
     "drops a secret body with zero records and one content-free diagnostic under %s",
     async (mode) => {
       const vault = makeVault();
-      const deps = makeDeps({ vault, model: SECRET_ONLY, mode });
+      const diagnostics = recordingDiagnosticsSink();
+      const deps = makeDeps({ vault, model: SECRET_ONLY, mode, diagnostics });
       const ctx = context();
-      // Spy on the diagnostic sink. captureSalientFromTurn is awaited directly (like the throwing
-      // test) so the secret-drop path settles deterministically before assertions.
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      try {
-        const actions = await captureSalientFromTurn(
-          deps,
-          salienceRequest(),
-          ctx,
-          "gpt-test",
-          "ok",
-        );
-        expect(actions).toEqual([]);
-        expect(readMemories(vault, ctx)).toHaveLength(0);
-        // AC "one content-free rejection outcome": the secret net drops the body silently inside
-        // candidateBody — there is deliberately NO dropped-model-items reason for secrets (that enum
-        // is source/type/scope only) and NO "rejected" wire action on the salience path (that kind
-        // is reserved for restricted/tombstone). The faithful content-free signal is therefore the
-        // "zero-candidates-after-filter" salience diagnostic: the model produced >= 1 raw item and
-        // zero survived filtering. Counts only, never the secret body.
-        const dropSignal = capturedSalienceDiagnostics(warnSpy.mock.calls).find(
-          (payload) => payload.kind === "zero-candidates-after-filter",
-        );
-        expect(dropSignal).toBeDefined();
-        expect(dropSignal?.rawItemCount ?? 0).toBeGreaterThanOrEqual(1);
-        // Content-free: no diagnostic argument leaks the secret body.
-        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(SECRET_TOKEN);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      // captureSalientFromTurn is awaited directly (like the throwing test) so the secret-drop
+      // path settles deterministically before assertions.
+      const actions = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
+      expect(actions).toEqual([]);
+      expect(readMemories(vault, ctx)).toHaveLength(0);
+      // AC "one content-free rejection outcome": the secret net drops the body silently inside
+      // candidateBody — there is deliberately NO dropped-model-items reason for secrets (that enum
+      // is source/type/scope only) and NO "rejected" wire action on the salience path (that kind
+      // is reserved for restricted/tombstone). The faithful content-free signal is therefore the
+      // "zero-candidates-after-filter" salience diagnostic: the model produced >= 1 raw item and
+      // zero survived filtering. Counts only, never the secret body.
+      const dropSignal = capturedSalienceDiagnostics(diagnostics.record.mock.calls).find(
+        (payload) => payload.kind === "zero-candidates-after-filter",
+      );
+      expect(dropSignal).toBeDefined();
+      expect(dropSignal?.rawItemCount ?? 0).toBeGreaterThanOrEqual(1);
+      // Content-free: no diagnostic record leaks the secret body.
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(SECRET_TOKEN);
     },
   );
 

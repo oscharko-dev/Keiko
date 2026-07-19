@@ -46,6 +46,7 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { emitServerDiagnostic } from "./diagnostics-log.js";
 import {
   buildMemoryCaptureDecisionAuditEvent,
   type MemoryCaptureDecisionOutcome,
@@ -193,24 +194,43 @@ function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefin
   return capability?.supportsSeeding === true ? SALIENCE_DEFAULT_SEED : undefined;
 }
 
+// Content-free operator diagnostic for the salience pipeline: routes through the single
+// redaction-safe server diagnostic sink (diagnostics-log.ts) instead of console.* directly, mirroring
+// the emitAdvisoryPhaseSummary pattern in memory-conflict-advisory.ts. errorClass doubles as a
+// machine-readable event-kind tag for non-error informational records (e.g. a capture summary).
+function emitSalienceDiagnostic(
+  deps: UiHandlerDeps,
+  source: string,
+  errorClass: string,
+  message: string,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "memory.salience",
+    source,
+    errorClass,
+    message,
+  });
+}
+
 function logSalienceDiagnostic(
   diagnostic: SalienceDiagnostic,
   deps: UiHandlerDeps,
   modelId: string,
 ): void {
   const responseFormatEnabled = salienceResponseFormatFor(deps, modelId) !== undefined;
-  const diagnosticDetails =
+  const detail =
     diagnostic.kind === "dropped-model-items"
-      ? { reason: diagnostic.reason, count: diagnostic.count }
-      : { rawItemCount: diagnostic.rawItemCount };
+      ? `reason=${diagnostic.reason} count=${String(diagnostic.count)}`
+      : `rawItemCount=${String(diagnostic.rawItemCount)}`;
   // Safe diagnostic: model id, response-format bit, and counts only; never user text or model text.
-  // eslint-disable-next-line no-console
-  console.warn("salience capture diagnostic", {
-    modelId,
-    responseFormat: responseFormatEnabled,
-    kind: diagnostic.kind,
-    ...diagnosticDetails,
-  });
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.logSalienceDiagnostic",
+    "SalienceExtractionDiagnostic",
+    `model=${modelId} responseFormat=${String(responseFormatEnabled)} kind=${diagnostic.kind} ${detail}`,
+  );
 }
 
 function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
@@ -411,13 +431,19 @@ function logSalienceCaptureFailure(
   error: unknown,
   deps: UiHandlerDeps,
 ): void {
-  // eslint-disable-next-line no-console
-  console.error(`${surface} salience capture failed`, redactedErrorMessage(error, deps));
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.scheduleMemorySalienceCapture",
+    "SalienceCaptureFailure",
+    `${surface} salience capture failed: ${redactedErrorMessage(error, deps)}`,
+  );
 }
 
-function logSalienceCaptureDropped(surface: SalienceCaptureSurface): void {
-  // eslint-disable-next-line no-console
-  console.error(
+function logSalienceCaptureDropped(surface: SalienceCaptureSurface, deps: UiHandlerDeps): void {
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.scheduleMemorySalienceCapture",
+    "SalienceCaptureDropped",
     `${surface} salience capture skipped: background queue full (${String(
       pendingSalienceCaptures,
     )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
@@ -436,7 +462,7 @@ export function scheduleMemorySalienceCapture(
     return;
   }
   if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
-    logSalienceCaptureDropped(surface);
+    logSalienceCaptureDropped(surface, deps);
     return;
   }
   pendingSalienceCaptures += 1;
@@ -528,19 +554,19 @@ function tallyDisposition(summary: SalienceCaptureSummary, disposition: CaptureD
 }
 
 // Content-free capture summary: the effective mode and per-disposition counts only, never bodies or
-// user text. Mirrors the logSalienceDiagnostic console.warn convention.
+// user text. Mirrors the logSalienceDiagnostic diagnostic-sink convention.
 function logSalienceCaptureSummary(
   mode: CodingWorkbenchMode,
   summary: SalienceCaptureSummary,
+  deps: UiHandlerDeps,
 ): void {
-  // eslint-disable-next-line no-console
-  console.warn("salience capture summary", {
-    mode,
-    proposed: summary.proposed,
-    accepted: summary.accepted,
-    rejected: summary.rejected,
-    merged: summary.merged,
-  });
+  emitSalienceDiagnostic(
+    deps,
+    "memory-salience.captureSalientFromTurn",
+    "SalienceCaptureSummary",
+    `mode=${mode} proposed=${String(summary.proposed)} accepted=${String(summary.accepted)} ` +
+      `rejected=${String(summary.rejected)} merged=${String(summary.merged)}`,
+  );
 }
 
 interface SalienceCaptureResult {
@@ -624,12 +650,16 @@ export async function captureSalientFromTurn(
     }
     const { outcomes } = extraction;
     const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
-    if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary);
+    if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps);
     return actions;
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
-    // eslint-disable-next-line no-console
-    console.error("salience capture failed", redactedErrorMessage(error, deps));
+    emitSalienceDiagnostic(
+      deps,
+      "memory-salience.captureSalientFromTurn",
+      "SalienceCaptureFailure",
+      `salience capture failed: ${redactedErrorMessage(error, deps)}`,
+    );
     return [];
   }
 }

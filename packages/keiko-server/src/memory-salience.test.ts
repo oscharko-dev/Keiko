@@ -23,6 +23,7 @@ import {
 } from "./memory-conversation-context.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const ATLAS_FACTS = JSON.stringify([
   {
@@ -237,9 +238,9 @@ describe("captureSalientFromTurn", () => {
   it("keeps the shared desktop and voice scheduler off-path, bounded, and reusable", async () => {
     const vault = makeVault();
     const model = deferredModel();
-    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => model.port });
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => model.port, diagnostics });
     const ctx = context();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const request = { content: USER_TEXT, memory: { enabled: true } };
     try {
       for (let index = 0; index < 32; index += 1) {
@@ -251,8 +252,11 @@ describe("captureSalientFromTurn", () => {
       await vi.waitFor(() => {
         expect(model.callCount()).toBe(32);
       });
-      expect(errorSpy).toHaveBeenCalledWith(
-        "voice salience capture skipped: background queue full (32/32)",
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorClass: "SalienceCaptureDropped",
+          message: "voice salience capture skipped: background queue full (32/32)",
+        }),
       );
 
       model.resolveAll();
@@ -264,7 +268,6 @@ describe("captureSalientFromTurn", () => {
     } finally {
       model.resolveAll();
       await yieldToImmediate();
-      errorSpy.mockRestore();
     }
   });
 
