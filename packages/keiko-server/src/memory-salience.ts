@@ -9,9 +9,19 @@
 // vault hiccup, or any other failure can NEVER throw into the chat path — it logs and returns [].
 
 import { randomUUID } from "node:crypto";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { MemoryId, MemoryProposalId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryId,
+  MemoryProposalId,
+  MemoryRecord,
+  MemoryScope,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { redact } from "@oscharko-dev/keiko-security";
+import {
+  type MemoryAccessStatLike,
+  planMemoryMaintenance,
+} from "@oscharko-dev/keiko-memory-governance";
 import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/keiko-model-gateway";
 import {
   extractSalientMemories,
@@ -33,7 +43,9 @@ import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
@@ -193,36 +205,37 @@ function redactedErrorMessage(error: unknown, deps: UiHandlerDeps): string {
   return redact(message, currentRedactionSecrets(deps));
 }
 
-// Persists one salience candidate and returns its wire action, or null when the outcome is not a
-// candidate, no record could be built, or the candidate was merged into an existing semantic
-// near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens INSIDE the novelty gate:
-// the body is embedded once, used to detect a near-duplicate, and stored only when the record is
-// actually inserted. Graceful when no embedding model is configured (plain insert, no dedup).
-async function persistCandidate(
-  deps: UiHandlerDeps,
-  outcome: CaptureOutcome,
-  vault: MemoryVaultStore,
-): Promise<ConversationMemoryActionWire | null> {
-  if (outcome.kind !== "candidate") {
-    return null;
-  }
-  if (!isPersistableMemoryCandidate(outcome)) {
-    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
-  }
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-  const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) {
-    return null;
-  }
-  if (isSuppressedByForgetTombstone(vault, record)) {
-    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
-  }
-  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, record);
-  if (inserted === null) {
-    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
-    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
-    return null;
-  }
+// Salience capture never tracks per-record access stats at capture time, so the governance planner
+// sees a fresh record with no recall/utility history: its strength collapses to provenance
+// confidence, exactly what shouldPromote's confidence >= promoteStrength gate expects.
+const EMPTY_SALIENCE_ACCESS_STATS: ReadonlyMap<MemoryId, MemoryAccessStatLike> = new Map();
+
+// How a candidate settled, for the content-free capture summary. "none" outcomes (non-candidate or
+// unbuildable records) are not tallied.
+type CaptureDisposition = "accepted" | "proposed" | "rejected" | "merged" | "none";
+
+interface PersistedCandidate {
+  readonly action: ConversationMemoryActionWire | null;
+  readonly disposition: CaptureDisposition;
+}
+
+// Auto-accept a freshly captured public record by routing it THROUGH the existing governance
+// promotion lever — no second promotion path. planMemoryMaintenance/shouldPromote keeps its own
+// gates (status proposed + sensitivity public + strength >= promoteStrength). The record's own
+// createdAt is the clock so a just-captured record decays by zero and its strength equals its
+// provenance confidence deterministically. Promoted -> insert as "accepted" (one atomic insert, no
+// proposed->accepted window); otherwise the record is inserted unchanged.
+function promoteEligibleRecord(record: MemoryRecord): MemoryRecord {
+  const plan = planMemoryMaintenance([record], EMPTY_SALIENCE_ACCESS_STATS, {
+    nowMs: record.createdAt,
+  });
+  return plan.promote.includes(record.id) ? { ...record, status: "accepted" } : record;
+}
+
+function candidateWireAction(
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  inserted: MemoryRecord,
+): ConversationMemoryActionWire {
   return {
     kind: "candidate",
     proposalId: String(inserted.id),
@@ -232,6 +245,54 @@ async function persistCandidate(
         : inserted.body,
     scopeLabel: scopeLabel(inserted.scope),
     requiresApproval: outcome.requiresApproval,
+  };
+}
+
+// Persists one salience candidate and returns its wire action plus how it settled. Returns a null
+// action when the outcome is not a candidate, no record could be built, or the candidate was merged
+// into an existing semantic near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens
+// INSIDE the novelty gate: the body is embedded once, used to detect a near-duplicate, and stored
+// only when the record is actually inserted. Graceful when no embedding model is configured (plain
+// insert, no dedup). When the resolved mode makes the candidate auto-accept-eligible the record is
+// routed through governance promotion before insert; every existing gate stays untouched.
+async function persistCandidate(
+  deps: UiHandlerDeps,
+  outcome: CaptureOutcome,
+  vault: MemoryVaultStore,
+  mode: CodingWorkbenchMode,
+): Promise<PersistedCandidate> {
+  if (outcome.kind !== "candidate") {
+    return { action: null, disposition: "none" };
+  }
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return {
+      action: { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON },
+      disposition: "rejected",
+    };
+  }
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (record === null) {
+    return { action: null, disposition: "none" };
+  }
+  if (isSuppressedByForgetTombstone(vault, record)) {
+    return {
+      action: { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON },
+      disposition: "rejected",
+    };
+  }
+  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleRecord(record)
+    : record;
+  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  if (inserted === null) {
+    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
+    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
+    return { action: null, disposition: "merged" };
+  }
+  return {
+    action: candidateWireAction(outcome, inserted),
+    disposition: inserted.status === "accepted" ? "accepted" : "proposed",
   };
 }
 
@@ -278,17 +339,71 @@ async function extractTurnSalienceOutcomes(
   );
 }
 
+interface SalienceCaptureSummary {
+  proposed: number;
+  accepted: number;
+  rejected: number;
+  merged: number;
+}
+
+function emptySalienceCaptureSummary(): SalienceCaptureSummary {
+  return { proposed: 0, accepted: 0, rejected: 0, merged: 0 };
+}
+
+function tallyDisposition(summary: SalienceCaptureSummary, disposition: CaptureDisposition): void {
+  switch (disposition) {
+    case "accepted":
+      summary.accepted += 1;
+      return;
+    case "proposed":
+      summary.proposed += 1;
+      return;
+    case "rejected":
+      summary.rejected += 1;
+      return;
+    case "merged":
+      summary.merged += 1;
+      return;
+    case "none":
+      return;
+  }
+}
+
+// Content-free capture summary: the effective mode and per-disposition counts only, never bodies or
+// user text. Mirrors the logSalienceDiagnostic console.warn convention.
+function logSalienceCaptureSummary(
+  mode: CodingWorkbenchMode,
+  summary: SalienceCaptureSummary,
+): void {
+  // eslint-disable-next-line no-console
+  console.warn("salience capture summary", {
+    mode,
+    proposed: summary.proposed,
+    accepted: summary.accepted,
+    rejected: summary.rejected,
+    merged: summary.merged,
+  });
+}
+
+interface SalienceCaptureResult {
+  readonly actions: readonly ConversationMemoryActionWire[];
+  readonly summary: SalienceCaptureSummary;
+}
+
 async function persistSalienceActions(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
-): Promise<readonly ConversationMemoryActionWire[]> {
+  mode: CodingWorkbenchMode,
+): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
+  const summary = emptySalienceCaptureSummary();
   for (const outcome of outcomes) {
-    const action = await persistCandidate(deps, outcome, vault);
+    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode);
     if (action !== null) actions.push(action);
+    tallyDisposition(summary, disposition);
   }
-  return actions;
+  return { actions, summary };
 }
 
 // Captures salient memories from a completed chat turn. Never throws — any failure (model error,
@@ -313,7 +428,11 @@ export async function captureSalientFromTurn(
       modelId,
       assistantText,
     );
-    return outcomes === null ? [] : await persistSalienceActions(deps, vault, outcomes);
+    if (outcomes === null) return [];
+    const mode = resolveMemoryCaptureAutonomyMode(deps);
+    const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode);
+    if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary);
+    return actions;
   } catch (error) {
     // Boundary: salience must never break the chat path. Log and continue.
     // eslint-disable-next-line no-console
