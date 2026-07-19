@@ -21,6 +21,7 @@ export type RejectionReason =
   | "provider-base-url"
   | "raw-log-content"
   | "customer-identifier"
+  | "denied-category"
   | "empty-content"
   | "exceeds-length-limit"
   | "ambiguous-forget"

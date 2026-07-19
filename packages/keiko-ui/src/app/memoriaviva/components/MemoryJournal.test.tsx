@@ -59,7 +59,7 @@ describe("MemoryJournal loading and ordering", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
-  it("sorts arbitrary input newest first and omits refused decisions", async () => {
+  it("sorts arbitrary input newest first and renders refused decisions without content or actions", async () => {
     const oldest = makeCapture("oldest", 100);
     const newest = makeCapture("newest", 300, { outcome: "proposed" });
     const refused: MemoryRecentCapture = {
@@ -71,24 +71,39 @@ describe("MemoryJournal loading and ordering", () => {
         sourceKind: "system-default",
       },
       occurredAt: 400,
-      reason: "credential-shape",
+      reason: "denied-category",
     };
     const middle = makeCapture("middle", 200);
 
     expect(
-      orderJournalCaptures([oldest, newest, refused, middle]).map((item) => item.memoryId),
-    ).toEqual(["newest", "middle", "oldest"]);
+      orderJournalCaptures([oldest, newest, refused, middle]).map((item) => [
+        item.outcome,
+        item.memoryId,
+      ]),
+    ).toEqual([
+      ["rejected", undefined],
+      ["proposed", "newest"],
+      ["auto-accepted", "middle"],
+      ["auto-accepted", "oldest"],
+    ]);
     renderJournal([oldest, newest, refused, middle]);
 
     const rows = await screen.findAllByTestId("memory-journal-row");
     expect(rows.map((row) => row.getAttribute("data-memory-id"))).toEqual([
+      null,
       "newest",
       "middle",
       "oldest",
     ]);
-    expect(within(rows[0]!).getByText("Awaiting review")).toBeInTheDocument();
     expect(
-      within(rows[0]!).getByText(/capture reason governance-auto-accepted/i),
+      within(rows[0]!).getByText("Capture refused by policy. No content was retained."),
+    ).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("Refused")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText(/capture reason denied-category/i)).toBeInTheDocument();
+    expect(within(rows[0]!).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(rows[1]!).getByText("Awaiting review")).toBeInTheDocument();
+    expect(
+      within(rows[1]!).getByText(/capture reason governance-auto-accepted/i),
     ).toBeInTheDocument();
   });
 
@@ -204,8 +219,19 @@ describe("MemoryJournal Keep and Forget", () => {
 
 describe("MemoryJournal accessibility", () => {
   it("has no detectable accessibility violations", async () => {
-    const { container } = renderJournal([makeCapture("accessible", 100)]);
-    await screen.findByTestId("memory-journal-row");
+    const refused: MemoryRecentCapture = {
+      outcome: "rejected",
+      scope: { kind: "global" },
+      mode: "governed-assist",
+      provenance: {
+        initiatorSurface: "conversation-center",
+        sourceKind: "system-default",
+      },
+      occurredAt: 200,
+      reason: "denied-category",
+    };
+    const { container } = renderJournal([refused, makeCapture("accessible", 100)]);
+    expect(await screen.findAllByTestId("memory-journal-row")).toHaveLength(2);
     expect(await axe(container)).toHaveNoViolations();
   });
 });
