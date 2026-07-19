@@ -126,16 +126,16 @@ function isWorkspaceRootDescriptor(value: unknown): value is WorkspaceRootDescri
 }
 
 function hasUniqueRootDimensions(roots: readonly WorkspaceRootDescriptor[]): boolean {
-  const refs = new Set(roots.map((root) => root.rootRef));
-  const paths = new Set(roots.map((root) => root.canonicalRoot));
-  const identities = new Set(roots.map((root) => root.identityDigest));
+  const refs = new Set(roots.map((root): WorkspaceRootRef => root.rootRef));
+  const paths = new Set(roots.map((root): string => root.canonicalRoot));
+  const identities = new Set(roots.map((root): WorkspaceRootIdentityDigest => root.identityDigest));
   return (
     refs.size === roots.length && paths.size === roots.length && identities.size === roots.length
   );
 }
 
 function rootsDoNotOverlap(roots: readonly WorkspaceRootDescriptor[]): boolean {
-  return workspaceCanonicalRootsDoNotOverlap(roots.map((root) => root.canonicalRoot));
+  return workspaceCanonicalRootsDoNotOverlap(roots.map((root): string => root.canonicalRoot));
 }
 
 function rootsAreValid(value: unknown): value is readonly WorkspaceRootDescriptor[] {
@@ -164,7 +164,7 @@ function isWorkspaceManifest(value: unknown): value is WorkspaceManifest {
   if (!fieldsValid || !rootsAreValid(value.roots) || !isWorkspaceRootRef(value.focusedRootRef)) {
     return false;
   }
-  return value.roots.some((root) => root.rootRef === value.focusedRootRef);
+  return value.roots.some((root): boolean => root.rootRef === value.focusedRootRef);
 }
 
 export function validateWorkspaceManifest(value: unknown): WorkspaceContractValidation {

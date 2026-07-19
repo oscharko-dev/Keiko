@@ -62,7 +62,7 @@ export function isWorkspaceRecord(value: unknown): value is UnknownRecord {
 
 export function hasOnlyWorkspaceKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
   try {
-    return Object.keys(value).every((key) => allowed.includes(key));
+    return Object.keys(value).every((key): boolean => allowed.includes(key));
   } catch {
     return false;
   }
@@ -163,12 +163,43 @@ function utf8ByteLength(value: string): number {
   return bytes;
 }
 
+type CanonicalWorkspaceRootStyle = "posix" | "windows";
+
+function canonicalWorkspaceRootStyle(value: string): CanonicalWorkspaceRootStyle | undefined {
+  if (value.startsWith("/")) return value.includes("\\") ? undefined : "posix";
+  if (/^[A-Za-z]:\\/u.test(value)) return value.includes("/") ? undefined : "windows";
+  return undefined;
+}
+
+function canonicalWorkspaceRootSeparator(style: CanonicalWorkspaceRootStyle): "/" | "\\" {
+  return style === "posix" ? "/" : "\\";
+}
+
+function normalizedCanonicalWorkspaceRoot(
+  value: string,
+  style: CanonicalWorkspaceRootStyle,
+): string {
+  return style === "windows" ? value.toLowerCase() : value;
+}
+
+function canonicalWorkspaceRootBodyIsValid(
+  value: string,
+  style: CanonicalWorkspaceRootStyle,
+): boolean {
+  const separator = canonicalWorkspaceRootSeparator(style);
+  const bodySegments = value.split(separator).slice(1);
+  if (bodySegments.length === 1 && bodySegments[0] === "") return true;
+  return bodySegments.every(
+    (segment): boolean => segment !== "" && segment !== "." && segment !== "..",
+  );
+}
+
 export function isCanonicalWorkspaceRoot(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 4096) return false;
   if (value.includes("\0")) return false;
-  const separator = value.includes("\\") ? "\\" : "/";
-  const absolute = value.startsWith("/") || /^[A-Za-z]:\\/u.test(value);
-  return absolute && !value.split(separator).some((segment) => segment === "." || segment === "..");
+  const style = canonicalWorkspaceRootStyle(value);
+  if (style === undefined) return false;
+  return canonicalWorkspaceRootBodyIsValid(value, style);
 }
 
 export function isPortableWorkspaceRelativePath(value: unknown): value is string {
@@ -176,19 +207,31 @@ export function isPortableWorkspaceRelativePath(value: unknown): value is string
   if (utf8ByteLength(value) > WORKSPACE_PORTABLE_PATH_MAX_BYTES) return false;
   if (value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
   if (/^[A-Za-z]:/u.test(value) || value.startsWith("~")) return false;
-  return !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
+  return !value
+    .split("/")
+    .some((segment): boolean => segment === "" || segment === "." || segment === "..");
 }
 
 function canonicalRootContains(parent: string, candidate: string): boolean {
-  const separator = parent.includes("\\") ? "\\" : "/";
-  const prefix = parent.endsWith(separator) ? parent : `${parent}${separator}`;
-  return candidate.startsWith(prefix);
+  const parentStyle = canonicalWorkspaceRootStyle(parent);
+  const candidateStyle = canonicalWorkspaceRootStyle(candidate);
+  if (parentStyle === undefined || candidateStyle === undefined || parentStyle !== candidateStyle) {
+    return false;
+  }
+  const separator = canonicalWorkspaceRootSeparator(parentStyle);
+  const normalizedParent = normalizedCanonicalWorkspaceRoot(parent, parentStyle);
+  const normalizedCandidate = normalizedCanonicalWorkspaceRoot(candidate, candidateStyle);
+  const prefix = normalizedParent.endsWith(separator)
+    ? normalizedParent
+    : `${normalizedParent}${separator}`;
+  return normalizedCandidate === normalizedParent || normalizedCandidate.startsWith(prefix);
 }
 
 export function workspaceCanonicalRootsDoNotOverlap(roots: readonly string[]): boolean {
-  return roots.every((root, index) =>
+  if (!roots.every((root): boolean => isCanonicalWorkspaceRoot(root))) return false;
+  return roots.every((root, index): boolean =>
     roots.every(
-      (candidate, candidateIndex) =>
+      (candidate, candidateIndex): boolean =>
         index === candidateIndex ||
         (!canonicalRootContains(root, candidate) && !canonicalRootContains(candidate, root)),
     ),
