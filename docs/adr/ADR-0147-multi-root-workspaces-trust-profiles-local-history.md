@@ -1,4 +1,4 @@
-# ADR-0146: Multi-root workspaces, Workspace Trust, profiles, and local history
+# ADR-0147: Multi-root workspaces, Workspace Trust, profiles, and local history
 
 ## Status
 
@@ -11,7 +11,7 @@ completed before implementation. The maintainer clarified on
 approval is required, and the independent security-reviewer assessment is quality evidence rather
 than human approval.
 
-ADR-0146 was allocated while synchronizing the feature line after `origin/dev` assigned ADR-0145.
+ADR-0147 was allocated while synchronizing the feature line after `origin/dev` assigned ADR-0146.
 
 ## Amends and reconciles
 

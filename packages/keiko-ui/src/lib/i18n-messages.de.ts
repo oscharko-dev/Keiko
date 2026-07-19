@@ -512,12 +512,42 @@ export const DE_MESSAGES = {
   "memoria.memoryList": "Erinnerungsliste",
   "memoria.memoriesFound": "{count} Erinnerungen gefunden",
   "memoria.loadingMemories": "Erinnerungen werden geladen…",
-  "memoria.policyLabel": "MemoriaViva-Policy aktivieren",
-  "memoria.policyState": "Policy {state}",
-  "memoria.policyOn": "an",
-  "memoria.policyOff": "aus",
   "memoria.backToWorkspace": "Zurück zum Workspace",
   "memoria.consolidation": "Konsolidierung",
+  "memoria.journal.open": "Journal",
+  "memoria.journal.title": "Erinnerungsjournal",
+  "memoria.journal.description":
+    "Eine aktuelle, umkehrbare Übersicht dessen, was Keiko aus deinen Gesprächen gelernt hat.",
+  "memoria.journal.loading": "Aktuelle Erfassungen werden geladen…",
+  "memoria.journal.loaded": "{count} aktuelle Erfassungen geladen",
+  "memoria.journal.emptyTitle": "Keine aktuellen Erfassungen",
+  "memoria.journal.emptyBody":
+    "Neue Erinnerungen erscheinen hier, nachdem MemoriaViva sie aus einem Gespräch erfasst hat.",
+  "memoria.journal.list": "Aktuelle Erinnerungserfassungen",
+  "memoria.journal.contentUnavailable": "Erinnerungsinhalt ist nicht verfügbar",
+  "memoria.journal.refusedBody":
+    "Erfassung durch Richtlinie abgelehnt. Es wurde kein Inhalt gespeichert.",
+  "memoria.journal.source": "Quelle {source}",
+  "memoria.journal.reason": "Erfassungsgrund {reason}",
+  "memoria.journal.capturedAt": "Erfasst {time}",
+  "memoria.journal.mode.governedAssist": "Um Freigabe bitten",
+  "memoria.journal.mode.supervisedCoding": "Überwachter Workspace",
+  "memoria.journal.mode.autonomousDelivery": "Vollzugriff",
+  "memoria.journal.mode.unknown": "Modus nicht verfügbar",
+  "memoria.journal.indicator.proposed": "Wartet auf Review",
+  "memoria.journal.indicator.auto": "Automatisch erfasst",
+  "memoria.journal.indicator.kept": "Behalten",
+  "memoria.journal.indicator.refused": "Abgelehnt",
+  "memoria.journal.keep": "Behalten",
+  "memoria.journal.keeping": "Wird behalten…",
+  "memoria.journal.forget": "Vergessen",
+  "memoria.journal.forgetting": "Wird vergessen…",
+  "memoria.journal.kept": "Erinnerung behalten",
+  "memoria.journal.forgotten": "Erinnerung vergessen",
+  "memoria.journal.keepError":
+    "Die Erinnerung konnte nicht behalten werden. Versuche die Aktion erneut.",
+  "memoria.journal.forgetError":
+    "Die Erinnerung konnte nicht vergessen werden. Versuche die Aktion erneut.",
   "memoria.actions.approveProposal": "Diesen Erinnerungsvorschlag akzeptieren",
   "memoria.actions.rejectProposal": "Diesen Erinnerungsvorschlag ablehnen",
   "memoria.actions.edit": "Bearbeiten",
@@ -558,6 +588,24 @@ export const DE_MESSAGES = {
   "memoria.settings.budgetUnit": "Token",
   "memoria.settings.budgetHelp":
     "Begrenzt den MemoriaViva-Erinnerungskontext für die nächste Chat-Anfrage.",
+  "memoria.settings.mode.label": "Erinnerungsautonomie",
+  "memoria.settings.mode.help": "Lege fest, wie Keiko neue Erinnerungen erfasst.",
+  "memoria.settings.mode.group": "Erinnerungsautonomiemodus",
+  "memoria.settings.mode.governedAssist.label": "Um Freigabe bitten",
+  "memoria.settings.mode.governedAssist.description":
+    "Neue Erfassungen bleiben Vorschläge, bis du sie freigibst.",
+  "memoria.settings.mode.supervisedCoding.label": "Überwachter Workspace",
+  "memoria.settings.mode.supervisedCoding.description":
+    "Öffentliche Routineerfassungen werden automatisch akzeptiert; sensible Erfassungen bleiben prüfpflichtig.",
+  "memoria.settings.mode.autonomousDelivery.label": "Vollzugriff",
+  "memoria.settings.mode.autonomousDelivery.description":
+    "Öffentliche Routineerfassungen werden innerhalb der Deployment-Grenze automatisch akzeptiert.",
+  "memoria.settings.mode.hydrateError":
+    "Der Erinnerungsautonomiemodus konnte nicht geladen werden. Um Freigabe bitten bleibt aktiv.",
+  "memoria.settings.mode.persistError":
+    "Der Erinnerungsautonomiemodus konnte nicht gespeichert werden. Der vorherige Modus bleibt aktiv.",
+  "memoria.settings.mode.clamped":
+    "Die Deployment-Grenze erzwingt aktuell {effectiveMode} für Erfassungen.",
   "memoria.consolidation.title": "MemoriaViva-Konsolidierung",
   "memoria.consolidation.description":
     "Starte einen begrenzten Konsolidierungsjob, prüfe seine Ausgabe und brich ihn ab, solange er wartet oder läuft.",

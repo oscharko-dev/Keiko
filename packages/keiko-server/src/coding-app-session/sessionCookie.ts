@@ -12,7 +12,7 @@ import type { IncomingMessage } from "node:http";
 export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
 /**
  * Path scope: every authenticated BFF content surface. W1.5 (#2478) first widened this from the
- * app-session route group to coding-workbench; ADR-0146 D7 adds editor local-history content under
+ * app-session route group to coding-workbench; ADR-0147 D7 adds editor local-history content under
  * `/api/editor/local-history`, so `/api` is now the narrow common path. The Path attribute is browser
  * hygiene, not a security boundary (RFC 6265 §8.6); `HttpOnly`, `SameSite=Strict`, and loopback host
  * scope carry the bearer-protection properties, and the BFF is the only receiver on this path.

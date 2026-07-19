@@ -1577,7 +1577,7 @@ export async function saveFilesContent(input: {
   readonly expectedModifiedAt?: number | undefined;
   // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
   readonly baseVersion?: EditorDocumentVersion | undefined;
-  /** ADR-0146 D7: restore saves checkpoint the previous on-disk state before writing. */
+  /** ADR-0147 D7: restore saves checkpoint the previous on-disk state before writing. */
   readonly historyOrigin?: "pre-restore" | undefined;
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {

@@ -5,7 +5,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migrateLegacyProjectManifests } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 interface Migration {
   readonly version: number;
@@ -350,8 +350,22 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
-// V11 (issue #2521, epic #2285, ADR-0146 D3/D8) — persisted canonical workspace-trust records.
-// ADR-0146 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
+// V11 (issue #2549) — singleton requested mode for the MemoriaViva capture surface. The value is
+// content-free and reuses the canonical product autonomy vocabulary; effective authority remains
+// server-owned and is clamped against the configured deployment ceiling at request time.
+const V11_SQL = `
+CREATE TABLE memory_autonomy_policy (
+  id TEXT NOT NULL PRIMARY KEY,
+  requested_mode TEXT NOT NULL,
+  CHECK (
+    id = 'capture'
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+  )
+) STRICT;
+`;
+
+// V12 (issue #2521, epic #2285, ADR-0147 D3/D8) — persisted canonical workspace-trust records.
+// ADR-0147 D8 mandates uiDb (one transaction domain) so a future root-removal (#2524) and trust
 // invalidation commit atomically; JSON-beside-SQLite was explicitly rejected. Content-free by
 // construction: `root_ref` is an opaque derived reference, `record_json` is the validated
 // WorkspaceTrustRecord (opaque digests, closed enums, revisions — never paths or manifest bytes).
@@ -359,7 +373,7 @@ CREATE INDEX idx_coding_runtime_settled_oldest
 // The denormalized columns are written from that same record and are never used as authority:
 // `revision` backs monotonic revision reads, `updated_at` orders deterministic bounded pruning, and
 // the `trust` enum is DB-layer enum enforcement plus cheap content-free inspection.
-const V11_SQL = `
+const V12_SQL = `
 CREATE TABLE workspace_trust_records (
   root_ref     TEXT NOT NULL PRIMARY KEY,
   revision     INTEGER NOT NULL,
@@ -378,11 +392,11 @@ CREATE TABLE workspace_trust_records (
 CREATE INDEX idx_workspace_trust_updated ON workspace_trust_records(updated_at, root_ref);
 `;
 
-// V12 (issue #2524, epic #2285, ADR-0146 D1/D8/D9) — server-owned ordered workspace manifests.
+// V13 (issue #2524, epic #2285, ADR-0147 D1/D8/D9) — server-owned ordered workspace manifests.
 // Root rows reference, rather than replace, the existing projects registry. `record_json` is the
 // authoritative closed WorkspaceManifest contract; relational columns enforce unique membership,
 // stable order, and the one-transaction root-removal/trust-invalidation boundary.
-const V12_SQL = `
+const V13_SQL = `
 CREATE TABLE workspace_manifests (
   workspace_id       TEXT NOT NULL PRIMARY KEY,
   schema_version     INTEGER NOT NULL,
@@ -437,7 +451,8 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
   { version: 11, sql: V11_SQL },
-  { version: 12, sql: V12_SQL, apply: migrateLegacyProjectManifests },
+  { version: 12, sql: V12_SQL },
+  { version: 13, sql: V13_SQL, apply: migrateLegacyProjectManifests },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -100,6 +100,7 @@ import {
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryReviewerId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import { createBffMemoryVault } from "./memory-handlers.js";
 import {
@@ -452,6 +453,10 @@ export interface UiHandlerDeps {
   readonly atlassianConnectorCredentials?: AtlassianConnectorCredentialDeps | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
+  // Optional deployment replacement for the default mode-independent memory category denylist.
+  // Category names and matched bodies remain inside the capture policy boundary.
+  readonly memoryDeniedCategoryMatchers?:
+    CapturePolicyOptions["deniedCategoryMatchers"] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
   // in-memory store via createInMemoryUiStore; production wiring resolves a node:sqlite file path.
   readonly store: UiStore;
@@ -504,7 +509,7 @@ export interface UiHandlerDeps {
   // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
   // reference in IndexedDB.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
-  // ADR-0146 D7 — server-owned encrypted, bounded file checkpoints. This is intentionally
+  // ADR-0147 D7 — server-owned encrypted, bounded file checkpoints. This is intentionally
   // independent from hot-exit recovery and from Code-task history.
   readonly editorLocalHistoryStore?: EditorLocalHistoryStore | undefined;
   // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
@@ -677,6 +682,10 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  // Optional deployment replacement for the default memory category denylist. Production leaves
+  // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
+  readonly memoryDeniedCategoryMatchers?:
+    CapturePolicyOptions["deniedCategoryMatchers"] | undefined;
   readonly workspaceScriptTrust?: WorkspaceScriptTrustService | undefined;
   // Optional injected registry (tests); a fresh bounded registry is created otherwise.
   readonly registry?: RunRegistry | undefined;
@@ -3010,6 +3019,9 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...autonomousDeliveryFields(args.options),
     ...atlassianConnectorCredentialFields(args),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
+    ...(args.options.memoryDeniedCategoryMatchers === undefined
+      ? {}
+      : { memoryDeniedCategoryMatchers: args.options.memoryDeniedCategoryMatchers }),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,

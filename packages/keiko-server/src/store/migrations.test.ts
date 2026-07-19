@@ -21,6 +21,28 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe("runMigrations", () => {
+  it("v11 creates the singleton canonical memory autonomy policy", () => {
+    const db = openMem();
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(11);
+    db.prepare("INSERT INTO memory_autonomy_policy (id, requested_mode) VALUES (?, ?)").run(
+      "capture",
+      "governed-assist",
+    );
+    expect(() => {
+      db.prepare("INSERT INTO memory_autonomy_policy (id, requested_mode) VALUES (?, ?)").run(
+        "other",
+        "governed-assist",
+      );
+    }).toThrow();
+    expect(() => {
+      db.prepare("UPDATE memory_autonomy_policy SET requested_mode = ? WHERE id = ?").run(
+        "unbounded",
+        "capture",
+      );
+    }).toThrow();
+  });
+
   it("v10 creates the strict, content-free coding runtime snapshot ledger and active-slot index", () => {
     const db = openMem();
     runMigrations(db);

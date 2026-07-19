@@ -1,4 +1,4 @@
-// Issue #2524, ADR-0146 D1/D8/D9 — ordered workspace-manifest persistence over the existing uiDb.
+// Issue #2524, ADR-0147 D1/D8/D9 — ordered workspace-manifest persistence over the existing uiDb.
 // The authoritative contract is stored as validated JSON while relational root rows preserve the
 // project registry reference and make membership/ordering constraints transactional.
 

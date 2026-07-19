@@ -301,9 +301,10 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the 21 memory routes (12 from #211, 2 #209 governance routes, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204, 1 health-scan route from #2129)", () => {
+  it("keeps recent captures on the existing GET /api/memory route", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(21);
+    expect(memoryRoutes).toHaveLength(23);
+    expect(API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory")).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/forget"),
     ).toBeDefined();
@@ -315,6 +316,12 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory/health-scan"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory/autonomy-policy"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "PUT" && r.pattern === "/api/memory/autonomy-policy"),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),

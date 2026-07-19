@@ -1,4 +1,4 @@
-// Issue #2521, ADR-0146 D3/D8 — canonical workspace-trust row CRUD. All SQL is module-scope
+// Issue #2521, ADR-0147 D3/D8 — canonical workspace-trust row CRUD. All SQL is module-scope
 // constants; no string interpolation into SQL. This layer is deliberately dumb: it persists and
 // returns opaque, content-free rows and holds no trust semantics. Derivation, contract validation,
 // projection, and fail-closed decisions all live above the UiStore port (workspace-script-trust.ts).
@@ -31,7 +31,7 @@ const SQL_GET =
 // guarded by `excluded.revision > current.revision`, so the row only ever moves forward. A stale or
 // replayed write at an equal-or-lower revision is silently ignored, so a restored older manifest (or
 // a rolled-back store) can never resurrect a prior grant — the invariant is enforced at the DB layer,
-// not only by caller discipline (ADR-0146 D3).
+// not only by caller discipline (ADR-0147 D3).
 const SQL_UPSERT = `
 INSERT INTO workspace_trust_records (root_ref, revision, trust, record_json, updated_at)
 VALUES (?, ?, ?, ?, ?)

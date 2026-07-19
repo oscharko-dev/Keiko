@@ -68,6 +68,12 @@ import {
   auditRunIdFor,
   recordMemoryAudit,
 } from "./memory-audit-handler.js";
+import {
+  MemoryCaptureProjectionReadError,
+  projectMemoryCaptureDecisions,
+  replayMemoryCaptureAuditLedger,
+  type MemoryCaptureDecision,
+} from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -77,6 +83,8 @@ const DEFAULT_REVIEWER_ID = "local-operator" as MemoryReviewerId;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_QUERY_CHARS = 200;
+const MAX_RECENT_SINCE_CHARS = 13;
+const MAX_MEMORY_EXCERPT_CHARS = 240;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
@@ -338,7 +346,8 @@ function listReviewQueueMemories(vault: MemoryVaultStore): readonly MemoryRecord
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
 
-interface ListParams {
+interface LegacyListParams {
+  readonly kind: "legacy";
   readonly scopeKinds: string[];
   readonly types: string[];
   readonly statuses: string[];
@@ -348,7 +357,17 @@ interface ListParams {
   readonly offset: number;
 }
 
-function parseListParams(ctx: RouteContext): ListParams | RouteResult {
+interface RecentListParams {
+  readonly kind: "recent";
+  readonly scopeKinds: string[];
+  readonly since: number;
+  readonly order: "asc" | "desc";
+  readonly limit: number;
+}
+
+type ListParams = LegacyListParams | RecentListParams;
+
+function parseLegacyListParams(ctx: RouteContext): LegacyListParams | RouteResult {
   const scopeKinds = splitComma(ctx.url.searchParams.get("scope"));
   const types = splitComma(ctx.url.searchParams.get("type"));
   const statuses = splitComma(ctx.url.searchParams.get("status"));
@@ -387,6 +406,7 @@ function parseListParams(ctx: RouteContext): ListParams | RouteResult {
   }
 
   return {
+    kind: "legacy",
     scopeKinds,
     types,
     statuses,
@@ -397,6 +417,185 @@ function parseListParams(ctx: RouteContext): ListParams | RouteResult {
   };
 }
 
+function invalidSinceResult(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "since must be an epoch-millisecond timestamp."),
+  };
+}
+
+function parseRecentSince(ctx: RouteContext): number | null | RouteResult {
+  const values = ctx.url.searchParams.getAll("since");
+  if (values.length === 0) return null;
+  const raw = values[0];
+  if (
+    values.length !== 1 ||
+    raw === undefined ||
+    raw.length === 0 ||
+    raw.length > MAX_RECENT_SINCE_CHARS ||
+    !/^\d+$/.test(raw)
+  ) {
+    return invalidSinceResult();
+  }
+  const since = Number(raw);
+  return Number.isSafeInteger(since) ? since : invalidSinceResult();
+}
+
+function parseRecentOrder(ctx: RouteContext): "asc" | "desc" | RouteResult {
+  const values = ctx.url.searchParams.getAll("order");
+  if (values.length === 0) return "desc";
+  if (values.length !== 1 || (values[0] !== "asc" && values[0] !== "desc")) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "order must be either asc or desc."),
+    };
+  }
+  return values[0];
+}
+
+function hasUnsupportedRecentFilter(ctx: RouteContext): boolean {
+  return ["type", "status", "sensitivity", "q", "offset"].some((key) =>
+    ctx.url.searchParams.has(key),
+  );
+}
+
+function parseRecentListParams(ctx: RouteContext, since: number): RecentListParams | RouteResult {
+  if (hasUnsupportedRecentFilter(ctx)) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "Recent capture mode supports only since, order, scope, and limit.",
+      ),
+    };
+  }
+  const scopeKinds = splitComma(ctx.url.searchParams.get("scope"));
+  if (scopeKinds.length > 0 && !isScopeKindArray(scopeKinds)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "scope must contain valid memory scope kinds."),
+    };
+  }
+  const order = parseRecentOrder(ctx);
+  if (isRouteResult(order)) return order;
+  return {
+    kind: "recent",
+    scopeKinds,
+    since,
+    order,
+    limit: parseIntQuery(ctx.url.searchParams.get("limit"), DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT),
+  };
+}
+
+function parseListParams(ctx: RouteContext): ListParams | RouteResult {
+  const since = parseRecentSince(ctx);
+  if (isRouteResult(since)) return since;
+  if (since !== null) return parseRecentListParams(ctx, since);
+  if (ctx.url.searchParams.has("order")) {
+    return invalidSinceResult();
+  }
+  return parseLegacyListParams(ctx);
+}
+
+function listAuthorizedRecords(
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
+}
+
+function governedExcerptMap(
+  deps: UiHandlerDeps,
+  records: readonly MemoryRecord[],
+): ReadonlyMap<string, string> {
+  const redacted = redactMemories(deps, records);
+  if (!Array.isArray(redacted)) return new Map();
+  const excerpts = new Map<string, string>();
+  for (const value of redacted) {
+    if (!isRecord(value) || typeof value.id !== "string" || typeof value.body !== "string")
+      continue;
+    excerpts.set(value.id, value.body.slice(0, MAX_MEMORY_EXCERPT_CHARS));
+  }
+  return excerpts;
+}
+
+function attachGovernedExcerpts(
+  decisions: readonly MemoryCaptureDecision[],
+  excerpts: ReadonlyMap<string, string>,
+): readonly unknown[] {
+  return decisions.map((decision) => {
+    const excerpt = decision.memoryId === undefined ? undefined : excerpts.get(decision.memoryId);
+    return excerpt === undefined ? decision : { ...decision, bodyExcerpt: excerpt };
+  });
+}
+
+// Recent-captures pages only ever reference a handful of records; redacting the whole authorized
+// vault before slicing to the page made this endpoint O(authorized vault size) on every request.
+function recordsForPage(
+  liveRecords: readonly MemoryRecord[],
+  page: readonly MemoryCaptureDecision[],
+): readonly MemoryRecord[] {
+  const pageIds = new Set(
+    page.flatMap((decision) => (decision.memoryId === undefined ? [] : [decision.memoryId])),
+  );
+  return liveRecords.filter((record) => pageIds.has(String(record.id)));
+}
+
+function handleRecentMemories(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  params: RecentListParams,
+): RouteResult {
+  const authorized = authorizedMemoryScopes(deps, vault).filter(
+    (scope) => params.scopeKinds.length === 0 || params.scopeKinds.includes(scope.kind),
+  );
+  const liveRecords = listAuthorizedRecords(vault, authorized);
+  const events = replayMemoryCaptureAuditLedger(deps.evidenceStore, params.since);
+  const projected = projectMemoryCaptureDecisions(events, {
+    since: params.since,
+    order: params.order,
+    authorizedScopes: authorized,
+    liveRecords,
+  });
+  const page = projected.slice(0, params.limit);
+  const captures = attachGovernedExcerpts(
+    page,
+    governedExcerptMap(deps, recordsForPage(liveRecords, page)),
+  );
+  return {
+    status: 200,
+    body: {
+      captures,
+      total: projected.length,
+      limit: params.limit,
+      since: params.since,
+      order: params.order,
+    },
+  };
+}
+
+function handleLegacyMemories(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  params: LegacyListParams,
+): RouteResult {
+  const { scopeKinds, types, statuses, sensitivities, query, limit, offset } = params;
+  const filtered = listMemoriesAcrossScopes(vault, {
+    ...(scopeKinds.length > 0 ? { scopeKinds: scopeKinds as readonly MemoryScopeKind[] } : {}),
+    ...(types.length > 0 ? { types: types as readonly MemoryType[] } : {}),
+    ...(statuses.length > 0 ? { statuses: statuses as readonly MemoryStatus[] } : {}),
+    ...(sensitivities.length > 0
+      ? { sensitivities: sensitivities as readonly MemorySensitivity[] }
+      : {}),
+    ...(query !== undefined ? { query } : {}),
+  });
+  const page = filtered.slice(offset, offset + limit);
+  return {
+    status: 200,
+    body: { memories: redactMemories(deps, page), total: filtered.length, limit, offset },
+  };
+}
+
 export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
@@ -404,25 +603,16 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   const params = parseListParams(ctx);
   if (isRouteResult(params)) return params;
 
-  const { scopeKinds, types, statuses, sensitivities, query, limit, offset } = params;
-
   try {
-    const filtered = listMemoriesAcrossScopes(vault, {
-      ...(scopeKinds.length > 0 ? { scopeKinds: scopeKinds as readonly MemoryScopeKind[] } : {}),
-      ...(types.length > 0 ? { types: types as readonly MemoryType[] } : {}),
-      ...(statuses.length > 0 ? { statuses: statuses as readonly MemoryStatus[] } : {}),
-      ...(sensitivities.length > 0
-        ? { sensitivities: sensitivities as readonly MemorySensitivity[] }
-        : {}),
-      ...(query !== undefined ? { query } : {}),
-    });
-    const page = filtered.slice(offset, offset + limit);
-
-    return {
-      status: 200,
-      body: { memories: redactMemories(deps, page), total: filtered.length, limit, offset },
-    };
+    if (params.kind === "recent") return handleRecentMemories(deps, vault, params);
+    return handleLegacyMemories(deps, vault, params);
   } catch (err) {
+    if (err instanceof MemoryCaptureProjectionReadError) {
+      return {
+        status: 500,
+        body: errorBody("MEMORY_AUDIT_UNAVAILABLE", "Recent memory history is unavailable."),
+      };
+    }
     if (err instanceof MemoryStorageError) {
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to list memories.") };
     }

@@ -25,7 +25,7 @@ describe("serializeSessionCookie", () => {
     expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=sess_abc.secret`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
-    // ADR-0146 adds authenticated editor local-history beside coding-workbench, so `/api` is the
+    // ADR-0147 adds authenticated editor local-history beside coding-workbench, so `/api` is the
     // narrow common path on which the browser must present the HttpOnly session.
     expect(cookie).toContain("Path=/api;");
     expect(cookie).toContain("Max-Age=3600");

@@ -23,6 +23,7 @@ const HOST = "127.0.0.1";
 // wiring regression (SSE framing dropped, gateway not dispatching, render not consuming deltas)
 // changes what the browser shows and reddens the smoke.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
+const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " provider", " pong", " 4242."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
 
@@ -81,7 +82,21 @@ function streamCompletion(res) {
   res.end();
 }
 
-function bufferedCompletion(res) {
+function bufferedContent(rawRequest) {
+  if (!rawRequest.includes(JOURNAL_CAPTURE_MARKER)) return REPLY_TEXT;
+  return JSON.stringify([
+    {
+      source: "user",
+      body: "The journal smoke fixture uses deterministic release windows.",
+      type: "fact",
+      confidence: 0.91,
+      scope: "project",
+      tags: ["journal-e2e"],
+    },
+  ]);
+}
+
+function bufferedCompletion(res, rawRequest) {
   const body = {
     id: "chatcmpl-e2e",
     object: "chat.completion",
@@ -90,7 +105,7 @@ function bufferedCompletion(res) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: REPLY_TEXT },
+        message: { role: "assistant", content: bufferedContent(rawRequest) },
         finish_reason: "stop",
       },
     ],
@@ -122,7 +137,7 @@ const server = createServer((req, res) => {
       if (wantsStream) {
         streamCompletion(res);
       } else {
-        bufferedCompletion(res);
+        bufferedCompletion(res, raw);
       }
     });
     return;

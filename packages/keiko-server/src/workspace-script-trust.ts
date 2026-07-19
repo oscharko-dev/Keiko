@@ -1,5 +1,5 @@
 // Server-owned approval for repository-authored package scripts, now persisted (issue #2521,
-// ADR-0146 D3/D8). A grant is bound to the registered project's canonical root, the resolved
+// ADR-0147 D3/D8). A grant is bound to the registered project's canonical root, the resolved
 // workspace root, and the exact package.json digest observed when the human approved it, and is
 // stored as a canonical, revisioned WorkspaceTrustRecord in the uiDb (one transaction domain). Any
 // manifest or root change invalidates the grant — persisting a restricted record at a newer revision
@@ -200,7 +200,7 @@ function resolveCanonicalRoot(
   return canonicalProjectRoot;
 }
 
-// The capability-specific trust basis (ADR-0146 D3): the exact package.json digest. This is the old
+// The capability-specific trust basis (ADR-0147 D3): the exact package.json digest. This is the old
 // manifest-digest computation, now a non-throwing tagged fact so `isTrusted` fails closed to
 // restricted rather than throwing on an absent or unreadable manifest.
 function resolveTrustBasisFact(
@@ -312,7 +312,7 @@ function invalidationReason(
 
 // A previously trusted record is durably demoted only when it is contradicted by KNOWN live facts —
 // a genuine digest or root change. A transient or unreadable manifest keeps the current call
-// fail-closed (untrusted) but must never permanently revoke a valid grant (ADR-0146 D3 speaks of a
+// fail-closed (untrusted) but must never permanently revoke a valid grant (ADR-0147 D3 speaks of a
 // "digest/root mismatch", not an unreadable basis). Returns the trusted record to invalidate, if any.
 function invalidatedTrustedRecord(
   assessment: WorkspaceTrustAssessment,

@@ -17,7 +17,7 @@ import {
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { scanForSecrets } from "./secret-patterns.js";
+import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
 import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./types.js";
 
 // ─── Regex catalogue (narrow, anchored, single-quantifier) ────────────────────
@@ -146,7 +146,7 @@ function execThatsWrongBody(text: string): RegExpExecArray | null {
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
-  const reason = scanForSecrets(body, policy.customerIdentifierMatchers ?? []);
+  const reason = memoryTextSecretEgressRejectionReason(body, policy);
   if (reason !== null) {
     return { kind: "rejected", reason };
   }

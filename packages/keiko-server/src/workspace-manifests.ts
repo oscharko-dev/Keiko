@@ -1,4 +1,4 @@
-// Issue #2524, ADR-0146 — server-owned multi-root workspace model. Every mutation validates one
+// Issue #2524, ADR-0147 — server-owned multi-root workspace model. Every mutation validates one
 // explicit current-root dispatch, rebuilds the closed manifest, and delegates the manifest/trust
 // transition to one SQLite transaction through UiStore.
 
