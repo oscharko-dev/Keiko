@@ -151,7 +151,9 @@ describe("Issue #12 docs drift", () => {
     const readme = readText("README.md");
     const topMatter = readme.split(/\n---\n/)[0] ?? "";
 
-    expect(topMatter).toMatch(/manifest-producing surfaces emit redacted evidence for audit/i);
+    expect(topMatter).toMatch(
+      /manifest-producing\s+surfaces\s+emit\s+redacted\s+evidence\s+for\s+audit/i,
+    );
     expect(topMatter).not.toMatch(/\b(?:every|each)\s+run\b.*\bmanifest\b/i);
   });
 
