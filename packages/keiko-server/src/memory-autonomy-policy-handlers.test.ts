@@ -87,4 +87,19 @@ describe("memory autonomy policy routes", () => {
     ).resolves.toMatchObject({ status: 400 });
     expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
   });
+
+  it("settles with 400 instead of hanging when the client aborts mid-upload", async () => {
+    const handlerDeps = deps();
+    const req = new Readable({ read: (): void => undefined });
+    const ctx: RouteContext = {
+      req: req as RouteContext["req"],
+      res: {} as RouteContext["res"],
+      params: {},
+      url: new URL("http://127.0.0.1/api/memory/autonomy-policy"),
+    };
+    const result = handlePutMemoryAutonomyPolicy(ctx, handlerDeps);
+    req.emit("aborted");
+    await expect(result).resolves.toMatchObject({ status: 400 });
+    expect(handlerDeps.store.getMemoryAutonomyMode()).toBeUndefined();
+  });
 });

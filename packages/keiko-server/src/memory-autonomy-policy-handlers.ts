@@ -24,19 +24,33 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let settled = false;
+    const settleReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     req.on("data", (chunk: Buffer) => {
+      if (settled) return;
       size += chunk.length;
       if (size > MAX_POLICY_BODY_BYTES) {
-        reject(new Error("policy request body too large"));
+        settleReject(new Error("policy request body too large"));
         req.resume();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       resolve(Buffer.concat(chunks).toString("utf8"));
     });
-    req.on("error", reject);
+    req.on("error", settleReject);
+    // A client disconnect mid-upload emits neither "end" nor "error" — without this, the promise
+    // (and the awaiting route handler) would hang until the process itself tears down the socket.
+    req.once("aborted", () => {
+      settleReject(new Error("policy request aborted"));
+    });
   });
 }
 
@@ -64,10 +78,16 @@ export async function handlePutMemoryAutonomyPolicy(
   try {
     requestedMode = await parseRequestedMode(ctx.req);
   } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Invalid memory autonomy policy.") };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Invalid memory autonomy policy.", ctx.correlationId),
+    };
   }
   if (!isCodingWorkbenchMode(requestedMode)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Invalid memory autonomy mode.") };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Invalid memory autonomy mode.", ctx.correlationId),
+    };
   }
   deps.store.setMemoryAutonomyMode(requestedMode);
   return { status: 200, body: policyProjection(deps) };

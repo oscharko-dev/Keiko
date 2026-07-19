@@ -94,4 +94,18 @@ describe("MemoryAutonomyControl", () => {
     });
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("labels each option's group membership so screen readers announce a full three-option group", () => {
+    renderControl({ mode: "governed-assist" });
+    const group = screen.getByRole("radiogroup", { name: "Memory autonomy mode" });
+    for (const option of within(group).getAllByRole("radio")) {
+      expect(option).toHaveAttribute("name");
+    }
+    const names = new Set(
+      within(group)
+        .getAllByRole("radio")
+        .map((option) => option.getAttribute("name")),
+    );
+    expect(names.size).toBe(1);
+  });
 });
