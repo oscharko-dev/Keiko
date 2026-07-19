@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyLsofNetworkNames,
+  missingRealBinaryEvidence,
   processIdsForExecutable,
   readMaterializedLimits,
   realBinaryEvidenceComplete,
@@ -93,5 +94,54 @@ describe("#2483 real-binary observation helpers", () => {
         limits: { ...complete.limits, materializedChildLimits: [] },
       }),
     ).toBe(false);
+  });
+
+  it("names every missing observation so a failed run explains itself", () => {
+    const complete = {
+      journey: { exitCode: 0 },
+      limits: {
+        materializedChildLimits: [{ context: 32_768, output: 4_096 }],
+        gatewayRequestCount: 1,
+        observedGatewayOutputTokenLimits: [4_096],
+      },
+      missingPayload: { passed: true, unavailableReason: "payload-missing" },
+    };
+
+    expect(missingRealBinaryEvidence(complete)).toEqual([]);
+    expect(missingRealBinaryEvidence({ ...complete, journey: { exitCode: 1 } })).toEqual([
+      "journey exit code 1",
+    ]);
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: { ...complete.limits, gatewayRequestCount: 0 },
+      }),
+    ).toEqual(["no gateway request was observed"]);
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: { ...complete.limits, observedGatewayOutputTokenLimits: [8_192] },
+      }),
+    ).toEqual(["no gateway request carried the effective output limit 4096"]);
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        missingPayload: { passed: false, unavailableReason: "probe-failed" },
+      }),
+    ).toEqual(["payload-missing probe did not pass (reason probe-failed)"]);
+  });
+
+  it("reports every gap at once rather than only the first", () => {
+    const gaps = missingRealBinaryEvidence({
+      journey: { exitCode: 1 },
+      limits: {
+        materializedChildLimits: [],
+        gatewayRequestCount: 0,
+        observedGatewayOutputTokenLimits: [],
+      },
+      missingPayload: undefined,
+    });
+
+    expect(gaps).toHaveLength(5);
   });
 });

@@ -15,6 +15,7 @@ import {
   createCodingRuntimeOrchestrator,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
+import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
 
@@ -147,6 +148,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
   } satisfies CodingRuntimeQuestionPort;
   const safeActivityProjection = activityProjection ?? fakeSafeActivityProjection();
   const researchGrants = createResearchGrantRegistry();
+  const pendingResearchApprovals = createPendingResearchApprovals();
   const orchestrator = createCodingRuntimeOrchestrator({
     manager: manager,
     approvalAuthority,
@@ -165,6 +167,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     safeActivityProjection,
     serverPrincipal: () => "server",
     researchGrants,
+    pendingResearchApprovals,
     now: () => new Date("2026-01-01T00:00:00.000Z"),
     newRunId: () => `run-${String(rows.size + 1)}`,
   });
@@ -180,6 +183,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     questionPort,
     safeActivityProjection,
     researchGrants,
+    pendingResearchApprovals,
     listPrunableSettled,
     deletePruned,
   };
@@ -803,6 +807,44 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
     // The projection never leaks the bound digest or the sanitized query.
     expect(JSON.stringify(snapshot)).not.toContain("approved query");
     expect(JSON.stringify(snapshot)).not.toContain("a".repeat(64));
+  });
+
+  it("#2387: projects the pending ask's host and request line for operator review", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.pendingResearchApprovals.request({
+      runId: "run-1",
+      url: new URL("https://docs.example.org/guide/streams?topic=backpressure"),
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      nowMs: FIXTURE_NOW_MS,
+    });
+
+    expect(f.orchestrator.pendingResearchAsk("run-1")).toEqual({
+      requestId: "research-approval-1",
+      host: "docs.example.org",
+      requestLine: "/guide/streams topic=backpressure",
+      expiresAt: "2026-01-01T00:02:00.000Z",
+    });
+    // The reviewable detail is for the AUTHENTICATED channel only; the public snapshot stays free
+    // of the host, the path, and the query.
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("docs.example.org");
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("backpressure");
+  });
+
+  it("#2387: has no reviewable ask for another run, or with nothing pending", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.pendingResearchApprovals.request({
+      runId: "run-1",
+      url: new URL("https://docs.example.org/guide"),
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      nowMs: FIXTURE_NOW_MS,
+    });
+
+    expect(f.orchestrator.pendingResearchAsk("run-other")).toBeUndefined();
+    expect(fixture().orchestrator.pendingResearchAsk("run-1")).toBeUndefined();
   });
 
   it("aggregates several live grants into one sorted, deduplicated projection", async () => {
