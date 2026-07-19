@@ -688,6 +688,10 @@ function boundedLifecycle(value: unknown): boolean {
  * (the DoS guard), every other field keeps the tight per-string bound, and the safe-activity
  * projection clips the displayed text to its own segment limit — the reconciliation path never
  * reads part text content. Non-text parts are bounded exactly as before.
+ *
+ * A part this size only ever arrives through the `POST /sync/history` HTTP body (which shares this
+ * 64 KiB row budget), never as a single live SSE frame: the live path yields content-free pull
+ * triggers only, so the independent `MAX_FRAME_BYTES` SSE limit is not a cross-budget constraint.
  */
 function boundedPartLifecycle(part: Record<string, unknown>): boolean {
   if (part.type !== "text") return boundedLifecycle(part);
