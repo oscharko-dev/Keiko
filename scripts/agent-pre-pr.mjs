@@ -44,6 +44,20 @@ const SCOPE_PRODUCT = [
   ...ROOT_TS_CONFIG,
 ];
 const SCOPE_COVERAGE = [...SCOPE_SOURCES, ...ROOT_TS_CONFIG, "docs/qa/"];
+const SCOPE_KNIP = [
+  ...SCOPE_SOURCES,
+  "native/",
+  "knip.json",
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.build.json",
+  "tsconfig.packages.json",
+  "vitest.config.ts",
+  "vitest.coverage.packages.config.ts",
+  "vitest.coverage.scripts.config.ts",
+];
 
 function npmCommand(platform = process.platform) {
   return platform === "win32" ? "npm.cmd" : "npm";
@@ -300,7 +314,7 @@ function testAndArchitectureSteps(platform) {
       platform,
     }),
     npmStep("knip", ["run", "check:knip"], {
-      cacheScope: ["."],
+      cacheScope: SCOPE_KNIP,
       platform,
     }),
   ];
