@@ -5,17 +5,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import {
   EDITOR_M7_SCHEMA_VERSION,
   defaultEditorM7Settings,
-  parseEditorM7SettingsEvent,
+  parseEditorM11SettingsEvent,
   type EditorM7ExternalReloadPolicy,
   type EditorM7LargeFileMode,
-  type EditorM7ResolvedSetting,
   type EditorM7SettingId,
-  type EditorM7SettingScope,
   type EditorM7SettingValue,
   type EditorM7SettingsMutationAction,
-  type EditorM7SettingsSnapshot,
   type EditorM7WhitespaceRendering,
   type EditorM7WordWrap,
+  type EditorM11ResolvedSetting,
+  type EditorM11SettingScope,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError, fetchEditorSettings, mutateEditorSettings } from "../../../../../lib/api";
 import { subscribeSharedEventSource } from "./sharedEventSource";
@@ -38,7 +38,7 @@ interface AppliedEditorSettings {
 export type EditorSettingsIssue = "load" | "mutation" | "conflict";
 
 export interface EditorSettingsView {
-  readonly snapshot: EditorM7SettingsSnapshot | undefined;
+  readonly snapshot: EditorM11SettingsSnapshot | undefined;
   readonly applied: AppliedEditorSettings;
   readonly loading: boolean;
   readonly mutating: boolean;
@@ -46,11 +46,14 @@ export interface EditorSettingsView {
   readonly announcement: string;
   readonly refresh: () => Promise<void>;
   readonly setValue: (
-    scope: EditorM7SettingScope,
+    scope: EditorM11SettingScope,
     id: EditorM7SettingId,
     value: EditorM7SettingValue,
   ) => Promise<void>;
-  readonly reset: (scope: EditorM7SettingScope, ids: readonly EditorM7SettingId[]) => Promise<void>;
+  readonly reset: (
+    scope: EditorM11SettingScope,
+    ids: readonly EditorM7SettingId[],
+  ) => Promise<void>;
 }
 
 const defaults = defaultEditorM7Settings();
@@ -96,7 +99,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
   const rootRef = useRef(root);
   const readAbort = useRef<AbortController | undefined>(undefined);
   const mutationAbort = useRef<AbortController | undefined>(undefined);
-  const [snapshot, setSnapshot] = useState<EditorM7SettingsSnapshot | undefined>();
+  const [snapshot, setSnapshot] = useState<EditorM11SettingsSnapshot | undefined>();
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<EditorSettingsIssue | undefined>();
@@ -145,7 +148,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
           return;
         }
         try {
-          const parsed = parseEditorM7SettingsEvent(JSON.parse(event.data));
+          const parsed = parseEditorM11SettingsEvent(JSON.parse(event.data));
           if (parsed.ok) void refresh();
         } catch {
           void refresh();
@@ -156,7 +159,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
   }, [refresh, root]);
 
   const reset = useCallback(
-    async (scope: EditorM7SettingScope, ids: readonly EditorM7SettingId[]): Promise<void> => {
+    async (scope: EditorM11SettingScope, ids: readonly EditorM7SettingId[]): Promise<void> => {
       if (ids.length === 0) return;
       await executeMutation({
         action: "reset",
@@ -176,7 +179,7 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
 
   const setValue = useCallback(
     async (
-      scope: EditorM7SettingScope,
+      scope: EditorM11SettingScope,
       id: EditorM7SettingId,
       value: EditorM7SettingValue,
     ): Promise<void> => {
@@ -205,10 +208,10 @@ export function useEditorSettings(root: string | undefined): EditorSettingsView 
 interface MutationArgs {
   readonly action: EditorM7SettingsMutationAction;
   readonly root: string | undefined;
-  readonly scope: EditorM7SettingScope;
-  readonly snapshot: EditorM7SettingsSnapshot | undefined;
+  readonly scope: EditorM11SettingScope;
+  readonly snapshot: EditorM11SettingsSnapshot | undefined;
   readonly signalRef: RefObject<AbortController | undefined>;
-  readonly setSnapshot: (snapshot: EditorM7SettingsSnapshot) => void;
+  readonly setSnapshot: (snapshot: EditorM11SettingsSnapshot) => void;
   readonly setMutating: (mutating: boolean) => void;
   readonly setIssue: (issue: EditorSettingsIssue | undefined) => void;
   readonly setAnnouncement: (announcement: string) => void;
@@ -229,7 +232,11 @@ async function executeMutation(args: MutationArgs): Promise<void> {
   args.setIssue(undefined);
   args.setAnnouncement("");
   const expectedRevision =
-    args.scope === "user" ? args.snapshot.userRevision : args.snapshot.workspaceRevision;
+    args.scope === "user"
+      ? args.snapshot.userRevision
+      : args.scope === "workspace"
+        ? args.snapshot.workspaceRevision
+        : (args.snapshot.rootRevision ?? 0);
   try {
     const body = mutationBody(args, expectedRevision, id, value);
     const result = await mutateEditorSettings(
@@ -272,7 +279,7 @@ function mutationBody(
 }
 
 function appliedEditorSettings(
-  snapshot: EditorM7SettingsSnapshot | undefined,
+  snapshot: EditorM11SettingsSnapshot | undefined,
 ): AppliedEditorSettings {
   if (snapshot === undefined) return DEFAULT_APPLIED_EDITOR_SETTINGS;
   return {
@@ -313,14 +320,14 @@ function appliedEditorSettings(
 }
 
 export function settingById(
-  snapshot: EditorM7SettingsSnapshot | undefined,
+  snapshot: EditorM11SettingsSnapshot | undefined,
   id: EditorM7SettingId,
-): EditorM7ResolvedSetting | undefined {
+): EditorM11ResolvedSetting | undefined {
   return snapshot?.settings.find((setting) => setting.id === id);
 }
 
 function settingValue(
-  snapshot: EditorM7SettingsSnapshot,
+  snapshot: EditorM11SettingsSnapshot,
   id: EditorM7SettingId,
 ): EditorM7SettingValue | undefined {
   return settingById(snapshot, id)?.value;

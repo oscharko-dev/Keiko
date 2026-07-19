@@ -3,9 +3,9 @@ import type { ServerResponse } from "node:http";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   type EditorM7SettingId,
-  type EditorM7SettingScope,
-  type EditorM7SettingsEvent,
-  type EditorM7SettingsSnapshot,
+  type EditorM11SettingScope,
+  type EditorM11SettingsEvent,
+  type EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
 import { writeOrDestroy } from "../../sse-write.js";
@@ -23,8 +23,8 @@ export interface EditorSettingsEventBus {
 }
 
 interface EditorSettingsPublishArgs {
-  readonly snapshot: EditorM7SettingsSnapshot;
-  readonly scope: EditorM7SettingScope;
+  readonly snapshot: EditorM11SettingsSnapshot;
+  readonly scope: EditorM11SettingScope;
   readonly settingIds: readonly EditorM7SettingId[];
 }
 
@@ -38,7 +38,7 @@ function editorSettingsEventRootKey(realRoot: string | undefined): string | unde
   return realRoot === undefined ? undefined : editorSettingsWorkspaceFingerprint(realRoot);
 }
 
-function snapshotRootKey(snapshot: EditorM7SettingsSnapshot): string | undefined {
+function snapshotRootKey(snapshot: EditorM11SettingsSnapshot): string | undefined {
   return snapshot.root === undefined ? undefined : editorSettingsEventRootKey(snapshot.root);
 }
 
@@ -50,7 +50,7 @@ function eventMatches(
   return subscriber.rootKey !== undefined && subscriber.rootKey === snapshotRootKey(args.snapshot);
 }
 
-function frame(event: EditorM7SettingsEvent): string {
+function frame(event: EditorM11SettingsEvent): string {
   return `id: ${String(event.sequence)}\nevent: editor-settings:changed\ndata: ${JSON.stringify(
     event,
   )}\n\n`;
@@ -63,7 +63,7 @@ function readyFrame(): string {
 function eventFromPublish(
   sequence: number,
   args: EditorSettingsPublishArgs,
-): EditorM7SettingsEvent {
+): EditorM11SettingsEvent {
   return {
     schemaVersion: EDITOR_M7_SCHEMA_VERSION,
     sequence,
@@ -71,6 +71,7 @@ function eventFromPublish(
     revision: args.snapshot.revision,
     userRevision: args.snapshot.userRevision,
     workspaceRevision: args.snapshot.workspaceRevision,
+    rootRevision: args.snapshot.rootRevision ?? 0,
     scope: args.scope,
     settingIds: args.settingIds,
     storeState: args.snapshot.storeState,

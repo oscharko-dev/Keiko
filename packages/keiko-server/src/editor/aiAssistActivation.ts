@@ -6,8 +6,8 @@ import {
   type EditorM7AiActivationSummary,
   type EditorM7AiFeature,
   type EditorM7ReasonCode,
-  type EditorM7ResolvedSetting,
   type EditorM7SettingId,
+  type EditorM11ResolvedSetting,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../deps.js";
@@ -98,7 +98,7 @@ export function editorAiPolicyCeilingLocks(
 }
 
 function explicitOptIn(
-  settings: readonly EditorM7ResolvedSetting[],
+  settings: readonly EditorM11ResolvedSetting[],
   feature: EditorM7AiFeature,
 ): boolean {
   return settings.find((setting) => setting.id === FEATURE_SETTINGS[feature])?.value === true;
@@ -116,7 +116,7 @@ export function resolveEditorAiAssistStatuses(args: {
   readonly env?: Env | undefined;
   readonly gatewayConfigured?: boolean | undefined;
   readonly revision: number;
-  readonly settings: readonly EditorM7ResolvedSetting[];
+  readonly settings: readonly EditorM11ResolvedSetting[];
 }): EditorM7AiActivationSummary {
   const gatewayConfigured = args.gatewayConfigured ?? true;
   const statuses = (

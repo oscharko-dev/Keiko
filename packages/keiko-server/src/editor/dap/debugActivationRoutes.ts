@@ -75,9 +75,9 @@ function hasWorkspaceRevisionPrecondition(
 ): boolean {
   const value = singleHeader(ctx, "if-match");
   const match =
-    value === undefined ? null : /^"edm7-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
+    value === undefined ? null : /^"edm7-(\d+)-(\d+)-(\d+)-([A-Za-z0-9_-]{4,64})"$/u.exec(value);
   if (match === null || Number(match[2]) !== expectedRevision) return false;
-  return match[3] === editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
+  return match[4] === editorSettingsWorkspaceFingerprint(realRoot).slice(0, 24);
 }
 
 function unavailable(): RouteResult {

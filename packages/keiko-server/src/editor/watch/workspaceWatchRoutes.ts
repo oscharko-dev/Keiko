@@ -1,9 +1,9 @@
 import type { ServerResponse } from "node:http";
 
 import type {
-  EditorM7SettingsSnapshot,
   EditorM7WatchEvent,
   EditorM7WatchSnapshot,
+  EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 
 import { resolveRoot, runFilesHandler } from "../../files.js";
@@ -50,7 +50,7 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function watcherExclusionsFrom(snapshot: EditorM7SettingsSnapshot): readonly string[] {
+function watcherExclusionsFrom(snapshot: EditorM11SettingsSnapshot): readonly string[] {
   const value = snapshot.settings.find((entry) => entry.id === "watcherExclusions")?.value;
   return isStringArray(value) ? value : [];
 }

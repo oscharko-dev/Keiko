@@ -7,9 +7,17 @@ import type {
   EditorM7ReasonCode,
   EditorM7SettingEffect,
   EditorM7SettingId,
+  EditorM7SettingScope,
+  EditorM7SettingSecurity,
+  EditorM7SettingsEvent,
   EditorM7SettingsLayer,
+  EditorM7SettingsMutation,
+  EditorM7SettingsMutationOk,
+  EditorM7SettingsMutationResult,
+  EditorM7SettingsSnapshot,
   EditorM7SettingValue,
 } from "./editor-m7.js";
+import type { ManagedLspControlSnapshot } from "./managed-lsp-route.js";
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   hasOnlyWorkspaceKeys,
@@ -47,16 +55,56 @@ export interface EditorM11RootSettingsLayer {
 }
 
 export type EditorM11SettingSource = "builtInDefault" | "profile" | "user" | "workspace" | "root";
+export type EditorM11SettingScope = EditorM7SettingScope | "root";
 
 export interface EditorM11ResolvedSetting {
   readonly id: EditorM7SettingId;
   readonly value: EditorM7SettingValue;
   readonly source: EditorM11SettingSource;
+  readonly scope: EditorM11SettingScope;
   readonly policyLocked: boolean;
   readonly reasonCode?: EditorM7ReasonCode | undefined;
   readonly effect: EditorM7SettingEffect;
   readonly profileRef?: WorkspaceProfileRef | undefined;
   readonly rootRef?: WorkspaceRootRef | undefined;
+}
+
+export interface EditorM11ManagedLanguageComposition {
+  readonly revision: number;
+  readonly etag: string;
+  readonly storeState: EditorM7SettingsSnapshot["storeState"];
+  readonly settingsCount: number;
+  readonly rootRef?: WorkspaceRootRef | undefined;
+  readonly rootIdentityDigest?: WorkspaceRootIdentityDigest | undefined;
+  readonly languages?: ManagedLspControlSnapshot["languages"] | undefined;
+  readonly settings?: ManagedLspControlSnapshot["settings"] | undefined;
+}
+
+export interface EditorM11SettingsSnapshot extends Omit<
+  EditorM7SettingsSnapshot,
+  "managedLanguages" | "settings"
+> {
+  readonly rootRevision?: number | undefined;
+  readonly rootRef?: WorkspaceRootRef | undefined;
+  readonly rootIdentityDigest?: WorkspaceRootIdentityDigest | undefined;
+  readonly settings: readonly EditorM11ResolvedSetting[];
+  readonly managedLanguages?: EditorM11ManagedLanguageComposition | undefined;
+}
+
+export type EditorM11SettingsMutation = Omit<EditorM7SettingsMutation, "scope"> & {
+  readonly scope: EditorM11SettingScope;
+};
+
+export interface EditorM11SettingsMutationOk extends Omit<EditorM7SettingsMutationOk, "snapshot"> {
+  readonly snapshot: EditorM11SettingsSnapshot;
+}
+
+export type EditorM11SettingsMutationResult =
+  EditorM11SettingsMutationOk | Exclude<EditorM7SettingsMutationResult, EditorM7SettingsMutationOk>;
+
+export interface EditorM11SettingsEvent extends Omit<EditorM7SettingsEvent, "scope"> {
+  readonly rootRevision?: number | undefined;
+  readonly scope: EditorM11SettingScope;
 }
 
 export interface EditorM11SettingsResolutionInput {
@@ -161,9 +209,10 @@ function layerValue(
 
 function resolvedSource(
   id: EditorM7SettingId,
+  fallback: EditorM7SettingValue,
   input: EditorM11SettingsResolutionInput,
 ): EditorM11SettingSource {
-  if (layerValue(id, input.root) !== undefined) return "root";
+  if (effectiveRootValue(id, fallback, input) !== undefined) return "root";
   if (layerValue(id, input.workspace) !== undefined) return "workspace";
   if (layerValue(id, input.user) !== undefined) return "user";
   return layerValue(id, input.profile) === undefined ? "builtInDefault" : "profile";
@@ -175,12 +224,37 @@ function resolvedValue(
   input: EditorM11SettingsResolutionInput,
 ): EditorM7SettingValue {
   return (
-    layerValue(id, input.root) ??
+    effectiveRootValue(id, fallback, input) ??
     layerValue(id, input.workspace) ??
     layerValue(id, input.user) ??
     layerValue(id, input.profile) ??
     fallback
   );
+}
+
+function inheritedValue(
+  id: EditorM7SettingId,
+  fallback: EditorM7SettingValue,
+  input: EditorM11SettingsResolutionInput,
+): EditorM7SettingValue {
+  return (
+    layerValue(id, input.workspace) ??
+    layerValue(id, input.user) ??
+    layerValue(id, input.profile) ??
+    fallback
+  );
+}
+
+function effectiveRootValue(
+  id: EditorM7SettingId,
+  fallback: EditorM7SettingValue,
+  input: EditorM11SettingsResolutionInput,
+): EditorM7SettingValue | undefined {
+  const value = layerValue(id, input.root);
+  if (value === undefined) return undefined;
+  return editorM11RootSettingIsMonotonic(id, inheritedValue(id, fallback, input), value)
+    ? value
+    : undefined;
 }
 
 function provenance(
@@ -198,17 +272,99 @@ function resolveSetting(
   definition: (typeof EDITOR_M7_SETTING_REGISTRY)[number],
   input: EditorM11SettingsResolutionInput,
 ): EditorM11ResolvedSetting {
-  const source = resolvedSource(definition.id, input);
+  const source = resolvedSource(definition.id, definition.defaultValue, input);
   const reasonCode = input.ceiling?.locked[definition.id];
   return {
     id: definition.id,
     value: resolvedValue(definition.id, definition.defaultValue, input),
     source,
+    scope: source === "root" ? "root" : source === "workspace" ? "workspace" : "user",
     policyLocked: reasonCode !== undefined,
     ...(reasonCode === undefined ? {} : { reasonCode }),
     effect: definition.effect,
     ...provenance(source, input),
   };
+}
+
+function definitionSecurity(id: EditorM7SettingId): EditorM7SettingSecurity {
+  const definition = EDITOR_M7_SETTING_REGISTRY.find((entry) => entry.id === id);
+  return definition?.security ?? "policyCeiling";
+}
+
+export function editorM11RootSettingIsMonotonic(
+  id: EditorM7SettingId,
+  inherited: EditorM7SettingValue,
+  root: EditorM7SettingValue,
+): boolean {
+  if (definitionSecurity(id) !== "policyCeiling") return true;
+  return root !== true || inherited === true;
+}
+
+function isM11EventScope(value: unknown): value is EditorM11SettingScope {
+  return value === "user" || value === "workspace" || value === "root";
+}
+
+function isNonnegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isSettingId(value: unknown): value is EditorM7SettingId {
+  return (
+    typeof value === "string" &&
+    EDITOR_M7_SETTING_REGISTRY.some((definition) => definition.id === value)
+  );
+}
+
+function hasOnlyEventKeys(value: Readonly<Record<string, unknown>>): boolean {
+  return Object.keys(value).every((key) =>
+    [
+      "schemaVersion",
+      "sequence",
+      "kind",
+      "revision",
+      "userRevision",
+      "workspaceRevision",
+      "rootRevision",
+      "scope",
+      "settingIds",
+      "storeState",
+    ].includes(key),
+  );
+}
+
+function hasValidEventRevisions(value: Readonly<Record<string, unknown>>): boolean {
+  const revisions = [value.sequence, value.revision, value.userRevision, value.workspaceRevision];
+  if (!revisions.every(isNonnegativeInteger)) return false;
+  return value.rootRevision === undefined || isNonnegativeInteger(value.rootRevision);
+}
+
+function hasValidEventSettingIds(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every(isSettingId)) return false;
+  return new Set(value).size === value.length;
+}
+
+function hasValidEventStoreState(value: unknown): boolean {
+  return value === "absent" || value === "ready" || value === "unavailable";
+}
+
+function isM11SettingsEvent(value: unknown): value is EditorM11SettingsEvent {
+  if (!isWorkspaceRecord(value) || !hasOnlyEventKeys(value)) return false;
+  return [
+    value.schemaVersion === "1" && (value.kind === "changed" || value.kind === "snapshot"),
+    hasValidEventRevisions(value),
+    isM11EventScope(value.scope) && hasValidEventSettingIds(value.settingIds),
+    hasValidEventStoreState(value.storeState),
+  ].every(Boolean);
+}
+
+export function parseEditorM11SettingsEvent(
+  value: unknown,
+): { readonly ok: true; readonly value: EditorM11SettingsEvent } | { readonly ok: false } {
+  try {
+    return isM11SettingsEvent(value) ? { ok: true, value } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function resolveEditorM11Settings(

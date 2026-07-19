@@ -311,6 +311,10 @@
     "en": "Workspace",
     "de": "Arbeitsbereich"
   },
+  "settings.editor.scopeRoot": {
+    "en": "Root",
+    "de": "Stammordner"
+  },
   "settings.editor.modifiedOnly": {
     "en": "Modified only",
     "de": "Nur geänderte"
@@ -374,6 +378,14 @@
   "settings.editor.sourceWorkspace": {
     "en": "workspace",
     "de": "Arbeitsbereich"
+  },
+  "settings.editor.sourceRoot": {
+    "en": "root",
+    "de": "Stammordner"
+  },
+  "settings.editor.sourceProfile": {
+    "en": "profile",
+    "de": "Profil"
   },
   "settings.editor.effectLive": {
     "en": "Live",

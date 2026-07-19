@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { resolveEditorM7Settings } from "@oscharko-dev/keiko-contracts";
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspControlService } from "../lsp/managedLspControl.js";
@@ -59,7 +60,7 @@ describe("editor settings control service", () => {
 
     expect(snapshot.storeState).toBe("absent");
     expect(snapshot.revision).toBe(0);
-    expect(snapshot.etag).toMatch(/^"edm7-0-0-/u);
+    expect(snapshot.etag).toMatch(/^"edm7-0-0-0-/u);
     expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
       value: 13,
       source: "builtInDefault",
@@ -105,7 +106,7 @@ describe("editor settings control service", () => {
     const snapshot = await control.read(root);
     expect(snapshot.userRevision).toBe(1);
     expect(snapshot.workspaceRevision).toBe(1);
-    expect(snapshot.etag).toMatch(/^"edm7-1-1-/u);
+    expect(snapshot.etag).toMatch(/^"edm7-1-1-0-/u);
     expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
       value: 17,
       source: "workspace",
@@ -114,6 +115,112 @@ describe("editor settings control service", () => {
       value: 4,
       source: "user",
     });
+  });
+
+  it("resolves independent root layers and falls back through workspace then user", async () => {
+    const rootA = temporaryDirectory("editor-settings-root-layer-a");
+    const rootB = temporaryDirectory("editor-settings-root-layer-b");
+    const control = service();
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "root-layer-user",
+      scope: "user",
+      values: { fontSize: 12 },
+    });
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "root-layer-workspace-a",
+      realRoot: rootA,
+      scope: "workspace",
+      values: { fontSize: 14 },
+    });
+    for (const [realRoot, value, key] of [
+      [rootA, 16, "root-layer-a"],
+      [rootB, 18, "root-layer-b"],
+    ] as const) {
+      await control.mutate({
+        action: "set",
+        expectedRevision: 0,
+        idempotencyKey: key,
+        realRoot,
+        scope: "root",
+        values: { fontSize: value },
+      });
+    }
+
+    expect(
+      (await control.read(rootA)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 16, source: "root", scope: "root" });
+    expect(
+      (await control.read(rootB)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 18, source: "root", scope: "root" });
+
+    await control.mutate({
+      action: "reset",
+      expectedRevision: 1,
+      idempotencyKey: "root-layer-reset-a",
+      realRoot: rootA,
+      scope: "root",
+      settingIds: ["fontSize"],
+    });
+    expect(
+      (await control.read(rootA)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 14, source: "workspace" });
+    await control.mutate({
+      action: "reset",
+      expectedRevision: 1,
+      idempotencyKey: "root-layer-reset-workspace-a",
+      realRoot: rootA,
+      scope: "workspace",
+      settingIds: ["fontSize"],
+    });
+    expect(
+      (await control.read(rootA)).settings.find((entry) => entry.id === "fontSize"),
+    ).toMatchObject({ value: 12, source: "user" });
+  });
+
+  it("keeps a single-root M7 resolution fixture byte-identical", async () => {
+    const root = temporaryDirectory("editor-settings-single-root-migration");
+    const control = service();
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "m7-regression-user",
+      scope: "user",
+      values: { fontSize: 15, minimap: true },
+    });
+    await control.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "m7-regression-workspace",
+      realRoot: root,
+      scope: "workspace",
+      values: { fontSize: 16, wordWrap: "on" },
+    });
+    const snapshot = await control.read(root);
+    const legacy = resolveEditorM7Settings({
+      user: { scope: "user", values: { fontSize: 15, minimap: true } },
+      workspace: { scope: "workspace", values: { fontSize: 16, wordWrap: "on" } },
+    });
+
+    expect(JSON.stringify(snapshot.settings)).toBe(JSON.stringify(legacy));
+  });
+
+  it("rejects a root override that widens a policy-ceiling setting", async () => {
+    const root = temporaryDirectory("editor-settings-root-policy");
+    const control = service();
+    await expect(
+      control.mutate({
+        action: "set",
+        expectedRevision: 0,
+        idempotencyKey: "root-policy-widen",
+        realRoot: root,
+        scope: "root",
+        values: { patchApply: true },
+      }),
+    ).resolves.toEqual({ kind: "invalid", code: "POLICY_LOCKED" });
   });
 
   it("rejects stale revisions and replays matching idempotency keys", async () => {
@@ -279,15 +386,64 @@ describe("editor settings control service", () => {
 
     const snapshot = await serviceWithManagedLanguages(managedLspControl).read(root);
 
-    expect(snapshot.managedLanguages).toStrictEqual({
+    expect(snapshot.managedLanguages).toMatchObject({
       revision: 7,
       etag: '"lspcfg-7-managed"',
       storeState: "ready",
       settingsCount: 1,
+      languages: [],
+      settings: [{ language: "python", workspaceActivation: "enabled" }],
     });
+    expect(snapshot.managedLanguages?.rootRef).toBe(snapshot.rootRef);
+    expect(snapshot.managedLanguages?.rootIdentityDigest).toBe(snapshot.rootIdentityDigest);
     expect(snapshot.settings.find((entry) => entry.id === "fontSize")).toMatchObject({
       source: "builtInDefault",
     });
+  });
+
+  it("attributes managed-language activation to the owning root", async () => {
+    const rootA = temporaryDirectory("editor-settings-language-root-a");
+    const rootB = temporaryDirectory("editor-settings-language-root-b");
+    const managedLspControl: ManagedLspControlService = {
+      stateDir: temporaryDirectory("managed-lsp-root-composition"),
+      read: (realRoot) =>
+        Promise.resolve({
+          storeState: "ready",
+          revision: 1,
+          etag: '"lspcfg-1-managed-root"',
+          evidenceCount: 0,
+          languages: [
+            {
+              ok: true,
+              schemaVersion: "1",
+              language: "python",
+              configurationRevision: 1,
+              state: realRoot === rootA ? "available" : "disabled",
+              reasonCode: realRoot === rootA ? "AVAILABLE" : "WORKSPACE_ACTIVATION_UNSET",
+              policyResult: "allowed",
+            },
+          ],
+          settings: [],
+          configurations: [],
+        }),
+      readConfiguration: () => Promise.resolve(undefined),
+      mutate: () => Promise.resolve({ kind: "invalid", code: "INVALID_REQUEST" }),
+      restrict: () => Promise.resolve(),
+    };
+    const control = serviceWithManagedLanguages(managedLspControl);
+    const [a, b] = await Promise.all([control.read(rootA), control.read(rootB)]);
+
+    expect(a.managedLanguages?.languages?.[0]).toMatchObject({
+      language: "python",
+      state: "available",
+    });
+    expect(b.managedLanguages?.languages?.[0]).toMatchObject({
+      language: "python",
+      state: "disabled",
+    });
+    expect(a.managedLanguages?.rootRef).toBe(a.rootRef);
+    expect(b.managedLanguages?.rootRef).toBe(b.rootRef);
+    expect(a.rootRef).not.toBe(b.rootRef);
   });
 
   it("projects debugging from the derived D7 gate and synchronizes the canonical workspace mutation", async () => {

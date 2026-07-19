@@ -3926,9 +3926,16 @@ export {
 export type {
   EditorM11ProfileSettingsLayer,
   EditorM11RootSettingsLayer,
+  EditorM11SettingScope,
   EditorM11SettingSource,
   EditorM11ResolvedSetting,
   EditorM11SettingsResolutionInput,
+  EditorM11ManagedLanguageComposition,
+  EditorM11SettingsSnapshot,
+  EditorM11SettingsMutation,
+  EditorM11SettingsMutationOk,
+  EditorM11SettingsMutationResult,
+  EditorM11SettingsEvent,
 } from "./editor-m11-settings.js";
 export {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
@@ -3937,6 +3944,8 @@ export {
   validateEditorM11ProfileSettingsLayer,
   validateEditorM11RootSettingsLayer,
   resolveEditorM11Settings,
+  editorM11RootSettingIsMonotonic,
+  parseEditorM11SettingsEvent,
 } from "./editor-m11-settings.js";
 export type { WorkspaceProfileManifest } from "./workspace-profile.js";
 export {
