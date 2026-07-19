@@ -927,21 +927,22 @@ class FakeOpenCodeChild {
     return this.callToolFacade(call, signal);
   }
 
-  /** A rejected (or aborted) question fails the tool and ends the turn, like the real binary. */
+  /**
+   * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
+   * The real v1.17.17 publishes its question lifecycle live-only over /global/event — question
+   * rows never reach the durable history — so the fake mirrors exactly that.
+   */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     this.questionSequence += 1;
     const id = `que_functional${String(this.questionSequence)}`;
     const row = { id, sessionID: FAKE_SESSION_ID, questions: call.args.questions };
-    this.appendHistory("question.asked", { id, sessionID: FAKE_SESSION_ID, questions: [] });
     return new Promise<string>((resolveQuestion, rejectQuestion) => {
       const settled = (outcome: FakeQuestionOutcome): void => {
         signal.removeEventListener("abort", onAbort);
-        this.appendHistory(
-          outcome.kind === "answered" ? "question.replied" : "question.rejected",
-          outcome.kind === "answered"
-            ? { sessionID: FAKE_SESSION_ID, requestID: id, answers: [] }
-            : { sessionID: FAKE_SESSION_ID, requestID: id },
-        );
+        this.broadcast(outcome.kind === "answered" ? "question.replied" : "question.rejected", {
+          sessionID: FAKE_SESSION_ID,
+          requestID: id,
+        });
         if (outcome.kind === "answered") resolveQuestion(JSON.stringify(outcome));
         else rejectQuestion(new Error("functional-question-rejected"));
       };
@@ -951,7 +952,7 @@ class FakeOpenCodeChild {
       };
       this.questions.set(id, { row, settle: settled });
       signal.addEventListener("abort", onAbort, { once: true });
-      this.broadcast("question.nudge", {});
+      this.broadcast("question.asked", { id, sessionID: FAKE_SESSION_ID });
     });
   }
 
