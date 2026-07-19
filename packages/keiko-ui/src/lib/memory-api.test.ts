@@ -11,6 +11,7 @@ import {
   fetchMemory,
   fetchMemoryConsolidationJob,
   fetchMemoryReviewQueue,
+  fetchRecentCaptures,
   forgetMemory,
   forgetMemories,
   pinMemory,
@@ -221,6 +222,7 @@ describe("memory BFF boundary helpers", () => {
       limit: 25,
       offset: 50,
     });
+    await fetchRecentCaptures({ since: 123, scope: ["project", "workspace"], limit: 10 });
     await fetchMemoryReviewQueue();
     await fetchMemory("mem 1" as MemoryId);
     await editMemory("mem 1" as MemoryId, {
@@ -238,6 +240,10 @@ describe("memory BFF boundary helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/memory?q=atlas+rust&scope=global%2Cworkspace&type=preference%2Csemantic-fact&status=accepted&sensitivity=public%2Cconfidential&limit=25&offset=50",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/memory?since=123&order=desc&scope=project%2Cworkspace&limit=10",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
