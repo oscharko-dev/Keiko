@@ -775,6 +775,53 @@
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
         "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.14 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
+    },
+    {
+      "id": "2026-07-19-keiko-0.2.15-editor-file-history",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.15",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "The editor now presents per-file local history with read-only comparisons, pinning, deletion, and conflict-aware restore.",
+      "affectedStateStores": ["editor-local-history"],
+      "stateImpact": [
+        {
+          "store": "editor-local-history",
+          "description": "Uses the existing encrypted M11 checkpoint store and creates a pre-restore checkpoint through the governed save flow. No store or schema migration is required.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Every save is a restore point — browse, compare, and restore file history locally."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-19",
+        "humanApproved": true,
+        "approvalReference": "issue:#2531",
+        "rationale": "Issue #2531 explicitly classifies this child as a user-visible new addition, supplies the customer release-note bullet, and sets Human Review Required to No for the epic feature-branch flow."
+      }
     }
   ]
 }

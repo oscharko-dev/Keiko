@@ -58,6 +58,7 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     trustWorkspaceScripts: vi.fn(),
     revokeWorkspaceScriptTrust: vi.fn(),
     openProblems: vi.fn(),
+    openFileHistory: vi.fn(),
     ...overrides,
   };
 }
@@ -102,6 +103,7 @@ describe("editor command registry", () => {
       "tab.reopenClosed",
       "files.saveAll",
       "editor.openProblems",
+      "editor.openFileHistory",
       "run.fileTests",
       "run.typecheck",
       "run.lint",
@@ -122,6 +124,7 @@ describe("editor command registry", () => {
     commandById("tab.reopenClosed").run(host);
     commandById("files.saveAll").run(host);
     commandById("editor.openProblems").run(host);
+    commandById("editor.openFileHistory").run(host);
 
     expect(host.splitActive).toHaveBeenNthCalledWith(1, "row");
     expect(host.splitActive).toHaveBeenNthCalledWith(2, "column");
@@ -132,6 +135,7 @@ describe("editor command registry", () => {
     expect(host.reopenClosed).toHaveBeenCalledTimes(1);
     expect(host.saveAll).toHaveBeenCalledTimes(1);
     expect(host.openProblems).toHaveBeenCalledTimes(1);
+    expect(host.openFileHistory).toHaveBeenCalledTimes(1);
   });
 });
 

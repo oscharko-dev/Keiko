@@ -1497,6 +1497,7 @@ async function writeResolvedFilesContent(args: {
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly beforeWrite?: ((content: string) => void) | undefined;
 }): Promise<FilesContentResponse> {
   if (!args.target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
@@ -1513,6 +1514,10 @@ async function writeResolvedFilesContent(args: {
       "FILE_TOO_LARGE",
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
+  }
+  if (args.beforeWrite !== undefined) {
+    const current = await readStableEditableContent(args.target);
+    args.beforeWrite(current.content);
   }
   const updatedStats = await writeExistingResolvedFile(args.target, args.content);
   return {
@@ -2197,6 +2202,7 @@ interface FilesWriteFields {
   readonly rootInput: string;
   readonly pathInput: string;
   readonly content: string;
+  readonly historyOrigin?: "pre-restore" | undefined;
 }
 
 function readFilesWriteFields(body: Record<string, unknown>): FilesWriteFields | null {
@@ -2206,7 +2212,13 @@ function readFilesWriteFields(body: Record<string, unknown>): FilesWriteFields |
   if (rootInput === null || pathInput === null || typeof content !== "string") {
     return null;
   }
-  return { rootInput, pathInput, content };
+  if (body.historyOrigin !== undefined && body.historyOrigin !== "pre-restore") return null;
+  return {
+    rootInput,
+    pathInput,
+    content,
+    ...(body.historyOrigin === "pre-restore" ? { historyOrigin: body.historyOrigin } : {}),
+  };
 }
 
 async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
@@ -2219,6 +2231,38 @@ async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Pr
       deps.redactor,
     ),
   };
+}
+
+function createPreRestoreCapture(
+  deps: UiHandlerDeps,
+  target: ResolvedTarget,
+): (content: string) => void {
+  return (content): void => {
+    captureEditorLocalHistorySafely({
+      deps,
+      realRoot: target.realRoot,
+      relativePath: target.relativePath,
+      absolutePath: target.path,
+      content,
+      origin: "pre-restore",
+    });
+  };
+}
+
+function captureNormalFileSave(
+  deps: UiHandlerDeps,
+  target: ResolvedTarget,
+  fields: FilesWriteFields,
+): void {
+  if (fields.historyOrigin !== undefined) return;
+  captureEditorLocalHistorySafely({
+    deps,
+    realRoot: target.realRoot,
+    relativePath: target.relativePath,
+    absolutePath: target.path,
+    content: fields.content,
+    origin: "user-save",
+  });
 }
 
 async function writeFilesContentRoute(
@@ -2252,16 +2296,11 @@ async function writeFilesContentRoute(
     expectedModifiedAt:
       typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
     baseVersion,
+    beforeWrite:
+      fields.historyOrigin === "pre-restore" ? createPreRestoreCapture(deps, target) : undefined,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
-  captureEditorLocalHistorySafely({
-    deps,
-    realRoot: target.realRoot,
-    relativePath: target.relativePath,
-    absolutePath: target.path,
-    content: fields.content,
-    origin: "user-save",
-  });
+  captureNormalFileSave(deps, target, fields);
   return { status: 200, body: response };
 }
 

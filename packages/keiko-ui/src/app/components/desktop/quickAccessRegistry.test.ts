@@ -60,6 +60,7 @@ function host(): EditorPaletteHost {
     trustWorkspaceScripts: vi.fn(),
     revokeWorkspaceScriptTrust: vi.fn(),
     openProblems: vi.fn(),
+    openFileHistory: vi.fn(),
   };
 }
 
@@ -81,12 +82,14 @@ describe("quick access registry", () => {
       EDITOR_PALETTE_COMMANDS.filter(
         (command) =>
           command.id === "editor.openProblems" ||
+          command.id === "editor.openFileHistory" ||
           command.id.startsWith("run.") ||
           command.id.startsWith("verification."),
       ).map((command) => [command.id, command.titleKey]),
     );
 
     expect(titleKeys).toEqual({
+      "editor.openFileHistory": "editor.command.openFileHistory",
       "editor.openProblems": "editor.command.openProblems",
       "run.build": "editor.command.runBuild",
       "run.cancel": "editor.command.cancelVerification",

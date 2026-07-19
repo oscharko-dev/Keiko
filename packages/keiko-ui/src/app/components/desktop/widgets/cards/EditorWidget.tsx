@@ -452,6 +452,11 @@ export function EditorWidget({
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
   const [tabInsertTarget, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
+  const [fileHistoryRequest, setFileHistoryRequest] = useState<{
+    readonly paneId: string;
+    readonly nonce: number;
+  } | null>(null);
+  const fileHistoryRequestSeqRef = useRef(0);
   const [agentReconciliationQueues, setAgentReconciliationQueues] =
     useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
@@ -1363,6 +1368,13 @@ export function EditorWidget({
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
+  const openActiveFileHistory = useCallback((): void => {
+    const pane = activeEditorPane(layoutRef.current);
+    if (pane.activeFile.length === 0) return;
+    fileHistoryRequestSeqRef.current += 1;
+    setFileHistoryRequest({ paneId: pane.id, nonce: fileHistoryRequestSeqRef.current });
+  }, []);
+
   // Issue #2212 (ADR-0126) — run-affordance state + actions through the governed verification route.
   const verification = useEditorVerificationRun({
     root: workspaceRoot,
@@ -1427,6 +1439,7 @@ export function EditorWidget({
       revokeWorkspaceScriptTrust: () =>
         setTrustDecision({ action: "revoke", initialPrompt: false }),
       openProblems: () => onOpenProblems?.(workspaceRoot),
+      openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),
     }),
     [
@@ -1438,6 +1451,7 @@ export function EditorWidget({
       nextTab,
       onOpenProblems,
       onOpenDebugPanel,
+      openActiveFileHistory,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
@@ -1606,6 +1620,8 @@ export function EditorWidget({
       onOpenDebugPanel,
       onOutlineStateChange: handleOutlineStateChange,
       outlineRevealRequest: outlineRevealByPane[pane.id],
+      fileHistoryRequestNonce:
+        fileHistoryRequest?.paneId === pane.id ? fileHistoryRequest.nonce : undefined,
       // GEN-PERF-EDITOR-003 — a per-pane scalar that changes only for the pane whose tab is
       // held, so a hold-state change re-renders just that pane (its stable renderTabHandle
       // re-reads the held flag) while other panes stay memo-bailed.

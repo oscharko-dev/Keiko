@@ -148,6 +148,7 @@ import type {
   EditorM11ProfileMutation,
   EditorM11ProfileMutationResult,
   EditorM11ProfilesSnapshot,
+  EditorLocalHistoryEntry,
   WorkspaceProfileExportResult,
   WorkspaceProfileImportApply,
   WorkspaceProfileImportPreview,
@@ -1576,11 +1577,69 @@ export async function saveFilesContent(input: {
   readonly expectedModifiedAt?: number | undefined;
   // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
   readonly baseVersion?: EditorDocumentVersion | undefined;
+  /** ADR-0146 D7: restore saves checkpoint the previous on-disk state before writing. */
+  readonly historyOrigin?: "pre-restore" | undefined;
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export interface EditorLocalHistoryListResponse {
+  readonly session: "active" | "unpaired";
+  readonly entries: readonly EditorLocalHistoryEntry[];
+}
+
+export interface EditorLocalHistoryReadResponse {
+  readonly entry: EditorLocalHistoryEntry;
+  readonly content: string;
+}
+
+export async function fetchEditorLocalHistory(
+  root: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<EditorLocalHistoryListResponse> {
+  const params = new URLSearchParams({ root, path });
+  return fetchJson(`/api/editor/local-history?${params.toString()}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchEditorLocalHistoryEntry(
+  root: string,
+  entryRef: string,
+  signal?: AbortSignal,
+): Promise<EditorLocalHistoryReadResponse> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export async function setEditorLocalHistoryPinned(
+  root: string,
+  entryRef: string,
+  pinned: boolean,
+): Promise<{ readonly entry: EditorLocalHistoryEntry }> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    { method: "PATCH", body: JSON.stringify({ pinned }) },
+  );
+}
+
+export async function deleteEditorLocalHistory(
+  root: string,
+  entryRef: string,
+): Promise<{ readonly deleted: true }> {
+  const params = new URLSearchParams({ root });
+  return fetchJson(
+    `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
+    { method: "DELETE" },
+  );
 }
 
 export interface EditorHotExitWriteResponse {

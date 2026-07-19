@@ -36,6 +36,10 @@ import { resolveRoot } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createEditorLocalHistoryStore } from "./editor/localHistory/localHistoryStore.js";
+import type {
+  EditorLocalHistoryCaptureInput,
+  EditorLocalHistoryStore,
+} from "./editor/localHistory/localHistoryStore.js";
 import type { UiStore } from "./store/index.js";
 
 // Mirrors the (non-exported) editable size limit in files.ts; used for boundary tests.
@@ -836,6 +840,41 @@ describe("desktop files browser", () => {
     });
     expect(JSON.stringify(diagnostics)).not.toContain(secret);
     expect(JSON.stringify(diagnostics)).not.toContain("saved despite history failure");
+  });
+
+  it("captures the pre-restore bytes before a conflict-aware restore save", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    const captures: EditorLocalHistoryCaptureInput[] = [];
+    const history = {
+      capture: (input: EditorLocalHistoryCaptureInput) => {
+        captures.push(input);
+        return {};
+      },
+    } as unknown as EditorLocalHistoryStore;
+    const restoredContent = 'const value: string = "restored";\n';
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: restoredContent,
+        baseVersion: initial.session.version,
+        historyOrigin: "pre-restore",
+      }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        editorLocalHistoryStore: history,
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { content: restoredContent } });
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({
+      content: 'const value: string = "ok";\n',
+      origin: "pre-restore",
+    });
+    await expect(readFile(join(root, "src", "app.ts"), "utf8")).resolves.toBe(restoredContent);
   });
 
   it("keeps denied-path precedence before malformed baseVersion validation at the route", async () => {

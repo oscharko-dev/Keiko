@@ -233,6 +233,7 @@ import {
 } from "./editorAgentBridge";
 import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
+import type { EditorFileHistoryPanelProps } from "./EditorFileHistoryPanel";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
   createEditorSemanticTokensHost,
@@ -289,6 +290,11 @@ const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./Editor
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
+
+const EditorFileHistoryPanel = dynamic<EditorFileHistoryPanelProps>(
+  () => import("./EditorFileHistoryPanel").then((module) => module.EditorFileHistoryPanel),
+  { ssr: false },
+);
 
 const EDITOR_REVIEW_SURFACE_STYLE: CSSProperties = {
   display: "flex",
@@ -645,6 +651,8 @@ export interface EditorRuntimeWidgetProps {
   readonly onOutlineStateChange?:
     ((paneId: string, snapshot: EditorOutlineSnapshot) => void) | undefined;
   readonly outlineRevealRequest?: EditorOutlineRevealRequest | undefined;
+  /** Monotonic palette request for opening this pane's active file history. */
+  readonly fileHistoryRequestNonce?: number | undefined;
   /** Opens the transient bounded debug projection for this editor's resolved workspace. */
   readonly onOpenDebugPanel?: (() => void) | undefined;
 }
@@ -1750,6 +1758,7 @@ function EditorRuntimeWidget({
   linkedCapsuleSetIds,
   onOutlineStateChange,
   outlineRevealRequest,
+  fileHistoryRequestNonce,
   onOpenDebugPanel,
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
@@ -1979,6 +1988,11 @@ function EditorRuntimeWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [fileHistoryOpen, setFileHistoryOpen] = useState(false);
+  useEffect(() => {
+    if (fileHistoryRequestNonce !== undefined) setFileHistoryOpen(true);
+  }, [fileHistoryRequestNonce]);
+  useEffect(() => setFileHistoryOpen(false), [file, root]);
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
   const [gitGutterRefreshNonce, setGitGutterRefreshNonce] = useState(0);
   const [gitGutterPeek, setGitGutterPeek] = useState<EditorGitGutterPeek | null>(null);
@@ -2738,7 +2752,7 @@ function EditorRuntimeWidget({
   );
 
   const persist = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, historyOrigin?: "pre-restore"): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
       const saveSessionKey = documentSessionKey(root, file);
       const textChangedBeforeReactCommitted = text !== contentRef.current;
@@ -2760,6 +2774,7 @@ function EditorRuntimeWidget({
           content: textToSave,
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
+          ...(historyOrigin === undefined ? {} : { historyOrigin }),
         });
         recentLocalWriteRef.current = {
           sessionKey: saveSessionKey,
@@ -2795,6 +2810,20 @@ function EditorRuntimeWidget({
       settleActiveSave,
       settleInactiveSave,
     ],
+  );
+
+  const restoreHistoryContent = useCallback(
+    async (checkpointContent: string): Promise<boolean> => {
+      if (dirtyRef.current) {
+        setAgentConflict({
+          code: "DIRTY",
+          message: commonT("editor.fileHistory.dirtyConflict"),
+        });
+        return false;
+      }
+      return persist(checkpointContent, "pre-restore");
+    },
+    [commonT, persist],
   );
 
   const onContentChange = useCallback(
@@ -6013,6 +6042,18 @@ function EditorRuntimeWidget({
         <button
           type="button"
           className="ed-reload"
+          aria-label={commonT("editor.fileHistory.open")}
+          aria-expanded={fileHistoryOpen}
+          onClick={() => setFileHistoryOpen((open) => !open)}
+        >
+          <Icons.restore size={13} />
+          {commonT("editor.fileHistory.title")}
+        </button>
+      ) : null}
+      {hasTarget ? (
+        <button
+          type="button"
+          className="ed-reload"
           onClick={() => {
             setGitGutterPeek(null);
             setGitGutterRefreshNonce((value) => value + 1);
@@ -6263,6 +6304,16 @@ function EditorRuntimeWidget({
       ) : null}
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
+        {fileHistoryOpen && root !== undefined && file !== undefined ? (
+          <EditorFileHistoryPanel
+            root={root}
+            file={file}
+            currentContent={content}
+            dirty={dirty}
+            onClose={() => setFileHistoryOpen(false)}
+            onRestore={restoreHistoryContent}
+          />
+        ) : null}
       </div>
       {showUnifiedStatusBar && statusBarViewModel !== null ? (
         <EditorStatusBar viewModel={statusBarViewModel} />
