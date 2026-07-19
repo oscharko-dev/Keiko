@@ -27,11 +27,9 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  applyModelRerankResults,
-  invalidRerankMappingDiagnostics,
   rerankAndSelect,
-  selectTopPromptCandidates,
-  withKeptCount,
+  withFinalMarkers,
+  withModelRerankScore,
   type RerankInput,
   type SelectedCandidate,
 } from "./grounded-rerank.js";
@@ -105,7 +103,7 @@ import {
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import {
@@ -408,56 +406,27 @@ interface HybridRerankedSelection {
   readonly diagnostics: GroundedRerankerDiagnostics;
 }
 
-function policyDeniedRerankDiagnostics(
-  candidateCount: number,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    status: "denied",
-    mode: "local-only",
-    candidateCount,
-    documentCount: 0,
-    keptCount,
-    failureKind: "policy-denied",
-    latencyMs: 0,
-  };
-}
-
 async function rerankHybridSelection(
   ctx: HybridGroundedAskCtx,
   preliminary: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
   externalRerankingDenied: boolean,
 ): Promise<HybridRerankedSelection> {
-  const fallback = selectTopPromptCandidates(preliminary, limits.maxPromptReferences);
-  if (externalRerankingDenied) {
-    return {
-      selected: fallback,
-      diagnostics: policyDeniedRerankDiagnostics(preliminary.length, fallback.length),
-    };
-  }
-  const attempt = await requestConfiguredRerank({
+  const result = await rerankSelection({
     deps: ctx.deps,
     query: ctx.content,
-    documents: preliminary.map((candidate) => candidate.redactedText),
+    candidates: preliminary,
+    documentFor: (candidate) => candidate.redactedText,
     topN: limits.maxPromptReferences,
     signal: ctx.signal,
+    policy: {
+      externalReranking: externalRerankingDenied ? "deny" : "allow",
+      localReranking: "allow",
+    },
+    applyScore: withModelRerankScore,
+    fallbackMode: "slice-topN",
   });
-  if (attempt.outcome === undefined) {
-    return { selected: fallback, diagnostics: withKeptCount(attempt.diagnostics, fallback.length) };
-  }
-  const reranked = applyModelRerankResults(
-    preliminary,
-    attempt.outcome.value.results,
-    limits.maxPromptReferences,
-  );
-  if (reranked === undefined) {
-    return {
-      selected: fallback,
-      diagnostics: invalidRerankMappingDiagnostics(attempt.diagnostics, fallback.length),
-    };
-  }
-  return { selected: reranked, diagnostics: withKeptCount(attempt.diagnostics, reranked.length) };
+  return { selected: withFinalMarkers(result.selected), diagnostics: result.diagnostics };
 }
 
 function connectorsDenyExternalReranking(connectors: readonly RetrievedConnector[]): boolean {

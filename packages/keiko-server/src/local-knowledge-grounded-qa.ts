@@ -78,9 +78,13 @@ import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import {
+  applyRerankMapping,
+  fallbackRerankSelection,
+  rerankSelection,
+  type RerankSelectionPolicy,
+} from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
-import { invalidRerankMappingDiagnostics, withKeptCount } from "./grounded-rerank.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -1254,7 +1258,7 @@ export function fallbackReferenceSelection(
   references: readonly RetrievalReference[],
   limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] {
-  return references.slice(0, limits.maxPromptReferences);
+  return fallbackRerankSelection(references, limits.maxPromptReferences, "slice-topN");
 }
 
 // Exported for deterministic unit coverage of the malformed-provider-mapping guard (#1925/#1926):
@@ -1265,21 +1269,7 @@ export function applyReferenceRerankResults(
   results: readonly RerankResult[],
   limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] | undefined {
-  if (references.length === 0) return [];
-  if (results.length === 0) return undefined;
-  const used = new Set<number>();
-  const reranked: RetrievalReference[] = [];
-  for (const result of results) {
-    if (!Number.isInteger(result.index) || result.index < 0 || result.index >= references.length) {
-      return undefined;
-    }
-    if (used.has(result.index)) return undefined;
-    const reference = references[result.index];
-    if (reference === undefined) return undefined;
-    used.add(result.index);
-    reranked.push(reference);
-  }
-  return reranked.slice(0, limits.maxPromptReferences);
+  return applyRerankMapping(references, results, limits.maxPromptReferences);
 }
 
 function rerankerDocumentText(
@@ -1300,91 +1290,25 @@ function createReferenceReranker(
   deps: UiHandlerDeps,
   store: KnowledgeStore,
   limits: ReturnType<typeof currentGroundingLimits>,
+  policy: RerankSelectionPolicy,
 ): ReferenceReranker {
   return {
     rerank: async (input): Promise<ReferenceRerankerResult> => {
-      const fallback = fallbackReferenceSelection(input.references, limits);
-      const candidates = input.references.slice(0, limits.maxPromptReferences);
-      const attempt = await requestConfiguredRerank({
+      const providerCandidates = input.references.slice(0, limits.maxPromptReferences);
+      const result = await rerankSelection({
         deps,
         query: input.query.text,
-        documents: candidates.map((reference) =>
-          rerankerDocumentText(deps, store, reference, limits),
-        ),
+        candidates: input.references,
+        providerCandidates,
+        documentFor: (reference) => rerankerDocumentText(deps, store, reference, limits),
         topN: limits.maxPromptReferences,
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
+        policy,
+        fallbackMode: "slice-topN",
       });
-      if (attempt.outcome === undefined) {
-        return {
-          references: fallback,
-          diagnostics: withKeptCount(attempt.diagnostics, fallback.length),
-        };
-      }
-      const reranked = applyReferenceRerankResults(
-        candidates,
-        attempt.outcome.value.results,
-        limits,
-      );
-      if (reranked === undefined) {
-        return {
-          references: fallback,
-          diagnostics: invalidRerankMappingDiagnostics(attempt.diagnostics, fallback.length),
-        };
-      }
-      return {
-        references: reranked,
-        diagnostics: withKeptCount(attempt.diagnostics, reranked.length),
-      };
+      return { references: result.selected, diagnostics: result.diagnostics };
     },
   };
-}
-
-type ReferenceRerankInput = Parameters<ReferenceReranker["rerank"]>[0];
-
-function createDisabledReferenceReranker(
-  limits: ReturnType<typeof currentGroundingLimits>,
-  diagnosticsFor: (
-    input: ReferenceRerankInput,
-    fallback: readonly RetrievalReference[],
-  ) => GroundedRerankerDiagnostics,
-): ReferenceReranker {
-  return {
-    rerank: (input): Promise<ReferenceRerankerResult> => {
-      const fallback = fallbackReferenceSelection(input.references, limits);
-      return Promise.resolve({
-        references: fallback,
-        diagnostics: diagnosticsFor(input, fallback),
-      });
-    },
-  };
-}
-
-function createNotConfiguredReranker(
-  limits: ReturnType<typeof currentGroundingLimits>,
-): ReferenceReranker {
-  return createDisabledReferenceReranker(limits, (input, fallback) => ({
-    status: "disabled",
-    mode: "none",
-    candidateCount: input.references.length,
-    documentCount: 0,
-    keptCount: fallback.length,
-    failureKind: "not-configured",
-    latencyMs: 0,
-  }));
-}
-
-function createPolicyDeniedReranker(
-  limits: ReturnType<typeof currentGroundingLimits>,
-): ReferenceReranker {
-  return createDisabledReferenceReranker(limits, (input, fallback) => ({
-    status: "denied",
-    mode: "local-only",
-    candidateCount: input.references.length,
-    documentCount: 0,
-    keptCount: fallback.length,
-    failureKind: "policy-denied",
-    latencyMs: 0,
-  }));
 }
 
 function referenceRerankerForScope(
@@ -1394,17 +1318,10 @@ function referenceRerankerForScope(
   limits: ReturnType<typeof currentGroundingLimits>,
 ): ReferenceReranker {
   const policy = resolveScopeModelUsePolicy(selected.capsules);
-  // Only `externalReranking` is enforced here: it gates the Model-Gateway provider call. The sibling
-  // `localReranking` policy operation is reserved forward-compat surface with NO consumer yet — Keiko
-  // ships no local reranker, so a policy-denied scope degrades to a redacted no-op (fused order
-  // preserved), never a local rerank. A future local reranker MUST also gate on `localReranking` here.
-  if (policy.operations.externalReranking === "deny") {
-    return createPolicyDeniedReranker(limits);
-  }
-  if (currentGatewayConfig(deps)?.reranker === undefined) {
-    return createNotConfiguredReranker(limits);
-  }
-  return createReferenceReranker(deps, store, limits);
+  return createReferenceReranker(deps, store, limits, {
+    externalReranking: policy.operations.externalReranking,
+    localReranking: policy.operations.localReranking,
+  });
 }
 
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;

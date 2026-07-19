@@ -1,0 +1,291 @@
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  requestLiteLLMRerank,
+  type LiteLLMRerankRequest,
+  type OutboundHttpEgressConfig,
+  type RerankErrorKind,
+  type RerankOutcome,
+  type RerankResult,
+  type RerankerConfig,
+} from "@oscharko-dev/keiko-model-gateway";
+
+import type { UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+
+export type RerankFallbackMode = "slice-topN" | "identity";
+
+export interface RerankSelectionPolicy {
+  readonly externalReranking: "allow" | "deny";
+  /** Reserved for the future bundled local reranker; intentionally unenforced today. */
+  readonly localReranking: "allow" | "deny";
+}
+
+export interface RerankSelectionInput<T> {
+  readonly deps: UiHandlerDeps;
+  readonly query: string;
+  readonly candidates: readonly T[];
+  /**
+   * Optional provider-visible subset when a caller's fallback/diagnostic pool is wider than the
+   * documents it is allowed to send. Provider indices are resolved against this subset.
+   */
+  readonly providerCandidates?: readonly T[] | undefined;
+  readonly documentFor: (candidate: T) => string;
+  readonly topN: number;
+  readonly signal?: AbortSignal | undefined;
+  readonly policy?: RerankSelectionPolicy | undefined;
+  readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
+  readonly fallbackMode: RerankFallbackMode;
+}
+
+export interface RerankSelection<T> {
+  readonly selected: readonly T[];
+  readonly diagnostics: GroundedRerankerDiagnostics;
+}
+
+interface MaterializedRerankInput {
+  readonly deps: UiHandlerDeps;
+  readonly query: string;
+  readonly documents: readonly string[];
+  readonly topN: number;
+  readonly signal?: AbortSignal | undefined;
+}
+
+interface SafeRerankTransportResult {
+  readonly outcome?: RerankOutcome | undefined;
+  readonly thrownKind?: RerankErrorKind | undefined;
+  readonly latencyMs: number;
+}
+
+export function fallbackRerankSelection<T>(
+  candidates: readonly T[],
+  topN: number,
+  mode: RerankFallbackMode,
+): readonly T[] {
+  if (mode === "identity") return candidates;
+  return topN <= 0 ? [] : candidates.slice(0, topN);
+}
+
+export function applyRerankMapping<T>(
+  candidates: readonly T[],
+  results: readonly RerankResult[],
+  topN: number,
+  applyScore?: (candidate: T, result: RerankResult) => T,
+): readonly T[] | undefined {
+  if (candidates.length === 0) return [];
+  if (results.length === 0 || topN <= 0) return undefined;
+  const used = new Set<number>();
+  const selected: T[] = [];
+  for (const result of results) {
+    const candidate = mappedCandidateFor(candidates, result.index, used);
+    if (candidate === undefined) return undefined;
+    selected.push(applyScore?.(candidate, result) ?? candidate);
+  }
+  return selected.slice(0, topN);
+}
+
+function mappedCandidateFor<T>(
+  candidates: readonly T[],
+  index: number,
+  used: Set<number>,
+): T | undefined {
+  if (!Number.isInteger(index) || index < 0 || index >= candidates.length || used.has(index)) {
+    return undefined;
+  }
+  const candidate = candidates[index];
+  if (candidate === undefined) return undefined;
+  used.add(index);
+  return candidate;
+}
+
+function policyDeniedDiagnostics(
+  candidateCount: number,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return {
+    status: "denied",
+    mode: "local-only",
+    candidateCount,
+    documentCount: 0,
+    keptCount,
+    failureKind: "policy-denied",
+    latencyMs: 0,
+  };
+}
+
+function disabledDiagnostics(
+  candidateCount: number,
+  keptCount: number,
+  failureKind?: "not-configured",
+): GroundedRerankerDiagnostics {
+  return {
+    status: "disabled",
+    mode: "none",
+    candidateCount,
+    documentCount: 0,
+    keptCount,
+    ...(failureKind === undefined ? {} : { failureKind }),
+    latencyMs: 0,
+  };
+}
+
+function unavailableStatus(kind: RerankErrorKind): GroundedRerankerDiagnostics["status"] {
+  if (kind === "disabled" || kind === "not-configured") return "disabled";
+  if (kind === "invalid-response") return "invalid-response";
+  return "unavailable";
+}
+
+function failedDiagnostics(
+  input: MaterializedRerankInput,
+  fallbackCount: number,
+  kind: RerankErrorKind,
+  latencyMs: number,
+): GroundedRerankerDiagnostics {
+  return {
+    status: unavailableStatus(kind),
+    mode: "provider-backed",
+    candidateCount: input.documents.length,
+    documentCount: input.documents.length,
+    keptCount: fallbackCount,
+    failureKind: kind === "disabled" ? "not-configured" : kind,
+    latencyMs,
+  };
+}
+
+function appliedDiagnostics(
+  input: MaterializedRerankInput,
+  outcome: Extract<RerankOutcome, { readonly ok: true }>,
+  latencyMs: number,
+): GroundedRerankerDiagnostics {
+  return {
+    status: "applied",
+    mode: "provider-backed",
+    candidateCount: input.documents.length,
+    documentCount: input.documents.length,
+    keptCount: Math.min(outcome.value.results.length, input.topN),
+    latencyMs,
+  };
+}
+
+function buildRerankRequest(
+  input: MaterializedRerankInput,
+  reranker: RerankerConfig,
+  egress: OutboundHttpEgressConfig | undefined,
+): LiteLLMRerankRequest {
+  return {
+    endpoint: reranker.baseUrl,
+    apiKey: reranker.apiKey,
+    ...(reranker.apiKeyHeaderName === undefined
+      ? {}
+      : { apiKeyHeaderName: reranker.apiKeyHeaderName }),
+    modelId: reranker.modelId,
+    query: input.query,
+    documents: input.documents,
+    topN: input.topN,
+    timeoutMs: reranker.timeoutMs,
+    ...(egress === undefined ? {} : { egress }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+}
+
+function thrownRerankKind(input: MaterializedRerankInput): RerankErrorKind {
+  return input.signal?.aborted === true ? "cancelled" : "transport";
+}
+
+async function requestRerankTransport(
+  input: MaterializedRerankInput,
+  reranker: RerankerConfig,
+): Promise<SafeRerankTransportResult> {
+  const startedAt = Date.now();
+  const request = input.deps.rerankRequest ?? requestLiteLLMRerank;
+  const egress = reranker.egress ?? currentGatewayEgressConfig(input.deps);
+  try {
+    return {
+      outcome: await request(buildRerankRequest(input, reranker, egress)),
+      latencyMs: Math.max(0, Date.now() - startedAt),
+    };
+  } catch {
+    return {
+      thrownKind: thrownRerankKind(input),
+      latencyMs: Math.max(0, Date.now() - startedAt),
+    };
+  }
+}
+
+function withKeptCount(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return { ...diagnostics, keptCount };
+}
+
+function invalidMappingDiagnostics(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return {
+    ...diagnostics,
+    status: "invalid-response",
+    failureKind: "invalid-response",
+    keptCount,
+  };
+}
+
+async function configuredSelection<T>(
+  input: RerankSelectionInput<T>,
+  providerCandidates: readonly T[],
+  fallback: readonly T[],
+  reranker: RerankerConfig,
+): Promise<RerankSelection<T>> {
+  const requestInput: MaterializedRerankInput = {
+    deps: input.deps,
+    query: input.query,
+    documents: providerCandidates.map(input.documentFor),
+    topN: input.topN,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+  const transport = await requestRerankTransport(requestInput, reranker);
+  if (transport.outcome?.ok !== true) {
+    const kind = transport.outcome?.kind ?? transport.thrownKind ?? "transport";
+    return {
+      selected: fallback,
+      diagnostics: failedDiagnostics(requestInput, fallback.length, kind, transport.latencyMs),
+    };
+  }
+  const diagnostics = appliedDiagnostics(requestInput, transport.outcome, transport.latencyMs);
+  const selected = applyRerankMapping(
+    providerCandidates,
+    transport.outcome.value.results,
+    input.topN,
+    input.applyScore,
+  );
+  return selected === undefined
+    ? { selected: fallback, diagnostics: invalidMappingDiagnostics(diagnostics, fallback.length) }
+    : { selected, diagnostics: withKeptCount(diagnostics, selected.length) };
+}
+
+export async function rerankSelection<T>(
+  input: RerankSelectionInput<T>,
+): Promise<RerankSelection<T>> {
+  const fallback = fallbackRerankSelection(input.candidates, input.topN, input.fallbackMode);
+  if (input.policy?.externalReranking === "deny") {
+    return {
+      selected: fallback,
+      diagnostics: policyDeniedDiagnostics(input.candidates.length, fallback.length),
+    };
+  }
+  const reranker = currentGatewayConfig(input.deps)?.reranker;
+  if (reranker === undefined) {
+    return {
+      selected: fallback,
+      diagnostics: disabledDiagnostics(input.candidates.length, fallback.length, "not-configured"),
+    };
+  }
+  const providerCandidates = input.providerCandidates ?? input.candidates;
+  if (providerCandidates.length === 0 || input.topN <= 0) {
+    return {
+      selected: fallback,
+      diagnostics: disabledDiagnostics(providerCandidates.length, fallback.length),
+    };
+  }
+  return configuredSelection(input, providerCandidates, fallback, reranker);
+}

@@ -9,8 +9,8 @@
 //      SEMANTIC embedding port (topic vectors, not lexical overlap), so a paraphrased query matches
 //      the right file WITHOUT sharing its words.
 //   2. `rerankAndSelect` (grounded-rerank) — the real RRF fusion of the lexical + semantic engines.
-//   3. `requestConfiguredRerank` + `applyModelRerankResults` (grounded-model-reranker) — the real
-//      model-reranker gate with a scripted rerank port.
+//   3. `rerankSelection` (grounded-rerank-facade) — the real model-reranker gate with a scripted
+//      rerank port.
 //
 // Non-tautological by construction: the budget floors are < 1, and an injected ranking or reranker
 // regression (`reranker-reversed`, `embedding-flat`) provably drops the metrics BELOW the floors —
@@ -31,13 +31,13 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
 import {
-  applyModelRerankResults,
   rerankAndSelect,
-  selectTopPromptCandidates,
+  withFinalMarkers,
+  withModelRerankScore,
   type RerankInput,
   type SelectedCandidate,
 } from "./grounded-rerank.js";
-import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { rerankSelection } from "./grounded-rerank-facade.js";
 
 const EMBEDDING_MODEL = "eval-embedding";
 const RERANK_MODEL = "eval-reranker";
@@ -230,8 +230,8 @@ function scriptedRerankPort(
       relevanceScore: cosine(queryVector, conceptVector(document)),
     }));
     scored.sort((a, b) => b.relevanceScore - a.relevanceScore || a.index - b.index);
-    // `reranker-reversed`: a defective reranker that returns worst-first. applyModelRerankResults
-    // trusts the order, so the least-relevant candidate is promoted to the top.
+    // `reranker-reversed`: a defective reranker that returns worst-first. The facade trusts the
+    // order, so the least-relevant candidate is promoted to the top.
     const results = mode === "reranker-reversed" ? [...scored].reverse() : scored;
     return Promise.resolve({ ok: true, value: { modelId: RERANK_MODEL, results } });
   };
@@ -381,17 +381,16 @@ async function applyModelRerank(
   query: string,
   fused: readonly SelectedCandidate<CasePayload>[],
 ): Promise<readonly SelectedCandidate<CasePayload>[]> {
-  const attempt = await requestConfiguredRerank({
+  const result = await rerankSelection({
     deps,
     query,
-    documents: fused.map((candidate) => candidate.redactedText),
+    candidates: fused,
+    documentFor: (candidate) => candidate.redactedText,
     topN: TOP_N,
+    applyScore: withModelRerankScore,
+    fallbackMode: "slice-topN",
   });
-  if (attempt.outcome === undefined) {
-    return selectTopPromptCandidates(fused, TOP_N);
-  }
-  const reranked = applyModelRerankResults(fused, attempt.outcome.value.results, TOP_N);
-  return reranked ?? selectTopPromptCandidates(fused, TOP_N);
+  return withFinalMarkers(result.selected);
 }
 
 // ─── Metrics ──────────────────────────────────────────────────────────────────
