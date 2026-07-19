@@ -25,6 +25,7 @@ import {
   listExtractionCheckpoints,
   listResumableDocuments,
   openKnowledgeStore,
+  refreshRepositoryPod,
   removeSourceFromCapsule,
   runIndexingJob,
   updateSourceScopeInCapsule,
@@ -1969,6 +1970,58 @@ function buildIndexingOptions(
   };
 }
 
+// A capsule whose only source is repository-scoped IS a repository pod (Issue #2569, ADR-0152 D8).
+// It runs the same discovery, parser, chunker, lexical/vector and embedding lanes as every other
+// capsule, but it has to be driven through `refreshRepositoryPod` rather than `runIndexingJob`
+// directly: the pod wrapper is what carries the git-blob fingerprint baseline, the incremental
+// unchanged-skip, the applied/unapplied run record and the atomic baseline commit. Sending it down
+// the generic path would still index the repository correctly — and would silently discard exactly
+// the incremental behaviour the M2 substrate was built for, re-embedding every file on every
+// refresh. Mixed-source capsules keep the generic path; the pod owns a whole capsule or nothing.
+function repositoryPodSourceId(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): KnowledgeSourceId | undefined {
+  const sources = listCapsuleSources(store, capsule.id);
+  const only = sources[0];
+  if (sources.length !== 1 || only === undefined) return undefined;
+  return only.scope.kind === "repository" ? only.id : undefined;
+}
+
+async function runRepositoryPodIndexingJob(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  sourceId: KnowledgeSourceId,
+  adapter: OpenAIEmbeddingAdapter,
+  ocrAdapter: OcrAdapter,
+  signal: AbortSignal,
+): Promise<IndexingTerminal | undefined> {
+  let terminal: IndexingTerminal | undefined;
+  await refreshRepositoryPod({
+    store,
+    capsuleId: capsule.id,
+    sourceId,
+    parserRegistry: createDefaultParserRegistry({ ocrAdapter }),
+    embeddingAdapter: adapter,
+    workspaceFs: nodeWorkspaceFs,
+    auditSink: createSqliteAuditSink(store),
+    signal,
+    onIndexEvent: (event) => {
+      if (event.kind === "job-started") {
+        localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
+      }
+      if (
+        event.kind === "job-completed" ||
+        event.kind === "job-failed" ||
+        event.kind === "job-cancelled"
+      ) {
+        terminal = event;
+      }
+    },
+  });
+  return terminal;
+}
+
 async function consumeCapsuleIndexingEvents(
   capsuleId: KnowledgeCapsuleId,
   events: ReturnType<typeof runIndexingJob>,
@@ -2011,28 +2064,60 @@ async function runCapsuleIndexingJob(
     return undefined;
   }
   const ocrAdapter = localKnowledgeOcrAdapter(deps);
-  const extractionCapabilities = await localKnowledgeExtractionCapabilitiesFor(ocrAdapter);
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   try {
-    return await consumeCapsuleIndexingEvents(
-      capsule.id,
-      runIndexingJob(
-        buildIndexingOptions(
-          deps,
-          store,
-          capsule,
-          adapter,
-          options,
-          sourceSelection,
-          ocrAdapter,
-          extractionCapabilities,
-          controller.signal,
-        ),
-      ),
+    return await dispatchCapsuleIndexingJob(
+      { deps, store, capsule, options, sourceSelection, adapter, ocrAdapter },
+      controller.signal,
     );
   } finally {
     localKnowledgeIndexingRegistry.complete(String(capsule.id));
   }
+}
+
+interface CapsuleIndexingDispatch {
+  readonly deps: UiHandlerDeps;
+  readonly store: ReturnType<typeof openKnowledgeStore>;
+  readonly capsule: KnowledgeCapsule;
+  readonly options: RunCapsuleIndexingJobOptions;
+  readonly sourceSelection: IndexingSourceSelection;
+  readonly adapter: OpenAIEmbeddingAdapter;
+  readonly ocrAdapter: OcrAdapter;
+}
+
+async function dispatchCapsuleIndexingJob(
+  input: CapsuleIndexingDispatch,
+  signal: AbortSignal,
+): Promise<IndexingTerminal | undefined> {
+  const { deps, store, capsule, options, sourceSelection, adapter, ocrAdapter } = input;
+  const podSourceId = repositoryPodSourceId(store, capsule);
+  if (podSourceId !== undefined) {
+    return await runRepositoryPodIndexingJob(
+      store,
+      capsule,
+      podSourceId,
+      adapter,
+      ocrAdapter,
+      signal,
+    );
+  }
+  const extractionCapabilities = await localKnowledgeExtractionCapabilitiesFor(ocrAdapter);
+  return await consumeCapsuleIndexingEvents(
+    capsule.id,
+    runIndexingJob(
+      buildIndexingOptions(
+        deps,
+        store,
+        capsule,
+        adapter,
+        options,
+        sourceSelection,
+        ocrAdapter,
+        extractionCapabilities,
+        signal,
+      ),
+    ),
+  );
 }
 
 function failedSourceIds(

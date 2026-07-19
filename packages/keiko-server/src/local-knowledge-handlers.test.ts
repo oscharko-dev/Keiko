@@ -1773,6 +1773,119 @@ describe("local-knowledge handlers", () => {
     ]);
   });
 
+  // Epic #2556 Target Outcomes 1 and 2. Before this wiring `refreshRepositoryPod` had no production
+  // caller at all — only the evaluation harness — so the whole M2 repository-pod substrate was
+  // unreachable from the product. Routing the one indexing dispatch point through the pod for a
+  // repository-scoped capsule is what makes chunk-precise, warm, incrementally refreshed repository
+  // retrieval real rather than substrate-only. The observable difference from the generic path is
+  // the pod's own run record and fingerprint baseline: the generic path writes neither.
+  it("drives a repository-scoped capsule through the repository pod, not the generic path", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const repoRoot = join(tmp, "repo");
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(repoRoot, "src", "app.ts"),
+      [
+        "export interface Request {}",
+        "",
+        "export function execute(): string {",
+        '  return "ok";',
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Repository",
+      tags: [],
+      scope: { kind: "repository", repositoryRoot: repoRoot },
+    });
+    store.close();
+
+    const deps = depsFor(tmp);
+    const first = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const runs = inspect._internal.db
+      .prepare(
+        "SELECT outcome, applied, added_files FROM repository_pod_runs WHERE capsule_id = :c",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly outcome: string;
+      readonly applied: number;
+      readonly added_files: number;
+    }[];
+    const fingerprints = inspect._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM repository_file_fingerprints WHERE capsule_id = :c")
+      .get({ c: "cap-1" }) as unknown as { readonly n: number };
+    inspect.close();
+
+    // A pod run record and a persisted fingerprint baseline exist only if the pod wrapper ran.
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ applied: 1 });
+    expect(runs[0]?.added_files).toBeGreaterThan(0);
+    expect(fingerprints.n).toBeGreaterThan(0);
+  });
+
+  it("re-embeds nothing when a repository pod is refreshed with no file changes", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const repoRoot = join(tmp, "repo");
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(repoRoot, "src", "app.ts"),
+      ["export function execute(): string {", '  return "ok";', "}", ""].join("\n"),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Repository",
+      tags: [],
+      scope: { kind: "repository", repositoryRoot: repoRoot },
+    });
+    store.close();
+
+    const deps = depsFor(tmp);
+    const ctx = (): Parameters<typeof handleReindexLocalKnowledgeCapsule>[0] => ({
+      ...baseCtx(tmp, "POST", { mode: "changed-files" }),
+      params: { capsuleId: "cap-1" },
+    });
+    expect((await handleReindexLocalKnowledgeCapsule(ctx(), deps)).status).toBe(200);
+    expect((await handleReindexLocalKnowledgeCapsule(ctx(), deps)).status).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const runs = inspect._internal.db
+      .prepare(
+        "SELECT added_files, changed_files, unchanged_files FROM repository_pod_runs WHERE capsule_id = :c ORDER BY completed_at ASC, run_id ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly added_files: number;
+      readonly changed_files: number;
+      readonly unchanged_files: number;
+    }[];
+    inspect.close();
+
+    // This is Outcome 1 stated as an assertion: an unchanged repository re-embeds nothing.
+    expect(runs).toHaveLength(2);
+    expect(runs[1]?.added_files).toBe(0);
+    expect(runs[1]?.changed_files).toBe(0);
+    expect(runs[1]?.unchanged_files).toBeGreaterThan(0);
+  });
+
   it("maps full-reembed and full-rebuild modes to a force reindex even when files are unchanged", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
