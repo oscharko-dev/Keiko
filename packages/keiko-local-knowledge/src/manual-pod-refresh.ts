@@ -93,6 +93,10 @@ export interface RefreshHtmlManualPodResult {
   readonly progress: HtmlManualIndexingProgress;
   // Redacted change summary (#1892): counts + reason codes + opaque crawl-run fingerprint only.
   readonly changeSummary: ManualRefreshChangeSummary;
+  // Whether the refresh ran its index-apply path (a completed, non-empty crawl). False when it failed
+  // closed before applying (limit-reached / empty / cancelled crawl), leaving the prior pod intact —
+  // the ground-truth signal a caller needs to report a non-applied refresh as failed, not succeeded.
+  readonly applied: boolean;
 }
 
 // Rebuild the approved crawl scope from persisted metadata ONLY — never from caller input, so a
@@ -344,5 +348,6 @@ export async function refreshHtmlManualPod(
     summary: buildKnowledgePodSummary(store, capsule),
     progress: buildHtmlManualIndexingProgress(crawl, applied.indexing),
     changeSummary,
+    applied: willApply,
   };
 }

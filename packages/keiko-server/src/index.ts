@@ -322,6 +322,18 @@ export {
   type GroundedFaithfulnessBudget,
 } from "./grounded-faithfulness-eval.js";
 
+// Knowledge M1.2 (#2563) — the entailment (citation-support) eval, exported so
+// scripts/check-grounded-entailment.mjs can gate that an in-pack citation whose excerpt does NOT
+// support the claim is flagged, no supported claim is falsely flagged, an unavailable judge degrades
+// to WARN, and the checker is load-bearing (non-tautology proven).
+export {
+  runGroundedEntailmentEval,
+  evaluateGroundedEntailmentBudget,
+  DEFAULT_GROUNDED_ENTAILMENT_BUDGET,
+  type GroundedEntailmentScorecard,
+  type GroundedEntailmentBudget,
+} from "./grounded-entailment-eval.js";
+
 // ADR-0141 W1.5 (#2478) — the trusted-launcher half of the app-session pairing hand-off. Exposed so
 // the keiko-cli launcher (`keiko start --open`) mints the single-use attestation with the SAME claim
 // construction the server-side pairing port verifies; the claim formula stays single-source here.

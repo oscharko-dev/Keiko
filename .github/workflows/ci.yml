@@ -139,6 +139,13 @@ jobs:
         # (faithful / hallucinated-citation / confident-over-empty / refusal). Fails closed if a
         # fabricated citation stops being flagged or empty evidence stops abstaining.
         run: npm run check:grounded-faithfulness
+      - name: Grounded entailment gate (Knowledge M1.2, Issue #2563)
+        # Scores the real claim-segmentation + entailment-reconciliation + marker logic over
+        # distractor-dense fixtures with a deterministic scripted judge (same port as the gateway
+        # judge). Fails closed if an in-pack-but-unsupported claim stops being flagged, a supported
+        # claim is falsely flagged, an unavailable judge stops degrading to WARN, or a pass-through
+        # judge still "detects" (the checker must be load-bearing — non-tautology proven in CI).
+        run: npm run check:grounded-entailment
       - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
         # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
         # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the

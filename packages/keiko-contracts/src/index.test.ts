@@ -1213,4 +1213,44 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM7AiActivationStatus>();
     pin<import("./index.js").EditorM7AiActivationSummary>();
   });
+
+  it("HTML manual pod job contracts are reachable + enforced through the barrel (#2063)", async () => {
+    const m = await import("./index.js");
+    expect(m.HTML_MANUAL_POD_JOB_SCHEMA_VERSION).toBe("1");
+    expect(m.HTML_MANUAL_POD_JOB_OPERATIONS).toStrictEqual(["create", "refresh"]);
+    expect(m.HTML_MANUAL_POD_JOB_STATES).toContain("running");
+    expect(m.HTML_MANUAL_POD_JOB_PHASES.length).toBeGreaterThan(0);
+
+    // The validators must fail closed on hostile input and accept a well-formed request when reached
+    // through the public entrypoint (not just the leaf module).
+    const create = m.validateHtmlManualPodCreateRequest({
+      displayName: "Vendor guide",
+      origin: "https://manual.example.com",
+      pathPrefix: null,
+    });
+    expect(create.ok).toBe(true);
+    expect(m.validateHtmlManualPodCreateRequest({ displayName: "", origin: "ftp://x" }).ok).toBe(
+      false,
+    );
+
+    const refresh = m.validateHtmlManualPodRefreshRequest({
+      capsuleId: "cap_1",
+      sourceId: "src_1",
+    });
+    expect(refresh.ok).toBe(true);
+    expect(
+      m.validateHtmlManualPodRefreshRequest({ capsuleId: "../escape", sourceId: "src_1" }).ok,
+    ).toBe(false);
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").HtmlManualPodJob>();
+    pin<import("./index.js").HtmlManualPodJobOperation>();
+    pin<import("./index.js").HtmlManualPodJobState>();
+    pin<import("./index.js").HtmlManualPodJobPhase>();
+    pin<import("./index.js").HtmlManualPodJobCrawl>();
+    pin<import("./index.js").HtmlManualPodJobIndexing>();
+    pin<import("./index.js").HtmlManualPodJobRemediation>();
+    pin<import("./index.js").HtmlManualPodRefreshRequest>();
+    pin<import("./index.js").HtmlManualPodCreateRequest>();
+  });
 });

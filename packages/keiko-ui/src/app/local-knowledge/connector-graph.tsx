@@ -49,6 +49,7 @@ import type {
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
+import { HtmlManualPodCreate } from "./html-manual-pod-create";
 import { CapsuleDetail } from "./[capsuleId]/capsule-detail";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
@@ -1916,6 +1917,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
         <h2 className="lk-section-head">{t("localKnowledge.overview.sectionLabel")}</h2>
+        {/* Create a live HTML Manual Knowledge Pod from a site origin (Issue #2063); refresh of an
+            existing pod lives on the pod detail. Reloads the catalog when the job settles. */}
+        <HtmlManualPodCreate onCreateComplete={reload} />
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}

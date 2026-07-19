@@ -273,6 +273,11 @@ import {
   handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 import {
+  handleCreateHtmlManualPod,
+  handleGetHtmlManualPodJob,
+  handleRefreshHtmlManualPod,
+} from "./manual/manual-pod-routes.js";
+import {
   handleAuthorizePdfCitationPreview,
   handleClosePdfCitationPreviewSession,
   handleGetPdfCitationPreviewDocument,
@@ -1065,6 +1070,22 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
+  },
+  // Issue #2063 — live HTML Manual Knowledge Pod create/refresh trigger + job status poll.
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/manual-pods/create",
+    handler: handleCreateHtmlManualPod,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/manual-pods/refresh",
+    handler: handleRefreshHtmlManualPod,
+  },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/manual-pods/jobs/:jobId",
+    handler: handleGetHtmlManualPodJob,
   },
   {
     method: "POST",

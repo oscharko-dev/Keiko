@@ -20,7 +20,10 @@ import type {
   IndexingJobStatus,
   CapsuleContextualRetrievalSettings,
 } from "@oscharko-dev/keiko-contracts";
-import { isTerminalExtractionPhase } from "@oscharko-dev/keiko-contracts";
+import {
+  isTerminalExtractionPhase,
+  parseHtmlManualSourceTagMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleDetail as CapsuleDetailData,
   CapsuleActionResponse,
@@ -39,6 +42,7 @@ import Link from "next/link";
 import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
+import { HtmlManualPodRefresh } from "../html-manual-pod-refresh";
 import { CapsuleRename } from "./capsule-rename";
 import { SourceRebindControl } from "./source-rebind-control";
 import detailStyles from "../capsule-detail.module.css";
@@ -47,6 +51,27 @@ import { Explainable } from "../detail-help";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Issue #2063 — a capsule is an HTML manual pod when it carries the html-manual source-kind tag; its
+// single source id drives the live refresh control. Returns undefined for non-manual pods.
+function htmlManualSourceIdOf(
+  tags: readonly string[],
+  sources: readonly SourceIndexStats[],
+): string | undefined {
+  const isManual = parseHtmlManualSourceTagMetadata(tags) !== undefined;
+  return isManual ? sources[0]?.sourceId : undefined;
+}
+
+function renderHtmlManualRefresh(
+  capsuleId: KnowledgeCapsuleId,
+  data: CapsuleDetailData,
+  reload: () => void,
+): ReactNode {
+  const sourceId = htmlManualSourceIdOf(data.capsule.tags, data.sources);
+  return sourceId === undefined ? null : (
+    <HtmlManualPodRefresh capsuleId={capsuleId} sourceId={sourceId} onRefreshComplete={reload} />
+  );
+}
 
 function formatTs(epochMs: number): string {
   // Explicit en-US: the surrounding UI copy is English; an OS-locale date
@@ -1523,6 +1548,8 @@ export function CapsuleDetail({
         onActionComplete={reload}
         onDeleted={handleDeleted}
       />
+
+      {renderHtmlManualRefresh(capsuleId, data, reload)}
 
       <IndexingStatusSection data={data} />
       <details className={detailStyles.advancedDisclosure}>

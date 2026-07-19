@@ -994,6 +994,18 @@ function groundedSummaryWarnings(answer: GroundedAnswer): readonly string[] {
         `references sources that were not in the retrieved evidence.`,
     );
   }
+  // Knowledge M1.2 (#2563): a citation that was in the pack but does not SUPPORT its claim.
+  const unsupportedClaims = markers.filter((m) => m.kind === "unsupported-claim").length;
+  if (unsupportedClaims > 0) {
+    warnings.push(
+      `${String(unsupportedClaims)} unsupported claim${unsupportedClaims === 1 ? "" : "s"} — the ` +
+        `answer states something its cited source does not support.`,
+    );
+  }
+  // Knowledge M1.2 (#2563): the entailment verification step could not run (fail-closed caveat).
+  if (markers.some((m) => m.kind === "entailment-unavailable")) {
+    warnings.push("Citation support could not be verified for part of this answer.");
+  }
   if (markers.some((m) => m.kind === "incomplete-answer")) {
     warnings.push("The answer was cut off before completion and may be partial.");
   }

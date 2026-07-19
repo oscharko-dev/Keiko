@@ -54,6 +54,7 @@ import {
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
@@ -72,6 +73,7 @@ import {
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
+  appendGroundedAnswerEntailment,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -876,6 +878,37 @@ function buildMultiSourceReconciliationUncertainty(
   return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
+// Knowledge M1.2 (#2563): folder scopes carry no capsule, so entailment is governed only by whether
+// a compatible judge model is configured. Abstained or inert ⇒ the assembled answer is unchanged.
+async function applyMultiSourceEntailment(
+  ctx: MultiSourceAskInput,
+  assembled: GroundedAnswer,
+  assistant: GroundedAnswerResult,
+  retrieved: readonly RetrievedSource[],
+  abstained: boolean,
+): Promise<GroundedAnswer> {
+  if (abstained) {
+    return assembled;
+  }
+  const stage = createEntailmentStage(
+    ctx.deps,
+    [],
+    ctx.modelId,
+    { diagnostics: ctx.deps.diagnostics },
+    ctx.signal,
+  );
+  if (stage === undefined) {
+    return assembled;
+  }
+  return appendGroundedAnswerEntailment(
+    assembled,
+    stage,
+    assistant.content,
+    retrieved.map((source) => source.pack),
+    ctx.deps.redactor,
+  );
+}
+
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
@@ -904,11 +937,12 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     redactString(ctx.deps.redactor, ctx.content),
     redactString(ctx.deps.redactor, assistant.content),
   );
-  const answer = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
+  const assembled = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     abstained,
   });
+  const answer = await applyMultiSourceEntailment(ctx, assembled, assistant, retrieved, abstained);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (!abstained) {
     rememberGroundedTurn({

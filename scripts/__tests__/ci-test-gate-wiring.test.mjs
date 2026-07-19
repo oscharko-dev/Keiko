@@ -85,6 +85,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:retrieval-quality",
   "npm run check:grounded-retrieval-quality",
   "npm run check:grounded-faithfulness",
+  "npm run check:grounded-entailment",
   "npm run check:context-quality",
   // Server error observability gate (Step 11, RB-6 / GEN-OBS-DIAGNOSTICS-901): the top-level 500 must
   // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`.

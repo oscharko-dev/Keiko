@@ -13,6 +13,7 @@ import {
   reconcileInlineCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
+import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
 import type { ConnectedContextPack, LineRange } from "@oscharko-dev/keiko-contracts";
 
 type FaithfulnessVariant =
@@ -134,13 +135,10 @@ function indexFor(fixture: FaithfulnessFixture): PackCitationIndex {
 // A minimal pack carrying exactly the fixture's evidence, so packHasUsableEvidence reflects the
 // real abstention predicate rather than a hand-set boolean.
 function packFor(fixture: FaithfulnessFixture): ConnectedContextPack {
-  return {
-    files: fixture.packScopePaths.map((scopePath) => ({
-      scopePath,
-      excerpts: [{ atom: { scopePath } }],
-    })),
-    uncertainty: fixture.packScopePaths.length === 0 ? [{ kind: "no-evidence" }] : [],
-  } as unknown as ConnectedContextPack;
+  return buildEvalContextPack(
+    fixture.packScopePaths.map((scopePath) => evalFileEntry(scopePath, [{ content: "" }])),
+    fixture.packScopePaths.length === 0 ? [evalUncertainty("no-evidence")] : [],
+  );
 }
 
 export interface GroundedFaithfulnessScorecard {
