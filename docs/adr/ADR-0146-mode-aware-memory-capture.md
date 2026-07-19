@@ -1,4 +1,4 @@
-# ADR-0145: Mode-aware memory capture
+# ADR-0146: Mode-aware memory capture
 
 ## Status
 
