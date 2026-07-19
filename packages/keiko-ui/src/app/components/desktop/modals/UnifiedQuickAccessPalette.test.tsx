@@ -219,6 +219,54 @@ describe("UnifiedQuickAccessPalette", () => {
     expect(screen.getAllByRole("option", { name: /src\/quick\.ts/ })).toHaveLength(1);
   });
 
+  it("disambiguates same-path results across roots and opens the selected root", async () => {
+    fetchFilesSearchMock.mockImplementation((root) =>
+      Promise.resolve({
+        root,
+        query: "shared",
+        results: [
+          {
+            root,
+            path: "src/shared.ts",
+            name: "shared.ts",
+            directory: "src",
+            extension: ".ts",
+            sizeBytes: 120,
+            modifiedAt: 1,
+          },
+        ],
+        truncated: false,
+        scannedFileCount: 1,
+      }),
+    );
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+        commands={[]}
+        openEditorFile={openEditorFile}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.type(screen.getByRole("combobox"), "shared");
+    const rootB = await screen.findByRole("option", { name: /Root B · src\/shared\.ts:1/ });
+    expect(screen.getByRole("option", { name: /Root A · src\/shared\.ts:1/ })).toBeInTheDocument();
+    await userEvent.click(rootB);
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo/b",
+      path: "src/shared.ts",
+      lineStart: 1,
+      lineEnd: 1,
+    });
+  });
+
   it("has no axe violations in file and command modes", async () => {
     fetchFilesSearchMock.mockResolvedValue({
       root: "/repo",

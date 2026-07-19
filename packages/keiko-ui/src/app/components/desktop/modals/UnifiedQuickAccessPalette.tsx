@@ -21,7 +21,9 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
+import { fuzzyScore } from "../widgets/cards/editorCommands";
 import type { QuickAccessCommand } from "../quickAccessRegistry";
+import { requestWorkspaceRoots, type WorkspaceRootTarget } from "../workspaceRootTargets";
 
 const SEARCH_DEBOUNCE_MS = 120;
 const SEARCH_LIMIT = 30;
@@ -30,6 +32,8 @@ type QuickAccessMode = "files" | "commands";
 
 interface FileResult {
   readonly kind: "file";
+  readonly root: string;
+  readonly rootLabel: string;
   readonly path: string;
   readonly line: number;
   readonly snippet: string;
@@ -37,6 +41,8 @@ interface FileResult {
 
 interface SymbolResult {
   readonly kind: "symbol";
+  readonly root: string;
+  readonly rootLabel: string;
   readonly path: string;
   readonly line: number;
   readonly symbol: string;
@@ -51,6 +57,7 @@ type WorkspaceSymbolSearchResponse = Awaited<ReturnType<typeof fetchWorkspaceSym
 interface UnifiedQuickAccessPaletteProps {
   readonly initialMode: QuickAccessMode;
   readonly root?: string | undefined;
+  readonly roots?: readonly WorkspaceRootTarget[] | undefined;
   readonly commands: readonly QuickAccessCommand[];
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly onClose: () => void;
@@ -65,39 +72,120 @@ function dedupeFileResults(results: readonly FileResult[]): readonly FileResult[
   const seen = new Set<string>();
   const out: FileResult[] = [];
   for (const result of results) {
-    if (seen.has(result.path)) continue;
-    seen.add(result.path);
+    const key = `${result.root}\n${result.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(result);
   }
   return out;
 }
 
-function fileNameResults(response: FileNameSearchResponse): readonly FileResult[] {
+function fileNameResults(
+  target: WorkspaceRootTarget,
+  response: FileNameSearchResponse,
+): readonly FileResult[] {
   return response.results.map((result) => ({
     kind: "file",
+    root: target.root,
+    rootLabel: target.label,
     path: result.path,
     line: 1,
     snippet: result.directory.length === 0 ? result.name : `${result.directory}/${result.name}`,
   }));
 }
 
-function textFileResults(response: WorkspaceTextSearchResponse): readonly FileResult[] {
+function textFileResults(
+  target: WorkspaceRootTarget,
+  response: WorkspaceTextSearchResponse,
+): readonly FileResult[] {
   return response.results.map((result) => ({
     kind: "file",
+    root: target.root,
+    rootLabel: target.label,
     path: result.path,
     line: result.lineRange.startLine,
     snippet: result.snippet,
   }));
 }
 
-function symbolResults(response: WorkspaceSymbolSearchResponse): readonly SymbolResult[] {
+function symbolResults(
+  target: WorkspaceRootTarget,
+  response: WorkspaceSymbolSearchResponse,
+): readonly SymbolResult[] {
   return response.results.map((result) => ({
     kind: "symbol",
+    root: target.root,
+    rootLabel: target.label,
     path: result.path,
     line: result.line,
     symbol: result.symbol,
     detail: result.enclosingSymbol ?? result.kind,
   }));
+}
+
+interface QuickAccessRootResponse {
+  readonly files: readonly FileResult[];
+  readonly symbols: readonly SymbolResult[];
+}
+
+function quickAccessTargets(
+  root: string | undefined,
+  roots: readonly WorkspaceRootTarget[] | undefined,
+): readonly WorkspaceRootTarget[] {
+  if (roots !== undefined && roots.length > 0) return roots;
+  return root === undefined ? [] : [{ id: root, root, label: root }];
+}
+
+function quickAccessSearchText(result: SearchResult): string {
+  return result.kind === "symbol"
+    ? `${result.symbol} ${result.path} ${result.detail}`
+    : `${result.path} ${result.snippet}`;
+}
+
+function rankedResults(
+  query: string,
+  responses: readonly QuickAccessRootResponse[],
+): readonly SearchResult[] {
+  const results = responses.flatMap((response) => [...response.files, ...response.symbols]);
+  return results
+    .map((result, index) => ({
+      result,
+      index,
+      score: fuzzyScore(query, quickAccessSearchText(result)) ?? Number.MAX_SAFE_INTEGER,
+    }))
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .map(({ result }) => result)
+    .slice(0, SEARCH_LIMIT);
+}
+
+async function searchQuickAccessRoot(
+  target: WorkspaceRootTarget,
+  query: string,
+  signal: AbortSignal,
+): Promise<QuickAccessRootResponse> {
+  const [fileNames, text, symbols] = await Promise.all([
+    fetchFilesSearch(target.root, query, SEARCH_LIMIT, { signal }),
+    fetchWorkspaceSearch(
+      {
+        root: target.root,
+        query,
+        mode: "literal",
+        caseSensitive: false,
+        includeGlobs: [],
+        excludeGlobs: [],
+        maxResults: SEARCH_LIMIT,
+      },
+      { signal },
+    ),
+    fetchWorkspaceSymbols({ root: target.root, query, maxResults: SEARCH_LIMIT }, { signal }),
+  ]);
+  return {
+    files: dedupeFileResults([
+      ...fileNameResults(target, fileNames),
+      ...textFileResults(target, text),
+    ]),
+    symbols: symbolResults(target, symbols),
+  };
 }
 
 function quickAccessEmptyText(
@@ -116,6 +204,7 @@ function quickAccessEmptyText(
 export function UnifiedQuickAccessPalette({
   initialMode,
   root,
+  roots,
   commands,
   openEditorFile,
   onClose,
@@ -123,6 +212,7 @@ export function UnifiedQuickAccessPalette({
   const t = useOptionalWidgetTranslate();
   const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
   const [searchResults, setSearchResults] = useState<readonly SearchResult[]>([]);
+  const [failedRoots, setFailedRoots] = useState<readonly string[]>([]);
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -132,6 +222,8 @@ export function UnifiedQuickAccessPalette({
   );
   const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
   const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
+  const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
+  const multiRoot = targets.length > 1;
 
   useEffect(() => {
     const opener = openerRef.current;
@@ -142,50 +234,41 @@ export function UnifiedQuickAccessPalette({
   }, []);
 
   useEffect(() => {
-    if (mode !== "files" || root === undefined || query.trim().length === 0) {
+    if (mode !== "files" || targets.length === 0 || query.trim().length === 0) {
       setSearchResults([]);
+      setFailedRoots([]);
       return;
     }
     const controller = new AbortController();
     const trimmed = query.trim();
     const handle = setTimeout(() => {
-      void Promise.all([
-        fetchFilesSearch(root, trimmed, SEARCH_LIMIT, { signal: controller.signal }),
-        fetchWorkspaceSearch(
-          {
-            root,
-            query: trimmed,
-            mode: "literal",
-            caseSensitive: false,
-            includeGlobs: [],
-            excludeGlobs: [],
-            maxResults: SEARCH_LIMIT,
-          },
-          { signal: controller.signal },
-        ),
-        fetchWorkspaceSymbols(
-          { root, query: trimmed, maxResults: SEARCH_LIMIT },
-          {
-            signal: controller.signal,
-          },
-        ),
-      ])
-        .then(([fileNames, text, symbols]) => {
-          const files = dedupeFileResults([
-            ...fileNameResults(fileNames),
-            ...textFileResults(text),
-          ]);
-          setSearchResults([...files, ...symbolResults(symbols)].slice(0, SEARCH_LIMIT));
+      void requestWorkspaceRoots(targets, (target) =>
+        searchQuickAccessRoot(target, trimmed, controller.signal),
+      )
+        .then((outcomes) => {
+          if (controller.signal.aborted) return;
+          const responses = outcomes.flatMap((outcome) =>
+            outcome.status === "success" ? [outcome.value] : [],
+          );
+          setFailedRoots(
+            outcomes.flatMap((outcome) =>
+              outcome.status === "error" ? [outcome.target.label] : [],
+            ),
+          );
+          setSearchResults(rankedResults(trimmed, responses));
         })
         .catch(() => {
-          if (!controller.signal.aborted) setSearchResults([]);
+          if (!controller.signal.aborted) {
+            setSearchResults([]);
+            setFailedRoots([]);
+          }
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(handle);
       controller.abort();
     };
-  }, [mode, query, root]);
+  }, [mode, query, targets]);
 
   const commandResults = useMemo(
     () =>
@@ -210,16 +293,16 @@ export function UnifiedQuickAccessPalette({
         return;
       }
       const result = searchResults[index];
-      if (result === undefined || root === undefined) return;
+      if (result === undefined) return;
       openEditorFile({
-        root,
+        root: result.root,
         path: result.path,
         lineStart: result.line,
         lineEnd: result.line,
       });
       onClose();
     },
-    [commandResults, mode, onClose, openEditorFile, root, searchResults],
+    [commandResults, mode, onClose, openEditorFile, searchResults],
   );
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
@@ -289,6 +372,11 @@ export function UnifiedQuickAccessPalette({
         <div className="sr-only" role="status">
           {itemCount === 0 ? emptyText : t(resultKey, { count: itemCount })}
         </div>
+        {failedRoots.length > 0 ? (
+          <div className="cmdk-empty" role="alert">
+            Search unavailable for {failedRoots.join(", ")}.
+          </div>
+        ) : null}
         <div id={listId} role="listbox" className="cmdk-list">
           {itemCount === 0 ? (
             <div className="cmdk-empty">{emptyText}</div>
@@ -317,7 +405,7 @@ export function UnifiedQuickAccessPalette({
           ) : (
             searchResults.map((result, index) => (
               <button
-                key={`${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+                key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
                 type="button"
                 id={optionId(index)}
                 role="option"
@@ -336,6 +424,7 @@ export function UnifiedQuickAccessPalette({
                 </span>
                 <span className="spacer" />
                 <span className="cmdk-group mono">
+                  {multiRoot ? `${result.rootLabel} · ` : ""}
                   {result.path}:{String(result.line)}
                 </span>
               </button>

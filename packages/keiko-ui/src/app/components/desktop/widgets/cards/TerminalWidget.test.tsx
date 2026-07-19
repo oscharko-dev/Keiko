@@ -81,6 +81,18 @@ describe("TerminalWidget", () => {
     expect(screen.getByLabelText(/working directory/i)).toBeInTheDocument();
   });
 
+  it("retargets project and cwd inputs when a bound window selects another root", async () => {
+    const view = render(<TerminalWidget projectPath="/repo/a" cwd="/repo/a" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    view.rerender(<TerminalWidget projectPath="/repo/b" cwd="/repo/b" />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/project path/i)).toHaveValue("/repo/b");
+      expect(screen.getByLabelText(/working directory/i)).toHaveValue("/repo/b");
+    });
+    expect(fetchTerminalDirectories).toHaveBeenLastCalledWith("/repo/b", "/repo/b");
+  });
+
   it("populates the command dropdown from the policy", async () => {
     const user = userEvent.setup();
     render(<TerminalWidget />);

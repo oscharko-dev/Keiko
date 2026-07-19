@@ -28,11 +28,13 @@ function activeFile(cfg: WindowCfgRecord): string | undefined {
 export function DebugPanelSessionHost({
   cfg,
   ctx,
+  root: rootOverride,
 }: {
   readonly cfg: WindowCfgRecord;
   readonly ctx: WindowRenderContext;
+  readonly root?: string | undefined;
 }): ReactNode {
-  const root = ctx.activeRoot ?? projectPath(cfg) ?? ctx.linkedRoot ?? undefined;
+  const root = rootOverride ?? ctx.activeRoot ?? projectPath(cfg) ?? ctx.linkedRoot ?? undefined;
   const editorSettings = useEditorSettings(root);
   const debugging = editorSettings.snapshot?.debugging;
   return (

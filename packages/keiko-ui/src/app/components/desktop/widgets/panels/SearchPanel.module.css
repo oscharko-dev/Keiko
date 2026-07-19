@@ -122,6 +122,26 @@
   padding: 8px 10px;
 }
 
+.rootLabel {
+  display: inline-block;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: var(--surface-accent-subtle);
+  color: var(--text-accent);
+  padding: 2px 6px;
+}
+
+.rootHeading {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.errorList {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
 .match {
   display: grid;
   width: 100%;

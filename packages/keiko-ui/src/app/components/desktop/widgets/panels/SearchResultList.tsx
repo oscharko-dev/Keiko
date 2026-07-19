@@ -4,21 +4,29 @@ import { useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { WorkspaceSearchResultMatch } from "@oscharko-dev/keiko-contracts";
 import styles from "./SearchPanel.module.css";
 
+export interface RootAwareSearchResult extends WorkspaceSearchResultMatch {
+  readonly root: string;
+  readonly rootLabel: string;
+}
+
 export interface SearchResultGroup {
+  readonly root: string;
+  readonly rootLabel: string;
   readonly path: string;
-  readonly matches: readonly WorkspaceSearchResultMatch[];
+  readonly matches: readonly RootAwareSearchResult[];
 }
 
 interface SearchResultEntry {
-  readonly match: WorkspaceSearchResultMatch;
+  readonly match: RootAwareSearchResult;
   readonly index: number;
 }
 
 interface SearchResultListProps {
   readonly groups: readonly SearchResultGroup[];
+  readonly showRootLabels: boolean;
   readonly activeIndex: number;
   readonly onActiveIndexChange: (index: number) => void;
-  readonly onOpen: (match: WorkspaceSearchResultMatch) => void;
+  readonly onOpen: (match: RootAwareSearchResult) => void;
 }
 
 function lineLabel(match: WorkspaceSearchResultMatch): string {
@@ -33,19 +41,26 @@ function entriesFromGroups(groups: readonly SearchResultGroup[]): readonly Searc
 }
 
 export function groupSearchResults(
-  results: readonly WorkspaceSearchResultMatch[],
+  results: readonly RootAwareSearchResult[],
 ): readonly SearchResultGroup[] {
-  const groups = new Map<string, WorkspaceSearchResultMatch[]>();
+  const groups = new Map<string, RootAwareSearchResult[]>();
   for (const result of results) {
-    const group = groups.get(result.path) ?? [];
+    const key = `${result.root}\n${result.path}`;
+    const group = groups.get(key) ?? [];
     group.push(result);
-    groups.set(result.path, group);
+    groups.set(key, group);
   }
-  return [...groups.entries()].map(([path, matches]) => ({ path, matches }));
+  return [...groups.values()].map((matches) => ({
+    root: matches[0]?.root ?? "",
+    rootLabel: matches[0]?.rootLabel ?? "",
+    path: matches[0]?.path ?? "",
+    matches,
+  }));
 }
 
 export function SearchResultList({
   groups,
+  showRootLabels,
   activeIndex,
   onActiveIndexChange,
   onOpen,
@@ -88,8 +103,16 @@ export function SearchResultList({
       onKeyDown={onKeyDown}
     >
       {groups.map((group) => (
-        <section className={styles.fileGroup} key={group.path} role="group" aria-label={group.path}>
-          <div className={`${styles.fileHeader} mono`}>{group.path}</div>
+        <section
+          className={styles.fileGroup}
+          key={`${group.root}:${group.path}`}
+          role="group"
+          aria-label={showRootLabels ? `${group.rootLabel}: ${group.path}` : group.path}
+        >
+          <div className={`${styles.fileHeader} mono`}>
+            {showRootLabels ? <span className={styles.rootLabel}>{group.rootLabel}</span> : null}
+            {group.path}
+          </div>
           {group.matches.map((match) => {
             const entry = entries.find((candidate) => candidate.match === match);
             const index = entry?.index ?? 0;

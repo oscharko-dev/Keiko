@@ -1,6 +1,6 @@
 import dynamic from "next/dynamic";
 import { gitObjectId } from "./gitObjectId";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRegenerateResult,
@@ -19,6 +19,9 @@ import {
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
+import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import { workspaceRootTargets } from "../workspaceRootTargets";
+import { BoundRootTarget } from "./BoundRootTarget";
 
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
@@ -222,6 +225,32 @@ export function resolveBoundRoot(
   return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
 }
 
+function BoundRootSurface({
+  ctx,
+  configuredRoot,
+  label,
+  onSelect,
+  children,
+}: {
+  readonly ctx: WindowRenderContext;
+  readonly configuredRoot: string | undefined;
+  readonly label: string;
+  readonly onSelect: (root: string) => void;
+  readonly children: (root: string | undefined) => ReactNode;
+}): ReactNode {
+  return (
+    <BoundRootTarget
+      fallbackRoot={resolveBoundRoot(ctx, configuredRoot)}
+      configuredRoot={configuredRoot}
+      lockedToActiveRoot={ctx.activeBinding !== null}
+      label={label}
+      onSelect={onSelect}
+    >
+      {children}
+    </BoundRootTarget>
+  );
+}
+
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const v = cfg[key];
   return typeof v === "boolean" ? v : undefined;
@@ -301,17 +330,25 @@ registerWindowRender("promptEnhancer", (_cfg, ctx) => (
     connectedRoots={ctx.linkedRoots}
   />
 ));
-function SearchPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+function SearchPanelSessionHost({
+  cfg,
+  ctx,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+}): ReactNode {
   const { activeProject } = useChatSessionContext();
-  return (
-    <SearchPanel
-      root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
-      openEditorFile={ctx.openEditorFile}
-    />
+  const root =
+    ctx.activeRoot ?? str(cfg, "root") ?? ctx.linkedRoot ?? activeProject?.path ?? undefined;
+  const workspace = useWorkspaceManifest(root);
+  const roots = useMemo(
+    () => workspaceRootTargets(root, workspace.manifest),
+    [root, workspace.manifest],
   );
+  return <SearchPanel root={root} roots={roots} openEditorFile={ctx.openEditorFile} />;
 }
 
-registerWindowRender("search", (_cfg, ctx) => <SearchPanelSessionHost ctx={ctx} />);
+registerWindowRender("search", (cfg, ctx) => <SearchPanelSessionHost cfg={cfg} ctx={ctx} />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
 registerWindowRender("mobile", () => <MobilePanel />);
@@ -337,10 +374,31 @@ registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 // Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel; jump-to-line via ctx.openEditorFile.
 registerWindowRender("problems", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "projectPath"));
-  return <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />;
+  const configuredRoot = str(cfg, "projectPath");
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Problems"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(root) => <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />}
+    </BoundRootSurface>
+  );
 });
-registerWindowRender("debug", (cfg, ctx) => <DebugPanelSessionHost cfg={cfg} ctx={ctx} />);
+registerWindowRender("debug", (cfg, ctx) => {
+  const configuredRoot = str(cfg, "projectPath");
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Debug"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(root) => <DebugPanelSessionHost cfg={cfg} ctx={ctx} root={root} />}
+    </BoundRootSurface>
+  );
+});
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow
     cfg={cfg}
@@ -430,27 +488,44 @@ registerWindowRender("docbrowser", (cfg, ctx) => {
   );
 });
 registerWindowRender("terminal", (cfg, ctx) => {
-  // Issue #446 — when a workspace is active the terminal opens in (and resolves commands against) the
-  // active root; the previous workspace cannot leak in as a stale cwd/projectId after a switch (SC3).
-  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
-  const cwd = ctx.activeRoot ?? str(cfg, "cwd");
-  const props: { cwd?: string; projectPath?: string } = {};
-  if (cwd !== undefined) props.cwd = cwd;
-  if (projectPath !== undefined) props.projectPath = projectPath;
-  return <TerminalWidget {...props} />;
+  const configuredRoot = str(cfg, "projectPath");
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Terminal"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root, cwd: root })}
+    >
+      {(root) => {
+        const cwd = root ?? str(cfg, "cwd");
+        const props: { cwd?: string; projectPath?: string } = {};
+        if (cwd !== undefined) props.cwd = cwd;
+        if (root !== undefined) props.projectPath = root;
+        return <TerminalWidget {...props} />;
+      }}
+    </BoundRootSurface>
+  );
 });
 registerWindowRender("commands", (cfg, ctx) => {
-  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
-  const props: { projectPath?: string; onOpenWorkspaceTrust: () => void } = {
-    onOpenWorkspaceTrust: () => {
-      ctx.openWindow("workspaceTrust");
-    },
-  };
-  if (projectPath !== undefined) props.projectPath = projectPath;
-  return <CommandsWidget {...props} />;
+  const configuredRoot = str(cfg, "projectPath");
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Commands"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(root) => (
+        <CommandsWidget
+          {...(root === undefined ? {} : { projectPath: root })}
+          onOpenWorkspaceTrust={() => ctx.openWindow("workspaceTrust")}
+        />
+      )}
+    </BoundRootSurface>
+  );
 });
 registerWindowRender("runtime", (cfg, ctx) => {
-  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const configuredRoot = str(cfg, "projectPath");
   const openWithProject = (
     type: "commands" | "governedGit" | "governedPullRequest" | "governedMerge",
     root: string,
@@ -458,22 +533,34 @@ registerWindowRender("runtime", (cfg, ctx) => {
     ctx.openWindow(type, { projectPath: root });
   };
   return (
-    <RuntimeHubWidget
-      projectPath={projectPath}
-      onProjectPathChange={(nextProjectPath: string) =>
-        ctx.updateCfg({ projectPath: nextProjectPath })
-      }
-      onOpenFiles={(root: string | undefined) => {
-        ctx.openWindow("files", root !== undefined ? { root } : undefined);
-      }}
-      onOpenCommands={(root: string) => openWithProject("commands", root)}
-      onOpenContainers={(root: string | undefined) => {
-        ctx.openWindow("containerStatus", root !== undefined ? { projectPath: root } : undefined);
-      }}
-      onOpenGovernedGit={(root: string) => openWithProject("governedGit", root)}
-      onOpenPullRequest={(root: string) => openWithProject("governedPullRequest", root)}
-      onOpenMerge={(root: string) => openWithProject("governedMerge", root)}
-    />
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Runtime"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(projectPath) => (
+        <RuntimeHubWidget
+          projectPath={projectPath}
+          onProjectPathChange={(nextProjectPath: string) =>
+            ctx.updateCfg({ projectPath: nextProjectPath })
+          }
+          onOpenFiles={(root: string | undefined) => {
+            ctx.openWindow("files", root !== undefined ? { root } : undefined);
+          }}
+          onOpenCommands={(root: string) => openWithProject("commands", root)}
+          onOpenContainers={(root: string | undefined) => {
+            ctx.openWindow(
+              "containerStatus",
+              root !== undefined ? { projectPath: root } : undefined,
+            );
+          }}
+          onOpenGovernedGit={(root: string) => openWithProject("governedGit", root)}
+          onOpenPullRequest={(root: string) => openWithProject("governedPullRequest", root)}
+          onOpenMerge={(root: string) => openWithProject("governedMerge", root)}
+        />
+      )}
+    </BoundRootSurface>
   );
 });
 registerWindowRender("coding", () => <CodingWorkbenchWindow />);
@@ -486,43 +573,81 @@ registerWindowRender("governedGit", (cfg, ctx) => {
   // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so the read surface and the
   // governed PR/merge windows run scoped to the active worktree and can never execute against the
   // previous workspace after a switch.
-  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
   return (
-    <GitClientWindow
-      key={projectId ?? ""}
-      projectId={projectId}
-      initialPath={initialPath}
-      initialCommit={initialCommit}
-      onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
-      onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
-      onOpenEditorFile={ctx.openEditorFile}
-      updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
-    />
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Git"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(projectId) => (
+        <GitClientWindow
+          key={projectId ?? ""}
+          projectId={projectId}
+          initialPath={initialPath}
+          initialCommit={initialCommit}
+          onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
+          onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
+          onOpenEditorFile={ctx.openEditorFile}
+          updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
+        />
+      )}
+    </BoundRootSurface>
   );
 });
 // Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
 // the projectId; the published head branch is carried in cfg from the Publish section.
 registerWindowRender("governedPullRequest", (cfg, ctx) => {
-  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
-  return <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />;
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Pull request"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(projectId) => (
+        <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />
+      )}
+    </BoundRootSurface>
+  );
 });
 // Epic #470, Issue #478 — Governed merge command center. The active project root acts as the projectId;
 // the head branch under review is carried in cfg from the Pull Request section.
 registerWindowRender("governedMerge", (cfg, ctx) => {
-  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
-  return <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />;
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Merge"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(projectId) => <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />}
+    </BoundRootSurface>
+  );
 });
 // Issue #1388 (ADR-0070) — container engine status surface. Always renders: the unavailable state
 // degrades gracefully and never blocks. An optional project path scopes the allowlisted catalog.
 registerWindowRender("containerStatus", (cfg, ctx) => {
-  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
-  const props: { projectPath?: string } = {};
-  if (projectPath !== undefined) props.projectPath = projectPath;
-  return <ContainerStatusWidget {...props} />;
+  const configuredRoot = str(cfg, "projectPath");
+  return (
+    <BoundRootSurface
+      ctx={ctx}
+      configuredRoot={configuredRoot}
+      label="Containers"
+      onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+    >
+      {(projectPath) => (
+        <ContainerStatusWidget {...(projectPath === undefined ? {} : { projectPath })} />
+      )}
+    </BoundRootSurface>
+  );
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.
