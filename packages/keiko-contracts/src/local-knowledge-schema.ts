@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 29 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 30 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -940,6 +940,65 @@ const CREATE_CONNECTOR_ITEM_FINGERPRINTS_SOURCE_INDEX =
 const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
   "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
 
+// Real-working-tree repository Knowledge Pod tables (Issue #2569, ADR-0152 D8). Previously created
+// at runtime by ensurer functions in keiko-local-knowledge (`ensureRunStorage`,
+// `ensureFingerprintStorage`, `ensureRepositoryChunkLineStorage`) outside this ledger — a
+// `CREATE TABLE IF NOT EXISTS` on a read path surfaces a busy/locked store as a pod failure instead
+// of a deterministic migration. Moved into the ledger to match every other table in this schema
+// (see CREATE_HTML_MANUAL_PAGE_FINGERPRINTS for the identical capsule+source-scoped precedent).
+const CREATE_REPOSITORY_POD_RUNS = `
+CREATE TABLE repository_pod_runs (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'partial', 'failed', 'cancelled')),
+  applied INTEGER NOT NULL CHECK (applied IN (0, 1)),
+  added_files INTEGER NOT NULL,
+  changed_files INTEGER NOT NULL,
+  removed_files INTEGER NOT NULL,
+  unchanged_files INTEGER NOT NULL,
+  failed_documents INTEGER NOT NULL,
+  rejected_entries INTEGER NOT NULL,
+  fingerprint_set_digest TEXT NOT NULL,
+  completed_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, source_id, run_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_REPOSITORY_FILE_FINGERPRINTS = `
+CREATE TABLE repository_file_fingerprints (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  fingerprint_kind TEXT NOT NULL CHECK (fingerprint_kind IN ('git-blob-sha1', 'file-state')),
+  byte_length INTEGER NOT NULL,
+  mtime_ms REAL,
+  run_id TEXT NOT NULL,
+  PRIMARY KEY (capsule_id, source_id, relative_path),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// References chunks/documents (not capsules directly); cascades transitively since both parents
+// already cascade capsule deletion onto their own rows.
+const CREATE_REPOSITORY_CHUNK_LINE_RANGES = `
+CREATE TABLE repository_chunk_line_ranges (
+  capsule_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  start_line INTEGER NOT NULL CHECK (start_line >= 1),
+  end_line INTEGER NOT NULL CHECK (end_line >= start_line),
+  document_line_count INTEGER NOT NULL CHECK (document_line_count >= end_line),
+  PRIMARY KEY (capsule_id, chunk_id),
+  FOREIGN KEY (capsule_id, chunk_id) REFERENCES chunks(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
 // Statements must be applied in this exact order: PRAGMA first (so child-table NOT NULL
 // foreign-key constraints are enforced as the rows arrive), then parents before children.
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
@@ -973,6 +1032,9 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_AUDIT_EVENTS,
   CREATE_EXTRACTION_CHECKPOINTS,
   CREATE_DOCUMENT_TEXT_WINDOWS,
+  CREATE_REPOSITORY_POD_RUNS,
+  CREATE_REPOSITORY_FILE_FINGERPRINTS,
+  CREATE_REPOSITORY_CHUNK_LINE_RANGES,
 ] as const;
 
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
@@ -1447,6 +1509,19 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "ALTER TABLE connector_item_fingerprints ADD COLUMN citation_metadata_json TEXT;",
     ],
   },
+  {
+    version: 30,
+    reason:
+      "Bring the real-working-tree repository Knowledge Pod tables (run history, file fingerprint " +
+      "baselines, code-chunk line ranges) into the versioned schema ledger instead of runtime " +
+      "`CREATE TABLE IF NOT EXISTS` ensurers, so a busy or locked store surfaces as a deterministic " +
+      "migration failure rather than a pod read-path failure (Issue #2569, ADR-0152 D8).",
+    up: [
+      CREATE_REPOSITORY_POD_RUNS,
+      CREATE_REPOSITORY_FILE_FINGERPRINTS,
+      CREATE_REPOSITORY_CHUNK_LINE_RANGES,
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -1487,6 +1562,9 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "vector_index_state",
   "chunk_lexical_index",
   "chunk_lexical_fts",
+  "repository_pod_runs",
+  "repository_file_fingerprints",
+  "repository_chunk_line_ranges",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [

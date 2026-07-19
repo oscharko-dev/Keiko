@@ -14,7 +14,6 @@ import {
   type KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { DatabaseSync } from "node:sqlite";
 
 import { isContained, walkSource } from "../discovery/walk.js";
 import type { DiscoveryOptions } from "../discovery/types.js";
@@ -25,22 +24,6 @@ const MAX_GIT_BLOB_FINGERPRINT_BYTES = 64 * 1024 * 1024;
 const GIT_INDEX_HEADER_BYTES = 12;
 const GIT_INDEX_ENTRY_FIXED_BYTES = 62;
 const GIT_INDEX_EXTENDED_FLAG = 0x4000;
-
-const CREATE_FINGERPRINTS_SQL = `
-CREATE TABLE IF NOT EXISTS repository_file_fingerprints (
-  capsule_id TEXT NOT NULL,
-  source_id TEXT NOT NULL,
-  relative_path TEXT NOT NULL,
-  content_fingerprint TEXT NOT NULL,
-  fingerprint_kind TEXT NOT NULL CHECK (fingerprint_kind IN ('git-blob-sha1', 'file-state')),
-  byte_length INTEGER NOT NULL,
-  mtime_ms REAL,
-  run_id TEXT NOT NULL,
-  PRIMARY KEY (capsule_id, source_id, relative_path),
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
-  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
-) STRICT;
-`.trim();
 
 export type RepositoryFingerprintKind = "git-blob-sha1" | "file-state";
 
@@ -259,10 +242,6 @@ export async function scanRepositoryFingerprints(
   };
 }
 
-function ensureFingerprintStorage(db: DatabaseSync): void {
-  db.exec(CREATE_FINGERPRINTS_SQL);
-}
-
 interface StoredFingerprintRow {
   readonly relative_path: string;
   readonly content_fingerprint: string;
@@ -286,7 +265,6 @@ export function readRepositoryFileFingerprints(
   capsuleId: KnowledgeCapsuleId,
   sourceId: KnowledgeSourceId,
 ): ReadonlyMap<string, RepositoryFileFingerprint> {
-  ensureFingerprintStorage(store._internal.db);
   const rows = store._internal.db
     .prepare(
       `SELECT relative_path, content_fingerprint, fingerprint_kind, byte_length, mtime_ms
@@ -310,7 +288,6 @@ export function replaceRepositoryFileFingerprints(
   beforeReplace?: () => void,
 ): void {
   const db = store._internal.db;
-  ensureFingerprintStorage(db);
   const insert = db.prepare(
     `INSERT INTO repository_file_fingerprints (
        capsule_id, source_id, relative_path, content_fingerprint, fingerprint_kind,

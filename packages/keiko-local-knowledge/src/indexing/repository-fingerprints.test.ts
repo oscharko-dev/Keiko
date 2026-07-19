@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { freshStore } from "../_support.js";
 import { memoryFs } from "../discovery/test-support.js";
 import { DEFAULT_DISCOVERY_OPTIONS } from "../discovery/types.js";
 import {
@@ -38,6 +39,22 @@ function gitBlobHash(text: string): string {
     .update(bytes)
     .digest("hex");
 }
+
+describe("repository_file_fingerprints ledger table", () => {
+  it("exists immediately after opening a fresh store, before any fingerprint read/write runs (Issue #2569 ledger migration)", () => {
+    const fresh = freshStore();
+    try {
+      const row = fresh.store._internal.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'repository_file_fingerprints'",
+        )
+        .get() as unknown as { readonly n: number };
+      expect(row.n).toBe(1);
+    } finally {
+      fresh.cleanup();
+    }
+  });
+});
 
 describe("repository fingerprints", () => {
   it("parses bounded Git index v2 entries without launching Git", () => {

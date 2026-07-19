@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
+import { freshStore } from "../_support.js";
 import { buildDocumentLineIndex, repositoryLineRangeForSpan } from "./repository-chunk-lines.js";
+
+describe("repository_chunk_line_ranges ledger table", () => {
+  it("exists immediately after opening a fresh store, before any chunk-line persist/read runs (Issue #2569 ledger migration)", () => {
+    const fresh = freshStore();
+    try {
+      const row = fresh.store._internal.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'repository_chunk_line_ranges'",
+        )
+        .get() as unknown as { readonly n: number };
+      expect(row.n).toBe(1);
+    } finally {
+      fresh.cleanup();
+    }
+  });
+});
 
 describe("repository chunk line mapping", () => {
   it.each([

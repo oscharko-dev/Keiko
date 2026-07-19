@@ -199,6 +199,17 @@ function firstSymbolLine(text: string, start: number, end: number): number | und
   return index < 0 ? undefined : before + index;
 }
 
+describe("repository_pod_runs ledger table", () => {
+  it("exists immediately after opening a fresh store, before any pod call runs (Issue #2569 ledger migration)", () => {
+    const row = store._internal.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'repository_pod_runs'",
+      )
+      .get() as unknown as { readonly n: number };
+    expect(row.n).toBe(1);
+  });
+});
+
 describe("repository pod executable journey", () => {
   it("indexes, resolves path:line, refreshes incrementally, survives cancellation, and removes", async () => {
     createShell();

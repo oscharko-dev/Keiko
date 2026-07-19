@@ -20,7 +20,6 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { DatabaseSync } from "node:sqlite";
 
 import { createCapsule, deleteCapsule, getCapsule } from "./capsule-lifecycle.js";
 import { documentIdFor } from "./discovery/types.js";
@@ -41,27 +40,6 @@ import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
-
-const CREATE_REPOSITORY_RUNS_SQL = `
-CREATE TABLE IF NOT EXISTS repository_pod_runs (
-  capsule_id TEXT NOT NULL,
-  source_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'partial', 'failed', 'cancelled')),
-  applied INTEGER NOT NULL CHECK (applied IN (0, 1)),
-  added_files INTEGER NOT NULL,
-  changed_files INTEGER NOT NULL,
-  removed_files INTEGER NOT NULL,
-  unchanged_files INTEGER NOT NULL,
-  failed_documents INTEGER NOT NULL,
-  rejected_entries INTEGER NOT NULL,
-  fingerprint_set_digest TEXT NOT NULL,
-  completed_at INTEGER NOT NULL,
-  PRIMARY KEY (capsule_id, source_id, run_id),
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
-  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
-) STRICT;
-`.trim();
 
 export interface RepositoryPodDeps {
   readonly store: KnowledgeStore;
@@ -119,10 +97,6 @@ export interface RefreshRepositoryPodInput {
   readonly runId?: string | undefined;
 }
 
-function ensureRunStorage(db: DatabaseSync): void {
-  db.exec(CREATE_REPOSITORY_RUNS_SQL);
-}
-
 function repositoryScope(input: CreateRepositoryPodShellInput): KnowledgeSourceScope {
   if (!isSafeScopePath(input.repositoryRoot)) {
     throw new KnowledgeStoreError("repository root failed the safe-path gate");
@@ -173,7 +147,6 @@ export function createRepositoryPodShell(
     },
     deps.auditSink,
   );
-  ensureRunStorage(deps.store._internal.db);
   return buildSummary(deps.store, deps.capsuleId);
 }
 
@@ -306,7 +279,6 @@ function runCounts(
 }
 
 function persistRun(deps: RepositoryPodDeps, record: RepositoryPodRunRecord): void {
-  ensureRunStorage(deps.store._internal.db);
   deps.store._internal.db
     .prepare(
       `INSERT INTO repository_pod_runs (
@@ -411,7 +383,6 @@ export function listRepositoryPodRuns(
   capsuleId: KnowledgeCapsuleId,
   sourceId: KnowledgeSourceId,
 ): readonly RepositoryPodRunRecord[] {
-  ensureRunStorage(store._internal.db);
   interface Row {
     readonly run_id: string;
     readonly outcome: RepositoryPodRunRecord["outcome"];

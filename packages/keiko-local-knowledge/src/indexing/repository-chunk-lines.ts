@@ -9,20 +9,6 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
 
-const CREATE_LINE_RANGES_SQL = `
-CREATE TABLE IF NOT EXISTS repository_chunk_line_ranges (
-  capsule_id TEXT NOT NULL,
-  chunk_id TEXT NOT NULL,
-  document_id TEXT NOT NULL,
-  start_line INTEGER NOT NULL CHECK (start_line >= 1),
-  end_line INTEGER NOT NULL CHECK (end_line >= start_line),
-  document_line_count INTEGER NOT NULL CHECK (document_line_count >= end_line),
-  PRIMARY KEY (capsule_id, chunk_id),
-  FOREIGN KEY (capsule_id, chunk_id) REFERENCES chunks(capsule_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
-) STRICT;
-`.trim();
-
 const INSERT_LINE_RANGE_SQL = `
 INSERT INTO repository_chunk_line_ranges (
   capsule_id, chunk_id, document_id, start_line, end_line, document_line_count
@@ -94,15 +80,10 @@ interface PersistRepositoryChunkLineRangeInput {
   readonly lineIndex: DocumentLineIndex;
 }
 
-export function ensureRepositoryChunkLineStorage(db: DatabaseSync): void {
-  db.exec(CREATE_LINE_RANGES_SQL);
-}
-
 export function persistRepositoryChunkLineRange(
   db: DatabaseSync,
   input: PersistRepositoryChunkLineRangeInput,
 ): void {
-  ensureRepositoryChunkLineStorage(db);
   const range = repositoryLineRangeForSpan(
     input.lineIndex,
     input.characterStart,
@@ -143,7 +124,6 @@ export function resolveRepositoryChunkLineRange(
   capsuleId: KnowledgeCapsuleId,
   chunkId: ChunkId,
 ): RepositoryChunkLineRange | undefined {
-  ensureRepositoryChunkLineStorage(store._internal.db);
   const row = store._internal.db
     .prepare(
       `SELECT r.chunk_id, r.document_id, d.document_path, r.start_line, r.end_line,
@@ -161,7 +141,6 @@ export function listRepositoryChunkLineRanges(
   capsuleId: KnowledgeCapsuleId,
   documentId?: DocumentId,
 ): readonly RepositoryChunkLineRange[] {
-  ensureRepositoryChunkLineStorage(store._internal.db);
   const whereDocument = documentId === undefined ? "" : " AND r.document_id = :document_id";
   const rows = store._internal.db
     .prepare(
