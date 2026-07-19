@@ -5,10 +5,12 @@
 
 import { bffFetchJson } from "./http";
 import type {
+  CodingWorkbenchMode,
   MemoryId,
   MemoryRecord,
   MemoryScope,
   MemoryScopeKind,
+  MemorySourceKind,
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
@@ -99,6 +101,36 @@ export interface MemoryListFilters {
   readonly offset?: number;
 }
 
+export type MemoryRecentCaptureOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
+
+export interface MemoryRecentCapture {
+  readonly outcome: MemoryRecentCaptureOutcome;
+  readonly scope: MemoryScope;
+  readonly mode?: CodingWorkbenchMode;
+  readonly provenance: {
+    readonly initiatorSurface: string;
+    readonly sourceKind: MemorySourceKind;
+  };
+  readonly occurredAt: number;
+  readonly reason: string;
+  readonly memoryId?: string;
+  readonly bodyExcerpt?: string;
+}
+
+export interface MemoryRecentCapturesResponse {
+  readonly captures: readonly MemoryRecentCapture[];
+  readonly total: number;
+  readonly limit: number;
+  readonly since: number;
+  readonly order: "asc" | "desc";
+}
+
+export interface MemoryRecentCaptureFilters {
+  readonly since?: number;
+  readonly scope?: readonly MemoryScopeKind[];
+  readonly limit?: number;
+}
+
 export interface StartMemoryConsolidationInput {
   readonly jaccardThreshold: number;
   readonly staleConfidenceThreshold: number;
@@ -185,6 +217,21 @@ export async function fetchMemories(
   if (filters.offset !== undefined) params.set("offset", filters.offset.toString());
   const qs = params.toString();
   return fetchImpl(`/api/memory${qs.length > 0 ? `?${qs}` : ""}` as string);
+}
+
+export async function fetchRecentCaptures(
+  filters: MemoryRecentCaptureFilters = {},
+  fetchImpl = fetchJson<MemoryRecentCapturesResponse>,
+): Promise<MemoryRecentCapturesResponse> {
+  const params = new URLSearchParams({
+    since: String(filters.since ?? 0),
+    order: "desc",
+  });
+  if (filters.scope !== undefined && filters.scope.length > 0) {
+    params.set("scope", filters.scope.join(","));
+  }
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+  return fetchImpl(`/api/memory?${params.toString()}`);
 }
 
 export async function fetchMemoryReviewQueue(

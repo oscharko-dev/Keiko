@@ -6,12 +6,18 @@ import type { ReactNode } from "react";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { useConversationMemorySettings } from "@/app/components/desktop/hooks/memorySettings";
 import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
-import type { fetchMemories } from "@/lib/memory-api";
+import type {
+  acceptMemoryProposal,
+  fetchMemories,
+  fetchRecentCaptures,
+  forgetMemory,
+} from "@/lib/memory-api";
 import { useTranslate } from "@/lib/i18n";
 import { HealthScanFindings } from "./HealthScanFindings";
 import { MemoryConsolidation } from "./MemoryConsolidation";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryListContent } from "./MemoryList";
+import { MemoryJournal } from "./MemoryJournal";
 import type { MemoryFilterState } from "./MemoryFilters";
 import { ReviewQueue } from "./ReviewQueue";
 
@@ -19,6 +25,7 @@ type MemoriaVivaWindowView =
   | { readonly kind: "list" }
   | { readonly kind: "detail"; readonly id: string }
   | { readonly kind: "consolidation" }
+  | { readonly kind: "journal" }
   | { readonly kind: "reviewQueue" }
   | { readonly kind: "healthScan" };
 
@@ -121,9 +128,17 @@ function MemoriaVivaRequestSettings(): ReactNode {
 
 interface MemoriaVivaWindowProps {
   readonly fetchMemoriesImpl?: typeof fetchMemories;
+  readonly fetchRecentCapturesImpl?: typeof fetchRecentCaptures;
+  readonly forgetMemoryImpl?: typeof forgetMemory;
+  readonly acceptMemoryProposalImpl?: typeof acceptMemoryProposal;
 }
 
-export function MemoriaVivaWindow({ fetchMemoriesImpl }: MemoriaVivaWindowProps = {}): ReactNode {
+export function MemoriaVivaWindow({
+  fetchMemoriesImpl,
+  fetchRecentCapturesImpl,
+  forgetMemoryImpl,
+  acceptMemoryProposalImpl,
+}: MemoriaVivaWindowProps = {}): ReactNode {
   const [view, setView] = useState<MemoriaVivaWindowView>({ kind: "list" });
   const [filters, setFilters] = useState<MemoryFilterState>(EMPTY_FILTERS);
   const [policyEnabled, setPolicyEnabled] = useState(true);
@@ -146,6 +161,7 @@ export function MemoriaVivaWindow({ fetchMemoriesImpl }: MemoriaVivaWindowProps 
           onOpenConsolidation={() => setView({ kind: "consolidation" })}
           onOpenReviewQueue={() => setView({ kind: "reviewQueue" })}
           onOpenHealthScan={() => setView({ kind: "healthScan" })}
+          onOpenJournal={() => setView({ kind: "journal" })}
           policyEnabled={policyEnabled}
           onPolicyEnabledChange={setPolicyEnabled}
           showWorkspaceBackLink={false}
@@ -154,6 +170,13 @@ export function MemoriaVivaWindow({ fetchMemoriesImpl }: MemoriaVivaWindowProps 
         />
       ) : view.kind === "detail" ? (
         <MemoryDetail id={view.id} onBack={openList} />
+      ) : view.kind === "journal" ? (
+        <MemoryJournal
+          onBack={openList}
+          {...(fetchRecentCapturesImpl === undefined ? {} : { fetchRecentCapturesImpl })}
+          {...(forgetMemoryImpl === undefined ? {} : { forgetMemoryImpl })}
+          {...(acceptMemoryProposalImpl === undefined ? {} : { acceptMemoryProposalImpl })}
+        />
       ) : view.kind === "consolidation" ? (
         <MemoryConsolidation onBack={openList} onOpenDetail={openDetail} />
       ) : view.kind === "reviewQueue" ? (

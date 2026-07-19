@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryListResponse } from "@/lib/memory-api";
+import type { MemoryListResponse, MemoryRecentCapturesResponse } from "@/lib/memory-api";
 import { resetConversationMemorySettingsForTests } from "@/app/components/desktop/hooks/memorySettings";
 import { MemoriaVivaWindow } from "./MemoriaVivaWindow";
 
@@ -11,6 +11,17 @@ function makeListResponse(): MemoryListResponse {
 
 function fetchEmptyMemories() {
   return vi.fn().mockResolvedValue(makeListResponse());
+}
+
+function fetchEmptyCaptures() {
+  const result: MemoryRecentCapturesResponse = {
+    captures: [],
+    total: 0,
+    limit: 50,
+    since: 0,
+    order: "desc",
+  };
+  return vi.fn().mockResolvedValue(result);
 }
 
 beforeEach(() => {
@@ -44,5 +55,22 @@ describe("MemoriaVivaWindow request settings", () => {
 
     await user.click(screen.getByRole("button", { name: "Decrease Memory context budget" }));
     expect(budgetInput).toHaveValue(800);
+  });
+
+  it("opens the Memory Journal inside the existing window and returns to the list", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoriaVivaWindow
+        fetchMemoriesImpl={fetchEmptyMemories()}
+        fetchRecentCapturesImpl={fetchEmptyCaptures()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Journal" }));
+    expect(screen.getByRole("heading", { name: "Memory Journal" })).toBeInTheDocument();
+    expect(await screen.findByTestId("memory-journal-empty")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("heading", { name: "MemoriaViva" })).toBeInTheDocument();
   });
 });

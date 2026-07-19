@@ -82,7 +82,7 @@ const STATUS_COLORS: Readonly<Record<string, string>> = {
 
 // No role="status": these badges are static metadata labels, not live status
 // messages — N rows produced N live regions for screen readers (uiux-fix F005).
-function StatusBadge({
+export function StatusBadge({
   status,
   t,
 }: {
@@ -101,6 +101,28 @@ function formatConfidence(confidence: number, t: I18nTranslate): string {
 // MemoryRow
 // ---------------------------------------------------------------------------
 
+export function MemoryRowScaffold({
+  body,
+  metadata,
+  trailing,
+}: {
+  readonly body: string;
+  readonly metadata: ReactNode;
+  readonly trailing: ReactNode;
+}): ReactNode {
+  return (
+    <>
+      <div className="mc-row-main">
+        <span className="mc-row-body" title={body}>
+          {body}
+        </span>
+        <div className="mc-row-meta">{metadata}</div>
+      </div>
+      {trailing}
+    </>
+  );
+}
+
 function MemoryRow({
   record,
   onOpenDetail,
@@ -110,38 +132,30 @@ function MemoryRow({
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly t: I18nTranslate;
 }): ReactNode {
-  const row = (
+  const metadata = (
     <>
-      <div className="mc-row-main">
-        {/* title: full text on hover — the row body is single-line truncated
-            and otherwise only reachable via the detail view (uiux-fix F035). */}
-        <span className="mc-row-body" title={record.body}>
-          {record.body}
-        </span>
-        <div className="mc-row-meta">
-          <span className="mc-row-type">{typeLabel(record.type, t)}</span>
-          <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
-          <span className="mc-row-source">
-            {t("memoria.sourceMeta", { source: record.provenance.sourceKind })}
-          </span>
-          <span className="mc-row-confidence">
-            {formatConfidence(record.provenance.confidence, t)}
-          </span>
-          <span className="mc-row-sensitivity">
-            {t("memoria.sensitivityMeta", {
-              sensitivity: sensitivityLabel(record.provenance.sensitivity, t),
-            })}
-          </span>
-          {record.pinned ? (
-            // Same badge as the detail page — a bare accent-coloured "P" was
-            // cryptic, failed light-theme contrast (2.41:1), and aria-label on
-            // a generic span is prohibited ARIA (uiux-fix F035).
-            <span className="mc-badge mc-badge-pinned">{t("memoria.pinned")}</span>
-          ) : null}
-        </div>
-      </div>
-      <StatusBadge status={record.status} t={t} />
+      <span className="mc-row-type">{typeLabel(record.type, t)}</span>
+      <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
+      <span className="mc-row-source">
+        {t("memoria.sourceMeta", { source: record.provenance.sourceKind })}
+      </span>
+      <span className="mc-row-confidence">{formatConfidence(record.provenance.confidence, t)}</span>
+      <span className="mc-row-sensitivity">
+        {t("memoria.sensitivityMeta", {
+          sensitivity: sensitivityLabel(record.provenance.sensitivity, t),
+        })}
+      </span>
+      {record.pinned ? (
+        <span className="mc-badge mc-badge-pinned">{t("memoria.pinned")}</span>
+      ) : null}
     </>
+  );
+  const row = (
+    <MemoryRowScaffold
+      body={record.body}
+      metadata={metadata}
+      trailing={<StatusBadge status={record.status} t={t} />}
+    />
   );
 
   return (
@@ -223,6 +237,49 @@ function HeaderActionLink({
 // MemoryListBody
 // ---------------------------------------------------------------------------
 
+export function MemoryListState({
+  loading,
+  hasItems,
+  error,
+  loadingLabel,
+  retryLabel,
+  loadingIsStatus = false,
+  emptyState,
+  onRetry,
+  children,
+}: {
+  readonly loading: boolean;
+  readonly hasItems: boolean;
+  readonly error: string | null;
+  readonly loadingLabel: string;
+  readonly retryLabel: string;
+  readonly loadingIsStatus?: boolean;
+  readonly emptyState: ReactNode;
+  readonly onRetry: () => void;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (loading && !hasItems) {
+    return loadingIsStatus ? (
+      <p role="status" aria-live="polite" className="lk-loading">
+        {loadingLabel}
+      </p>
+    ) : (
+      <p className="lk-loading">{loadingLabel}</p>
+    );
+  }
+  if (error !== null) {
+    return (
+      <div role="alert" aria-live="assertive" className="lk-alert">
+        {error}
+        <button type="button" className="lk-alert-retry" onClick={onRetry}>
+          {retryLabel}
+        </button>
+      </div>
+    );
+  }
+  return hasItems ? children : emptyState;
+}
+
 // The section content is one of four mutually exclusive states — loading,
 // error, empty, or populated. Extracted as early returns (same shape as
 // EmptyState above) instead of a nested ternary chain in MemoryListContent.
@@ -243,50 +300,35 @@ function MemoryListBody({
   readonly onRetry: () => void;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (loading && memories.length === 0) {
-    return (
-      <p role="status" aria-live="polite" className="lk-loading">
-        {t("memoria.loadingMemories")}
-      </p>
-    );
-  }
-
-  if (error !== null) {
-    return (
-      <div role="alert" aria-live="assertive" className="lk-alert">
-        {error}
-        <button type="button" className="lk-alert-retry" onClick={onRetry}>
-          {t("memoria.retry")}
-        </button>
-      </div>
-    );
-  }
-
-  if (memories.length === 0) {
-    return <EmptyState hasFilters={hasFilters} t={t} />;
-  }
-
   return (
-    <ul
-      aria-label={t("memoria.memoryList")}
-      style={{
-        listStyle: "none",
-        padding: 0,
-        margin: 0,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        // Stale-while-revalidate: keep the previous results visible
-        // (dimmed) during a refetch instead of collapsing the list to a
-        // one-line loading message on every filter click (uiux-fix F035).
-        opacity: loading ? 0.6 : 1,
-        transition: "opacity 0.15s ease",
-      }}
+    <MemoryListState
+      loading={loading}
+      hasItems={memories.length > 0}
+      error={error}
+      loadingLabel={t("memoria.loadingMemories")}
+      retryLabel={t("memoria.retry")}
+      loadingIsStatus
+      emptyState={<EmptyState hasFilters={hasFilters} t={t} />}
+      onRetry={onRetry}
     >
-      {memories.map((record) => (
-        <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} t={t} />
-      ))}
-    </ul>
+      <ul
+        aria-label={t("memoria.memoryList")}
+        style={{
+          listStyle: "none",
+          padding: 0,
+          margin: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          opacity: loading ? 0.6 : 1,
+          transition: "opacity 0.15s ease",
+        }}
+      >
+        {memories.map((record) => (
+          <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} t={t} />
+        ))}
+      </ul>
+    </MemoryListState>
   );
 }
 
@@ -335,6 +377,7 @@ export interface MemoryListContentProps {
   readonly onOpenConsolidation?: (() => void) | undefined;
   readonly onOpenReviewQueue?: (() => void) | undefined;
   readonly onOpenHealthScan?: (() => void) | undefined;
+  readonly onOpenJournal?: (() => void) | undefined;
   readonly policyEnabled?: boolean | undefined;
   readonly onPolicyEnabledChange?: ((next: boolean) => void) | undefined;
   readonly showWorkspaceBackLink?: boolean;
@@ -349,6 +392,7 @@ export function MemoryListContent({
   onOpenConsolidation,
   onOpenReviewQueue,
   onOpenHealthScan,
+  onOpenJournal,
   policyEnabled,
   onPolicyEnabledChange,
   showWorkspaceBackLink = true,
@@ -420,6 +464,12 @@ export function MemoryListContent({
               {t("memoria.backToWorkspace")}
             </Link>
           ) : null}
+          <HeaderActionLink
+            href="/memoriaviva/journal"
+            label={t("memoria.journal.open")}
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            onClick={onOpenJournal}
+          />
           <HeaderActionLink
             href="/memoriaviva/consolidation"
             label={t("memoria.consolidation")}
