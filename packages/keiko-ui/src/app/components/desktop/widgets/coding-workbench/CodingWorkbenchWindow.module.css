@@ -41,6 +41,10 @@
     grid-template-columns: 1fr;
   }
 
+  .changesLayout {
+    grid-template-columns: 1fr;
+  }
+
   .button {
     width: 100%;
   }
@@ -68,7 +72,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .timeline {
+  .timeline,
+  .changesFileList,
+  .changesDiff {
     scroll-behavior: auto;
   }
 }
@@ -95,8 +101,20 @@
     box-shadow: none;
   }
 
+  .changesMessage,
+  .changesNotice,
+  .changesFileList,
+  .changesDiff,
+  .changesFileButton {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
   .modeOption[data-selected="true"],
-  .sourceCard[data-selected="true"] {
+  .sourceCard[data-selected="true"],
+  .changesFileButton[aria-pressed="true"] {
     outline: var(--focus-w) solid Highlight;
   }
 

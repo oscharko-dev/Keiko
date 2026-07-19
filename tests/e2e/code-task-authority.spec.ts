@@ -26,7 +26,7 @@
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
@@ -176,6 +176,47 @@ async function proveUnpairedClientReadsNoQuestionText(
   expect(answered.status()).toBe(404);
 }
 
+function worktreeRootForTarget(target: string): string {
+  return AUTHORITY_TARGET_RELATIVE_PATH.split("/").reduce((root) => dirname(root), target);
+}
+
+// #2482 negative step: the generic Git routes resolve the managed worktree and require the same
+// launcher-attested app session before they execute Git. The fresh cookie-less client knows the
+// exact root and path but still receives only schema-valid empty projections.
+async function proveUnpairedClientReadsNoManagedDiff(
+  stranger: APIRequestContext,
+  origin: string,
+  target: string,
+): Promise<void> {
+  const root = worktreeRootForTarget(target);
+  const query = new URLSearchParams({ root, path: AUTHORITY_TARGET_RELATIVE_PATH, scope: "all" });
+  const diff = await stranger.get(`/api/git/diff?${query.toString()}`, { headers: { origin } });
+  expect(diff.status()).toBe(200);
+  expect(await diff.json()).toMatchObject({ available: false, diff: "" });
+
+  const status = await stranger.get(`/api/git/status?${new URLSearchParams({ root }).toString()}`, {
+    headers: { origin },
+  });
+  expect(status.status()).toBe(200);
+  expect(await status.json()).toMatchObject({ available: false, changes: [] });
+}
+
+async function proveRunChangesView(
+  page: Page,
+  stranger: APIRequestContext,
+  target: string,
+): Promise<void> {
+  const changes = page.getByRole("region", { name: "Run changes" });
+  await expect(
+    changes.getByRole("button", { name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u") }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toContainText(
+    AUTHORITY_EDITED_CONTENT.trim(),
+  );
+  await expect(changes.getByText(/^As of [0-9a-f]{7,40}$/u)).toBeVisible();
+  await proveUnpairedClientReadsNoManagedDiff(stranger, new URL(page.url()).origin, target);
+}
+
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the
 // honest re-pair state on the questions surface at the next resync (the pause transition), never
 // a silent empty list — while the content-free run controls keep working without a session.
@@ -193,6 +234,12 @@ async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
+  const changes = page.getByRole("region", { name: "Run changes" });
+  await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
+    timeout: 15_000,
+  });
+  await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toHaveCount(0);
+  await expect(changes).not.toContainText(AUTHORITY_EDITED_CONTENT.trim());
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
 }
@@ -226,6 +273,7 @@ async function proveLiveActivityTimeline(
   const edited = findManagedTargetFiles(managedRoot, 4);
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
+  await proveRunChangesView(page, request, edited[0] ?? "");
 }
 
 // Runs FIRST: this readiness probe asserts the #2476 AC4 setup surface, which only renders while

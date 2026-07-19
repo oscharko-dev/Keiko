@@ -2,11 +2,14 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 
 import {
+  APP_SESSION_GIT_COOKIE_PATH,
   APP_SESSION_COOKIE_NAME,
   clearSessionCookie,
+  clearSessionCookies,
   readSessionCookie,
   requestIsSecure,
   serializeSessionCookie,
+  serializeSessionCookies,
 } from "./sessionCookie.js";
 
 function requestWith(headers: Record<string, string>, encrypted = false): IncomingMessage {
@@ -25,8 +28,6 @@ describe("serializeSessionCookie", () => {
     expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=sess_abc.secret`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
-    // #2478 widened the scope to the coding-workbench surface so the browser presents the session
-    // to the enforced content-bearing runtime routes; it must never widen past that surface.
     expect(cookie).toContain("Path=/api/coding-workbench;");
     expect(cookie).toContain("Max-Age=3600");
     expect(cookie).not.toContain("Secure");
@@ -35,12 +36,29 @@ describe("serializeSessionCookie", () => {
   it("adds Secure over TLS", () => {
     expect(serializeSessionCookie("t", { secure: true, maxAgeSeconds: 10 })).toContain("Secure");
   });
+
+  it("issues the bearer only on the Coding Workbench and Git route families", () => {
+    const cookies = serializeSessionCookies("t", { secure: false, maxAgeSeconds: 10 });
+
+    expect(cookies).toHaveLength(2);
+    expect(cookies[0]).toContain("Path=/api/coding-workbench;");
+    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
+    expect(cookies.join("\n")).not.toContain("Path=/api;");
+  });
 });
 
 describe("clearSessionCookie", () => {
   it("expires the cookie immediately", () => {
     expect(clearSessionCookie(false)).toContain("Max-Age=0");
     expect(clearSessionCookie(false)).toContain("HttpOnly");
+  });
+
+  it("expires both route-family projections", () => {
+    const cookies = clearSessionCookies(false);
+
+    expect(cookies).toHaveLength(2);
+    expect(cookies.every((cookie) => cookie.includes("Max-Age=0"))).toBe(true);
+    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
   });
 });
 

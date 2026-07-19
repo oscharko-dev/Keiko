@@ -209,6 +209,50 @@ contract, and the fragment codec moved to `keiko-contracts` alongside the browse
 channel-carried question payload (`{ session, questions }`, unchanged question bounds), exactly as
 the consequence below scheduled for W1.5.
 
+## W1.9 finalization (Issue #2482)
+
+W1.9 binds the Code-task changes view to the existing generic Git readers and finalizes the
+managed-worktree posture this ADR deliberately deferred.
+
+### F5 — Generic Git reads are session-gated for resolved managed roots
+
+Every generic `/api/git/*` reader keeps its existing behavior for ordinary registered or arbitrary
+repository roots. When the route's **resolved real root** is contained inside Keiko's managed
+task-worktree root, however, it requires the same launcher-attested app session as other
+content-bearing Code surfaces. The check lives once in the shared repository-resolution choke point,
+before Git membership or content is read, so status, raw and structured diffs, history, blame,
+branches, summary, and remotes cannot drift into different postures. Classifying the resolved root
+rather than the query spelling closes trailing-separator, dot-segment, and symlink aliases.
+
+An absent, forged, revoked, expired, or otherwise invalid session receives each route's existing
+schema-valid, content-free unavailable projection: empty changes, empty diff, empty entries, and no
+distinct authentication error. The response does not reveal managed-worktree content or root
+existence. A valid session enables the bounded existing readers; no new Git route, parser, or durable
+content store is introduced.
+
+### F6 — The cookie reaches only the two authenticated API route families
+
+The same session bearer is issued as two host-scoped cookies, one at `/api/coding-workbench` and one
+at `/api/git`. This reaches both authenticated route families without presenting the bearer to their
+broader `/api` ancestor or unrelated BFF routes. `Path` remains browser hygiene, not a security
+boundary. `HttpOnly`, `SameSite=Strict`, loopback host scope, hashed server storage, rotation,
+revocation, and expiry remain unchanged; sign-out clears both browser projections after revoking the
+single server-side session.
+
+### F7 — Run-to-worktree binding stays single-sourced and read-only
+
+The changes view derives its root only from `WorkspaceBinding.activeRoot`, which by contract equals
+`gitDeliveryRoot`, `editorProjectRoot`, and the managed worktree path. It selects only paths returned
+by the bounded status reader and fetches one whole-file diff at a time. Runtime change events trigger
+a debounced refresh; there is no polling loop. Losing the binding immediately clears the view, and an
+unavailable session clears content rather than retaining a stale diff. Durable evidence continues to
+carry counts and digests only.
+
+This is a uniform product content posture, not an operating-system read-authority guarantee: another
+same-user local process can read on-disk worktree files directly. The app session prevents Keiko's
+generic HTTP routes from becoming an unauthenticated content projection; it does not claim to revoke
+local filesystem authority.
+
 ## Consequences
 
 - W1.5 can enforce this authority on the content-bearing routes and migrate the runtime-question

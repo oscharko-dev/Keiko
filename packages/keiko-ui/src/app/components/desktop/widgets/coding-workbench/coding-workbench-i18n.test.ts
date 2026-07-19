@@ -29,6 +29,18 @@ describe("Coding Workbench translations", () => {
     ).toBe("Wird ausgeführt. Revision 7.");
   });
 
+  it("localizes the authenticated run-changes surface", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.changes.asOf", { head: "abc123" })).toBe(
+      "As of abc123",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.changes.asOf", { head: "abc123" })).toBe(
+      "Stand abc123",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.changes.diff.addedLine")).toBe(
+      "Hinzugefügte Zeile",
+    );
+  });
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

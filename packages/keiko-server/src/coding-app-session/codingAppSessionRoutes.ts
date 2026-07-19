@@ -22,10 +22,10 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import {
-  clearSessionCookie,
+  clearSessionCookies,
   readSessionCookie,
   requestIsSecure,
-  serializeSessionCookie,
+  serializeSessionCookies,
 } from "./sessionCookie.js";
 
 // Advisory browser hygiene only; server-side expiry in the registry is the authoritative bound.
@@ -71,14 +71,17 @@ export function readPairingBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function ackResult(headers?: Readonly<Record<string, string>>): RouteResult {
+function ackResult(headers?: RouteResult["headers"]): RouteResult {
   const body = codingAppSessionAcknowledgement();
   return headers ? { status: 200, body, headers } : { status: 200, body };
 }
 
-function issuedCookie(req: IncomingMessage, cookieToken: string): Record<string, string> {
+function issuedCookie(
+  req: IncomingMessage,
+  cookieToken: string,
+): Readonly<Record<string, readonly string[]>> {
   return {
-    "Set-Cookie": serializeSessionCookie(cookieToken, {
+    "Set-Cookie": serializeSessionCookies(cookieToken, {
       secure: requestIsSecure(req),
       maxAgeSeconds: APP_SESSION_COOKIE_MAX_AGE_SECONDS,
     }),
@@ -182,7 +185,7 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
 /** POST /sign-out — revoke the presented session and clear the cookie. */
 export function handleCodingAppSessionSignOut(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req));
-  return ackResult({ "Set-Cookie": clearSessionCookie(requestIsSecure(ctx.req)) });
+  return ackResult({ "Set-Cookie": clearSessionCookies(requestIsSecure(ctx.req)) });
 }
 
 export const CODING_APP_SESSION_ROUTE_GROUP: readonly RouteDefinition[] = [
