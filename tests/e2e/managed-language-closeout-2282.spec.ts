@@ -151,54 +151,11 @@ async function settingsSnapshot(
   return (await response.json()) as SettingsSnapshot;
 }
 
-function baselineConfiguration(
-  language: ConfigurableLanguage,
-  snapshot: SettingsSnapshot,
-): Readonly<Record<string, unknown>> {
-  const common = {
-    schemaVersion: "1",
-    language,
-    revision: snapshot.revision,
-    etag: snapshot.etag,
-    activation: "enabled",
-    runtime: { kind: "operatorApproved", runtimeId: `${language}-lsp` },
-    provenance: { activation: "workspace", runtime: "operatorProvisioning", settings: "workspace" },
-    restartRequired: false,
-    restartFields: [],
-  };
-  if (language === "python") {
-    return {
-      ...common,
-      settings: {
-        interpreter: { kind: "operatorApproved", runtimeId: "python-lsp" },
-        venv: null,
-        typeCheckingMode: "basic",
-        extraPaths: [],
-        configurationPrecedence: ["workspaceConfiguration", "pyproject", "builtInDefault"],
-      },
-    };
-  }
-  return {
-    ...common,
-    settings: {
-      toolchain: { kind: "operatorApproved", runtimeId: "go-lsp" },
-      staticcheck: false,
-      buildTags: [],
-      buildFlags: { moduleMode: "readonly", trimPath: true },
-      target: { goos: "linux", goarch: "amd64", minimumGoVersion: "1.24" },
-      directoryFilters: [],
-      dependencyMode: "offline",
-      moduleDownloads: false,
-    },
-  };
-}
-
 async function mutateSettings(
   request: APIRequestContext,
   root: string,
   language: ConfigurableLanguage,
-  action: "configure" | "restart" | "rollback",
-  configuration?: Readonly<Record<string, unknown>>,
+  action: "rollback",
 ): Promise<void> {
   const snapshot = await settingsSnapshot(request, root);
   idempotencySequence += 1;
@@ -213,25 +170,25 @@ async function mutateSettings(
       language,
       action,
       expectedRevision: snapshot.revision,
-      ...(configuration === undefined ? {} : { configuration }),
     },
   });
   expect(response.status(), await response.text()).toBe(200);
 }
 
-async function seedEditableConfigurations(request: APIRequestContext, root: string): Promise<void> {
-  for (const language of ["python", "go"] as const) {
-    const snapshot = await settingsSnapshot(request, root);
-    await mutateSettings(
-      request,
-      root,
-      language,
-      "configure",
-      baselineConfiguration(language, snapshot),
-    );
-    await mutateSettings(request, root, language, "restart");
-  }
-  await warmCapabilities(request, root);
+async function acceptInitialConfiguration(
+  page: Page,
+  request: APIRequestContext,
+  settings: Locator,
+  root: string,
+  label: ConfigurableLabel,
+): Promise<Locator> {
+  const card = providerCard(settings, label);
+  const save = card.getByRole("button", { name: "Save settings" });
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expectProviderState(card, "restartRequired", "Restart required");
+  await expect(card.getByText(/Restart impact:.*runtime.*settings/u)).toBeVisible();
+  return restartThroughSettings(page, request, settings, root, label);
 }
 
 async function configureAndRestart(
@@ -249,16 +206,20 @@ async function configureAndRestart(
   }
   await card.getByRole("button", { name: "Save settings" }).click();
   await expect(card.getByText(/Restart impact:.*settings/u)).toBeVisible();
-  return restartThroughControl(page, request, root, label);
+  return restartThroughSettings(page, request, settings, root, label);
 }
 
-async function restartThroughControl(
+async function restartThroughSettings(
   page: Page,
   request: APIRequestContext,
+  settings: Locator,
   root: string,
   label: ConfigurableLabel,
 ): Promise<Locator> {
-  await mutateSettings(request, root, label === "Python" ? "python" : "go", "restart");
+  const card = providerCard(settings, label);
+  await card.getByRole("button", { name: `Restart ${label}` }).click();
+  await settings.getByRole("alertdialog").getByRole("button", { name: "Confirm restart" }).click();
+  await expectProviderState(card, "available", "Available");
   await warmCapabilities(request, root);
   const refreshed = await openLanguages(page);
   await expectProviderState(providerCard(refreshed, label), "active", "Active");
@@ -278,9 +239,9 @@ async function configureRollbackAndRestart(
   await mutateSettings(request, root, "python", "rollback");
   const rolledBack = await openLanguages(page);
   await expect(providerCard(rolledBack, "Python").getByLabel("Type-checking mode")).toHaveValue(
-    "basic",
+    "standard",
   );
-  return restartThroughControl(page, request, root, "Python");
+  return restartThroughSettings(page, request, rolledBack, root, "Python");
 }
 
 async function assertSemanticFallback(request: APIRequestContext, root: string): Promise<void> {
@@ -355,11 +316,11 @@ test("Settings drives the governed Python and Go lifecycle through the real BFF"
   await assertDefaultOff(settings);
   await assertBrowserA11y(page);
   settings = await activateProvider(page, request, settings, workspace.root, "Python");
-  await activateProvider(page, request, settings, workspace.root, "Go");
+  settings = await acceptInitialConfiguration(page, request, settings, workspace.root, "Python");
+  settings = await activateProvider(page, request, settings, workspace.root, "Go");
+  settings = await acceptInitialConfiguration(page, request, settings, workspace.root, "Go");
   await executeOperation(request, workspace.root, "python", "diagnostics");
   await executeOperation(request, workspace.root, "go", "definition");
-  await seedEditableConfigurations(request, workspace.root);
-  settings = await openLanguages(page);
   settings = await configureRollbackAndRestart(page, request, settings, workspace.root);
   settings = await configureAndRestart(page, request, settings, workspace.root, "Go");
   await assertSemanticFallback(request, workspace.root);

@@ -12,7 +12,7 @@ Accepted (2026-07-11). Contract foundation for Issue
 
 ## Version
 
-1.4
+1.5
 
 ## Context
 
@@ -300,6 +300,15 @@ language name or static candidate array and never stores managed language state 
 Every mutation carries the current strong ETag, revision, idempotency key, CSRF header, and an abort
 signal. Activation, configuration, deactivation, reset, rollback, and explicit restart update the UI
 only after server acknowledgement and a fresh snapshot read.
+
+The control response also projects one complete, typed `configurationDefaults` entry per managed
+language. These entries carry the current revision and ETag, an operator-approved opaque runtime
+identity, built-in safe settings, and no restart impact. They are server-owned write templates, not
+persisted workspace state, provisioning proof, or negotiated capability evidence. The response
+parser requires exact five-language coverage and the UI may offer an initial configuration write
+only after workspace activation is enabled and policy/provisioning permit it. A submitted template
+still passes the normal CSRF, ETag, revision, idempotency, containment, redaction, and runtime-
+approval checks; the server persists it as a workspace setting and marks the actual restart impact.
 
 An explicit restart is a first-class, evidence-bearing transition. It advances the canonical
 revision, atomically clears acknowledged restart impact in a validated configuration, and disposes

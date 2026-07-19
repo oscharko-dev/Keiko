@@ -6,9 +6,14 @@ import type {
   ManagedLspActivationReasonCode,
   ManagedLspEffectiveState,
   ManagedLspLanguage,
+  ManagedLspRuntimeConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError, type ManagedLspSettingsResponse } from "@/lib/api";
 import { I18nProvider } from "@/lib/i18n";
+import {
+  managedLspTestConfiguration,
+  managedLspTestConfigurationDefaults,
+} from "@/test-utils/managed-lsp-settings-fixture";
 
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
 
@@ -67,29 +72,9 @@ function snapshot(
       },
     ],
     configurations: [
-      {
-        schemaVersion: "1",
-        language: "python",
-        revision: 3,
-        etag: '"lspcfg-3-abcdefghijklmnop"',
-        activation: "enabled",
-        runtime: { kind: "operatorApproved", runtimeId: "python-lsp" },
-        provenance: {
-          activation: "workspace",
-          runtime: "operatorProvisioning",
-          settings: "workspace",
-        },
-        restartRequired: false,
-        restartFields: [],
-        settings: {
-          interpreter: { kind: "operatorApproved", runtimeId: "python-lsp" },
-          venv: null,
-          typeCheckingMode: "standard",
-          extraPaths: [],
-          configurationPrecedence: ["workspaceConfiguration", "pyproject", "builtInDefault"],
-        },
-      },
+      managedLspTestConfiguration("python", "workspace", 3, '"lspcfg-3-abcdefghijklmnop"'),
     ],
+    configurationDefaults: managedLspTestConfigurationDefaults(3, '"lspcfg-3-abcdefghijklmnop"'),
     providerMetadata: [{ language: "python", configurationSource: "pyproject" }],
     health: [
       {
@@ -121,6 +106,85 @@ function snapshot(
         },
       },
     ],
+  };
+}
+
+function initialConfigurationSnapshot(
+  language: ManagedLspLanguage = "python",
+): ManagedLspSettingsResponse & {
+  readonly configurationDefaults: readonly ManagedLspRuntimeConfiguration[];
+} {
+  const current = snapshot("available", "AVAILABLE");
+  return {
+    ...current,
+    languages: [status("available", "AVAILABLE", language)],
+    settings: [
+      {
+        language,
+        workspaceActivation: "enabled",
+        configured: false,
+        restartRequired: false,
+        restartFields: [],
+        provenance: null,
+      },
+    ],
+    configurations: [],
+    configurationDefaults: managedLspTestConfigurationDefaults(3, '"lspcfg-3-abcdefghijklmnop"'),
+    providerMetadata:
+      language === "python" ? [{ language: "python", configurationSource: "pyproject" }] : [],
+    health: [],
+  };
+}
+
+function configuredLanguageSnapshot(
+  language: ManagedLspLanguage,
+  state: ManagedLspEffectiveState,
+  reason: ManagedLspActivationReasonCode,
+): ManagedLspSettingsResponse {
+  const current = snapshot(state, reason);
+  return {
+    ...current,
+    languages: [status(state, reason, language)],
+    settings: [
+      {
+        language,
+        workspaceActivation: "enabled",
+        configured: true,
+        restartRequired: state === "restartRequired",
+        restartFields: state === "restartRequired" ? ["runtime", "settings"] : [],
+        provenance: {
+          activation: "workspace",
+          runtime: "operatorProvisioning",
+          settings: "workspace",
+        },
+      },
+    ],
+    configurations: [
+      managedLspTestConfiguration(language, "workspace", 3, '"lspcfg-3-abcdefghijklmnop"'),
+    ],
+    configurationDefaults: managedLspTestConfigurationDefaults(3, '"lspcfg-3-abcdefghijklmnop"'),
+    providerMetadata:
+      language === "python" ? [{ language: "python", configurationSource: "pyproject" }] : [],
+    health: [],
+  };
+}
+
+function inactiveSnapshot(): ManagedLspSettingsResponse {
+  const current = snapshot("disabled", "WORKSPACE_ACTIVATION_UNSET");
+  return {
+    ...current,
+    settings: [
+      {
+        language: "python",
+        workspaceActivation: "unset",
+        configured: false,
+        restartRequired: false,
+        restartFields: [],
+        provenance: null,
+      },
+    ],
+    configurations: [],
+    health: [],
   };
 }
 
@@ -162,6 +226,7 @@ describe("ManagedLanguageSettings", () => {
     renderSettings();
     await screen.findByText("Disabled by policy");
     expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
@@ -170,6 +235,7 @@ describe("ManagedLanguageSettings", () => {
     renderSettings();
     await screen.findByText("Not provisioned");
     expect(screen.queryByRole("button", { name: "Enable Python" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
     expect(mutateSettingsMock).not.toHaveBeenCalled();
   });
 
@@ -238,6 +304,117 @@ describe("ManagedLanguageSettings", () => {
     expect(screen.getByText(/detected project configuration: pyproject/i)).toBeInTheDocument();
   });
 
+  it.each([
+    ["python", "Python"],
+    ["go", "Go"],
+    ["shell", "Shell"],
+    ["java", "Java"],
+    ["rust", "Rust"],
+  ] as const)(
+    "accepts the server-owned initial %s configuration without inventing browser runtime identities",
+    async (language, _label): Promise<void> => {
+      fetchSettingsMock
+        .mockResolvedValueOnce(initialConfigurationSnapshot(language))
+        .mockResolvedValueOnce(
+          configuredLanguageSnapshot(language, "restartRequired", "RESTART_REQUIRED"),
+        );
+      mutateSettingsMock.mockResolvedValue(undefined);
+      renderSettings(`/workspace/initial-${language}`);
+
+      const save = await screen.findByRole("button", { name: "Save settings" });
+      expect(save).toBeEnabled();
+      fireEvent.click(save);
+
+      await screen.findByText("Restart required");
+      expect(mutateSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "configure",
+          configuration: expect.objectContaining({
+            language,
+            runtime: { kind: "operatorApproved", runtimeId: `${language}-lsp` },
+            provenance: {
+              activation: "workspace",
+              runtime: "operatorProvisioning",
+              settings: "workspace",
+            },
+          }),
+        }),
+        expect.any(String),
+        expect.any(String),
+        expect.any(AbortSignal),
+      );
+    },
+  );
+
+  it.each(["python", "go", "shell", "java", "rust"] as const)(
+    "preserves the initial %s configuration intent across a stale revision",
+    async (language): Promise<void> => {
+      fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot(language));
+      mutateSettingsMock.mockRejectedValue(new ApiError("STALE_REVISION", "stale", 412));
+      renderSettings(`/workspace/initial-stale-${language}`);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Save settings" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/changed on the server/i);
+      expect(screen.getByRole("button", { name: "Save settings" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /retry requested change/i })).toBeInTheDocument();
+    },
+  );
+
+  it("blocks an invalid initial Rust target before any mutation", async (): Promise<void> => {
+    fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("rust"));
+    renderSettings("/workspace/initial-invalid-rust");
+
+    const target = await screen.findByRole("textbox", { name: "Rust target triple" });
+    fireEvent.change(target, { target: { value: "-unapproved" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/use an empty target/i);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled();
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks incompatible initial Java source and target levels before any mutation", async (): Promise<void> => {
+    fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("java"));
+    renderSettings("/workspace/initial-invalid-java");
+
+    const source = await screen.findByRole("combobox", { name: "Java source level" });
+    const target = screen.getByRole("combobox", { name: "Java target level" });
+    fireEvent.change(source, { target: { value: "25" } });
+    fireEvent.change(target, { target: { value: "17" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/source level cannot be newer/i);
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeDisabled();
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale configured draft when accepting a server-owned initial default", async (): Promise<void> => {
+    const root = "/workspace/stale-initial-draft";
+    fetchSettingsMock.mockResolvedValue(snapshot());
+    const configured = renderSettings(root);
+    const configuredMode = await screen.findByRole("combobox", { name: "Type-checking mode" });
+    fireEvent.change(configuredMode, { target: { value: "strict" } });
+    expect(configuredMode).toHaveValue("strict");
+    configured.unmount();
+
+    fetchSettingsMock.mockResolvedValue(initialConfigurationSnapshot("python"));
+    mutateSettingsMock.mockResolvedValue(undefined);
+    renderSettings(root);
+
+    const initialMode = await screen.findByRole("combobox", { name: "Type-checking mode" });
+    expect(initialMode).toHaveValue("standard");
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(mutateSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuration: expect.objectContaining({
+          settings: expect.objectContaining({ typeCheckingMode: "standard" }),
+        }),
+      }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("does not show a false active state before the server acknowledges activation", async () => {
     let acknowledge: (() => void) | undefined;
     mutateSettingsMock.mockReturnValue(
@@ -246,11 +423,11 @@ describe("ManagedLanguageSettings", () => {
       }),
     );
     fetchSettingsMock
-      .mockResolvedValueOnce(snapshot("available", "AVAILABLE"))
+      .mockResolvedValueOnce(inactiveSnapshot())
       .mockResolvedValueOnce(snapshot("active", "ACTIVE"));
     renderSettings();
     fireEvent.click(await screen.findByRole("button", { name: "Enable Python" }));
-    expect(screen.getByText("Available")).toBeInTheDocument();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
     expect(screen.queryByText("Active")).toBeNull();
     acknowledge?.();
     expect(await screen.findByText("Active")).toBeInTheDocument();
@@ -275,14 +452,14 @@ describe("ManagedLanguageSettings", () => {
   });
 
   it("reloads a stale revision while preserving the requested action for retry", async () => {
-    fetchSettingsMock.mockResolvedValue(snapshot("available", "AVAILABLE"));
+    fetchSettingsMock.mockResolvedValue(inactiveSnapshot());
     mutateSettingsMock.mockRejectedValue(new ApiError("STALE_REVISION", "stale", 412));
     const { container } = renderSettings();
     fireEvent.click(await screen.findByRole("button", { name: "Enable Python" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/changed on the server/i);
     expect(screen.getByRole("button", { name: /retry requested change/i })).toBeInTheDocument();
-    expect(screen.getByText("Available")).toBeInTheDocument();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 

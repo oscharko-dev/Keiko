@@ -43,27 +43,26 @@ The browser test drives this sequence:
 3. Prove Python, Go, Shell, Java, and Rust are default-off and expose text states rather than
    color-only status.
 4. Focus **Enable Python** and **Enable Go** and activate each with the keyboard.
-5. Warm the real capabilities route and prove `active`, `READY`, and live negotiated operations.
-6. Execute Python diagnostics and Go definition through `POST /api/editor/language` and real stdio.
-7. Change Python type checking in Settings, save, observe the visible restart impact, roll it back
+5. Accept each server-owned typed default in Settings, observe the precise `runtime` + `settings`
+   restart impact, and complete the guarded targeted restart from the visible Settings action.
+6. Warm the real capabilities route and prove `active`, `READY`, and live negotiated operations.
+7. Execute Python diagnostics and Go definition through `POST /api/editor/language` and real stdio.
+8. Change Python type checking in Settings, save, observe the visible `settings` restart impact, roll it back
    through the real control route, confirm the rolled-back value in Settings, restart through the
    real revision/ETag-protected control route, and negotiate the restored generation.
-8. Change Go static analysis in Settings, save, observe the visible restart impact, restart through
+9. Change Go static analysis in Settings, save, observe the visible `settings` restart impact, restart through
    the same real control route, and negotiate the changed generation.
-9. Request Rust semantic tokens while Rust is disabled and prove the bounded
-   `{ "schemaVersion": "1", "supported": false }` fallback.
-10. Run real-browser axe against the populated Settings window and attach a deterministic visual
+10. Request Rust semantic tokens while Rust is disabled and prove the bounded
+    `{ "schemaVersion": "1", "supported": false }` fallback.
+11. Run real-browser axe against the populated Settings window and attach a deterministic visual
     evidence image to the Playwright result.
-11. Disable Python and Go from Settings and prove subsequent operations fail with
+12. Disable Python and Go from Settings and prove subsequent operations fail with
     `UNSUPPORTED_LANGUAGE`; no in-process or stale-provider fallback serves them.
 
-The test uses the real control route to install a bounded baseline Python/Go configuration before it
-edits that configuration in Settings. This is explicit test setup, not a route stub. Closeout found
-that first activation does not create a runtime-configuration record and the UI only renders its
-editor for an existing record. It also found that the live projection currently resolves
-`restartRequired` to `available`, hiding the UI restart action even though Settings displays the
-restart impact. Product follow-ups #2534 and #2535 own those two experiences; Issue #2282 is
-verification-only and must not patch product source inline.
+The test does not seed runtime configuration through an API shortcut. It proves the complete local-human
+product path: workspace activation exposes one strict server-owned typed default, Settings persists it
+through the revision/ETag/idempotency guards, the disposed pool remains visibly `restartRequired`, and
+only the explicit targeted restart creates and negotiates the next provider generation.
 
 If Chromium cannot launch because of a host sandbox, kernel policy, missing browser artifact, or
 display restriction, the browser lane is not green. Record the exact platform failure and rerun the

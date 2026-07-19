@@ -1,24 +1,24 @@
 # Epic 2094 managed language intelligence regression evidence
 
-Evidence refreshed: 2026-07-18. The local Issue #2282 implementation is based on
-`dev@1325bf1321f15956afd08d7988bae3e24e6c8387` with Node 24.18.0 and npm 11.16.0.
-The real-browser, controlled Linux orchestration, Linux-authoritative editor-evidence, and complete
-local aggregate lanes are green. Exact-head protected-check receipts remain mandatory before
-closure.
+Evidence refreshed: 2026-07-19. The final Epic #2094 audit is based on
+`dev@e1a1b0e911cf8f133f7b3db5a7cca8c4a43feaae` with Node 24.18.0 and npm 11.16.0.
+The focused closeout, real-browser, controlled orchestration, and Linux-authoritative
+editor-evidence lanes are green. The final no-cache aggregate runs on the refreshed evidence commit;
+exact-head protected-check receipts remain mandatory before closure.
 
 ## Current closeout status
 
 | Evidence                         | Current disposition                                                                                                                                                    |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Failure-first guard              | **PASS** — the new guard failed 4/4 before implementation: incomplete suite collection, missing browser proof, missing matrix/p50 evidence, and stale setup/M5 claims. |
-| Focused closeout                 | **PASS** — 52 files and 642 tests passed; 5 optional real-provider files/tests skipped. UI continuation: 2 files and 102 tests passed.                                 |
+| Focused closeout                 | **PASS** — 53 files and 656 tests passed; 5 optional real-provider files/tests skipped. UI continuation: 2 files and 115 tests passed.                                 |
 | Provider-operation-state matrix  | **PASS** — 5 tests, including all 675 cells and fail-closed disposition invariants.                                                                                    |
 | Measurement harness unit tests   | **PASS** — 5 tests cover percentiles, recursive disk bytes and error paths, all budget dispositions, controlled enforcement, and five provider profiles.               |
 | Controlled orchestration         | **PASS** — `linux-arm64`, enforced wall-clock/RSS budgets, five isolated provider profiles, and zero residual disk bytes.                                              |
-| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 32.4 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
-| Linux editor release evidence    | **PASS** — fresh production export: 307 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
-| D12 paired editor evidence       | **PASS** — independent validation reports fresh Linux-authoritative evidence at `1e7d0742a095dd37fde6ab77885e6f58ee79fed3`, with all budgets inside their limits.      |
-| Aggregate gate                   | **PASS** — `npm run agent:pre-pr -- --no-cache` completed with 27 passed steps, zero failures, and 3 documented non-Linux platform skips.                              |
+| Real Settings/BFF/LSP Playwright | **PASS** — 1/1 in 26.8 s through the real UI/BFF/stdio path; zero serious/critical axe violations and a preserved populated-state PNG attachment.                      |
+| Linux editor release evidence    | **PASS** — fresh production export: 309 static files; B1 0/0 markers, B2 1,152.6/2,560 KiB, B3 103.7/750 KiB.                                                          |
+| D12 paired editor evidence       | **PASS** — six orchestrated runs independently validate every budget at candidate `ba9b69bb95881c673c6791f13e7f7362f324eb7e`.                                          |
+| Aggregate gate                   | **PENDING** — the final no-cache aggregate runs after this refreshed evidence is committed; the preceding complete run passed 28 steps with 3 platform skips.          |
 
 The local receipt does not replace the required protected checks on the pushed exact head.
 
@@ -35,6 +35,18 @@ Tests       4 failed (4)
 The failures independently proved the four closeout gaps. The retained test now requires complete
 LSP directory collection, the Issue #2282 Playwright config/spec, 675-cell and dual-percentile
 documentation, Node/npm lockfile setup, and a current M5 disposition.
+
+Pull-request review then exposed two additional regressions with failure-first tests:
+
+```text
+managedLspControl.test.ts: expected an identical configuration to return ok; received invalid
+ManagedLanguageSettings.test.tsx: expected server default "standard"; received stale draft "strict"
+```
+
+The control layer now records an identical configuration as an idempotent no-op without revision or
+pool churn, while preserving the existing restart state. The Settings editor now gives a newly
+server-owned initial default precedence over any module-cached configured draft. The focused
+regressions pass 27/27 server tests and 38/38 UI tests after the fixes.
 
 ## Provider-operation-state matrix
 
@@ -100,16 +112,16 @@ The spec covers:
 - populated-state real-browser axe and attached visual evidence;
 - deactivation and typed no-fallback operation failure.
 
-The exact Playwright command passed 1/1 in 32.4 seconds. axe reported no serious or critical
+The exact Playwright command passed 1/1 in 26.8 seconds. axe reported no serious or critical
 violations. The preserved `managed-language-closeout-active.png` attachment has SHA-256
-`4554ed9eac369e1f167ca9a232d45d5734317ec106e458e826088e860390e9ba` and shows Python and Go
+`11d89fa08ce5c82eaf0bfcc7d29cdb100640cc8937bb074145a2076fd006f3f5` and shows Python and Go
 active/ready with their rolled-back and changed configuration values.
 
-The browser fixture seeds initial typed Python/Go configurations through the real BFF because the
-current Settings surface cannot create the first record after activation. Follow-up #2534 owns that
-product defect. Settings does expose the restart impact after an edit, but the live projection hides
-the restart action by resolving the provider back to `available`; #2535 owns that second defect. The
-test therefore performs restart and rollback through the real guarded BFF route rather than a stub.
+The browser fixture does not seed initial configurations through an API shortcut. After activation,
+the strict control response supplies complete safe typed defaults for all five languages. Settings
+persists the selected default through the normal revision/ETag/idempotency guards, shows the precise
+restart fields, and exposes the targeted restart while the intentionally disposed pool has no health
+sample. The test performs restart and rollback through the same real guarded BFF route used by the UI.
 
 ## Per-provider orchestration measurements
 
@@ -179,11 +191,6 @@ gate, or evidence fingerprint may be lowered to obtain a pass.
   download was attempted.
 - Provider-native indexing latency/RSS varies by real workspace and is not claimed by the fake
   orchestration harness.
-- Settings cannot create the first typed runtime-configuration record after activation; #2534 owns
-  the product fix. The closeout fixture uses the real BFF to establish this explicit precondition.
-- The live projection hides the restart action after a configuration mutation; #2535 owns the
-  product fix. The browser proof still verifies visible restart impact and the real guarded restart
-  route.
 - Rust remains the first semantic-token provider; Python, Go, Java, and Shell retain syntax
   highlighting until separately reviewed mappings exist.
 - The two M5 conflict-UX findings were resolved in `94fa38d42c9b9ec62e72b0464e30b5a526865bde`:

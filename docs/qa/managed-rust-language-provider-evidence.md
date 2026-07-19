@@ -53,7 +53,7 @@ authority source.
 Run the hermetic profile after the Rust provider implementation and tests are present:
 
 ```bash
-npm exec vitest -- run packages/keiko-contracts/src/managed-lsp-runtime.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.security.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.conformance.test.ts packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts packages/keiko-server/src/editor/lsp/lspJsonRpcClient.test.ts packages/keiko-server/src/editor/lsp/lspProcessManager.test.ts packages/keiko-server/src/editor/lsp/lspSecurity.test.ts
+npm exec vitest -- run packages/keiko-contracts/src/managed-lsp-runtime.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.test.ts packages/keiko-server/src/editor/lsp/providers/rustProvider.conformance.test.ts packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts packages/keiko-server/src/editor/lsp/lspJsonRpcClient.test.ts packages/keiko-server/src/editor/lsp/lspProcessManager.test.ts packages/keiko-server/src/editor/lsp/lspSecurity.test.ts
 ```
 
 Passing documentation checks alone does not establish this profile. Release acceptance requires
