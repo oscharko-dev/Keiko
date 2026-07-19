@@ -250,6 +250,32 @@ describe("OpenCode safe-activity normalization", () => {
     expect(serialized).not.toContain('"tool"');
   });
 
+  it("maps every closed upstream todo status onto the projected plan vocabulary", () => {
+    const todos = [
+      { content: "a", status: "pending", priority: "low" },
+      { content: "b", status: "in_progress", priority: "low" },
+      { content: "c", status: "completed", priority: "low" },
+      { content: "d", status: "cancelled", priority: "low" },
+    ];
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: planToolPart(completedPlanState(todos)),
+        time: 1_721_323_200_002,
+      }),
+    ]);
+    expect(normalized.dropped).toBe(0);
+    expect(normalized.signals[0]?.signal).toMatchObject({
+      kind: "plan",
+      steps: [
+        { text: "a", state: "pending" },
+        { text: "b", state: "active" },
+        { text: "c", state: "completed" },
+        { text: "d", state: "cancelled" },
+      ],
+    });
+  });
+
   it("fails the whole plan update closed on malformed todo items", () => {
     const malformedStates: Record<string, unknown>[] = [
       { ...completedPlanState([{ content: "x", status: "pending", priority: "low" }]), input: {} },

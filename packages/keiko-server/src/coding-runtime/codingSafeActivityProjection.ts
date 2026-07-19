@@ -593,9 +593,10 @@ function applyPlan(
       plan.truncated = true;
       continue;
     }
-    const characters = boundedCharacters(cleaned, limits.maxPlanStepChars);
-    const text = characters.join("");
-    plan.steps.push({ text, state: step.state, truncated: text !== cleaned });
+    const text = boundedCharacters(cleaned, limits.maxPlanStepChars).join("");
+    const truncated = text !== cleaned;
+    if (truncated) plan.truncated = true;
+    plan.steps.push({ text, state: step.state, truncated });
   }
   shrinkPlan(plan, limits.maxPlanBytes);
   entry.feed.plan = plan;

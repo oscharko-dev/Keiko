@@ -618,6 +618,22 @@ describe("bounded coding safe-activity projection", () => {
     });
   });
 
+  it("publishes a clipped over-long step instead of dropping the whole plan update", () => {
+    const projection = openProjection();
+    expect(
+      projection.ingest(RUN_ID, planSignal([{ text: "y".repeat(300), state: "pending" }])),
+    ).toBe(true);
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available" || feed.plan === undefined) {
+      throw new Error("expected an available feed with a plan");
+    }
+    expect(feed.plan.steps).toHaveLength(1);
+    expect(feed.plan.steps[0]?.text.length).toBeLessThanOrEqual(256);
+    expect(feed.plan.steps[0]?.truncated).toBe(true);
+    expect(feed.plan.truncated).toBe(true);
+    expect(feed.droppedEventCount).toBe(0);
+  });
+
   it("rejects malformed plan signals without mutating the published plan", () => {
     const projection = openProjection();
     expect(projection.ingest(RUN_ID, planSignal([{ text: "Keep", state: "completed" }]))).toBe(
