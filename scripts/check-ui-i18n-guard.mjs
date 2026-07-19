@@ -92,6 +92,23 @@ const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+'|`[^`]+`)/u;
 
 const FEATURE_CATALOG_EN_PATTERN = /-i18n\.en\.ts$/u;
 const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
+// The split-file convention above has exactly one instance (the Coding Workbench boundary). The
+// dominant convention in this package is a SINGLE `*-i18n.ts` carrying both language maps, which
+// this guard could not see: a feature using it was told to update the shared catalogs its component
+// never reads. The requirement is unchanged — English and German must land together — so a
+// single-file catalog satisfies it only when both maps are present AND expose identical keys, which
+// `singleFileCatalogParityProblems` enforces exactly as the split-file parity check does.
+const FEATURE_CATALOG_SINGLE_PATTERN = /-i18n\.ts$/u;
+const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
+
+export function changedSingleFileFeatureCatalogs(changedFileSet) {
+  return [...changedFileSet]
+    .filter(
+      (file) =>
+        file.startsWith("packages/keiko-ui/src/") && FEATURE_CATALOG_SINGLE_PATTERN.test(file),
+    )
+    .sort((left, right) => left.localeCompare(right));
+}
 
 export function changedFeatureCatalogPairs(changedFileSet) {
   const pairs = [];
@@ -125,10 +142,11 @@ export function unpairedFeatureCatalogs(changedFileSet) {
 // the English and German halves change together.
 function catalogUpdateProblems(changedFileSet) {
   const featureCatalogPairs = changedFeatureCatalogPairs(changedFileSet);
+  const singleFileCatalogs = changedSingleFileFeatureCatalogs(changedFileSet);
   const sharedCatalogsTouched = changedFileSet.has(EN_CATALOG) && changedFileSet.has(DE_CATALOG);
   const problems = [];
-  if (sharedCatalogsTouched || featureCatalogPairs.length > 0) {
-    return { problems, featureCatalogPairs };
+  if (sharedCatalogsTouched || featureCatalogPairs.length > 0 || singleFileCatalogs.length > 0) {
+    return { problems, featureCatalogPairs, singleFileCatalogs };
   }
   for (const catalog of [EN_CATALOG, DE_CATALOG]) {
     if (!changedFileSet.has(catalog)) {
@@ -142,7 +160,39 @@ function catalogUpdateProblems(changedFileSet) {
       `Feature i18n catalog ${file} changed without its language counterpart. Update the English and German halves together.`,
     );
   }
-  return { problems, featureCatalogPairs };
+  return { problems, featureCatalogPairs, singleFileCatalogs };
+}
+
+// The split-file parity check compares two files; here both halves live in one file, so the same
+// guarantee needs the maps sliced apart before their key sets are compared. Without this, a
+// single-file catalog would satisfy the update requirement while carrying English-only additions —
+// which would make this guard weaker for the convention most of the package actually uses.
+function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
+  const problems = [];
+  for (const file of singleFileCatalogs) {
+    const source = readText(repoRoot, file);
+    const boundaries = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+    const english = boundaries.find((match) => match[1] === "EN");
+    const german = boundaries.find((match) => match[1] === "DE");
+    if (english?.index === undefined || german?.index === undefined) {
+      problems.push(
+        `Feature i18n catalog ${file} must declare both an English and a German message map.`,
+      );
+      continue;
+    }
+    const [first, second] =
+      english.index < german.index ? [english.index, german.index] : [german.index, english.index];
+    const mismatches = symmetricDifference(
+      extractCatalogKeys(source.slice(first, second)),
+      extractCatalogKeys(source.slice(second)),
+    );
+    if (mismatches.length > 0) {
+      problems.push(
+        `Feature i18n catalog ${file} must expose the same keys in English and German. Mismatched keys: ${mismatches.join(", ")}.`,
+      );
+    }
+  }
+  return problems;
 }
 
 function featureCatalogParityProblems(repoRoot, featureCatalogPairs) {
@@ -565,6 +615,9 @@ export function checkUiI18nGuard({
   }
 
   problems.push(...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs));
+  problems.push(
+    ...singleFileCatalogParityProblems(repoRoot, catalogRequirement.singleFileCatalogs ?? []),
+  );
 
   return {
     ok: problems.length === 0,

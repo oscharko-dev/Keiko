@@ -304,6 +304,91 @@ test("fails UI source changes that do not update both catalogs", async () => {
   );
 });
 
+// The split-file `*-i18n.en.ts` / `*-i18n.de.ts` convention has one instance in this package; the
+// dominant one is a single `*-i18n.ts` holding both language maps, which the guard used to miss —
+// it told such a feature to update shared catalogs its component never reads. These pin that the
+// single-file form satisfies the requirement WITHOUT weakening the English-and-German guarantee.
+const SINGLE_FILE_CATALOG = "packages/keiko-ui/src/app/feature/feature-i18n.ts";
+const SINGLE_FILE_UI = "packages/keiko-ui/src/app/feature/Feature.tsx";
+const SINGLE_FILE_SOURCE =
+  'import { useTranslate } from "@/lib/i18n";\n' +
+  'export function Feature() { const t = useTranslate(); return <p>{t("feature.title")}</p>; }\n';
+
+function singleFileCatalog(englishKeys, germanKeys) {
+  const render = (entries) =>
+    Object.entries(entries)
+      .map(([key, value]) => `  "${key}": "${value}",`)
+      .join("\n");
+  return (
+    `const FEATURE_EN_MESSAGES = {\n${render(englishKeys)}\n} as const;\n\n` +
+    `const FEATURE_DE_MESSAGES = {\n${render(germanKeys)}\n} as const;\n`
+  );
+}
+
+test("accepts a single-file feature catalog carrying both language maps", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SINGLE_FILE_CATALOG]: singleFileCatalog(
+        { "feature.title": "Title" },
+        { "feature.title": "Titel" },
+      ),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SINGLE_FILE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("fails a single-file feature catalog whose German half is missing a key", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SINGLE_FILE_CATALOG]: singleFileCatalog(
+        { "feature.title": "Title", "feature.subtitle": "Subtitle" },
+        { "feature.title": "Titel" },
+      ),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SINGLE_FILE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.subtitle/);
+    },
+  );
+});
+
+test("fails a single-file feature catalog that declares only one language map", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SINGLE_FILE_CATALOG]:
+        'const FEATURE_EN_MESSAGES = {\n  "feature.title": "Title",\n} as const;\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SINGLE_FILE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/both an English and a German message map/);
+    },
+  );
+});
+
 test("fails UI source changes that only import the i18n module", async () => {
   await withFixture(
     {
