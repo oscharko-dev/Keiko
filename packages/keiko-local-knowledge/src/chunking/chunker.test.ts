@@ -57,6 +57,24 @@ describe("chunkParsedUnit — pure", () => {
     expect(proseChunks[0]?.characterEnd).toBeGreaterThan(codeChunks[0]?.characterEnd ?? 0);
   });
 
+  // `chooseChunkEnd` runs the symbol probe over every line of a code unit, inside the caller's
+  // open BEGIN/COMMIT transaction. A quadratic symbol pattern therefore did not just slow the
+  // parser down, it held a write transaction open for the same tens of seconds. The probe is now
+  // bounded per line, so a hostile long-space code unit chunks in ordinary time.
+  it("chunks a hostile long-space code unit in bounded time", () => {
+    const hostile = `a${" ".repeat(60_000)}b`;
+    const text = [hostile, "function alpha() { return 1; }", hostile, hostile].join("\n");
+    const startedAt = Date.now();
+    const chunks = chunkParsedUnit(
+      pageUnit(0, text.length),
+      text,
+      { maxTokens: 4_000, minTokens: 0, overlapTokens: 0, tokenEstimator: (v) => v.length },
+      { parserId: CODE_PARSER_ID },
+    );
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
   it("keeps prose chunk boundaries byte-identical without code-parser provenance", () => {
     const text = "First sentence. Second sentence.\nThird line.\nFourth line.";
     const options = { maxTokens: 8, minTokens: 0, overlapTokens: 0 };
@@ -291,7 +309,10 @@ describe("chunkParsedUnit — pure", () => {
     const start = Date.now();
     const chunks = chunkParsedUnit(unit, text, { maxTokens: 2048, minTokens: 1, overlapTokens: 0 });
     const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1_000);
+    // Budget widened 1_000 -> 3_000: the 1s ceiling flaked on a loaded box (observed 1.1s-1.8s on
+    // an unmodified tree). The guard is unaffected — the quadratic form this pins costs orders of
+    // magnitude more than 3s over a 300k-character whitespace run, so the two remain far apart.
+    expect(elapsedMs).toBeLessThan(3_000);
     expect(chunks.length).toBeGreaterThan(1);
   });
 

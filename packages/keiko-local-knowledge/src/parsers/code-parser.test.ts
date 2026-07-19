@@ -77,4 +77,75 @@ describe("codeParser", () => {
     expect(codeSymbolLabel("const refresh = async () => true;")).toBe("constant refresh");
     expect(codeSymbolLabel("private Result refresh(Input input) {")).toBe("function refresh");
   });
+
+  // The broad method-shaped pattern used to mine call sites, control flow and embedded SQL as
+  // definitions: on this package's own repository-pod.ts it produced 73 anchors for ~20 real
+  // symbols. Every false anchor becomes a chunk boundary AND a citation sectionPath, so this is
+  // a retrieval-precision defect, not cosmetics.
+  it.each([
+    ["a call site in a return statement", "  return buildSummary(store, capsuleId);"],
+    ["a throw site", '    throw new KnowledgeStoreError("repository root failed");'],
+    ["an awaited call", "  return await persistRun(deps, record);"],
+    ["a for-await header", "  for await (const event of events) {"],
+    ["a bare constructor call", "  return new Map(entries);"],
+    ["a SQL table header in a template literal", "CREATE TABLE IF NOT EXISTS pod_runs ("],
+    ["a SQL CHECK constraint", "  applied INTEGER NOT NULL CHECK (applied IN (0, 1)),"],
+    ["a SQL PRIMARY KEY clause", "  PRIMARY KEY (capsule_id, source_id, run_id),"],
+    ["a SQL FOREIGN KEY clause", "  FOREIGN KEY (capsule_id) REFERENCES capsules(id),"],
+  ])("does not mine %s as a symbol", (_case, line) => {
+    expect(codeSymbolLabel(line)).toBeUndefined();
+  });
+
+  it("does not mine type members of an unterminated import block", () => {
+    const text = [
+      "import {",
+      "  KnowledgeStoreError,",
+      "  type KnowledgeCapsuleId,",
+      "  type KnowledgeSourceId,",
+      "  type KnowledgeSourceScope,",
+      '} from "./types.js";',
+      "",
+      "export function load(): void {}",
+    ].join("\n");
+    for (const line of text.split("\n")) {
+      if (line.trimStart().startsWith("type ")) expect(codeSymbolLabel(line)).toBeUndefined();
+    }
+    expect(sectionsFor(text, "ts").map((section) => section.sectionPath)).toEqual([
+      ["typescript module"],
+      ["function load"],
+    ]);
+  });
+
+  it("still recognises declared type aliases and Go struct types", () => {
+    expect(codeSymbolLabel("export type SourceScope = { id: string };")).toBe("type SourceScope");
+    expect(codeSymbolLabel("type Envelope<T> = readonly T[];")).toBe("type Envelope");
+    expect(codeSymbolLabel("type Server struct {")).toBe("type Server");
+    expect(codeSymbolLabel("pub struct Fingerprint {")).toBe("type Fingerprint");
+  });
+
+  // The old method-shaped pattern held a literal space inside `[\w$<>, ?.[\]]` directly in front
+  // of `\s+`, which backtracks quadratically over a run of spaces (~1.0s at 40k spaces, 4x per
+  // doubling). The deadline could not stop it either: `shouldStop` was only consulted after the
+  // whole per-line scan had already run. A 1.2 MB file took 47.7s despite `timeoutMs: 100`.
+  it("stays bounded on a hostile long-space line despite a permissive deadline", () => {
+    const hostile = `a${" ".repeat(60_000)}b`;
+    const text = `${hostile}\nexport function load(): void {}\n`;
+    const startedAt = Date.now();
+    const sections = sectionsFor(text, "ts");
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(sections.map((section) => section.sectionPath)).toEqual([
+      ["typescript module"],
+      ["function load"],
+    ]);
+  });
+
+  it("honours a short deadline over many hostile lines instead of scanning them all", () => {
+    const hostile = `${`a${" ".repeat(3_000)}b\n`.repeat(400)}export function load(): void {}\n`;
+    const startedAt = Date.now();
+    codeParser.parse(
+      selectionFromText(hostile, { extension: "ts" }),
+      buildParserOptions({ now: () => Date.now(), timeoutMs: 100 }),
+    );
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+  });
 });
