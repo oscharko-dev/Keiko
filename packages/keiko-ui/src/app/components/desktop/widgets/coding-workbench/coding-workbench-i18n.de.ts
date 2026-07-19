@@ -51,6 +51,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.stale": "Fragestatus geändert. Erneut prüfen, um fortzufahren.",
   "codingWorkbench.questions.submitting": "Ihre Antwort wird übermittelt…",
   "codingWorkbench.questions.terminal": "Der Coding-Lauf ist beendet.",
+  "codingWorkbench.questions.unpaired":
+    "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
   "codingWorkbench.questions.retry": "Erneut prüfen",
   "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt Ihre Eingabe",
   "codingWorkbench.questions.required": "Beantworten Sie jede Frage vor dem Senden.",

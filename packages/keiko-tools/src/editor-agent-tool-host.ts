@@ -361,8 +361,17 @@ interface ParsedSearchWorkspaceArguments {
 }
 
 function searchWorkspaceMode(value: unknown): EditorAgentSearchWorkspaceMode {
-  if (value === "text" || value === "symbol") return value;
+  if (value === "text" || value === "symbol" || value === "regex") return value;
   throw new InvalidArgumentsError("Workspace search mode is invalid.");
+}
+
+function optionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new InvalidArgumentsError(`Argument '${key}' must be boolean.`);
+  }
+  return value;
 }
 
 function parseSearchWorkspaceArguments(
@@ -374,14 +383,14 @@ function parseSearchWorkspaceArguments(
     "query",
     "mode",
     "caseSensitive",
+    "wholeWord",
     "includeGlobs",
     "excludeGlobs",
     "maxResults",
     "scopePath",
   ]);
-  if (args.caseSensitive !== undefined && typeof args.caseSensitive !== "boolean") {
-    throw new InvalidArgumentsError("Argument 'caseSensitive' must be boolean.");
-  }
+  const caseSensitive = optionalBoolean(args, "caseSensitive");
+  const wholeWord = optionalBoolean(args, "wholeWord");
   const includeGlobs = optionalSearchStringArray(args.includeGlobs);
   const excludeGlobs = optionalSearchStringArray(args.excludeGlobs);
   const maxResults = optionalPositiveInteger(args, "maxResults");
@@ -392,7 +401,8 @@ function parseSearchWorkspaceArguments(
     request: {
       mode: searchWorkspaceMode(args.mode),
       query: requireString(args, "query"),
-      ...(args.caseSensitive === undefined ? {} : { caseSensitive: args.caseSensitive }),
+      ...(caseSensitive === undefined ? {} : { caseSensitive }),
+      ...(wholeWord === undefined ? {} : { wholeWord }),
       ...(includeGlobs === undefined ? {} : { includeGlobs }),
       ...(excludeGlobs === undefined ? {} : { excludeGlobs }),
       ...(maxResults === undefined ? {} : { maxResults }),

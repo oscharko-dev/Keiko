@@ -302,7 +302,9 @@ function updateSelections(
 
 function statusTone(alert: boolean, status: CodingWorkbenchQuestionsStatus): string {
   if (alert) return "danger";
-  return status === "stale" ? "warning" : "neutral";
+  // "unpaired" is the honest re-pair state (#2478): visible as a warning, but not an alert — the
+  // run keeps working and only question content is withheld until a new session is paired.
+  return status === "stale" || status === "unpaired" ? "warning" : "neutral";
 }
 
 function replaceAt<T>(current: readonly T[], index: number, value: T): T[] {

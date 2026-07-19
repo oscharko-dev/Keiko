@@ -321,3 +321,12 @@ export {
   type GroundedFaithfulnessScorecard,
   type GroundedFaithfulnessBudget,
 } from "./grounded-faithfulness-eval.js";
+
+// ADR-0141 W1.5 (#2478) — the trusted-launcher half of the app-session pairing hand-off. Exposed so
+// the keiko-cli launcher (`keiko start --open`) mints the single-use attestation with the SAME claim
+// construction the server-side pairing port verifies; the claim formula stays single-source here.
+export {
+  SESSION_PAIRING_LAUNCHER_SECRET_ENV,
+  computeLauncherPairingClaim,
+  mintLauncherPairingAttestation,
+} from "./coding-app-session/launcherSessionPairingPort.js";

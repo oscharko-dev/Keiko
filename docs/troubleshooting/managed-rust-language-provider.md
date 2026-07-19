@@ -83,8 +83,8 @@ without execution-derived project information.
    deployment path. If enforcement cannot be established, leave Rust deactivated.
 4. If cache cleanup failed, deactivate Rust and use the governed targeted cleanup/reset. Do not
    point Rust at an operator Cargo/Rustup home, another workspace's cache, or an unbounded directory.
-5. Activate Rust, then perform the targeted Rust restart when requested. Unrelated providers remain
-   warm.
+5. Activate Rust, accept or edit the server-owned typed default, save it, and perform the targeted
+   Rust restart when requested. Unrelated providers remain warm.
 6. For rollback, restore the previous governed settings revision and restart only Rust, or
    deactivate Rust. Remove owned isolated Rust runtime/cache state through the governed cleanup
    path; never delete shared operator toolchains.

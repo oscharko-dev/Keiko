@@ -80,6 +80,116 @@ function pythonConfiguration(revision = 0, etag = ETAG): Record<string, unknown>
   };
 }
 
+function defaultBase(
+  language: ManagedLspLanguage,
+  revision: number,
+  etag: string,
+): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    language,
+    revision,
+    etag,
+    activation: "enabled",
+    runtime: { kind: "operatorApproved", runtimeId: `${language}-lsp` },
+    provenance: {
+      activation: "workspace",
+      runtime: "operatorProvisioning",
+      settings: "builtInDefault",
+    },
+    restartRequired: false,
+    restartFields: [],
+  };
+}
+
+function pythonDefaultSettings(): Record<string, unknown> {
+  return {
+    interpreter: { kind: "operatorApproved", runtimeId: "python-lsp" },
+    venv: null,
+    typeCheckingMode: "standard",
+    extraPaths: [],
+    configurationPrecedence: ["workspaceConfiguration", "pyproject", "builtInDefault"],
+  };
+}
+
+function goDefaultSettings(): Record<string, unknown> {
+  return {
+    toolchain: { kind: "operatorApproved", runtimeId: "go-lsp" },
+    staticcheck: false,
+    buildTags: [],
+    buildFlags: { moduleMode: "readonly", trimPath: true },
+    target: { goos: "linux", goarch: "amd64", minimumGoVersion: "1.24" },
+    directoryFilters: [],
+    dependencyMode: "offline",
+    moduleDownloads: false,
+  };
+}
+
+function shellDefaultSettings(): Record<string, unknown> {
+  return {
+    dialect: "posix",
+    sourcePolicy: "workspaceOnly",
+    shellCheck: {
+      mode: "workspace",
+      severity: "warning",
+      excludedCodes: [],
+      includePaths: [],
+      externalSources: false,
+    },
+  };
+}
+
+function javaDefaultSettings(): Record<string, unknown> {
+  return {
+    jdk: { kind: "operatorApproved", runtimeId: "java-lsp" },
+    sourceLevel: "21",
+    targetLevel: "21",
+    classpath: [],
+    projectRoots: [],
+    projectImport: "safeOffline",
+    buildToolExecution: false,
+    annotationProcessing: false,
+    dependencyDownloads: false,
+  };
+}
+
+function rustDefaultSettings(): Record<string, unknown> {
+  return {
+    toolchain: { kind: "operatorApproved", runtimeId: "rust-lsp" },
+    features: [],
+    target: null,
+    cfgs: [],
+    noDefaultFeatures: false,
+    linkedProjects: [],
+    sysrootPolicy: "disabled",
+    resourceBudget: {
+      maxProjectFiles: 20_000,
+      maxCargoMetadataBytes: 4_194_304,
+      maxMemoryMb: 1_024,
+      indexDeadlineMs: 30_000,
+    },
+    cargoMetadata: "disabled",
+    dependencyDownloads: false,
+    procMacros: false,
+    buildScripts: false,
+  };
+}
+
+function defaultSettings(language: ManagedLspLanguage): Record<string, unknown> {
+  if (language === "python") return pythonDefaultSettings();
+  if (language === "go") return goDefaultSettings();
+  if (language === "shell") return shellDefaultSettings();
+  if (language === "java") return javaDefaultSettings();
+  return rustDefaultSettings();
+}
+
+function configurationDefaults(revision = 0, etag = ETAG): readonly Record<string, unknown>[] {
+  return MANAGED_LSP_LANGUAGES.map((language) => ({
+    ...defaultBase(language, revision, etag),
+    settings: defaultSettings(language),
+  }));
+}
+
 function response(): Record<string, unknown> {
   return {
     storeState: "absent",
@@ -89,6 +199,7 @@ function response(): Record<string, unknown> {
     languages: MANAGED_LSP_LANGUAGES.map((language) => status(language)),
     settings: MANAGED_LSP_LANGUAGES.map(settings),
     configurations: [],
+    configurationDefaults: configurationDefaults(),
     health: [],
     providerMetadata: [
       {
@@ -197,6 +308,7 @@ describe("managed-LSP route response parser", () => {
               },
         ),
         configurations: [pythonConfiguration(1, '"lspcfg-1-abcdefghijklmnop"')],
+        configurationDefaults: configurationDefaults(snapshotRevision, snapshotEtag),
       }),
     ).toMatchObject({ ok: true });
   });
@@ -249,6 +361,25 @@ describe("managed-LSP route response parser", () => {
     ["missing activation language", { ...response(), languages: [status("python")] }],
     ["empty settings coverage", { ...response(), settings: [] }],
     ["missing settings language", { ...response(), settings: [settings("python")] }],
+    ["missing configuration default", { ...response(), configurationDefaults: [] }],
+    [
+      "browser-writable default provenance",
+      {
+        ...response(),
+        configurationDefaults: configurationDefaults().map((entry, index) =>
+          index === 0
+            ? {
+                ...entry,
+                provenance: {
+                  activation: "workspace",
+                  runtime: "operatorProvisioning",
+                  settings: "workspace",
+                },
+              }
+            : entry,
+        ),
+      },
+    ],
     ["forged ETag", { ...response(), etag: '"lspcfg-1-abcdefghijklmnop"' }],
     [
       "future configuration revision",

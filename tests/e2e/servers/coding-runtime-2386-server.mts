@@ -56,7 +56,9 @@ import {
   scriptedResponse,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
 import {
+  AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
   AUTHORITY_DEFAULT_UI_PORT,
   AUTHORITY_EDITED_CONTENT,
   AUTHORITY_ORIGINAL_CONTENT,
@@ -244,7 +246,13 @@ function buildAuthorityComposition(stateDir: string, port: number): AuthorityCom
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
-    env: { PATH: process.env.PATH ?? "", KEIKO_STATE_DIR: join(bffStateRoot, "state") },
+    env: {
+      PATH: process.env.PATH ?? "",
+      KEIKO_STATE_DIR: join(bffStateRoot, "state"),
+      // #2478: provision the launcher secret so the journey pairs through the REAL production
+      // pairing port (`resolveLauncherSessionPairingPort`) — no fake port on this journey.
+      [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
+    },
     uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
     workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,

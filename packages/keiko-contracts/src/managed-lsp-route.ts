@@ -37,6 +37,7 @@ const CONTROL_RESPONSE_KEYS = [
   "languages",
   "settings",
   "configurations",
+  "configurationDefaults",
   "health",
   "providerMetadata",
 ] as const;
@@ -96,6 +97,7 @@ export interface ManagedLspControlSnapshot {
 }
 
 export interface ManagedLspControlResponse extends ManagedLspControlSnapshot {
+  readonly configurationDefaults: readonly ManagedLspRuntimeConfiguration[];
   readonly health: readonly ManagedLspProcessHealthSnapshot[];
   readonly providerMetadata?: readonly ManagedLspProviderMetadata[] | undefined;
 }
@@ -451,6 +453,36 @@ function isSnapshotConfigurationArray(
   });
 }
 
+function isConfigurationDefault(
+  value: unknown,
+  revision: number,
+  etag: string,
+): value is ManagedLspRuntimeConfiguration {
+  if (!isRuntimeConfiguration(value)) return false;
+  return (
+    value.revision === revision &&
+    value.etag === etag &&
+    value.activation === "enabled" &&
+    !value.restartRequired &&
+    value.restartFields.length === 0 &&
+    value.provenance.activation === "workspace" &&
+    value.provenance.runtime === "operatorProvisioning" &&
+    value.provenance.settings === "builtInDefault"
+  );
+}
+
+function isConfigurationDefaultArray(
+  value: unknown,
+  revision: unknown,
+  etag: unknown,
+): value is readonly ManagedLspRuntimeConfiguration[] {
+  if (!isRevision(revision) || typeof etag !== "string" || !Array.isArray(value)) return false;
+  return (
+    value.every((entry) => isConfigurationDefault(entry, revision, etag)) &&
+    hasExactLanguageCoverage(value)
+  );
+}
+
 function hasSameProvenance(
   left: ManagedLspConfigurationProvenance,
   right: ManagedLspConfigurationProvenance,
@@ -501,6 +533,7 @@ function validControlResponse(value: UnknownRecord): boolean {
     parseManagedLspRevisionEtag(value.etag, value.revision) !== undefined &&
     isRevision(value.evidenceCount) &&
     hasConsistentSnapshotPayload(value) &&
+    isConfigurationDefaultArray(value.configurationDefaults, value.revision, value.etag) &&
     isUniqueLanguageArray(value.health, isHealthSnapshot) &&
     isProviderMetadataArray(value.providerMetadata)
   );
