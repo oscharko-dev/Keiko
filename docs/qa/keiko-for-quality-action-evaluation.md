@@ -108,6 +108,25 @@ export TARGET_REPOSITORIES_JSON='[{"repository":"oscharko-dev/Keiko","baseBranch
 KFQ_PR=<pull-number> node scripts/keiko-for-quality-action.mjs
 ```
 
+## Live-probe gate results (2026-07-19)
+
+All six ADR-0135 conditions were proven on live `dev` pull requests before the cutover, using the
+label-gated PoC identity (`GITHUB_TOKEN` fallback; the App-auth upgrade path stays open):
+
+| #   | Condition                                                 | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Exactly one app-bound check per head, no manual prompting | Probe PR #2589 head `f762ef15` received exactly one `Keiko for Quality (Action)` check, published event-driven (no dispatch); #2586 head `04b8ebcb` likewise carries exactly one.                                                                                                                                                                                                                                                                                          |
+| 2   | Missing/running inputs neutral; terminal failures red     | Unresolved Qodo finding ⇒ `failure` + "Blocked" dashboard (#2589 @ `f762ef15`); clean current-head review ⇒ `success` (#2586, #2589 @ `2d3e335a`). Direct-check state does not enter the bridge (ADR-0143) and gates natively.                                                                                                                                                                                                                                             |
+| 3   | Bounded settlement, no repeated unchanged writes          | Full blocked→repair→green cycle settled event-driven within minutes on one PR (#2589, heads `f762ef15` → `2d3e335a`); exactly **one** dashboard comment per PR across all evaluations (in-place updates).                                                                                                                                                                                                                                                                  |
+| 4   | Quota independence                                        | Public-repository Actions minutes are unmetered; no D1, cron, webhook, or vendor-plan quota remains; per-evaluation API calls are bounded (lazy merge-parent fetch, #2505).                                                                                                                                                                                                                                                                                                |
+| 5   | Repair path independent of the gate                       | The producer is advisory and non-required; its workflow/script fixes merge through the direct required checks alone (demonstrated repeatedly on 2026-07-19 while the aggregate was red).                                                                                                                                                                                                                                                                                   |
+| 6   | Negative + positive probe set                             | Live: unresolved-finding block + settlement (#2589). Unit-pinned in `keiko-for-quality-core.test.mjs`: stale-/current-head binding ("selects the newest parseable current-head Qodo summary", merge-commit head binding), wrong producer ("binds bot evidence to immutable user, type, and app identities"), unparseable summary ("rejects Qodo bodies without the header or any recognizable blocking count"). Positive: #2586 clean pass with current-head Qodo `0/0/0`. |
+
+An incidental live finding strengthened the case: during the probes the still-deployed Worker
+published full-aggregate verdicts from a **stale deployment** (pre-ADR-0143 semantics) while the
+Action evaluated the repository-current evaluator — the exact "forgotten redeploy" drift class the
+Action shell eliminates ("merge = deployed").
+
 ## Decision
 
 **Adopt the GitHub Action and retire the Cloudflare Worker**, with App auth so the producer id and

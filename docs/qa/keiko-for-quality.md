@@ -104,21 +104,24 @@ The aggregate may be reconsidered only after live probes prove all of the follow
 Until every condition is met and branch protection is changed through a reviewed maintainer
 decision, `Keiko for Quality` remains advisory and non-required.
 
-## GitHub Action execution shell (evaluation)
+## GitHub Action execution shell (canonical since 2026-07-19)
 
-The evaluator is a pure function and does not depend on the Cloudflare Worker. Issue #2506 (Epic
-#2504) evaluates and prototypes running the same evaluator as a GitHub Action instead, removing the
-D1 database, the scheduled cron, the manual `wrangler deploy`, and the webhook secret while
-preserving fail-closed evaluation and exact-head currency. The base-branch `check_run` and
+The evaluator is a pure function and does not depend on any hosting shell. Since the ADR-0142
+cutover (2026-07-19) it runs as the GitHub Action
+(`.github/workflows/keiko-for-quality-action.yml` + `scripts/keiko-for-quality-action.mjs`) under
+the canonical check name and dashboard marker, with no D1 database, no scheduled cron, no manual
+`wrangler deploy`, and no webhook secret — "merge = deployed". The base-branch `check_run` and
 `issue_comment` triggers run the workflow definition from `dev`, which pull-request code cannot
-alter, so the Action preserves the Worker's tamper-resistance; App auth keeps the produced check
-bound to the Keiko for Quality App id so no branch-protection change is required.
+alter, so the Action preserves the Worker's tamper-resistance. It currently publishes under the
+documented `GITHUB_TOKEN` fallback (the aggregate is advisory and non-required); adding
+`KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` as repository secrets restores App-bound producer identity
+without code changes and is required before the aggregate could ever become a branch-protection
+requirement.
 
-The proof-of-concept (`.github/workflows/keiko-for-quality-action.yml` +
-`scripts/keiko-for-quality-action.mjs`) coexists with the live Worker under a distinct check name and
-the `kfq-action-poc` opt-in label, so it never touches the real gate during evaluation. The full
-trade-off analysis, tamper-resistance comparison, empirical equivalence evidence, and the migration
-and rollback plan are in
+All six live-probe conditions above were proven on live pull requests before the cutover; the
+probe ledger, trade-off analysis, tamper-resistance comparison, empirical equivalence evidence,
+and the rollback plan (`wrangler deploy` from `infrastructure/keiko-for-quality/` plus reverting
+the workflow identity block) are in
 [`keiko-for-quality-action-evaluation.md`](keiko-for-quality-action-evaluation.md); the decision is
 recorded in
 [ADR-0142](../adr/ADR-0142-keiko-for-quality-github-action-execution-shell.md).

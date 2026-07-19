@@ -93,7 +93,9 @@ export function resolveAuth(env) {
 
 export function actionIdentity(env) {
   return {
-    label: hasValue(env.KFQ_ACTION_LABEL) ? env.KFQ_ACTION_LABEL : defaultLabel,
+    // An explicitly EMPTY label (set to "") disables the opt-in gate (ADR-0142 cutover); only an
+    // absent variable falls back to the proof-of-concept label.
+    label: env.KFQ_ACTION_LABEL === undefined ? defaultLabel : env.KFQ_ACTION_LABEL.trim(),
     marker: hasValue(env.KFQ_DASHBOARD_MARKER) ? env.KFQ_DASHBOARD_MARKER : defaultMarker,
     name: hasValue(env.KFQ_CHECK_NAME) ? env.KFQ_CHECK_NAME : defaultCheckName,
   };
@@ -131,11 +133,13 @@ export function affectedPullNumbers(eventName, payload, producerAppId) {
   return pullRequestNumbers(eventName, payload);
 }
 
-// A pull is evaluated only when it opts in via the configured label, so the proof-of-concept stays
-// scoped to sample pull requests while the live Worker owns the real gate. A manual dispatch or a
-// dry run targets a pull explicitly and needs no label.
+// Before the ADR-0142 cutover a pull was evaluated only when it opted in via the configured label,
+// scoping the proof-of-concept to sample pull requests while the live Worker owned the real gate.
+// Post-cutover the workflow sets an explicitly empty label, which disables the gate: every pull is
+// evaluated. A manual dispatch or a dry run targets a pull explicitly and never needs a label.
 export function pullIsOptedIn(pull, label, eventName, dryRun) {
   if (dryRun === true || eventName === "workflow_dispatch") return true;
+  if (label === "") return true;
   const labels = Array.isArray(pull?.labels) ? pull.labels : [];
   return labels.some((entry) => entry?.name === label);
 }
