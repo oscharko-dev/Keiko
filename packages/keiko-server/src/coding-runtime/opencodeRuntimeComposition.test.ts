@@ -1599,6 +1599,37 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  it("degrades an overridden Error.name to a content-free class in the diagnostic", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => {
+        const hostile = new Error("boom");
+        hostile.name = "secret-token-abc123";
+        throw hostile;
+      }),
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: toolBody("call_hostile_name"),
+        }),
+      ).resolves.toMatchObject({ status: 502 });
+      expect(records).toEqual([expect.objectContaining({ errorClass: "Error" })]);
+      expect(JSON.stringify(records)).not.toContain("secret-token-abc123");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("aborts delayed governed work when the client disconnects", async () => {
     let observedSignal: AbortSignal | undefined;
     let release: (() => void) | undefined;

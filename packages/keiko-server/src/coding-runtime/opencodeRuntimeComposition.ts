@@ -1102,6 +1102,23 @@ function startFacadeExecution(
 
 // Content-free by design (the tool bridge never logs request or error bodies): the record carries
 // the error class and a fixed machine message only, keyed to the action id for correlation.
+// `Error.name` is a mutable own property, so a thrown value could carry request-derived text
+// there; only names from this closed allowlist pass through, anything else degrades to "Error".
+const KNOWN_ERROR_CLASSES = new Set([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "AbortError",
+  "TimeoutError",
+]);
+
+function contentFreeErrorClass(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  return KNOWN_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+}
+
 function emitFacadeStartDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
@@ -1112,7 +1129,7 @@ function emitFacadeStartDiagnostic(
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
     source: "opencode-runtime-composition.start-facade",
-    errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+    errorClass: contentFreeErrorClass(error),
     message: "tool-facade-sync-throw",
   });
 }
