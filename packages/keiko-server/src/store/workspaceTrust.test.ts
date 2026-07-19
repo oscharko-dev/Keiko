@@ -83,4 +83,32 @@ describe("workspace trust store rows", () => {
     store.pruneWorkspaceTrustRecords(0);
     expect(store.readWorkspaceTrustRecord("root-a")).toBeUndefined();
   });
+
+  it("ignores a stale write at an equal or lower revision (monotonic guard)", () => {
+    store.writeWorkspaceTrustRecord({
+      rootRef: "root-a",
+      revision: 1,
+      trust: "restricted",
+      recordJson: '{"kept":true}',
+    });
+    // A lower revision must be rejected.
+    store.writeWorkspaceTrustRecord({
+      rootRef: "root-a",
+      revision: 0,
+      trust: "trusted",
+      recordJson: '{"lower":true}',
+    });
+    // An equal revision must be rejected too.
+    store.writeWorkspaceTrustRecord({
+      rootRef: "root-a",
+      revision: 1,
+      trust: "trusted",
+      recordJson: '{"equal":true}',
+    });
+    expect(store.readWorkspaceTrustRecord("root-a")).toMatchObject({
+      revision: 1,
+      trust: "restricted",
+      recordJson: '{"kept":true}',
+    });
+  });
 });
